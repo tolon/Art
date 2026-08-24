@@ -48,6 +48,7 @@ import {
 import { describeVerdict, describeOutcome, type WhdloadOutcome, type WhdloadVerdict } from "@/lib/whdload";
 import {
   buildBlocker,
+  secondSystem,
   defaultPartition,
   findingPhrase,
   healthCheckPhrase,
@@ -578,6 +579,22 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     for (const warning of warnings) {
       const phrase = warningPhrase(warning);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("secondSystem: both refusals resolve", () => {
+    const GIB = 1024 ** 3;
+    // No size given, and a size that leaves the first system less than its own
+    // partition. Both are sentences somebody reads next to the field they just
+    // typed in, and neither is reachable from `warningPhrase` above.
+    const refusals = [
+      secondSystem(64 * GIB, GIB, 0, "ffsstandard", 512),
+      secondSystem(64 * GIB, GIB, 63 * GIB, "ffsstandard", 512),
+    ];
+    for (const refusal of refusals) {
+      expect(refusal.ok).toBe(false);
+      if (refusal.ok) continue;
+      expect(isLeafKey(refusal.why.key), refusal.why.key).toBe(true);
     }
   });
 

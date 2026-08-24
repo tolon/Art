@@ -407,6 +407,13 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // other two are ternaries over two literal keys apiece (show/hide the
     // passphrase, write/writing), which is what the sidebar toggle at
     // \"43 → 45\" already does.
-    expect(dynamicCalls).toBe(135);
+    // 135 → 136 (SD-3 G16, the second AmigaOS): one, and the same shape as the
+    // two above it. `secondSystem` returns a `Phrase` when the split cannot be
+    // made and the card builder renders it beside the size field, exactly as
+    // `buildBlocker`'s sentence is rendered. Its two variants — no size given,
+    // and a size that leaves the first system less than its own partition —
+    // are enumerated in `phrase-keys.test.ts`, which is again the check this
+    // one cannot make.
+    expect(dynamicCalls).toBe(136);
   });
 });

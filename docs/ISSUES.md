@@ -828,6 +828,37 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-233** 🟡 **The second Amiga disk's size arrived as an unknown field and
+became "take the rest", and nothing failed** - *found 2026-08-24 while building
+the screen that sends one*
+`src-tauri/src/commands/card.rs::AmigaDiskRequest`
+
+`AmigaDiskRequest` was written with `#[serde(rename_all = "camelCase")]`.
+Neither the `CardBuildRequest` that carries it nor the `PartitionSpec` inside
+it has one - both are snake_case, and so is the whole frontend. So a screen
+sending `size_bytes` would have had it read as an unknown field, and because
+the field is `#[serde(default)]` it would have become **0**, which is this
+API's sentinel for *"whatever is left"*.
+
+A card asked for with an 8 GB second system would have been built with the
+entire remainder as the second disk. No error, no warning, and a plan on screen
+that looked right until somebody counted.
+
+**Never reachable by a user.** It landed in `f33cb65` together with the command
+support, at a point where nothing sent `extra_disks` at all, and it was found
+by the first thing that did. Recorded anyway: it is the shape this project
+spends its effort on - a wrong answer delivered confidently, by a mechanism
+that cannot fail.
+
+**Fixed** by removing the rename, so it matches everything around it.
+
+**Guarded** by `the_wire_shape_the_screen_sends_is_the_one_rust_reads`, which
+deserialises a JSON literal in the exact shape the card builder sends rather
+than constructing the Rust type - a test that builds `AmigaDiskRequest` in Rust
+agrees with whatever the field is called this week, which is precisely the
+check that was missing. It follows the house pattern two other modules already
+use (`core::rom::pairing`, `core::launch`). Putting the rename back fails it.
+
 **ART-232** 🟡 **The Hard Disk studio's "which partition did I pick" ring is
 2.52:1 on two of its five colours** - *found 2026-08-24 while measuring
 work-list item 18*

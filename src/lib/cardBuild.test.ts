@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildBlocker,
+  secondSystem,
   cardFsChoices,
   defaultPartition,
   defaultSecondPartition,
@@ -299,5 +300,84 @@ describe("the card's two partitions", () => {
   it("the second partition follows the filesystem the first uses", () => {
     expect(defaultSecondPartition("pfs3directscsi").fs_type).toBe("pfs3directscsi");
     expect(defaultSecondPartition("ffsdircache").fs_type).toBe("ffsdircache");
+  });
+});
+
+describe("secondSystem", () => {
+  const GIB = 1024 ** 3;
+  const CARD = 64 * GIB;
+  const BOOT = 1 * GIB;
+
+  it("gives the second disk the size asked for and the first the rest", () => {
+    const split = secondSystem(CARD, BOOT, 8 * GIB, "ffsstandard", 512);
+    expect(split.ok).toBe(true);
+    if (!split.ok) return;
+
+    // The FIRST disk's size is what goes in the request, because the planner
+    // allows "whatever is left" only for the last disk.
+    expect(split.firstDiskBytes).toBe(CARD - BOOT - 8 * GIB);
+    expect(split.extraDisks).toHaveLength(1);
+    expect(split.extraDisks[0].size_bytes).toBe(0);
+  });
+
+  it("the two disks and the boot partition account for the whole card", () => {
+    const split = secondSystem(CARD, BOOT, 8 * GIB, "ffsstandard", 512);
+    if (!split.ok) throw new Error("expected a split");
+    // The second takes the rest, so what is left after boot and the first is
+    // exactly what it gets - no gap, and nothing counted twice.
+    expect(BOOT + split.firstDiskBytes + 8 * GIB).toBe(CARD);
+  });
+
+  it("the second system boots below the first, so there is no tie", () => {
+    const split = secondSystem(CARD, BOOT, 8 * GIB, "ffsstandard", 512);
+    if (!split.ok) throw new Error("expected a split");
+    const [partition] = split.extraDisks[0].partitions;
+
+    expect(partition.bootable).toBe(true);
+    // The number, not the constant: comparing a constant with itself is a test
+    // that passes whatever the value becomes.
+    expect(partition.boot_priority).toBe(0);
+    expect(defaultPartition().boot_priority).toBe(1);
+    expect(partition.boot_priority).toBeLessThan(defaultPartition().boot_priority);
+  });
+
+  it("its one partition takes the whole disk and does not reuse a drive name", () => {
+    const split = secondSystem(CARD, BOOT, 8 * GIB, "pfs3directscsi", 512);
+    if (!split.ok) throw new Error("expected a split");
+    const [partition] = split.extraDisks[0].partitions;
+
+    expect(partition.size_mb).toBe(0);
+    expect(partition.fs_type).toBe("pfs3directscsi");
+    // A name the first disk already uses would be two volumes answering to
+    // one name on the same card.
+    expect(partition.drive_name).not.toBe(defaultPartition().drive_name);
+    expect(partition.drive_name).not.toBe(defaultSecondPartition("ffsstandard").drive_name);
+  });
+
+  it("refuses a second system with no size", () => {
+    const split = secondSystem(CARD, BOOT, 0, "ffsstandard", 512);
+    expect(split.ok).toBe(false);
+    if (split.ok) return;
+    expect(split.why.key).toBe("cardBuilder.second.blocked.noSize");
+  });
+
+  it("refuses one that leaves the first system no room for its own partition", () => {
+    // 63 GB of a 64 GB card, with 1 GB already gone to the boot partition:
+    // the first Amiga disk would be 0 bytes.
+    const split = secondSystem(CARD, BOOT, 63 * GIB, "ffsstandard", 512);
+    expect(split.ok).toBe(false);
+    if (split.ok) return;
+    expect(split.why.key).toBe("cardBuilder.second.blocked.tooLarge");
+    expect(split.why.params).toEqual({ mb: 512 });
+  });
+
+  it("the floor follows the first system's own partition size", () => {
+    // A card with exactly enough for a 512 MB first system is allowed; the
+    // same card with a 4096 MB first system is not. The floor is the size the
+    // user asked for, not a constant.
+    const card = 10 * GIB;
+    const second = card - BOOT - 512 * 1024 * 1024;
+    expect(secondSystem(card, BOOT, second, "ffsstandard", 512).ok).toBe(true);
+    expect(secondSystem(card, BOOT, second, "ffsstandard", 4096).ok).toBe(false);
   });
 });

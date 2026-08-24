@@ -63,8 +63,16 @@ export interface CardBuildRequest {
    *  driver the user picked — empty for FFS, which Kickstart mounts itself.
    *  See `CARD_FS_CHOICES` for why this took until 2026-08-23 to exist. */
   file_systems: FileSystemInput[];
-  /** The partitions of the card's one Amiga disk. */
+  /** The partitions of the card's **first** Amiga disk. */
   partitions: PartitionSpec[];
+  /**
+   * How much of the card the first Amiga disk takes. Absent, or 0, means
+   * *"whatever is left"* - which the planner allows only for the last disk, so
+   * a card with `extra_disks` has to state this one.
+   */
+  first_disk_bytes?: number;
+  /** Further Amiga disks, each with its own RDB (SD-3 G16). */
+  extra_disks?: AmigaDiskRequest[];
 }
 
 /** A file on its way to the boot partition — its name and its size. */
@@ -472,6 +480,98 @@ export function defaultPartition(): PartitionSpec {
     // identically, so this is not a fix; it is matching what the cards that
     // boot actually carry, and leaving room below for a second one.
     boot_priority: 1,
+  };
+}
+
+/**
+ * A further Amiga disk on the same card, with its own RDB.
+ *
+ * `size_bytes` of 0 means *"whatever is left"*, and only the **last** disk may
+ * say it - the planner's own rule, restated nowhere else.
+ */
+export interface AmigaDiskRequest {
+  size_bytes: number;
+  partitions: PartitionSpec[];
+}
+
+/**
+ * The drive names the second AmigaOS gets, and its boot priority.
+ *
+ * **Priority 0, below the first disk's 1**, which is what
+ * [`defaultPartition`]'s own note left room for. That is the whole of what ART
+ * decides about multiboot: AmigaOS already has the menu - hold both mouse
+ * buttons at power-on and Early Startup lists every bootable partition - so
+ * this only says which one starts when nobody holds anything. Equal priorities
+ * would be a tie, which is undocumented on the Amiga and which
+ * `core::card::multiboot` refuses to resolve rather than guessing.
+ */
+export const SECOND_SYSTEM_DRIVE = "SDH2";
+export const SECOND_SYSTEM_PRIORITY = 0;
+
+/** What a second AmigaOS asks for, or why it cannot be asked for. */
+export type SecondSystem =
+  | { ok: true; firstDiskBytes: number; extraDisks: AmigaDiskRequest[] }
+  | { ok: false; why: Phrase };
+
+/**
+ * Split the card between two complete AmigaOS environments (SD-3 G16).
+ *
+ * The user says how big the **second** one is, because that is the thing they
+ * are adding; the first takes what is left. The request is built the other way
+ * round - the first disk's size stated, the second passed 0 - because
+ * `plan_card` allows "whatever is left" only for the last disk, and stating
+ * both would leave the rounding somewhere nobody asked for. So the sector
+ * rounding lands on the second disk, which is the one whose size was a round
+ * number the user typed rather than a remainder.
+ *
+ * **One partition, taking the whole disk.** A second environment is a second
+ * system, not a second system plus a second work volume: the work volume is
+ * shared and lives on the first disk. Offering a split here would be offering
+ * a shape with nothing behind it (spec §96), the same reason the first disk
+ * has a toggle rather than a partition editor.
+ */
+export function secondSystem(
+  totalBytes: number,
+  bootBytes: number,
+  secondBytes: number,
+  fs: AmigaHardDiskFs,
+  firstSystemMb: number
+): SecondSystem {
+  const forAmiga = totalBytes - bootBytes;
+  // What the first disk must still be able to hold: its own system partition.
+  // Below that the card has two systems and nowhere to put the first one.
+  const firstFloor = firstSystemMb * 1024 * 1024;
+
+  if (secondBytes <= 0) {
+    return { ok: false, why: { key: "cardBuilder.second.blocked.noSize" } };
+  }
+  if (forAmiga - secondBytes < firstFloor) {
+    return {
+      ok: false,
+      why: {
+        key: "cardBuilder.second.blocked.tooLarge",
+        params: { mb: firstSystemMb },
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    firstDiskBytes: forAmiga - secondBytes,
+    extraDisks: [
+      {
+        size_bytes: 0,
+        partitions: [
+          {
+            drive_name: SECOND_SYSTEM_DRIVE,
+            fs_type: fs,
+            size_mb: 0,
+            bootable: true,
+            boot_priority: SECOND_SYSTEM_PRIORITY,
+          },
+        ],
+      },
+    ],
   };
 }
 
