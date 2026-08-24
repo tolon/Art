@@ -137,8 +137,19 @@ describe("every shipped recipe", () => {
     // GlowIcons a user had ticked for. Both now sit after it, which is why
     // this list reads in a different order than it used to; `locale-euro` is
     // ART-159's new one.
+    //
+    // The four `locale-*` entries arrived on 2026-08-24 with the `Support`
+    // drawer the four alphabets that need it carry - Greek, Polish, Russian
+    // and Turkish. They declare over `workbench-base` because they write
+    // `Prefs/Presets/Font-XX.prefs` into a drawer it owns, and they sit after
+    // it in recipe order, which is what makes the declaration mean anything
+    // (ART-224: an override declared *above* what it overrides is inert).
     expect(declaring).toEqual([
       "AmigaOS 3.2/extras",
+      "AmigaOS 3.2/locale-gr",
+      "AmigaOS 3.2/locale-pl",
+      "AmigaOS 3.2/locale-ru",
+      "AmigaOS 3.2/locale-tr",
       "AmigaOS 3.2/classes",
       "AmigaOS 3.2/modules-a1200",
       "AmigaOS 3.2/glowicons",
