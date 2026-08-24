@@ -203,7 +203,9 @@ pub fn osinstall_scan_media(folder: PathBuf) -> AppResult<MediaScanResult> {
 /// a second 31 MB pass for nothing.
 #[tauri::command]
 pub fn osinstall_release_for_media(volume_names: Vec<String>) -> AppResult<Option<String>> {
-    Ok(recipe::release_holding(&volume_names)?)
+    Ok(crate::core::osinstall::identify::release_holding(
+        &volume_names,
+    )?)
 }
 
 // ---------------------------------------------------------------------------

@@ -26,6 +26,63 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-229** 🟠 ✅ **An AmigaOS 3.1 folder was announced as the user's AmigaOS
+3.2 folder** — *found and fixed 2026-08-24, while building work-list item 5*
+`src-tauri/src/core/osinstall/identify.rs` (moved there from `recipe.rs`)
+
+[ART-208](#fixed) gave ART a good sentence: instead of sixteen `MediaMissing`
+refusals about a folder that is simply the wrong one, name the release the
+folder actually holds and offer the switch. `recipe::release_holding` answered
+that question by counting **any** matching volume name as proof, and that is
+where it went wrong.
+
+**`Fonts` and `Locale` carry no version suffix.** The AmigaOS 3.1, 3.1.4 and
+3.2 disk sets each ship a disk called exactly `Fonts` and one called exactly
+`Locale` — checked against HstWB Installer's own `data/amiga-os-entries.csv`
+(78 rows, whose required set for all three releases is Workbench, Extras,
+**Fonts**, Install, **Locale**, Storage) and against the abime.net and
+pjhutchison.org 3.1 installation guides. ART's 3.2 recipe names both, so
+either one alone matched 3.2 and nothing else.
+
+Measured on the shipped code before it was changed:
+
+```text
+["Fonts"]                            -> Some("AmigaOS 3.2")
+["Locale"]                           -> Some("AmigaOS 3.2")
+["Fonts", "Locale"]                  -> Some("AmigaOS 3.2")
+["Workbench3.1", "Fonts", "Locale"]  -> Some("AmigaOS 3.2")
+```
+
+The fourth is the one that matters: a folder holding a real AmigaOS **3.1**
+Workbench disk, announced as a 3.2 folder — on a screen that then offers a
+one-click release switch on the strength of that sentence. Not a crash, not a
+wrong tree, just a confident wrong sentence about somebody's own disks, which
+is this file's most expensive class.
+
+**Fixed by separating evidence from names that are not evidence.**
+`identify::identify` counts only volume names no other known release carries;
+`Fonts`, `Locale` and `Storage` are carried in a `shared` list and counted as
+nothing. All four cases above now answer `None`, and the six ART-208 tests
+still pass unchanged — the fix removes wrong answers without losing right ones.
+
+`release_holding` moved out of `recipe.rs` in the same change rather than
+calling `identify` from where it was: a recipe asking `identify` a question
+inverts the layering CLAUDE.md requires, since `identify` is the module that
+*reads* recipes.
+
+*Tests:* 19 in `identify.rs`, six of them ART-208's moved across.
+**Eight mutations, seven fell** — the cited list emptied and `Fonts` dropped
+from it, `shared` counted as evidence, `missing_required` never filled, two
+releases resolved by picking one, an exact comparison in place of the
+international fold, and the recipe's spelling reported instead of the
+medium's. **The eighth survived and taught something**: removing the
+de-duplication did not fail `the_same_disk_twice_is_counted_once`, because
+what holds *that* property up is `find` taking the first match. The
+de-duplication is real and is guarded by `the_3_9_disc_is_named_amigaos_3_9`
+instead — the 3.9 recipe is six components off one disc, so without it a
+person is told their disc is six discs. Both tests now say which property
+they actually hold.
+
 **ART-226** 🟠 **Every tree ART builds has an empty `Devs/Keymaps`, so whatever
 language the user chose they can only type on an American keyboard — and for
 Turkish the keymap is not on the CD at all** — *found 2026-08-24 by the owner,
