@@ -181,6 +181,45 @@ The half that survives is the half that was always the point: **build
 everything into a sparse image file through the existing, tested paths.** That
 was this gap's own recommendation; it is now the whole of it.
 
+## G2a 🟧 Place an existing RDB hardfile into a card as an Amiga area
+
+**Found 2026-08-25 while answering how other distributions are built, and
+recorded so the observation is not lost. Not scheduled.**
+
+There are two routes in the field and ART only walks one:
+
+- **Build in place.** Partition the image, format the Amiga partitions, write
+  files straight into them. This is ART (`core/card/build.rs` +
+  `core/preload`) and it is `jit06/emu68-bootstrap`, which does the same with
+  `hst-imager` (`hst.imager fs copy` into the RDB partition, because Linux
+  cannot mount a PFS3 volume either).
+- **Build a hardfile, then wrap it.** CoffinOS and CaffeineOS ship a standard
+  `.hdf`, and **`PiStorm/hdf2emu68`** turns it into a card: it creates the
+  `0x76` partition and produces an image to write to the microSD, after which
+  the user copies Emu68 and their own Kickstart to the FAT32 partition. The
+  hardfile's **own RDB becomes that area's partition table**, which is why the
+  tool requires an **RDB** hardfile and refuses a bare one — *"if it's marked
+  as `RDSK` you're good, if it's `DOS` it won't work"*.
+
+That requirement is [ART-146](ISSUES.md#fixed)'s distinction exactly, arrived
+at from the other end: `HardfileShape::{Bare, Rdb, Unknown}` already tells the
+two apart, and already reads it out of the file's own bytes.
+
+**ART cannot do the second route today.** `AreaSpec` describes an area to
+*create* — a size, partitions, drivers — with no way to say *"fill this one
+from that file"*. Every piece it would need exists: `core/mbr` writes `0x76`
+primaries at measured offsets, `core/rdb` reads an RDB, `core/hdf`'s
+`detect_hardfile_shape` refuses a bare image before anything is written.
+
+Worth knowing what it would and would not buy. It would let somebody put a
+distribution they already have onto a card ART built, and it would let ART
+carry a volume built inside an emulator — which is the only place an Amiga's
+own installers run, the same conclusion [ART-166](ISSUES.md) reached from the
+BoingBag end. It would **not** help with the owner's own `AmiKit.hdf`: that
+one is a *dynamic VHD*, measured 2026-08-24 — 3.9 GB of disk inside a 1.2 GB
+file, reached through a block allocation table — so it is not a raw RDB image
+and would need converting before either tool could take it.
+
 ## G2 ✅ Hybrid SD layout: MBR + FAT32 boot partition + Amiga RDB
 
 > **Done in the engine, 2026-08-13/14.** ART writes a partition table
