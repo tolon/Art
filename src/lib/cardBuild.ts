@@ -81,6 +81,24 @@ export type CardBuildWarning =
   | { kind: "rom-unrecognised" }
   | { kind: "rom-machine-unknown"; rom: string }
   | { kind: "rom-wrong-machine"; rom: string }
+  /**
+   * An FFS partition larger than this card's Kickstart can address (SD-5 G13).
+   *
+   * The original FFS does not refuse a partition past its 4 GiB addressing —
+   * it writes past it and corrupts the drive. AmigaOS 3.1.4 and 3.2 carry FFS
+   * v46, which addresses TD_64 and NSD natively, so this is raised only for an
+   * older ROM or none at all.
+   *
+   * `romMajor` is `null` when no Kickstart was chosen, which is **not** the
+   * same as an old one — and the two get different sentences.
+   */
+  | {
+      kind: "partition-beyond-kickstart-ffs";
+      driveName: string;
+      bytes: number;
+      limit: number;
+      romMajor: number | null;
+    }
   | { kind: "volumes-unformatted" };
 
 /** A ROM as ART identifies it. The fields this screen uses. */
@@ -467,6 +485,22 @@ export function warningPhrase(warning: CardBuildWarning): Phrase {
       };
     case "rom-wrong-machine":
       return { key: "cardBuilder.warning.romWrongMachine", params: { rom: warning.rom } };
+    case "partition-beyond-kickstart-ffs":
+      // Two sentences, because "your Kickstart is too old" and "you have not
+      // chosen one" send somebody to different places.
+      return warning.romMajor === null
+        ? {
+            key: "cardBuilder.warning.beyondKickstartFfsNoRom",
+            params: { drive: warning.driveName, gb: Math.round(warning.bytes / 1024 ** 3) },
+          }
+        : {
+            key: "cardBuilder.warning.beyondKickstartFfs",
+            params: {
+              drive: warning.driveName,
+              gb: Math.round(warning.bytes / 1024 ** 3),
+              major: warning.romMajor,
+            },
+          };
     case "volumes-unformatted":
       return { key: "cardBuilder.warning.volumesUnformatted" };
   }

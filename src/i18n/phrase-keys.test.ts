@@ -553,6 +553,23 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       { kind: "rom-unrecognised" },
       { kind: "rom-machine-unknown", rom: "Kickstart 3.1 (40.068)" },
       { kind: "rom-wrong-machine", rom: "Kickstart 3.1 (A600)" },
+      // SD-5 G13. **Both** branches: "your Kickstart is too old" and "you have
+      // not chosen one" are different sentences and send somebody to different
+      // places, so a mapper with one variant and two keys needs two entries.
+      {
+        kind: "partition-beyond-kickstart-ffs",
+        driveName: "SDH1",
+        bytes: 20 * 1024 ** 3,
+        limit: 4 * 1024 ** 3,
+        romMajor: 40,
+      },
+      {
+        kind: "partition-beyond-kickstart-ffs",
+        driveName: "SDH1",
+        bytes: 20 * 1024 ** 3,
+        limit: 4 * 1024 ** 3,
+        romMajor: null,
+      },
       { kind: "volumes-unformatted" },
     ];
     for (const warning of warnings) {
