@@ -55,6 +55,7 @@
 pub mod apply;
 pub mod chain;
 pub mod collide;
+pub mod identify;
 pub mod package;
 pub mod plan;
 pub mod recipe;
