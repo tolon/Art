@@ -828,6 +828,56 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-232** 🟡 **The Hard Disk studio's "which partition did I pick" ring is
+2.52:1 on two of its five colours** - *found 2026-08-24 while measuring
+work-list item 18*
+`src/pages/HardDiskStudio.tsx` - `scripts/contrast-check.py`
+
+The partition map draws the selected segment with `outline: 2px solid #fff`,
+`outlineOffset: -2`, so the ring sits **inside** the segment with the fill on
+both sides of it. Measured against each fill:
+
+| fill | white ring |
+|---|---|
+| `#3fb950` green | **2.54:1** |
+| `#d29922` amber | **2.52:1** |
+| `#388bfd` blue | 3.34:1 |
+| `#a371f7` purple | 3.35:1 |
+| `#f85149` red | 3.35:1 |
+
+WCAG 1.4.11 asks 3:1 of an indicator that is not text, and this one carries the
+whole answer to which partition is selected. Two of the five are below it, and
+they are the two brightest fills - which is also why looking at the screen
+would not have found it: the ring is *visible*, it is just not separated.
+
+**Why nothing caught it.** `scripts/contrast-check.py` reads `theme.css` and
+measures every pair the tokens produce, which is 90 pairs and all of them pass.
+It could not see this one, because the partition map does not use tokens: it is
+a picture of a disk rather than ART's chrome, and it hard-codes its colours.
+Three screens do that - the hex dump, the simulated Gotek display, and this -
+and none of them had ever been measured.
+
+**Fixed** with two rings rather than one, `inset 0 0 0 2px #000000, inset 0 0 0
+4px #ffffff`: black is 6.26:1 at worst against these fills and white is 21:1
+against black, so whichever way the fills change later, one of the two rings
+still has a boundary somebody can see.
+
+**Guarded** by extending the same script to the hard-coded islands - 23 more
+pairs, each foreground declared with the one ground it actually lands on. Two
+rules keep that declaration honest: every hex literal in those files must
+appear in the table (so a colour cannot be added or changed without saying what
+it sits on), and the two-ring **arrangement** is required verbatim in the
+source. The second exists because mutation found the first insufficient:
+reverting to a single white ring changed neither the set of colours nor the
+declared table, and the check went on reporting a black ring that was no longer
+drawn. It runs in CI, where it already ran.
+
+Its own first run reported two failures that did not exist, by pairing every
+colour with every background - `#ff3b30` is the seven-segment readout and never
+appears on the LCD's green at all. Reading the source rather than the table is
+what corrected it, and the pairing rule is written down so the next reader does
+not repeat it.
+
 **ART-228** 🟠 **Every AmigaOS 3.2 tree ART builds carries 3 263 files the
 release's own Installer would have decompressed and renamed — the whole help
 system, and for a Turkish user the fonts and catalogs too** — *found

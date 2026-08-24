@@ -593,8 +593,21 @@ export function HardDiskStudio() {
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
-                      outline: isSel ? "2px solid #fff" : "none",
-                      outlineOffset: -2,
+                      /*
+                       * Two rings, not one. A white ring alone is measured at
+                       * 2.54:1 against the green fill and 2.52:1 against the
+                       * amber — below the 3:1 WCAG asks of an indicator that
+                       * is not text, and this one carries the whole answer to
+                       * "which partition did I pick". Black against every fill
+                       * here is 6.26:1 at worst and white against black is
+                       * 21:1, so whichever way the fills change later, one of
+                       * the two rings still has a boundary somebody can see.
+                       * Measured by `scripts/contrast-check.py`, which now
+                       * reads these colours out of this file.
+                       */
+                      boxShadow: isSel
+                        ? "inset 0 0 0 2px #000000, inset 0 0 0 4px #ffffff"
+                        : "none",
                     }}
                     title={`${p.drive_name} (${p.dostype_str}) — ${fmtBytes(p.size_bytes)}`}
                   >
