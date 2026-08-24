@@ -7,7 +7,8 @@
 //!
 //! # Two files, and only one of them is a secret
 //!
-//! - `Envarc/Sys/Wireless.prefs` — [`super::wpa`]'s `network={}` blocks, read
+//! - `Prefs/Env-Archive/Sys/Wireless.prefs` — [`super::wpa`]'s `network={}`
+//!   blocks, read
 //!   by `tolunwifi`'s driver adapters. **The passphrase is in here.**
 //! - `Devs/tolunnet.config` — [`super::tolunnet`]'s `KEY=VALUE` lines. No
 //!   secret, and deliberately no field for one.
@@ -92,7 +93,7 @@ pub fn networks_already_there(tree: &Path) -> Option<usize> {
 /// Write what was asked for into `tree`.
 ///
 /// Refuses a `tree` that is not a directory rather than creating one: a typo
-/// in a path is not a reason to scatter `Devs/` and `Envarc/` somewhere
+/// in a path is not a reason to scatter `Devs/` and `Prefs/` somewhere
 /// nobody will look.
 pub fn seed_tree(tree: &Path, seed: &Seed) -> CoreResult<Seeded> {
     if !tree.is_dir() {
@@ -168,6 +169,15 @@ mod tests {
         dir
     }
 
+    /// Built from the constant rather than typed, so a test can never
+    /// disagree with the code about where the file goes — which is exactly
+    /// how ART-231 survived its own test suite.
+    fn wireless_in(dir: &ScratchDir) -> PathBuf {
+        wpa::PREFS_IN_TREE
+            .iter()
+            .fold(dir.path().to_path_buf(), |at, part| at.join(part))
+    }
+
     fn wifi(ssid: &str) -> wpa::Profile {
         wpa::Profile {
             ssid: ssid.into(),
@@ -197,7 +207,7 @@ mod tests {
         )
         .unwrap();
 
-        let prefs = dir.join("Envarc").join("Sys").join("Wireless.prefs");
+        let prefs = wireless_in(&dir);
         let config = dir.join("Devs").join("tolunnet.config");
         assert!(prefs.is_file(), "ENVARC:Sys/Wireless.prefs");
         assert!(config.is_file(), "DEVS:tolunnet.config");
@@ -221,11 +231,11 @@ mod tests {
     }
 
     /// The drawer does not have to be there: a tree assembled by hand may have
-    /// no `Envarc/Sys`.
+    /// no `Prefs/Env-Archive/Sys`.
     #[test]
     fn the_drawers_are_made_when_they_are_not_there() {
         let dir = tree("makes-drawers");
-        assert!(!dir.join("Envarc").exists());
+        assert!(!dir.join("Prefs").exists());
         seed_tree(
             dir.path(),
             &Seed {
@@ -234,7 +244,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(dir.join("Envarc").join("Sys").is_dir());
+        assert!(wireless_in(&dir).parent().unwrap().is_dir());
     }
 
     /// Either half alone. Somebody on Roadshow still wants the credentials;
@@ -263,7 +273,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(done.written, vec!["DEVS:tolunnet.config".to_string()]);
-        assert!(!dir.join("Envarc").exists());
+        assert!(!dir.join("Prefs").exists());
         assert_eq!(done.networks, 0);
     }
 
@@ -302,14 +312,14 @@ mod tests {
     #[test]
     fn replacing_the_networks_says_how_many_were_there() {
         let dir = tree("replace-networks");
-        std::fs::create_dir_all(dir.join("Envarc").join("Sys")).unwrap();
+        std::fs::create_dir_all(wireless_in(&dir).parent().unwrap()).unwrap();
         // A real `Wireless.prefs` carries more than blocks. **The comment
         // mentions `ssid` on purpose**: counting lines that merely contain the
         // word, rather than lines that open a block, gives three here — and
         // the number is shown to somebody as *"you are about to replace N
         // networks"*, so it has to be the count of networks.
         std::fs::write(
-            dir.join("Envarc").join("Sys").join("Wireless.prefs"),
+            wireless_in(&dir),
             b"# the ssid below is the old one\nnetwork={\n    ssid=\"Old1\"\n}\n\
               network={\n    ssid=\"Old2\"\n}\n",
         )
@@ -329,8 +339,7 @@ mod tests {
         .unwrap();
         assert_eq!(done.replaced_networks, Some(2));
 
-        let text =
-            std::fs::read_to_string(dir.join("Envarc").join("Sys").join("Wireless.prefs")).unwrap();
+        let text = std::fs::read_to_string(wireless_in(&dir)).unwrap();
         assert!(text.contains("New"));
         assert!(!text.contains("Old1"), "replaced, and the count said so");
     }
@@ -370,7 +379,7 @@ mod tests {
         )
         .is_err());
 
-        assert!(!dir.join("Envarc").exists(), "no half-seeded tree");
+        assert!(!dir.join("Prefs").exists(), "no half-seeded tree");
         assert!(
             !dir.join("Devs").join("tolunnet.config").exists(),
             "and not the other file either"
