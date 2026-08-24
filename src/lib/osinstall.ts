@@ -74,6 +74,21 @@ export interface InstallRequest {
    * built before this existed still deserialises.
    */
   extraMediaFolders?: string[];
+  /**
+   * The keyboard layout the finished system boots with — a name in
+   * `Devs/Keymaps` (ART-226's other half).
+   *
+   * The `keymaps` component *places* every layout the media carries; nothing
+   * selected one, so a tree built for a Turkish user rendered `ç ü ş Ğ` in its
+   * menus and still typed on an American keyboard. ART writes
+   * `SetKeyboard <name>` into its own marked block in `S:User-Startup`, which
+   * both the 3.2 and the 3.9 tree's own `S/Startup-Sequence` ends by
+   * executing.
+   *
+   * Optional on the wire, and omitting it leaves the system on the ROM's
+   * `usa` — a default here would be ART choosing somebody's keyboard.
+   */
+  keymap?: string | null;
   /** The paired Kickstart, if supplied. `null` refuses any component whose
    *  condition needs it decided. */
   rom: string | null;
@@ -361,6 +376,33 @@ export interface VerifyReport {
  * component has been chosen, so the screen can show what it found the
  * moment a folder is picked. Writes nothing.
  */
+/**
+ * The keyboard layouts this plan would actually place, sorted.
+ *
+ * **Read off the plan's own items**, never from a list ART keeps: the picker
+ * can then only offer a layout that will really be in `Devs/Keymaps`, so the
+ * `keymap-missing` refusal is reachable only by a stale remembered value —
+ * which is exactly when it should fire.
+ */
+export function keymapsIn(plan: InstallPlan | null): string[] {
+  if (!plan) return [];
+  const names = new Set<string>();
+  for (const item of plan.items) {
+    if (item.isDir) continue;
+    const parts = item.to.split("/");
+    if (
+      parts.length === 3 &&
+      parts[0].toLowerCase() === "devs" &&
+      parts[1].toLowerCase() === "keymaps" &&
+      // `.info` is the icon beside the keymap, not a layout anybody can pick.
+      !parts[2].toLowerCase().endsWith(".info")
+    ) {
+      names.add(parts[2]);
+    }
+  }
+  return [...names].sort((a, b) => a.localeCompare(b));
+}
+
 export async function osinstallScanMedia(mediaFolder: string): Promise<MediaScanResult> {
   return invoke<MediaScanResult>("osinstall_scan_media", { folder: mediaFolder });
 }

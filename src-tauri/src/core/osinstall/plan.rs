@@ -184,6 +184,36 @@ pub struct UserStartupContribution {
     pub lines: Vec<String>,
 }
 
+/// The block `S:User-Startup` carries the keymap selection under.
+///
+/// Not a component id: no component chose this, the **user** did. It is its
+/// own block so that changing the keyboard rewrites one marked section and
+/// leaves every component's lines — and every line the user wrote — alone.
+pub const KEYMAP_SELECTION: &str = "keymap-selection";
+
+/// Is the keymap the user chose actually among the files this plan places?
+///
+/// Asked of the plan's own items rather than of the media or of a list: what
+/// matters is whether `Devs/Keymaps/<name>` will **exist** on the finished
+/// tree, and only the items know that.
+///
+/// Compared with [`super::amiga_names_equal`], the same international fold
+/// `scan::media_for` uses — a disc that spells it `TÜRKÇE` and a user who
+/// typed `türkçe` mean the same keymap, and answering "missing" there would
+/// be a refusal about nothing.
+fn keymap_is_placed(items: &[PlanItem], keymap: &str) -> bool {
+    items.iter().any(|item| {
+        let mut parts = item.to.split('/');
+        matches!(
+            (parts.next(), parts.next(), parts.next(), parts.next()),
+            (Some(devs), Some(keymaps), Some(name), None)
+                if devs.eq_ignore_ascii_case("Devs")
+                    && keymaps.eq_ignore_ascii_case("Keymaps")
+                    && super::amiga_names_equal(name, keymap)
+        )
+    })
+}
+
 /// One file or directory `apply` (a later task) will place in the
 /// distribution tree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -451,6 +481,34 @@ pub struct InstallRequest {
     /// request serialised before this existed must still deserialise.
     #[serde(default)]
     pub extra_media_folders: Vec<PathBuf>,
+    /// The keyboard layout the finished system should boot with — a name in
+    /// `Devs/Keymaps`, e.g. `türkçe`.
+    ///
+    /// **[ART-226]'s other half.** The `keymaps` component *places* every
+    /// keymap the media carries; nothing selected one, so a tree built for a
+    /// Turkish user rendered `ç ü ş Ğ` in its menus and still typed on an
+    /// American keyboard — which is the complaint that opened the issue.
+    ///
+    /// Measured on the trees ART has actually built, rather than recalled:
+    /// both the 3.2 and the 3.9 tree carry `C/SetKeyboard`, and both their own
+    /// `S/Startup-Sequence` files end with
+    ///
+    /// ```text
+    /// IF EXISTS S:User-Startup
+    ///   Execute S:User-Startup
+    /// ```
+    ///
+    /// so a `SetKeyboard <name>` line inside ART's own marked block in
+    /// `S:User-Startup` is read at every boot — and it runs **after** `IPrefs`,
+    /// so it is the last word. The alternative, writing `ENVARC:Sys/input.prefs`,
+    /// is a binary file ART would be overwriting on the user's behalf; a line
+    /// in a block ART already owns is neither.
+    ///
+    /// `None` leaves the system on the ROM's `usa`, exactly as before.
+    ///
+    /// [ART-226]: ../../../../docs/ISSUES.md
+    #[serde(default)]
+    pub keymap: Option<String>,
     /// The paired Kickstart, if the user supplied one. `None` refuses any
     /// component whose [`Condition`] needs it to be decided — see
     /// [`condition_holds`].
@@ -1326,7 +1384,7 @@ fn plan_over_with_cache(
     // refuses, matching `components_on`'s own rule: a component that never
     // resolved still explains itself, and this costs nothing to compute
     // when it does.
-    let user_startup = components_on
+    let mut user_startup: Vec<UserStartupContribution> = components_on
         .iter()
         .filter_map(|id| recipe.component(id))
         .filter(|component| !component.user_startup.is_empty())
@@ -1335,6 +1393,30 @@ fn plan_over_with_cache(
             lines: component.user_startup.clone(),
         })
         .collect();
+
+    // ART-226's other half: select the keymap, having placed it. The line is
+    // only written when the keymap is **really going to be there** — checked
+    // against the items this very plan produces, not against a name the caller
+    // typed. `S/SetKeyboard` on the owner's own 3.9 tree ends with
+    // `echo "ERROR: Can't load keymap"`, and a line that prints that at every
+    // boot is worse than no line at all.
+    if let Some(chosen) = request
+        .keymap
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+    {
+        if keymap_is_placed(&items, chosen) {
+            user_startup.push(UserStartupContribution {
+                component: KEYMAP_SELECTION.to_string(),
+                lines: vec![format!("SetKeyboard {chosen}")],
+            });
+        } else {
+            refusals.push(RefusalReason::KeymapMissing {
+                keymap: chosen.to_string(),
+            });
+        }
+    }
 
     // Resolved from the same `components_on` the rules were, and checked
     // against the items those rules produced — see `detect_missing_activations`.
@@ -1753,6 +1835,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec!["extras".to_string()],
             destination: dir.join("dist"),
@@ -1834,6 +1917,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: None,
             chosen: vec!["subtree-owner".to_string(), "file-writer".to_string()],
             destination: dir.join("dist"),
@@ -1841,6 +1925,164 @@ mod plan_tests {
             scan_cache: Default::default(),
         };
         plan(&request, &recipe).unwrap()
+    }
+
+    // -----------------------------------------------------------------
+    // ART-226's other half: selecting the keymap, having placed it.
+    // -----------------------------------------------------------------
+
+    /// A recipe whose one component places two keymaps, so a selection has
+    /// something real to be checked against.
+    fn keymap_fixture() -> (PathBuf, Recipe, PathBuf) {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-keymap");
+        let folder = dir.join("media");
+        std::fs::create_dir_all(&folder).unwrap();
+        crate::core::osinstall::fixtures::media(
+            &folder,
+            "Shelf",
+            "shelf.adf",
+            &[("Keymaps/türkçe", b"tr", 0), ("Keymaps/usa", b"us", 0)],
+        );
+        let recipe = Recipe {
+            release: "Test".to_string(),
+            components: vec![Component {
+                id: "keymaps".to_string(),
+                media: "Shelf".to_string(),
+                rules: vec![PathRule {
+                    from: "Keymaps".to_string(),
+                    to: "Devs/Keymaps".to_string(),
+                    kind: RuleKind::Subtree,
+                }],
+                required: true,
+                condition: None,
+                overrides: vec![],
+                user_startup: vec![],
+                activate: vec![],
+                exclusive_group: None,
+                label_key: None,
+                available: true,
+            }],
+        };
+        (dir, recipe, folder)
+    }
+
+    fn keymap_request(folder: &Path, dest: PathBuf, keymap: Option<&str>) -> InstallRequest {
+        InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2".to_string(),
+            media_folder: folder.to_path_buf(),
+            extra_media_folders: Vec::new(),
+            keymap: keymap.map(str::to_string),
+            rom: None,
+            chosen: vec!["keymaps".to_string()],
+            destination: dest,
+            excluded: Vec::new(),
+            scan_cache: Default::default(),
+        }
+    }
+
+    /// **The complaint that opened ART-226, answered.** The tree rendered
+    /// Turkish and typed American, because every keymap was placed and none
+    /// was selected.
+    ///
+    /// The line goes into `S:User-Startup`, which both the 3.2 and the 3.9
+    /// tree's own `S/Startup-Sequence` ends by executing — measured on the
+    /// trees ART has built, not recalled — and the command is `SetKeyboard`,
+    /// which is what `C/` in those same trees actually carries.
+    #[test]
+    fn choosing_a_keymap_writes_the_line_that_selects_it() {
+        let (dir, recipe, folder) = keymap_fixture();
+        let request = keymap_request(&folder, dir.join("dist"), Some("türkçe"));
+
+        let planned = plan(&request, &recipe).unwrap();
+        assert!(planned.refusals.is_empty(), "{:?}", planned.refusals);
+
+        let selection = planned
+            .user_startup
+            .iter()
+            .find(|c| c.component == KEYMAP_SELECTION)
+            .expect("the keymap selection must contribute a line");
+        assert_eq!(selection.lines, vec!["SetKeyboard türkçe".to_string()]);
+    }
+
+    /// **Nothing chosen is nothing written**, and the system stays on the
+    /// ROM's `usa` exactly as before. A default here would be ART choosing
+    /// somebody's keyboard for them.
+    #[test]
+    fn choosing_nothing_leaves_the_startup_file_alone() {
+        let (dir, recipe, folder) = keymap_fixture();
+        let request = keymap_request(&folder, dir.join("dist"), None);
+
+        let planned = plan(&request, &recipe).unwrap();
+        assert!(planned
+            .user_startup
+            .iter()
+            .all(|c| c.component != KEYMAP_SELECTION));
+    }
+
+    /// **The one that matters most.** The tree's own `S/SetKeyboard` script
+    /// ends with `echo "ERROR: Can't load keymap"`, so a line naming a keymap
+    /// the install does not place prints that at every boot — and looks like
+    /// ART did the thing while the keyboard is still American.
+    ///
+    /// Checked against the plan's **own items**, never against a list or a
+    /// name the caller typed.
+    #[test]
+    fn a_keymap_this_install_would_not_place_is_refused_rather_than_written() {
+        let (dir, recipe, folder) = keymap_fixture();
+        let request = keymap_request(&folder, dir.join("dist"), Some("norsk"));
+
+        let planned = plan(&request, &recipe).unwrap();
+        assert!(
+            planned
+                .user_startup
+                .iter()
+                .all(|c| c.component != KEYMAP_SELECTION),
+            "no line may be written"
+        );
+        assert!(
+            planned
+                .refusals
+                .iter()
+                .any(|r| matches!(r, RefusalReason::KeymapMissing { keymap } if keymap == "norsk")),
+            "and it says so: {:?}",
+            planned.refusals
+        );
+    }
+
+    /// A disc that spells it `TÜRKÇE` and a user who typed `türkçe` mean the
+    /// same keymap. Refusing there would be a refusal about nothing — the same
+    /// international fold `scan::media_for` already uses.
+    #[test]
+    fn the_selection_is_compared_the_way_amigados_compares_names() {
+        let (dir, recipe, folder) = keymap_fixture();
+        let request = keymap_request(&folder, dir.join("dist"), Some("TÜRKÇE"));
+
+        let planned = plan(&request, &recipe).unwrap();
+        assert!(planned.refusals.is_empty(), "{:?}", planned.refusals);
+        // Written as the **user** typed it, which is what they will read back.
+        let selection = planned
+            .user_startup
+            .iter()
+            .find(|c| c.component == KEYMAP_SELECTION)
+            .expect("must resolve");
+        assert_eq!(selection.lines, vec!["SetKeyboard TÜRKÇE".to_string()]);
+    }
+
+    /// Its own block, not a component's. Nobody's component chose this, and a
+    /// later change of keyboard must rewrite one marked section and leave
+    /// every other line — ART's and the user's — alone.
+    #[test]
+    fn the_selection_gets_its_own_block() {
+        assert!(
+            !crate::core::osinstall::recipe::amigaos_32()
+                .unwrap()
+                .components
+                .iter()
+                .any(|c| c.id == KEYMAP_SELECTION),
+            "'{KEYMAP_SELECTION}' must not collide with a component id"
+        );
     }
 
     // -----------------------------------------------------------------
@@ -1900,6 +2142,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: base.clone(),
             extra_media_folders: vec![update.clone()],
+            keymap: None,
             rom: None,
             chosen: vec!["from-base".to_string(), "from-update".to_string()],
             destination: dir.join("dist"),
@@ -1920,6 +2163,7 @@ mod plan_tests {
         // has to refuse the component that is in the second.
         let one_folder = InstallRequest {
             extra_media_folders: Vec::new(),
+            keymap: None,
             ..request
         };
         let narrower = plan(&one_folder, &recipe).unwrap();
@@ -1973,6 +2217,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: None,
             chosen: vec!["a".to_string()],
             destination: dir.join("dist"),
@@ -2017,6 +2262,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: None,
             chosen: vec!["a".to_string()],
             destination: dir.join("dist"),
@@ -2066,6 +2312,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: None,
             chosen: vec!["a".to_string(), "b".to_string()],
             destination: dir.join("dist"),
@@ -2135,6 +2382,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            keymap: None,
             // major 40 < 47, so `modules-b` switches on by its own
             // condition — never named in `chosen`.
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 40)),
@@ -2198,6 +2446,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: None,
             chosen: vec!["a".to_string()],
             destination: dir.join("dist"),
@@ -2282,6 +2531,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: None,
             chosen: vec!["a".to_string()],
             destination: scratch.join("dist"),
@@ -2544,6 +2794,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: None,
             chosen: vec!["storage".to_string()],
             destination: dir.join("dist"),
@@ -2715,6 +2966,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder.clone(),
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&scratch, 47)),
             chosen: vec!["extras".to_string()],
             destination: scratch.join("dist"),
@@ -2831,6 +3083,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 40)),
             chosen: vec!["workbench-base".to_string()],
             excluded: vec!["modules-a1200".to_string()],
@@ -2882,6 +3135,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec!["workbench-base".to_string(), "extras".to_string()],
             excluded: vec!["extras".to_string()],
@@ -2916,6 +3170,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec![],
             excluded: vec!["workbench-base".to_string()],
@@ -3140,6 +3395,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: Some(bad_rom),
             chosen: vec!["workbench-base".to_string()],
             destination: dir.join("dist"),
@@ -3180,6 +3436,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec!["workbench-base".to_string()],
             destination: dir.join("dist"),
@@ -3259,6 +3516,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: None,
             // Reverse of the recipe's own declaration order — see the doc
             // comment above.
@@ -3452,6 +3710,7 @@ mod plan_tests {
             release: "Test OS".to_string(),
             media_folder: media.to_path_buf(),
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: None,
             chosen: Vec::new(),
             excluded: Vec::new(),

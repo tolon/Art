@@ -1000,6 +1000,7 @@ mod tests {
         let request = crate::core::osinstall::plan::InstallRequest {
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: None,
             chosen: Vec::new(),
             excluded: Vec::new(),

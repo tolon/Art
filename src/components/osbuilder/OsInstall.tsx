@@ -95,6 +95,7 @@ import {
   osinstallPlan,
   osinstallRescanMedia,
   osinstallReleaseForMedia,
+  keymapsIn,
   osinstallScanMedia,
   pruneStaleExclusions,
   refusalPhrase,
@@ -114,7 +115,7 @@ import {
   type PlanResult,
 } from "@/lib/osinstall";
 import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
-import { isFlag, isTextList, isTextOrNothing } from "@/lib/remembered";
+import { isFlag, isText, isTextList, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useBuildSession } from "@/lib/useBuildSession";
 import { fraction, onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
@@ -283,6 +284,26 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     rememberedComponentKey("osinstall.extraMediaFolders", release),
     isTextList,
     []
+  );
+
+  /**
+   * **The keyboard the finished system boots with** (ART-226's other half).
+   *
+   * The `keymaps` component places every layout the media carries; until this
+   * existed nothing selected one, so a Turkish tree rendered `ç ü ş Ğ` in
+   * its menus and still typed on an American keyboard — the owner's own
+   * complaint, and the one that opened the issue.
+   *
+   * Per release, like the media folder (ART-207): a layout is a name in *that*
+   * release's `Devs/Keymaps`.
+   *
+   * Empty means the ROM's `usa`, exactly as before. **No default**: choosing
+   * somebody's keyboard for them is not ART's to do.
+   */
+  const [keymap, setKeymap] = useRemembered<string>(
+    rememberedComponentKey("osinstall.keymap", release),
+    isText,
+    ""
   );
 
   // A disc dropped on the panel names a *file*; the scanner takes the folder
@@ -673,6 +694,9 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       mediaFolder,
       // Work-list item 8: a 3.2.2.1 install reads from three folders.
       extraMediaFolders: extraMediaFolders,
+      // ART-226: empty means "leave it on the ROM's usa", so it is sent as
+      // null rather than as an empty string the Rust side would have to trim.
+      keymap: keymap.trim() ? keymap : null,
       rom: romPath,
       chosen: sanitized,
       destination: destination ?? "",
@@ -745,7 +769,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   // preview describing a plan nobody asked for any more. `chosen` and
   // `excludedConditional` are arrays in this list already, so the identity
   // question ART-178/ART-195 raise is one `useRemembered` has answered.
-  }, [mediaFolder, extraMediaFolders, romPath, chosen, destination, excludedConditional, release, catalogue, reuseScan, rescanNonce]);
+  }, [mediaFolder, extraMediaFolders, keymap, romPath, chosen, destination, excludedConditional, release, catalogue, reuseScan, rescanNonce]);
 
   // `subscribeSafely` (Task 7's own fix round, F7/ART-165): the bare
   // `.then((fn) => { unlisten = fn })` shape this used to have could both
@@ -922,6 +946,25 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       cancelled = true;
     };
   }, [wrongFolder, foundVolumeNames]);
+
+  /**
+   * What the plan would really put in `Devs/Keymaps` — the picker's options,
+   * so nothing offered can be refused for not being there.
+   *
+   * **Held across a re-plan**, and that is not a nicety. `effectivePlan` goes
+   * `null` while a new plan is in the air, and reading the list straight off it
+   * made the whole section vanish and come back on every keystroke elsewhere
+   * on the screen — including on the user's own choice of keyboard, which
+   * unmounted the control they had just used. A control that disappears under
+   * somebody's hand is the same defect as one that answers wrongly.
+   *
+   * A plan that **has** arrived always supersedes, empty included: turning the
+   * `keymaps` component off has to empty the list, not leave a stale one.
+   */
+  const [availableKeymaps, setAvailableKeymaps] = useState<string[]>([]);
+  useEffect(() => {
+    if (effectivePlan) setAvailableKeymaps(keymapsIn(effectivePlan));
+  }, [effectivePlan]);
 
   const blocker = osinstallBlocker({
     mediaFolder,
@@ -1526,6 +1569,42 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
               </div>
             ))}
           </div>
+        </section>
+      )}
+
+      {/* **ART-226's other half: choose the keyboard, having placed it.**
+          The options are read off the plan's own items, so the list is exactly
+          what will really be in `Devs/Keymaps` — a layout offered here cannot
+          then be refused for not being there. Nothing selected leaves the
+          system on the ROM's `usa`, which is what every ART tree did until
+          now; a default would be ART choosing somebody's keyboard. */}
+      {availableKeymaps.length > 0 && (
+        <section className="card" style={{ marginBottom: 16 }} data-testid="keymap-section">
+          <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osinstall.keymap.heading")}</h2>
+          <p className="muted" style={{ fontSize: 12, margin: "4px 0 12px" }}>
+            {t("osinstall.keymap.intro", { count: availableKeymaps.length })}
+          </p>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: "24em" }}>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {t("osinstall.keymap.label")}
+            </span>
+            <select
+              className="input"
+              value={keymap}
+              onChange={(e) => setKeymap(e.target.value)}
+              aria-label={t("osinstall.keymap.label")}
+            >
+              <option value="">{t("osinstall.keymap.rom")}</option>
+              {availableKeymaps.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+            <span className="faint" style={{ fontSize: 10 }}>
+              {t("osinstall.keymap.hint")}
+            </span>
+          </label>
         </section>
       )}
 

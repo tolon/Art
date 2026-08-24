@@ -3067,6 +3067,7 @@ mod tests {
             release: "AmigaOS 3.9".to_string(),
             media_folder: PathBuf::from(&media),
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: None,
             chosen: Vec::new(),
             excluded: Vec::new(),
@@ -3217,6 +3218,7 @@ mod tests {
             release: "AmigaOS 3.9".to_string(),
             media_folder: PathBuf::from(&media),
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: None,
             chosen: vec!["locale-base".to_string()],
             excluded: Vec::new(),
@@ -3351,6 +3353,7 @@ mod tests {
             release: release.clone(),
             media_folder: PathBuf::from(&media),
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: Some(PathBuf::from(&rom)),
             chosen,
             excluded: Vec::new(),
@@ -3837,6 +3840,7 @@ mod tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: missing.clone(),
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: None,
             chosen: vec!["workbench-base".to_string()],
             excluded: Vec::new(),
@@ -3864,6 +3868,7 @@ mod tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: dir.clone(),
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom: None,
             chosen: vec!["workbench-base".to_string()],
             excluded: Vec::new(),
@@ -4436,7 +4441,8 @@ mod tests {
             #[allow(dead_code)]
             fn every_variant_is_matched(reason: RefusalReason) {
                 match reason {
-                    RefusalReason::MediaMissing { .. }
+                    RefusalReason::KeymapMissing { .. }
+                    | RefusalReason::MediaMissing { .. }
                     | RefusalReason::MediaPathMissing { .. }
                     | RefusalReason::MediaUnreadable { .. }
                     | RefusalReason::RomUnknown
