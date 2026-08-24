@@ -858,6 +858,31 @@ export async function osinstallDescribeTree(tree: string): Promise<TreeSummary> 
   return invoke<TreeSummary>("osinstall_describe_tree", { tree });
 }
 
+/** One build found inside a folder of builds, and what it carries. */
+export interface FoundTree {
+  /** The tree's own folder, absolute. */
+  path: string;
+  /** Its folder name — what the picker shows, so no component splits a path. */
+  name: string;
+  /** Always `isTree: true`; anything else is not returned. */
+  summary: TreeSummary;
+}
+
+/**
+ * Every distribution tree directly inside `folder` (ART-197 wave 2, row 1).
+ *
+ * The artefact picker's question. A folder of builds is the ordinary case —
+ * the owner keeps several that differ by which components went in — and the
+ * only way to tell them apart used to be pointing a step at one and reading
+ * the refusal.
+ *
+ * **This one does throw** where `osinstallDescribeTree` does not: the user has
+ * just pointed at the folder, so "that path is gone" is the true sentence.
+ */
+export async function osinstallTreesIn(folder: string): Promise<FoundTree[]> {
+  return invoke<FoundTree[]>("osinstall_trees_in", { folder });
+}
+
 /**
  * When a folder holds install media and this release wants **none** of it,
  * the volume names it does hold — otherwise `null` (ART-208).

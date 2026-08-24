@@ -91,7 +91,7 @@ use crate::core::osinstall::apply::{
     add_package_staging_in, apply_staging_in, refuse_unless_free, ApplyOutcome,
     DistributionManifest, FileRecord, MANIFEST_FILE_NAME,
 };
-use crate::core::osinstall::chain::{self, TreeSummary};
+use crate::core::osinstall::chain::{self, FoundTree, TreeSummary};
 use crate::core::osinstall::collide::{self, CollisionReport, Incoming};
 use crate::core::osinstall::package::{self, Package};
 use crate::core::osinstall::plan::{
@@ -191,6 +191,22 @@ pub fn osinstall_scan_media(folder: PathBuf) -> AppResult<MediaScanResult> {
         }),
         Err(other) => Err(other.into()),
     }
+}
+
+/// Every distribution tree directly inside `folder`, and what each carries
+/// (ART-197 wave 2, row 1).
+///
+/// The artefact picker's own question. A folder of builds is the ordinary
+/// case — the owner keeps several, differing by which components went in —
+/// and until now the only way to tell them apart was to point a step at one
+/// and see what it refused.
+///
+/// A folder that cannot be read **is** an error here, unlike
+/// `osinstall_describe_tree`: the user has just pointed at it, so "that path
+/// is gone" is the true sentence and there is no folder to describe.
+#[tauri::command]
+pub fn osinstall_trees_in(folder: PathBuf) -> AppResult<Vec<FoundTree>> {
+    Ok(chain::trees_in(&folder)?)
 }
 
 /// Which shipped release these volume names are the install media of, if any

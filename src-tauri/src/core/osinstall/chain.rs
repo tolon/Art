@@ -93,7 +93,7 @@
 //! that some package is missing, which ART would not know.
 
 use std::collections::{BTreeSet, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -194,6 +194,73 @@ pub fn describe_tree(tree: &Path) -> TreeSummary {
             .collect(),
         problem: None,
     }
+}
+
+/// One tree found inside a folder, and what it carries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundTree {
+    /// The tree's own folder, absolute.
+    pub path: PathBuf,
+    /// Its folder name — what a picker shows, so the screen never has to
+    /// split a path itself.
+    pub name: String,
+    /// [`describe_tree`]'s answer for it. Always `is_tree: true`; anything
+    /// else is not returned at all.
+    pub summary: TreeSummary,
+}
+
+/// Every distribution tree directly inside `folder`, newest name last.
+///
+/// **ART-197's first remaining row, and the doc comment on
+/// [`TreeSummary::components`] already asked for it**: *"the owner learned by
+/// trial which of nine trees carried `locale-base`, when every manifest says
+/// so."* Nine folders whose names differ by a suffix, and the only way to tell
+/// them apart was to run something and see what happened.
+///
+/// **One directory level, no recursion.** A tree is a system volume — it has a
+/// `C`, a `Devs`, a `Libs` and several thousand files under them, and
+/// descending into one looking for another would walk the whole distribution
+/// to find nothing. The folder the user keeps their builds in is the folder
+/// they point at.
+///
+/// **The folder itself is not considered.** A caller that has just been handed
+/// a path asks [`describe_tree`] about it first; this answers the different
+/// question *"what is inside here?"*, and folding both into one function would
+/// mean a tree could be returned as its own child.
+///
+/// Unreadable entries are skipped rather than raised, for the reason
+/// [`describe_tree`] never fails: a folder holding one broken build and eight
+/// good ones should offer the eight. Only the top-level `read_dir` can fail,
+/// which is the caller's own bad path.
+pub fn trees_in(folder: &Path) -> CoreResult<Vec<FoundTree>> {
+    let mut found: Vec<FoundTree> = Vec::new();
+    for entry in std::fs::read_dir(folder)? {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let summary = describe_tree(&path);
+        if !summary.is_tree {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        found.push(FoundTree {
+            path,
+            name,
+            summary,
+        });
+    }
+    // `read_dir` order is the filesystem's, which on NTFS is neither creation
+    // order nor anything a person would predict. Sorted by name so the list
+    // is the same list twice running — a picker whose rows move between two
+    // openings is one nobody can learn.
+    found.sort_by_key(|found| found.name.to_lowercase());
+    Ok(found)
 }
 
 /// Every component and package id this tree already carries — the components
@@ -448,6 +515,168 @@ mod tests {
         )
         .unwrap();
         tree
+    }
+
+    /// A tree under a name of the caller's choosing, so a folder can hold
+    /// several and they can be told apart.
+    fn named_tree(at: &std::path::Path, name: &str, components: &[&str]) -> std::path::PathBuf {
+        let tree = at.join(name);
+        std::fs::create_dir_all(&tree).unwrap();
+        let manifest = DistributionManifest {
+            release: "amigaos-3.9".into(),
+            built_from: Vec::new(),
+            files: components.iter().map(|c| file_from(c)).collect(),
+            paired_rom: None,
+            amiga_installed: Vec::new(),
+        };
+        std::fs::write(
+            tree.join(MANIFEST_FILE_NAME),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        tree
+    }
+
+    // -----------------------------------------------------------------
+    // ART-197 wave 2, row 1: the artefact picker's own question.
+    // -----------------------------------------------------------------
+
+    /// The case the picker exists for: several builds side by side, told
+    /// apart by what each one carries rather than by trying them.
+    #[test]
+    fn a_folder_of_builds_lists_each_one_and_what_it_carries() {
+        let dir = scratch("trees-in");
+        named_tree(dir.path(), "dist-3.9-plain", &["workbench-base"]);
+        named_tree(
+            dir.path(),
+            "dist-3.9-turkish",
+            &["workbench-base", "locale-base"],
+        );
+
+        let found = trees_in(dir.path()).unwrap();
+        assert_eq!(found.len(), 2);
+
+        let turkish = found
+            .iter()
+            .find(|t| t.name == "dist-3.9-turkish")
+            .expect("the tree with the locale in it");
+        assert!(turkish.summary.is_tree);
+        assert_eq!(turkish.summary.release.as_deref(), Some("amigaos-3.9"));
+        assert!(
+            turkish
+                .summary
+                .components
+                .contains(&"locale-base".to_string()),
+            "which component a tree carries is the whole reason for the list"
+        );
+
+        let plain = found.iter().find(|t| t.name == "dist-3.9-plain").unwrap();
+        assert!(!plain
+            .summary
+            .components
+            .contains(&"locale-base".to_string()));
+    }
+
+    /// One broken build must not cost the user the eight good ones beside it.
+    #[test]
+    fn a_folder_that_is_not_a_tree_is_skipped_not_raised() {
+        let dir = scratch("trees-in-mixed");
+        named_tree(dir.path(), "a-real-build", &["workbench-base"]);
+        std::fs::create_dir_all(dir.path().join("just-a-folder")).unwrap();
+        // A folder that *has* a manifest ART cannot read is the harder case:
+        // `describe_tree` answers rather than failing, and this has to skip
+        // on the answer, not on the absence of a file.
+        let broken = dir.path().join("half-written");
+        std::fs::create_dir_all(&broken).unwrap();
+        std::fs::write(broken.join(MANIFEST_FILE_NAME), b"{ not json").unwrap();
+        std::fs::write(dir.path().join("notes.txt"), b"hello").unwrap();
+
+        let found = trees_in(dir.path()).unwrap();
+        assert_eq!(
+            found.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            vec!["a-real-build"]
+        );
+    }
+
+    /// The order is the same order twice running, and it is the order a
+    /// person reads.
+    ///
+    /// **One mutation survives here and it is disclosed rather than worked
+    /// around**: deleting `sort_by` altogether does not fail this test on
+    /// Windows, because NTFS keeps its directory index in a *case-insensitive*
+    /// order already — the same order the sort produces. Replacing the fold
+    /// with a byte-wise `cmp` **does** fail it (`Zulu` would come before
+    /// `beta`), which is what says the comparison is load-bearing wherever the
+    /// two differ. The sort stays for the filesystems whose `read_dir` is not
+    /// ordered at all; no test on this machine can prove it, and claiming one
+    /// could would be worse than saying so.
+    #[test]
+    fn the_list_is_sorted_by_name_and_stable() {
+        let dir = scratch("trees-in-order");
+        // Deliberately mixed case: `["zulu", "Alpha", "mike"]` sorts the same
+        // whether or not the comparison folds case, so it would have pinned
+        // nothing. These three separate the two.
+        for name in ["beta", "Alpha", "Zulu"] {
+            named_tree(dir.path(), name, &["workbench-base"]);
+        }
+        let names: Vec<String> = trees_in(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(
+            names,
+            vec!["Alpha", "beta", "Zulu"],
+            "a byte-wise sort puts Zulu before beta; a person does not"
+        );
+        let again: Vec<String> = trees_in(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(names, again);
+    }
+
+    /// A tree is a system volume with thousands of files under `C`, `Devs`
+    /// and `Libs`. Descending into one to look for another would walk the
+    /// whole distribution to find nothing — and would return a tree as its
+    /// own child.
+    #[test]
+    fn it_does_not_descend_into_a_tree_it_has_already_found() {
+        let dir = scratch("trees-in-nested");
+        let outer = named_tree(dir.path(), "outer", &["workbench-base"]);
+        named_tree(&outer, "inner", &["workbench-base"]);
+
+        let found = trees_in(dir.path()).unwrap();
+        assert_eq!(
+            found.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            vec!["outer"]
+        );
+    }
+
+    /// The folder the caller points at is a different question, asked of
+    /// `describe_tree`. Folding both in here would make a tree its own child.
+    #[test]
+    fn the_folder_itself_is_never_in_its_own_list() {
+        let dir = scratch("trees-in-self");
+        let tree = named_tree(dir.path(), "only-build", &["workbench-base"]);
+        assert!(trees_in(&tree).unwrap().is_empty());
+        assert!(
+            describe_tree(&tree).is_tree,
+            "asked the other way, it is one"
+        );
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_read_is_the_callers_own_bad_path() {
+        let dir = scratch("trees-in-missing");
+        assert!(trees_in(&dir.path().join("nowhere")).is_err());
+    }
+
+    #[test]
+    fn an_empty_folder_lists_nothing_without_complaining() {
+        let dir = scratch("trees-in-empty");
+        assert!(trees_in(dir.path()).unwrap().is_empty());
     }
 
     /// The defect ART-186 names, in one line: BoingBag 2 on a tree BoingBag 1
