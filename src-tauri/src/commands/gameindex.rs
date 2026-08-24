@@ -51,6 +51,69 @@ pub fn kickstart_offers_for(
     ))
 }
 
+/// Put one Kickstart where WHDLoad will look for it (ART-130).
+///
+/// **One agreed placement, never a title's worth.** The owner's decision was
+/// that ART offers and the user chooses; a command that took a title and did
+/// the right thing would be the silent copy that decision rules out. So this
+/// takes the single image the user pressed a button about.
+///
+/// Logged like every other write (§53), including its refusals — an occupied
+/// name and a name a slave should not have declared are both things somebody
+/// may want to find again afterwards.
+#[tauri::command]
+pub fn place_kickstart(
+    from: String,
+    as_name: String,
+    tree: String,
+    oplog: State<'_, JsonlOperationLog>,
+) -> AppResult<crate::core::rom::place::PlaceOutcome> {
+    use crate::core::rom::place::{place, PlaceOutcome, Placement};
+
+    let placement = Placement {
+        from: PathBuf::from(&from),
+        as_name: as_name.clone(),
+        tree: PathBuf::from(&tree),
+    };
+    let result = place(&placement).map_err(AppError::from);
+
+    write_result(
+        &oplog,
+        user_operation("Place a Kickstart a title asks for")
+            .source(&from)
+            .destination(&tree)
+            .detail("Name the title asks for", &as_name),
+        &result,
+        |record, done: &PlaceOutcome| {
+            // **The three endings stay apart in the log too.** A refusal
+            // recorded as a plain success is the operation log agreeing with a
+            // screen that out-claims the core, which is the shape this project
+            // names as its own worst.
+            let record = match done {
+                PlaceOutcome::Placed { to, bytes } => record
+                    .detail("Written to", to.clone())
+                    .detail("Bytes", bytes.to_string()),
+                PlaceOutcome::AlreadyThere { to } => {
+                    record.detail("Already there, unchanged", to.clone())
+                }
+                PlaceOutcome::Occupied { to } => {
+                    record.detail("Refused: a different ROM is already there", to.clone())
+                }
+            };
+            record.outcome(match done {
+                PlaceOutcome::Placed { .. } => OperationOutcome::verified(true),
+                // Nothing was written. `verified(false)` is not a failure and
+                // not a claim that anything was checked.
+                PlaceOutcome::AlreadyThere { .. } | PlaceOutcome::Occupied { .. } => {
+                    OperationOutcome::verified(false)
+                }
+            })
+        },
+    );
+
+    result
+}
+
 /// A slave's declared need, as the images it will accept.
 ///
 /// **The list wins when there is one.** `KickstartNeed::image` is the first of
