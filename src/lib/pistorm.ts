@@ -12,6 +12,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+import type { Phrase } from "@/lib/phrase";
+
 // ---------------------------------------------------------------------------
 // Hardware
 // ---------------------------------------------------------------------------
@@ -285,10 +287,68 @@ export interface KernelInfo {
 /** Where a named firmware set's text comes from. */
 export type ConfigSetSource = "current-config" | "set" | "screen-settings";
 
+/**
+ * Something true about activating a set that the diff does not say.
+ *
+ * A line moving from one kernel name to another is one changed character to a
+ * diff and a card that does not boot to a Pi - [ART-103](../../docs/ISSUES.md)
+ * reached by a different road.
+ */
+export type ActivationEffect =
+  | { effect: "kickstart-changes"; from: string | null; to: string }
+  | { effect: "kernel-changes"; from: string | null; to: string }
+  | { effect: "kickstart-not-on-the-card"; name: string }
+  | { effect: "kernel-not-on-the-card"; name: string }
+  | { effect: "no-kernel-named" }
+  | { effect: "chooses-per-board" };
+
 export interface ConfigSetPreview {
   file_name: string;
   before: string;
   after: string;
+  effects: ActivationEffect[];
+}
+
+/** Whether this effect is a reason to look twice before pressing the button. */
+export function effectIsSerious(effect: ActivationEffect): boolean {
+  return (
+    effect.effect === "kickstart-not-on-the-card" ||
+    effect.effect === "kernel-not-on-the-card"
+  );
+}
+
+/** The sentence for an activation effect, for the component to render. */
+export function activationPhrase(effect: ActivationEffect): Phrase {
+  switch (effect.effect) {
+    case "kickstart-changes":
+      return effect.from
+        ? {
+            key: "pistorm.sets.effect.kickstartChanges",
+            params: { from: effect.from, to: effect.to },
+          }
+        : { key: "pistorm.sets.effect.kickstartSet", params: { to: effect.to } };
+    case "kernel-changes":
+      return effect.from
+        ? {
+            key: "pistorm.sets.effect.kernelChanges",
+            params: { from: effect.from, to: effect.to },
+          }
+        : { key: "pistorm.sets.effect.kernelSet", params: { to: effect.to } };
+    case "kickstart-not-on-the-card":
+      return {
+        key: "pistorm.sets.effect.kickstartMissing",
+        params: { name: effect.name },
+      };
+    case "kernel-not-on-the-card":
+      return {
+        key: "pistorm.sets.effect.kernelMissing",
+        params: { name: effect.name },
+      };
+    case "no-kernel-named":
+      return { key: "pistorm.sets.effect.noKernel" };
+    case "chooses-per-board":
+      return { key: "pistorm.sets.effect.perBoard" };
+  }
 }
 
 export const DEFAULT_HARDWARE: PistormHardware = {

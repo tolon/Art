@@ -45,6 +45,8 @@ import {
   DEFAULT_HARDWARE,
   type AmigaChoice,
   type CardRom,
+  activationPhrase,
+  effectIsSerious,
   type ConfigSetPreview,
   type ConfigSetSource,
   type DisplayMode,
@@ -1270,6 +1272,32 @@ function ConfigSetsSection({
             onClick={(event) => event.stopPropagation()}
           >
             <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("pistorm.sets.previewTitle")}</h2>
+            {/* **Above the diff, not below it.** A diff hides nothing and
+                says nothing: `kernel=Emu68-pistorm.gz` becoming
+                `kernel=Emu68.img` is one changed character on screen and a card
+                that does not boot on the bench (ART-103). What the change
+                *means* has to be readable before the button, not discoverable
+                after it. */}
+            {preview.effects.length > 0 && (
+              <ul style={{ margin: "0 0 12px", paddingLeft: 18, fontSize: 12 }}>
+                {preview.effects.map((effect, index) => {
+                  const phrase = activationPhrase(effect);
+                  return (
+                    <li
+                      key={index}
+                      className={effectIsSerious(effect) ? "badge badge-warn" : "muted"}
+                      style={
+                        effectIsSerious(effect)
+                          ? { display: "block", padding: "4px 10px", marginBottom: 4 }
+                          : { marginBottom: 4 }
+                      }
+                    >
+                      {t(phrase.key, phrase.params)}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
             <FileDiff
               name={preview.file_name}
               before={preview.before}

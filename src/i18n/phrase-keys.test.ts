@@ -35,6 +35,7 @@ import {
   type PackageUpdate,
 } from "@/lib/sources";
 import { checksumBadge, type RomChecksum } from "@/lib/rom";
+import { activationPhrase, type ActivationEffect } from "@/lib/pistorm";
 import { copyDirection, ISO_WRITE_REFUSAL } from "@/lib/isoPane";
 import { parseCommandLine } from "@/lib/commandLine";
 import { planMove, type MoveInput } from "@/lib/movePlan";
@@ -595,6 +596,26 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       expect(refusal.ok).toBe(false);
       if (refusal.ok) continue;
       expect(isLeafKey(refusal.why.key), refusal.why.key).toBe(true);
+    }
+  });
+
+  it("activationPhrase: every ActivationEffect variant resolves", () => {
+    // Both arms of the two that read differently when there is nothing to
+    // change *from* - activating a set onto a card whose `config.txt` names no
+    // kernel at all is "the Pi will boot X", not "instead of null".
+    const effects: ActivationEffect[] = [
+      { effect: "kickstart-changes", from: "kick.rom", to: "kick31.rom" },
+      { effect: "kickstart-changes", from: null, to: "kick31.rom" },
+      { effect: "kernel-changes", from: "Emu68-pistorm.gz", to: "Emu68.gz" },
+      { effect: "kernel-changes", from: null, to: "Emu68.gz" },
+      { effect: "kickstart-not-on-the-card", name: "kick31.rom" },
+      { effect: "kernel-not-on-the-card", name: "Emu68.img" },
+      { effect: "no-kernel-named" },
+      { effect: "chooses-per-board" },
+    ];
+    for (const effect of effects) {
+      const phrase = activationPhrase(effect);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
     }
   });
 
