@@ -45,6 +45,7 @@ pub mod safety;
 pub mod security;
 pub mod sources;
 pub mod validation;
+pub mod vhd;
 pub mod volume;
 pub mod whdload;
 pub mod winuae;

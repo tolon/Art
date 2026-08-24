@@ -64,6 +64,37 @@ fn is_lha(d: &Detection) -> bool {
 fn is_harddisk(d: &Detection) -> bool {
     d.category == FormatCategory::HardDiskImage
 }
+/// A hard-disk image ART cannot read as a sequence of disk sectors, because
+/// its data is not laid out that way.
+///
+/// **The owner's own `AmiKit.hdf` is one**: a *dynamic* VHD under an `.hdf`
+/// name, whose offset 0 holds a copy of its own footer rather than the disk's
+/// first sector. A *fixed* VHD is deliberately not here — that one is a raw
+/// image with 512 bytes appended, so every reader works on it unchanged.
+///
+/// `"vhd"` bare is the disk type the specification does not name, and it is
+/// treated as opaque for the reason `core::vhd::VhdKind` gives: a layout
+/// nobody has read the specification for is not a layout to assume.
+fn is_opaque_container(d: &Detection) -> bool {
+    matches!(
+        d.format_hint.as_str(),
+        "vhd-dynamic" | "vhd-differencing" | "vhd"
+    )
+}
+/// A hard-disk image whose sectors really are where a reader would look.
+///
+/// The same shape as [`is_lha`] above and for the same reason: offering "Open
+/// in Hard Disk Studio" for a dynamic VHD is an action that exists to fail
+/// (§46, §89), and it would fail by *saying* the disk has no partition table
+/// — a true sentence about the bytes at offset 0 and a wrong one about the
+/// disk.
+///
+/// Hex and Collection deliberately keep the wider [`is_harddisk`]: hashing a
+/// file works whatever is inside it, and a hex viewer showing raw bytes is
+/// exactly what somebody looking at an unreadable container wants.
+fn is_raw_harddisk(d: &Detection) -> bool {
+    is_harddisk(d) && !is_opaque_container(d)
+}
 fn is_rom(d: &Detection) -> bool {
     d.category == FormatCategory::Rom
 }
@@ -444,7 +475,7 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             Recommended,
             10,
             true,
-            is_harddisk,
+            is_raw_harddisk,
         ),
         nav(
             "hdf.launch_winuae",
@@ -454,7 +485,7 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             Recommended,
             20,
             true,
-            is_harddisk,
+            is_raw_harddisk,
         ),
         nav(
             "hdf.add_collection",
@@ -848,6 +879,58 @@ mod tests {
             browse < install,
             "iso.browse must precede os.install-from-disc: {ids:?}"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Work-list item 7: a hard-disk image ART cannot read as sectors.
+    // -----------------------------------------------------------------
+
+    /// **The owner's `AmiKit.hdf`.** Offering "Open in Hard Disk Studio" for a
+    /// dynamic VHD is an action that exists to fail (§46, §89) — and it would
+    /// fail by *saying* the disk has no partition table, which is true about
+    /// the bytes at offset 0 and wrong about the disk.
+    #[test]
+    fn a_container_art_cannot_read_as_sectors_is_not_offered_the_raw_studios() {
+        for hint in ["vhd-dynamic", "vhd-differencing", "vhd"] {
+            let ids = ids_for(&detection(FormatCategory::HardDiskImage, hint, false));
+            assert!(
+                !ids.contains(&"hdf.browse"),
+                "{hint} must not offer the Hard Disk Studio: {ids:?}"
+            );
+            assert!(
+                !ids.contains(&"hdf.launch_winuae"),
+                "{hint} must not offer WinUAE: {ids:?}"
+            );
+        }
+    }
+
+    /// **And it is not a dead end** (§91). Hashing a file works whatever is
+    /// inside it, and a hex viewer showing raw bytes is exactly what somebody
+    /// looking at a container ART cannot open wants to see.
+    #[test]
+    fn it_still_has_somewhere_to_go() {
+        for hint in ["vhd-dynamic", "vhd-differencing", "vhd"] {
+            let ids = ids_for(&detection(FormatCategory::HardDiskImage, hint, false));
+            assert!(!ids.is_empty(), "{hint} is a dead end");
+            assert!(ids.contains(&"hdf.hex"), "{hint}: {ids:?}");
+            assert!(ids.contains(&"hdf.add_collection"), "{hint}: {ids:?}");
+        }
+    }
+
+    /// **A fixed VHD is deliberately not narrowed.** It is a raw image with
+    /// 512 bytes appended, so every reader works on it unchanged — and a test
+    /// that lumped it in with the others would be pinning a restriction ART
+    /// does not need and the user would feel.
+    #[test]
+    fn a_fixed_vhd_keeps_every_offer_an_ordinary_image_has() {
+        let fixed = ids_for(&detection(
+            FormatCategory::HardDiskImage,
+            "vhd-fixed",
+            false,
+        ));
+        let plain = ids_for(&detection(FormatCategory::HardDiskImage, "hdf", false));
+        assert_eq!(fixed, plain);
+        assert!(fixed.contains(&"hdf.browse"));
     }
 
     /// The offer is for discs only. A floppy image goes to the ADF studio and
