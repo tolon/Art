@@ -616,6 +616,17 @@ pub enum HostPlacementBlock {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "refusal", rename_all = "kebab-case")]
 pub enum RefusalReason {
+    /// A keyboard layout was chosen and this install would not place it, so
+    /// the `SetKeyboard` line ART would write points at nothing.
+    ///
+    /// **[ART-226].** The tree's own `S/SetKeyboard` script ends with
+    /// `echo "ERROR: Can't load keymap"`, and a line that prints that at every
+    /// boot is worse than no line at all — it looks like ART did the thing and
+    /// the keyboard is still American. So the selection is checked against the
+    /// items *this plan* produces, never against the name the caller typed.
+    ///
+    /// [ART-226]: ../../../docs/ISSUES.md
+    KeymapMissing { keymap: String },
     /// No image in the folder carries this volume name.
     MediaMissing {
         component: String,
@@ -1194,6 +1205,7 @@ pub(crate) mod fixtures {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            keymap: None,
             rom,
             chosen: chosen.iter().map(|s| s.to_string()).collect(),
             excluded: Vec::new(),

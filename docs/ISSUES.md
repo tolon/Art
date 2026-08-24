@@ -331,6 +331,37 @@ refuse with `DestinationCollision { path: "Devs/Keymaps/türkçe", components:
 a destination retyped, `requires_components` emptied, a rule dropped — all
 fell too.
 
+> **The selecting half landed 2026-08-24, and it is what the owner's original
+> sentence was about.** Placing every keymap was never enough: *"klavye
+> örtüsünde türkçe yok"* is about which one the machine **boots with**.
+>
+> **Measured on the trees ART has actually built, not recalled.** Both the 3.2
+> and the 3.9 tree carry `C/SetKeyboard`, and both their own
+> `S/Startup-Sequence` files end with `IF EXISTS S:User-Startup` /
+> `Execute S:User-Startup` — so a `SetKeyboard <name>` line in ART's own marked
+> block is read at every boot, and it runs **after** `IPrefs`, which makes it
+> the last word. The alternative, `ENVARC:Sys/input.prefs`, is a binary file
+> ART would be overwriting on the user's behalf; a line in a block ART already
+> owns is neither.
+>
+> `InstallRequest::keymap`, `plan()` and a picker on the install step whose
+> options are **read off the plan's own items** — so a layout it offers cannot
+> then be refused for not being there, and `RefusalReason::KeymapMissing` is
+> reachable only by a stale remembered value, which is exactly when it should
+> fire. That refusal exists because the tree's own `S/SetKeyboard` ends with
+> `echo "ERROR: Can't load keymap"`: a line naming a keymap the install does
+> not place prints that at every boot and looks like ART did the thing.
+>
+> **No default.** Nothing chosen leaves the system on the ROM's `usa`, exactly
+> as before — choosing somebody's keyboard for them is not ART's to do.
+>
+> *Tests:* 5 in `plan.rs`, 7 over `keymapsIn`, 5 on the screen. Fifteen
+> mutations, fifteen fell. **Two real defects came out of writing the tests
+> rather than out of review**: the plan did not re-run when the keyboard
+> changed, so the picker would have done nothing; and the section **vanished
+> during every re-plan**, unmounting the control the user had just touched.
+> Both fixed here.
+
 **Two threads stay open, and neither is a decision any more:**
 
 1. **The per-language half of `locale-39`.** ART's package model wraps one

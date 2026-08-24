@@ -199,6 +199,21 @@ const COMPONENTS_32: ComponentDef[] = [
     exclusiveGroup: "modules",
     overrides: [],
   },
+  // ART-226. The shipped 3.2 recipe has carried a `keymaps` component since
+  // 2026-08-24; this fixture was behind it, which is what made the keyboard
+  // picker vanish on the second plan - `sanitizeChosen` pruned an id the
+  // catalogue did not know.
+  {
+    id: "keymaps",
+    media: "Storage3.2",
+    labelKey: null,
+    required: false,
+    available: true,
+    conditionMajor: null,
+    requiresRomMajor: null,
+    exclusiveGroup: null,
+    overrides: [],
+  },
 ];
 
 const COMPONENTS_39: ComponentDef[] = [
@@ -228,6 +243,20 @@ const COMPONENTS_39: ComponentDef[] = [
     requiresRomMajor: null,
     exclusiveGroup: null,
     overrides: ["workbench-base"],
+  },
+  // ART-226. Both shipped recipes carry a `keymaps` component since
+  // 2026-08-24, and this fixture was behind the real one until the keyboard
+  // picker's own test needed 3.9 to have it too.
+  {
+    id: "keymaps",
+    media: "AmigaOS3.9",
+    labelKey: null,
+    required: false,
+    available: true,
+    conditionMajor: null,
+    requiresRomMajor: null,
+    exclusiveGroup: null,
+    overrides: [],
   },
 ];
 
@@ -260,6 +289,15 @@ const ITEM_EXTRAS: PlanItem = {
  *  the same way it would be against the real engine. */
 function planResultFor(req: InstallRequest): PlanResult {
   const items = req.chosen.includes("extras") ? [ITEM_WORKBENCH, ITEM_EXTRAS] : [ITEM_WORKBENCH];
+  // ART-226: the keyboard picker's options are read off the plan's own items,
+  // so a plan that places keymaps is what makes the section appear at all.
+  if (req.chosen.includes("keymaps")) {
+    items.push(
+      { ...ITEM_WORKBENCH, component: "keymaps", to: "Devs/Keymaps/türkçe" },
+      { ...ITEM_WORKBENCH, component: "keymaps", to: "Devs/Keymaps/türkçe.info" },
+      { ...ITEM_WORKBENCH, component: "keymaps", to: "Devs/Keymaps/usa" }
+    );
+  }
   return {
     outcome: "planned",
     plan: {
@@ -1422,5 +1460,95 @@ describe("media in more than one folder", () => {
       "AmigaOS 3.9"
     );
     await waitFor(() => expect(screen.queryAllByTestId("extra-media-folder")).toHaveLength(0));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ART-226's other half: choosing the keyboard, having placed it
+// ---------------------------------------------------------------------------
+//
+// The owner built a Turkish tree, watched its menus render ç ü ş Ğ, and then
+// could not type them: every keymap was placed and none was selected. The
+// picker's options are read off the plan's own items, so a layout it offers
+// cannot then be refused for not being there.
+
+describe("choosing the keyboard the system boots with", () => {
+  it("says nothing when the install places no keymaps", async () => {
+    await renderFull();
+    expect(screen.queryByTestId("keymap-section")).toBeNull();
+  });
+
+  it("offers what the plan will really place, and not the icons", async () => {
+    seedRemembered({ ...FULL_FIELDS, "osinstall.chosen": ["keymaps"] });
+    render(<OsInstall />);
+    await screen.findByTestId("keymap-section");
+
+    const picker = screen.getByRole("combobox", { name: /keyboard layout/i });
+    const options = [...picker.querySelectorAll("option")].map((o) => o.getAttribute("value"));
+    // The empty one is "leave it to Kickstart".
+    expect(options).toContain("");
+    expect(options).toContain("türkçe");
+    expect(options).toContain("usa");
+    expect(options).not.toContain("türkçe.info");
+  });
+
+  it("sends the chosen layout to the planner", async () => {
+    seedRemembered({ ...FULL_FIELDS, "osinstall.chosen": ["keymaps"] });
+    render(<OsInstall />);
+    await screen.findByTestId("keymap-section");
+
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: /keyboard layout/i }),
+      "türkçe"
+    );
+
+    // Does the control itself move?
+    expect(
+      (screen.getByRole("combobox", { name: /keyboard layout/i }) as HTMLSelectElement).value
+    ).toBe("türkçe");
+    // The last plan the screen asked for is the one it is showing, and it has
+    // to carry the choice - otherwise the picker moves and nothing follows it.
+    await waitFor(() => {
+      const sent = planMock.mock.calls.at(-1)![0] as InstallRequest;
+      expect(sent.keymap).toBe("türkçe");
+    });
+  });
+
+  /// **No default.** Every ART tree until now booted on the ROM's `usa`, and
+  /// choosing somebody's keyboard for them is not ART's to do.
+  it("sends null when nothing is chosen, leaving it to Kickstart", async () => {
+    seedRemembered({ ...FULL_FIELDS, "osinstall.chosen": ["keymaps"] });
+    render(<OsInstall />);
+    await screen.findByTestId("keymap-section");
+
+    const sent = planMock.mock.calls.at(-1)![0] as InstallRequest;
+    expect(sent.keymap).toBeNull();
+  });
+
+  /// Per release, like the media folder (ART-207): a layout is a name in
+  /// *that* release's `Devs/Keymaps`.
+  it("remembers the choice per release", async () => {
+    seedRemembered({
+      ...FULL_FIELDS,
+      "osinstall.chosen": ["keymaps"],
+      "osinstall.keymap": "türkçe",
+      "osinstall.chosen.AmigaOS 3.9": ["keymaps"],
+      "osinstall.keymap.AmigaOS 3.9": "",
+    });
+    render(<OsInstall />);
+    await screen.findByTestId("keymap-section");
+    expect(
+      (screen.getByRole("combobox", { name: /keyboard layout/i }) as HTMLSelectElement).value
+    ).toBe("türkçe");
+
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: i18n.t("osinstall.release.label") }),
+      "AmigaOS 3.9"
+    );
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("combobox", { name: /keyboard layout/i }) as HTMLSelectElement).value
+      ).toBe("")
+    );
   });
 });

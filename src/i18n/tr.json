@@ -2441,6 +2441,13 @@
       "heading": "Bunun neyin yerine geçeceği",
       "summary": "{{components}} {{placed}} dosya yerleştirecek: {{fresh}} yeni, {{unchanged}} zaten birebir aynı ve {{replaced}} tanesi bu sürümün başka bir parçasının önce koyduğu dosyaların üzerine.",
       "failed": "ART bunun neyin yerine geçeceğini hesaplayamadı: {{error}}"
+    },
+    "keymap": {
+      "heading": "Klavye",
+      "intro": "Devs/Keymaps içinde {{count}} düzen olacak. Sistemin hangisiyle açılacağını seçin.",
+      "label": "Klavye düzeni",
+      "rom": "Kickstart'a bırak (usa)",
+      "hint": "ART, S:User-Startup içindeki kendi bloğuna SetKeyboard yazar. Dosyadaki başka hiçbir şeye dokunulmaz."
     }
   },
   "gameindex": {

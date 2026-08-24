@@ -26,6 +26,7 @@ import {
   conditionalToggleAction,
   hasRomUnknownRefusal,
   isForcedOnByCondition,
+  keymapsIn,
   osinstallBlocker,
   parseOptionalSlot,
   parsePartitionIndex,
@@ -637,5 +638,93 @@ describe("osinstallBlocker", () => {
       plan: planned({ refusals: [MEDIA_MISSING("workbench-base", "Workbench3.2")] }),
     });
     expect(blocker?.key).toBe("osinstall.blocked.refusals");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ART-226's other half: which keyboards a plan would really place
+// ---------------------------------------------------------------------------
+
+describe("keymapsIn", () => {
+  const planWith = (to: string[]): InstallPlan =>
+    ({
+      items: to.map((path) => ({
+        component: "keymaps",
+        media: "Shelf",
+        from: path,
+        to: path,
+        isDir: false,
+      })),
+    }) as unknown as InstallPlan;
+
+  it("reads the layouts off the plan's own items", () => {
+    expect(
+      keymapsIn(
+        planWith(["Devs/Keymaps/türkçe", "Devs/Keymaps/usa", "C/Assign", "Libs/x.library"])
+      )
+    ).toEqual(["türkçe", "usa"]);
+  });
+
+  /// **The icon is not a layout.** `Devs/Keymaps` carries a `.info` beside
+  /// every keymap, and offering `türkçe.info` in the picker would write a
+  /// `SetKeyboard türkçe.info` line that prints an error at every boot.
+  it("does not offer the icons as keyboards", () => {
+    expect(keymapsIn(planWith(["Devs/Keymaps/tr", "Devs/Keymaps/tr.info"]))).toEqual(["tr"]);
+  });
+
+  /// **A directory inside the drawer is not a layout either**, and that is
+  /// the case `isDir` actually guards: it splits into three parts exactly as a
+  /// keymap does, so nothing about the path says it is not one. Found by
+  /// mutation — the first version of these tests only had the drawer itself,
+  /// which the three-part rule already excludes, so removing `isDir` broke
+  /// nothing.
+  it("does not offer a directory that sits inside the drawer", () => {
+    const plan = {
+      items: [
+        {
+          component: "keymaps",
+          media: "S",
+          from: "Keymaps/extra",
+          to: "Devs/Keymaps/extra",
+          isDir: true,
+        },
+        {
+          component: "keymaps",
+          media: "S",
+          from: "Keymaps/tr",
+          to: "Devs/Keymaps/tr",
+          isDir: false,
+        },
+      ],
+    } as unknown as InstallPlan;
+    expect(keymapsIn(plan)).toEqual(["tr"]);
+  });
+
+  /// A directory entry for the drawer itself is not a layout either.
+  it("does not offer the drawer", () => {
+    const plan = {
+      items: [
+        { component: "keymaps", media: "S", from: "Keymaps", to: "Devs/Keymaps", isDir: true },
+        { component: "keymaps", media: "S", from: "Keymaps/d", to: "Devs/Keymaps/d", isDir: false },
+      ],
+    } as unknown as InstallPlan;
+    expect(keymapsIn(plan)).toEqual(["d"]);
+  });
+
+  /// Anything deeper than one level is not a keymap AmigaOS would load.
+  it("ignores anything below the drawer", () => {
+    expect(keymapsIn(planWith(["Devs/Keymaps/extra/deep"]))).toEqual([]);
+  });
+
+  it("says nothing when there is no plan yet", () => {
+    expect(keymapsIn(null)).toEqual([]);
+  });
+
+  it("is sorted, so the list does not move between two plans", () => {
+    expect(keymapsIn(planWith(["Devs/Keymaps/usa", "Devs/Keymaps/d", "Devs/Keymaps/i"]))).toEqual([
+      "d",
+      "i",
+      "usa",
+    ]);
   });
 });

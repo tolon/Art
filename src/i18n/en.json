@@ -2441,6 +2441,13 @@
       "heading": "What this would replace",
       "summary": "{{components}} would place {{placed}} files: {{fresh}} new, {{unchanged}} already identical, and {{replaced}} over files another part of this release puts down first.",
       "failed": "ART could not work out what this would replace: {{error}}"
+    },
+    "keymap": {
+      "heading": "Keyboard",
+      "intro": "{{count}} layout(s) will be in Devs/Keymaps. Pick the one the system should start with.",
+      "label": "Keyboard layout",
+      "rom": "Leave it to Kickstart (usa)",
+      "hint": "ART writes SetKeyboard into its own block in S:User-Startup. Nothing else in the file is touched."
     }
   },
   "gameindex": {
