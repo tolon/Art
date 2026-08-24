@@ -61,8 +61,16 @@
 //! yet. The two routes, neither built:
 //!
 //! 1. **Into the hardfile**, beside the slave, through `core/volume/write`.
-//!    A `whdload-hardfile` is a bare FFS volume whose boot block says `DOS`
-//!    write.
+//!    A `whdload-hardfile` is a bare FFS volume ART can already write.
+//!
+//!    **Measured on all 1 697 of the owner's own images**
+//!    ([`free_bytes_in_hardfile`], 2026-08-24): every one read without error,
+//!    the median has **43 008 bytes free** against a file of a few dozen, and
+//!    **148 have less than a kilobyte** — many of them exactly zero. So the
+//!    route is open for roughly 1 549 titles and closed for 148, which is a
+//!    distinct ending rather than a failure, and a number worth having before
+//!    anybody decides whether ART should write into somebody's game files at
+//!    all.
 //! 2. **Into a distribution's own Games drawer**, for a build that unpacks
 //!    WHDLoad archives rather than carrying self-booting images — the
 //!    ClassicWB/HstWB shape, which this owner's collection is not.
@@ -297,10 +305,121 @@ pub fn write_into(drawer: &Path, data: &IGameData) -> CoreResult<Written> {
     })
 }
 
+/// How much room a WHDLoad hardfile has left, so a route can be judged rather
+/// than guessed at.
+///
+/// **Read-only**, and deliberately so: whether ART should write into somebody's
+/// 1 697 game images at all is a decision, and a decision wants a number in
+/// front of it. Opens the volume through the reading half of
+/// [`crate::core::volume`] — a `&dyn BlockDevice`, which the type system will
+/// not let write.
+pub fn free_bytes_in_hardfile(image: &std::path::Path) -> CoreResult<u64> {
+    use crate::core::adf::blocks::{Bitmap, RootBlock};
+    use crate::core::volume::mount::{mount, scan_image};
+    use crate::core::volume::read_block_vec;
+
+    let scanned = scan_image(image)?;
+    let entry = scanned
+        .volumes
+        .iter()
+        .find(|volume| volume.is_mountable())
+        .ok_or_else(|| crate::core::error::CoreError::Malformed {
+            format: "hardfile".into(),
+            detail: "no mountable volume".into(),
+        })?;
+    let (device, geometry) = mount(image, entry)?;
+
+    let root = RootBlock::parse(&read_block_vec(&device, geometry.root_block)?)?;
+    let bitmap = Bitmap::parse(
+        &read_block_vec(&device, root.bitmap_block)?,
+        geometry.total_blocks as usize,
+    )?;
+    Ok(bitmap.free_count() as u64 * geometry.block_size as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::ScratchDir;
+
+    /// **Is there room to write into these at all?**
+    ///
+    /// Permanent and `#[ignore]`d, like every hook that needs the owner's own
+    /// material. The question it answers is not about code: writing
+    /// `igame.data` *inside* each hardfile is the only route this collection
+    /// has, and a route into a volume with no free blocks is not a route.
+    ///
+    /// ```text
+    /// cd src-tauri && ART_HDF_DIR="E:\amiga\Amigatolon\WHDload"     ///   cargo test how_much_room_the_hardfiles_have -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs the owner's own hardfiles; set ART_HDF_DIR"]
+    fn how_much_room_the_hardfiles_have() {
+        let Ok(dir) = std::env::var("ART_HDF_DIR") else {
+            return;
+        };
+
+        fn walk(at: &Path, into: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(at) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, into);
+                } else if path
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("hdf"))
+                {
+                    into.push(path);
+                }
+            }
+        }
+        let mut images = Vec::new();
+        walk(Path::new(&dir), &mut images);
+        images.sort();
+        println!("{} hardfiles", images.len());
+
+        let mut free: Vec<u64> = Vec::new();
+        let mut unreadable = 0usize;
+        // A rendered file is a few dozen bytes, but AmigaDOS allocates whole
+        // blocks: a header block plus at least one data block.
+        let needed = 2 * 512u64;
+        let mut too_tight = 0usize;
+        for image in &images {
+            match free_bytes_in_hardfile(image) {
+                Ok(bytes) => {
+                    if bytes < needed {
+                        too_tight += 1;
+                        if too_tight <= 5 {
+                            println!("  tight: {} has {bytes} bytes free", image.display());
+                        }
+                    }
+                    free.push(bytes);
+                }
+                Err(err) => {
+                    unreadable += 1;
+                    if unreadable <= 5 {
+                        println!("  unreadable: {} - {err}", image.display());
+                    }
+                }
+            }
+        }
+        free.sort_unstable();
+        println!("read {}, unreadable {unreadable}", free.len());
+        if !free.is_empty() {
+            println!(
+                "  free bytes: smallest {} median {} largest {}",
+                free[0],
+                free[free.len() / 2],
+                free[free.len() - 1]
+            );
+            println!(
+                "  with less than {needed} bytes free: {too_tight} of {}",
+                free.len()
+            );
+        }
+    }
 
     fn data() -> IGameData {
         IGameData {
