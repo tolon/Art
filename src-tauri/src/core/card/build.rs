@@ -95,9 +95,26 @@ pub struct BuiltCard {
 /// image is tens of gigabytes of somebody's afternoon, and "it was already
 /// there" is not a reason to lose it.
 ///
-/// The file is created *sparse* where the filesystem underneath allows it —
-/// `set_len` on NTFS costs nothing and takes no space — so building a 128 GB
-/// card writes the few megabytes that are actually structure.
+/// # A `.vhd` destination costs what it holds; a `.img` costs its whole size
+///
+/// **The claim that used to stand here was false and was measured, not
+/// argued about.** It said the image was *"created sparse where the filesystem
+/// underneath allows it — `set_len` on NTFS costs nothing and takes no
+/// space"*. On the owner's own D: drive, 2026-08-24: `SetLength(2 GB)`
+/// consumed **2 147 483 648 bytes** of free space, exactly the length, and
+/// `fsutil sparse queryflag` said *"This file is NOT set as sparse"*. A 32 GiB
+/// card really did cost 32 GiB, and the comment saying otherwise sat in the
+/// file somebody would read first when trying to fix that ([ART-230]).
+///
+/// So the destination decides. A name ending `.vhd` is written as a **dynamic
+/// VHD** (`core::vhd::write`) — a portable, self-describing format that
+/// hst-imager, WinUAE, Hyper-V and qemu all read, whose saving survives being
+/// copied to another machine. Measured: a 32 GiB card with three blocks
+/// touched is **6 360 576 bytes**, and Microsoft's own `Get-VHD` reads every
+/// field of it (`scripts/vhd-oracle-check.py`). Anything else is written raw,
+/// unchanged, because a raw image is what `dd` and every card writer take.
+///
+/// [ART-230]: ../../../../docs/ISSUES.md
 pub fn build_card(
     dest: &Path,
     spec: &CardSpec,
@@ -123,44 +140,47 @@ pub fn build_card(
     };
 
     step("Creating the image");
-    let mut file = std::fs::File::create_new(dest)?;
-    file.set_len(layout.total_sectors * SECTOR_BYTES)?;
+    let file = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(dest)?;
 
-    step("Writing the partition table");
-    file.write_all(&write_mbr(&layout))?;
+    // **The destination decides the container.** A `.vhd` costs what it holds;
+    // anything else is the raw image every card writer takes. Both are laid
+    // out by the same code below — `lay_out` is generic over `Read + Write +
+    // Seek`, which `create_boot_partition` already required — so the two paths
+    // cannot drift apart in what they write, only in how it is stored.
+    let as_vhd = dest
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("vhd"));
 
-    step("Creating the boot partition");
-    create_boot_partition(
-        &mut file,
-        layout.boot.start_bytes(),
-        layout.boot.length_bytes(),
-        &spec.label,
-        &spec.boot_files,
-    )?;
-
-    for (index, area) in spec.areas.iter().enumerate() {
-        step(&format!("Preparing Amiga disk {}", index + 1));
-        if progress.is_cancelled() {
-            // Between whole units of work (§54). The half-built file is ART's
-            // own — it did not exist a moment ago — so it goes with the
-            // cancellation rather than being left as a card-shaped thing
-            // somebody might later try to boot.
-            drop(file);
-            let _ = std::fs::remove_file(dest);
-            return Err(CoreError::Cancelled);
+    let outcome = if as_vhd {
+        let mut image =
+            crate::core::vhd::DynamicVhd::create(file, layout.total_sectors * SECTOR_BYTES)?;
+        let laid = lay_out(&mut image, &layout, spec, &mut step, progress);
+        match laid {
+            Ok(()) => image.finish()?.sync_all().map_err(CoreError::Io),
+            Err(err) => Err(err),
         }
+    } else {
+        let mut image = file;
+        image.set_len(layout.total_sectors * SECTOR_BYTES)?;
+        let laid = lay_out(&mut image, &layout, spec, &mut step, progress);
+        match laid {
+            Ok(()) => image.sync_all().map_err(CoreError::Io),
+            Err(err) => Err(err),
+        }
+    };
 
-        let placed = &layout.areas[index];
-        let rdb = create_rdb_layout(placed.length_bytes(), &area.partitions, &area.file_systems)?;
-
-        // The one thing this module exists to get right: at the area's own
-        // offset, with block numbers that are relative to it.
-        file.seek(SeekFrom::Start(placed.start_bytes()))?;
-        file.write_all(&rdb.blocks)?;
+    if let Err(err) = outcome {
+        // §54: between whole units of work. The half-built file is ART's own —
+        // it did not exist a moment ago — so it goes with the failure rather
+        // than being left as a card-shaped thing somebody might try to boot.
+        let _ = std::fs::remove_file(dest);
+        return Err(err);
     }
-
-    file.sync_all()?;
-    drop(file);
 
     step("Checking what was built");
     let verified = read_card(dest)?;
@@ -176,6 +196,48 @@ pub fn build_card(
     }
 
     Ok(BuiltCard { layout, verified })
+}
+
+/// Put the table, the boot partition and every RDB into an image.
+///
+/// Generic over the container so a raw file and a dynamic VHD are laid out by
+/// **one** piece of code: two copies would be two chances to write a card that
+/// is right in one format and wrong in the other, and nothing would notice
+/// until somebody booted it.
+fn lay_out<T: std::io::Read + Write + Seek>(
+    image: &mut T,
+    layout: &CardLayout,
+    spec: &CardSpec,
+    step: &mut dyn FnMut(&str),
+    progress: &dyn ProgressSink,
+) -> CoreResult<()> {
+    step("Writing the partition table");
+    image.write_all(&write_mbr(layout))?;
+
+    step("Creating the boot partition");
+    create_boot_partition(
+        &mut *image,
+        layout.boot.start_bytes(),
+        layout.boot.length_bytes(),
+        &spec.label,
+        &spec.boot_files,
+    )?;
+
+    for (index, area) in spec.areas.iter().enumerate() {
+        step(&format!("Preparing Amiga disk {}", index + 1));
+        if progress.is_cancelled() {
+            return Err(CoreError::Cancelled);
+        }
+
+        let placed = &layout.areas[index];
+        let rdb = create_rdb_layout(placed.length_bytes(), &area.partitions, &area.file_systems)?;
+
+        // The one thing this module exists to get right: at the area's own
+        // offset, with block numbers that are relative to it.
+        image.seek(SeekFrom::Start(placed.start_bytes()))?;
+        image.write_all(&rdb.blocks)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -265,6 +327,78 @@ mod tests {
             built.verified.partitions_missing_driver().is_empty(),
             "FFS is Kickstart's own and needs no driver in the RDB"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **The same card in a container that costs what it holds.**
+    ///
+    /// Work-list item 7. The premise was measured before the code was written:
+    /// `SetLength(2 GB)` on the owner's NTFS consumed exactly 2 147 483 648
+    /// bytes and the file was not sparse, so a 32 GiB card really did cost 32
+    /// GiB — and `build_card`'s own doc comment said otherwise (ART-230).
+    ///
+    /// What this pins is not the saving alone but that **the card survives the
+    /// container**: the same table, the same boot partition, the same RDB at
+    /// the same offset, read back by the same reader that opens real cards.
+    /// An image ART could write and not re-open would fail §92's VERIFY step
+    /// silently.
+    #[test]
+    fn a_card_built_as_a_vhd_costs_a_fraction_and_reads_back_the_same() {
+        let dir = scratch("vhd");
+        let raw_dest = dir.join("card.img");
+        let vhd_dest = dir.join("card.vhd");
+
+        let spec = || CardSpec {
+            total_bytes: SMALLEST,
+            boot_bytes: 0,
+            label: "ART CARD".into(),
+            boot_files: vec![BootFile {
+                name: "config.txt".into(),
+                bytes: b"initramfs kick.rom
+"
+                .to_vec(),
+            }],
+            areas: vec![AreaSpec {
+                size_bytes: 0,
+                partitions: vec![work_partition("SDH0", 512)],
+                file_systems: Vec::new(),
+            }],
+        };
+
+        let raw = build_card(&raw_dest, &spec(), &NoProgress).unwrap();
+        let vhd = build_card(&vhd_dest, &spec(), &NoProgress).unwrap();
+
+        // The saving, measured on disk rather than claimed.
+        let raw_bytes = std::fs::metadata(&raw_dest).unwrap().len();
+        let vhd_bytes = std::fs::metadata(&vhd_dest).unwrap().len();
+        assert_eq!(raw_bytes, SMALLEST, "a raw image costs its whole size");
+        assert!(
+            vhd_bytes * 4 < raw_bytes,
+            "the VHD is {vhd_bytes} bytes against the raw image's {raw_bytes}"
+        );
+
+        // And it is a VHD, said by the module that reads them rather than by
+        // the extension.
+        let head = std::fs::read(&vhd_dest).unwrap();
+        let footer = crate::core::vhd::parse_footer(&head[0..512]).expect("a footer at offset 0");
+        assert_eq!(footer.kind, crate::core::vhd::VhdKind::Dynamic);
+        assert_eq!(footer.disk_size, SMALLEST);
+
+        // The card itself is the same card. This is the assertion that makes
+        // the feature real rather than a file format exercise.
+        assert_eq!(vhd.layout.areas.len(), raw.layout.areas.len());
+        assert!(vhd.verified.mbr.is_some(), "it is a card, not an HDF");
+        assert_eq!(
+            vhd.verified.areas.len(),
+            raw.verified.areas.len(),
+            "the same number of Amiga disks"
+        );
+        assert_eq!(
+            vhd.verified.areas[0].offset_bytes, raw.verified.areas[0].offset_bytes,
+            "at the same offset"
+        );
+        assert_eq!(vhd.verified.areas[0].rdb.partitions[0].drive_name, "SDH0");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

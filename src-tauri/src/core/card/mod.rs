@@ -117,11 +117,42 @@ impl CardImage {
 }
 
 /// Read a card, or a plain HDF, and report the Amiga disks in it.
+///
+/// **A dynamic VHD is read through its own layout, not as raw bytes.** ART
+/// writes card images as dynamic VHDs now (`core::vhd::write`), and the whole
+/// point of that format is that offset 0 of the *file* is not offset 0 of the
+/// *disk*. Reading one raw would find no partition table and say so, which is
+/// the confident wrong sentence `core::vhd`'s own module doc is about — and it
+/// would break `build_card`'s read-back, so §92's VERIFY step would be
+/// verifying nothing.
 pub fn read_card(path: &Path) -> CoreResult<CardImage> {
-    use std::io::{Read as _, Seek as _, SeekFrom};
-
-    let mut file = std::fs::File::open(path)?;
+    let file = std::fs::File::open(path)?;
     let total_bytes = file.metadata()?.len();
+
+    // Cheap: four bytes at offset 0 decide it, and only a dynamic image keeps
+    // a footer copy there.
+    let is_dynamic_vhd = {
+        use std::io::Read as _;
+        let mut cookie = [0u8; 8];
+        let mut peek = std::fs::File::open(path)?;
+        peek.read_exact(&mut cookie).is_ok() && cookie == crate::core::vhd::FOOTER_COOKIE
+    };
+    if is_dynamic_vhd {
+        let vhd = crate::core::vhd::DynamicVhd::open(file)?;
+        let disk_bytes = vhd.disk_size();
+        return read_card_from(vhd, disk_bytes, path);
+    }
+    read_card_from(file, total_bytes, path)
+}
+
+/// The reading itself, over anything that seeks — a file, or a dynamic VHD
+/// presenting the disk inside it.
+fn read_card_from<R: std::io::Read + std::io::Seek>(
+    mut file: R,
+    total_bytes: u64,
+    path: &Path,
+) -> CoreResult<CardImage> {
+    use std::io::SeekFrom;
 
     if total_bytes < SECTOR_BYTES {
         return Err(CoreError::Malformed {
@@ -178,9 +209,10 @@ pub fn read_card(path: &Path) -> CoreResult<CardImage> {
     })
 }
 
-fn read_as_much_as_possible(file: &mut std::fs::File, buffer: &mut [u8]) -> CoreResult<usize> {
-    use std::io::Read as _;
-
+fn read_as_much_as_possible<R: std::io::Read>(
+    file: &mut R,
+    buffer: &mut [u8],
+) -> CoreResult<usize> {
     let mut filled = 0;
     while filled < buffer.len() {
         match file.read(&mut buffer[filled..])? {

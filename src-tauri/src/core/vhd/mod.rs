@@ -55,6 +55,10 @@
 //! a detection that refused a valid file because this module's arithmetic was
 //! wrong would be worse than one that does not check.
 
+pub mod write;
+
+pub use write::DynamicVhd;
+
 use serde::Serialize;
 
 /// The eight bytes every VHD footer begins with.
