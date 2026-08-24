@@ -1825,7 +1825,9 @@
       "romWrongMachine": "{{rom}} is not a ROM for the Amiga you chose. Usually that means a machine that does not come up, with nothing on screen to explain it — but if you know what you are doing, carry on.",
       "volumesUnformatted": "The Amiga volumes on this card are not formatted. The Amiga will see them and offer to format them; putting a system on them is not built yet.",
       "beyondKickstartFfs": "{{drive}} is {{gb}} GB of FFS, and Kickstart {{major}}'s own file system can only address 4 GB. Past that it does not refuse — it corrupts the drive. Use PFS3, make it smaller, or boot a Kickstart 3.1.4 or 3.2.",
-      "beyondKickstartFfsNoRom": "{{drive}} is {{gb}} GB of FFS. Kickstart 3.1's own file system can only address 4 GB and corrupts the drive past that; 3.1.4 and 3.2 are fine. No Kickstart is chosen, so ART cannot tell which this card will boot."
+      "beyondKickstartFfsNoRom": "{{drive}} is {{gb}} GB of FFS. Kickstart 3.1's own file system can only address 4 GB and corrupts the drive past that; 3.1.4 and 3.2 are fine. No Kickstart is chosen, so ART cannot tell which this card will boot.",
+      "tiedBootPriority": "{{drives}} are all set to boot at priority {{priority}}. Higher boots first, and what happens on a tie is not documented — give each system its own number so you know which one starts.",
+      "nothingBootable": "None of this card's Amiga disks is marked bootable. That is fine for a card of pure data volumes, and it is also what a missed tick looks like."
     },
     "blocked": {
       "noArchive": "Choose the Emu68 release archive first.",
