@@ -8,6 +8,7 @@
 
 pub mod adf;
 pub mod amigainstall;
+pub mod amiganet;
 pub mod amigaver;
 pub mod analysis;
 pub mod archive;
