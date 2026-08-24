@@ -49,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kernel from the board at start-up, ART says so and checks nothing: the
   release knows its own boot layout and ART does not.
 
+- **The Turkish part of the official AmigaOS 3.9 Locale update installs now.**
+  Its catalogs and its ISO-8859-9 font families come off the update rather than
+  only off the CD — the fonts landing where `diskfont.library` looks for them,
+  which is what the release's own installer does. Only Turkish: the update
+  carries twenty languages and shipping all of them because you wanted one
+  would be ART answering a question the release asks you.
 - **A copy of the same disk in two places no longer stops an install.** If two
   of your folders hold the same `Workbench3.2.adf`, or one folder holds it
   twice under different filenames, ART now treats them as the one disk they

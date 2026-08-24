@@ -2195,7 +2195,7 @@ mod tests {
         write_locale_turkish_archive(&folder, "turkish.lha", b"catalog bytes");
 
         let summaries = osinstall_packages(folder, "AmigaOS 3.9".to_string()).unwrap();
-        assert_eq!(summaries.len(), 4, "ART ships exactly four packages today");
+        assert_eq!(summaries.len(), 5, "ART ships exactly five packages today");
 
         let turkish = summaries
             .iter()
@@ -2247,7 +2247,7 @@ mod tests {
         // to, still offers all four. A filter that answered "none" for
         // everything would pass the assertion above.
         let for_39 = osinstall_packages(folder, "AmigaOS 3.9".to_string()).unwrap();
-        assert_eq!(for_39.len(), 4);
+        assert_eq!(for_39.len(), 5);
     }
 
     #[test]
@@ -2291,7 +2291,7 @@ mod tests {
         let missing = dir.join("does-not-exist");
 
         let summaries = osinstall_packages(missing, "AmigaOS 3.9".to_string()).unwrap();
-        assert_eq!(summaries.len(), 4);
+        assert_eq!(summaries.len(), 5);
         assert!(summaries.iter().all(|p| !p.available));
     }
 

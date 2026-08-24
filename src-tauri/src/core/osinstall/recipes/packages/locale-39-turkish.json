@@ -1,0 +1,33 @@
+{
+  "_why_this_package_exists": "ART-226 question 2's per-language half, work-list item 3. `locale-39` is the wholesale half of the same archive; this is Turkish's own slice of it. The split is the release's, not ART's: `Locale3.9/Install-Locale` ($VER: Install-Locale 45.4) asks which of twenty languages the user wants and then calls its own `P_CopyDirByLang` four times - for `Locale/Catalogs`, `Locale/Help`, `Fonts` and `Libs` - copying only the chosen languages' directories out of each.",
+  "_why_only_two_rules": "**Measured against the owner's own archive on 2026-08-25, not assumed from the four calls.** Turkish has content in two of the four: `Locale/Locale/Catalogs/türkçe` (33 entries) and `Locale/Fonts/türkçe` (56). `Locale/Locale/Help/türkçe` and `Locale/Libs/türkçe` **do not exist** - the archive's Help carries fifteen languages and Turkish is not among them, and its Libs carries one, russian. A recipe written from the installer's four calls alone would have named four rules, two of which resolve to nothing - and a `from` that does not resolve is a refusal rather than a skip, so the package would have refused itself on the owner's own material.",
+  "_why_fonts_flattens": "The installer's fourth argument. `P_CopyDirByLang` takes `#create-lang-dir` and branches on it: `true` copies `<dir>/<lang>` to `<dest>/<dir>/<lang>`, `false` copies `<dir>/<lang>`'s **contents** to `<dest>/<dir>`. It is called `true` for Catalogs and Help, and **`false` for Fonts and Libs**. So a font family lands in `Fonts/` itself, next to the base ones, which is where `diskfont.library` looks - the same shape ART-234 read out of the AmigaOS 3.2 Installer for that release's own `Support/Fonts`.",
+  "id": "locale-39-turkish",
+  "name": "Türkçe catalogs and fonts (Locale 3.9)",
+  "releases": [
+    "AmigaOS 3.9"
+  ],
+  "media": "Locale3.9",
+  "_why_no_distinguished_by": "`Locale3.9` is this archive's own top-level directory and is unique among the owner's material - the same measurement `locale-39` records, from the same pass over all 44 archives. Two packages sharing one medium is ordinary: `media` says which archive, and the rules say which part of it.",
+  "requires": [],
+  "requires_components": [
+    "locale-base"
+  ],
+  "_why_overrides_locale_base": "Two declarations, for two different reasons, and the difference matters. **`locale-base`** is a real file collision: it places the CD's own `OS-VERSION3.9/LOCALE/CATALOGS`, which carries 41 rows under `türkçe` (measured on the owner's own disc, 2026-08-25), and this package replaces them with the update's 33. **`workbench-base`** is a drawer: it owns `Fonts` whole, and this package writes into it. Nothing collides there - every family the archive carries for Turkish is suffixed `-ISO9` (`Topaz-ISO9`, `Times-ISO9`, `courier-iso9`, …), so they sit beside the base families rather than replacing them - but `no_toolkit_disk_takes_a_whole_drawer_the_base_already_owns` asks to be told all the same, and its own words say why: the declaration separates a deliberate layer from a disk that took the easy route. The same call ART-234's four locale components make for `Prefs`. **`workbench-39` is deliberately absent.** It places the 3.9 overlay's `LOCALE` drawer whole, and that drawer's `Catalogs` is an **empty directory** on the owner's disc - one row, no children. An override that names nothing real is a licence to overwrite something nobody measured, which is ART-159's mistake.",
+  "overrides": [
+    "locale-base",
+    "workbench-base"
+  ],
+  "rules": [
+    {
+      "from": "Locale/Locale/Catalogs/türkçe",
+      "to": "Locale/Catalogs/türkçe",
+      "kind": "subtree"
+    },
+    {
+      "from": "Locale/Fonts/türkçe",
+      "to": "Fonts",
+      "kind": "subtree"
+    }
+  ]
+}

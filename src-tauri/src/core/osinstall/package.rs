@@ -208,6 +208,7 @@ const BOINGBAG_39_1_JSON: &str = include_str!("recipes/packages/boingbag-39-1.js
 const BOINGBAG_39_2_JSON: &str = include_str!("recipes/packages/boingbag-39-2.json");
 const LOCALE_TURKISH_JSON: &str = include_str!("recipes/packages/locale-turkish.json");
 const LOCALE_39_JSON: &str = include_str!("recipes/packages/locale-39.json");
+const LOCALE_39_TURKISH_JSON: &str = include_str!("recipes/packages/locale-39-turkish.json");
 
 /// Every package JSON this project ships. The one list a new package JSON
 /// has to join — see the module doc comment.
@@ -216,6 +217,7 @@ const SHIPPED_JSON: &[&str] = &[
     BOINGBAG_39_2_JSON,
     LOCALE_TURKISH_JSON,
     LOCALE_39_JSON,
+    LOCALE_39_TURKISH_JSON,
 ];
 
 /// An update package on top of an installed AmigaOS tree — an official
@@ -1070,8 +1072,9 @@ mod tests {
                 // tables and printers, which is what its own installer
                 // copies whatever languages the user picks.
                 "locale-39",
+                "locale-39-turkish",
             ],
-            "the two BoingBags, the Turkish catalogs from BoingBag 3.9-2, and the Locale update"
+            "the shipped packages for AmigaOS 3.9"
         );
     }
 
@@ -1518,6 +1521,253 @@ mod tests {
         parse(&json.to_string())
     }
 
+    /// The per-language slice, pinned against what the release's own installer
+    /// does rather than against what its four calls suggest.
+    ///
+    /// Two things here would be wrong if written from the installer's shape
+    /// alone, and both were measured against the owner's own archive on
+    /// 2026-08-25:
+    ///
+    /// - **Two rules, not four.** `P_CopyDirByLang` is called for
+    ///   `Locale/Catalogs`, `Locale/Help`, `Fonts` and `Libs`. Turkish has
+    ///   content in two: Catalogs (33 entries) and Fonts (56). The archive's
+    ///   Help carries fifteen languages without Turkish, and its Libs carries
+    ///   one, russian. A `from` that does not resolve is a refusal, so the
+    ///   other two would have made the package refuse itself.
+    /// - **Fonts flattens and Catalogs does not.** The procedure's fourth
+    ///   argument is `#create-lang-dir`: `true` copies `<dir>/<lang>` to
+    ///   `<dest>/<dir>/<lang>`, `false` copies its *contents* to
+    ///   `<dest>/<dir>`. It is `true` for Catalogs and Help and **`false` for
+    ///   Fonts and Libs** - so a font family lands in `Fonts/` itself, beside
+    ///   the base ones, where `diskfont.library` looks. The same shape
+    ///   [ART-234](../../../docs/ISSUES.md#fixed) read out of the AmigaOS 3.2
+    ///   Installer for that release's own `Support/Fonts`.
+    #[test]
+    fn the_turkish_locale_slice_is_two_rules_and_the_fonts_one_flattens() {
+        let package = super::packages()
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == "locale-39-turkish")
+            .expect("the per-language slice must ship");
+
+        assert_eq!(
+            package.media, "Locale3.9",
+            "the same archive as its wholesale half"
+        );
+        assert_eq!(
+            package.component.rules.len(),
+            2,
+            "{:?}",
+            package.component.rules
+        );
+
+        let catalogs = &package.component.rules[0];
+        assert_eq!(catalogs.from, "Locale/Locale/Catalogs/türkçe");
+        assert_eq!(
+            catalogs.to, "Locale/Catalogs/türkçe",
+            "create-lang-dir is true for Catalogs, so the language drawer is kept"
+        );
+
+        let fonts = &package.component.rules[1];
+        assert_eq!(fonts.from, "Locale/Fonts/türkçe");
+        assert_eq!(
+            fonts.to, "Fonts",
+            "create-lang-dir is FALSE for Fonts: the family lands in Fonts/ itself"
+        );
+
+        // Neither of the two the archive does not carry for Turkish.
+        for absent in ["Help", "Libs"] {
+            assert!(
+                !package
+                    .component
+                    .rules
+                    .iter()
+                    .any(|r| r.from.contains(absent)),
+                "the archive has no Turkish {absent}, and a rule that does not resolve is a refusal"
+            );
+        }
+    }
+
+    /// **The override names a collision that is really there, and the ones it
+    /// does not name were measured rather than forgotten.**
+    ///
+    /// Written twice. The first version looped over `overrides` and asserted
+    /// each named component claims one of our destinations - which is
+    /// **vacuous when the list is empty**, so emptying it left every test
+    /// green. That is the shape CLAUDE.md warns about, caught by mutation and
+    /// recorded here rather than quietly fixed.
+    ///
+    /// What is asserted now is the measured answer, 2026-08-25:
+    ///
+    /// - **`locale-base` is required.** It places the CD's own
+    ///   `OS-VERSION3.9/LOCALE/CATALOGS`, which carries **41 rows** under
+    ///   `türkçe`. This package replaces them with the update's 33. A real
+    ///   collision, so a real declaration.
+    /// - **`workbench-39` is deliberately absent.** It places the 3.9
+    ///   overlay's `LOCALE` drawer whole, and that drawer's `Catalogs` is an
+    ///   **empty directory** on the owner's own disc - one row, no children.
+    ///   Nothing to collide with.
+    /// - **`workbench-base` is required for a different reason.** It owns
+    ///   `Fonts` as a whole drawer and this package writes into it. Nothing
+    ///   collides there - every family the archive carries for Turkish is
+    ///   suffixed `-ISO9` (`Topaz-ISO9`, `Times-ISO9`, `courier-iso9`, …), so
+    ///   they sit beside the base families rather than replacing them - but
+    ///   `no_toolkit_disk_takes_a_whole_drawer_the_base_already_owns` asks to
+    ///   be told all the same. Its own words say why: the declaration
+    ///   separates a deliberate layer from a disk that took the easy route.
+    ///   The same call ART-234's four locale components make for `Prefs`.
+    ///
+    /// An override that names nothing real is a licence to overwrite something
+    /// nobody measured - ART-159's mistake - so the absences are as deliberate
+    /// as the presence.
+    #[test]
+    fn the_turkish_slice_overrides_a_component_that_really_claims_its_destination() {
+        let package = super::packages()
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == "locale-39-turkish")
+            .expect("the per-language slice must ship");
+
+        // **First, and not in a loop**: the declaration exists at all. The
+        // loop below asserts nothing when the list is empty.
+        assert!(
+            package
+                .component
+                .overrides
+                .iter()
+                .any(|o| o == "locale-base"),
+            "the CD's own Locale/Catalogs carries türkçe and this package replaces it: {:?}",
+            package.component.overrides
+        );
+
+        let recipe = super::super::recipe::by_release("AmigaOS 3.9")
+            .expect("the shipped 3.9 recipe must parse");
+
+        for overridden in &package.component.overrides {
+            let component = recipe
+                .component(overridden)
+                .unwrap_or_else(|| panic!("'{overridden}' is not a component of AmigaOS 3.9"));
+
+            let claims_one_of_ours = component.rules.iter().any(|r| {
+                package
+                    .component
+                    .rules
+                    .iter()
+                    .any(|rule| rule.to == r.to || rule.to.starts_with(&format!("{}/", r.to)))
+            });
+
+            assert!(
+                claims_one_of_ours,
+                "'{overridden}' is declared as overridden and places none of {:?}",
+                package
+                    .component
+                    .rules
+                    .iter()
+                    .map(|r| r.to.as_str())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// **Every rule of every shipped package resolves inside its own real
+    /// archive**, which is the check that would have caught a per-language
+    /// rule naming a language the archive does not carry.
+    ///
+    /// It is not hypothetical: `locale-39-turkish` was written from the
+    /// release's own installer, which calls `P_CopyDirByLang` for four
+    /// directories - `Locale/Catalogs`, `Locale/Help`, `Fonts` and `Libs`.
+    /// Turkish has content in **two** of them. `Locale/Help/türkçe` and
+    /// `Locale/Libs/türkçe` do not exist in the archive at all, and because a
+    /// `from` that does not resolve is a refusal rather than a skip, naming
+    /// all four would have made the package refuse itself on the owner's own
+    /// material.
+    #[test]
+    #[ignore = "reads the owner's real packages: set ART_PACKAGE_FOLDER and run with --ignored --nocapture"]
+    fn every_package_rule_resolves_in_its_own_archive_when_asked() {
+        use super::super::scan::{find_packages, package_for, MediaMatch};
+        use super::super::source::MediaSource;
+        use super::super::source_archive::ArchiveSource;
+
+        let Ok(folder) = std::env::var("ART_PACKAGE_FOLDER") else {
+            eprintln!("SKIPPED: ART_PACKAGE_FOLDER is not set, so nothing was checked");
+            return;
+        };
+        let found = find_packages(std::path::Path::new(&folder)).expect("the folder must scan");
+
+        let mut checked = 0usize;
+        for package in super::packages().unwrap() {
+            // **A blocked package's rules describe what it cannot reach.**
+            // Both BoingBags name paths inside their `AmigaOS-Update` member,
+            // a ZIP whose every entry is encrypted (ART-166) - the rules are
+            // right and unreachable, and looking for them in the wrapper LHA
+            // is looking in the wrong place. This check caught that on its
+            // first run against real archives, which is what it is for; the
+            // wrong assumption was the check's, not the recipe's.
+            if package.host_placement_block.is_some() {
+                println!("  {:<20} blocked host-side, rules not walked", package.id);
+                continue;
+            }
+
+            let archive =
+                match package_for(&found, &package.media, package.distinguished_by.as_deref()) {
+                    MediaMatch::Found(archive) => archive,
+                    MediaMatch::Missing => {
+                        eprintln!("  {} - archive not in this folder, skipped", package.id);
+                        continue;
+                    }
+                    // Two files claiming one identity. Said distinctly rather
+                    // than as "missing": the owner's own folder has a
+                    // `BoingBag39-1.lha` and a `BoingBag39-1 (1).lha` that differ
+                    // by 46 bytes, and reporting that as absent would hide it.
+                    MediaMatch::Ambiguous(paths) => {
+                        eprintln!(
+                            "  {} - {} archives claim this identity, skipped",
+                            package.id,
+                            paths.len()
+                        );
+                        continue;
+                    }
+                };
+            let mut source = ArchiveSource::open(&archive.path).expect("the archive must open");
+
+            for rule in &package.component.rules {
+                let entry = source
+                    .entry(&rule.from)
+                    .expect("reading the archive must not fail")
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{}: '{}' is not in {} - an unresolved rule is a refusal",
+                            package.id,
+                            rule.from,
+                            archive.path.display()
+                        )
+                    });
+                let files = source
+                    .walk(&rule.from)
+                    .expect("walking must not fail")
+                    .iter()
+                    .filter(|e| !e.is_dir)
+                    .count();
+                println!(
+                    "  {:<20} {:<34} dir={} files={}",
+                    package.id, rule.from, entry.is_dir, files
+                );
+                assert!(
+                    files > 0,
+                    "{}: '{}' resolves to no files",
+                    package.id,
+                    rule.from
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked > 0,
+            "no package rule was checked against a real archive"
+        );
+        println!("{checked} rule(s) checked against real archives");
+    }
+
     /// The declared program exists inside the archive it belongs to. A path
     /// nobody checked is how the 3.9 recipe shipped fourteen wrong ones.
     #[test]
@@ -1938,7 +2188,16 @@ mod tests {
             .collect();
         assert_eq!(
             with_components,
-            vec!["locale-turkish".to_string(), "locale-39".to_string()]
+            // `locale-39-turkish` joined on 2026-08-25: the per-language half
+            // of the same archive, and it needs `locale-base` for the same
+            // reason its wholesale half does - there is no `Locale/Catalogs`
+            // for a chosen language to be read from until that component
+            // places one.
+            vec![
+                "locale-turkish".to_string(),
+                "locale-39".to_string(),
+                "locale-39-turkish".to_string()
+            ]
         );
     }
 
