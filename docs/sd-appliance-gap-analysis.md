@@ -357,7 +357,18 @@ the driver back out SHA-256-identical to the file that went in. Closes
 > are separate gaps, not sub-items of G5.** G9 is built (2026-08-17); G10 is
 > the one gap SD-2 still owes — see their own entries below.
 
-## G6 🟧 Multiboot & recovery configuration
+## G6 🟨 Multiboot & recovery configuration — **the Pi-side sets done; the Amiga-side RDB editing is not**
+
+The `config_<name>.txt` sets are built: list, create, duplicate, rename,
+activate and delete, each through preview → backup → write, with a deleted set
+kept rather than destroyed. The **boot selection** this row calls v1 is settled
+and is what [G16](#g16--multiboot-as-a-first-class-build--done-2026-08-24-engine-and-screen)
+carries out: Kickstart's own early-startup menu plus boot priorities, with a
+custom boot manager explicitly out of scope — recorded, as this row asked.
+
+Still open below: editing an existing card's boot order, and the RECOVERY:
+template.
+
 
 - Set bootable flags and **boot priority** per partition on an existing RDB
   (creation supports flags; editing an existing card's boot order does not
@@ -460,7 +471,22 @@ review found ten things and all ten were fixed ([ART-129](ISSUES.md)); two were
 blockers and both were the same failure — the check that exists to warn said
 nothing. **Real hardware untouched**, as everywhere else in SD-2.
 
-## G10 🟧 Launcher metadata export (Game Center, without writing one) — **the one gap SD-2 still owes**
+## G10 🟨 Launcher metadata export (Game Center, without writing one) — **iGame's half done 2026-08-24**
+
+`core/gameindex/igame.rs` writes `igame.data` the way **iGame's own source**
+reads it — `MrZammler/iGame`'s `fsfuncs.c::getIGameDataInfo`, read rather than
+recalled, which is where the 64-byte line length and the keys come from. A
+title whose name will not fit, or which iGame itself would refuse, is left out
+**and named**, rather than written in a form the launcher would misread.
+
+**The route this row assumed was redirected by measurement.** It says
+*"generated onto the GAMES: volume at build time"*, which presumes the
+collection is a set of drawers. The owner's own catalogue was counted on
+2026-08-24: **2815 titles, zero drawers.** Writing into a hardfile is
+therefore the shape that would be needed, and it is parked rather than built —
+the owner does not use iGame, and it is not worth a bulk write against a
+collection to serve a launcher nobody here runs. AGS and `games.json` are the
+rest of this row and are unbuilt.
 
 Do NOT write an Amiga-side launcher in v1. Gap on the ART side: export the
 Collection's game metadata in the formats existing Amiga launchers already
@@ -562,7 +588,15 @@ If a user wants a byte-for-byte copy of a card, the same imager that wrote it
 reads it back. Snapshot Manager (§49) remains unbuilt and remains about
 *images*, where it always belonged.
 
-## G13 🟨 Capacity planner / build profiles
+## G13 🟨 Capacity planner / build profiles — **the safety half done 2026-08-24**
+
+**This row called itself "pure UI" and "comfort", and half of it was not.**
+`core/card/capacity.rs` refuses a card whose FFS partition would run past the
+4 GB a Kickstart before v46 can address — which does not fail, it wraps and
+writes over the start of the volume. That is a corrupted drive, not an
+inconvenience, and it is the half that shipped first. What is left is the
+planner proper: the distro registry's entries are all `available: false`, so
+nothing yet plans a card from a named distribution.
 
 The guided wizard: pick a profile (Power Retro / Gamer / Preservationist…),
 see the proposed volume table scaled to the actual card size, adjust, go.
@@ -617,9 +651,24 @@ config file, which means §39/§40's in-place editing rule applies to all of
 them, and the WiFi key means `core/security` has a secret to keep out of the
 oplog, out of the build manifest (G7) and out of any AI prompt (§45.5).
 
-**Wallpaper is new scope**: it appears in no existing document, including the
-master spec. WiFi is not new — it is §45.5's, reachable only through an AI
-layer that is not built.
+**Corrected 2026-08-24, both halves of this paragraph.** WiFi was said here to
+be *"reachable only through an AI layer that is not built"*. It is built and
+no AI layer was involved: `core/amiganet/` writes the stack's configuration and
+the wireless network list into the tree, and the card builder asks for them on
+the volumes step — **the owner's own ruling**, *"ART sorsun, kart kurarken WiFi
+bilgilerini girelim"*. The configuration file is merged rather than replaced,
+because the stack's own preferences program writes there too; the network list
+is replaced, and the count of what is already there is shown before the button
+rather than after. The passphrase is deliberately not remembered, which is this
+project's one exception to its own remembered-settings rule and is proven by a
+test rather than described. [ART-231](ISSUES.md#fixed) was the first attempt
+writing it into a drawer no Amiga opens: `ENVARC:` is an assign, not a folder.
+
+**Wallpaper is out of scope, not deferred** — the owner's ruling on the same
+day: *"duvar kağıdını boşver kullanıcı onu kendisi yapar."* The rest of the
+prefs were assessed rather than built: they are binary `IFF PREF` files whose
+editors are the Amiga's own, and writing them from Windows would be ART
+guessing at a format it has no reason to own.
 
 ## G15 ✅ Drag and drop as the way a build is fed — **done 2026-08-15**
 
@@ -641,7 +690,26 @@ today `plan()` answers "what can I do with this file", and the builder needs
 "what does this file become in *this* card". Detection, the workflow
 catalogue and the job queue all already exist to hang it on.
 
-## G16 🟧 Multiboot as a first-class build, not a boot-priority field
+## G16 ✅ Multiboot as a first-class build — **done 2026-08-24, engine and screen**
+
+**There is no menu to write, which is what this row got wrong.** It says
+"its own place in the boot menu" as though ART had to build one. AmigaOS
+already has it: hold both mouse buttons at power-on and the Early Startup
+screen lists every bootable partition. What ART decides is which one starts
+when nobody holds anything, and that is `de_BootPri` — *"suggested value
+zero"*, higher first (ADCD 2.1, read rather than recalled).
+
+`core/card/multiboot.rs` plus `CardBuildRequest::{first_disk_bytes,
+extra_disks}` plus a control on the card builder, Power User only. A tie is
+**named, never resolved**: what an Amiga does with two bootable partitions at
+one priority is documented nowhere, and the check looks at every disk at once
+because the ordinary way to build this wrong is two systems on two disks both
+left at the priority a single-system card uses. Every disk gets the drivers the
+user supplied — [ART-097](ISSUES.md)'s lesson applied to a card ART builds.
+
+Still owed here: the named ROM+volume pairing G9 deferred into this row.
+
+### What this row said before it was built
 
 G6 covers boot priority and a recovery volume. What the user is asking for is
 larger: **several complete AmigaOS environments on one card**, chosen at boot

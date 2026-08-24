@@ -74,8 +74,17 @@ FEATURES satırını sarıdan yeşile çevirir.
 | 3.1 | **Çıplak bir `.adf` başlığı** | Koleksiyondan bir disket başlığı seç, **Oynat** | Oyun açıldı |
 | 3.2 | **Bir `.rp9` hardfile başlığı** | `.rp9` içinde hardfile olan bir başlık seç, **Oynat** | Oyun açıldı |
 | 3.3 | **Y1/Y2 çekmece yolu** | Bir WHDLoad başlığını `E:\amiga\amikit\AmiKit.hdf` ile aç | Oyun açıldı; hangi yolun kullanıldığı ekranda yazıyor |
-| 3.4 | **VHD/RDB sistem imajı** | RDB'li bir sistem imajıyla bir başlık aç | Açıldı — **ART-146 tam olarak bu yüzden kanıtsız** |
+| 3.4 | **VHD/RDB sistem imajı** | RDB'li ya da VHD'li bir sistem imajıyla bir başlık aç | Açıldı — **yarısı 2026-08-24'te kapandı**, kalan yarısı emülatörü istiyor (aşağıdaki nota bak) |
 | 3.5 | **Kayıt hayatta kalıyor mu** | `allow_write` açıkken bir oyun oyna, **kaydet**, kapat, tekrar aç | Kayıt duruyor |
+
+**3.4 hakkında bilinen (2026-08-24):** ART artık senin gerçek 1.2 GB
+`AmiKit.hdf`'ini doğrudan okuyor — ilk sekiz baytından yapılmış bir taklidi
+değil. İki ayrı okuyucu aynı şeyi söylüyor: **dinamik** bir VHD, içinde 3.9 GB
+disk, sağlama toplamı tutuyor; ART'ın yazdığı satırda zorlanmış geometri yok.
+**Ama bu, ART'ın yazdığı ayarı ölçüyor — WinUAE'nin onunla ne yaptığını
+değil.** Kalan tek soru bu, ve cevabı emülatörü açmakla geliyor.
+Koşmak istersen: `ART_REAL_HARDFILE` değişkenine imajın yolunu ver,
+`cd src-tauri && cargo test the_real_vhd_gets_no_forced_geometry -- --ignored --nocapture`.
 
 **3.5 hakkında bilinen:** İki başlık `allow_write` açıkken oynandı, imajlar
 emülatör kapandıktan sonra okundu ve **2021 zaman damgalarını koruyordu** —
@@ -87,7 +96,7 @@ yani o iki oyun hiç yazmadı. Bu, özelliğin çalışmadığı anlamına gelmi
 ## 3.6 Türkçeyi ekranda gör (ART-062)
 
 **Neden sende:** Bu aşamada inen her Türkçe dize `pnpm test`'in anahtar
-denetiminden ve JSON okumasından geçti — ama **1775 anahtarın 1774'ü çalışan
+denetiminden ve JSON okumasından geçti — ama **1900 anahtarın 1899'u çalışan
 uygulamada ekranda hâlâ görülmedi.** Anahtarların eşleşmesi, cümlenin doğru
 olduğunu ya da kutuya sığdığını söylemez.
 
@@ -171,6 +180,47 @@ kusurların çoğu tam orada çıktı.
 yapacağını söylediğini söyleyebiliyorsan. Bir yerde ART'ın yapmadığı bir şeyi
 yaptığını söylediğini gördüysen — bu, bu projenin en pahalı kusur sınıfı,
 hemen söyle.
+
+---
+
+## 6. Aminet ekranını elle sür
+
+**Neden sende:** Zincirin tamamı gerçek Aminet'e karşı koşuldu ve çalışıyor —
+her ayna **ayrı ayrı** soruldu (üçü de ayakta, 85 472 paket, 0 atlanan),
+katalog eşitlenip geri okundu, gerçek bir paket indi, kapılardan geçti ve
+açıldı. Bunu istediğin zaman kendin koşabilirsin:
+
+```
+cd src-tauri && cargo test live_aminet -- --ignored --nocapture
+```
+
+Hiç olmayan tek şey **çalışan uygulamada düğmeye basmak.**
+
+**Nasıl:** `/aminet`'i aç → Eşitle → istediğin bir şeyi ara → indir → bir
+disket imajına ya da sabit disk bölümüne kur.
+
+**Tamam sayılır:** Katalog doldu, indirilen dosya senin seçtiğin klasöre indi,
+ve kurulum neyi nereye koyduğunu söyledi.
+
+**Bana söyle:** Toplamı bilinmeyen bir ilerleme çubuğu gördüysen, ya da bir
+ayna hatası hangi ayna olduğunu söylemediyse.
+
+---
+
+## 7. İki AmigaOS'lu bir kart
+
+**Neden sende:** ART böyle bir kart kuruyor artık, ama hangisinin açılacağını
+seçen şey **Amiga'nın kendi Early Startup ekranı** — ART menü yazmıyor, çünkü
+AmigaOS'ta zaten var. Bunun doğru çalıştığını ancak gerçek bir açılış söyler.
+
+**Nasıl:** Kart kurucusunda Gelişmiş → *"Bu kartta ikinci bir AmigaOS"*, boyut
+ver, kur. Sonra makineyi açarken **iki fare düğmesini** birden basılı tut.
+
+**Tamam sayılır:** İkisi de listede, ve hiçbir şey tutmadığında ART'ın yüksek
+öncelik verdiği olan açılıyor.
+
+**Bana söyle:** Yalnızca biri göründüyse, ya da yanlış olan açıldıysa. ART sana
+ikisinin *eşit öncelikte* olduğunu söylediyse, asıl bildirilecek şey o uyarı.
 
 ---
 
