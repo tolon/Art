@@ -6,6 +6,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Two AmigaOS on one card, WiFi before the first boot, and a partition ART now refuses to build (2026-08-24)
+
+#### Added
+- **A card can carry a second complete AmigaOS.** 3.1 for compatibility beside
+  3.2 for daily use, each on its own Amiga disk with its own partition table.
+  **ART writes no boot menu, because AmigaOS already has one** — hold both
+  mouse buttons while the machine starts and its own Early Startup screen
+  lists every bootable partition. What ART sets is which one starts when you
+  hold nothing: the second system is given the priority below the first. You
+  say how big the second one is; the first keeps the rest.
+- **If two systems both claim to be first, ART says so instead of choosing.**
+  What an Amiga does with a tie is documented nowhere, so ART names the
+  partitions that are tied rather than picking between your systems and being
+  right by accident.
+- **Your WiFi details can go on the card while you are setting it up**, so the
+  Amiga is on the network the first time it boots. The stack's own
+  configuration file is *edited*, not replaced, because its own preferences
+  program writes there too. The wireless network list **is** replaced — and
+  ART tells you how many networks are already in it **before** you press the
+  button, not after. The passphrase is the one thing ART deliberately does not
+  remember: everything else on that panel comes back next time.
+- **Aminet: a package can be installed straight into a hard-disk image**, and
+  a downloaded folder handed to the Collection screen. The mirror list is
+  yours to reorder and edit, and it is remembered across launches.
+- **The Kickstart a WHDLoad title asks for can now be put where WHDLoad looks
+  for it.** ART matches your ROMs by content — never by filename — and offers
+  to place the one a title names, one title at a time.
+- **`igame.data` is written the way iGame's own source reads it**, for people
+  who use that launcher.
+- **An install can read its disks from more than one folder**, which is what
+  AmigaOS 3.2.2.1 needs: your own 3.2 floppies plus the update disks beside
+  them.
+
+#### Fixed
+- **ART would have built a 20 GB FFS partition that corrupts the drive.** A
+  Kickstart before v46 cannot address past 4 GB on FFS, and going past it does
+  not fail — it wraps and writes over the start of the volume. ART now refuses
+  before the card is built and says which Kickstart would be needed.
+- **The selected partition in the Hard Disk studio was hard to pick out on two
+  of its five colours.** The white ring around it measured 2.5:1 against the
+  green and amber partitions, where a marker that is not text needs 3:1. It is
+  drawn as two rings now, so it stands out whatever colour the partition is.
+  Every colour pair ART renders — including the three screens that set their
+  own colours rather than following the theme — is now measured automatically
+  on every build.
+- **A Turkish system can type Turkish.** Installing every keyboard layout was
+  never enough on its own: AmigaOS still had to be told which one to use. The
+  install now writes that choice, and refuses to finish silently if the layout
+  it names is not there.
+- **The WiFi settings were being written into a drawer no Amiga opens.**
+  `ENVARC:` is an assign, not a folder, so the file has to go where the assign
+  points. Nobody who had not tried it on a real machine would have seen it.
+
 ### Turkish fonts and euro country files, and a row you can tell from the one above it (2026-08-23)
 
 #### Added

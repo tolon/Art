@@ -128,9 +128,14 @@ archives installed to a disk at once; Kickstart ROM identification; machine
 profiles for the whole classic line; Gotek/FlashFloppy; PiStorm/Emu68; WinUAE
 launching; **AmigaOS installed from your own media**, host-side into a
 distribution tree and Amiga-side by running an update package's own installer
-inside the emulator; a background job queue with progress/cancel;
+inside the emulator; **Aminet browsed, downloaded and installed** from a
+catalogue held locally; a background job queue with progress/cancel;
 an operation log; Beginner/Power User modes; and the drag-and-drop Workflow
 Engine behind "what can I do with this?".
+
+Every screen scales with Ctrl +/-/0 and every colour pair in both themes is
+**measured against WCAG in CI** rather than judged by eye — most of the people
+this is for are over fifty, and contrast is not decoration.
 
 **A collection you can keep.** ART indexes your folders once and remembers:
 a library that takes minutes to read is there the moment the screen opens, and
@@ -144,6 +149,18 @@ could only be taken off a filename, ART proposes a tidier one and you accept it
 says nothing and leaves you the edit box. Measured against a real 2787-title
 library across two folders.
 
+**Software from Aminet, without a browser.** ART syncs Aminet's own index —
+**85 472 packages**, measured 2026-08-24 — and keeps it locally, so search and
+browse work with no connection at all. A package downloads to a folder you
+choose, is checked against the size the index claimed and its own SHA-256, and
+can be installed straight into a floppy image or a hard-disk partition. An
+update view compares what you have downloaded against the catalogue as it
+stands now. There is no address bar: every request is built from a **configured
+mirror** plus a validated repository path, so there is no code path anywhere in
+ART that fetches a URL somebody typed. The mirror list is yours to edit and
+reorder, and it is remembered. Nothing leaves the machine until you ask it to.
+
+
 **PiStorm cards, both directions.** ART opens a real one — an MBR with a FAT32
 boot partition and one to three Amiga disks inside it, each carrying its own
 partition table at a byte offset inside the card — and shows it as the list of
@@ -152,7 +169,21 @@ It can also **build one**: the partition table, a FAT32 boot partition carrying
 your own Emu68 release and Kickstart, and a partition table at the start of
 every Amiga disk. **PFS3 and FFS volumes are formatted and filled by ART
 itself** — no external tool required, though one can be configured as a
-fallback for two named gaps. One limit, said here rather than discovered later:
+fallback for two named gaps.
+
+The card can carry **more than one complete AmigaOS** — 3.1 for compatibility
+beside 3.2 for daily use, say. ART writes no boot menu, because AmigaOS already
+has one: hold both mouse buttons while the machine starts and its own Early
+Startup screen lists every bootable partition. What ART sets is which one starts
+when nobody holds anything, and if two of them claim that equally it **says so
+rather than choosing between your systems**. It also refuses to build an FFS
+partition larger than the 4 GB a Kickstart before v46 can address — that one is
+a partition which corrupts the drive, not an inconvenience. And it can put your
+WiFi details on the card while you are setting it up, so the Amiga is on the
+network the first time it boots; the passphrase is the one thing ART
+deliberately does not remember.
+
+One limit, said here rather than discovered later:
 **no card ART built has been flashed or booted.**
 
 **AmigaOS, built from your own install media.** Point ART at your own AmigaOS
@@ -263,7 +294,7 @@ title on the A1200 profile is the claim** — not every OCS title in a
 collection. And a **Turkish** sentence has finally
 been read on a running screen by someone who speaks it: the new WHDLoad
 Kickstart refusal, judged clear, and the launch then worked
-([ART-062](docs/ISSUES.md#open)). That is one sentence out of 1775 keys, so the
+([ART-062](docs/ISSUES.md#open)). That is one sentence out of 1900 keys, so the
 language as a whole is still unseen — but it is no longer zero.
 
 **Still open, and each one is a concrete gap rather than a vague "try it and
@@ -298,7 +329,14 @@ see"** — what to run, and what a good or bad result looks like:
    `RDSK`) instead of assuming one shape for all of them, but has **not**
    been retried against a real emulator run — the one real run since
    (`1000 Miglia`) is a bare `DOS\1` image, the branch ART-146 left
-   unchanged. Launch a title or a WHDLoad system (via Y1)
+   unchanged. **Half of this closed on 2026-08-24** and the half that is
+   left is the half that needs a person: ART now reads the real 1.2 GB
+   `AmiKit.hdf` itself rather than a fixture built from its first eight
+   bytes, and two independent readers agree about it - it is a *dynamic*
+   VHD carrying 3.9 GB of disk, its footer checksum matches, and the line
+   ART writes for it has the empty device name and zeroed geometry the fix
+   was about. What that measures is the configuration ART writes, **not
+   what WinUAE does with it.** So: launch a title or a WHDLoad system (via Y1)
    backed by a VHD container (e.g. an AmiKit-style `.hdf`) or a plain RDB
    hardfile. **Good:** WinUAE mounts and reads it normally. **Bad:** "Not a
    DOS disk in unit 0" — the exact error ART-146 was filed against.
@@ -324,7 +362,23 @@ see"** — what to run, and what a good or bad result looks like:
    distinct sentences with a next step. **Bad:** a sentence that is confidently
    wrong about what happened — this round's signature defect — or an emulator
    window that opens with no warning first.
-7. **A PiStorm card ART built, flashed and booted.** Everything on the code
+7. **The Aminet studio, driven by a person.** The whole chain has been run
+   against the real Aminet and it works — each shipped mirror asked
+   separately, the index synced and reloaded, and a real package downloaded,
+   checked and unpacked (`cargo test live_aminet -- --ignored`). What has never
+   happened is somebody pressing the buttons in the running application. Sync,
+   search for something you want, download it, and install it into a floppy
+   image. **Good:** the catalogue fills, the download lands where you chose it
+   to, and the install names what it put where. **Bad:** a progress bar with no
+   total behind it, or a mirror failure that does not say which mirror.
+8. **A card with two AmigaOS environments on it.** ART will build one, and the
+   Amiga's own Early Startup screen is what chooses between them — ART writes
+   no menu. Build a card with a second system, then hold both mouse buttons at
+   power-on. **Good:** both systems are listed, and the one ART gave the higher
+   priority is what starts when you hold nothing. **Bad:** only one appears, or
+   the wrong one starts — and if ART warned you the two were tied, that warning
+   is the thing to report on.
+9. **A PiStorm card ART built, flashed and booted.** Everything on the code
    side is finished, tested, and cross-checked against 7-Zip and `hst-imager`;
    what is missing is a microSD card and a Pi. Build a card image, write it
    with whatever card writer you already use (ART deliberately does not write
