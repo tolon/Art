@@ -46,6 +46,7 @@ import type { CardBuildPlan } from "@/lib/cardBuild";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 const planBuildMock = vi.hoisted(() => vi.fn());
+const proposeMock = vi.hoisted(() => vi.fn());
 const buildMock = vi.hoisted(() => vi.fn());
 const checkImageMock = vi.hoisted(() => vi.fn());
 const intakeMock = vi.hoisted(() => vi.fn());
@@ -58,6 +59,7 @@ const outletContextMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/cardBuild", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/cardBuild")>()),
   cardPlanBuild: planBuildMock,
+  cardProposeTable: proposeMock,
   cardBuild: buildMock,
   cardCheckImage: checkImageMock,
   cardIntake: intakeMock,
@@ -391,5 +393,102 @@ describe("a second AmigaOS on the same card (SD-3 G16)", () => {
     // And nothing half-split was planned with it.
     const request = planBuildMock.mock.calls.at(-1)?.[0];
     expect(request?.extra_disks).toBeUndefined();
+  });
+});
+
+describe("a proposed volume table (SD-5 G13)", () => {
+  /** What `core/card/propose.rs` returns for FFS on a pre-v46 Kickstart. */
+  const SPLIT = {
+    boot_bytes: 1_178_599_424,
+    partitions: [
+      { drive_name: "SDH0", fs_type: "ffsstandard", size_mb: 800, bootable: true, boot_priority: 1, num_buffers: 600 },
+      { drive_name: "SDH1", fs_type: "ffsstandard", size_mb: 4096, bootable: false, boot_priority: 0, num_buffers: 600 },
+      { drive_name: "SDH2", fs_type: "ffsstandard", size_mb: 0, bootable: false, boot_priority: 0, num_buffers: 600 },
+    ],
+    notes: [{ note: "split-for-kickstart-ffs", pieces: 2, limit: 4 * 1024 ** 3, rom_major: 40 }],
+  };
+
+  function seedProposed() {
+    useSettingsStore.setState({
+      loaded: true,
+      settings: {
+        ...DEFAULT_SETTINGS,
+        uxMode: "power",
+        remembered: { ...ANSWERED, "cardBuilder.useProposed": true },
+      },
+    });
+  }
+
+  it("sends the proposed table rather than the two-field pair", async () => {
+    seedProposed();
+    proposeMock.mockResolvedValue(SPLIT);
+    planBuildMock.mockResolvedValue(planWith(false));
+    mount();
+
+    const preview = await screen.findByRole("button", { name: /preview/i });
+    await waitFor(() => expect((preview as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(preview);
+    await waitFor(() => expect(planBuildMock).toHaveBeenCalled());
+
+    const request = planBuildMock.mock.calls.at(-1)?.[0];
+    expect(request.partitions).toHaveLength(3);
+    expect(request.partitions.map((p: { drive_name: string }) => p.drive_name)).toEqual([
+      "SDH0",
+      "SDH1",
+      "SDH2",
+    ]);
+  });
+
+  it("says why the table looks like that", async () => {
+    seedProposed();
+    proposeMock.mockResolvedValue(SPLIT);
+    mount();
+
+    // Written out rather than fetched with t(), the same trade this file's
+    // header records.
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Split into 2 work volumes");
+    });
+    expect(document.body.textContent).toContain("writes over the start of the volume");
+  });
+
+  it("a proposal that failed blocks the build instead of quietly building the other layout", async () => {
+    seedProposed();
+    proposeMock.mockRejectedValue(new Error("a card needs at least 2400000000 bytes"));
+    planBuildMock.mockResolvedValue(planWith(false));
+    mount();
+
+    // **The blocker's own sentence, not the button's state.** "Build is
+    // disabled" is true here for a second reason - nothing has been previewed
+    // yet - so asserting on it let a silent fall back to the two-field pair
+    // survive mutation. Only one blocker says the disk has no partitions, and
+    // it can only be reached by the proposed table being the one in use and
+    // having failed.
+    await waitFor(() => expect(proposeMock).toHaveBeenCalled());
+    await waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "The Amiga disk needs at least one partition."
+      );
+    });
+    expect(
+      document.body.textContent,
+      "falling back to the two-field pair would build a different card than the screen shows"
+    ).not.toContain("Preview it first");
+  });
+
+  it("off by default: the two-field pair still drives the request", async () => {
+    seedRemembered(ANSWERED);
+    planBuildMock.mockResolvedValue(planWith(false));
+    mount();
+
+    const preview = await screen.findByRole("button", { name: /preview/i });
+    await waitFor(() => expect((preview as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(preview);
+    await waitFor(() => expect(planBuildMock).toHaveBeenCalled());
+
+    expect(proposeMock).not.toHaveBeenCalled();
+    const request = planBuildMock.mock.calls.at(-1)?.[0];
+    expect(request.partitions[0].drive_name).toBe("SDH0");
+    expect(request.partitions[0].size_mb).toBe(512);
   });
 });

@@ -1918,6 +1918,18 @@
         "noSize": "İkinci AmigaOS'un karttan ne kadar alacağını belirtin.",
         "tooLarge": "Bu, birinci AmigaOS'a kendi {{mb}} MB'lık sistem bölümü kadar bile yer bırakmıyor. İkincisini küçültün ya da kartı büyütün."
       }
+    },
+    "propose": {
+      "enable": "Bu kart için bir birim tablosu öner",
+      "enableHint": "ART'ın kart modelinin ölçüldüğü iki gerçek PiStorm kartından alınan boyutlar. Eski bir Kickstart'ta FFS ile, sürücüyü bozacak tek bir bölüm yerine sığan iş birimleri önerir.",
+      "rest": "geriye kalan",
+      "mb": "{{mb}} MB",
+      "note": {
+        "splitForFfs": "{{pieces}} iş birimine bölündü: Kickstart {{major}}'ın kendi FFS'i tek bir bölümde {{gb}} GB'ın ötesini adresleyemiyor ve sınırı aşmak hata vermek yerine birimin başını üzerine yazıyor.",
+        "splitNoRom": "Eski bir Kickstart'ın FFS'inin adresleyebildiği {{gb}} GB'a sığan iş birimlerine bölündü. Henüz Kickstart seçilmedi, bu yüzden bu ölçülmüş değil güvenli cevap - birini seçerseniz tek birime dönüşebilir.",
+        "onePfs3": "Tek iş birimi: bu dosya sistemi kendi sürücüsünü kartta taşıyor, yani Kickstart'ın 4 GB sınırı onu bağlamıyor.",
+        "tail": "{{gb}} GB ayrılmadan kaldı: tamamını kapsamak bir bölüm tablosunun aldığından fazla bölüm gerektirirdi."
+      }
     }
   },
   "preload": {

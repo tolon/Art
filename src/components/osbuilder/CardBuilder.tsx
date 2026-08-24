@@ -22,8 +22,11 @@ import { useBuildSession } from "@/lib/useBuildSession";
 
 import {
   buildBlocker,
+  cardProposeTable,
+  proposalPhrase,
   secondSystem,
   SECOND_SYSTEM_DRIVE,
+  type ProposedTable,
   cardBuild,
   cardPlanBuild,
   cardCheckImage,
@@ -179,6 +182,23 @@ export function CardBuilder() {
     true
   );
   /**
+   * Whether the card uses the proposed table rather than the two-field pair.
+   *
+   * **The choice is remembered; the table is not.** Recomputing it from the
+   * card size, the filesystem and the ROM every time is what keeps it true -
+   * a stored table would go on describing a 64 GB card after somebody typed
+   * 128, which is the settings-drift this project forbids from the other
+   * direction (ART-089).
+   */
+  const [useProposed, setUseProposed] = useRemembered(
+    "cardBuilder.useProposed",
+    isFlag,
+    false
+  );
+  const [proposed, setProposed] = useState<ProposedTable | null>(null);
+  const [proposeError, setProposeError] = useState<string | null>(null);
+
+  /**
    * A second complete AmigaOS on the same card (SD-3 G16).
    *
    * Off by default: one system is what a card is for, and the reference
@@ -287,6 +307,37 @@ export function CardBuilder() {
       )
     : null;
 
+  // The proposal is recomputed whenever anything it depends on moves. It reads
+  // nothing and writes nothing, so there is no job and no debounce to get
+  // wrong; a failure (a card too small for the shape) is a sentence rather
+  // than a silent fall back to the two-field pair.
+  const romMajor = plan?.rom?.major ?? null;
+  useEffect(() => {
+    if (!useProposed) {
+      setProposed(null);
+      setProposeError(null);
+      return;
+    }
+    let current = true;
+    void (async () => {
+      try {
+        const table = await cardProposeTable(cardGb * GIB, fsType, romMajor);
+        if (current) {
+          setProposed(table);
+          setProposeError(null);
+        }
+      } catch (e) {
+        if (current) {
+          setProposed(null);
+          setProposeError(errorText(t, e));
+        }
+      }
+    })();
+    return () => {
+      current = false;
+    };
+  }, [useProposed, cardGb, fsType, romMajor, t]);
+
   const request: CardBuildRequest = {
     archive: archive ?? "",
     // Empty for FFS — Kickstart mounts that itself and a driver it never
@@ -301,7 +352,12 @@ export function CardBuilder() {
     line,
     firmware,
     options,
-    partitions,
+    // The proposal replaces the two-field pair when it is in use and has
+    // produced a table. A failed proposal falls back to nothing rather than
+    // to the simple layout: the button is blocked and the sentence says why,
+    // because quietly building a different card than the one on screen is the
+    // outcome this whole panel is arranged to avoid.
+    partitions: useProposed ? (proposed?.partitions ?? []) : partitions,
     ...(second?.ok
       ? { first_disk_bytes: second.firstDiskBytes, extra_disks: second.extraDisks }
       : {}),
@@ -628,7 +684,18 @@ export function CardBuilder() {
                 />
               </div>
 
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
+              {/* Hidden while the proposal is in use, because they would be
+                  describing a card nobody is about to build - the request
+                  takes the proposed table instead. Hidden and not disabled:
+                  what the user set is still there when they switch back. */}
+              <div
+                style={{
+                  display: useProposed ? "none" : "flex",
+                  gap: 8,
+                  flexWrap: "wrap",
+                  alignItems: "end",
+                }}
+              >
                 <TextField
                   label={t("cardBuilder.advanced.driveName")}
                   value={driveName}
@@ -668,7 +735,12 @@ export function CardBuilder() {
                   is a better question to be able to answer than to prevent
                   somebody asking. */}
               <label
-                style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12 }}
+                style={{
+                  display: useProposed ? "none" : "flex",
+                  gap: 8,
+                  alignItems: "flex-start",
+                  fontSize: 12,
+                }}
               >
                 <input
                   type="checkbox"
@@ -682,6 +754,67 @@ export function CardBuilder() {
                   </span>
                 </span>
               </label>
+
+              {/* SD-5 G13's planner. Every number in the table it proposes was
+                  measured off the two real cards ART's card model came from -
+                  the boot partition to the byte, and a system volume that is
+                  the same ~800 MiB on a 128 GB card as on a 64 GB one, which
+                  is the fact a proportional planner would have got wrong.
+                  What it earns its place with is the FFS case: rather than
+                  warning that one work partition would run past what an older
+                  Kickstart can address, it proposes pieces that fit. */}
+              <label
+                style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12 }}
+              >
+                <input
+                  type="checkbox"
+                  checked={useProposed}
+                  onChange={(e) => setUseProposed(e.target.checked)}
+                />
+                <span>
+                  {t("cardBuilder.propose.enable")}
+                  <span className="faint" style={{ display: "block", fontSize: 11 }}>
+                    {t("cardBuilder.propose.enableHint")}
+                  </span>
+                </span>
+              </label>
+
+              {useProposed && proposeError && (
+                <p
+                  className="badge badge-warn"
+                  style={{ display: "block", padding: "6px 12px", fontSize: 11 }}
+                >
+                  {proposeError}
+                </p>
+              )}
+
+              {useProposed && proposed && (
+                <div style={{ fontSize: 12 }}>
+                  <table style={{ borderCollapse: "collapse", marginBottom: 8 }}>
+                    <tbody>
+                      {proposed.partitions.map((partition) => (
+                        <Row
+                          key={partition.drive_name}
+                          name={partition.drive_name}
+                          value={
+                            partition.size_mb === 0
+                              ? t("cardBuilder.propose.rest")
+                              : t("cardBuilder.propose.mb", { mb: partition.size_mb })
+                          }
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                  {proposed.notes.map((note) => {
+                    const phrase = proposalPhrase(note);
+                    return (
+                      <p key={phrase.key} className="muted" style={{ fontSize: 11, margin: "0 0 4px" }}>
+                        {t(phrase.key, phrase.params)}
+                      </p>
+                    );
+                  })}
+                </div>
+              )}
 
               {/* SD-3 G16. There is no menu to write: AmigaOS already has one -
                   hold both mouse buttons at power-on and Early Startup lists

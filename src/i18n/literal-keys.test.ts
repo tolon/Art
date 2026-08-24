@@ -420,6 +420,13 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // diff; `phrase-keys.test.ts` enumerates all six variants, including both
     // arms of the two that read differently when there is nothing to change
     // *from*.
-    expect(dynamicCalls).toBe(137);
+    // 137 → 138 (SD-5 G13, the proposed volume table): one, the same
+    // `Phrase`-off-a-mapper shape as the three above it. `proposalPhrase`
+    // turns a `ProposalNote` into a key and the card builder renders it under
+    // the table; `phrase-keys.test.ts` enumerates all four variants, including
+    // both arms of the split - "your Kickstart is too old" and "you have not
+    // chosen one" are different sentences that send somebody to different
+    // places, which is [ART-232]'s neighbouring lesson.
+    expect(dynamicCalls).toBe(138);
   });
 });

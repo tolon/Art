@@ -1918,6 +1918,18 @@
         "noSize": "Say how much of the card the second AmigaOS gets.",
         "tooLarge": "That leaves the first AmigaOS less than its own {{mb}} MB system partition. Make the second one smaller, or the card larger."
       }
+    },
+    "propose": {
+      "enable": "Propose a volume table for this card",
+      "enableHint": "Sized from the two real PiStorm cards ART's card model was measured from. On an older Kickstart with FFS it proposes work volumes that fit rather than one that would corrupt the drive.",
+      "rest": "whatever is left",
+      "mb": "{{mb}} MB",
+      "note": {
+        "splitForFfs": "Split into {{pieces}} work volumes: Kickstart {{major}}'s own FFS cannot address past {{gb}} GB on one partition, and going past it writes over the start of the volume rather than failing.",
+        "splitNoRom": "Split into work volumes that fit the {{gb}} GB an older Kickstart's FFS can address. No Kickstart has been chosen yet, so this is the safe answer rather than a measured one - choose one and this may become a single volume.",
+        "onePfs3": "One work volume: this filesystem carries its own driver on the card, so the Kickstart's 4 GB limit does not apply to it.",
+        "tail": "{{gb}} GB is left unallocated: covering it would need more partitions than a partition table holds."
+      }
     }
   },
   "preload": {

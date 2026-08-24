@@ -21,6 +21,7 @@ pub mod intake;
 pub mod manifest;
 pub mod multiboot;
 pub mod payload;
+pub mod propose;
 
 use std::path::Path;
 

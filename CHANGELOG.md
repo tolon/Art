@@ -49,6 +49,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kernel from the board at start-up, ART says so and checks nothing: the
   release knows its own boot layout and ART does not.
 
+- **ART will lay out the card for you.** Tick *"propose a volume table"* and
+  it sizes the partitions from what the two real PiStorm cards it was measured
+  against actually carry - including that the system volume is the same size
+  on a 128 GB card as on a 64 GB one. On an older Kickstart with FFS it
+  proposes work volumes that fit rather than one big one, because a partition
+  past what that Kickstart can address does not fail: it writes over the start
+  of the volume.
+
 #### Fixed
 - **Greek, Polish, Russian and Turkish systems had their translations and not
   their letters.** Those four AmigaOS 3.2 disks carry their own fonts —

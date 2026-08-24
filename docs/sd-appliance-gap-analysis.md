@@ -604,8 +604,17 @@ reads it back. Snapshot Manager (§49) remains unbuilt and remains about
 4 GB a Kickstart before v46 can address — which does not fail, it wraps and
 writes over the start of the volume. That is a corrupted drive, not an
 inconvenience, and it is the half that shipped first. What is left is the
-planner proper: the distro registry's entries are all `available: false`, so
-nothing yet plans a card from a named distribution.
+planner proper. **Its volume-table half landed 2026-08-24** —
+`core/card/propose.rs`, with every number measured off the two real cards
+rather than chosen, and a system volume that is the same ~800 MiB whether the
+card is 64 GB or 128 GB. On FFS with a pre-v46 Kickstart it proposes work
+volumes that fit instead of one that corrupts the drive, which is the same
+hazard `capacity.rs` warns about, removed rather than reported.
+
+What is still open is the **profiles** half: the registry's five entries are
+all `available: false`, so nothing yet plans a card from a named distribution.
+Three of them are somebody else's images and need one obtained and read by hand
+before ART can claim anything about them.
 
 The guided wizard: pick a profile (Power Retro / Gamer / Preservationist…),
 see the proposed volume table scaled to the actual card size, adjust, go.
