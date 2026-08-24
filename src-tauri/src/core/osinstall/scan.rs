@@ -279,6 +279,45 @@ pub fn find_media(folder: &Path) -> CoreResult<Vec<FoundMedia>> {
     Ok(found)
 }
 
+/// Every install disk in **several** folders, as one list.
+///
+/// **Work-list item 8's blocker.** The media for AmigaOS 3.2.2.1 is the user's
+/// own 3.2 ADFs *plus* the update disks *plus* the hotfix disk, and Hyperion
+/// ships the last two as `ADFs/Update/` and `ADFs/Hotfix/` inside one
+/// download — three folders for one install, where [`find_media`] assumes
+/// one. Read from Hyperion's own hotfix announcement and amiga-news.de's
+/// report of the 3.2.2.1 release, 2026-08-24, rather than recalled.
+///
+/// # Duplicates across folders are refused, not resolved
+///
+/// Two folders can each hold a `Workbench3.2`, and this keeps both — exactly
+/// as [`find_media`] keeps two in one folder. [`media_for`] then answers
+/// [`MediaMatch::Ambiguous`] and names both paths, which is the honest answer:
+/// picking the one from the folder listed first would be ART choosing between
+/// two of somebody's disks on the strength of the order they happened to add
+/// them in. **The order this returns is not a precedence rule** and nothing
+/// may start treating it as one.
+///
+/// A folder that cannot be read fails the whole scan, unlike an unreadable
+/// *file* inside one: the user named this folder, so "that path is gone" is a
+/// sentence about something they just did rather than about a stray file.
+pub fn find_media_across(folders: &[PathBuf]) -> CoreResult<Vec<FoundMedia>> {
+    let mut found: Vec<FoundMedia> = Vec::new();
+    let mut seen: Vec<PathBuf> = Vec::new();
+    for folder in folders {
+        // The same folder named twice is one folder. A user who picks their
+        // media folder and then adds it again should not be told every disk
+        // in it is ambiguous with itself.
+        let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.clone());
+        if seen.contains(&canonical) {
+            continue;
+        }
+        seen.push(canonical);
+        found.extend(find_media(folder)?);
+    }
+    Ok(found)
+}
+
 /// Every package archive in `folder`, identified from **inside** each file.
 ///
 /// Deliberately separate from [`find_media`] rather than a third arm of its
@@ -584,6 +623,97 @@ pub fn open_package_staging_in(
 mod tests {
     use super::*;
     use crate::core::osinstall::fixtures::{media, scratch, write_test_iso};
+
+    // -----------------------------------------------------------------
+    // Work-list item 8: an install whose media is in more than one folder.
+    // -----------------------------------------------------------------
+
+    /// **The shape AmigaOS 3.2.2.1 actually ships in.** The user's own 3.2
+    /// ADFs, plus the update disks, plus the hotfix disk — and Hyperion puts
+    /// the last two in `ADFs/Update/` and `ADFs/Hotfix/` inside one download.
+    /// Three folders, one install.
+    #[test]
+    fn disks_in_several_folders_are_one_list() {
+        let dir = scratch("scan-across");
+        let base = dir.join("base");
+        let update = dir.join("Update");
+        let hotfix = dir.join("Hotfix");
+        for folder in [&base, &update, &hotfix] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        media(&base, "Workbench3.2", "wb.adf", &[]);
+        media(&base, "Install3.2", "install.adf", &[]);
+        media(&update, "Update3.2.1", "update.adf", &[]);
+        media(&hotfix, "Hotfix3.2.2.1", "hotfix.adf", &[]);
+
+        let found = find_media_across(&[base, update, hotfix]).unwrap();
+        let mut names: Vec<&str> = found.iter().map(|m| m.volume_name.as_str()).collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["Hotfix3.2.2.1", "Install3.2", "Update3.2.1", "Workbench3.2"]
+        );
+
+        // And each one still resolves to its own file, from whichever folder
+        // it came out of.
+        let MediaMatch::Found(hotfix) = media_for(&found, "Hotfix3.2.2.1") else {
+            panic!("the hotfix disk must resolve");
+        };
+        assert!(hotfix.path.ends_with("hotfix.adf"));
+    }
+
+    /// **The same disk in two folders is refused by name, never resolved by
+    /// order.** Picking the one from the folder listed first would be ART
+    /// choosing between two of somebody's disks on the strength of the order
+    /// they happened to add them in.
+    #[test]
+    fn the_same_volume_in_two_folders_stays_ambiguous() {
+        let dir = scratch("scan-across-dupes");
+        let one = dir.join("one");
+        let two = dir.join("two");
+        for folder in [&one, &two] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        media(&one, "Workbench3.2", "wb.adf", &[]);
+        media(&two, "Workbench3.2", "wb-copy.adf", &[]);
+
+        let found = find_media_across(&[one, two]).unwrap();
+        let MediaMatch::Ambiguous(both) = media_for(&found, "Workbench3.2") else {
+            panic!("two copies must not resolve to one");
+        };
+        assert_eq!(both.len(), 2, "and the refusal names both");
+    }
+
+    /// One folder named twice is one folder. A user who picks their media
+    /// folder and then adds it again must not be told every disk in it is
+    /// ambiguous with itself.
+    #[test]
+    fn the_same_folder_named_twice_is_read_once() {
+        let dir = scratch("scan-across-same");
+        media(&dir, "Workbench3.2", "wb.adf", &[]);
+
+        let found = find_media_across(&[dir.clone(), dir.clone()]).unwrap();
+        assert_eq!(found.len(), 1);
+        assert!(matches!(
+            media_for(&found, "Workbench3.2"),
+            MediaMatch::Found(_)
+        ));
+    }
+
+    /// A folder the user named and that is not there fails the scan, unlike an
+    /// unreadable *file* inside one. They just chose it, so "that path is
+    /// gone" is a sentence about something they did.
+    #[test]
+    fn a_named_folder_that_is_not_there_fails_the_scan() {
+        let dir = scratch("scan-across-missing");
+        media(&dir, "Workbench3.2", "wb.adf", &[]);
+        assert!(find_media_across(&[dir.clone(), dir.join("nowhere")]).is_err());
+    }
+
+    #[test]
+    fn no_folders_at_all_is_an_empty_list_rather_than_an_error() {
+        assert!(find_media_across(&[]).unwrap().is_empty());
+    }
 
     #[test]
     fn media_is_found_by_its_volume_name_not_its_filename() {

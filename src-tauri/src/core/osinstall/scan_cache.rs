@@ -999,6 +999,7 @@ mod tests {
         let recipe = crate::core::osinstall::recipe::by_release("AmigaOS 3.9").unwrap();
         let request = crate::core::osinstall::plan::InstallRequest {
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: Vec::new(),
             excluded: Vec::new(),

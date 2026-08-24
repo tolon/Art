@@ -1193,6 +1193,7 @@ pub(crate) mod fixtures {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             rom,
             chosen: chosen.iter().map(|s| s.to_string()).collect(),
             excluded: Vec::new(),

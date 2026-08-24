@@ -56,6 +56,24 @@ export type ScanCachePolicy = "reuse" | "ignore";
 
 export interface InstallRequest {
   mediaFolder: string;
+  /**
+   * More folders holding install media, read alongside `mediaFolder`
+   * (work-list item 8).
+   *
+   * **AmigaOS 3.2.2.1 is not one folder of disks**: it is the user's own 3.2
+   * ADFs plus the update disks plus the hotfix disk, and Hyperion ships the
+   * last two as `ADFs/Update/` and `ADFs/Hotfix/` inside a single download. A
+   * model with one media folder cannot express that install at all.
+   *
+   * A second field rather than a list, because the first folder is the
+   * question this screen has always asked and the one a wrong-folder verdict
+   * is about. **The order is not a precedence rule**: the same volume name in
+   * two folders is refused by name, never resolved by which came first.
+   *
+   * Optional on the wire (`#[serde(default)]` on the Rust side), so a request
+   * built before this existed still deserialises.
+   */
+  extraMediaFolders?: string[];
   /** The paired Kickstart, if supplied. `null` refuses any component whose
    *  condition needs it decided. */
   rom: string | null;
