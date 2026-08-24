@@ -463,4 +463,96 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    /// [ART-146](../../../docs/ISSUES.md#fixed) against the image it was found
+    /// on, rather than against a fixture built from its first eight bytes.
+    ///
+    /// The defect was found by **reading** `AmiKit.hdf`'s bytes and the fix
+    /// was tested on a synthetic `conectix` header — which is the right unit
+    /// test and is not the same claim. A real VHD is 1.2 GB of header, block
+    /// allocation table and blocks, and what this asks is whether the shape
+    /// ART decides from the real file still produces the corrected
+    /// `hardfile2=` line: empty device name, zeroed geometry, no second
+    /// forced-geometry line beside it.
+    ///
+    /// Read-only, and deliberately so: it opens somebody's live AmiKit
+    /// installation.
+    ///
+    /// ```text
+    /// set ART_REAL_HARDFILE=<the image>
+    /// cargo test the_real_vhd_gets_no_forced_geometry -- --ignored --nocapture
+    /// ```
+    ///
+    /// **What it still does not prove.** ART-146's own entry says the branch
+    /// has never been mounted in the real emulator, and this does not change
+    /// that: it measures the configuration ART writes, not what WinUAE does
+    /// with it. That half needs the owner and a running emulator.
+    #[test]
+    #[ignore = "reads a real multi-gigabyte VHD from disk; run explicitly with ART_REAL_HARDFILE"]
+    fn the_real_vhd_gets_no_forced_geometry_when_asked() {
+        let Ok(path) = std::env::var("ART_REAL_HARDFILE") else {
+            eprintln!("set ART_REAL_HARDFILE to a real hard-disk image");
+            return;
+        };
+        let path = std::path::PathBuf::from(path);
+        assert!(path.is_file(), "{} is not a file", path.display());
+
+        // Two independent readers, asked about the same file. `core/vhd` looks
+        // for the footer; `detect_hardfile_shape` looks for signatures it
+        // knows and gives up otherwise. They agree or something is wrong with
+        // one of them.
+        let head = {
+            use std::io::Read as _;
+            let mut file = std::fs::File::open(&path).unwrap();
+            let mut buffer = vec![0u8; crate::core::vhd::FOOTER_LEN];
+            file.read_exact(&mut buffer).unwrap();
+            buffer
+        };
+        let footer = crate::core::vhd::parse_footer(&head);
+        let shape = detect_hardfile_shape(&path).unwrap();
+        println!("  {} -> {shape:?}, footer {footer:?}", path.display());
+
+        match footer {
+            Some(footer) => {
+                assert_eq!(
+                    shape,
+                    HardfileShape::Unknown,
+                    "a VHD ({:?}) must not be mounted as a bare image",
+                    footer.kind
+                );
+            }
+            None => assert_ne!(
+                shape,
+                HardfileShape::Unknown,
+                "not a VHD, so it should have been recognised as bare or RDB"
+            ),
+        }
+
+        // And the line ART would actually write for it.
+        let profile = crate::core::profile::AmigaProfile::a1200_aga();
+        let media = crate::core::winuae::LaunchMedia {
+            hardfile_paths: vec![path.to_string_lossy().into_owned()],
+            hardfile_shapes: vec![shape],
+            use_aros: true,
+            ..Default::default()
+        };
+        let uae = crate::core::winuae::generate_uae_config(&profile, &media).unwrap();
+        let line = uae
+            .lines()
+            .find(|l| l.starts_with("hardfile2="))
+            .expect("one hardfile line");
+        println!("  {line}");
+
+        assert_eq!(
+            uae.matches("hardfile2=").count(),
+            1,
+            "a forced-geometry line beside it is the defect ART-146 was"
+        );
+        if shape != HardfileShape::Bare {
+            assert!(
+                line.contains(&format!("rw,:{},0,0,0,0,0,,uae", path.display())),
+                "{line}"
+            );
+        }
+    }
 }
