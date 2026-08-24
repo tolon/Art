@@ -264,3 +264,132 @@ describe("what a person actually reads", () => {
     });
   }
 });
+
+describe("a second AmigaOS on the same card (SD-3 G16)", () => {
+  /** Power User mode, and the second system already asked for. */
+  function seedTwoSystems(extra: Record<string, unknown> = {}) {
+    useSettingsStore.setState({
+      loaded: true,
+      settings: {
+        ...DEFAULT_SETTINGS,
+        uxMode: "power",
+        remembered: { ...ANSWERED, "cardBuilder.secondSystem": true, ...extra },
+      },
+    });
+  }
+
+  it("is reachable: the control is on the screen in Power User mode", async () => {
+    seedTwoSystems();
+    mount();
+
+    // Written out rather than fetched with t(), the same trade this file's
+    // header records: asking the catalogue would make the test agree with a
+    // deleted key rendering as its own name.
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("A second AmigaOS on this card");
+    });
+    // And the whole point of it: nobody has to write the boot menu.
+    expect(document.body.textContent).toContain("There is no menu to write");
+  });
+
+  it("Beginner mode hides it rather than disabling it", async () => {
+    useSettingsStore.setState({
+      loaded: true,
+      settings: {
+        ...DEFAULT_SETTINGS,
+        uxMode: "beginner",
+        remembered: { ...ANSWERED, "cardBuilder.secondSystem": true },
+      },
+    });
+    mount();
+
+    // The plan is asked for when somebody presses Preview, not on every
+    // keystroke - §92's PREVIEW step, and what this has to go through too.
+    const preview = await screen.findByRole("button", { name: /preview/i });
+    await waitFor(() => expect((preview as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(preview);
+
+    await waitFor(() => expect(planBuildMock).toHaveBeenCalled());
+    expect(document.body.textContent).not.toContain("A second AmigaOS on this card");
+    // Hidden, not disabled: what the user already asked for still reaches the
+    // request (§47/§48 - the mode changes what is shown, never what ART does).
+    const request = planBuildMock.mock.calls.at(-1)?.[0];
+    expect(request.extra_disks).toHaveLength(1);
+  });
+
+  it("asks the core for a second disk, bootable and below the first", async () => {
+    seedTwoSystems();
+    planBuildMock.mockResolvedValue(planWith(false));
+    mount();
+
+    // The plan is asked for when somebody presses Preview, not on every
+    // keystroke - §92's PREVIEW step, and what this has to go through too.
+    const preview = await screen.findByRole("button", { name: /preview/i });
+    await waitFor(() => expect((preview as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(preview);
+
+    await waitFor(() => expect(planBuildMock).toHaveBeenCalled());
+    const request = planBuildMock.mock.calls.at(-1)?.[0];
+
+    expect(request.extra_disks).toHaveLength(1);
+    const [partition] = request.extra_disks[0].partitions;
+    expect(partition.drive_name).toBe("SDH2");
+    expect(partition.bootable).toBe(true);
+    expect(partition.boot_priority).toBe(0);
+    expect(request.partitions[0].boot_priority).toBe(1);
+
+    // The first disk must state its size, because "whatever is left" is only
+    // allowed for the last one.
+    expect(request.first_disk_bytes).toBeGreaterThan(0);
+    expect(request.extra_disks[0].size_bytes).toBe(0);
+  });
+
+  it("one system is still one disk: nothing extra is sent when it is off", async () => {
+    seedRemembered(ANSWERED);
+    planBuildMock.mockResolvedValue(planWith(false));
+    mount();
+
+    // The plan is asked for when somebody presses Preview, not on every
+    // keystroke - §92's PREVIEW step, and what this has to go through too.
+    const preview = await screen.findByRole("button", { name: /preview/i });
+    await waitFor(() => expect((preview as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(preview);
+
+    await waitFor(() => expect(planBuildMock).toHaveBeenCalled());
+    const request = planBuildMock.mock.calls.at(-1)?.[0];
+    expect(request.extra_disks).toBeUndefined();
+    expect(request.first_disk_bytes).toBeUndefined();
+  });
+
+  it("a split that cannot be made blocks the build and says why", async () => {
+    // 2000 GB of second system on a card that does not have it.
+    seedTwoSystems({ "cardBuilder.secondSystemGb": 2000 });
+    planBuildMock.mockResolvedValue(planWith(false));
+    mount();
+
+    // **Planned first, deliberately.** A refused split leaves the second disk
+    // off the request, so the plan itself succeeds - it is a perfectly good
+    // one-disk card. Without a plan on screen Build is disabled for "nobody
+    // has previewed this yet" and this test would pass whatever the refusal
+    // did, which is how the first version of it asserted nothing: dropping the
+    // precedence of the second system's own refusal left every test green.
+    // With a plan, the only thing left to disable Build is the refusal.
+    const preview = await screen.findByRole("button", { name: /preview/i });
+    await waitFor(() => expect((preview as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(preview);
+    await waitFor(() => expect(planBuildMock).toHaveBeenCalled());
+
+    expect(document.body.textContent).toContain(
+      "That leaves the first AmigaOS less than its own"
+    );
+    const build = screen.getByRole("button", { name: /build/i });
+    expect(
+      (build as HTMLButtonElement).disabled,
+      "a card asked for with two systems must not be built with one"
+    ).toBe(true);
+
+    // And nothing half-split was planned with it.
+    const request = planBuildMock.mock.calls.at(-1)?.[0];
+    expect(request?.extra_disks).toBeUndefined();
+  });
+});

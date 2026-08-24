@@ -1796,7 +1796,7 @@
       "driveName": "Drive name",
       "partitionMb": "Partition size (MB)",
       "fsType": "Filesystem",
-      "oneDisk": "One Amiga disk, taking whatever is left after the boot partition. Several disks with a boot menu is multiboot, which is not built yet. Only the filesystems Kickstart carries are offered: a PFS3 partition with no driver on the card is one an Amiga ignores in silence.",
+      "oneDisk": "One Amiga disk by default, taking whatever is left after the boot partition. A second complete AmigaOS can be added below. Only the filesystems Kickstart carries are offered: a PFS3 partition with no driver on the card is one an Amiga ignores in silence.",
       "fsDriver": "Filesystem driver",
       "fsDriverHint": "Your own pfs3aio, embedded in the card's partition table so the Amiga can mount a PFS3 partition. ART ships none — the same rule as the Kickstart. Fast File System needs nothing here: Kickstart carries it.",
       "workPartition": "A second partition for your own files (SDH1)",
@@ -1898,6 +1898,16 @@
     },
     "fs": {
       "needsDriver": "needs {{file}}"
+    },
+    "second": {
+      "enable": "A second AmigaOS on this card",
+      "enableHint": "Its own Amiga disk, with its own partition table. There is no menu to write - hold both mouse buttons while the Amiga starts and its own Early Startup screen lists both systems. The first one starts when nobody holds anything.",
+      "sizeGb": "Second AmigaOS (GB)",
+      "firstGets": "The first AmigaOS keeps {{gb}} GB. The second becomes {{drive}}.",
+      "blocked": {
+        "noSize": "Say how much of the card the second AmigaOS gets.",
+        "tooLarge": "That leaves the first AmigaOS less than its own {{mb}} MB system partition. Make the second one smaller, or the card larger."
+      }
     }
   },
   "preload": {

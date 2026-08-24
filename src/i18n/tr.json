@@ -1796,7 +1796,7 @@
       "driveName": "Sürücü adı",
       "partitionMb": "Bölüm boyutu (MB)",
       "fsType": "Dosya sistemi",
-      "oneDisk": "Önyükleme bölümünden geriye kalanı alan tek bir Amiga diski. Önyükleme menüsüyle birden çok disk çoklu önyüklemedir ve henüz yapılmadı. Yalnızca Kickstart'ın kendi taşıdığı dosya sistemleri sunulur: sürücüsü kartta olmayan bir PFS3 bölümünü Amiga sessizce yok sayar.",
+      "oneDisk": "Varsayılan olarak, önyükleme bölümünden geriye kalanı alan tek bir Amiga diski. Aşağıdan ikinci bir eksiksiz AmigaOS eklenebilir. Yalnızca Kickstart'ın kendi taşıdığı dosya sistemleri sunulur: sürücüsü kartta olmayan bir PFS3 bölümünü Amiga sessizce yok sayar.",
       "fsDriver": "Dosya sistemi sürücüsü",
       "fsDriverHint": "Kendi pfs3aio dosyanız; kartın bölüm tablosuna gömülür, böylece Amiga PFS3 bölümünü bağlayabilir. ART hiçbirini göndermez — Kickstart'la aynı kural. Fast File System için burada bir şey gerekmez: onu Kickstart taşır.",
       "workPartition": "Kendi dosyalarınız için ikinci bir bölüm (SDH1)",
@@ -1898,6 +1898,16 @@
     },
     "fs": {
       "needsDriver": "{{file}} gerekiyor"
+    },
+    "second": {
+      "enable": "Bu kartta ikinci bir AmigaOS",
+      "enableHint": "Kendi bölüm tablosuyla, kendi Amiga diski. Yazılacak bir menü yok - Amiga açılırken iki fare düğmesini birden basılı tutun, Amiga'nın kendi Early Startup ekranı iki sistemi de listeler. Kimse bir şey tutmazsa birincisi açılır.",
+      "sizeGb": "İkinci AmigaOS (GB)",
+      "firstGets": "Birinci AmigaOS'a {{gb}} GB kalır. İkincisi {{drive}} olur.",
+      "blocked": {
+        "noSize": "İkinci AmigaOS'un karttan ne kadar alacağını belirtin.",
+        "tooLarge": "Bu, birinci AmigaOS'a kendi {{mb}} MB'lık sistem bölümü kadar bile yer bırakmıyor. İkincisini küçültün ya da kartı büyütün."
+      }
     }
   },
   "preload": {

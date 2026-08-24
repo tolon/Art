@@ -22,6 +22,8 @@ import { useBuildSession } from "@/lib/useBuildSession";
 
 import {
   buildBlocker,
+  secondSystem,
+  SECOND_SYSTEM_DRIVE,
   cardBuild,
   cardPlanBuild,
   cardCheckImage,
@@ -176,6 +178,25 @@ export function CardBuilder() {
     isFlag,
     true
   );
+  /**
+   * A second complete AmigaOS on the same card (SD-3 G16).
+   *
+   * Off by default: one system is what a card is for, and the reference
+   * layout both real cards carry is a single Amiga disk. Remembered like
+   * everything else, so somebody who builds two-system cards is not asked
+   * again each time.
+   */
+  const [secondSystemOn, setSecondSystemOn] = useRemembered(
+    "cardBuilder.secondSystem",
+    isFlag,
+    false
+  );
+  /** How much of the card the second AmigaOS gets. */
+  const [secondSystemGb, setSecondSystemGb] = useRemembered(
+    "cardBuilder.secondSystemGb",
+    isWholeNumberBetween(1, 2048),
+    8
+  );
   const [fsType, setFsType] = useRemembered<AmigaHardDiskFs>(
     "cardBuilder.fsType",
     isOneOf<AmigaHardDiskFs>(...fsChoices.map((choice) => choice.value)),
@@ -247,6 +268,25 @@ export function CardBuilder() {
     if (typeof picked === "string") setFsDriver(picked);
   }
 
+  /**
+   * The split, when a second system was asked for.
+   *
+   * A refusal is carried rather than silently dropped: the fields are left off
+   * the request so nothing half-split is planned, and the sentence is shown
+   * beside the control *and* blocks the button. A card that quietly came back
+   * with one disk after the user asked for two is the confident wrong outcome
+   * this project keeps naming.
+   */
+  const second = secondSystemOn
+    ? secondSystem(
+        cardGb * GIB,
+        bootMib * 1024 * 1024,
+        secondSystemGb * GIB,
+        fsType,
+        partitionMb
+      )
+    : null;
+
   const request: CardBuildRequest = {
     archive: archive ?? "",
     // Empty for FFS — Kickstart mounts that itself and a driver it never
@@ -262,6 +302,9 @@ export function CardBuilder() {
     firmware,
     options,
     partitions,
+    ...(second?.ok
+      ? { first_disk_bytes: second.firstDiskBytes, extra_disks: second.extraDisks }
+      : {}),
   };
   // `built_at` is deliberately **not** part of `request`: the fingerprint
   // below is `JSON.stringify(request)`, and a clock in it would change on
@@ -414,7 +457,11 @@ export function CardBuilder() {
     if (typeof picked === "string") await verify(picked);
   }
 
-  const blocker = buildBlocker(request, plan);
+  // The second system's own refusal comes first: it is about the card's shape
+  // rather than about a missing file, and it is the one the user can act on
+  // without touching anything else.
+  const blocker =
+    second && !second.ok ? second.why : buildBlocker(request, plan);
 
   return (
     <>
@@ -635,6 +682,53 @@ export function CardBuilder() {
                   </span>
                 </span>
               </label>
+
+              {/* SD-3 G16. There is no menu to write: AmigaOS already has one -
+                  hold both mouse buttons at power-on and Early Startup lists
+                  every bootable partition. What this decides is which one
+                  starts when nobody holds anything, and the second system is
+                  given the priority below the first so there is no tie. */}
+              <label
+                style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12 }}
+              >
+                <input
+                  type="checkbox"
+                  checked={secondSystemOn}
+                  onChange={(e) => setSecondSystemOn(e.target.checked)}
+                />
+                <span>
+                  {t("cardBuilder.second.enable")}
+                  <span className="faint" style={{ display: "block", fontSize: 11 }}>
+                    {t("cardBuilder.second.enableHint")}
+                  </span>
+                </span>
+              </label>
+
+              {secondSystemOn && (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
+                  <NumberField
+                    label={t("cardBuilder.second.sizeGb")}
+                    value={secondSystemGb}
+                    onChange={setSecondSystemGb}
+                    hint={
+                      second?.ok
+                        ? t("cardBuilder.second.firstGets", {
+                            gb: gb(second.firstDiskBytes),
+                            drive: SECOND_SYSTEM_DRIVE,
+                          })
+                        : undefined
+                    }
+                  />
+                  {second && !second.ok && (
+                    <p
+                      className="badge badge-warn"
+                      style={{ display: "block", padding: "6px 12px", fontSize: 11 }}
+                    >
+                      {t(second.why.key, second.why.params)}
+                    </p>
+                  )}
+                </div>
+              )}
 
               <Field
                 label={t("cardBuilder.advanced.fsDriver")}

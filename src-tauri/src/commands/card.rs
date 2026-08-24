@@ -298,8 +298,12 @@ pub const CARD_BUILD_EVENT: &str = "card-build-result";
 ///
 /// The same two fields `core::card::AreaSpec` carries, because that is what it
 /// becomes — a second shape would be a second thing to keep in step.
+// snake_case, like `CardBuildRequest` above it and `PartitionSpec` inside it.
+// It carried a `rename_all = "camelCase"` until 2026-08-24, when the screen
+// that sends one was built: `size_bytes` arrived as an unknown field, and
+// because it is `#[serde(default)]` it became **0** - "whatever is left" -
+// rather than an error. Nothing would have failed.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct AmigaDiskRequest {
     /// How much of the card this disk takes. `0` means *"whatever is left"*,
     /// and only one disk may say it — `plan_card` refuses two by name.
@@ -1647,5 +1651,43 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The wire, in the exact shape the card builder sends.
+    ///
+    /// This exists because the shape was wrong and nothing failed. Until
+    /// 2026-08-24 `AmigaDiskRequest` carried a `rename_all = "camelCase"` that
+    /// neither the request around it nor the `PartitionSpec` inside it has, so
+    /// the screen's `size_bytes` arrived as an unknown field — and because the
+    /// field is `#[serde(default)]`, it became **0**, which is the sentinel for
+    /// *"whatever is left"*. A card asked for with an 8 GB second disk would
+    /// have been built with the whole remainder as the second disk, silently.
+    ///
+    /// So the payload below is written out as JSON rather than built from the
+    /// Rust types: a test that constructs `AmigaDiskRequest` in Rust agrees
+    /// with whatever the field is called this week, which is precisely the
+    /// check that was missing.
+    #[test]
+    fn the_wire_shape_the_screen_sends_is_the_one_rust_reads() {
+        let json = serde_json::json!({
+            "size_bytes": 8_589_934_592u64,
+            "partitions": [{
+                "drive_name": "SDH2",
+                "fs_type": "ffsstandard",
+                "size_mb": 0,
+                "bootable": true,
+                "boot_priority": 0
+            }]
+        });
+
+        let disk: AmigaDiskRequest = serde_json::from_value(json).expect("the screen's own shape");
+        assert_eq!(
+            disk.size_bytes, 8_589_934_592,
+            "a size that does not arrive becomes 0, which means \"take the rest\""
+        );
+        assert_eq!(disk.partitions.len(), 1);
+        assert_eq!(disk.partitions[0].drive_name, "SDH2");
+        assert_eq!(disk.partitions[0].boot_priority, 0);
+        assert!(disk.partitions[0].bootable);
     }
 }
