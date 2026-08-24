@@ -4438,6 +4438,95 @@ mod tests {
         assert_eq!(replaced, 9);
     }
 
+    /// **ART-226 question 2, against the owner's own archive.** Builds a 3.9
+    /// tree with the `locale-39` package selected and checks what actually
+    /// lands.
+    ///
+    /// The measurement this exists for is the one the owner asked about: the
+    /// CD's shelf carries 22 keymaps and this archive carries **49**, so a
+    /// tree with the package on should hold the larger set — Turkish among
+    /// them — in the drawer AmigaOS loads from, not on a shelf.
+    ///
+    /// Read-only with respect to the user's material: the disc and the
+    /// archive are opened, the tree goes to `ART_L39_DEST`.
+    #[test]
+    #[ignore = "needs the user's own AmigaOS 3.9 disc and Locale3_9.lha; set ART_L39_ISO, ART_L39_PACKAGES and ART_L39_DEST"]
+    fn install_the_locale_update_when_asked() {
+        let (Ok(iso), Ok(packages), Ok(dest)) = (
+            std::env::var("ART_L39_ISO"),
+            std::env::var("ART_L39_PACKAGES"),
+            std::env::var("ART_L39_DEST"),
+        ) else {
+            return;
+        };
+
+        let iso_path = PathBuf::from(&iso);
+        let media_folder = iso_path.parent().unwrap().to_path_buf();
+        let root = PathBuf::from(&dest);
+
+        let request = crate::core::osinstall::plan::InstallRequest {
+            packages: vec!["locale-39".to_string()],
+            package_folder: Some(PathBuf::from(&packages)),
+            release: "AmigaOS 3.9".to_string(),
+            media_folder,
+            rom: None,
+            chosen: vec!["locale-base".to_string(), "keymaps".to_string()],
+            excluded: Vec::new(),
+            destination: root.clone(),
+            scan_cache: Default::default(),
+        };
+
+        let recipe = crate::core::osinstall::recipe::amigaos_39().unwrap();
+        let planned = crate::core::osinstall::plan::plan(&request, &recipe).expect("plan");
+        println!("components_on={:?}", planned.components_on);
+        for refusal in &planned.refusals {
+            println!("  refused: {refusal:?}");
+        }
+        assert!(planned.refusals.is_empty(), "{:?}", planned.refusals);
+
+        let from_package = planned
+            .items
+            .iter()
+            .filter(|i| i.component == "locale-39")
+            .count();
+        println!("locale-39 plan items: {from_package}");
+
+        let outcome = apply(&planned, &root, &NoProgress).expect("build the tree");
+        println!(
+            "applied: files={} directories={} bytes={}",
+            outcome.files, outcome.directories, outcome.bytes
+        );
+
+        // The point of the exercise, on disk.
+        let keymaps: std::collections::BTreeSet<String> =
+            std::fs::read_dir(root.join("Devs").join("Keymaps"))
+                .expect("Devs/Keymaps")
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| !n.ends_with(".uaem") && !n.ends_with(".info"))
+                .collect();
+        println!("Devs/Keymaps holds {} keymaps", keymaps.len());
+        let non_ascii: Vec<&String> = keymaps.iter().filter(|n| !n.is_ascii()).collect();
+        println!("  non-ASCII among them: {non_ascii:?}");
+        assert!(
+            keymaps.len() > 22,
+            "the archive carries 49 where the CD shelf carries 22; got {}",
+            keymaps.len()
+        );
+        assert_eq!(
+            non_ascii.len(),
+            1,
+            "the Turkish keymap, carried by the medium's own spelling; got {non_ascii:?}"
+        );
+        for expected in ["czech", "slovak", "hrvatska", "srpski_D"] {
+            assert!(
+                keymaps.contains(expected),
+                "'{expected}' is in the archive and not on the CD shelf, so its presence is \
+                 what says the package's keymaps really arrived"
+            );
+        }
+    }
+
     // ---- Task 6: produce with a package, or add one afterwards ----------
 
     /// Every file in a tree, path -> bytes, with the manifest left out.

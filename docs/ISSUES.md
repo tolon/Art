@@ -204,9 +204,46 @@ icon, not the shelf's. The keymaps are 34 940 bytes.
   `keymaps` comes off `Storage3.2`, which `storage` already reads. One more
   component, no more media. The two are separate pins now.
 
-**Still open: question 2** — `Locale3_9.lha` as a package. The keymap there is
-the same one, but the archive also carries `türkiye.country`, a 2 520-byte
-`türkçe.language`, both flags and 15 font families.
+**Question 2 answered and half built, 2026-08-24.** `Locale3_9.lha` is now a
+shipped package, `locale-39` — and **the split is the release's own, not
+ART's**. Its installer (`Locale3.9/Install-Locale`, `$VER: Install-Locale
+45.4`) asks with `askoptions` which of twenty languages the user wants, then
+does two different things:
+
+| | |
+|---|---|
+| **per language**, via its own `P_CopyDirByLang` | `Locale/Catalogs/<lang>`, `Locale/Help/<lang>`, `Fonts/<lang>`, `Libs/<lang>` |
+| **wholesale**, whatever was chosen | `Locale/Flags`, `Locale/Providers`, `Locale/Languages`, `Devs/Keymaps`, `L`, `Devs/Printers` |
+
+`locale-39` is the wholesale half, six subtree rules in that order — and the
+keymaps are in it, which is why the owner's original question is answered by
+it. Measured against their own archive and disc: 0 refusals, **239 plan items**
+from the package, 2 026 files written, and `Devs/Keymaps` afterwards holds
+**49 keymaps** where the CD shelf gives 22, with `türkçe` among them, carried
+by the medium's own spelling
+(`apply::tests::install_the_locale_update_when_asked`).
+
+Four overrides, each a real collision rather than a precaution, and the one
+that matters is proven: dropping `keymaps` from the list makes a real run
+refuse with `DestinationCollision { path: "Devs/Keymaps/türkçe", components:
+["keymaps", "locale-39"] }` and ninety-odd siblings. Three cheaper mutations —
+a destination retyped, `requires_components` emptied, a rule dropped — all
+fell too.
+
+**Two threads stay open, and neither is a decision any more:**
+
+1. **The per-language half of `locale-39`.** ART's package model wraps one
+   component with fixed rules, so "the Turkish slice" means either a package
+   per language or a package that takes one as a parameter. Shipping twenty
+   languages' catalogs and fonts because somebody wanted one would be ART
+   answering a question the release asks.
+2. **The 3.2 recipe's Turkish content.** `locale-tr` places only `Languages`
+   and `Help`; `Locale-TR.adf` also carries `Catalogs/türkçe` (20 catalogs
+   against the base disk's one, `installer.catalog`) and
+   `Support/Fonts/topaz_iso-8859-9`. [ART-228](#fixed) removed the reason to
+   wait — those files are `compress`-format and ART can now expand them —
+   but where a `Support/Fonts` drawer belongs on the volume is a question the
+   3.2 Installer answers and nobody has read that part of its script yet.
 
 **Fixed 2026-08-24, and verified on the owner's own material.**
 `core/amigainstall/finish.rs` — a typed vocabulary of two operations,

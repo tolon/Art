@@ -207,10 +207,16 @@ use crate::core::security::refuse_shell_metacharacters;
 const BOINGBAG_39_1_JSON: &str = include_str!("recipes/packages/boingbag-39-1.json");
 const BOINGBAG_39_2_JSON: &str = include_str!("recipes/packages/boingbag-39-2.json");
 const LOCALE_TURKISH_JSON: &str = include_str!("recipes/packages/locale-turkish.json");
+const LOCALE_39_JSON: &str = include_str!("recipes/packages/locale-39.json");
 
 /// Every package JSON this project ships. The one list a new package JSON
 /// has to join — see the module doc comment.
-const SHIPPED_JSON: &[&str] = &[BOINGBAG_39_1_JSON, BOINGBAG_39_2_JSON, LOCALE_TURKISH_JSON];
+const SHIPPED_JSON: &[&str] = &[
+    BOINGBAG_39_1_JSON,
+    BOINGBAG_39_2_JSON,
+    LOCALE_TURKISH_JSON,
+    LOCALE_39_JSON,
+];
 
 /// An update package on top of an installed AmigaOS tree — an official
 /// BoingBag or an unofficial pack like the Turkish catalogs.
@@ -1050,13 +1056,22 @@ mod tests {
     }
 
     #[test]
-    fn all_three_shipped_packages_belong_to_amigaos_39() {
+    fn every_shipped_package_belongs_to_amigaos_39() {
         let for_39 = super::packages_for("AmigaOS 3.9").unwrap();
         let ids: Vec<&str> = for_39.iter().map(|p| p.id.as_str()).collect();
         assert_eq!(
             ids,
-            vec!["boingbag-39-1", "boingbag-39-2", "locale-turkish"],
-            "the two BoingBags and the Turkish catalogs from BoingBag 3.9-2"
+            vec![
+                "boingbag-39-1",
+                "boingbag-39-2",
+                "locale-turkish",
+                // ART-226 question 2: the official Locale update's wholesale
+                // half — keymaps, flags, languages, providers, CrossDOS
+                // tables and printers, which is what its own installer
+                // copies whatever languages the user picks.
+                "locale-39",
+            ],
+            "the two BoingBags, the Turkish catalogs from BoingBag 3.9-2, and the Locale update"
         );
     }
 
@@ -1902,20 +1917,103 @@ mod tests {
         );
     }
 
-    /// Every other shipped package says it needs no component, and says so
-    /// by carrying an empty list rather than by the field being absent from
-    /// the type — so a reader can tell "nothing needed" from "nobody
-    /// thought about it" only by reading the JSON, which is why this test
-    /// pins the measured answer for all three.
+    /// The BoingBags say they need no component, and say so by carrying an
+    /// empty list rather than by the field being absent from the type — so a
+    /// reader can tell "nothing needed" from "nobody thought about it" only
+    /// by reading the JSON, which is why this test pins the measured answer
+    /// for every package.
+    ///
+    /// **Two of them name one now** (ART-226 question 2). Both write into
+    /// `Locale/`, and without `locale-base` there is nothing on the volume
+    /// that can select a language — so the files land in a drawer no running
+    /// system opens, which is a silent no-op wearing a successful install's
+    /// clothes.
     #[test]
-    fn only_the_turkish_catalogs_need_a_component_today() {
+    fn the_locale_packages_are_the_ones_that_need_a_component() {
         let with_components: Vec<String> = packages()
             .unwrap()
             .into_iter()
             .filter(|p| !p.requires_components.is_empty())
             .map(|p| p.id)
             .collect();
-        assert_eq!(with_components, vec!["locale-turkish".to_string()]);
+        assert_eq!(
+            with_components,
+            vec!["locale-turkish".to_string(), "locale-39".to_string()]
+        );
+    }
+
+    /// **ART-226 question 2.** The official AmigaOS 3.9 Locale update's
+    /// **wholesale** half, and the split is the release's own rather than
+    /// ART's.
+    ///
+    /// `Locale3.9/Install-Locale` (`$VER: Install-Locale 45.4`) asks with
+    /// `askoptions` which of twenty languages the user wants, then copies
+    /// `Locale/Catalogs/<lang>`, `Locale/Help/<lang>`, `Fonts/<lang>` and
+    /// `Libs/<lang>` **per language** through its own `P_CopyDirByLang`, and
+    /// copies `Locale/Flags`, `Locale/Providers`, `Locale/Languages`,
+    /// `Devs/Keymaps`, `L` and `Devs/Printers` **whatever was chosen**. The
+    /// six rules below are that second list, in that order.
+    ///
+    /// The per-language half is deliberately absent: it needs one package per
+    /// language or a package that takes one as a parameter, and shipping
+    /// twenty languages' catalogs because somebody wanted one would be ART
+    /// answering a question the release asks.
+    #[test]
+    fn the_locale_update_places_the_half_its_own_installer_places_wholesale_art_226() {
+        let package = packages()
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == "locale-39")
+            .expect("ART-226: the 3.9 Locale update must be a shipped package");
+
+        assert_eq!(package.media, "Locale3.9");
+        assert_eq!(package.releases, vec!["AmigaOS 3.9".to_string()]);
+        assert!(
+            package.amiga_installer.is_none(),
+            "a plain LHA ART reads on the host; nothing here needs an Amiga"
+        );
+
+        let rules: Vec<(&str, &str)> = package
+            .component
+            .rules
+            .iter()
+            .map(|r| (r.from.as_str(), r.to.as_str()))
+            .collect();
+        assert_eq!(
+            rules,
+            vec![
+                ("Locale/Devs/Keymaps", "Devs/Keymaps"),
+                ("Locale/Devs/Printers", "Devs/Printers"),
+                ("Locale/L", "L"),
+                ("Locale/Locale/Flags", "Locale/Flags"),
+                ("Locale/Locale/Languages", "Locale/Languages"),
+                ("Locale/Locale/Providers", "Locale/Providers"),
+            ],
+            "the wholesale six, and nothing per-language"
+        );
+        assert!(
+            package
+                .component
+                .rules
+                .iter()
+                .all(|r| r.kind == RuleKind::Subtree),
+            "each is a whole drawer, the way the release copies it"
+        );
+
+        let mut overrides = package.component.overrides.clone();
+        overrides.sort();
+        assert_eq!(
+            overrides,
+            vec![
+                "keymaps".to_string(),
+                "locale-base".to_string(),
+                "workbench-39".to_string(),
+                "workbench-base".to_string(),
+            ],
+            "every one is a measured collision — the archive's 49 keymaps cover the CD \
+             shelf's 22, its 23 `.language` files cover locale-base's, its flags and \
+             providers cover workbench-39's, and `L`/`Devs` are drawers workbench-base owns"
+        );
     }
 
     /// **ART-227.** What the two BoingBags need done after their own

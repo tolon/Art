@@ -1,0 +1,101 @@
+{
+  "_why_this_package_exists": [
+    "ART-226 question 2. `Locale3_9.lha` is the official AmigaOS 3.9 Locale update —",
+    "2 102 093 bytes, 1 031 files, and the owner already has it. It carries things the",
+    "3.9 CD does not, and the one that started this was a keyboard: the owner built a",
+    "Turkish system, watched its menus render ş and ğ, and then could not type them.",
+    "",
+    "Measured against their own copy on 2026-08-24:",
+    "",
+    "  Devs/Keymaps          49 keymaps, each with its icon — a strict superset of the",
+    "                        CD shelf's 22, `türkçe` among them",
+    "  Devs/Printers          3 printer drivers",
+    "  L/FileSystem_Trans    11 CrossDOS translation tables",
+    "  Locale/Flags          35 country flags and 52 keymap flags",
+    "  Locale/Languages      23 `.language` files (the CD's own `türkçe.language` is",
+    "                        1 052 bytes; this one is 2 520)",
+    "  Locale/Providers       5, including Türkiye"
+  ],
+  "_why_only_the_wholesale_half": [
+    "**The archive's own installer decides this, not ART.** `Locale3.9/Install-Locale`",
+    "($VER: Install-Locale 45.4) asks the user which of twenty languages they want —",
+    "`askoptions` over `bosanski català czech dansk deutsch español français hrvatski",
+    "italiano nederlands norsk português português-brasil russian slovak slovensko",
+    "srpski suomi svenska türkçe` — and then splits its work in two:",
+    "",
+    "  per language, through its own `P_CopyDirByLang`:",
+    "      Locale/Catalogs/<lang>, Locale/Help/<lang>, Fonts/<lang>, Libs/<lang>",
+    "",
+    "  wholesale, whatever was chosen:",
+    "      Locale/Flags, Locale/Providers, Locale/Languages,",
+    "      Devs/Keymaps, L, Devs/Printers",
+    "",
+    "This package is the **wholesale** half, exactly as the release defines it. The",
+    "per-language half is a second thing and is not here: it needs one package per",
+    "language, or a package that takes a language as a parameter, and ART's model has",
+    "no notion of the second. Shipping a package that placed twenty languages' catalogs",
+    "and fonts because a user wanted one would be ART deciding something the release",
+    "asks about.",
+    "",
+    "The keymaps are in this half, which is why the owner's original question is",
+    "answered by it."
+  ],
+  "id": "locale-39",
+  "name": "AmigaOS 3.9 Locale update — keymaps, flags, languages",
+  "releases": [
+    "AmigaOS 3.9"
+  ],
+  "_why_no_distinguished_by": [
+    "`Locale3.9` is this archive's own top-level directory and it is unique among the",
+    "owner's material: every `.lha` in their package folder was asked what top-level",
+    "directory ART reads from it, and the others answer `BoingBag3.9-1`,",
+    "`BoingBag3.9-2`, `BoingBag3.9-1-UAE`, `BoingBag3.9-3&4`, `LocaleUpdate`,",
+    "`Euro-Update`, `GenesisPrefs`, `NDK_3.9` or `Archives`. So `media` alone",
+    "identifies it and ART-167's tiebreak is not needed — the filename is never",
+    "consulted either way."
+  ],
+  "media": "Locale3.9",
+  "requires": [],
+  "_why_requires_components_locale_base": [
+    "The same reasoning `locale-turkish` records. This package writes `.language`",
+    "files and flags into `Locale/`; without `locale-base` switched on there is no",
+    "`Locale/Catalogs` for a chosen language to read, and the update would sit in a",
+    "drawer no running system opens."
+  ],
+  "requires_components": [
+    "locale-base"
+  ],
+  "_why_these_four_overrides": [
+    "Each is a real, measured collision rather than a precaution:",
+    "",
+    "  keymaps        the 3.9 recipe's own component places the CD shelf's 22 keymaps",
+    "                 into `Devs/Keymaps`; all 22 are among this archive's 49, so every",
+    "                 one of them is written over",
+    "  locale-base    places `Locale/Languages` off the CD — 22 `.language` files this",
+    "                 archive also carries, `türkçe.language` among them at more than",
+    "                 twice the size",
+    "  workbench-39   places `OS-VERSION3.9/WORKBENCH3.9/LOCALE` whole, which is where",
+    "                 the CD's own `Locale/Flags` (61 rows) and `Locale/Providers` (4)",
+    "                 come from",
+    "  workbench-base places `L` and `Devs` as whole drawers, which is what",
+    "                 `L/FileSystem_Trans` and `Devs/Printers` land inside",
+    "",
+    "Declared because `plan::detect_collisions` refuses an undeclared claim at plan",
+    "time — and because an override that names nothing real is a licence to overwrite",
+    "something nobody measured, which is the mistake ART-159 was careful not to make."
+  ],
+  "overrides": [
+    "workbench-base",
+    "locale-base",
+    "workbench-39",
+    "keymaps"
+  ],
+  "rules": [
+    { "from": "Locale/Devs/Keymaps", "to": "Devs/Keymaps", "kind": "subtree" },
+    { "from": "Locale/Devs/Printers", "to": "Devs/Printers", "kind": "subtree" },
+    { "from": "Locale/L", "to": "L", "kind": "subtree" },
+    { "from": "Locale/Locale/Flags", "to": "Locale/Flags", "kind": "subtree" },
+    { "from": "Locale/Locale/Languages", "to": "Locale/Languages", "kind": "subtree" },
+    { "from": "Locale/Locale/Providers", "to": "Locale/Providers", "kind": "subtree" }
+  ]
+}
