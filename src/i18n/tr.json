@@ -2552,5 +2552,43 @@
     "treeDestinationOccupied": "'{{path}}' klasörünün içinde bir şeyler var. ART bir dağıtım ağacını boş olmayan bir klasörün üzerine kurmaz — boş bir klasör seçin ya da yeni bir tane oluşturun.\n\nHata kimliği: ART-SAFETY-REFUSED",
     "packageWrongArchive": "'{{archive}}' bu paketin kurucusunun bulunduğu arşiv değil: içinde '{{expected}}' çekmecesi yok. İçinde olanlar: {{found}}.\n\nHata kimliği: ART-INPUT-INVALID",
     "verbatimNoId": "{{sentence}}"
+  },
+  "network": {
+    "heading": "Ağ",
+    "intro": "Bunları şimdi girin, kart ilk açılışta ağa bağlansın — Amiga'da parola yazmak zorunda kalmayın.",
+    "wifi": {
+      "enable": "WiFi kur",
+      "ssid": "Ağ adı (SSID)",
+      "security": "Güvenlik",
+      "wpa": "Parolalı WPA / WPA2",
+      "open": "Açık, parolasız",
+      "passphrase": "Parola",
+      "show": "Göster",
+      "hide": "Gizle",
+      "notRemembered": "Hatırlanmaz: ART karta yazar, kendinde kopya tutmaz; her seferinde yazarsınız."
+    },
+    "stack": {
+      "enable": "TCP/IP yığınını kur (tolunnet)",
+      "device": "Sürücü",
+      "deviceHint": "PiStorm kartta wifipi.device.",
+      "unit": "Birim",
+      "dhcp": "Adresi otomatik al (DHCP)",
+      "ip": "Adres",
+      "netmask": "Ağ maskesi",
+      "gateway": "Ağ geçidi",
+      "dns": "DNS sunucusu"
+    },
+    "replacing": "Bu birimde kayıtlı {{count}} ağ değiştirilecek — ART verdiğiniz listeyi yazar, birleştirmez.",
+    "write": "Birime yaz",
+    "writing": "Yazılıyor…",
+    "done": "Yazıldı: {{files}}",
+    "blocked": {
+      "noTree": "Önce bir sistem birimi seçin.",
+      "nothingChosen": "WiFi'yi, yığını ya da ikisini işaretleyin.",
+      "noSsid": "Ağın bir adı olmalı.",
+      "passphraseLength": "Parola {{got}} karakter; {{min}} ile {{max}} arası ya da {{key}} karakterlik anahtar olmalı.",
+      "noDevice": "Yığının bir sürücü adı gerekiyor.",
+      "staticIncomplete": "Sabit adres için her alan gerekli; {{field}} boş."
+    }
   }
 }

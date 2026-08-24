@@ -30,6 +30,7 @@
 //! and `Debug` prints stars.
 
 pub mod secret;
+pub mod seed;
 pub mod tolunnet;
 pub mod wpa;
 

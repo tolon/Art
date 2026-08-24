@@ -2552,5 +2552,43 @@
     "treeDestinationOccupied": "'{{path}}' already has something in it. ART never builds a distribution tree over a folder that is not empty — choose an empty folder, or make a new one.\n\nError ID: ART-SAFETY-REFUSED",
     "packageWrongArchive": "'{{archive}}' is not the archive this package's installer lives in: it carries no '{{expected}}' drawer. What it does hold: {{found}}.\n\nError ID: ART-INPUT-INVALID",
     "verbatimNoId": "{{sentence}}"
+  },
+  "network": {
+    "heading": "Network",
+    "intro": "Fill these in now and the card is on the network the first time it starts, instead of you typing a passphrase on an Amiga.",
+    "wifi": {
+      "enable": "Set up WiFi",
+      "ssid": "Network name (SSID)",
+      "security": "Security",
+      "wpa": "WPA / WPA2 with a passphrase",
+      "open": "Open, no passphrase",
+      "passphrase": "Passphrase",
+      "show": "Show",
+      "hide": "Hide",
+      "notRemembered": "Not remembered: ART writes it to the card and keeps no copy, so you type it each time."
+    },
+    "stack": {
+      "enable": "Set up the TCP/IP stack (tolunnet)",
+      "device": "Driver",
+      "deviceHint": "wifipi.device on a PiStorm card.",
+      "unit": "Unit",
+      "dhcp": "Get an address automatically (DHCP)",
+      "ip": "Address",
+      "netmask": "Netmask",
+      "gateway": "Gateway",
+      "dns": "DNS server"
+    },
+    "replacing": "{{count}} network(s) already on this volume will be replaced — ART writes the list you give it, it does not merge.",
+    "write": "Write it to the volume",
+    "writing": "Writing…",
+    "done": "Written: {{files}}",
+    "blocked": {
+      "noTree": "Choose a system volume first.",
+      "nothingChosen": "Tick WiFi, the stack, or both.",
+      "noSsid": "The network needs a name.",
+      "passphraseLength": "The passphrase is {{got}} characters; it must be {{min}} to {{max}}, or a {{key}}-character key.",
+      "noDevice": "The stack needs a driver name.",
+      "staticIncomplete": "A fixed address needs every field; {{field}} is empty."
+    }
   }
 }

@@ -10,6 +10,7 @@ import en from "./en.json";
 
 import { ALL_PROVENANCES, provenancePhrase } from "@/lib/gameindex";
 import { kindPhrase as artworkKindPhrase, mediaPhrase } from "@/lib/collectionDetail";
+import { networkBlocker } from "@/components/osbuilder/NetworkPanel";
 import type { Media } from "@/lib/gameindex";
 import {
   outcomePhrase,
@@ -671,6 +672,52 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       expect(isLeafKey(blocker!.key), blocker!.key).toBe(true);
     }
     expect(buildBlocker(request, plan)).toBeNull();
+  });
+
+  it("networkBlocker: every reason a card's network cannot be written resolves", () => {
+    const ok = {
+      tree: "E:\dist",
+      wifiOn: true,
+      ssid: "Tolun-Ev",
+      security: "wpa" as const,
+      psk: "correct-horse",
+      stackOn: true,
+      device: "wifipi.device",
+      dhcp: true,
+      ip: "",
+      netmask: "",
+      gateway: "",
+      dns: "",
+    };
+    const blockers = [
+      networkBlocker({ ...ok, tree: null }),
+      networkBlocker({ ...ok, wifiOn: false, stackOn: false }),
+      networkBlocker({ ...ok, ssid: "  " }),
+      networkBlocker({ ...ok, psk: "short" }),
+      networkBlocker({ ...ok, device: "" }),
+      networkBlocker({ ...ok, dhcp: false }),
+    ];
+    for (const blocker of blockers) {
+      expect(blocker).not.toBeNull();
+      expect(isLeafKey(blocker!.key), blocker!.key).toBe(true);
+    }
+    // Nothing wrong is nothing said. And an open network needs no passphrase,
+    // which is the branch that would otherwise be blocked by its own length.
+    expect(networkBlocker(ok)).toBeNull();
+    expect(networkBlocker({ ...ok, security: "open", psk: "" })).toBeNull();
+    // A 64-character key is not a passphrase and is not measured as one.
+    expect(networkBlocker({ ...ok, psk: "a".repeat(64) })).toBeNull();
+    // A fixed address with every field filled in.
+    expect(
+      networkBlocker({
+        ...ok,
+        dhcp: false,
+        ip: "192.168.1.50",
+        netmask: "255.255.255.0",
+        gateway: "192.168.1.1",
+        dns: "192.168.1.1",
+      })
+    ).toBeNull();
   });
 
   it("stepPhrase: every PreloadStep variant resolves", () => {

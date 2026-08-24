@@ -23,6 +23,7 @@ import { AmigaInstallPanel } from "@/components/osbuilder/AmigaInstallPanel";
 import { CardBuilder } from "@/components/osbuilder/CardBuilder";
 import { OsInstall } from "@/components/osbuilder/OsInstall";
 import { PackagePanel } from "@/components/osbuilder/PackagePanel";
+import { NetworkPanel } from "@/components/osbuilder/NetworkPanel";
 import { VerifyAgainstCard } from "@/components/osbuilder/VerifyAgainstCard";
 import { VolumePreload } from "@/components/osbuilder/VolumePreload";
 
@@ -167,6 +168,12 @@ export function StepBirimler() {
   return (
     <>
       <VolumePreload />
+      {/* **SD-3 G14.** The owner's decision, 2026-08-24: ART asks, and the
+          WiFi credentials are entered while the card is being set up. It goes
+          here rather than on the install step because this is where somebody
+          is setting a card up, and it writes into the system volume the card
+          will carry. */}
+      <NetworkPanel />
       <VerifyAgainstCard />
     </>
   );
