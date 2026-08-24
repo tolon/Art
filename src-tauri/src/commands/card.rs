@@ -417,6 +417,34 @@ fn payload_for(request: &CardBuildRequest) -> CoreResult<crate::core::card::payl
     )
 }
 
+/// A volume table proposed for this card, before anything is chosen.
+///
+/// SD-5 G13's planner half. Reads nothing and writes nothing - it is
+/// arithmetic over numbers measured off two real cards
+/// ([`crate::core::card::propose`]) - so it is safe to call on every keystroke
+/// and does not go through a job.
+///
+/// The ROM is passed as its **major version**, not as a path: the screen
+/// already knows it from the pairing it renders, and having this command read
+/// a ROM file would put a second reader beside `core::rom` for one number.
+#[tauri::command]
+pub fn card_propose_table(
+    card_bytes: u64,
+    fs_type: crate::core::rdb::AmigaHardDiskFs,
+    rom_major: Option<u16>,
+) -> AppResult<crate::core::card::propose::ProposedTable> {
+    crate::core::card::propose::propose(card_bytes, fs_type, rom_major)
+        .map_err(|refusal| match refusal {
+            crate::core::card::propose::ProposalRefusal::CardTooSmall {
+                need_bytes,
+                have_bytes,
+            } => crate::core::error::CoreError::InvalidInput(format!(
+                "a card needs at least {need_bytes} bytes for this layout and this one is {have_bytes}"
+            )),
+        })
+        .map_err(Into::into)
+}
+
 /// What building this card would do. Writes nothing (§92's PREVIEW step).
 ///
 /// Unpacking the release archive is what this costs, and it is one small

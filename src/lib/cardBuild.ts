@@ -126,6 +126,57 @@ export interface PlannedRom {
   size_bytes: number;
   sha256: string;
   compatible_models: string[];
+  /**
+   * The numeric major, when the ROM names one - 40 for a 3.1, 47 for a 3.2.
+   *
+   * `null` for an AROS replacement, an undecoded Amiga Forever dump, or a file
+   * that is not recognisably a Kickstart. It is what decides whether the
+   * Kickstart's own FFS can address past 4 GiB, so it reaches the proposal.
+   */
+  major: number | null;
+}
+
+/**
+ * Something about a proposed table the table itself does not say.
+ *
+ * SD-5 G13. See `core/card/propose.rs` - every number in a proposal was
+ * measured off the two real cards ART's card model came from.
+ */
+export type ProposalNote =
+  | { note: "split-for-kickstart-ffs"; pieces: number; limit: number; rom_major: number | null }
+  | { note: "one-work-volume-because-pfs3" }
+  | { note: "tail-unallocated"; bytes: number }
+  | { note: "split-because-no-rom-chosen" };
+
+/** A whole card, proposed. */
+export interface ProposedTable {
+  boot_bytes: number;
+  partitions: PartitionSpec[];
+  notes: ProposalNote[];
+}
+
+/** The sentence for a proposal note, for the component to render. */
+export function proposalPhrase(note: ProposalNote): Phrase {
+  switch (note.note) {
+    case "split-for-kickstart-ffs":
+      return {
+        key: "cardBuilder.propose.note.splitForFfs",
+        params: {
+          pieces: note.pieces,
+          gb: Math.round(note.limit / 1024 ** 3),
+          major: note.rom_major ?? 0,
+        },
+      };
+    case "split-because-no-rom-chosen":
+      return { key: "cardBuilder.propose.note.splitNoRom" };
+    case "one-work-volume-because-pfs3":
+      return { key: "cardBuilder.propose.note.onePfs3" };
+    case "tail-unallocated":
+      return {
+        key: "cardBuilder.propose.note.tail",
+        params: { gb: Math.round(note.bytes / 1024 ** 3) },
+      };
+  }
 }
 
 /** What building the request would produce. Writes nothing (§92's PREVIEW). */
@@ -351,6 +402,24 @@ export function findingPhrase(finding: ManifestFinding): Phrase {
 }
 
 /** What building this card would do. Writes nothing. */
+/**
+ * A volume table proposed for a card of this size.
+ *
+ * Arithmetic only - it reads nothing and writes nothing - so it is safe to
+ * call whenever the size or the filesystem changes.
+ */
+export async function cardProposeTable(
+  cardBytes: number,
+  fsType: AmigaHardDiskFs,
+  romMajor: number | null
+): Promise<ProposedTable> {
+  return invoke<ProposedTable>("card_propose_table", {
+    cardBytes,
+    fsType,
+    romMajor,
+  });
+}
+
 export async function cardPlanBuild(request: CardBuildRequest): Promise<CardBuildPlan> {
   return invoke<CardBuildPlan>("card_plan_build", { request });
 }

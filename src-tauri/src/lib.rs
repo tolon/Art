@@ -136,6 +136,7 @@ pub fn run() {
             commands::hdf::hdf_create,
             commands::card::card_open,
             commands::card::card_plan_build,
+            commands::card::card_propose_table,
             commands::card::card_build,
             commands::card::card_check_image,
             commands::card::card_intake,

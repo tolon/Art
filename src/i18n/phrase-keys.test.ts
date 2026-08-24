@@ -49,7 +49,9 @@ import {
 import { describeVerdict, describeOutcome, type WhdloadOutcome, type WhdloadVerdict } from "@/lib/whdload";
 import {
   buildBlocker,
+  proposalPhrase,
   secondSystem,
+  type ProposalNote,
   defaultPartition,
   findingPhrase,
   healthCheckPhrase,
@@ -615,6 +617,20 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     ];
     for (const effect of effects) {
       const phrase = activationPhrase(effect);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("proposalPhrase: every ProposalNote variant resolves", () => {
+    const GIB = 1024 ** 3;
+    const notes: ProposalNote[] = [
+      { note: "split-for-kickstart-ffs", pieces: 15, limit: 4 * GIB, rom_major: 40 },
+      { note: "split-because-no-rom-chosen" },
+      { note: "one-work-volume-because-pfs3" },
+      { note: "tail-unallocated", bytes: 30 * GIB },
+    ];
+    for (const note of notes) {
+      const phrase = proposalPhrase(note);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
     }
   });
