@@ -1786,6 +1786,35 @@ sentence**: `core::error::tests::the_sentences_the_frontend_recognises_are_pinne
 calls the real producers, and `errorText.test.ts` holds the literals copied
 from what they produce. Change either and a test fails pointing at the other.
 
+> **Both remaining halves closed, 2026-08-24 — and both were smaller than the
+> work list said.**
+>
+> **The render sites are done.** Measured rather than assumed: `errorText(` is
+> called at **132** places in `src/`, and the four remaining `String(e)` are
+> each deliberate and carry their reason — two in `src/lib`, which has no
+> i18next singleton by this project's own rule, one a comment, one wrapping a
+> value into an `Error` rather than rendering it. The work-list item still said
+> *"the last 132 Rust refusal render sites"*, which had stopped being true.
+>
+> **The recogniser list is deliberately not grown.** This entry's own rule is
+> that it grows *"when somebody meets something new, not when somebody goes
+> looking"*, so the owner's `operations.jsonl` was read instead of the code:
+> **37 operations, 10 failures, exactly the two distinct sentences named
+> above**, both already recognised. Nothing new has been met, so nothing is
+> added.
+>
+> **What was actually left was a half-open pin, found by mutation.** The module
+> claims both ends pin the same sentence and that changing either fails a test
+> *pointing at the other*. For the package-archive sentence that was not true:
+> rewording it failed
+> `packagevol::tests::an_unrecognised_archive_still_lists_what_it_held`, a test
+> named for something else whose message names nothing — so somebody rewording
+> it would fix the literal there and never learn a Turkish sentence had just
+> reverted to English.
+> `core::error::tests::the_sentences_the_frontend_recognises_are_pinned_here`
+> now covers it, in two halves, each failing with `src/lib/errorText.ts` named.
+> Both halves mutated; both fell.
+
 **Wired at the two screens where those two errors actually surface** — the
 tree build and the Amiga-side installer run. Not the other 132 `String(e)`
 sites: that is a codemod worth doing on its own, and doing it half-way here

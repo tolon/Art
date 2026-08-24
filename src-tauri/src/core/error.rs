@@ -291,7 +291,37 @@ mod tests {
             "and on this trailer: {text}"
         );
 
-        // 2. The trailer's exact shape, which is what `parseError` splits on.
+        // 2. **The package-archive sentence.** `errorText.ts`'s second
+        //    recogniser keys on `carries no '…' drawer, so it is not the
+        //    archive this package's installer lives in; it holds …`, and until
+        //    2026-08-24 nothing on this side said so.
+        //
+        //    It was not unguarded — rewording it failed
+        //    `packagevol::tests::an_unrecognised_archive_still_lists_what_it_held`,
+        //    which was measured rather than assumed. But that test is named for
+        //    something else and its failure names nothing, so somebody
+        //    rewording the sentence would fix the literal there and never learn
+        //    that a Turkish sentence had just reverted to English. This
+        //    module's own claim is that changing either end fails a test
+        //    **pointing at the other**; for this sentence it did not.
+        let said = crate::core::amigainstall::packagevol::wrong_archive_sentence(
+            std::path::Path::new("E:\\dl\\BoingBag39-1-UAE.lha"),
+            "BoingBag3.9-1",
+            &crate::core::amigainstall::packagevol::ArchiveIs::Neither,
+            "BoingBag3.9-1-UAE, BoingBag3.9-1-UAE.info",
+        );
+        assert!(
+            said.contains("' carries no '"),
+            "src/lib/errorText.ts keys on this phrase: {said}"
+        );
+        assert!(
+            said.contains(
+                "drawer, so it is not the archive this package's installer lives in; it holds "
+            ),
+            "src/lib/errorText.ts keys on this phrase: {said}"
+        );
+
+        // 3. The trailer's exact shape, which is what `parseError` splits on.
         //    One place writes it, and this is the check that it stays.
         assert_eq!(
             CoreError::NonUtf8Path.user_message(),
