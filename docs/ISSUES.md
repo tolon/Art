@@ -26,6 +26,50 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-230** 🟠 ✅ **A comment in the card builder said its images were free,
+and they cost their full size** — *found and fixed 2026-08-24, while building
+work-list item 7*
+`src-tauri/src/core/card/build.rs::build_card`
+
+Not a crash and not a wrong card. A **sentence**, in the doc comment on the
+function that writes card images, and it was wrong:
+
+> The file is created *sparse* where the filesystem underneath allows it —
+> `set_len` on NTFS costs nothing and takes no space — so building a 128 GB
+> card writes the few megabytes that are actually structure.
+
+Measured on the owner's own D: drive rather than argued about:
+
+```text
+SetLength(2 GB) on NTFS
+  logical length : 2 147 483 648
+  free consumed  : 2 147 483 648
+  sparse flag    : This file is NOT set as sparse
+```
+
+Exactly the length, to the byte. **A 32 GiB card cost 32 GiB**, and a 128 GB
+one cost 128 GB.
+
+What makes this worth an entry rather than a typo fix is *where* it sat: in the
+first file anybody would open to find out why their card images are enormous,
+telling them the thing they came to check had already been dealt with. That is
+the class this file's own preamble is about — a confident, wrong sentence that
+passes every test and is invisible until somebody reads the screen and acts on
+it. The work-list item that finally caught it had been carrying the correct
+premise (*"A 32 GiB card image costs 32 GiB today"*) beside the comment that
+denied it, and neither had been checked.
+
+**Fixed by making the claim true rather than by deleting it.** A destination
+ending `.vhd` is now written as a **dynamic VHD** (`core::vhd::write`), which
+really does cost what it holds: measured, a 32 GiB card with three blocks
+touched is **6 360 576 bytes**, a 5 402× saving, and Microsoft's own `Get-VHD`
+reads every field of it. The doc comment now carries the measurement, both
+numbers and the date.
+
+*Tests:* the card round-trips through the container
+(`a_card_built_as_a_vhd_costs_a_fraction_and_reads_back_the_same`), and
+`scripts/vhd-oracle-check.py` is the outside verifier.
+
 **ART-229** 🟠 ✅ **An AmigaOS 3.1 folder was announced as the user's AmigaOS
 3.2 folder** — *found and fixed 2026-08-24, while building work-list item 5*
 `src-tauri/src/core/osinstall/identify.rs` (moved there from `recipe.rs`)
