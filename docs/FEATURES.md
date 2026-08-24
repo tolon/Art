@@ -12,6 +12,7 @@ implemented and tested.** A row may only be marked ✅ if there is working code
 | 🟡 | Partly implemented — the gap is named in the row |
 | 🔩 | Stub only: the module exists and returns `NotImplemented` |
 | ⏳ | Not started |
+| 🅥2 | Deliberately deferred to v2 - a decision, not a gap. The row says whose and when |
 | — | Not applicable |
 
 Scheduling lives in [STATUS.md](STATUS.md); defects live in [ISSUES.md](ISSUES.md).
@@ -373,9 +374,9 @@ Both are designed — [design-software-sources.md](design-software-sources.md),
 | Aminet install to HDF | §41.5 | ✅ | `sources_install_volume` — same unpack as the ADF path, then a Stage W folder copy |
 | Aminet update view | §41.5.6 | ✅ | `core/sources/installed.rs`; compares the recorded download against the catalogue |
 | Package bundles — a curated catalogue, downloaded in order | [design-package-bundles.md](superpowers/specs/2026-08-22-package-bundles-design.md) | ✅ | 14 sets, 62 entries, shipped as data (`core/sources/bundle/catalogue/*.json`); `core/sources/bundle/` (parse/resolve/run) + `commands/bundles.rs` + a section inside Aminet Studio (`BundlePanel.tsx`). Phase 1 is download-only — nothing installs onto an Amiga volume yet |
-| AI read-only assistant | §45.5 Stage A | ⏳ |
-| AI plan generation + Plan Cards | §45.5 Stage B | ⏳ |
-| AI full scenarios | §45.5 Stage C | ⏳ |
+| AI read-only assistant | §45.5 Stage A | 🅥2 | **v2, on the owner's decision 2026-08-24** — prepared and added once the project is in use. The only planned feature that adds no capability ART lacks, so it waits for the ground under it to be driven rather than layering over it. |
+| AI plan generation + Plan Cards | §45.5 Stage B | 🅥2 | **v2, on the owner's decision 2026-08-24** — prepared and added once the project is in use. The only planned feature that adds no capability ART lacks, so it waits for the ground under it to be driven rather than layering over it. |
+| AI full scenarios | §45.5 Stage C | 🅥2 | **v2, on the owner's decision 2026-08-24** — prepared and added once the project is in use. The only planned feature that adds no capability ART lacks, so it waits for the ground under it to be driven rather than layering over it. |
 
 The Aminet rows are ✅ apart from the AI layer. What is built and tested:
 `core/sources` — index and readme parsing, catalog store, search, version
