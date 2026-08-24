@@ -191,6 +191,23 @@ pub enum CardBuildWarning {
     RomMachineUnknown { rom: String },
     /// The ROM is one ART knows and it is not for this Amiga.
     RomWrongMachine { rom: String },
+    /// **An FFS partition larger than Kickstart's own filesystem can address.**
+    ///
+    /// SD-5 G13's safety half. The original FFS does not refuse a partition
+    /// past its 4 GiB addressing — it writes past it and corrupts the drive.
+    /// AmigaOS 3.1.4 and 3.2 carry FFS v46, which addresses TD_64 and NSD
+    /// natively, so this is raised only for an older ROM or none at all.
+    ///
+    /// A **warning and not a refusal**, because ART cannot see everything that
+    /// lifts the limit: a 3.9 system loads FFS v45 from disk and `SetPatch`
+    /// replaces the ROM's filesystem at boot. See `core::card::capacity`.
+    PartitionBeyondKickstartFfs {
+        drive_name: String,
+        bytes: u64,
+        limit: u64,
+        /// `None` when no Kickstart was chosen — not the same as an old one.
+        rom_major: Option<u16>,
+    },
     /// **What SD-1 builds.** The Amiga sees a partition table it understands
     /// and volumes it will offer to format; putting a system on them is SD-2's
     /// work. Said plainly rather than left to be discovered (§10, §89).
@@ -372,6 +389,34 @@ pub fn card_plan_build(request: CardBuildRequest) -> AppResult<CardBuildPlan> {
             }
         }
     };
+
+    // SD-5 G13: an FFS partition past what this card's Kickstart can address.
+    // Computed from the layout that was just planned, so the sizes are the
+    // ones this build would really produce.
+    {
+        use crate::core::card::capacity::{approximate_sizes, size_concerns, SizeConcern};
+        let area_bytes = layout
+            .areas
+            .first()
+            .map(|area| area.length_bytes())
+            .unwrap_or(0);
+        let sizes = approximate_sizes(area_bytes, &request.partitions);
+        let major = rom.as_ref().and_then(|info| info.major);
+        for concern in size_concerns(&request.partitions, &sizes, major) {
+            let SizeConcern::BeyondKickstartFfs {
+                drive_name,
+                bytes,
+                limit,
+                rom_major,
+            } = concern;
+            warnings.push(CardBuildWarning::PartitionBeyondKickstartFfs {
+                drive_name,
+                bytes,
+                limit,
+                rom_major,
+            });
+        }
+    }
 
     Ok(CardBuildPlan {
         layout,

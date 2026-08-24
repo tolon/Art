@@ -1823,7 +1823,9 @@
       "romUnrecognised": "ART bu ROM'u tanımıyor. Yine de doğru ROM olabilir.",
       "romMachineUnknown": "{{rom}} — ART bu Kickstart'ın hangisi olduğunu biliyor, ama hangi Amiga için üretildiğini bilmiyor: birden çok makine aynı revizyonu paylaşıyor ve onları yalnızca tam sağlama ayırt ediyor. Makinene ait olan bu mu, kontrol et.",
       "romWrongMachine": "{{rom}}, seçtiğin Amiga'ya ait bir ROM değil. Bu genellikle açılmayan bir makine demektir ve ekranda bunu açıklayan bir şey olmaz — ama ne yaptığını biliyorsan devam et.",
-      "volumesUnformatted": "Bu karttaki Amiga birimleri biçimlendirilmemiştir. Amiga onları görür ve biçimlendirmeyi teklif eder; üzerlerine sistem kurmak henüz yapılmadı."
+      "volumesUnformatted": "Bu karttaki Amiga birimleri biçimlendirilmemiştir. Amiga onları görür ve biçimlendirmeyi teklif eder; üzerlerine sistem kurmak henüz yapılmadı.",
+      "beyondKickstartFfs": "{{drive}} {{gb}} GB'lık FFS, ama Kickstart {{major}}'ın kendi dosya sistemi yalnızca 4 GB adresleyebiliyor. Ötesinde reddetmiyor — diski bozuyor. PFS3 kullanın, küçültün ya da Kickstart 3.1.4/3.2 ile açın.",
+      "beyondKickstartFfsNoRom": "{{drive}} {{gb}} GB'lık FFS. Kickstart 3.1'in dosya sistemi 4 GB'ı aşınca diski bozar; 3.1.4 ve 3.2 sorunsuz. Kickstart seçilmediği için ART bu kartın hangisiyle açılacağını bilemiyor."
     },
     "blocked": {
       "noArchive": "Önce Emu68 sürüm arşivini seç.",

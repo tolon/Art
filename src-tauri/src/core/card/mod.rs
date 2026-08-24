@@ -15,6 +15,7 @@
 //! (spec §56).
 
 pub mod build;
+pub mod capacity;
 pub mod health;
 pub mod intake;
 pub mod manifest;
