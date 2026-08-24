@@ -3385,6 +3385,7 @@ mod tests {
             "mmulibs",
             "hdtools",
             "storage",
+            "keymaps",
             "backdrops",
         ]
         .into_iter()
@@ -3460,10 +3461,33 @@ mod tests {
         // *the* answer is what made this hook fail the first time it was
         // pointed at the user's 3.2 ROM — the material it was written against
         // was never the only real material.
-        let (want_components, want_files, want_dirs, want_bytes) = if rom_major < 47 {
-            (28, 3954, 281, 12_700_698)
+        // **Both rows moved on 2026-08-24 and each half has its own reason.**
+        //
+        // The byte totals grew by exactly **15 934** without anything being
+        // added, and that number is [ART-224](../../../docs/ISSUES.md)
+        // measured on real material rather than off the ADFs. `glowicons`
+        // used to be declared *above* `storage`, so the plain shelf icons won
+        // the sixteen files the two disks share; declared below it, the
+        // GlowIcons ones do. Ten monitor icons at 1 452 bytes against 476 is
+        // 9 760, and the six DOSDrivers icons account for the other 6 174.
+        // The fix was previously only measured by comparing the two ADFs; the
+        // tree now says the same thing.
+        //
+        // The rest is [ART-226](../../../docs/ISSUES.md)'s `keymaps`
+        // component, chosen above: twenty-two keymap files into
+        // `Devs/Keymaps`, which until now held twenty-two icons and nothing
+        // they pointed at.
+        // **`want_media` is not `want_components`, and 2026-08-24 is when
+        // that stopped being the same number.** `built_from` carries one
+        // record per *medium*; every component had its own disk until
+        // ART-226's `keymaps` arrived, which comes off `Storage3.2` — the
+        // disk `storage` already reads. One more component, no more media.
+        // Asserting one count against both is the kind of conflation that
+        // holds until it quietly does not.
+        let (want_components, want_media, want_files, want_dirs, want_bytes) = if rom_major < 47 {
+            (29, 28, 3976, 281, 12_751_572)
         } else {
-            (27, 3950, 278, 12_651_178)
+            (28, 27, 3972, 278, 12_702_052)
         };
         assert_eq!(
             planned.components_on.len(),
@@ -3490,7 +3514,7 @@ mod tests {
             manifest.built_from.len()
         );
         assert_eq!(manifest.files.len(), want_files as usize);
-        assert_eq!(manifest.built_from.len(), want_components);
+        assert_eq!(manifest.built_from.len(), want_media);
     }
 
     /// Throwaway diagnostic, not part of the suite's real coverage — lists

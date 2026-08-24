@@ -1561,42 +1561,41 @@ mod tests {
     /// was which. Nothing failed and nothing looked broken — which is why it
     /// sat there through a driven session.
     ///
-    /// So the rule is conditional on the shape that causes it: a recipe whose
-    /// components do not each name their own medium must label every row.
-    /// Written this way round rather than "every component everywhere needs a
-    /// label" because 3.2's sixteen volume names are better than any sentence
-    /// ART would write for them, and a rule that forced sixteen redundant keys
-    /// would be obeyed by writing sixteen worse labels.
+    /// **Refined 2026-08-24, by the next thing that used it.** The rule read
+    /// *"a recipe whose components do not each name their own medium must
+    /// label every row"*, and the AmigaOS 3.2 recipe's new `keymaps`
+    /// component — which comes off `Storage3.2`, the same disk as `storage` —
+    /// would have demanded a label on all twenty-nine of that recipe's rows.
+    /// Twenty-seven of them already say `Extras3.2`, `Locale-TR`, `MMULibs`:
+    /// better than any sentence ART would write for them. A rule that forces
+    /// twenty-seven redundant keys is obeyed by writing twenty-seven worse
+    /// labels, which is the outcome the rule was written to avoid. So it is
+    /// narrowed to the components that actually collide: **a component
+    /// sharing its medium with another must name its own row**, and one whose
+    /// medium is its own keeps saying so.
     #[test]
-    fn a_recipe_whose_components_share_a_medium_labels_every_row() {
+    fn a_component_sharing_its_medium_labels_its_own_row() {
         for release in super::releases() {
             let recipe = super::by_release(release)
                 .unwrap_or_else(|e| panic!("the shipped {release} recipe must parse: {e}"));
 
-            let mut media: Vec<&str> = recipe.components.iter().map(|c| c.media.as_str()).collect();
-            media.sort_unstable();
-            let distinct = {
-                let mut seen = media.clone();
-                seen.dedup();
-                seen.len()
-            };
-            if distinct == recipe.components.len() {
-                continue;
-            }
-
             for component in &recipe.components {
+                let shared = recipe
+                    .components
+                    .iter()
+                    .any(|other| other.id != component.id && other.media == component.media);
+                if !shared {
+                    continue;
+                }
                 let key = component.label_key.as_deref().unwrap_or_else(|| {
                     panic!(
-                        "{release}: '{}' shares its medium with another component and declares \
-                         no label_key, so its row on screen is labelled '{}' — the same words \
-                         as the row above it",
+                        "{release}: '{}' shares the medium '{}'; both rows read alike, so it needs a label_key",
                         component.id, component.media
                     )
                 });
                 assert!(
                     key.starts_with("osinstall.components.name."),
-                    "{release}: '{}' labels itself with '{key}', outside the namespace this \
-                     screen owns — a row must not borrow a sentence written elsewhere",
+                    "{release}: '{}' labels itself '{key}', outside this screen's own namespace",
                     component.id
                 );
             }
@@ -1655,6 +1654,68 @@ mod tests {
             checked >= 13,
             "this guard saw only {checked} font descriptors; the Turkish set alone is thirteen, \
              so it is looking in the wrong place"
+        );
+    }
+
+    /// **ART-226, the AmigaOS 3.2 half — and it is the same defect solved the
+    /// opposite way, on purpose.**
+    ///
+    /// A 3.2 tree ART built carries twenty-two entries in `Devs/Keymaps` and
+    /// every one of them is a `.info`: icons pointing at nothing, and the
+    /// only usable keymap the one in ROM. The keymaps are on `Storage3.2`,
+    /// the shelf, and `tr` is among them — so AmigaOS 3.2 does ship a Turkish
+    /// keymap and ART was not installing it.
+    ///
+    /// **Twenty-two `File` rules, where the 3.9 component uses one
+    /// `Subtree`.** Measured, not stylistic: the 3.2 shelf carries a `.info`
+    /// beside every keymap and `Devs/Keymaps` already holds icons — different
+    /// ones (`Workbench3.2`'s `d.info` is 1 256 bytes, `Storage3.2`'s is 450),
+    /// so a subtree rule would replace twenty-two good icons with shelf ones.
+    /// On the 3.9 disc the drawer arrives empty, so there the shelf's icons
+    /// are the only icons and taking the drawer whole is right. Each recipe
+    /// follows its own medium.
+    ///
+    /// The names are the shelf's own, and being ASCII they can be listed
+    /// without reintroducing ART-225's risk — which is exactly why the 3.9
+    /// component, whose shelf holds `türkçe`, may not be written this way.
+    #[test]
+    fn the_32_keymaps_component_names_the_shelf_and_not_its_icons_art_226() {
+        let recipe = parse(AMIGAOS_32_JSON).unwrap();
+        let keymaps = recipe
+            .component("keymaps")
+            .expect("ART-226: the 3.2 recipe must offer the keymaps");
+
+        assert!(!keymaps.required, "a tick-box, as on the 3.9 side");
+        assert_eq!(keymaps.media, "Storage3.2");
+        assert!(
+            keymaps.overrides.is_empty(),
+            "naming the keymaps alone replaces nothing; an override here would be a licence \
+             to overwrite the icons this component deliberately leaves alone"
+        );
+
+        const SHELF: [&str; 22] = [
+            "cdn", "ch1", "ch2", "d", "dk", "e", "f", "gb", "greek", "i", "la", "n", "po",
+            "polska", "rusd", "rusgb", "rusuae", "rusus", "ruswin", "s", "tr", "usa2",
+        ];
+        let expected: Vec<PathRule> = SHELF
+            .iter()
+            .map(|name| PathRule {
+                from: format!("Keymaps/{name}"),
+                to: format!("Devs/Keymaps/{name}"),
+                kind: RuleKind::File,
+            })
+            .collect();
+        assert_eq!(
+            keymaps.rules, expected,
+            "the shelf's twenty-two keymaps, and not the twenty-two icons beside them"
+        );
+        assert!(
+            keymaps.rules.iter().any(|r| r.to.ends_with("/tr")),
+            "the Turkish keymap is on this shelf, and it is why this component exists"
+        );
+        assert!(
+            !keymaps.rules.iter().any(|r| r.from.ends_with(".info")),
+            "an icon named here would replace one Workbench3.2 already placed"
         );
     }
 

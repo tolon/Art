@@ -2168,6 +2168,10 @@
       "loading": "Bu sürümün bileşenleri okunuyor…",
       "unavailable": "ART bu sürümün bileşenlerini okuyamadı.",
       "name": {
+        "os32": {
+          "keymaps": "Klavye düzenleri",
+          "storage": "Storage rafı — sürücüler, monitörler, hazır ayarlar"
+        },
         "os39": {
           "base": "Workbench 3.5 taban katmanı",
           "euroCountries": "Euro para birimi ülke dosyaları",
