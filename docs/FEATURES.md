@@ -363,7 +363,7 @@ Both are designed — [design-software-sources.md](design-software-sources.md),
 
 | Feature | Spec | State |
 |---|---|:---:|
-| Aminet catalog sync / search / fetch | §41.5 | 🟡 |
+| Aminet catalog sync / search / fetch | §41.5 | ✅ | `core/sources` + `net/http_mirror.rs`, and — since 2026-08-24 — `net/live_aminet.rs`: three `#[ignore]`d checks that run the chain against the real Aminet rather than a mock |
 | Aminet install to HDF | §41.5 | ✅ | `sources_install_volume` — same unpack as the ADF path, then a Stage W folder copy |
 | Aminet update view | §41.5.6 | ✅ | `core/sources/installed.rs`; compares the recorded download against the catalogue |
 | Package bundles — a curated catalogue, downloaded in order | [design-package-bundles.md](superpowers/specs/2026-08-22-package-bundles-design.md) | ✅ | 14 sets, 62 entries, shipped as data (`core/sources/bundle/catalogue/*.json`); `core/sources/bundle/` (parse/resolve/run) + `commands/bundles.rs` + a section inside Aminet Studio (`BundlePanel.tsx`). Phase 1 is download-only — nothing installs onto an Amiga volume yet |
@@ -382,6 +382,17 @@ against a localhost socket, so CI never leaves the machine.
 The index format, the mirror defaults and the whole pipeline were verified
 against live Aminet mirrors on 2026-08-09 — which is how
 [ART-030 and ART-031](ISSUES.md#software-sources-aminet-415) were found.
+
+**That verification is now a check anybody can re-run**, `net/live_aminet.rs`
+(`cargo test live_aminet -- --ignored --nocapture`), because a one-off run
+answers for the day it happened and the mirrors are somebody else's machines.
+It asks each shipped mirror **separately** — failover stops at the first that
+answers, so a dead mirror in position two is invisible in an ordinary sync —
+then syncs, reloads the catalogue it wrote, and downloads and unpacks one real
+package chosen out of the index at run time. Run 2026-08-24: all three mirrors
+answered a byte-identical 7 232 499-byte index, **85 472 packages, 0 skipped**;
+`biz/dbase/DefectForm.lha` downloaded, passed every gate and unpacked to five
+files. It stays out of CI, which never leaves the machine.
 
 Since then: sorting (six orders) and filters (name-only, age, size range, file
 type) in the catalogue; a **user-chosen download folder** with subfolders and
