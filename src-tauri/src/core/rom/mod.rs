@@ -23,6 +23,7 @@
 //!    revision is shared across the per-machine builds, so this claims no
 //!    machine, deliberately.
 
+pub mod offer;
 pub mod pairing;
 pub mod remus;
 
@@ -70,6 +71,24 @@ pub struct RomInfo {
     /// beside it to decode, or a file that is not recognisably a Kickstart.
     #[serde(default)]
     pub major: Option<u16>,
+    /// WHDLoad's own CRC-16/ARC over the **decoded** image, when ART could
+    /// read one (ART-130).
+    ///
+    /// This is the number a WHDLoad slave declares to say which Kickstart it
+    /// needs — not a filename, and not the CRC-32 above. It is computed here,
+    /// where the decoded bytes already exist, so matching a title's request
+    /// against a collection is arithmetic on data already in hand rather than
+    /// a second pass that re-reads and re-decodes every ROM.
+    ///
+    /// **`None` is a real answer and not a zero.** A licensed Amiga Forever
+    /// ROM without its `rom.key` beside it has no readable image, so there is
+    /// nothing to checksum — and "you have this file but ART cannot read it"
+    /// is a different sentence from "you do not have it".
+    ///
+    /// `#[serde(default)]`: a `RomInfo` serialised before this field existed
+    /// must still deserialise.
+    #[serde(default)]
+    pub whdload_crc16: Option<u16>,
 }
 
 /// The verdict on a ROM file's stored checksum.
@@ -248,7 +267,9 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
                 compatible_models: Vec::new(),
                 file_path: path.to_string_lossy().to_string(),
                 major: None,
-            })
+                // Nothing to checksum: without the key there is no image.
+                whdload_crc16: None,
+            });
         }
         (false, _) => raw_bytes,
     };
@@ -289,6 +310,8 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
             // `0` is remus's own "no numbered major" case (`Custom` above) —
             // never a real Kickstart major, so it becomes `None` here too.
             major: (matched.major != 0).then_some(matched.major),
+            // WHDLoad's own checksum over the image a slave would load.
+            whdload_crc16: Some(crate::core::hashing::crc16_arc(&bytes)),
         });
     }
 
@@ -311,6 +334,8 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
             compatible_models: matched.models.iter().map(|s| s.to_string()).collect(),
             file_path: path.to_string_lossy().to_string(),
             major: major_from_revision(matched.revision),
+            // WHDLoad's own checksum over the image a slave would load.
+            whdload_crc16: Some(crate::core::hashing::crc16_arc(&bytes)),
         });
     }
 
@@ -346,6 +371,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
             compatible_models: Vec::new(),
             file_path: path.to_string_lossy().to_string(),
             major: Some(major),
+            whdload_crc16: Some(crate::core::hashing::crc16_arc(&bytes)),
         });
     }
 
@@ -370,6 +396,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
             // against, so a caller enforcing WHDLoad's minimum must not
             // guess one on AROS's behalf.
             major: None,
+            whdload_crc16: Some(crate::core::hashing::crc16_arc(&bytes)),
         });
     }
 
@@ -418,6 +445,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
         // Nothing here identified a Kickstart major — `revision` is a size,
         // not a version.
         major: None,
+        whdload_crc16: Some(crate::core::hashing::crc16_arc(&bytes)),
     })
 }
 
@@ -1032,6 +1060,14 @@ mod tests {
         assert_eq!(
             info.version, "Custom",
             "and it is not passed off as a version ART worked out"
+        );
+        // **ART-130.** `None`, never `Some(0)`. A zero here is a number, and
+        // `core::rom::offer` matches on this field — so a "checksum" ART never
+        // computed would silently answer a title whose slave happens to
+        // declare 0, and the user would be offered a ROM nobody had read.
+        assert_eq!(
+            info.whdload_crc16, None,
+            "there is no image to checksum without the key"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

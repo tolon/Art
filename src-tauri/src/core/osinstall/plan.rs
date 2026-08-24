@@ -1479,6 +1479,7 @@ mod condition_tests {
                 compatible_models: Vec::new(),
                 file_path: String::new(),
                 major: Some(major),
+                whdload_crc16: None,
             },
         }
     }

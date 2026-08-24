@@ -787,6 +787,7 @@ mod tests {
             compatible_models: vec!["A1200".into()],
             file_path: r"D:\roms\kick.rom".into(),
             major: Some(40),
+            whdload_crc16: None,
         };
 
         let rom = launch_rom_from(&info);

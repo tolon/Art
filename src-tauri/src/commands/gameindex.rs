@@ -20,6 +20,70 @@ use crate::core::jobs::JobId;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::error::{AppError, AppResult};
 
+/// Which Kickstart images a title asks for, and which of them ART found in a
+/// ROM folder (ART-130).
+///
+/// **Read-only, and it places nothing.** The owner's decision, 2026-08-21: ART
+/// closes this loop *"always as a proposal"* — *"this title asks for
+/// `kick34005.A500`; ART recognises it in your collection — place it?"*, never
+/// a silent copy. Putting somebody's ROM onto their card touches ROM Manager,
+/// the licensed Amiga Forever decode path and the card's layout, and those are
+/// their decisions rather than a side effect of a scan.
+///
+/// **The mapping from `KickstartNeed` to `WantedImage` is here on purpose.**
+/// `core::rom::offer` declares its own record and does not import
+/// `core::gameindex` — the layering rule CLAUDE.md states with `core/rom` as
+/// its own example. Translating one module's representation into another's is a
+/// command-layer job, the way `commands/preload.rs::rom_pairing_for` already
+/// does it for `core/rom/pairing`.
+///
+/// An empty `wanted` list is an empty answer, not an error: a great many titles
+/// declare no Kickstart at all, and that is not a problem with the title.
+#[tauri::command]
+pub fn kickstart_offers_for(
+    need: crate::core::gameindex::record::KickstartNeed,
+    rom_folder: String,
+) -> AppResult<Vec<crate::core::rom::offer::Offer>> {
+    let collection = crate::core::rom::scan_rom_directory(Path::new(&rom_folder))?;
+    Ok(crate::core::rom::offer::offer_for(
+        &wanted_images(&need),
+        &collection,
+    ))
+}
+
+/// A slave's declared need, as the images it will accept.
+///
+/// **The list wins when there is one.** `KickstartNeed::image` is the first of
+/// `alternatives` when that is non-empty, so reading both would ask for the
+/// same image twice — and `crc16` is `None` in exactly that case, because the
+/// `$ffff` sentinel is how a slave says "the name field is a list" rather than
+/// a checksum ([ART-137](../../../docs/ISSUES.md)).
+fn wanted_images(
+    need: &crate::core::gameindex::record::KickstartNeed,
+) -> Vec<crate::core::rom::offer::WantedImage> {
+    use crate::core::rom::offer::WantedImage;
+
+    if !need.alternatives.is_empty() {
+        return need
+            .alternatives
+            .iter()
+            .map(|alt| WantedImage {
+                name: alt.image.clone(),
+                crc16: Some(alt.crc16),
+                size: need.size,
+            })
+            .collect();
+    }
+    match &need.image {
+        Some(image) => vec![WantedImage {
+            name: image.clone(),
+            crc16: need.crc16,
+            size: need.size,
+        }],
+        None => Vec::new(),
+    }
+}
+
 /// Where the catalogue lives.
 ///
 /// **Resolved here and nowhere else.** `core/gameindex/store` takes the
@@ -399,4 +463,76 @@ pub fn gameindex_scan(
     );
 
     Ok(id)
+}
+
+#[cfg(test)]
+mod kickstart_offer_tests {
+    use super::wanted_images;
+    use crate::core::gameindex::record::{KickstartAlternative, KickstartNeed};
+
+    fn need() -> KickstartNeed {
+        KickstartNeed {
+            image: None,
+            size: None,
+            crc16: None,
+            rom_version: None,
+            alternatives: Vec::new(),
+        }
+    }
+
+    /// **The list wins when there is one**, and reading both fields would ask
+    /// for the same image twice: `KickstartNeed::image` is documented as the
+    /// first of `alternatives` when those exist.
+    #[test]
+    fn a_slave_naming_three_images_asks_for_three() {
+        let asked = wanted_images(&KickstartNeed {
+            image: Some("kick40063.A600".into()),
+            size: Some(524_288),
+            crc16: None,
+            alternatives: vec![
+                KickstartAlternative {
+                    image: "kick40063.A600".into(),
+                    crc16: 0x0001,
+                },
+                KickstartAlternative {
+                    image: "kick40068.A1200".into(),
+                    crc16: 0x0002,
+                },
+                KickstartAlternative {
+                    image: "kick40068.A4000".into(),
+                    crc16: 0x0003,
+                },
+            ],
+            ..need()
+        });
+        assert_eq!(
+            asked.len(),
+            3,
+            "three, not four - `image` is the first of them"
+        );
+        assert_eq!(asked[0].name, "kick40063.A600");
+        assert_eq!(asked[0].crc16, Some(0x0001));
+        assert_eq!(asked[2].crc16, Some(0x0003));
+        assert!(asked.iter().all(|w| w.size == Some(524_288)));
+    }
+
+    #[test]
+    fn a_slave_naming_one_image_asks_for_one() {
+        let asked = wanted_images(&KickstartNeed {
+            image: Some("kick34005.A500".into()),
+            crc16: Some(0xABCD),
+            size: Some(262_144),
+            ..need()
+        });
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].name, "kick34005.A500");
+        assert_eq!(asked[0].crc16, Some(0xABCD));
+    }
+
+    /// A great many titles declare no Kickstart at all. That is an empty
+    /// answer, not a problem with the title.
+    #[test]
+    fn a_slave_naming_nothing_asks_for_nothing() {
+        assert!(wanted_images(&need()).is_empty());
+    }
 }
