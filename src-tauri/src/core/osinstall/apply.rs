@@ -3530,10 +3530,25 @@ mod tests {
         // disk `storage` already reads. One more component, no more media.
         // Asserting one count against both is the kind of conflation that
         // holds until it quietly does not.
+        // **Both arms measured on 2026-08-24**, against the owner's own V40
+        // (`Kickstart v3.1 rev 40.68 … (A1200)`) and the 3.2 set's own V47
+        // (`ROM/kicka1200.rom`) - not one measured and the other reasoned
+        // from it.
+        //
+        // They moved by **exactly the same amounts** that day, +57 files, +14
+        // directories and +204 282 bytes, which is the shape to expect: the
+        // change is four locale components gaining their `Support` drawer, and
+        // nothing about it depends on the ROM. An arm that had moved by a
+        // different amount would have meant something else moved too.
+        //
+        // The 57: 54 font files across the four alphabets Greek, Polish,
+        // Russian and Turkish need, plus the three `Font-GR/PL/RU.prefs`
+        // presets. Turkish's own `Support/Prefs/Presets` is empty on the
+        // owner's disk, which is why it is three and not four.
         let (want_components, want_media, want_files, want_dirs, want_bytes) = if rom_major < 47 {
-            (29, 28, 3976, 281, 19_839_113)
+            (29, 28, 4033, 295, 20_043_395)
         } else {
-            (28, 27, 3972, 278, 19_789_593)
+            (28, 27, 4029, 292, 19_993_875)
         };
         assert_eq!(
             planned.components_on.len(),

@@ -828,6 +828,74 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-234** 🟠 **Four alphabets got their catalogs and none of their letters:
+the AmigaOS 3.2 recipe placed no `Support/Fonts` at all** - *found 2026-08-24
+finishing work-list item 2*
+`src-tauri/src/core/osinstall/recipes/amigaos-3.2.json`
+
+[ART-159](#fixed) in the other recipe. A Turkish 3.2 tree ART built carried the
+Turkish catalogs and not one ISO-8859-9 glyph, so the translated text rendered
+with whatever the base fonts had - and the same was true of Greek, Polish and
+Russian, which nobody had looked at.
+
+**Read out of the release's own Installer script**, not recalled.
+`Install3.2.adf`'s `Install/Install` (177 688 bytes, `$VER: Install 47.123`)
+guards the block with
+
+```text
+;begin copy for language that need special support as greek, polski, russian and turkish
+(if (OR (OR (= n 6) (= n 10)) (OR (= n 12) (= n 14)))
+  (
+    (copyfiles (source (tackon languagePath "Support")) (dest target) (pattern "~(fonts)"))
+    (UNCOMPRESS (tackon languagePath "Support/Fonts") (tackon target "Fonts") "#?.(font|otag|Z)")
+    (foreach (tackon languagePath "Support/Fonts") "#?" ... (tackon target (cat "Fonts/" @each-name)) ...)
+  )
+)
+```
+
+where `n` indexes the script's own `choices` list - 6 Greek, 10 Polski, 12
+Russian, **14 Türkçe**. Three things follow, and the first is the one a design
+would have got wrong:
+
+- **The destination is `SYS:Fonts`**, from `(tackon target "Fonts")` - not
+  `Locale/`, and not `Storage/`.
+- **Everything under `Support` except `Fonts` goes to the tree root**, which is
+  how `Support/Prefs/Presets/Font-GR.prefs` becomes `SYS:Prefs/Presets/...`.
+- `UNCOMPRESS`, so the `.Z` files are expanded - which only became possible
+  after [ART-228](#fixed), and is why this waited rather than shipping
+  something that looked done.
+
+**Confirmed against the media rather than the script alone.** `Locale-GR`,
+`-PL`, `-RU` and `-TR` each carry a `Support` drawer; `Locale-DE`, `-EN`, `-FR`
+and `-IT` have none at all. The script's four-language condition and the
+owner's own disks agree.
+
+**Fixed** by giving those four components `Support/Fonts -> Fonts` and
+`Support/Prefs -> Prefs`, both `Subtree` - one rule each where the Installer
+needs two steps, because ART's subtree copy recurses and `UNCOMPRESS`'s pattern
+does not. Each declares `overrides: ["workbench-base"]`, which owns `Prefs`;
+they sit after it in recipe order, without which the declaration is inert
+([ART-224](#fixed)).
+
+**Proven on the owner's own ADFs, both ROM arms, 2026-08-24.** V40
+(`Kickstart v3.1 rev 40.68 … (A1200)`) and the 3.2 set's own V47
+(`ROM/kicka1200.rom`), 0 refusals each, moving by **exactly the same amounts**:
++57 files, +14 directories, +204 282 bytes. The 57 is 54 font files plus the
+three `Font-GR/PL/RU.prefs` presets - Turkish's own `Presets` is empty on the
+owner's disk, measured rather than assumed.
+
+The decompression is visible in the result: `SevenAlone_iso-8859-9/7` is
+1 974 bytes as `7.Z` on the disk and **3 224 bytes** in the tree with the
+suffix gone, while `topaz_iso-8859-9/11` is byte-identical at 4 472 because
+that one was never compressed. One disk, both cases, handled per file.
+
+Three mutations, three fell: the fonts rule removed from `locale-tr`, the
+override declaration removed, and `Support` claimed by a locale whose disk does
+not carry one.
+
+**Still not proven:** that an Amiga renders them. The tree is at
+`E:\amiga\ProjeART\dist-32-fonts` and booting it is the owner's.
+
 **ART-233** 🟡 **The second Amiga disk's size arrived as an unknown field and
 became "take the rest", and nothing failed** - *found 2026-08-24 while building
 the screen that sends one*

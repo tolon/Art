@@ -50,6 +50,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release knows its own boot layout and ART does not.
 
 #### Fixed
+- **Greek, Polish, Russian and Turkish systems had their translations and not
+  their letters.** Those four AmigaOS 3.2 disks carry their own fonts —
+  ISO-8859-9 for Turkish, and so on — and ART placed none of them, so a
+  translated system rendered with whatever glyphs the base fonts happened to
+  have. They now go where the release's own installer puts them, expanded from
+  the compressed form the disk carries, along with the font preset that comes
+  beside them. Built and counted against real disks: 54 font files and three
+  presets, with no change to any other language.
 - **ART would have built a 20 GB FFS partition that corrupts the drive.** A
   Kickstart before v46 cannot address past 4 GB on FFS, and going past it does
   not fail — it wraps and writes over the start of the volume. ART now refuses

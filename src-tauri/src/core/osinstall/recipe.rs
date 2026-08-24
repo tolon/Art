@@ -1338,6 +1338,23 @@ mod tests {
         );
     }
 
+    /// The four languages whose disks carry a `Support` drawer, and whose
+    /// alphabets need it.
+    ///
+    /// **Read out of the release's own Installer script on 2026-08-24**, not
+    /// recalled: `Install3.2.adf`'s `Install/Install` guards the block with
+    ///
+    /// ```text
+    /// ;begin copy for language that need special support as greek, polski, russian and turkish
+    /// (if (OR (OR (= n 6) (= n 10)) (OR (= n 12) (= n 14)))
+    /// ```
+    ///
+    /// where `n` indexes the script's own `choices` list — 6 Greek, 10 Polski,
+    /// 12 Russian, **14 Türkçe**. Confirmed against the media rather than
+    /// against the script alone: those four disks carry `Support`, and
+    /// `Locale-DE`, `-EN`, `-FR` and `-IT` have no such drawer at all.
+    const SPECIAL_SUPPORT: [&str; 4] = ["GR", "PL", "RU", "TR"];
+
     /// One loop over all fifteen, so a mistyped volume name is caught here
     /// rather than surfacing only as a `MediaMissing` refusal at install
     /// time, on whichever machine happens to have that particular disk.
@@ -1353,7 +1370,12 @@ mod tests {
                 .component(&id)
                 .unwrap_or_else(|| panic!("missing locale component '{id}'"));
             assert_eq!(component.media, format!("Locale-{code}"));
-            assert_eq!(component.rules.len(), 2, "{id}");
+            let expected = if SPECIAL_SUPPORT.contains(&code) {
+                4
+            } else {
+                2
+            };
+            assert_eq!(component.rules.len(), expected, "{id}");
             assert!(
                 component.rules.iter().any(|r| r.from == "Languages"
                     && r.to == "Locale/Languages"
@@ -1365,6 +1387,46 @@ mod tests {
                     && r.to == "Locale/Help"
                     && r.kind == RuleKind::Subtree),
                 "{id} must carry Help -> Locale/Help"
+            );
+
+            // **The alphabet, and where the release puts it.** `Support/Fonts`
+            // goes to `SYS:Fonts` — not `Locale/`, not `Storage/` — because
+            // that is what the Installer's own `(tackon target "Fonts")`
+            // says. Turkish catalogs on a system with no ISO-8859-9 glyphs is
+            // [ART-159](../../../../docs/ISSUES.md#fixed) in the other recipe.
+            let has_support = component.rules.iter().any(|r| {
+                r.from == "Support/Fonts" && r.to == "Fonts" && r.kind == RuleKind::Subtree
+            }) && component
+                .rules
+                .iter()
+                .any(|r| r.from == "Support/Prefs" && r.to == "Prefs");
+            assert_eq!(
+                has_support,
+                SPECIAL_SUPPORT.contains(&code),
+                "{id}: only the four languages whose disks carry Support may claim it"
+            );
+        }
+    }
+
+    /// The one whose absence would be invisible: a locale disk writing into a
+    /// drawer the base owns has to say so, and these four write
+    /// `Prefs/Presets/Font-XX.prefs`.
+    ///
+    /// Measured on the owner's own disks, 2026-08-24: `Locale-GR`, `-PL` and
+    /// `-RU` each carry one `Font-XX.prefs` under `Support/Prefs/Presets`.
+    /// **`Locale-TR`'s `Presets` is empty** — the rule is there anyway, so a
+    /// disk revision that fills it is carried rather than silently dropped,
+    /// and because a `from` that does not resolve is a refusal rather than a
+    /// skip, the empty drawer has to exist for that to be safe. It does.
+    #[test]
+    fn the_four_special_locales_declare_what_they_write_into() {
+        let recipe = recipe();
+        for code in SPECIAL_SUPPORT {
+            let id = format!("locale-{}", code.to_lowercase());
+            let component = recipe.component(&id).unwrap();
+            assert!(
+                component.overrides.iter().any(|o| o == "workbench-base"),
+                "{id} writes into Prefs, which workbench-base owns"
             );
         }
     }
