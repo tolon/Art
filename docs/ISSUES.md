@@ -1767,6 +1767,16 @@ would catch that panel drifting back to its own key. The mechanism it uses is
 covered from three directions and the panel itself is not; a `CardBuilder`
 test is worth its own round rather than a hurried one here.
 
+> **Survivor closed, 2026-08-24** — `src/components/osbuilder/CardBuilder.test.tsx`,
+> six tests. It went further than this entry asked: what it mainly pins is the
+> panel's own claim that **`SAFE_CREATE` is answered before the button**, both
+> arms, driven through `useSettingsStore` and Preview rather than asserted at
+> the unit level. Six mutations, six fell. Worth recording that the first draft
+> had **two vacuous assertions** and only the mutation round found them — one
+> matched a word the panel's field labels also contain, the other asserted a
+> disabled button that was disabled three blockers earlier and never reached
+> `dest_exists` at all. Exactly the shape this file's own rule describes.
+
 **Still open from ART-197's table**, and this is wave 2's remainder: the card
 image (`cardBuilder.dest` → `preload.image`) and the per-partition content
 folders. Splitting `OsInstall.tsx` is on the work list too and has no
