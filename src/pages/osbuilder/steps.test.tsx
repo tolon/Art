@@ -46,6 +46,11 @@ vi.mock("@/components/osbuilder/CardBuilder", () => ({
 vi.mock("@/components/osbuilder/VolumePreload", () => ({
   VolumePreload: () => <div data-testid="volumes" />,
 }));
+// ART-197 wave 3: this used to be rendered by the install step. It is mocked
+// like every other panel — what this file is about is *which step renders it*.
+vi.mock("@/components/osbuilder/VerifyAgainstCard", () => ({
+  VerifyAgainstCard: () => <div data-testid="verify" />,
+}));
 vi.mock("@/components/osbuilder/OsInstall", () => ({
   OsInstall: ({ droppedMedia }: { droppedMedia?: { path: string } | null }) => (
     <div data-testid="install">{droppedMedia?.path ?? "(no drop)"}</div>
@@ -55,7 +60,7 @@ vi.mock("@/components/osbuilder/OsInstall", () => ({
 const { useSettingsStore } = await import("@/stores/settingsStore");
 const { DEFAULT_SETTINGS } = await import("@/lib/settings");
 const { OsBuilder } = await import("@/pages/OsBuilder");
-const { StepPaketler, StepAmigaKurulum, StepKaynak, StepKart } = await import(
+const { StepPaketler, StepAmigaKurulum, StepKaynak, StepKart, StepBirimler } = await import(
   "@/pages/osbuilder/steps"
 );
 
@@ -75,6 +80,7 @@ function renderAt(path: string, state?: unknown) {
           <Route path="paketler" element={<StepPaketler />} />
           <Route path="amiga-kurulum" element={<StepAmigaKurulum />} />
           <Route path="kart" element={<StepKart />} />
+          <Route path="birimler" element={<StepBirimler />} />
         </Route>
       </Routes>
     </MemoryRouter>
@@ -222,5 +228,39 @@ describe("a folder that is not a tree (ART-199)", () => {
     renderAt("/os-builder/paketler");
     await screen.findByTestId("packages");
     expect(screen.queryByTestId("step-wrong-folder")).toBeNull();
+  });
+});
+
+describe("Verify against a card is on the volumes step (ART-197 wave 3)", () => {
+  /// **Where it belongs, rather than where it was built.** It compares a
+  /// distribution tree against a volume that already *exists*, so everything
+  /// it needs is here: the card is on this step. On the install step it was a
+  /// section asking for a card image on a screen whose whole job is to produce
+  /// a folder.
+  it("renders it under the volumes panel", () => {
+    seed({});
+    renderAt("/os-builder/birimler");
+    expect(screen.getByTestId("volumes")).toBeTruthy();
+    expect(screen.getByTestId("verify")).toBeTruthy();
+  });
+
+  /// The other half, and the one that would make the move a loss if it were
+  /// wrong: it is not on the card *builder* step either. That step creates an
+  /// image; this compares against one that has been written.
+  it("is not on the card step, which builds an image rather than checking one", () => {
+    seed({});
+    renderAt("/os-builder/kart");
+    expect(screen.getByTestId("card")).toBeTruthy();
+    expect(screen.queryByTestId("verify")).toBeNull();
+  });
+
+  /// And not on the step it came from. `OsInstall.test.tsx` asserts the same
+  /// thing from the other side, against the real component rather than a
+  /// marker.
+  it("is not on the install step any more", () => {
+    seed({});
+    renderAt("/os-builder/kaynak");
+    expect(screen.getByTestId("install")).toBeTruthy();
+    expect(screen.queryByTestId("verify")).toBeNull();
   });
 });

@@ -119,7 +119,6 @@ import { useRemembered } from "@/lib/useRemembered";
 import { useBuildSession } from "@/lib/useBuildSession";
 import { fraction, onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
 import { Field } from "@/components/osbuilder/Field";
-import { VerifyAgainstCard } from "@/components/osbuilder/VerifyAgainstCard";
 import { PackagePanel } from "@/components/osbuilder/PackagePanel";
 import { AmigaInstallPanel } from "@/components/osbuilder/AmigaInstallPanel";
 
@@ -505,9 +504,10 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<OsInstallResult | null>(null);
 
-  // The Verify section moved out whole in ART-197 wave 2's row 3 — it
-  // shared no state with the install and is what wave 3 relocates:
-  // `components/osbuilder/VerifyAgainstCard.tsx`.
+  // The Verify section is not here any more. Row 3 moved it out whole (it
+  // shared no state with the install) and wave 3 moved it to the volumes
+  // step, where the card it compares against actually is:
+  // `components/osbuilder/VerifyAgainstCard.tsx`, rendered by `StepBirimler`.
 
   // The checklist is the chosen release's recipe, fetched when the release
   // changes. `setComponents(null)` first, so a switch shows "loading" rather
@@ -1547,7 +1547,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         release={release}
       />
 
-      <VerifyAgainstCard />
     </>
   );
 }
