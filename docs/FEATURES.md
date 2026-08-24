@@ -353,7 +353,7 @@ checks the image comes back byte for byte.
 | Attributes editor | Stage W §7.2 | ✅ | All eight bits with explanations; Power edits, Beginner reads |
 | Explorer drag-out | §17, §90 | ✅ | `tauri-plugin-drag`, local files only |
 | File associations | §59 | ⏳ | requires explicit consent flow |
-| Accessibility (keyboard, focus, contrast) | §64 | 🟡 | not audited |
+| Accessibility (keyboard, focus, contrast) | §64 | 🟡 | **Contrast is audited and blocking**, keyboard and focus are not. `scripts/contrast-check.py` measures 113 pairs in CI: every combination `theme.css` produces in both themes, and - since [ART-232](ISSUES.md#fixed) - the colours three screens hard-code outside the token system, each declared against the one ground it lands on. Text is held to 4.5:1 and a non-text indicator to 3:1, and the seven-segment readout is held to 4.5 although WCAG would allow 3.0 for 48px bold, because the people this is for are over fifty. |
 
 ### Spec addenda
 
