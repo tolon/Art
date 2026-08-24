@@ -86,7 +86,6 @@ import {
   isForcedOnByCondition,
   isInstallRelease,
   groupCollisionsForPreview,
-  isVerified,
   onOsInstallResult,
   osinstallApply,
   osinstallComponentCollisions,
@@ -97,9 +96,6 @@ import {
   osinstallRescanMedia,
   osinstallReleaseForMedia,
   osinstallScanMedia,
-  osinstallVerify,
-  parseOptionalSlot,
-  parsePartitionIndex,
   pruneStaleExclusions,
   refusalPhrase,
   wrongMediaFolder,
@@ -116,7 +112,6 @@ import {
   type MediaScanResult,
   type OsInstallResult,
   type PlanResult,
-  type VerifyReport,
 } from "@/lib/osinstall";
 import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
 import { isFlag, isTextList, isTextOrNothing } from "@/lib/remembered";
@@ -124,6 +119,7 @@ import { useRemembered } from "@/lib/useRemembered";
 import { useBuildSession } from "@/lib/useBuildSession";
 import { fraction, onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
 import { Field } from "@/components/osbuilder/Field";
+import { VerifyAgainstCard } from "@/components/osbuilder/VerifyAgainstCard";
 import { PackagePanel } from "@/components/osbuilder/PackagePanel";
 import { AmigaInstallPanel } from "@/components/osbuilder/AmigaInstallPanel";
 
@@ -509,14 +505,9 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<OsInstallResult | null>(null);
 
-  // --- the secondary Verify section, session-only (see the module doc) ----
-  const [verifyDistRoot, setVerifyDistRoot] = useState<string | null>(null);
-  const [verifyImage, setVerifyImage] = useState<string | null>(null);
-  const [verifySlotText, setVerifySlotText] = useState("");
-  const [verifyIndexText, setVerifyIndexText] = useState("1");
-  const [verifying, setVerifying] = useState(false);
-  const [verifyReport, setVerifyReport] = useState<VerifyReport | null>(null);
-  const [verifyError, setVerifyError] = useState<string | null>(null);
+  // The Verify section moved out whole in ART-197 wave 2's row 3 — it
+  // shared no state with the install and is what wave 3 relocates:
+  // `components/osbuilder/VerifyAgainstCard.tsx`.
 
   // The checklist is the chosen release's recipe, fetched when the release
   // changes. `setComponents(null)` first, so a switch shows "loading" rather
@@ -736,12 +727,16 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         setResult(r);
         setBusy(false);
         setConfirmed(false);
-        setVerifyDistRoot(r.destination);
         // ART-197: the tree ART has just written **is** the tree the next
         // steps act on. One variable, so the carry holds by structure rather
         // than by anyone remembering to wire it — and the result card says so
         // (`osinstall.result.carried`), because a carry the user cannot see
         // is the same defect as one that never happened.
+        //
+        // This used to be followed by `setVerifyDistRoot(r.destination)` as
+        // well. `VerifyAgainstCard` now reads `session.tree.root` itself, so
+        // the one line below carries both — and carries it to a step that has
+        // not been built yet, which is what wave 3 needs.
         setTree({ root: r.destination, builtHere: true });
         installJob.current = null;
         setProgress(null);
@@ -1004,42 +999,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       setBusy(false);
       installJob.current = null;
       setProgress(null);
-    }
-  }
-
-  async function chooseVerifyDistRoot() {
-    const picked = await open({
-      directory: true,
-      multiple: false,
-      title: t("osinstall.verify.distRoot.chooseTitle"),
-    });
-    if (typeof picked === "string") setVerifyDistRoot(picked);
-  }
-
-  async function chooseVerifyImage() {
-    const picked = await open({
-      multiple: false,
-      title: t("osinstall.verify.image.chooseTitle"),
-      filters: [{ name: "Amiga volume image", extensions: ["img", "hdf"] }],
-    });
-    if (typeof picked === "string") setVerifyImage(picked);
-  }
-
-  const verifySlot = parseOptionalSlot(verifySlotText);
-  const verifyIndex = parsePartitionIndex(verifyIndexText);
-  const verifyReady = !!verifyDistRoot && !!verifyImage && verifySlot.ok && verifyIndex !== null;
-
-  async function runVerify() {
-    if (!verifyDistRoot || !verifyImage || !verifySlot.ok || verifyIndex === null) return;
-    setVerifying(true);
-    setVerifyError(null);
-    setVerifyReport(null);
-    try {
-      setVerifyReport(await osinstallVerify(verifyImage, verifySlot.value, verifyIndex, verifyDistRoot));
-    } catch (e) {
-      setVerifyError(errorText(t, e));
-    } finally {
-      setVerifying(false);
     }
   }
 
@@ -1588,135 +1547,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         release={release}
       />
 
-      <section className="card" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osinstall.verify.heading")}</h2>
-        <p className="muted" style={{ fontSize: 12, margin: "4px 0 12px" }}>
-          {t("osinstall.verify.intro")}
-        </p>
-
-        <Field
-          label={t("osinstall.verify.distRoot.label")}
-          value={verifyDistRoot}
-          empty={t("osinstall.verify.distRoot.none")}
-          onChoose={() => void chooseVerifyDistRoot()}
-          choose={t("common.browse")}
-          hint={t("osinstall.verify.distRoot.hint")}
-        />
-        <Field
-          label={t("osinstall.verify.image.label")}
-          value={verifyImage}
-          empty={t("osinstall.verify.image.none")}
-          onChoose={() => void chooseVerifyImage()}
-          choose={t("common.browse")}
-          hint={t("osinstall.verify.image.hint")}
-        />
-
-        <div style={{ display: "flex", gap: 16, marginBottom: 12, flexWrap: "wrap" }}>
-          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <span className="muted" style={{ fontSize: 12 }}>
-              {t("osinstall.verify.slot.label")}
-            </span>
-            <input
-              className="input"
-              value={verifySlotText}
-              onChange={(e) => setVerifySlotText(e.target.value)}
-              style={{ maxWidth: "8em" }}
-            />
-            <span className="faint" style={{ fontSize: 10 }}>
-              {t("osinstall.verify.slot.hint")}
-            </span>
-          </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <span className="muted" style={{ fontSize: 12 }}>
-              {t("osinstall.verify.index.label")}
-            </span>
-            <input
-              className="input"
-              value={verifyIndexText}
-              onChange={(e) => setVerifyIndexText(e.target.value)}
-              style={{ maxWidth: "8em" }}
-            />
-          </label>
-        </div>
-
-        {verifyError && (
-          <div className="badge badge-err" style={{ display: "block", padding: "6px 12px", fontSize: 12, marginBottom: 12 }}>
-            {t("osinstall.verify.error", { message: verifyError })}
-          </div>
-        )}
-
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
-          <button className="btn" onClick={() => void runVerify()} disabled={verifying || !verifyReady}>
-            {t(verifying ? "osinstall.verify.running" : "osinstall.verify.run")}
-          </button>
-          {!verifyReady && (
-            <span className="faint" style={{ fontSize: 11 }}>
-              {t("osinstall.verify.needsInputs")}
-            </span>
-          )}
-        </div>
-
-        {verifyReport && (
-          <>
-            {/* isVerified is failed === 0 && notChecked === 0 — never
-                failed === 0 alone. "ART did not look" is not "ART found
-                nothing wrong" (§89), so a NotChecked count above zero keeps
-                this a warning, never a tick. */}
-            <p
-              className={isVerified(verifyReport) ? "badge badge-ok" : "badge badge-warn"}
-              style={{ display: "block", padding: "8px 12px", fontSize: 12, marginBottom: 8 }}
-            >
-              {t(isVerified(verifyReport) ? "osinstall.verify.verified" : "osinstall.verify.notVerified")}
-            </p>
-            <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
-              {t("osinstall.verify.summary", {
-                passed: verifyReport.passed,
-                failed: verifyReport.failed,
-                notChecked: verifyReport.notChecked,
-              })}
-            </p>
-            <div
-              style={{
-                maxHeight: 280,
-                overflowY: "auto",
-                border: "1px solid var(--border)",
-                borderRadius: 4,
-                padding: "6px 10px",
-              }}
-            >
-              {verifyReport.files.map((file, i) => (
-                <div key={i} style={{ fontSize: 11, padding: "2px 0" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                    <span style={{ wordBreak: "break-all" }}>{file.path}</span>
-                    {file.state === "pass" && (
-                      <span className="badge badge-ok" style={{ fontSize: 10 }}>
-                        {t("osinstall.verify.state.pass")}
-                      </span>
-                    )}
-                    {file.state === "fail" && (
-                      <span className="badge badge-err" style={{ fontSize: 10 }}>
-                        {t("osinstall.verify.state.fail")}
-                      </span>
-                    )}
-                    {file.state === "not-checked" && (
-                      <span className="badge badge-warn" style={{ fontSize: 10 }}>
-                        {t("osinstall.verify.state.notChecked")}
-                      </span>
-                    )}
-                  </div>
-                  {/* Rust-side detail text stays English (ART-060) — the
-                      same rule CoreError messages and WhdloadRefusal follow. */}
-                  {file.detail && (
-                    <div className="faint" style={{ fontSize: 10 }}>
-                      {file.detail}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-      </section>
+      <VerifyAgainstCard />
     </>
   );
 }

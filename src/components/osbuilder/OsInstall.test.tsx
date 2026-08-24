@@ -1320,12 +1320,19 @@ describe("the tree it builds is the tree the next steps get (ART-197)", () => {
     });
     render(<OsInstall />);
 
-    // `PackagePanel` and `AmigaInstallPanel` each render the tree root through
-    // `Field`, as plain text beside their Browse button — so the path appears
-    // **twice**, once per panel, and that is the point: both are reading the
-    // one session value. `findAllByText`, because `findByText` refuses a
-    // multiple match.
+    // `PackagePanel`, `AmigaInstallPanel` and `VerifyAgainstCard` each render
+    // the tree root through `Field`, as plain text beside their Browse button
+    // - so the path appears **three times**, once per panel, and that is the
+    // point: all three are reading the one session value. `findAllByText`,
+    // because `findByText` refuses a multiple match.
+    //
+    // **It was two until 2026-08-24**, and the third is a real widening rather
+    // than an accident of the split. `VerifyAgainstCard` used to be filled
+    // only by `OsInstall`'s own result handler, so it knew about a tree this
+    // run had *built* and nothing about one the user had picked. Reading the
+    // session covers both, and covers a tree chosen on a step that does not
+    // exist yet - which is what wave 3 needs.
     const shown = await screen.findAllByText("E:\\amiga\\picked-by-hand");
-    expect(shown.length).toBe(2);
+    expect(shown.length).toBe(3);
   });
 });
