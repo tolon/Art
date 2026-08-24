@@ -16,6 +16,7 @@
 //! warning.
 
 pub mod cleanup;
+pub mod igame;
 pub mod readers;
 pub mod record;
 pub mod scan;
