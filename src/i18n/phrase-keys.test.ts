@@ -570,6 +570,9 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         limit: 4 * 1024 ** 3,
         romMajor: null,
       },
+      // SD-3 G16, both of them.
+      { kind: "tied-boot-priority", priority: 0, driveNames: ["SDH0", "SDH2"] },
+      { kind: "nothing-bootable" },
       { kind: "volumes-unformatted" },
     ];
     for (const warning of warnings) {

@@ -152,12 +152,39 @@ pub struct CardBuildRequest {
     /// model was measured from, but the binary is the user's to provide.
     #[serde(default)]
     pub file_systems: Vec<crate::commands::hdf::FileSystemInput>,
-    /// The partitions of the card's one Amiga disk.
+    /// The partitions of the card's **first** Amiga disk.
     ///
-    /// One disk, taking whatever is left after the boot partition. Two and
-    /// three disks are multiboot — SD-3's G16 — and are not offered here
-    /// rather than half-built (§96).
+    /// It takes whatever is left after the boot partition and after any
+    /// [`CardBuildRequest::extra_disks`].
     pub partitions: Vec<PartitionSpec>,
+    /// How much of the card the **first** Amiga disk takes.
+    ///
+    /// `0` means *"whatever is left"*, which `plan_card` allows only for the
+    /// **last** disk — so a card with [`CardBuildRequest::extra_disks`] has to
+    /// say how big this one is, and one without carries on meaning what it
+    /// always did. That rule is `plan_card`'s own and is reused rather than
+    /// restated: a second copy is how two answers to one question begin.
+    #[serde(default)]
+    pub first_disk_bytes: u64,
+    /// Further Amiga disks, each with its own RDB — **SD-3's G16**.
+    ///
+    /// *"Several complete AmigaOS environments on one card, chosen at boot."*
+    /// The card format has always allowed up to three (`core::mbr` reads and
+    /// writes them, and `read_card` opens real cards that have them); what was
+    /// missing was any way for the builder to ask for one, so `card_spec`
+    /// hard-coded a single area.
+    ///
+    /// **There is no menu to write.** AmigaOS already has one — hold both
+    /// mouse buttons at power-on and the Early Startup screen lists every
+    /// bootable partition. What ART decides is which starts when nobody holds
+    /// anything, which is `boot_priority`, and `core::card::multiboot` says so
+    /// when two of them tie.
+    ///
+    /// `#[serde(default)]`: a request built before this existed still
+    /// deserialises, and an empty list is the single-disk card ART has always
+    /// built.
+    #[serde(default)]
+    pub extra_disks: Vec<AmigaDiskRequest>,
 }
 
 /// A file on its way to the boot partition: its name and its size, never its
@@ -208,6 +235,21 @@ pub enum CardBuildWarning {
         /// `None` when no Kickstart was chosen — not the same as an old one.
         rom_major: Option<u16>,
     },
+    /// **Two bootable partitions claim the same priority** — SD-3 G16.
+    ///
+    /// Higher boots first; what happens on a tie is not documented anywhere,
+    /// so ART names the pair rather than picking between somebody's systems.
+    /// A card whose two systems are both "first" is a card whose owner does
+    /// not know which one they are about to boot.
+    TiedBootPriority {
+        priority: i8,
+        drive_names: Vec<String>,
+    },
+    /// **The card's Amiga disks boot nothing.**
+    ///
+    /// Legitimate — a card of pure data volumes is a real thing — and said
+    /// out loud, because it is also what a mistyped `bootable` looks like.
+    NothingBootable,
     /// **What SD-1 builds.** The Amiga sees a partition table it understands
     /// and volumes it will offer to format; putting a system on them is SD-2's
     /// work. Said plainly rather than left to be discovered (§10, §89).
@@ -252,6 +294,20 @@ pub const CARD_BUILD_EVENT: &str = "card-build-result";
 
 /// The request as a card, without the payload. The one mapping both the plan
 /// and the build go through.
+/// One further Amiga disk on the card.
+///
+/// The same two fields `core::card::AreaSpec` carries, because that is what it
+/// becomes — a second shape would be a second thing to keep in step.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmigaDiskRequest {
+    /// How much of the card this disk takes. `0` means *"whatever is left"*,
+    /// and only one disk may say it — `plan_card` refuses two by name.
+    #[serde(default)]
+    pub size_bytes: u64,
+    pub partitions: Vec<PartitionSpec>,
+}
+
 fn card_spec(
     request: &CardBuildRequest,
     boot_files: Vec<crate::core::fat32::BootFile>,
@@ -266,16 +322,28 @@ fn card_spec(
         boot_bytes: request.boot_bytes,
         label: request.label.clone(),
         boot_files,
-        areas: vec![AreaSpec {
-            // Whatever is left after the boot partition.
-            size_bytes: 0,
+        areas: std::iter::once(AreaSpec {
+            // `0` — whatever is left — unless there are disks after it, in
+            // which case only the last of those may say that.
+            size_bytes: request.first_disk_bytes,
             partitions: request.partitions.clone(),
             // Whatever the user gave, usually nothing or one `pfs3aio`.
             // Empty means FFS only, which Kickstart mounts itself — see
             // `CardBuildRequest::file_systems` for why this used to be
             // hard-coded empty (ART-084) and what changed.
-            file_systems,
-        }],
+            file_systems: file_systems.clone(),
+        })
+        .chain(request.extra_disks.iter().map(|disk| AreaSpec {
+            size_bytes: disk.size_bytes,
+            partitions: disk.partitions.clone(),
+            // **The same drivers on every disk** (ART-097): a card whose
+            // second RDB carries the FFS driver and whose first carries PFS3
+            // boots fine, and asking one RDB in isolation reported fifteen
+            // working partitions as broken. Embedding what the user gave into
+            // each disk is the shape that cannot produce that.
+            file_systems: file_systems.clone(),
+        }))
+        .collect(),
     })
 }
 
@@ -354,7 +422,12 @@ fn payload_for(request: &CardBuildRequest) -> CoreResult<crate::core::card::payl
 pub fn card_plan_build(request: CardBuildRequest) -> AppResult<CardBuildPlan> {
     let payload = payload_for(&request)?;
     let spec = card_spec(&request, Vec::new())?;
-    let layout = plan_card(spec.total_bytes, spec.boot_bytes, &[0])?;
+    // **One share per Amiga disk, from the spec rather than hard-coded** —
+    // SD-3 G16. This said `&[0]` until 2026-08-24, which is why `card_spec`
+    // could grow a second disk and the plan still showed one area: two places
+    // decided how many disks a card had, and only one of them was changed.
+    let shares: Vec<u64> = spec.areas.iter().map(|area| area.size_bytes).collect();
+    let layout = plan_card(spec.total_bytes, spec.boot_bytes, &shares)?;
 
     let mut warnings = vec![CardBuildWarning::VolumesUnformatted];
 
@@ -389,6 +462,26 @@ pub fn card_plan_build(request: CardBuildRequest) -> AppResult<CardBuildPlan> {
             }
         }
     };
+
+    // SD-3 G16: which system starts, when there is more than one.
+    {
+        use crate::core::card::multiboot::{boot_concerns, BootConcern, Disk};
+        let disks: Vec<Disk> = std::iter::once(request.partitions.as_slice())
+            .chain(request.extra_disks.iter().map(|d| d.partitions.as_slice()))
+            .collect();
+        for concern in boot_concerns(&disks) {
+            warnings.push(match concern {
+                BootConcern::TiedPriority {
+                    priority,
+                    drive_names,
+                } => CardBuildWarning::TiedBootPriority {
+                    priority,
+                    drive_names,
+                },
+                BootConcern::NothingBootable => CardBuildWarning::NothingBootable,
+            });
+        }
+    }
 
     // SD-5 G13: an FFS partition past what this card's Kickstart can address.
     // Computed from the layout that was just planned, so the sizes are the
@@ -857,6 +950,8 @@ mod tests {
 
     fn request(archive: &std::path::Path, dest: &std::path::Path) -> CardBuildRequest {
         CardBuildRequest {
+            first_disk_bytes: 0,
+            extra_disks: Vec::new(),
             archive: archive.display().to_string(),
             kickstart: None,
             dest: dest.display().to_string(),
@@ -882,6 +977,210 @@ mod tests {
                 num_buffers: 0,
             }],
         }
+    }
+
+    // -----------------------------------------------------------------
+    // SD-3 G16: several complete systems on one card.
+    // -----------------------------------------------------------------
+
+    /// **The gap G16 names, closed at the level it existed.** The card format
+    /// has always allowed up to three Amiga disks — `core::mbr` writes them
+    /// and `read_card` opens real cards that have them — and `card_spec`
+    /// hard-coded one, so no request could ask.
+    ///
+    /// Asserted against the **plan**, whose `layout.areas` is what the writer
+    /// then lays out.
+    #[test]
+    fn a_second_amiga_disk_becomes_a_second_area() {
+        let dir = scratch("g16-two-disks");
+        let archive = emu68_zip(&dir);
+        let mut request = request(&archive, &dir.join("card.img"));
+        request.total_bytes = 4 * GIB;
+        // With a disk after it, the first has to say how big it is - the rule
+        // is plan_card's own and it refuses two "whatever is left" by name.
+        request.first_disk_bytes = GIB;
+        request.extra_disks = vec![AmigaDiskRequest {
+            size_bytes: 0,
+            partitions: vec![PartitionSpec {
+                drive_name: "SDH2".into(),
+                fs_type: AmigaHardDiskFs::FfsStandard,
+                size_mb: 512,
+                bootable: true,
+                boot_priority: 1,
+                num_buffers: 0,
+            }],
+        }];
+
+        let plan = card_plan_build(request).unwrap();
+        assert_eq!(plan.layout.areas.len(), 2, "two Amiga disks, two areas");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **The ordinary way to build a multiboot card wrong**: two systems, both
+    /// left at the priority a single-system card uses. Higher boots first and
+    /// a tie is undocumented, so ART names the pair.
+    #[test]
+    fn two_systems_at_the_same_priority_are_named_in_the_plan() {
+        let dir = scratch("g16-tie");
+        let archive = emu68_zip(&dir);
+        let mut request = request(&archive, &dir.join("card.img"));
+        request.total_bytes = 4 * GIB;
+        request.first_disk_bytes = GIB;
+        // The fixture's own SDH0 is bootable at priority 0.
+        request.extra_disks = vec![AmigaDiskRequest {
+            size_bytes: 0,
+            partitions: vec![PartitionSpec {
+                drive_name: "SDH2".into(),
+                fs_type: AmigaHardDiskFs::FfsStandard,
+                size_mb: 512,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+        }];
+
+        let plan = card_plan_build(request).unwrap();
+        let tie = plan
+            .warnings
+            .iter()
+            .find(|w| matches!(w, CardBuildWarning::TiedBootPriority { .. }))
+            .expect("the tie must be named");
+        let CardBuildWarning::TiedBootPriority {
+            priority,
+            drive_names,
+        } = tie
+        else {
+            unreachable!()
+        };
+        assert_eq!(*priority, 0);
+        assert_eq!(drive_names, &["SDH0".to_string(), "SDH2".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Each disk gets the size it asked for**, and only the last takes what
+    /// is left. Found by mutation: a single extra disk saying `0` cannot tell
+    /// a sized disk from an unsized one, so this uses two.
+    #[test]
+    fn each_extra_disk_gets_the_size_it_asked_for() {
+        use crate::core::rdb::AmigaHardDiskFs;
+
+        let dir = scratch("g16-sizes");
+        let archive = emu68_zip(&dir);
+        let mut request = request(&archive, &dir.join("card.img"));
+        request.total_bytes = 8 * GIB;
+        request.first_disk_bytes = GIB;
+
+        let disk = |name: &str, size: u64| AmigaDiskRequest {
+            size_bytes: size,
+            partitions: vec![PartitionSpec {
+                drive_name: name.into(),
+                fs_type: AmigaHardDiskFs::FfsStandard,
+                size_mb: 256,
+                bootable: false,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+        };
+        // The middle one is sized; the last takes the rest.
+        request.extra_disks = vec![disk("SDH2", 2 * GIB), disk("SDH3", 0)];
+
+        let plan = card_plan_build(request).unwrap();
+        assert_eq!(plan.layout.areas.len(), 3);
+        let middle = plan.layout.areas[1].length_bytes();
+        let last = plan.layout.areas[2].length_bytes();
+        // Cylinder rounding moves these by megabytes, not gigabytes.
+        assert!(
+            (middle as i64 - 2 * GIB as i64).abs() < 64 * 1024 * 1024,
+            "the middle disk asked for 2 GB and got {middle}"
+        );
+        assert!(
+            last > 3 * GIB,
+            "the last takes what is left, and there is more than 3 GB of it: {last}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **ART-097's lesson, applied to a card ART builds rather than one it
+    /// reads.** A card whose second RDB carries the FFS driver and whose first
+    /// carries PFS3 boots fine, and asking one RDB in isolation reported
+    /// fifteen working partitions as broken. Every disk gets the drivers the
+    /// user supplied.
+    ///
+    /// Asserted against the **finished image**, read back through the same
+    /// reader the Hard Disk studio uses — a request-shaped assertion would
+    /// pass just as well if `card_spec` dropped them.
+    #[test]
+    fn every_amiga_disk_carries_the_drivers_the_user_supplied() {
+        use crate::core::jobs::NoProgress;
+        use crate::core::rdb::AmigaHardDiskFs;
+
+        let dir = scratch("g16-drivers");
+        let archive = emu68_zip(&dir);
+        let dest = dir.join("card.img");
+
+        let driver = dir.join("pfs3aio");
+        let mut bytes = b"$VER: pfs3aio 19.2 (1.1.99)
+"
+        .to_vec();
+        bytes.extend(std::iter::repeat_n(0u8, 2048));
+        std::fs::write(&driver, &bytes).unwrap();
+
+        let mut request = request(&archive, &dest);
+        request.total_bytes = 4 * GIB;
+        request.first_disk_bytes = GIB;
+        request.partitions[0].fs_type = AmigaHardDiskFs::Pfs3DirectScsi;
+        request.file_systems = vec![crate::commands::hdf::FileSystemInput {
+            path: driver.display().to_string(),
+            dos_type: "PDS3".to_string(),
+            // ART reads both out of the driver's own `$VER:`.
+            version: None,
+            revision: None,
+        }];
+        request.extra_disks = vec![AmigaDiskRequest {
+            size_bytes: 0,
+            partitions: vec![PartitionSpec {
+                drive_name: "SDH2".into(),
+                fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
+                size_mb: 256,
+                bootable: false,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+        }];
+
+        build_requested_card(&request, &NoProgress).unwrap();
+        let card = crate::core::card::read_card(&dest).unwrap();
+        assert_eq!(card.areas.len(), 2);
+        for (index, area) in card.areas.iter().enumerate() {
+            assert!(
+                !area.rdb.file_systems.is_empty(),
+                "Amiga disk {} carries no driver, so its PFS3 partitions mount nowhere",
+                index + 1
+            );
+        }
+        assert!(
+            card.partitions_missing_driver().is_empty(),
+            "every partition's filesystem is on the card"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One disk with one bootable partition says nothing about ties — the
+    /// card ART has always built must not start warning.
+    #[test]
+    fn the_single_disk_card_gains_no_new_warning() {
+        let dir = scratch("g16-single");
+        let archive = emu68_zip(&dir);
+        let plan = card_plan_build(request(&archive, &dir.join("card.img"))).unwrap();
+        assert!(!plan
+            .warnings
+            .iter()
+            .any(|w| matches!(w, CardBuildWarning::TiedBootPriority { .. })));
+        assert!(!plan
+            .warnings
+            .iter()
+            .any(|w| matches!(w, CardBuildWarning::NothingBootable)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A driver the user supplied reaches the RDB of the card ART builds, and

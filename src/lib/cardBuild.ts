@@ -99,6 +99,15 @@ export type CardBuildWarning =
       limit: number;
       romMajor: number | null;
     }
+  /**
+   * Two bootable partitions claim the same priority (SD-3 G16).
+   *
+   * Higher boots first; what happens on a tie is not documented anywhere, so
+   * ART names the pair rather than picking between somebody's systems.
+   */
+  | { kind: "tied-boot-priority"; priority: number; driveNames: string[] }
+  /** The card's Amiga disks boot nothing — legitimate, and said out loud. */
+  | { kind: "nothing-bootable" }
   | { kind: "volumes-unformatted" };
 
 /** A ROM as ART identifies it. The fields this screen uses. */
@@ -501,6 +510,13 @@ export function warningPhrase(warning: CardBuildWarning): Phrase {
               major: warning.romMajor,
             },
           };
+    case "tied-boot-priority":
+      return {
+        key: "cardBuilder.warning.tiedBootPriority",
+        params: { priority: warning.priority, drives: warning.driveNames.join(", ") },
+      };
+    case "nothing-bootable":
+      return { key: "cardBuilder.warning.nothingBootable" };
     case "volumes-unformatted":
       return { key: "cardBuilder.warning.volumesUnformatted" };
   }

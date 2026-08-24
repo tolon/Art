@@ -19,6 +19,7 @@ pub mod capacity;
 pub mod health;
 pub mod intake;
 pub mod manifest;
+pub mod multiboot;
 pub mod payload;
 
 use std::path::Path;
