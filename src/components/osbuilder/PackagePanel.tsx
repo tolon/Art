@@ -111,10 +111,13 @@ import {
   onOsInstallAddPackageResult,
   osinstallAddPackage,
   osinstallCollisions,
+  osinstallDescribeTree,
   osinstallPackages,
+  osinstallTreesIn,
   refusalPhrase,
   type ApplyOutcome,
   type CollisionReport,
+  type FoundTree,
   type InstallRelease, type PackageSummary,
   type RefusalReason,
 } from "@/lib/osinstall";
@@ -306,13 +309,43 @@ export function PackagePanel({
     );
   }, []);
 
+  /**
+   * **The artefact picker** (ART-197 wave 2, row 1).
+   *
+   * A folder of builds is the ordinary case here, not the exception: the owner
+   * keeps several trees side by side that differ only in which components went
+   * into them, and `TreeSummary::components`' own doc records what that cost —
+   * *"the owner learned by trial which of nine trees carried `locale-base`,
+   * when every manifest says so."*
+   *
+   * So a picked folder is asked two questions rather than one. If it **is** a
+   * tree it is taken, exactly as before; whether or not it is, the builds
+   * inside it are listed with what each carries, and choosing a row is one
+   * click instead of a second trip through the folder dialog.
+   *
+   * `null` means "not asked, or ART could not look" — never "empty". A failed
+   * round trip renders no list rather than an accusation about the folder,
+   * which is the rule `useTreeCheck` already follows for `isTree`.
+   */
+  const [siblingTrees, setSiblingTrees] = useState<FoundTree[] | null>(null);
+
   async function chooseTreeRoot() {
     const picked = await open({
       directory: true,
       multiple: false,
       title: t("osinstall.packages.treeRoot.chooseTitle"),
     });
-    if (typeof picked === "string") onTreeRootChange?.(picked);
+    if (typeof picked !== "string") return;
+    // The folder itself first: a user who pointed straight at a build gets
+    // exactly the behaviour they had before this existed.
+    const summary = await osinstallDescribeTree(picked).catch(() => null);
+    if (summary?.isTree) {
+      onTreeRootChange?.(picked);
+    }
+    const inside = await osinstallTreesIn(picked).catch(() => null);
+    // A folder that *is* a build and holds none needs no list; one that holds
+    // exactly the build already taken would be a list of one saying nothing.
+    setSiblingTrees(inside && inside.length > 0 ? inside : null);
   }
 
   async function choosePackageFolder() {
@@ -391,6 +424,54 @@ export function PackagePanel({
         choose={t("common.browse")}
         hint={t("osinstall.packages.treeRoot.hint")}
       />
+      {siblingTrees && (
+        <div data-testid="tree-picker" style={{ margin: "-4px 0 12px" }}>
+          <p className="faint" style={{ fontSize: 11, margin: "0 0 6px" }}>
+            {t("osinstall.packages.treePicker.heading", { count: siblingTrees.length })}
+          </p>
+          {siblingTrees.map((found) => {
+            const chosenTree = found.path === treeRoot;
+            return (
+              <button
+                key={found.path}
+                type="button"
+                className={chosenTree ? "btn btn-primary" : "btn"}
+                onClick={() => {
+                  onTreeRootChange?.(found.path);
+                }}
+                aria-pressed={chosenTree}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  marginBottom: 4,
+                  fontSize: 12,
+                }}
+              >
+                <strong>{found.name}</strong>{" "}
+                <span className="faint">
+                  {/* Release, size and what it carries — the three answers
+                      that used to need a build to find out. `components` is
+                      the one that decides whether a package can go on. */}
+                  {t("osinstall.packages.treePicker.row", {
+                    release: found.summary.release ?? "—",
+                    files: found.summary.files,
+                    components: found.summary.components.length,
+                  })}
+                </span>
+                {found.summary.amigaInstalled.length > 0 && (
+                  <span className="faint">
+                    {" "}
+                    {t("osinstall.packages.treePicker.alreadyInstalled", {
+                      packages: found.summary.amigaInstalled.join(", "),
+                    })}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
       <Field
         label={t("osinstall.packages.packageFolder.label")}
         value={packageFolder}

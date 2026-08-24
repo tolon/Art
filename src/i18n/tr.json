@@ -2321,6 +2321,11 @@
         "cancelled": "Yarıda iptal edildi.",
         "progressStarting": "Başlıyor…",
         "progressPercent": "%{{percent}} — {{total}} dosyadan {{done}} tanesi"
+      },
+      "treePicker": {
+        "heading": "O klasörde {{count}} yapı var — birini seçin:",
+        "row": "{{release}} · {{files}} dosya · {{components}} bileşen",
+        "alreadyInstalled": "· Amiga'da zaten kurulu: {{packages}}"
       }
     },
     "amigaInstall": {

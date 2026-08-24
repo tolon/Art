@@ -2321,6 +2321,11 @@
         "cancelled": "Cancelled partway through.",
         "progressStarting": "Starting…",
         "progressPercent": "{{percent}}% — {{done}} of {{total}} files"
+      },
+      "treePicker": {
+        "heading": "{{count}} build(s) in that folder — pick one:",
+        "row": "{{release}} · {{files}} files · {{components}} components",
+        "alreadyInstalled": "· already installed on the Amiga: {{packages}}"
       }
     },
     "amigaInstall": {

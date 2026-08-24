@@ -7,7 +7,7 @@
 // `@tauri-apps/api` itself.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // Side-effecting import: initialises the real i18next instance
@@ -18,6 +18,9 @@ import "@/i18n";
 import type { CollisionReport, PackageSummary } from "@/lib/osinstall";
 
 const packagesMock = vi.hoisted(() => vi.fn());
+const describeTreeMock = vi.hoisted(() => vi.fn());
+const treesInMock = vi.hoisted(() => vi.fn());
+const dialogOpenMock = vi.hoisted(() => vi.fn());
 const collisionsMock = vi.hoisted(() => vi.fn());
 const addPackageMock = vi.hoisted(() => vi.fn());
 const onJobProgressMock = vi.hoisted(() => vi.fn());
@@ -29,6 +32,8 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   osinstallCollisions: collisionsMock,
   osinstallAddPackage: addPackageMock,
   onOsInstallAddPackageResult: onAddPackageResultMock,
+  osinstallDescribeTree: describeTreeMock,
+  osinstallTreesIn: treesInMock,
 }));
 
 vi.mock("@/lib/jobs", async (importOriginal) => ({
@@ -37,7 +42,7 @@ vi.mock("@/lib/jobs", async (importOriginal) => ({
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
-  open: vi.fn(),
+  open: dialogOpenMock,
 }));
 
 const { PackagePanel } = await import("@/components/osbuilder/PackagePanel");
@@ -101,6 +106,16 @@ beforeEach(() => {
   addPackageMock.mockReset().mockResolvedValue({ outcome: "started", job_id: 1 });
   onJobProgressMock.mockReset().mockResolvedValue(() => {});
   onAddPackageResultMock.mockReset().mockResolvedValue(() => {});
+  describeTreeMock.mockReset().mockResolvedValue({
+    isTree: false,
+    release: null,
+    files: 0,
+    components: [],
+    amigaInstalled: [],
+    problem: "not a tree",
+  });
+  treesInMock.mockReset().mockResolvedValue([]);
+  dialogOpenMock.mockReset().mockResolvedValue(null);
 });
 
 const REPORTS: CollisionReport[] = [
@@ -399,5 +414,146 @@ describe("m6 — an entry name safe_join refused is shown, not only counted", ()
     render(<PackagePanel release="AmigaOS 3.9" treeRoot="E:/tree" packageFolder="E:/packages" chosen={[]} />);
 
     expect(await screen.findByText(/\.\.\/\.\.\/Startup/)).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The artefact picker (ART-197 wave 2, row 1)
+// ---------------------------------------------------------------------------
+//
+// `TreeSummary::components`' own doc comment says what this is for: *"the
+// owner learned by trial which of nine trees carried `locale-base`, when every
+// manifest says so."* Several builds side by side, distinguished only by what
+// went into them, and the only way to tell them apart was to point a step at
+// one and read the refusal.
+
+const BUILD = (name: string, components: string[], amigaInstalled: string[] = []) => ({
+  path: `E:/builds/${name}`,
+  name,
+  summary: {
+    isTree: true,
+    release: "amigaos-3.9",
+    files: 3868,
+    components,
+    amigaInstalled,
+    problem: null,
+  },
+});
+
+describe("the artefact picker", () => {
+  it("lists the builds in a chosen folder and says what each carries", async () => {
+    dialogOpenMock.mockResolvedValue("E:/builds");
+    treesInMock.mockResolvedValue([
+      BUILD("dist-3.9-plain", ["workbench-base"]),
+      BUILD("dist-3.9-turkish", ["workbench-base", "locale-base", "locale-turkish"]),
+    ]);
+    render(<PackagePanel release="AmigaOS 3.9" treeRoot={null} chosen={[]} />);
+
+    await userEvent.click(screen.getAllByRole("button", { name: /browse/i })[0]);
+    const picker = await screen.findByTestId("tree-picker");
+
+    expect(picker.textContent).toContain("dist-3.9-plain");
+    expect(picker.textContent).toContain("dist-3.9-turkish");
+
+    // **Read off each row, not off the whole panel.** `toContain("3")` was
+    // the first version of this and it passed on the release string
+    // `amigaos-3.9` alone — an assertion that cannot fail is worse than none.
+    const turkish = screen.getByRole("button", { name: /dist-3\.9-turkish/ });
+    const plain = screen.getByRole("button", { name: /dist-3\.9-plain/ });
+    // The number that decides whether a package can go on this tree.
+    expect(turkish.textContent).toContain("3 components");
+    expect(plain.textContent).toContain("1 components");
+    expect(turkish.textContent).toContain("3868");
+  });
+
+  it("hands the chosen build's path back to the caller", async () => {
+    const onChange = vi.fn();
+    dialogOpenMock.mockResolvedValue("E:/builds");
+    treesInMock.mockResolvedValue([
+      BUILD("dist-3.9-plain", ["workbench-base"]),
+      BUILD("dist-3.9-turkish", ["workbench-base", "locale-base"]),
+    ]);
+    render(
+      <PackagePanel
+        release="AmigaOS 3.9"
+        treeRoot={null}
+        onTreeRootChange={onChange}
+        chosen={[]}
+      />
+    );
+
+    await userEvent.click(screen.getAllByRole("button", { name: /browse/i })[0]);
+    await screen.findByTestId("tree-picker");
+    await userEvent.click(screen.getByRole("button", { name: /dist-3\.9-turkish/ }));
+
+    // The **path**, not the name: the caller remembers a folder, and a name
+    // is not one.
+    expect(onChange).toHaveBeenCalledWith("E:/builds/dist-3.9-turkish");
+  });
+
+  it("still takes a folder that is itself a build, as it always did", async () => {
+    const onChange = vi.fn();
+    dialogOpenMock.mockResolvedValue("E:/builds/dist-3.9");
+    describeTreeMock.mockResolvedValue({
+      isTree: true,
+      release: "amigaos-3.9",
+      files: 3868,
+      components: ["workbench-base"],
+      amigaInstalled: [],
+      problem: null,
+    });
+    treesInMock.mockResolvedValue([]);
+    render(
+      <PackagePanel
+        release="AmigaOS 3.9"
+        treeRoot={null}
+        onTreeRootChange={onChange}
+        chosen={[]}
+      />
+    );
+
+    await userEvent.click(screen.getAllByRole("button", { name: /browse/i })[0]);
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith("E:/builds/dist-3.9"));
+    // Nothing inside it, so no list of one saying nothing.
+    expect(screen.queryByTestId("tree-picker")).toBeNull();
+  });
+
+  it("says which builds have had a package installed on the Amiga already", async () => {
+    dialogOpenMock.mockResolvedValue("E:/builds");
+    treesInMock.mockResolvedValue([
+      BUILD("dist-with-bb1", ["workbench-base"], ["boingbag-39-1"]),
+      BUILD("dist-plain", ["workbench-base"]),
+    ]);
+    render(<PackagePanel release="AmigaOS 3.9" treeRoot={null} chosen={[]} />);
+
+    await userEvent.click(screen.getAllByRole("button", { name: /browse/i })[0]);
+    const picker = await screen.findByTestId("tree-picker");
+    // BoingBag 2 refuses on a tree BoingBag 1 never touched (ART-186), so
+    // which build already has it is the difference between a run that works
+    // and a refusal.
+    expect(picker.textContent).toContain("boingbag-39-1");
+  });
+
+  it("renders no list rather than an accusation when the lookup fails", async () => {
+    dialogOpenMock.mockResolvedValue("E:/builds");
+    treesInMock.mockRejectedValue(new Error("the disk went away"));
+    render(<PackagePanel release="AmigaOS 3.9" treeRoot={null} chosen={[]} />);
+
+    await userEvent.click(screen.getAllByRole("button", { name: /browse/i })[0]);
+    await waitFor(() => expect(treesInMock).toHaveBeenCalled());
+    expect(screen.queryByTestId("tree-picker")).toBeNull();
+    // And nothing on screen claims anything about the folder.
+    expect(document.body.textContent).not.toContain("disk went away");
+  });
+
+  it("carries no raw key and no unrendered interpolation in the picker", async () => {
+    dialogOpenMock.mockResolvedValue("E:/builds");
+    treesInMock.mockResolvedValue([BUILD("dist-3.9", ["workbench-base"], ["boingbag-39-1"])]);
+    render(<PackagePanel release="AmigaOS 3.9" treeRoot={null} chosen={[]} />);
+
+    await userEvent.click(screen.getAllByRole("button", { name: /browse/i })[0]);
+    const picker = await screen.findByTestId("tree-picker");
+    expect(picker.textContent).not.toMatch(/osinstall\.packages\.treePicker/);
+    expect(picker.textContent).not.toMatch(/\{\{[^}]+\}\}/);
   });
 });
