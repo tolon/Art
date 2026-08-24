@@ -8508,6 +8508,36 @@ No VHD or RDB image was involved, so whether `AmiKit.hdf`, or any other VHD
 or RDB image, now mounts correctly has still **not** been retried against
 the real emulator.
 
+**Half of that is now proven, 2026-08-24.** The fix was found by reading
+`AmiKit.hdf`'s bytes and tested against a fixture built from its first eight —
+the right unit test, and not the same claim as the real file. It has now been
+run against the real file, read-only:
+`core::hdf::tests::the_real_vhd_gets_no_forced_geometry_when_asked`,
+`#[ignore]`d and gated on `ART_REAL_HARDFILE`. Two readers are asked about it
+independently and agree — `core::vhd::parse_footer` says
+**`VhdKind::Dynamic`, disk size 4 193 255 424 bytes with the file itself 1.2 GB,
+checksum matching**, and `detect_hardfile_shape` says `Unknown` — and the line
+ART writes is
+
+```text
+hardfile2=rw,:E:migamikit\AmiKit.hdf,0,0,0,0,0,,uae
+```
+
+with no forced-geometry line beside it. Worth recording that it is a *dynamic*
+VHD rather than a fixed one, which is the harder case: offset 0 is a copy of
+the footer and the disk's real contents are reached through a block allocation
+table, so nothing at a fixed byte offset in the file can be relied on — the
+detection does not try, and the mount is left entirely to WinUAE.
+
+Two mutations, both fall: treating an unrecognised shape as `Bare`, and moving
+`Unknown` into the forced-geometry arm. A third could not be written — dropping
+`Unknown` from the match is a compile error, which is a better guard than a
+test.
+
+**What is still not proven is the mount itself.** This measures the
+configuration ART writes, not what WinUAE does with it. That half needs the
+owner and a running emulator.
+
 **ART-145** 🔴 ✅ **The one-click WHDLoad launch never got past the CLI: the
 generated startup-sequence could not run its own first line** — *found and
 fixed 2026-08-18, by running Y2 against a real title (`1000 Miglia`) in
