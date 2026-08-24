@@ -548,6 +548,43 @@ owner's decisions rather than something a scan does on their behalf. So the
 loop closes as *"this title asks for `kick34005.A500`; ART recognises it in
 your collection — place it?"*, never as a silent copy.
 
+> **The matching half is built, 2026-08-24** — `core/rom/offer.rs` plus
+> `RomInfo::whdload_crc16`, computed at `identify_rom` where the decoded bytes
+> already exist. **The placing half is deliberately still absent**, which is
+> what the decision above asks for: nothing in this module writes a file, and a
+> test shows it rather than the doc claiming it — a collection entry whose file
+> has since been deleted is matched and reported like any other, because
+> matching reads `RomInfo` and nothing else.
+>
+> **Matched by checksum, never by filename.** A slave declares the CRC-16 of
+> the image WHDLoad will load; what a file is called says nothing. A ROM named
+> `kick34005.A500` does **not** answer a slave asking for `kick34005.A500`
+> unless its bytes do, and one called `anything.bin` does if they do.
+>
+> **Four endings, not two.** `Supplied` · `Encrypted` · `NotHere` ·
+> `Unmatchable`. The one that earns its keep is `Encrypted`: a licensed Amiga
+> Forever ROM without its `rom.key` is a file the user **has**, and reporting
+> it missing would send them looking for something already on their disk.
+> `Unmatchable` is the `$ffff` sentinel — not a checksum but a slave saying
+> "the name field is a list" ([ART-137](#fixed)) — where "you do not have it"
+> would be a claim about a ROM that does not exist.
+>
+> **One of three is enough**, because an AGA title names an A600, an A1200 and
+> an A4000 ROM and WHDLoad takes whichever it finds. Reporting such a title as
+> unsatisfied is the sentence ART-137 already cost this project once.
+>
+> `core/rom` declares its **own** `WantedImage` rather than importing
+> `core::gameindex::KickstartNeed`, and `commands/gameindex.rs` maps between
+> them — the layering rule CLAUDE.md states with `core/rom` as its own example.
+>
+> *Tests:* 11 in `offer.rs`, 3 over the mapping, 1 added to `core/rom`.
+> **Eight mutations, six fell at once; two survived and both were missing
+> tests**, one of them dangerous: an unreadable ROM given `Some(0)` instead of
+> `None` would have silently answered any title whose slave declares a checksum
+> of zero. Both now covered, both fell on the re-run.
+>
+> **Still open: the placing step and its screen.**
+
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
 the crash itself is still unresolved** — *found 2026-08-15/16, Task 13's

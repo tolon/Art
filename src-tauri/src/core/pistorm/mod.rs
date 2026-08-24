@@ -811,6 +811,7 @@ mod tests {
             compatible_models: vec!["A500".into(), "A600".into(), "A2000".into()],
             file_path: String::new(),
             major: Some(40),
+            whdload_crc16: None,
         };
         assert_eq!(rom_suits(&known, AmigaTarget::A500), Some(true));
         // A note, not a block: people boot odd combinations on purpose.
