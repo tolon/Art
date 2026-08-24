@@ -17,6 +17,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::core::error::{CoreError, CoreResult};
+use crate::core::vhd;
 
 /// A coarse category of Amiga object. Used by the Workflow Engine to decide
 /// which workflows are candidates.
@@ -207,6 +208,22 @@ pub fn detect(path: &Path) -> CoreResult<Detection> {
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
 
+    // --- Is it a VHD wearing somebody else's extension? -------------------
+    //
+    // **First, because a dynamic VHD's offset 0 is not its disk's offset 0.**
+    // The owner's own `AmiKit.hdf` is 1 200 776 704 bytes beginning
+    // `conectix` — a dynamic VHD under an `.hdf` name, shipped that way by a
+    // real Amiga distribution. Read as a raw image it has no `RDSK` at offset
+    // 0, so ART would say *"this hard disk has no partition table"* about a
+    // disk that has one: true about the bytes, wrong about the disk.
+    //
+    // A **fixed** VHD is a different answer and gets one: it is a raw image
+    // with the footer appended, so everything ART's readers look at is exactly
+    // where they look for it. See `core::vhd`.
+    if let Some(detection) = vhd_detection(path, size) {
+        return Ok(detection);
+    }
+
     // --- Signature-backed checks first (highest confidence) ---------------
     //
     // Content decides the category; the extension below is only a fallback
@@ -359,6 +376,66 @@ pub fn detect(path: &Path) -> CoreResult<Detection> {
         }),
         _ => Ok(Detection::unknown(size, false)),
     }
+}
+
+/// Is this file a VHD, and which kind?
+///
+/// Two places are looked at, because the specification puts the footer in two
+/// different places depending on the kind (`core::vhd`'s module doc carries
+/// the sources):
+///
+/// - **offset 0** — only a *dynamic* or *differencing* image keeps a copy of
+///   its footer there. A fixed one never does, so a match here settles it.
+/// - **the last 512 bytes** — every image has the real footer there, and for
+///   a fixed one it is the only copy.
+///
+/// The tail is read second and only when the head did not match, so an
+/// ordinary Amiga HDF costs one extra 512-byte read at the end of the file.
+/// That cost is paid before the extension is consulted, deliberately: an
+/// `.hdf` that is really a VHD is the whole case, so the check cannot sit
+/// behind a filter that trusts the extension.
+///
+/// `format_hint` distinguishes the kinds — `"vhd-fixed"`, `"vhd-dynamic"`,
+/// `"vhd-differencing"`, and `"vhd"` for a disk type the specification does
+/// not name — because the workflows route on it: a fixed image is readable as
+/// a raw disk and the others are not.
+fn vhd_detection(path: &Path, size: u64) -> Option<Detection> {
+    // Too small to hold a footer at all.
+    if size < vhd::FOOTER_LEN as u64 {
+        return None;
+    }
+
+    let footer = probe_at(path, 0, vhd::FOOTER_LEN)
+        .ok()
+        .and_then(|head| vhd::parse_footer(&head))
+        // A footer at offset 0 that claims to be *fixed* is a contradiction:
+        // a fixed image has no copy there, so those 512 bytes are the disk's
+        // own first sector and it happens to start `conectix`. Fall through
+        // to the tail, which is where a real fixed image keeps its only copy.
+        .filter(|found| !found.kind.data_starts_at_offset_zero())
+        .or_else(|| {
+            probe_at(path, size - vhd::FOOTER_LEN as u64, vhd::FOOTER_LEN)
+                .ok()
+                .and_then(|tail| vhd::parse_footer(&tail))
+        })?;
+
+    Some(Detection {
+        category: FormatCategory::HardDiskImage,
+        format_hint: match footer.kind {
+            vhd::VhdKind::Fixed => "vhd-fixed",
+            vhd::VhdKind::Dynamic => "vhd-dynamic",
+            vhd::VhdKind::Differencing => "vhd-differencing",
+            vhd::VhdKind::Unrecognised(_) => "vhd",
+        }
+        .to_string(),
+        // A cookie, a named disk type and a plausible size are a lot of
+        // agreement for eight bytes to produce by accident. The checksum is
+        // not counted towards it — see `core::vhd` on why it is reported and
+        // never used to reject.
+        confidence: 0.95,
+        size,
+        is_dir: false,
+    })
 }
 
 /// A `DOS\0`..`DOS\7` boot signature at offset 0, categorised by size: the
@@ -932,6 +1009,117 @@ mod tests {
 
         let det = detect(&p).unwrap();
         assert_eq!(det.category, FormatCategory::Unknown);
+        fs::remove_dir_all(&d).ok();
+    }
+
+    // -----------------------------------------------------------------
+    // Work-list item 7: a `.hdf` that is really a VHD.
+    // -----------------------------------------------------------------
+
+    /// A footer built the way `core::vhd`'s own tests build one.
+    fn vhd_footer(kind: u32, data_offset: u64, disk_size: u64) -> Vec<u8> {
+        let mut bytes = vec![0u8; vhd::FOOTER_LEN];
+        bytes[0..8].copy_from_slice(&vhd::FOOTER_COOKIE);
+        bytes[12..16].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        bytes[16..24].copy_from_slice(&data_offset.to_be_bytes());
+        bytes[40..48].copy_from_slice(&disk_size.to_be_bytes());
+        bytes[60..64].copy_from_slice(&kind.to_be_bytes());
+        let sum = vhd::checksum(&bytes);
+        bytes[64..68].copy_from_slice(&sum.to_be_bytes());
+        bytes
+    }
+
+    /// **The owner's `AmiKit.hdf`, in miniature.** A dynamic VHD under an
+    /// `.hdf` name: the copy of the footer at offset 0 settles it, and
+    /// nothing about the extension is consulted.
+    #[test]
+    fn a_dynamic_vhd_wearing_an_hdf_extension_is_named_as_one() {
+        let d = tmp();
+        let p = d.join("AmiKit.hdf");
+        let mut file = vhd_footer(3, 512, 4 * 1024 * 1024 * 1024);
+        file.extend_from_slice(&[0u8; 4096]); // header, BAT, blocks — unread
+        file.extend_from_slice(&vhd_footer(3, 512, 4 * 1024 * 1024 * 1024));
+        fs::write(&p, &file).unwrap();
+
+        let det = detect(&p).unwrap();
+        assert_eq!(det.category, FormatCategory::HardDiskImage);
+        assert_eq!(
+            det.format_hint, "vhd-dynamic",
+            "read raw, this file has no RDSK at offset 0"
+        );
+        fs::remove_dir_all(&d).ok();
+    }
+
+    /// **The other kind, and it is not the same answer.** A fixed VHD is a
+    /// raw image with 512 bytes appended, so every ART reader works on it
+    /// unchanged — and its footer is only at the end.
+    #[test]
+    fn a_fixed_vhd_is_named_separately_from_a_dynamic_one() {
+        let d = tmp();
+        let p = d.join("fixed.vhd");
+        let mut file = b"RDSK".to_vec();
+        file.extend_from_slice(&[0u8; 2048]);
+        file.extend_from_slice(&vhd_footer(2, u64::MAX, 2052));
+        fs::write(&p, &file).unwrap();
+
+        let det = detect(&p).unwrap();
+        assert_eq!(det.format_hint, "vhd-fixed");
+        fs::remove_dir_all(&d).ok();
+    }
+
+    /// A footer at offset 0 that claims to be *fixed* is a contradiction — a
+    /// fixed image keeps no copy there. Those 512 bytes are the disk's own
+    /// first sector, which merely happens to begin `conectix`, so the tail is
+    /// what decides.
+    #[test]
+    fn a_first_sector_that_looks_like_a_fixed_footer_does_not_settle_it() {
+        let d = tmp();
+        let p = d.join("odd.hdf");
+        let mut file = vhd_footer(2, u64::MAX, 99); // at offset 0: impossible
+        file.extend_from_slice(&[0u8; 1024]);
+        file.extend_from_slice(&[0u8; vhd::FOOTER_LEN]); // no footer at the end
+        fs::write(&p, &file).unwrap();
+
+        let det = detect(&p).unwrap();
+        assert!(
+            !det.format_hint.starts_with("vhd"),
+            "nothing here is a VHD; got {}",
+            det.format_hint
+        );
+        fs::remove_dir_all(&d).ok();
+    }
+
+    /// An ordinary Amiga hard-disk image is unaffected. The extra read at the
+    /// end of the file finds nothing and detection carries on exactly as
+    /// before — which is what makes the check safe to run first.
+    #[test]
+    fn an_ordinary_hdf_is_still_an_ordinary_hdf() {
+        let d = tmp();
+        let p = d.join("plain.hdf");
+        let mut file = b"RDSK".to_vec();
+        file.extend_from_slice(&[0u8; 4096]);
+        fs::write(&p, &file).unwrap();
+
+        let det = detect(&p).unwrap();
+        assert_eq!(det.category, FormatCategory::HardDiskImage);
+        // `"rdb"`, not `"hdf"` — the RDSK signature is the stronger answer and
+        // detection has always preferred it. What matters here is that the
+        // VHD check did not take it away.
+        assert_eq!(det.format_hint, "rdb");
+        fs::remove_dir_all(&d).ok();
+    }
+
+    /// A disk type the specification does not name is reported as `"vhd"`
+    /// and treated as opaque, rather than guessed into one of the three.
+    #[test]
+    fn an_unnamed_vhd_disk_type_is_named_vhd_and_nothing_more() {
+        let d = tmp();
+        let p = d.join("future.hdf");
+        let mut file = vhd_footer(9, 512, 1024);
+        file.extend_from_slice(&[0u8; 512]);
+        fs::write(&p, &file).unwrap();
+
+        assert_eq!(detect(&p).unwrap().format_hint, "vhd");
         fs::remove_dir_all(&d).ok();
     }
 
