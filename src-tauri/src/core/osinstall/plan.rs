@@ -3428,7 +3428,19 @@ mod plan_tests {
             .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
             .collect();
         crate::core::osinstall::fixtures::media(&folder, "Workbench3.2", "wb-copy-1.adf", &wb_refs);
-        crate::core::osinstall::fixtures::media(&folder, "Workbench3.2", "wb-copy-2.adf", &wb_refs);
+        // **The second copy differs**, and that is the case this test is
+        // about. Two byte-identical disks of one name are one disk
+        // (`scan::dedupe_identical_disks`, 2026-08-25) - there is no decision
+        // for anybody to make - so a fixture that made them identical would
+        // now be asserting ambiguity over a question that has one answer.
+        let mut differing = wb_refs.clone();
+        differing.push(("C/OnlyHere", b"newer".as_slice(), 0));
+        crate::core::osinstall::fixtures::media(
+            &folder,
+            "Workbench3.2",
+            "wb-copy-2.adf",
+            &differing,
+        );
 
         let request = InstallRequest {
             packages: Vec::new(),

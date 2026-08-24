@@ -49,6 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kernel from the board at start-up, ART says so and checks nothing: the
   release knows its own boot layout and ART does not.
 
+- **A copy of the same disk in two places no longer stops an install.** If two
+  of your folders hold the same `Workbench3.2.adf`, or one folder holds it
+  twice under different filenames, ART now treats them as the one disk they
+  are. Two disks sharing a name that are *not* identical are still refused by
+  name, because which of them you want is not ART's to guess.
 - **ART will lay out the card for you.** Tick *"propose a volume table"* and
   it sizes the partitions from what the two real PiStorm cards it was measured
   against actually carry - including that the system volume is the same size
