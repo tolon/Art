@@ -195,6 +195,8 @@ pub fn run() {
             commands::gameindex::rename_title_file,
             commands::gameindex::kickstart_offers_for,
             commands::gameindex::place_kickstart,
+            commands::amiganet::amiganet_seed,
+            commands::amiganet::amiganet_networks_already_there,
             commands::artwork::artwork_defaults,
             commands::artwork::artwork_check_source,
             commands::artwork::artwork_dir,

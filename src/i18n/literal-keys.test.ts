@@ -399,6 +399,14 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // declared key against both catalogues and refusing one nothing claims,
     // and the Rust side refusing a recipe that shares a medium without
     // labelling its rows.
-    expect(dynamicCalls).toBe(131);
+    // 131 → 135 (SD-3 G14, the network panel): four, all of them patterns
+    // already on this list. Two read a `Phrase.key` off `networkBlocker` —
+    // the button's `title` and the sentence beside it, the same shape
+    // `buildBlocker` has — and `phrase-keys.test.ts` enumerates every one of
+    // that mapper's variants, which is the check this one cannot make. The
+    // other two are ternaries over two literal keys apiece (show/hide the
+    // passphrase, write/writing), which is what the sidebar toggle at
+    // \"43 → 45\" already does.
+    expect(dynamicCalls).toBe(135);
   });
 });
