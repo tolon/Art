@@ -224,6 +224,28 @@ ikisinin *eşit öncelikte* olduğunu söylediyse, asıl bildirilecek şey o uya
 
 ---
 
+## 8. Türkçe harfleri ekranda gör (ART-234)
+
+**Neden sende:** 3.2 ağaçların bugüne kadar Türkçe **katalogları** taşıyordu ve
+tek bir ISO-8859-9 **harfi** taşımıyordu — çeviri vardı, ş/ğ/ı/İ yoktu. Aynısı
+Yunanca, Lehçe ve Rusça için de geçerliydi. Artık sürümün kendi Installer
+betiğinin koyduğu yere, `SYS:Fonts`'a konuyor ve diskteki sıkıştırılmış
+hâlinden açılıyor. Sayılar tuttu; **görüntüyü ancak bir Amiga söyler.**
+
+**Hazır duruyor:** `E:\amiga\ProjeART\dist-32-fonts` — senin kendi
+ADF'lerinden, V40 ROM'unla, 0 reddetme, 4033 dosya.
+
+**Nasıl:** Ağacı WinUAE'de dizin birimi olarak bağla, aç, Locale tercihlerinden
+Türkçeyi seç ve yeniden başlat. Sonra bir pencere başlığına ya da bir menüye bak.
+
+**Tamam sayılır:** ş, ğ, ı, İ ekranda doğru görünüyor.
+
+**Bana söyle:** Harfler hâlâ bozuksa — o zaman font yerinde ama seçili değil
+demektir, ve eksik olan `Prefs/Presets/Font-TR.prefs`'tir: senin `Locale-TR`
+diskinde o dosya **yok** (ölçtüm, `Presets` boş), diğer üç dilde var.
+
+---
+
 ## Bilinen ve kapanmış olan — bunları tekrar denemene gerek yok
 
 - **AmigaOS 3.9 ağacı açılıyor**, ve gerçekten 3.9: `Workbench 45.1
