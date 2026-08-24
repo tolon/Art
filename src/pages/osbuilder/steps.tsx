@@ -23,6 +23,7 @@ import { AmigaInstallPanel } from "@/components/osbuilder/AmigaInstallPanel";
 import { CardBuilder } from "@/components/osbuilder/CardBuilder";
 import { OsInstall } from "@/components/osbuilder/OsInstall";
 import { PackagePanel } from "@/components/osbuilder/PackagePanel";
+import { VerifyAgainstCard } from "@/components/osbuilder/VerifyAgainstCard";
 import { VolumePreload } from "@/components/osbuilder/VolumePreload";
 
 /** What a step says when it has been opened without what it needs. */
@@ -146,6 +147,27 @@ export function StepKart() {
   return <CardBuilder />;
 }
 
+/**
+ * Preparing the volumes on a card — and then checking one.
+ *
+ * **ART-197 wave 3.** `VerifyAgainstCard` sat on the install step until
+ * 2026-08-24, which is where it was built and not where it belongs: it
+ * compares a distribution tree against **a volume that already exists**, so
+ * everything it needs is here and nothing it needs is there. On the install
+ * step it was a section asking for a card image on a screen whose whole job
+ * is to produce a folder, which is the "sections that do not belong on this
+ * screen" complaint in its own right.
+ *
+ * It carries its own tree across by reading `session.tree.root`, so a user who
+ * built a tree on the install step and came here to write it finds the field
+ * already pointing at it — the carry row 3 widened, doing the work that makes
+ * this move cost nothing.
+ */
 export function StepBirimler() {
-  return <VolumePreload />;
+  return (
+    <>
+      <VolumePreload />
+      <VerifyAgainstCard />
+    </>
+  );
 }

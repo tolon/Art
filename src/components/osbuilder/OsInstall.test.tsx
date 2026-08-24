@@ -386,7 +386,11 @@ describe("OsInstall renders past its headings", () => {
     ).toBeTruthy();
 
     expect(screen.getByRole("button", { name: i18n.t("osinstall.run.run") })).toBeTruthy();
-    expect(screen.getByRole("button", { name: i18n.t("osinstall.verify.run") })).toBeTruthy();
+    // **Verify is deliberately not here** (ART-197 wave 3). It compares a
+    // tree against a volume that already exists, so everything it needs is on
+    // the volumes step and nothing it needs is on this one. `steps.test.tsx`
+    // is where it is now checked for.
+    expect(screen.queryByRole("button", { name: i18n.t("osinstall.verify.run") })).toBeNull();
   });
 });
 
@@ -1320,19 +1324,17 @@ describe("the tree it builds is the tree the next steps get (ART-197)", () => {
     });
     render(<OsInstall />);
 
-    // `PackagePanel`, `AmigaInstallPanel` and `VerifyAgainstCard` each render
-    // the tree root through `Field`, as plain text beside their Browse button
-    // - so the path appears **three times**, once per panel, and that is the
-    // point: all three are reading the one session value. `findAllByText`,
-    // because `findByText` refuses a multiple match.
+    // `PackagePanel` and `AmigaInstallPanel` each render the tree root through
+    // `Field`, as plain text beside their Browse button - so the path appears
+    // **twice**, once per panel, and that is the point: both are reading the
+    // one session value. `findAllByText`, because `findByText` refuses a
+    // multiple match.
     //
-    // **It was two until 2026-08-24**, and the third is a real widening rather
-    // than an accident of the split. `VerifyAgainstCard` used to be filled
-    // only by `OsInstall`'s own result handler, so it knew about a tree this
-    // run had *built* and nothing about one the user had picked. Reading the
-    // session covers both, and covers a tree chosen on a step that does not
-    // exist yet - which is what wave 3 needs.
+    // It was briefly three, while `VerifyAgainstCard` still lived on this
+    // screen. Wave 3 moved that section to the volumes step, where the card it
+    // compares against actually is, and it reads the same session value there
+    // - which is what makes the move cost nothing.
     const shown = await screen.findAllByText("E:\\amiga\\picked-by-hand");
-    expect(shown.length).toBe(3);
+    expect(shown.length).toBe(2);
   });
 });
