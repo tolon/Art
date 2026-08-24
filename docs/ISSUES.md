@@ -440,7 +440,9 @@ and no password is bypassed; the payload is as encrypted as it ever was, and
 host-side placement is as impossible as it ever was. This entry therefore
 stays open as the reason a BoingBag's rows are refused on the host screen —
 `host_placement_block: "encrypted-payload"` is still correct and still
-shipped.
+shipped. What has changed is that the sentence ART tells the user now has an
+answer to give: the package installs, through the emulator, the way every
+established distribution builder installs one.
 
 **Re-researched 2026-08-25 at the owner's request, and the decision stands —
 with a better reason than the one recorded.** HstWB Installer's README says
@@ -472,10 +474,39 @@ Three routes were checked and none is one:
   in `boingbag-39-2.json`'s `_why_distinguished_by_repeats_the_member`; found
   again here and recorded so a third pass does not repeat it.
 
-No search was made for the password itself. The owner's decision forbids a
-bypass, so looking for one is not research. What has changed is that the sentence ART tells the user now has an
-answer to give: the package installs, through the emulator, the way every
-established distribution builder installs one.
+**And a decrypted payload would not be enough anyway — measured 2026-08-25,
+which settles a question that had only ever been reasoned about.** The owner
+asked whether an unencrypted copy, if somebody had uploaded one, would let ART
+place a BoingBag from the host. The package's own Installer script answers it.
+
+`BoingBag39-2.lha` carries one — `BoingBag3.9-2/Install`, 65 180 bytes,
+`$VER: Boing Bag 3.9-2 Install 45.13 (20.3.2002)`, plain text and readable
+without decrypting anything. **It does not place the payload's files.** Its own
+line is `(run (cat "C/Updater AmigaOS-Update ..." #target))`: it hands the
+whole payload to the 42 676-byte `C/Updater` binary with the target path, and
+that binary does both jobs — decrypts *and* decides where every file goes. The
+script's five `copyfiles` calls place none of the payload: two rename
+`Devs/AmigaOS ROM Update` inside the target, two put the `C/Installer` binary
+into `C` and `Utilities`, one handles an `Internet` drawer. Of roughly 121
+payload files, **zero** are placed by anything ART could read.
+
+`BoingBag39-1.lha` does not even have a script — `C/Updater` (25 588 bytes),
+its catalogs, the payload, and nothing that says where anything goes.
+
+So the placement logic lives in a 68k executable, which is HstWB's general
+sentence made specific. Holding every decrypted file, ART would still not know
+which goes where, which are conditional on the machine or the language, or
+which replace rather than skip — and **guessing where operating-system files
+go is this project's most expensive defect class.** ART reads Installer
+*scripts*; a BoingBag is delivered as a *program*.
+
+That is why the emulator route is not second best. It is the only route that
+knows the answer, it is built, and it works.
+
+No search was made for the password itself, and none for a decrypted
+re-upload. The owner's decision forbids a bypass; obtaining somebody else's is
+the same bypass with an extra step, and the measurement above says it would
+buy nothing.
 
 
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
