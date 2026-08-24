@@ -36,6 +36,8 @@ const detachMock = vi.hoisted(() => vi.fn());
 const artworkDirMock = vi.hoisted(() => vi.fn());
 const artworkForTitleMock = vi.hoisted(() => vi.fn());
 const dialogOpenMock = vi.hoisted(() => vi.fn());
+const offersMock = vi.hoisted(() => vi.fn());
+const placeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/artwork", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/artwork")>()),
@@ -52,6 +54,14 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: dialogOpenMock }));
 vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: (path: string) => `art://${path}`,
   invoke: vi.fn().mockResolvedValue(null),
+}));
+
+// ART-130: the offers section asks on mount whenever the title declares a
+// Kickstart and a ROM folder is remembered.
+vi.mock("@/lib/gameindex", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/gameindex")>()),
+  kickstartOffersFor: offersMock,
+  placeKickstart: placeMock,
 }));
 
 vi.mock("@/lib/launch", async (importOriginal) => ({
@@ -106,6 +116,8 @@ beforeEach(() => {
   attachMock.mockReset();
   detachMock.mockReset();
   dialogOpenMock.mockReset();
+  offersMock.mockReset().mockResolvedValue([]);
+  placeMock.mockReset();
 });
 
 afterEach(() => cleanup());
@@ -238,5 +250,177 @@ describe("a slow answer for the previous title cannot paint over this one", () =
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(picture()?.src).toContain("lotus.png");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ART-130: the Kickstart a title asks for
+// ---------------------------------------------------------------------------
+//
+// The loop's other end. G10 read what a slave declares; this is the screen
+// that says whether the user has it and offers to put it where WHDLoad looks.
+// **A proposal and never a copy** - the owner's decision, 2026-08-21 - so
+// every placement is its own button press.
+
+function withKickstart(entry: CatalogueEntry): CatalogueEntry {
+  return {
+    ...entry,
+    record: {
+      ...entry.record,
+      kickstart: {
+        value: {
+          image: "kick34005.A500",
+          size: 262144,
+          crc16: 0xabcd,
+          rom_version: null,
+          alternatives: [],
+        },
+        from: "whdload-slave",
+      },
+    },
+  } as CatalogueEntry;
+}
+
+function seedRomDirAndTree() {
+  useSettingsStore.setState({
+    loaded: true,
+    settings: {
+      ...DEFAULT_SETTINGS,
+      remembered: {
+        "launch.romDir": "E:\\roms",
+        "buildSession.tree": { root: "E:\\amiga\\dist-3.2", builtHere: true },
+      },
+    },
+  });
+}
+
+const SUPPLIED = {
+  outcome: "supplied" as const,
+  wanted: { name: "kick34005.A500", crc16: 0xabcd, size: 262144 },
+  by: { path: "E:\\roms\\kick13.rom", name: "Kickstart 1.3 (34.005)", sizeDisagrees: null },
+};
+
+describe("the Kickstart a title asks for (ART-130)", () => {
+  it("says nothing at all when the title declares no Kickstart", async () => {
+    seedRomDirAndTree();
+    renderPanel(entryFor("t1", "Turrican"));
+    await waitFor(() => expect(artworkForTitleMock).toHaveBeenCalled());
+    expect(offersMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("kickstart-offers")).toBeNull();
+  });
+
+  it("says nothing when no ROM folder has been chosen", async () => {
+    // Not "you do not have it" - ART has not looked, and those are different
+    // sentences.
+    useSettingsStore.setState({
+      loaded: true,
+      settings: { ...DEFAULT_SETTINGS, remembered: {} },
+    });
+    renderPanel(withKickstart(entryFor("t2", "Lotus")));
+    await waitFor(() => expect(artworkForTitleMock).toHaveBeenCalled());
+    expect(offersMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("kickstart-offers")).toBeNull();
+  });
+
+  it("names the ROM when the user already has it, and offers to place it", async () => {
+    seedRomDirAndTree();
+    offersMock.mockResolvedValue([SUPPLIED]);
+    renderPanel(withKickstart(entryFor("t3", "Lotus")));
+
+    const row = await screen.findByTestId("kickstart-offer");
+    expect(row.textContent).toContain("kick34005.A500");
+    expect(row.textContent).toContain("Kickstart 1.3 (34.005)");
+    expect(screen.getByRole("button", { name: /place it/i })).toBeTruthy();
+  });
+
+  it("hands the core the ROM path, the name the title asks for and the tree", async () => {
+    seedRomDirAndTree();
+    offersMock.mockResolvedValue([SUPPLIED]);
+    placeMock.mockResolvedValue({ outcome: "placed", to: "E:\\amiga\\dist-3.2\\Devs\\Kickstarts\\kick34005.A500", bytes: 262144 });
+    renderPanel(withKickstart(entryFor("t4", "Lotus")));
+
+    await screen.findByTestId("kickstart-offer");
+    await userEvent.click(screen.getByRole("button", { name: /place it/i }));
+
+    await waitFor(() => expect(placeMock).toHaveBeenCalled());
+    expect(placeMock).toHaveBeenCalledWith(
+      "E:\\roms\\kick13.rom",
+      "kick34005.A500",
+      "E:\\amiga\\dist-3.2"
+    );
+  });
+
+  /// **Three endings, three sentences.** "Refused" is not "failed" and
+  /// "already there" is neither - collapsing them is this project's own named
+  /// defect class.
+  it("says which of the three things happened", async () => {
+    seedRomDirAndTree();
+    offersMock.mockResolvedValue([SUPPLIED]);
+
+    for (const [outcome, expected] of [
+      ["placed", "Placed at"],
+      ["already-there", "Already there, unchanged"],
+      ["occupied", "Refused"],
+    ] as const) {
+      placeMock.mockResolvedValue({ outcome, to: "E:\\dist\\Devs\\Kickstarts\\k", bytes: 1 });
+      const { unmount } = renderPanel(withKickstart(entryFor("t5", "Lotus")));
+      await screen.findByTestId("kickstart-offer");
+      await userEvent.click(screen.getByRole("button", { name: /place it/i }));
+
+      const said = await screen.findByTestId("kickstart-placed");
+      expect(said.textContent).toContain(expected);
+      // And they are not each other.
+      if (outcome !== "occupied") expect(said.textContent).not.toContain("Refused");
+      unmount();
+    }
+  });
+
+  /// A file the user **has**. Saying "missing" would send them looking for
+  /// something already on their disk.
+  it("distinguishes a ROM ART cannot read from one that is not there", async () => {
+    seedRomDirAndTree();
+    offersMock.mockResolvedValue([
+      {
+        outcome: "encrypted",
+        wanted: { name: "kick34005.A500", crc16: 0xabcd, size: null },
+        candidates: ["E:\\Amiga Forever\\a500.rom"],
+      },
+    ]);
+    renderPanel(withKickstart(entryFor("t6", "Lotus")));
+
+    const row = await screen.findByTestId("kickstart-offer");
+    expect(row.textContent).toContain("rom.key");
+    expect(row.textContent).not.toContain("not in your ROM folder");
+    // Nothing to place: ART cannot read it.
+    expect(screen.queryByRole("button", { name: /place it/i })).toBeNull();
+  });
+
+  /// Without a system volume there is nowhere to put it, and a button that
+  /// exists to fail is what section 46 and section 89 both forbid.
+  it("asks for a system volume instead of offering a button that cannot work", async () => {
+    useSettingsStore.setState({
+      loaded: true,
+      settings: { ...DEFAULT_SETTINGS, remembered: { "launch.romDir": "E:\\roms" } },
+    });
+    offersMock.mockResolvedValue([SUPPLIED]);
+    renderPanel(withKickstart(entryFor("t7", "Lotus")));
+
+    const row = await screen.findByTestId("kickstart-offer");
+    expect(screen.queryByRole("button", { name: /place it/i })).toBeNull();
+    expect(row.textContent).toContain("system volume");
+  });
+
+  it("renders no raw key and no unrendered interpolation", async () => {
+    seedRomDirAndTree();
+    offersMock.mockResolvedValue([
+      SUPPLIED,
+      { outcome: "not-here", wanted: { name: "kick40068.A1200", crc16: 1, size: null } },
+      { outcome: "unmatchable", wanted: { name: "a list", crc16: null, size: null } },
+    ]);
+    renderPanel(withKickstart(entryFor("t8", "Lotus")));
+
+    const section = await screen.findByTestId("kickstart-offers");
+    expect(section.textContent).not.toMatch(/collection\.detail\.kickstart/);
+    expect(section.textContent).not.toMatch(/\{\{[^}]+\}\}/);
   });
 });

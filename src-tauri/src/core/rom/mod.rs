@@ -25,6 +25,7 @@
 
 pub mod offer;
 pub mod pairing;
+pub mod place;
 pub mod remus;
 
 use serde::{Deserialize, Serialize};

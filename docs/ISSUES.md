@@ -515,7 +515,7 @@ answer to give: the package installs, through the emulator, the way every
 established distribution builder installs one.
 
 
-**ART-130** 🔵 **A game can name the Kickstart it needs, and nothing offers to
+**ART-130** 🔵 ✅ **A game can name the Kickstart it needs, and nothing offers to
 supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
 built by G10, this is the half that was deliberately left out*
 `src-tauri/src/core/gameindex/`, `src-tauri/src/core/rom/`, ROM Manager ·
@@ -583,7 +583,33 @@ your collection — place it?"*, never as a silent copy.
 > `None` would have silently answered any title whose slave declares a checksum
 > of zero. Both now covered, both fell on the re-run.
 >
-> **Still open: the placing step and its screen.**
+> **The placing step and its screen landed the same day.**
+> `core/rom/place.rs` carries out **one agreed placement** — not a title's
+> worth, because a call that took a title and did the right thing would be the
+> silent copy the decision above rules out.
+>
+> **The name comes out of a downloaded binary**, so it goes through `safe_join`
+> like every other untrusted name: a slave declaring
+> `..\..\Windows\System32\kernel32.dll` is refused by name rather than by
+> luck. **A licensed ROM is written decoded**, because WHDLoad cannot read an
+> Amiga Forever file — copying it verbatim would produce a card that looks
+> right and does not work, which is the confident-wrong shape in the place it
+> is hardest to notice.
+>
+> Three endings again, and they stay apart in the operation log too:
+> `Placed`, `AlreadyThere` (byte-for-byte identical — doing nothing and saying
+> so is right), and `Occupied`, which is **refused rather than replaced**
+> (`SAFE_CREATE`: the ROM already there is somebody's).
+>
+> The screen is `TitleDetail.tsx`, beside the sentence that already said what
+> the title needs. Without a system volume it **asks for one instead of
+> offering a button that cannot work** (§46, §89).
+>
+> *Tests:* 7 in `place.rs`, 8 on the screen. Eleven mutations, ten fell; the
+> survivor is disclosed in the source — a redundant `treeRoot` guard inside
+> `placeOne` that no test can reach because the button is not rendered without
+> one, kept because the next caller may not guard and what is behind it writes
+> to disk.
 
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,

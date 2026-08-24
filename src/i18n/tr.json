@@ -1649,6 +1649,21 @@
           "fileMissing": "'{{path}}' artık yok.",
           "nothingToMount": "Bu başlık takılacak bir disk belirtmiyor — WinUAE'nin yükleyeceği hiçbir şey yok."
         }
+      },
+      "kickstart": {
+        "heading": "Bu başlığın istediği Kickstart",
+        "have": "sizde var — {{rom}}",
+        "sizeDiffers": "sizdeki kopya {{bytes}} bayt",
+        "place": "Yerleştir",
+        "needsTree": "önce OS Builder'da bir sistem birimi seçin",
+        "encrypted": "sizde olabilir: buradaki {{count}} Amiga Forever ROM'u ART'ın okuyabilmesi için rom.key istiyor",
+        "notHere": "ROM klasörünüzde yok",
+        "unmatchable": "başlık tek bir imge değil bir liste veriyor, ART eşleştiremez",
+        "result": {
+          "placed": "{{to}} konumuna yerleştirildi.",
+          "occupied": "Reddedildi: {{to}} konumunda başka bir ROM var. Hiçbir şey yazılmadı.",
+          "alreadyThere": "Zaten orada, değiştirilmedi — {{to}}."
+        }
       }
     },
     "rebind": {

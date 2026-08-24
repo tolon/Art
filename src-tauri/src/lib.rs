@@ -194,6 +194,7 @@ pub fn run() {
             commands::gameindex::name_suggestions,
             commands::gameindex::rename_title_file,
             commands::gameindex::kickstart_offers_for,
+            commands::gameindex::place_kickstart,
             commands::artwork::artwork_defaults,
             commands::artwork::artwork_check_source,
             commands::artwork::artwork_dir,

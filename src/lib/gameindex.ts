@@ -307,3 +307,71 @@ export function mediaKind(media: Media): "floppies" | "hardfile" | "whdload" {
       return "whdload";
   }
 }
+
+// ---------------------------------------------------------------------------
+// The Kickstart a title asks for (ART-130)
+// ---------------------------------------------------------------------------
+
+/** One Kickstart image a title will accept. */
+export interface WantedImage {
+  /** What WHDLoad looks for in `DEVS:Kickstarts/`, e.g. `kick34005.A500`. */
+  name: string;
+  /** WHDLoad's CRC-16 over the image, or `null` for the `$ffff` sentinel. */
+  crc16: number | null;
+  size: number | null;
+}
+
+/** Which ROM in the collection answers a wanted image. */
+export interface SuppliedBy {
+  path: string;
+  name: string;
+  /** Present and different from the wanted size: reported, never resolved. */
+  sizeDisagrees: number | null;
+}
+
+/**
+ * What ART can say about one image a title asks for.
+ *
+ * **Four endings, and they stay apart.** `encrypted` in particular is a file
+ * the user *has* — a licensed Amiga Forever ROM whose `rom.key` is not beside
+ * it — and reporting it as missing would send them looking for something
+ * already on their disk.
+ */
+export type KickstartOffer =
+  | { outcome: "supplied"; wanted: WantedImage; by: SuppliedBy }
+  | { outcome: "encrypted"; wanted: WantedImage; candidates: string[] }
+  | { outcome: "not-here"; wanted: WantedImage }
+  | { outcome: "unmatchable"; wanted: WantedImage };
+
+/**
+ * Which of the images this title will accept are in `romFolder`.
+ *
+ * Read-only, and it places nothing: ART offers, and the user chooses (the
+ * owner's decision, 2026-08-21).
+ */
+export async function kickstartOffersFor(
+  need: KickstartNeed,
+  romFolder: string
+): Promise<KickstartOffer[]> {
+  return invoke<KickstartOffer[]>("kickstart_offers_for", { need, romFolder });
+}
+
+/** What placing one did. Three endings, kept apart. */
+export type PlaceOutcome =
+  | { outcome: "placed"; to: string; bytes: number }
+  | { outcome: "already-there"; to: string }
+  | { outcome: "occupied"; to: string };
+
+/**
+ * Put one agreed Kickstart into a tree's `Devs/Kickstarts`.
+ *
+ * **One image, never a title's worth.** A call that took a title and did the
+ * right thing would be the silent copy the owner's decision rules out.
+ */
+export async function placeKickstart(
+  from: string,
+  asName: string,
+  tree: string
+): Promise<PlaceOutcome> {
+  return invoke<PlaceOutcome>("place_kickstart", { from, asName, tree });
+}

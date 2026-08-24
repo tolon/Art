@@ -12,7 +12,13 @@ import {
   isSupportedPicture,
   type ArtKind,
 } from "@/lib/artwork";
-import type { CatalogueEntry } from "@/lib/gameindex";
+import {
+  kickstartOffersFor,
+  placeKickstart,
+  type CatalogueEntry,
+  type KickstartOffer,
+  type PlaceOutcome,
+} from "@/lib/gameindex";
 import {
   DEFAULT_WHDLOAD_FAST_RAM_MB,
   isMachine,
@@ -32,6 +38,7 @@ import { isFlag, isOneOf, isText, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { usePowerMode } from "@/lib/uxmode";
+import { useBuildSession } from "@/lib/useBuildSession";
 import { errorText } from "@/lib/errorText";
 
 type MachineChoice = "auto" | Machine;
@@ -141,6 +148,62 @@ export function TitleDetail({
   // fixed keys rather than per record id, and shown here because this is the
   // only screen with anywhere to put them.
   const [romDir, setRomDir] = useRemembered<string>("launch.romDir", isText, "");
+
+  /**
+   * **What this title asks for, and whether the user has it** (ART-130).
+   *
+   * Asked whenever the title declares a Kickstart and a ROM folder is set —
+   * both of which the screen already knows. `[]` means "nothing to say", never
+   * "nothing found": a lookup that could not run renders no section rather
+   * than an accusation about the folder, the rule `useTreeCheck` follows.
+   */
+  const [offers, setOffers] = useState<KickstartOffer[]>([]);
+  const [placing, setPlacing] = useState<string | null>(null);
+  const [placed, setPlaced] = useState<PlaceOutcome | null>(null);
+  /** A refusal from the core, rendered through `errorText` like every other
+   *  Rust sentence (ART-060). Its own state: it is about the placing, and
+   *  folding it into the artwork or launch error would put it under the wrong
+   *  heading. */
+  const [placeError, setPlaceError] = useState<string | null>(null);
+  const treeRoot = useBuildSession().session.tree.root;
+  const need = record.kickstart?.value ?? null;
+
+  useEffect(() => {
+    if (!need || !romDir.trim()) {
+      setOffers([]);
+      return;
+    }
+    let cancelled = false;
+    kickstartOffersFor(need, romDir)
+      .then((found) => {
+        if (!cancelled) setOffers(found);
+      })
+      .catch(() => {
+        if (!cancelled) setOffers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [need, romDir]);
+
+  async function placeOne(from: string, asName: string) {
+    // **A second lock on a door with one key, and disclosed as such**: the
+    // button is not rendered without a `treeRoot`, so no test can reach this
+    // line and a mutation removing it survives. It stays because the next
+    // caller may not guard, and because what is behind it writes to disk.
+    if (!treeRoot) return;
+    setPlacing(asName);
+    setPlaced(null);
+    setPlaceError(null);
+    try {
+      setPlaced(await placeKickstart(from, asName, treeRoot));
+    } catch (e) {
+      setPlaced(null);
+      setPlaceError(errorText(t, e));
+    } finally {
+      setPlacing(null);
+    }
+  }
   const [defaultMachine, setDefaultMachine] = useRemembered<Machine>(
     "launch.defaultMachine",
     isMachine,
@@ -458,6 +521,102 @@ export function TitleDetail({
         <div className="faint" style={{ fontSize: 12 }}>
           {t("gameindex.kickstartNeeded", { image: record.kickstart.value.image })}
         </div>
+      )}
+
+      {/* **ART-130: the loop's other end.** The title says what it needs; this
+          says whether the user already has it, and offers to put it where
+          WHDLoad looks. **A proposal and never a copy** — the owner's own
+          decision, 2026-08-21 — so every placement is its own button press. */}
+      {offers.length > 0 && (
+        <section data-testid="kickstart-offers" style={{ marginTop: 12 }}>
+          <h4 style={{ fontSize: 12, margin: "0 0 6px" }}>
+            {t("collection.detail.kickstart.heading")}
+          </h4>
+          {offers.map((offer, at) => (
+            <div
+              key={`${offer.wanted.name}-${at}`}
+              data-testid="kickstart-offer"
+              style={{ fontSize: 11, marginBottom: 6 }}
+            >
+              <code>{offer.wanted.name}</code>{" "}
+              {offer.outcome === "supplied" && (
+                <>
+                  <span className="badge badge-ok" style={{ fontSize: 10 }}>
+                    {t("collection.detail.kickstart.have", { rom: offer.by.name })}
+                  </span>
+                  {offer.by.sizeDisagrees !== null && (
+                    <span className="badge badge-warn" style={{ fontSize: 10, marginLeft: 4 }}>
+                      {t("collection.detail.kickstart.sizeDiffers", {
+                        bytes: offer.by.sizeDisagrees,
+                      })}
+                    </span>
+                  )}
+                  {treeRoot ? (
+                    <button
+                      className="btn"
+                      style={{ fontSize: 10, marginLeft: 6 }}
+                      disabled={placing !== null}
+                      onClick={() => void placeOne(offer.by.path, offer.wanted.name)}
+                    >
+                      {t("collection.detail.kickstart.place")}
+                    </button>
+                  ) : (
+                    <span className="faint" style={{ marginLeft: 6 }}>
+                      {t("collection.detail.kickstart.needsTree")}
+                    </span>
+                  )}
+                </>
+              )}
+              {/* A file the user **has** and ART cannot read. Saying "missing"
+                  would send them looking for something already on their disk. */}
+              {offer.outcome === "encrypted" && (
+                <span className="badge badge-warn" style={{ fontSize: 10 }}>
+                  {t("collection.detail.kickstart.encrypted", {
+                    count: offer.candidates.length,
+                  })}
+                </span>
+              )}
+              {offer.outcome === "not-here" && (
+                <span className="faint">{t("collection.detail.kickstart.notHere")}</span>
+              )}
+              {/* The `$ffff` sentinel: a slave saying "the name field is a
+                  list", not a checksum. "You do not have it" would be a claim
+                  about a ROM that does not exist (ART-137). */}
+              {offer.outcome === "unmatchable" && (
+                <span className="faint">{t("collection.detail.kickstart.unmatchable")}</span>
+              )}
+            </div>
+          ))}
+          {placeError && (
+            <p
+              data-testid="kickstart-place-error"
+              className="badge badge-err"
+              style={{ display: "block", fontSize: 11, padding: "4px 8px" }}
+            >
+              {placeError}
+            </p>
+          )}
+          {placed && (
+            <p
+              data-testid="kickstart-placed"
+              className={placed.outcome === "placed" ? "badge badge-ok" : "badge badge-warn"}
+              style={{ display: "block", fontSize: 11, padding: "4px 8px" }}
+            >
+              {/* Three endings, three sentences. "Refused" is not "failed" and
+                  "already there" is neither.
+                  Written out rather than built from `placed.outcome`: a
+                  template-literal key is one `phrase-keys.test.ts` cannot
+                  check, and `literal-keys.test.ts` counts them for exactly
+                  that reason. */}
+              {placed.outcome === "placed" &&
+                t("collection.detail.kickstart.result.placed", { to: placed.to })}
+              {placed.outcome === "already-there" &&
+                t("collection.detail.kickstart.result.alreadyThere", { to: placed.to })}
+              {placed.outcome === "occupied" &&
+                t("collection.detail.kickstart.result.occupied", { to: placed.to })}
+            </p>
+          )}
+        </section>
       )}
 
       {disks.length > 0 && (
