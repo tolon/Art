@@ -20,6 +20,7 @@
 import { useCallback, useMemo } from "react";
 
 import {
+  CARD_SPEC,
   COMPONENT_SPEC,
   DEFAULT_MEDIA,
   DEFAULT_PACKAGES,
@@ -30,11 +31,13 @@ import {
   SESSION_KEYS,
   TREE_SPEC,
   isBuildKind,
+  seedCardImage,
   seedRom,
   seedTreeRoot,
   seededComponents,
   type BuildKind,
   type BuildSession,
+  type CardChoice,
   type ComponentChoice,
   type MediaChoice,
   type PackageChoice,
@@ -54,6 +57,9 @@ export interface BuildSessionApi {
   setTree: (change: Partial<TreeChoice>) => void;
   setComponents: (change: Partial<ComponentChoice>) => void;
   setPackages: (change: Partial<PackageChoice>) => void;
+  /** The card this build writes and then prepares — one value for both steps
+   *  (ART-197's remaining duplicate). */
+  setCard: (image: string | null) => void;
 }
 
 export function useBuildSession(): BuildSessionApi {
@@ -108,11 +114,22 @@ export function useBuildSession(): BuildSessionApi {
     }
   );
 
+  // ART-197's remaining duplicate: the card builder's destination and the
+  // volumes step's image were two keys for one card. `seedCardImage` walks
+  // both, hand-picked first.
+  const [card, setCardShape] = useRememberedShape<CardChoice>(SESSION_KEYS.card, CARD_SPEC, {
+    image: seedCardImage(bag),
+  });
+
   const setRom = useCallback((path: string | null) => setRomShape({ path }), [setRomShape]);
+  const setCard = useCallback(
+    (image: string | null) => setCardShape({ image }),
+    [setCardShape]
+  );
 
   const session = useMemo<BuildSession>(
-    () => ({ kind, media, rom, release, tree, components, packages }),
-    [kind, media, rom, release, tree, components, packages]
+    () => ({ kind, media, rom, release, tree, components, packages, card }),
+    [kind, media, rom, release, tree, components, packages, card]
   );
 
   return {
@@ -124,5 +141,6 @@ export function useBuildSession(): BuildSessionApi {
     setTree,
     setComponents,
     setPackages,
+    setCard,
   };
 }

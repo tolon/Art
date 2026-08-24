@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_COMPONENTS,
+  DEFAULT_CARD,
   DEFAULT_MEDIA,
   DEFAULT_PACKAGES,
   type BuildSession,
@@ -17,6 +18,7 @@ function sessionWith(over: Partial<BuildSession> = {}): BuildSession {
     tree: { root: null, builtHere: false },
     components: DEFAULT_COMPONENTS,
     packages: DEFAULT_PACKAGES,
+    card: DEFAULT_CARD,
     ...over,
   };
 }

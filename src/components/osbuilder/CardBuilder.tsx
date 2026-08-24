@@ -88,7 +88,7 @@ const LINES: Emu68Line[] = ["stable", "alpha11"];
 
 export function CardBuilder() {
   const { t } = useTranslation();
-  const { session, setRom } = useBuildSession();
+  const { session, setRom, setCard } = useBuildSession();
   const powerMode = usePowerMode();
 
   // --- what the user chose, remembered ------------------------------------
@@ -112,11 +112,22 @@ export function CardBuilder() {
    */
   const kickstart = session.rom.path;
   const setKickstart = setRom;
-  const [dest, setDest] = useRemembered<string | null>(
-    "cardBuilder.dest",
-    isTextOrNothing,
-    null
-  );
+  /**
+   * **One card for the build** (ART-197's remaining duplicate, wave 2).
+   *
+   * This panel kept its own remembered key until 2026-08-24, so the image ART
+   * *wrote* and the image the volumes step *prepared* were two values joined
+   * by nothing. That is ART-197's own defect in its second instance, and its
+   * own sentence still covers it: a user who has just watched ART write
+   * something should not be asked to go and find it.
+   *
+   * The pair the Kickstart field above already is, in the other direction —
+   * and changing it here changes it for the build, which the hint says out
+   * loud, because a carry the user cannot see is the same defect as one that
+   * never happened.
+   */
+  const dest = session.card.image;
+  const setDest = setCard;
   const [cardGb, setCardGb] = useRemembered(
     "cardBuilder.cardGb",
     isWholeNumberBetween(2, 2048),

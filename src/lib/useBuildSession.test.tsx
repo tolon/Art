@@ -31,11 +31,13 @@ function seed(remembered: Record<string, unknown>) {
 }
 
 function Probe() {
-  const { session, setTree, setRom } = useBuildSession();
+  const { session, setTree, setRom, setCard } = useBuildSession();
   return (
     <div>
       <span data-testid="rom">{session.rom.path ?? "(none)"}</span>
       <button onClick={() => setRom("E:\\roms\\chosen.rom")}>choose rom</button>
+      <span data-testid="card">{session.card.image ?? "(none)"}</span>
+      <button onClick={() => setCard("E:\\amiga\\built.img")}>write card</button>
       <span data-testid="root">{session.tree.root ?? "(none)"}</span>
       <span data-testid="builtHere">{String(session.tree.builtHere)}</span>
       <span data-testid="chosen">{session.components.chosen.join(",")}</span>
@@ -50,7 +52,12 @@ function Probe() {
 /** A second panel. Nothing connects it to `Probe` but the session itself. */
 function OtherPanel() {
   const { session } = useBuildSession();
-  return <span data-testid="other-rom">{session.rom.path ?? "(none)"}</span>;
+  return (
+    <>
+      <span data-testid="other-rom">{session.rom.path ?? "(none)"}</span>
+      <span data-testid="other-card">{session.card.image ?? "(none)"}</span>
+    </>
+  );
 }
 
 afterEach(() => {
@@ -161,5 +168,45 @@ describe("one Kickstart for the build (ART-197's fourth row)", () => {
     seed({ "cardBuilder.kickstart": "E:\\roms\\kick47.rom" });
     render(<Probe />);
     expect(screen.getByTestId("rom").textContent).toBe("E:\\roms\\kick47.rom");
+  });
+});
+
+describe("one card for the build (ART-197's remaining duplicate)", () => {
+  /// **The defect, in one assertion.** The card builder wrote an image and the
+  /// volumes step asked the user to go and find it. Writing it in one panel
+  /// now shows it in the other, with nothing wired between them.
+  it("a card written in one panel is the card the next panel already has", async () => {
+    seed({});
+    render(
+      <>
+        <Probe />
+        <OtherPanel />
+      </>
+    );
+    expect(screen.getByTestId("other-card").textContent).toBe("(none)");
+
+    await userEvent.click(screen.getByText("write card"));
+
+    expect(screen.getByTestId("card").textContent).toBe("E:\\amiga\\built.img");
+    expect(screen.getByTestId("other-card").textContent).toBe("E:\\amiga\\built.img");
+  });
+
+  /// The migration ART-197 is actually about: this user never picked a card on
+  /// the volumes step, because nothing ever told them they had to.
+  it("hands the volumes step the image the card builder last wrote", () => {
+    seed({ "cardBuilder.dest": "E:\\amiga\\card.img" });
+    render(<Probe />);
+    expect(screen.getByTestId("card").textContent).toBe("E:\\amiga\\card.img");
+  });
+
+  /// And the other direction, which the order exists to protect: a card
+  /// somebody went and chose is not moved by this.
+  it("leaves a card the user picked by hand exactly where they put it", () => {
+    seed({
+      "cardBuilder.dest": "E:\\amiga\\card.img",
+      "preload.image": "E:\\amiga\\somewhere-else.img",
+    });
+    render(<Probe />);
+    expect(screen.getByTestId("card").textContent).toBe("E:\\amiga\\somewhere-else.img");
   });
 });

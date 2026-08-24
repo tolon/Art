@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { seedRom, seedTreeRoot, seededComponents, SESSION_KEYS } from "./buildSession";
+import {
+  seedCardImage,
+  seedRom,
+  seedTreeRoot,
+  seededComponents,
+  SESSION_KEYS,
+} from "./buildSession";
 
 describe("seedTreeRoot", () => {
   it("prefers the session's own key once it exists", () => {
@@ -134,5 +140,56 @@ describe("seedRom", () => {
 
   it("nothing chosen anywhere is null, not an empty string", () => {
     expect(seedRom({})).toBeNull();
+  });
+});
+
+describe("seedCardImage", () => {
+  /// ART-197's remaining duplicate. The card builder remembered where it was
+  /// about to *write* an image and the volumes step remembered which image it
+  /// was about to *prepare* — two keys for one card, so a user who had just
+  /// watched ART lay out a 32 GB image was asked to go and find it.
+  it("prefers the session's own key once it exists", () => {
+    const bag = {
+      [SESSION_KEYS.card]: { image: "E:\amiga\new.img" },
+      "preload.image": "E:\amiga\picked.img",
+      "cardBuilder.dest": "E:\amiga\written.img",
+    };
+    expect(seedCardImage(bag)).toBe("E:\amiga\new.img");
+  });
+
+  /// **The hand-made pick wins, and the order is the point.** `preload.image`
+  /// is a card somebody went and chose; moving a setting is still changing it,
+  /// which the remembered-settings rule forbids outright. `seedTreeRoot` takes
+  /// the same order for the same reason.
+  it("takes the card the user picked over the one ART wrote", () => {
+    const bag = {
+      "preload.image": "E:\amiga\picked.img",
+      "cardBuilder.dest": "E:\amiga\written.img",
+    };
+    expect(seedCardImage(bag)).toBe("E:\amiga\picked.img");
+  });
+
+  /// **The one ART-197 is actually about.** This user never picked a card on
+  /// the volumes step, because nothing ever told them they had to — they
+  /// watched ART write one and expected the next step to know.
+  it("falls back to the image the card builder last wrote", () => {
+    expect(seedCardImage({ "cardBuilder.dest": "E:\amiga\written.img" })).toBe(
+      "E:\amiga\written.img"
+    );
+  });
+
+  it("nothing chosen anywhere is null, not an empty string", () => {
+    expect(seedCardImage({})).toBeNull();
+  });
+
+  /// A hand-edited or stale settings file must fall back to the default
+  /// rather than putting a bad value on screen — `recall`'s own rule, applied
+  /// to the seed that feeds it.
+  it("a session key holding the wrong shape falls through to the legacy keys", () => {
+    const bag = {
+      [SESSION_KEYS.card]: { image: 42 },
+      "cardBuilder.dest": "E:\amiga\written.img",
+    };
+    expect(seedCardImage(bag)).toBe("E:\amiga\written.img");
   });
 });

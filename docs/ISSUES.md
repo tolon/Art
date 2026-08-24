@@ -1836,7 +1836,14 @@ test is worth its own round rather than a hurried one here.
 
 **Still open from ART-197's table**, and this is wave 2's remainder: the card
 image (`cardBuilder.dest` → `preload.image`) and the per-partition content
-folders. Splitting `OsInstall.tsx` is on the work list too and has no
+folders.
+
+> **The card image closed, 2026-08-24.** One `session.card.image`, seeded by
+> `seedCardImage`. The order is the migration and is `seedTreeRoot`'s: the
+> hand-picked `preload.image` outranks the ART-written `cardBuilder.dest`,
+> because moving a setting is still changing one. Both legacy keys are read
+> once, never written again, never deleted. 8 tests; five mutations, five fell.
+> **The per-partition content folders are still open**, and so is wave 3. Splitting `OsInstall.tsx` is on the work list too and has no
 user-visible value; it should be last.
 
 **ART-222** 🟠 ✅ **A different disc of the same name built silently while

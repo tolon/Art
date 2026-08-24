@@ -69,6 +69,24 @@ export interface PackageChoice {
 }
 
 /**
+ * The card this build writes and then prepares.
+ *
+ * **ART-197's remaining duplicate.** The card builder remembered where it was
+ * about to *create* an image (`cardBuilder.dest`); the volumes step remembered
+ * which image it was about to *prepare* (`preload.image`). Two keys joined by
+ * nothing — and in a build they are one card: ART writes it, then puts volumes
+ * on it. That is ART-197's own defect in its second instance, and its own
+ * words for it still apply: a user who has just watched ART write something
+ * should not be asked to go and find it.
+ *
+ * One field, not two. "Where it goes" and "which one to prepare" are the same
+ * question asked at two moments, exactly as the three Kickstart fields were.
+ */
+export interface CardChoice {
+  image: string | null;
+}
+
+/**
  * One build, as the steps see it.
  *
  * Wave 1 carries what wave 1 wires. `amigaInstall`, `card` and `output` join
@@ -83,6 +101,7 @@ export interface BuildSession {
   tree: TreeChoice;
   components: ComponentChoice;
   packages: PackageChoice;
+  card: CardChoice;
 }
 
 /** Where each section persists inside `settings.remembered`. */
@@ -93,6 +112,7 @@ export const SESSION_KEYS = {
   release: "buildSession.release",
   tree: "buildSession.tree",
   packages: "buildSession.packages",
+  card: "buildSession.card",
   /** Per release, for the reason `rememberedComponentKey` exists: a component
    *  id means something only inside the recipe that declares it. */
   components: (release: InstallRelease): string => `buildSession.components.${release}`,
@@ -121,6 +141,10 @@ export const LEGACY_KEYS = {
   amigaKickstart: "amigaInstall.kickstart",
   chosen: "osinstall.chosen",
   excludedConditional: "osinstall.excludedConditional",
+  /** Where the card builder wrote an image, before wave 2 made it one value. */
+  cardDest: "cardBuilder.dest",
+  /** Which image the volumes step was preparing, likewise. */
+  preloadImage: "preload.image",
 } as const;
 
 export function isBuildKind(value: unknown): value is BuildKind {
@@ -159,10 +183,15 @@ export const PACKAGE_SPEC: { [K in keyof PackageChoice]: Guard<PackageChoice[K]>
 
 export const ROM_SPEC: { path: Guard<string | null> } = { path: isTextOrNothing };
 
+export const CARD_SPEC: { [K in keyof CardChoice]: Guard<CardChoice[K]> } = {
+  image: isTextOrNothing,
+};
+
 export const DEFAULT_TREE: TreeChoice = { root: null, builtHere: false };
 export const DEFAULT_MEDIA: MediaChoice = { folder: null, reuseScan: true };
 export const DEFAULT_COMPONENTS: ComponentChoice = { chosen: [], excludedConditional: [] };
 export const DEFAULT_PACKAGES: PackageChoice = { folder: null, chosen: [] };
+export const DEFAULT_CARD: CardChoice = { image: null };
 
 function bagOf(store: unknown): Record<string, unknown> {
   return typeof store === "object" && store !== null && !Array.isArray(store)
@@ -231,6 +260,26 @@ export function seedRom(store: unknown): string | null {
     textAt(bag, LEGACY_KEYS.cardKickstart) ??
     textAt(bag, LEGACY_KEYS.amigaKickstart)
   );
+}
+
+/**
+ * The card this session starts on, from whichever key the user's history has.
+ *
+ * **The order is the migration, and it is the same order `seedTreeRoot` uses
+ * for the same reason.** `preload.image` is a card the user went and *picked*,
+ * and moving a setting is still changing it — the remembered-settings rule
+ * forbids that, so a hand-made pick wins. `cardBuilder.dest` is where ART last
+ * wrote one, which is ART-197's own user: they never picked, because nothing
+ * ever told them they had to.
+ *
+ * Read once, never written again and never deleted, so a rollback still finds
+ * them.
+ */
+export function seedCardImage(store: unknown): string | null {
+  const bag = bagOf(store);
+  const held = bagOf(bag[SESSION_KEYS.card]);
+  if (isText(held.image)) return held.image;
+  return textAt(bag, LEGACY_KEYS.preloadImage) ?? textAt(bag, LEGACY_KEYS.cardDest);
 }
 
 export function seededComponents(store: unknown, release: InstallRelease): ComponentChoice {
