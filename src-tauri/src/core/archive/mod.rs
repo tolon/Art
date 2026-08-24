@@ -22,6 +22,7 @@
 //!                  files on disk
 //! ```
 
+pub mod compress;
 pub mod extract;
 pub mod lha;
 pub mod sevenz;

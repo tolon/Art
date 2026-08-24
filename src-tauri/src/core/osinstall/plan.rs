@@ -120,6 +120,7 @@ use super::scan::{
 use super::scan_cache::ScanCache;
 use super::source::MediaSource;
 use super::{Component, Condition, Recipe, RefusalReason, RuleKind};
+use crate::core::archive::compress;
 use crate::core::error::{CoreError, CoreResult};
 
 /// What a planning decision needs to know about the paired Kickstart.
@@ -197,7 +198,23 @@ pub struct PlanItem {
     /// Where it goes in the tree, `/`-separated.
     pub to: String,
     pub is_dir: bool,
+    /// What the **medium** holds, which for a compressed entry is not what
+    /// gets written. See [`PlanItem::decompress`].
     pub bytes: u64,
+    /// Whether these bytes are a `compress`-format `.Z` stream that `apply`
+    /// must expand on the way in (ART-228).
+    ///
+    /// **The plan cannot predict the size this produces.** A `.Z` stream
+    /// carries no expanded length, so the only way to know it is to expand
+    /// it — and `plan()` runs live while the user ticks boxes, so reading and
+    /// decompressing three thousand files to answer a preview would be paid
+    /// for on every keystroke. So [`bytes`](Self::bytes) stays the medium's
+    /// own figure, `total_bytes` with it, and the two stop being equal to
+    /// what `apply` writes exactly when a tree carries compressed content.
+    /// That is a real loss — ART-156 established that equality — and it is
+    /// recorded here rather than papered over, because the alternative was to
+    /// make the preview slow enough that nobody uses it.
+    pub decompress: bool,
 }
 
 /// What a medium looked like when the plan was made.
@@ -818,13 +835,22 @@ pub(crate) fn expand_rules(
                 });
             }
             RuleKind::File => {
+                // A `File` rule names its own destination, so a recipe that
+                // points at a `.Z` and asks for the suffixed name gets it —
+                // deliberately. Nothing shipped does; if one ever should, it
+                // says so by writing the name it wants.
+                let compressed = compress::is_compressed_name(&rule.from);
                 items.push(PlanItem {
                     component: component.id.clone(),
                     media: component.media.clone(),
                     from: rule.from.clone(),
-                    to: rule.to.clone(),
+                    to: compress::name_without_suffix(&rule.to)
+                        .filter(|_| compressed)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| rule.to.clone()),
                     is_dir: false,
                     bytes: entry.size,
+                    decompress: compressed,
                 });
             }
             RuleKind::Subtree if !entry.is_dir => {
@@ -852,16 +878,30 @@ pub(crate) fn expand_rules(
                     to: rule.to.clone(),
                     is_dir: true,
                     bytes: 0,
+                    decompress: false,
                 });
                 for walked in source.walk(&rule.from)? {
                     let relative = relative_to(&walked.path, &rule.from);
+                    // ART-228: the release's own Installer drops the `.Z`
+                    // when it expands a file, so the tree holds
+                    // `dos.catalog`, never `dos.catalog.Z`. A directory is
+                    // never a stream, whatever it is called.
+                    let compressed = !walked.is_dir && compress::is_compressed_name(&walked.path);
+                    let placed = destination_for(&rule.to, &relative);
                     items.push(PlanItem {
                         component: component.id.clone(),
                         media: component.media.clone(),
                         from: walked.path.clone(),
-                        to: destination_for(&rule.to, &relative),
+                        to: if compressed {
+                            compress::name_without_suffix(&placed)
+                                .map(str::to_string)
+                                .unwrap_or(placed)
+                        } else {
+                            placed
+                        },
                         is_dir: walked.is_dir,
                         bytes: walked.size,
+                        decompress: compressed,
                     });
                 }
             }
@@ -2268,6 +2308,7 @@ mod plan_tests {
             to: to.into(),
             is_dir,
             bytes: 4,
+            decompress: false,
         }
     }
 
@@ -2855,6 +2896,7 @@ mod plan_tests {
                 // What an ISO9660 directory record declares for itself: a
                 // real, sector-rounded number.
                 bytes: 2048,
+                decompress: false,
             },
             PlanItem {
                 component: "workbench-base".into(),
@@ -2863,6 +2905,7 @@ mod plan_tests {
                 to: "C/Assign".into(),
                 is_dir: false,
                 bytes: 100,
+                decompress: false,
             },
         ];
         assert_eq!(
@@ -2890,6 +2933,7 @@ mod plan_tests {
             to: to.into(),
             is_dir: false,
             bytes,
+            decompress: false,
         };
         let items = vec![
             item("workbench-base", "C/Format", 100),
@@ -2917,6 +2961,7 @@ mod plan_tests {
             to: to.into(),
             is_dir: false,
             bytes,
+            decompress: false,
         };
         let items = vec![
             item("workbench-base", "C/ASSIGN", 100),
