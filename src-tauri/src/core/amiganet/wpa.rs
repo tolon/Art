@@ -64,7 +64,19 @@ pub const PREFS_PATH: &str = "ENVARC:Sys/Wireless.prefs";
 pub const PREFS_PATH_LIVE: &str = "ENV:Sys/Wireless.prefs";
 
 /// Its place inside a distribution tree ART builds, as host path components.
-pub const PREFS_IN_TREE: [&str; 3] = ["Envarc", "Sys", "Wireless.prefs"];
+///
+/// **`Prefs/Env-Archive`, not `Envarc`** — [ART-231]. `ENVARC:` is an
+/// *assign*, and the drawer it points at is `SYS:Prefs/Env-Archive`. The first
+/// version of this constant spelled the assign as though it were a directory,
+/// which put the file in a drawer nothing on the Amiga opens: ART would have
+/// reported *"Written: ENVARC:Sys/Wireless.prefs"* and the card would have
+/// come up with no network and no error anywhere.
+///
+/// Read off the owner's own built trees, both of which carry
+/// `Prefs/Env-Archive/Sys/` and no `Envarc` at all.
+///
+/// [ART-231]: ../../../../docs/ISSUES.md
+pub const PREFS_IN_TREE: [&str; 4] = ["Prefs", "Env-Archive", "Sys", "Wireless.prefs"];
 
 /// A WPA passphrase is 8 to 63 characters \u2014 the supplicant's own range.
 pub const PASSPHRASE_MIN: usize = 8;
@@ -252,6 +264,30 @@ mod tests {
             psk: Secret::new(""),
             priority: 0,
         }
+    }
+
+    /// **ART-231, pinned as one literal in one place.**
+    ///
+    /// `ENVARC:` is an *assign*, and the drawer behind it is
+    /// `SYS:Prefs/Env-Archive`. The first version of [`PREFS_IN_TREE`] spelled
+    /// the assign as though it were a directory and put the file where nothing
+    /// on the Amiga looks — and every test around it built its expected path
+    /// **from the same constant**, so the whole suite agreed with the mistake.
+    ///
+    /// This is the one place the spelling is written out, checked against the
+    /// owner's own built trees (both carry `Prefs/Env-Archive/Sys/` and no
+    /// `Envarc` at all). A test cannot prove an Amiga reads it; it can make
+    /// changing it a thing somebody does on purpose.
+    #[test]
+    fn the_file_goes_where_envarc_actually_points() {
+        assert_eq!(
+            PREFS_IN_TREE,
+            ["Prefs", "Env-Archive", "Sys", "Wireless.prefs"],
+            "ENVARC: is an assign onto SYS:Prefs/Env-Archive, not a drawer called Envarc"
+        );
+        // And the AmigaDOS name ART reports is the assign, which is what a
+        // person reads and types.
+        assert_eq!(PREFS_PATH, "ENVARC:Sys/Wireless.prefs");
     }
 
     /// The shape `tw_wpaconf_write` emits, byte for byte.

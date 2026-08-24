@@ -26,6 +26,39 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-231** 🔴 ✅ **The WiFi credentials were written to a drawer no Amiga
+opens** — *found and fixed 2026-08-24, hours after shipping it*
+`src-tauri/src/core/amiganet/wpa.rs::PREFS_IN_TREE`
+
+`ENVARC:` is an **assign**, not a directory. The drawer behind it is
+`SYS:Prefs/Env-Archive`. The first version of `PREFS_IN_TREE` spelled the
+assign as though it were a folder — `Envarc/Sys/Wireless.prefs` — so ART wrote
+the file into a drawer nothing on the Amiga looks in, reported *"Written:
+ENVARC:Sys/Wireless.prefs"*, and the card would have come up with **no network
+and no error anywhere**. The confident wrong sentence, in the shape this file's
+preamble describes: nothing crashes and the screen says it worked.
+
+**Measured on the owner's own built trees rather than reasoned about.** Both
+`art159-boot` (3.9) and `art205-32` (3.2) carry `Prefs/Env-Archive/Sys/` and no
+`Envarc` at all — and inside it `amidock.prefs`, `font.prefs`, `locale.prefs`,
+`wbconfig.prefs`, which is also how the round found that a prefs file simply
+does not exist until somebody sets it.
+
+**The suite agreed with the mistake, and that is the part worth keeping.**
+Nine tests touched this path and every one of them built its expected value
+**from the same constant**, so they were tautologies about the spelling: they
+proved ART writes where ART writes. `the_file_goes_where_envarc_actually_points`
+is now the one place the four components are written out as literals, with the
+reason beside them; the tests derive their paths from the constant, which is
+right *once* something independent pins it.
+
+**How it was caught**: reading G14's own definition in
+`docs/sd-appliance-gap-analysis.md`, which spells the destination
+`Prefs/Env-Archive/sys/` — for the *next* part of the same item. A neighbouring
+sentence in a document, not a test.
+
+*Tests:* the pin above, mutated (`Envarc` restored → falls).
+
 **ART-230** 🟠 ✅ **A comment in the card builder said its images were free,
 and they cost their full size** — *found and fixed 2026-08-24, while building
 work-list item 7*
