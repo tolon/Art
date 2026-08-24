@@ -26,140 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-231** 🔴 ✅ **The WiFi credentials were written to a drawer no Amiga
-opens** — *found and fixed 2026-08-24, hours after shipping it*
-`src-tauri/src/core/amiganet/wpa.rs::PREFS_IN_TREE`
-
-`ENVARC:` is an **assign**, not a directory. The drawer behind it is
-`SYS:Prefs/Env-Archive`. The first version of `PREFS_IN_TREE` spelled the
-assign as though it were a folder — `Envarc/Sys/Wireless.prefs` — so ART wrote
-the file into a drawer nothing on the Amiga looks in, reported *"Written:
-ENVARC:Sys/Wireless.prefs"*, and the card would have come up with **no network
-and no error anywhere**. The confident wrong sentence, in the shape this file's
-preamble describes: nothing crashes and the screen says it worked.
-
-**Measured on the owner's own built trees rather than reasoned about.** Both
-`art159-boot` (3.9) and `art205-32` (3.2) carry `Prefs/Env-Archive/Sys/` and no
-`Envarc` at all — and inside it `amidock.prefs`, `font.prefs`, `locale.prefs`,
-`wbconfig.prefs`, which is also how the round found that a prefs file simply
-does not exist until somebody sets it.
-
-**The suite agreed with the mistake, and that is the part worth keeping.**
-Nine tests touched this path and every one of them built its expected value
-**from the same constant**, so they were tautologies about the spelling: they
-proved ART writes where ART writes. `the_file_goes_where_envarc_actually_points`
-is now the one place the four components are written out as literals, with the
-reason beside them; the tests derive their paths from the constant, which is
-right *once* something independent pins it.
-
-**How it was caught**: reading G14's own definition in
-`docs/sd-appliance-gap-analysis.md`, which spells the destination
-`Prefs/Env-Archive/sys/` — for the *next* part of the same item. A neighbouring
-sentence in a document, not a test.
-
-*Tests:* the pin above, mutated (`Envarc` restored → falls).
-
-**ART-230** 🟠 ✅ **A comment in the card builder said its images were free,
-and they cost their full size** — *found and fixed 2026-08-24, while building
-work-list item 7*
-`src-tauri/src/core/card/build.rs::build_card`
-
-Not a crash and not a wrong card. A **sentence**, in the doc comment on the
-function that writes card images, and it was wrong:
-
-> The file is created *sparse* where the filesystem underneath allows it —
-> `set_len` on NTFS costs nothing and takes no space — so building a 128 GB
-> card writes the few megabytes that are actually structure.
-
-Measured on the owner's own D: drive rather than argued about:
-
-```text
-SetLength(2 GB) on NTFS
-  logical length : 2 147 483 648
-  free consumed  : 2 147 483 648
-  sparse flag    : This file is NOT set as sparse
-```
-
-Exactly the length, to the byte. **A 32 GiB card cost 32 GiB**, and a 128 GB
-one cost 128 GB.
-
-What makes this worth an entry rather than a typo fix is *where* it sat: in the
-first file anybody would open to find out why their card images are enormous,
-telling them the thing they came to check had already been dealt with. That is
-the class this file's own preamble is about — a confident, wrong sentence that
-passes every test and is invisible until somebody reads the screen and acts on
-it. The work-list item that finally caught it had been carrying the correct
-premise (*"A 32 GiB card image costs 32 GiB today"*) beside the comment that
-denied it, and neither had been checked.
-
-**Fixed by making the claim true rather than by deleting it.** A destination
-ending `.vhd` is now written as a **dynamic VHD** (`core::vhd::write`), which
-really does cost what it holds: measured, a 32 GiB card with three blocks
-touched is **6 360 576 bytes**, a 5 402× saving, and Microsoft's own `Get-VHD`
-reads every field of it. The doc comment now carries the measurement, both
-numbers and the date.
-
-*Tests:* the card round-trips through the container
-(`a_card_built_as_a_vhd_costs_a_fraction_and_reads_back_the_same`), and
-`scripts/vhd-oracle-check.py` is the outside verifier.
-
-**ART-229** 🟠 ✅ **An AmigaOS 3.1 folder was announced as the user's AmigaOS
-3.2 folder** — *found and fixed 2026-08-24, while building work-list item 5*
-`src-tauri/src/core/osinstall/identify.rs` (moved there from `recipe.rs`)
-
-[ART-208](#fixed) gave ART a good sentence: instead of sixteen `MediaMissing`
-refusals about a folder that is simply the wrong one, name the release the
-folder actually holds and offer the switch. `recipe::release_holding` answered
-that question by counting **any** matching volume name as proof, and that is
-where it went wrong.
-
-**`Fonts` and `Locale` carry no version suffix.** The AmigaOS 3.1, 3.1.4 and
-3.2 disk sets each ship a disk called exactly `Fonts` and one called exactly
-`Locale` — checked against HstWB Installer's own `data/amiga-os-entries.csv`
-(78 rows, whose required set for all three releases is Workbench, Extras,
-**Fonts**, Install, **Locale**, Storage) and against the abime.net and
-pjhutchison.org 3.1 installation guides. ART's 3.2 recipe names both, so
-either one alone matched 3.2 and nothing else.
-
-Measured on the shipped code before it was changed:
-
-```text
-["Fonts"]                            -> Some("AmigaOS 3.2")
-["Locale"]                           -> Some("AmigaOS 3.2")
-["Fonts", "Locale"]                  -> Some("AmigaOS 3.2")
-["Workbench3.1", "Fonts", "Locale"]  -> Some("AmigaOS 3.2")
-```
-
-The fourth is the one that matters: a folder holding a real AmigaOS **3.1**
-Workbench disk, announced as a 3.2 folder — on a screen that then offers a
-one-click release switch on the strength of that sentence. Not a crash, not a
-wrong tree, just a confident wrong sentence about somebody's own disks, which
-is this file's most expensive class.
-
-**Fixed by separating evidence from names that are not evidence.**
-`identify::identify` counts only volume names no other known release carries;
-`Fonts`, `Locale` and `Storage` are carried in a `shared` list and counted as
-nothing. All four cases above now answer `None`, and the six ART-208 tests
-still pass unchanged — the fix removes wrong answers without losing right ones.
-
-`release_holding` moved out of `recipe.rs` in the same change rather than
-calling `identify` from where it was: a recipe asking `identify` a question
-inverts the layering CLAUDE.md requires, since `identify` is the module that
-*reads* recipes.
-
-*Tests:* 19 in `identify.rs`, six of them ART-208's moved across.
-**Eight mutations, seven fell** — the cited list emptied and `Fonts` dropped
-from it, `shared` counted as evidence, `missing_required` never filled, two
-releases resolved by picking one, an exact comparison in place of the
-international fold, and the recipe's spelling reported instead of the
-medium's. **The eighth survived and taught something**: removing the
-de-duplication did not fail `the_same_disk_twice_is_counted_once`, because
-what holds *that* property up is `find` taking the first match. The
-de-duplication is real and is guarded by `the_3_9_disc_is_named_amigaos_3_9`
-instead — the 3.9 recipe is six components off one disc, so without it a
-person is told their disc is six discs. Both tests now say which property
-they actually hold.
-
 **ART-226** 🟠 **Every tree ART builds has an empty `Devs/Keymaps`, so whatever
 language the user chose they can only type on an American keyboard — and for
 Turkish the keymap is not on the CD at all** — *found 2026-08-24 by the owner,
@@ -579,102 +445,6 @@ answer to give: the package installs, through the emulator, the way every
 established distribution builder installs one.
 
 
-**ART-130** 🔵 ✅ **A game can name the Kickstart it needs, and nothing offers to
-supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
-built by G10, this is the half that was deliberately left out*
-`src-tauri/src/core/gameindex/`, `src-tauri/src/core/rom/`, ROM Manager ·
-A WHDLoad slave at `ws_Version >= 16` declares the Kickstart image it needs by
-name (`kick34005.A500`, which WHDLoad loads from `DEVS:Kickstarts/`), by size
-and by CRC16 — documented in whdload.de's autodoc under
-`WHDLoad.Slave/--Overview--`. G10 reads all three fields, computes WHDLoad's
-own CRC-16/ARC (`core/hashing`), and **reports** which declared images are
-missing from the tree it is building. What it does not do is close the loop:
-ART holds a 154-dump Kickstart table, verified against amitools' Remus database
-on every CI run, so in many cases it could *identify* the needed image and
-offer to place it under the name the slave asks for.
-
-Left out on purpose rather than forgotten. Putting a user's ROM onto their card
-on their behalf reaches ROM Manager, the licensed-Amiga-Forever decode path
-([ART-128](#fixed)) and the card's own layout — decisions of theirs, not a side
-effect of a metadata pass. It is the same question G9 answers for the OS side
-("does this Kickstart suit this volume?") arriving from the games side, and it
-belongs beside G9/G16 rather than inside a launcher-metadata round.
-
-Design: [2026-08-17-g10-launcher-metadata-design.md](superpowers/specs/2026-08-17-g10-launcher-metadata-design.md) §6.
-
-**Decided 2026-08-21 by the owner: yes, ART should offer it — but in its own
-round, and always as a proposal.** Never as a side effect of a metadata pass,
-and never placing a ROM without the user agreeing to that specific placement.
-The reasoning that kept it out of G10 still holds and is the reason for the
-shape: putting a user's ROM onto their card touches ROM Manager, the licensed
-Amiga Forever decode path and the card's own layout, and those are the
-owner's decisions rather than something a scan does on their behalf. So the
-loop closes as *"this title asks for `kick34005.A500`; ART recognises it in
-your collection — place it?"*, never as a silent copy.
-
-> **The matching half is built, 2026-08-24** — `core/rom/offer.rs` plus
-> `RomInfo::whdload_crc16`, computed at `identify_rom` where the decoded bytes
-> already exist. **The placing half is deliberately still absent**, which is
-> what the decision above asks for: nothing in this module writes a file, and a
-> test shows it rather than the doc claiming it — a collection entry whose file
-> has since been deleted is matched and reported like any other, because
-> matching reads `RomInfo` and nothing else.
->
-> **Matched by checksum, never by filename.** A slave declares the CRC-16 of
-> the image WHDLoad will load; what a file is called says nothing. A ROM named
-> `kick34005.A500` does **not** answer a slave asking for `kick34005.A500`
-> unless its bytes do, and one called `anything.bin` does if they do.
->
-> **Four endings, not two.** `Supplied` · `Encrypted` · `NotHere` ·
-> `Unmatchable`. The one that earns its keep is `Encrypted`: a licensed Amiga
-> Forever ROM without its `rom.key` is a file the user **has**, and reporting
-> it missing would send them looking for something already on their disk.
-> `Unmatchable` is the `$ffff` sentinel — not a checksum but a slave saying
-> "the name field is a list" ([ART-137](#fixed)) — where "you do not have it"
-> would be a claim about a ROM that does not exist.
->
-> **One of three is enough**, because an AGA title names an A600, an A1200 and
-> an A4000 ROM and WHDLoad takes whichever it finds. Reporting such a title as
-> unsatisfied is the sentence ART-137 already cost this project once.
->
-> `core/rom` declares its **own** `WantedImage` rather than importing
-> `core::gameindex::KickstartNeed`, and `commands/gameindex.rs` maps between
-> them — the layering rule CLAUDE.md states with `core/rom` as its own example.
->
-> *Tests:* 11 in `offer.rs`, 3 over the mapping, 1 added to `core/rom`.
-> **Eight mutations, six fell at once; two survived and both were missing
-> tests**, one of them dangerous: an unreadable ROM given `Some(0)` instead of
-> `None` would have silently answered any title whose slave declares a checksum
-> of zero. Both now covered, both fell on the re-run.
->
-> **The placing step and its screen landed the same day.**
-> `core/rom/place.rs` carries out **one agreed placement** — not a title's
-> worth, because a call that took a title and did the right thing would be the
-> silent copy the decision above rules out.
->
-> **The name comes out of a downloaded binary**, so it goes through `safe_join`
-> like every other untrusted name: a slave declaring
-> `..\..\Windows\System32\kernel32.dll` is refused by name rather than by
-> luck. **A licensed ROM is written decoded**, because WHDLoad cannot read an
-> Amiga Forever file — copying it verbatim would produce a card that looks
-> right and does not work, which is the confident-wrong shape in the place it
-> is hardest to notice.
->
-> Three endings again, and they stay apart in the operation log too:
-> `Placed`, `AlreadyThere` (byte-for-byte identical — doing nothing and saying
-> so is right), and `Occupied`, which is **refused rather than replaced**
-> (`SAFE_CREATE`: the ROM already there is somebody's).
->
-> The screen is `TitleDetail.tsx`, beside the sentence that already said what
-> the title needs. Without a system volume it **asks for one instead of
-> offering a button that cannot work** (§46, §89).
->
-> *Tests:* 7 in `place.rs`, 8 on the screen. Eleven mutations, ten fell; the
-> survivor is disclosed in the source — a redundant `treeRoot` guard inside
-> `placeOne` that no test can reach because the button is not rendered without
-> one, kept because the next caller may not guard and what is behind it writes
-> to disk.
-
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
 the crash itself is still unresolved** — *found 2026-08-15/16, Task 13's
@@ -770,7 +540,7 @@ than a dead end.
 Revisit only if someone actually meets the case and `hst-imager` cannot serve
 it — not before.
 
-**ART-062** 🔵 **One Turkish sentence has been read on screen; the other 1766 keys have not**
+**ART-062** 🔵 **One Turkish sentence has been read on screen; the other 1899 keys have not**
 `src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
 was verified by `pnpm test`'s key-parity check and by reading the JSON — never
 by opening the running application and looking at a screen. Several Turkish
@@ -827,6 +597,236 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-231** 🔴 ✅ **The WiFi credentials were written to a drawer no Amiga
+opens** — *found and fixed 2026-08-24, hours after shipping it*
+`src-tauri/src/core/amiganet/wpa.rs::PREFS_IN_TREE`
+
+`ENVARC:` is an **assign**, not a directory. The drawer behind it is
+`SYS:Prefs/Env-Archive`. The first version of `PREFS_IN_TREE` spelled the
+assign as though it were a folder — `Envarc/Sys/Wireless.prefs` — so ART wrote
+the file into a drawer nothing on the Amiga looks in, reported *"Written:
+ENVARC:Sys/Wireless.prefs"*, and the card would have come up with **no network
+and no error anywhere**. The confident wrong sentence, in the shape this file's
+preamble describes: nothing crashes and the screen says it worked.
+
+**Measured on the owner's own built trees rather than reasoned about.** Both
+`art159-boot` (3.9) and `art205-32` (3.2) carry `Prefs/Env-Archive/Sys/` and no
+`Envarc` at all — and inside it `amidock.prefs`, `font.prefs`, `locale.prefs`,
+`wbconfig.prefs`, which is also how the round found that a prefs file simply
+does not exist until somebody sets it.
+
+**The suite agreed with the mistake, and that is the part worth keeping.**
+Nine tests touched this path and every one of them built its expected value
+**from the same constant**, so they were tautologies about the spelling: they
+proved ART writes where ART writes. `the_file_goes_where_envarc_actually_points`
+is now the one place the four components are written out as literals, with the
+reason beside them; the tests derive their paths from the constant, which is
+right *once* something independent pins it.
+
+**How it was caught**: reading G14's own definition in
+`docs/sd-appliance-gap-analysis.md`, which spells the destination
+`Prefs/Env-Archive/sys/` — for the *next* part of the same item. A neighbouring
+sentence in a document, not a test.
+
+*Tests:* the pin above, mutated (`Envarc` restored → falls).
+
+**ART-230** 🟠 ✅ **A comment in the card builder said its images were free,
+and they cost their full size** — *found and fixed 2026-08-24, while building
+work-list item 7*
+`src-tauri/src/core/card/build.rs::build_card`
+
+Not a crash and not a wrong card. A **sentence**, in the doc comment on the
+function that writes card images, and it was wrong:
+
+> The file is created *sparse* where the filesystem underneath allows it —
+> `set_len` on NTFS costs nothing and takes no space — so building a 128 GB
+> card writes the few megabytes that are actually structure.
+
+Measured on the owner's own D: drive rather than argued about:
+
+```text
+SetLength(2 GB) on NTFS
+  logical length : 2 147 483 648
+  free consumed  : 2 147 483 648
+  sparse flag    : This file is NOT set as sparse
+```
+
+Exactly the length, to the byte. **A 32 GiB card cost 32 GiB**, and a 128 GB
+one cost 128 GB.
+
+What makes this worth an entry rather than a typo fix is *where* it sat: in the
+first file anybody would open to find out why their card images are enormous,
+telling them the thing they came to check had already been dealt with. That is
+the class this file's own preamble is about — a confident, wrong sentence that
+passes every test and is invisible until somebody reads the screen and acts on
+it. The work-list item that finally caught it had been carrying the correct
+premise (*"A 32 GiB card image costs 32 GiB today"*) beside the comment that
+denied it, and neither had been checked.
+
+**Fixed by making the claim true rather than by deleting it.** A destination
+ending `.vhd` is now written as a **dynamic VHD** (`core::vhd::write`), which
+really does cost what it holds: measured, a 32 GiB card with three blocks
+touched is **6 360 576 bytes**, a 5 402× saving, and Microsoft's own `Get-VHD`
+reads every field of it. The doc comment now carries the measurement, both
+numbers and the date.
+
+*Tests:* the card round-trips through the container
+(`a_card_built_as_a_vhd_costs_a_fraction_and_reads_back_the_same`), and
+`scripts/vhd-oracle-check.py` is the outside verifier.
+
+**ART-229** 🟠 ✅ **An AmigaOS 3.1 folder was announced as the user's AmigaOS
+3.2 folder** — *found and fixed 2026-08-24, while building work-list item 5*
+`src-tauri/src/core/osinstall/identify.rs` (moved there from `recipe.rs`)
+
+[ART-208](#fixed) gave ART a good sentence: instead of sixteen `MediaMissing`
+refusals about a folder that is simply the wrong one, name the release the
+folder actually holds and offer the switch. `recipe::release_holding` answered
+that question by counting **any** matching volume name as proof, and that is
+where it went wrong.
+
+**`Fonts` and `Locale` carry no version suffix.** The AmigaOS 3.1, 3.1.4 and
+3.2 disk sets each ship a disk called exactly `Fonts` and one called exactly
+`Locale` — checked against HstWB Installer's own `data/amiga-os-entries.csv`
+(78 rows, whose required set for all three releases is Workbench, Extras,
+**Fonts**, Install, **Locale**, Storage) and against the abime.net and
+pjhutchison.org 3.1 installation guides. ART's 3.2 recipe names both, so
+either one alone matched 3.2 and nothing else.
+
+Measured on the shipped code before it was changed:
+
+```text
+["Fonts"]                            -> Some("AmigaOS 3.2")
+["Locale"]                           -> Some("AmigaOS 3.2")
+["Fonts", "Locale"]                  -> Some("AmigaOS 3.2")
+["Workbench3.1", "Fonts", "Locale"]  -> Some("AmigaOS 3.2")
+```
+
+The fourth is the one that matters: a folder holding a real AmigaOS **3.1**
+Workbench disk, announced as a 3.2 folder — on a screen that then offers a
+one-click release switch on the strength of that sentence. Not a crash, not a
+wrong tree, just a confident wrong sentence about somebody's own disks, which
+is this file's most expensive class.
+
+**Fixed by separating evidence from names that are not evidence.**
+`identify::identify` counts only volume names no other known release carries;
+`Fonts`, `Locale` and `Storage` are carried in a `shared` list and counted as
+nothing. All four cases above now answer `None`, and the six ART-208 tests
+still pass unchanged — the fix removes wrong answers without losing right ones.
+
+`release_holding` moved out of `recipe.rs` in the same change rather than
+calling `identify` from where it was: a recipe asking `identify` a question
+inverts the layering CLAUDE.md requires, since `identify` is the module that
+*reads* recipes.
+
+*Tests:* 19 in `identify.rs`, six of them ART-208's moved across.
+**Eight mutations, seven fell** — the cited list emptied and `Fonts` dropped
+from it, `shared` counted as evidence, `missing_required` never filled, two
+releases resolved by picking one, an exact comparison in place of the
+international fold, and the recipe's spelling reported instead of the
+medium's. **The eighth survived and taught something**: removing the
+de-duplication did not fail `the_same_disk_twice_is_counted_once`, because
+what holds *that* property up is `find` taking the first match. The
+de-duplication is real and is guarded by `the_3_9_disc_is_named_amigaos_3_9`
+instead — the 3.9 recipe is six components off one disc, so without it a
+person is told their disc is six discs. Both tests now say which property
+they actually hold.
+
+**ART-130** 🔵 ✅ **A game can name the Kickstart it needs, and nothing offers to
+supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
+built by G10, this is the half that was deliberately left out*
+`src-tauri/src/core/gameindex/`, `src-tauri/src/core/rom/`, ROM Manager ·
+A WHDLoad slave at `ws_Version >= 16` declares the Kickstart image it needs by
+name (`kick34005.A500`, which WHDLoad loads from `DEVS:Kickstarts/`), by size
+and by CRC16 — documented in whdload.de's autodoc under
+`WHDLoad.Slave/--Overview--`. G10 reads all three fields, computes WHDLoad's
+own CRC-16/ARC (`core/hashing`), and **reports** which declared images are
+missing from the tree it is building. What it does not do is close the loop:
+ART holds a 154-dump Kickstart table, verified against amitools' Remus database
+on every CI run, so in many cases it could *identify* the needed image and
+offer to place it under the name the slave asks for.
+
+Left out on purpose rather than forgotten. Putting a user's ROM onto their card
+on their behalf reaches ROM Manager, the licensed-Amiga-Forever decode path
+([ART-128](#fixed)) and the card's own layout — decisions of theirs, not a side
+effect of a metadata pass. It is the same question G9 answers for the OS side
+("does this Kickstart suit this volume?") arriving from the games side, and it
+belongs beside G9/G16 rather than inside a launcher-metadata round.
+
+Design: [2026-08-17-g10-launcher-metadata-design.md](superpowers/specs/2026-08-17-g10-launcher-metadata-design.md) §6.
+
+**Decided 2026-08-21 by the owner: yes, ART should offer it — but in its own
+round, and always as a proposal.** Never as a side effect of a metadata pass,
+and never placing a ROM without the user agreeing to that specific placement.
+The reasoning that kept it out of G10 still holds and is the reason for the
+shape: putting a user's ROM onto their card touches ROM Manager, the licensed
+Amiga Forever decode path and the card's own layout, and those are the
+owner's decisions rather than something a scan does on their behalf. So the
+loop closes as *"this title asks for `kick34005.A500`; ART recognises it in
+your collection — place it?"*, never as a silent copy.
+
+> **The matching half is built, 2026-08-24** — `core/rom/offer.rs` plus
+> `RomInfo::whdload_crc16`, computed at `identify_rom` where the decoded bytes
+> already exist. **The placing half is deliberately still absent**, which is
+> what the decision above asks for: nothing in this module writes a file, and a
+> test shows it rather than the doc claiming it — a collection entry whose file
+> has since been deleted is matched and reported like any other, because
+> matching reads `RomInfo` and nothing else.
+>
+> **Matched by checksum, never by filename.** A slave declares the CRC-16 of
+> the image WHDLoad will load; what a file is called says nothing. A ROM named
+> `kick34005.A500` does **not** answer a slave asking for `kick34005.A500`
+> unless its bytes do, and one called `anything.bin` does if they do.
+>
+> **Four endings, not two.** `Supplied` · `Encrypted` · `NotHere` ·
+> `Unmatchable`. The one that earns its keep is `Encrypted`: a licensed Amiga
+> Forever ROM without its `rom.key` is a file the user **has**, and reporting
+> it missing would send them looking for something already on their disk.
+> `Unmatchable` is the `$ffff` sentinel — not a checksum but a slave saying
+> "the name field is a list" ([ART-137](#fixed)) — where "you do not have it"
+> would be a claim about a ROM that does not exist.
+>
+> **One of three is enough**, because an AGA title names an A600, an A1200 and
+> an A4000 ROM and WHDLoad takes whichever it finds. Reporting such a title as
+> unsatisfied is the sentence ART-137 already cost this project once.
+>
+> `core/rom` declares its **own** `WantedImage` rather than importing
+> `core::gameindex::KickstartNeed`, and `commands/gameindex.rs` maps between
+> them — the layering rule CLAUDE.md states with `core/rom` as its own example.
+>
+> *Tests:* 11 in `offer.rs`, 3 over the mapping, 1 added to `core/rom`.
+> **Eight mutations, six fell at once; two survived and both were missing
+> tests**, one of them dangerous: an unreadable ROM given `Some(0)` instead of
+> `None` would have silently answered any title whose slave declares a checksum
+> of zero. Both now covered, both fell on the re-run.
+>
+> **The placing step and its screen landed the same day.**
+> `core/rom/place.rs` carries out **one agreed placement** — not a title's
+> worth, because a call that took a title and did the right thing would be the
+> silent copy the decision above rules out.
+>
+> **The name comes out of a downloaded binary**, so it goes through `safe_join`
+> like every other untrusted name: a slave declaring
+> `..\..\Windows\System32\kernel32.dll` is refused by name rather than by
+> luck. **A licensed ROM is written decoded**, because WHDLoad cannot read an
+> Amiga Forever file — copying it verbatim would produce a card that looks
+> right and does not work, which is the confident-wrong shape in the place it
+> is hardest to notice.
+>
+> Three endings again, and they stay apart in the operation log too:
+> `Placed`, `AlreadyThere` (byte-for-byte identical — doing nothing and saying
+> so is right), and `Occupied`, which is **refused rather than replaced**
+> (`SAFE_CREATE`: the ROM already there is somebody's).
+>
+> The screen is `TitleDetail.tsx`, beside the sentence that already said what
+> the title needs. Without a system volume it **asks for one instead of
+> offering a button that cannot work** (§46, §89).
+>
+> *Tests:* 7 in `place.rs`, 8 on the screen. Eleven mutations, ten fell; the
+> survivor is disclosed in the source — a redundant `treeRoot` guard inside
+> `placeOne` that no test can reach because the button is not rendered without
+> one, kept because the next caller may not guard and what is behind it writes
+> to disk.
 
 **ART-234** 🟠 **Four alphabets got their catalogs and none of their letters:
 the AmigaOS 3.2 recipe placed no `Support/Fonts` at all** - *found 2026-08-24
