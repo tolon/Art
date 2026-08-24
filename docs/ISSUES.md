@@ -440,7 +440,40 @@ and no password is bypassed; the payload is as encrypted as it ever was, and
 host-side placement is as impossible as it ever was. This entry therefore
 stays open as the reason a BoingBag's rows are refused on the host screen —
 `host_placement_block: "encrypted-payload"` is still correct and still
-shipped. What has changed is that the sentence ART tells the user now has an
+shipped.
+
+**Re-researched 2026-08-25 at the owner's request, and the decision stands —
+with a better reason than the one recorded.** HstWB Installer's README says
+why it uses an emulator, and it is not the password: *"AmigaDOS scripts and
+uses binaries for 68000 CPU to support as many Amiga models as possible."*
+**The emulator is the installer's native environment, not a workaround for
+encryption.** Even an unencrypted BoingBag would still be 68k code that has to
+execute somewhere. That makes ART's host-side placement the unusual thing
+rather than the obvious thing — it works only because ART reads each release's
+own Installer script and reimplements the placement, which is possible for a
+release laid out as files and impossible for one delivered as a program.
+
+Three routes were checked and none is one:
+
+- **`jit06/emu68-bootstrap`** — the one comparable host-side, no-emulator card
+  builder — does not solve this. It supports **AmigaOS 3.2 only**; 3.9 and the
+  BoingBags are outside its scope entirely. Avoiding the problem is a
+  legitimate answer for that project and is not one for ART, which builds 3.9
+  trees today.
+- **The community Boing Bags 3 & 4** (James Jacobs, `amigansoftware`) are
+  *unencrypted* — and their own readme requires *"Boing Bags #1 and #2 first"*.
+  They sit on top of the problem rather than around it.
+- **`BoingBag39-2-Contribution.lha`**, which the owner also has, is genuinely
+  unencrypted — verified by **extracting** it rather than listing it (445
+  files, 2.8 MB, ClassAction · OpenURL · cddb-lib), which is this entry's own
+  lesson applied. It carries **no payload member at all**, so it is contributed
+  third-party extras beside the update rather than any part of it. Already
+  measured on 2026-08-20 by `scripts/lha-package-identity.py` and already named
+  in `boingbag-39-2.json`'s `_why_distinguished_by_repeats_the_member`; found
+  again here and recorded so a third pass does not repeat it.
+
+No search was made for the password itself. The owner's decision forbids a
+bypass, so looking for one is not research. What has changed is that the sentence ART tells the user now has an
 answer to give: the package installs, through the emulator, the way every
 established distribution builder installs one.
 

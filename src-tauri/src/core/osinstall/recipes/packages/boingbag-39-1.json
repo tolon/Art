@@ -37,7 +37,9 @@
     "third would be a new JSON file, at which point whether these apply to it",
     "is a question somebody has to answer by looking, not a default."
   ],
-  "releases": ["AmigaOS 3.9"],
+  "releases": [
+    "AmigaOS 3.9"
+  ],
   "media": "BoingBag3.9-1",
   "_why_no_distinguished_by": [
     "ART-167 gave a package a second identity fact for archives whose",
@@ -54,25 +56,7 @@
   ],
   "member": "AmigaOS-Update",
   "_why_host_placement_block": [
-    "ART-166, measured in Task 8's real run and confirmed three independent",
-    "ways (ART's own reader, 7-Zip 26.02, the raw general-purpose flag word",
-    "0x0003 with bit 0 set): the `AmigaOS-Update` member named above is a",
-    "ZIP whose every entry is ZipCrypto-encrypted — 233 of 233 entries in",
-    "3.9-1's payload, 147 of 147 in 3.9-2's. The password belongs to the",
-    "BoingBag's own `Updater`, which the wrapper LHA carries beside the",
-    "payload and which has to run *on* an Amiga; every established",
-    "distribution builder (HstWB Installer, AmiKit, AmigaSYS, ClassicWB)",
-    "installs a BoingBag by running that Updater inside an emulator rather",
-    "than by decrypting anything, and the owner's recorded decision is that",
-    "ART will write no bypass.",
-    "",
-    "So the rules below are right and unreachable, and spec §10/§89 says ART",
-    "must not offer what it cannot do. Declaring the block here — data, not",
-    "code — is what makes the screen refuse the tick with a translated",
-    "sentence naming the Updater, instead of accepting it and meeting the",
-    "reader's own raw English `Password required to decrypt file` after the",
-    "user already confirmed. The day the Amiga-side install round lands,",
-    "this one key is deleted and nothing else changes."
+    "ART-166, measured in Task 8's real run and confirmed three independent ways (ART's own reader, 7-Zip 26.02, the raw general-purpose flag word 0x0003 with bit 0 set): the `AmigaOS-Update` member named above is a ZIP whose every entry is ZipCrypto-encrypted — 233 of 233 entries in 3.9-1's payload, 147 of 147 in 3.9-2's. The password belongs to the BoingBag's own `Updater`, which the wrapper LHA carries beside the payload and which has to run *on* an Amiga; every established distribution builder (HstWB Installer, AmiKit, AmigaSYS, ClassicWB) installs a BoingBag by running that Updater inside an emulator rather than by decrypting anything, and the owner's recorded decision is that ART will write no bypass.  So the rules below are right and unreachable, and spec §10/§89 says ART must not offer what it cannot do. Declaring the block here — data, not code — is what makes the screen refuse the tick with a translated sentence naming the Updater, instead of accepting it and meeting the reader's own raw English `Password required to decrypt file` after the user already confirmed. **That prediction was wrong, and is corrected here rather than left standing (2026-08-25).** It read: \"The day the Amiga-side install round lands, this one key is deleted and nothing else changes.\" That round landed on 2026-08-21 and both BoingBags installed on the owner's own material through ART's own compose-then-install path - and this key STAYS. The block is about placing the payload's files from the host, which is as impossible as it ever was: the Amiga's own Updater writes them, inside the emulator, after the package's own code decrypts its own payload. Deleting this key would put a live tick back on a screen that still cannot do what the tick promises."
   ],
   "host_placement_block": "encrypted-payload",
   "_why_amiga_installer": [
@@ -184,58 +168,162 @@
     "build behave differently from another on the same disc."
   ],
   "amiga_installer": {
-      "_why_post_install": [
-        "ART-227. The `Updater` finishes and leaves ten files without the protection",
-        "bits AmigaDOS needs from them. Measured on 2026-08-24 against the owner's own",
-        "material, on the tree ART's own BoingBag 1 run produced: every one of the seven",
-        "`C:` commands below reads `----rwed` afterwards (two of them carry no `.uaem`",
-        "at all, which is WinUAE's way of saying `default`), and `S/Start-Amplifier.rexx`",
-        "reads `----rwed` where it needs the script bit.",
-        "",
-        "**Why it matters rather than being tidy.** `Resident` refuses a command without",
-        "the `p` bit, and AmigaOS 3.9's own boot makes commands resident. A tree missing",
-        "these boots and then fails a line at a time, which is exactly the shape that",
-        "costs this project the most: nothing crashes and nothing says anything.",
-        "",
-        "The same ten files are what HstWB Installer sets, in the same two groups —",
-        "`+prwed` on the commands, `+srwed` on the scripts — which is where the list was",
-        "found. Every one of the ten was then checked to be present in the tree ART's own",
-        "run produced before it was written here, because `protect` refuses a file that",
-        "is not there rather than skipping it."
-      ],
-      "post_install": [
-        { "step": "protect", "path": "C/LoadMonDrvs", "add": "p" },
-        { "step": "protect", "path": "C/LoadResource", "add": "p" },
-        { "step": "protect", "path": "C/MakeDir", "add": "p" },
-        { "step": "protect", "path": "C/MakeLink", "add": "p" },
-        { "step": "protect", "path": "C/SetEnv", "add": "p" },
-        { "step": "protect", "path": "C/WBInfo", "add": "p" },
-        { "step": "protect", "path": "C/WBRun", "add": "p" },
-        { "step": "protect", "path": "S/Start-Amplifier.rexx", "add": "s" },
-        { "step": "protect", "path": "S/Startup-Sequence-BB3.9-1", "add": "s" },
-        { "step": "protect", "path": "S/Stream-Amplifier.rexx", "add": "s" }
-      ],
+    "_why_post_install": [
+      "ART-227. The `Updater` finishes and leaves ten files without the protection",
+      "bits AmigaDOS needs from them. Measured on 2026-08-24 against the owner's own",
+      "material, on the tree ART's own BoingBag 1 run produced: every one of the seven",
+      "`C:` commands below reads `----rwed` afterwards (two of them carry no `.uaem`",
+      "at all, which is WinUAE's way of saying `default`), and `S/Start-Amplifier.rexx`",
+      "reads `----rwed` where it needs the script bit.",
+      "",
+      "**Why it matters rather than being tidy.** `Resident` refuses a command without",
+      "the `p` bit, and AmigaOS 3.9's own boot makes commands resident. A tree missing",
+      "these boots and then fails a line at a time, which is exactly the shape that",
+      "costs this project the most: nothing crashes and nothing says anything.",
+      "",
+      "The same ten files are what HstWB Installer sets, in the same two groups —",
+      "`+prwed` on the commands, `+srwed` on the scripts — which is where the list was",
+      "found. Every one of the ten was then checked to be present in the tree ART's own",
+      "run produced before it was written here, because `protect` refuses a file that",
+      "is not there rather than skipping it."
+    ],
+    "post_install": [
+      {
+        "step": "protect",
+        "path": "C/LoadMonDrvs",
+        "add": "p"
+      },
+      {
+        "step": "protect",
+        "path": "C/LoadResource",
+        "add": "p"
+      },
+      {
+        "step": "protect",
+        "path": "C/MakeDir",
+        "add": "p"
+      },
+      {
+        "step": "protect",
+        "path": "C/MakeLink",
+        "add": "p"
+      },
+      {
+        "step": "protect",
+        "path": "C/SetEnv",
+        "add": "p"
+      },
+      {
+        "step": "protect",
+        "path": "C/WBInfo",
+        "add": "p"
+      },
+      {
+        "step": "protect",
+        "path": "C/WBRun",
+        "add": "p"
+      },
+      {
+        "step": "protect",
+        "path": "S/Start-Amplifier.rexx",
+        "add": "s"
+      },
+      {
+        "step": "protect",
+        "path": "S/Startup-Sequence-BB3.9-1",
+        "add": "s"
+      },
+      {
+        "step": "protect",
+        "path": "S/Stream-Amplifier.rexx",
+        "add": "s"
+      }
+    ],
     "program": "C/Updater",
-    "args": ["AmigaOS-Update"],
+    "args": [
+      "AmigaOS-Update"
+    ],
     "minimum_version": "45.15",
-    "overlays": [{ "from": "BoingBag3.9-1-UAE/BoingBag3.9-1", "to": "" }],
-    "required_medium": { "volume": "AmigaOS3.9", "name": "the original AmigaOS 3.9 CD-ROM" }
+    "overlays": [
+      {
+        "from": "BoingBag3.9-1-UAE/BoingBag3.9-1",
+        "to": ""
+      }
+    ],
+    "required_medium": {
+      "volume": "AmigaOS3.9",
+      "name": "the original AmigaOS 3.9 CD-ROM"
+    }
   },
   "requires": [],
-  "overrides": ["workbench-base"],
+  "overrides": [
+    "workbench-base"
+  ],
   "rules": [
-    { "from": "C",         "to": "C",         "kind": "subtree" },
-    { "from": "Classes",   "to": "Classes",   "kind": "subtree" },
-    { "from": "Devs",      "to": "Devs",      "kind": "subtree" },
-    { "from": "Fonts",     "to": "Fonts",     "kind": "subtree" },
-    { "from": "L",         "to": "L",         "kind": "subtree" },
-    { "from": "Libs",      "to": "Libs",      "kind": "subtree" },
-    { "from": "Prefs",     "to": "Prefs",     "kind": "subtree" },
-    { "from": "S",         "to": "S",         "kind": "subtree" },
-    { "from": "Storage",   "to": "Storage",   "kind": "subtree" },
-    { "from": "System",    "to": "System",    "kind": "subtree" },
-    { "from": "Tools",     "to": "Tools",     "kind": "subtree" },
-    { "from": "Utilities", "to": "Utilities", "kind": "subtree" },
-    { "from": "WBStartup", "to": "WBStartup", "kind": "subtree" }
+    {
+      "from": "C",
+      "to": "C",
+      "kind": "subtree"
+    },
+    {
+      "from": "Classes",
+      "to": "Classes",
+      "kind": "subtree"
+    },
+    {
+      "from": "Devs",
+      "to": "Devs",
+      "kind": "subtree"
+    },
+    {
+      "from": "Fonts",
+      "to": "Fonts",
+      "kind": "subtree"
+    },
+    {
+      "from": "L",
+      "to": "L",
+      "kind": "subtree"
+    },
+    {
+      "from": "Libs",
+      "to": "Libs",
+      "kind": "subtree"
+    },
+    {
+      "from": "Prefs",
+      "to": "Prefs",
+      "kind": "subtree"
+    },
+    {
+      "from": "S",
+      "to": "S",
+      "kind": "subtree"
+    },
+    {
+      "from": "Storage",
+      "to": "Storage",
+      "kind": "subtree"
+    },
+    {
+      "from": "System",
+      "to": "System",
+      "kind": "subtree"
+    },
+    {
+      "from": "Tools",
+      "to": "Tools",
+      "kind": "subtree"
+    },
+    {
+      "from": "Utilities",
+      "to": "Utilities",
+      "kind": "subtree"
+    },
+    {
+      "from": "WBStartup",
+      "to": "WBStartup",
+      "kind": "subtree"
+    }
   ]
 }

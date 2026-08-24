@@ -12,7 +12,9 @@
   ],
   "id": "boingbag-39-2",
   "name": "BoingBag 3.9-2",
-  "releases": ["AmigaOS 3.9"],
+  "releases": [
+    "AmigaOS 3.9"
+  ],
   "media": "BoingBag3.9-2",
   "_why_distinguished_by_repeats_the_member": [
     "ART-167. Two of the owner's archives carry the top-level directory",
@@ -35,25 +37,7 @@
   "distinguished_by": "AmigaOS-Update",
   "member": "AmigaOS-Update",
   "_why_host_placement_block": [
-    "ART-166, measured in Task 8's real run and confirmed three independent",
-    "ways (ART's own reader, 7-Zip 26.02, the raw general-purpose flag word",
-    "0x0003 with bit 0 set): the `AmigaOS-Update` member named above is a",
-    "ZIP whose every entry is ZipCrypto-encrypted — 233 of 233 entries in",
-    "3.9-1's payload, 147 of 147 in 3.9-2's. The password belongs to the",
-    "BoingBag's own `Updater`, which the wrapper LHA carries beside the",
-    "payload and which has to run *on* an Amiga; every established",
-    "distribution builder (HstWB Installer, AmiKit, AmigaSYS, ClassicWB)",
-    "installs a BoingBag by running that Updater inside an emulator rather",
-    "than by decrypting anything, and the owner's recorded decision is that",
-    "ART will write no bypass.",
-    "",
-    "So the rules below are right and unreachable, and spec §10/§89 says ART",
-    "must not offer what it cannot do. Declaring the block here — data, not",
-    "code — is what makes the screen refuse the tick with a translated",
-    "sentence naming the Updater, instead of accepting it and meeting the",
-    "reader's own raw English `Password required to decrypt file` after the",
-    "user already confirmed. The day the Amiga-side install round lands,",
-    "this one key is deleted and nothing else changes."
+    "ART-166, measured in Task 8's real run and confirmed three independent ways (ART's own reader, 7-Zip 26.02, the raw general-purpose flag word 0x0003 with bit 0 set): the `AmigaOS-Update` member named above is a ZIP whose every entry is ZipCrypto-encrypted — 233 of 233 entries in 3.9-1's payload, 147 of 147 in 3.9-2's. The password belongs to the BoingBag's own `Updater`, which the wrapper LHA carries beside the payload and which has to run *on* an Amiga; every established distribution builder (HstWB Installer, AmiKit, AmigaSYS, ClassicWB) installs a BoingBag by running that Updater inside an emulator rather than by decrypting anything, and the owner's recorded decision is that ART will write no bypass.  So the rules below are right and unreachable, and spec §10/§89 says ART must not offer what it cannot do. Declaring the block here — data, not code — is what makes the screen refuse the tick with a translated sentence naming the Updater, instead of accepting it and meeting the reader's own raw English `Password required to decrypt file` after the user already confirmed. **That prediction was wrong, and is corrected here rather than left standing (2026-08-25).** It read: \"The day the Amiga-side install round lands, this one key is deleted and nothing else changes.\" That round landed on 2026-08-21 and both BoingBags installed on the owner's own material through ART's own compose-then-install path - and this key STAYS. The block is about placing the payload's files from the host, which is as impossible as it ever was: the Amiga's own Updater writes them, inside the emulator, after the package's own code decrypts its own payload. Deleting this key would put a live tick back on a screen that still cannot do what the tick promises."
   ],
   "host_placement_block": "encrypted-payload",
   "_why_amiga_installer": [
@@ -107,53 +91,111 @@
     "side."
   ],
   "amiga_installer": {
-      "_why_post_install": [
-        "ART-227, and this one is the whole reason the mechanism exists.",
-        "",
-        "BoingBag 2's `Updater` writes its ROM update as",
-        "`Devs/AmigaOS ROM Update.BB39-2` — **321 768 bytes** — and leaves it there,",
-        "beside the CD's own 127 956-byte `Devs/AmigaOS ROM Update`, under a name",
-        "`SetPatch` does not load. Measured on 2026-08-24 on the tree ART's own run",
-        "produced: both files present, the old one still the active one. So a tree that",
-        "reports itself BoingBag'd, and answers `Workbench 45.3` when asked, is running",
-        "the ROM update it had before. Nothing fails; the newer file is simply never",
-        "read.",
-        "",
-        "HstWB Installer does the same move — back the old one aside, copy the new one",
-        "over it — which is where this was found. ART does it on the host instead of in",
-        "the boot script, for the reasons `core::amigainstall::finish` gives.",
-        "",
-        "**`NSDPatch.cfg` is deliberately left alone.** BoingBag 1 leaves",
-        "`Devs/NSDPatch.cfg-BB3.9-1` and BoingBag 2 leaves `Devs/NSDPatch.cfg.BB39-2`",
-        "(the two packages do not even agree on the punctuation), and neither is rotated",
-        "here. That file is user-editable configuration; a reference copy beside it is",
-        "the right shape, and HstWB reaches the same conclusion by touching neither."
-      ],
-      "post_install": [
-        {
-          "step": "replace-keeping-backup",
-          "target": "Devs/AmigaOS ROM Update",
-          "replacement": "Devs/AmigaOS ROM Update.BB39-2"
-        }
-      ],
+    "_why_post_install": [
+      "ART-227, and this one is the whole reason the mechanism exists.",
+      "",
+      "BoingBag 2's `Updater` writes its ROM update as",
+      "`Devs/AmigaOS ROM Update.BB39-2` — **321 768 bytes** — and leaves it there,",
+      "beside the CD's own 127 956-byte `Devs/AmigaOS ROM Update`, under a name",
+      "`SetPatch` does not load. Measured on 2026-08-24 on the tree ART's own run",
+      "produced: both files present, the old one still the active one. So a tree that",
+      "reports itself BoingBag'd, and answers `Workbench 45.3` when asked, is running",
+      "the ROM update it had before. Nothing fails; the newer file is simply never",
+      "read.",
+      "",
+      "HstWB Installer does the same move — back the old one aside, copy the new one",
+      "over it — which is where this was found. ART does it on the host instead of in",
+      "the boot script, for the reasons `core::amigainstall::finish` gives.",
+      "",
+      "**`NSDPatch.cfg` is deliberately left alone.** BoingBag 1 leaves",
+      "`Devs/NSDPatch.cfg-BB3.9-1` and BoingBag 2 leaves `Devs/NSDPatch.cfg.BB39-2`",
+      "(the two packages do not even agree on the punctuation), and neither is rotated",
+      "here. That file is user-editable configuration; a reference copy beside it is",
+      "the right shape, and HstWB reaches the same conclusion by touching neither."
+    ],
+    "post_install": [
+      {
+        "step": "replace-keeping-backup",
+        "target": "Devs/AmigaOS ROM Update",
+        "replacement": "Devs/AmigaOS ROM Update.BB39-2"
+      }
+    ],
     "program": "C/Updater",
-    "args": ["AmigaOS-Update"],
-    "required_medium": { "volume": "AmigaOS3.9", "name": "the original AmigaOS 3.9 CD-ROM" }
+    "args": [
+      "AmigaOS-Update"
+    ],
+    "required_medium": {
+      "volume": "AmigaOS3.9",
+      "name": "the original AmigaOS 3.9 CD-ROM"
+    }
   },
-  "requires": ["boingbag-39-1"],
-  "overrides": ["workbench-base", "boingbag-39-1"],
+  "requires": [
+    "boingbag-39-1"
+  ],
+  "overrides": [
+    "workbench-base",
+    "boingbag-39-1"
+  ],
   "rules": [
-    { "from": "C",         "to": "C",         "kind": "subtree" },
-    { "from": "Classes",   "to": "Classes",   "kind": "subtree" },
-    { "from": "Devs",      "to": "Devs",      "kind": "subtree" },
-    { "from": "L",         "to": "L",         "kind": "subtree" },
-    { "from": "Libs",      "to": "Libs",      "kind": "subtree" },
-    { "from": "Prefs",     "to": "Prefs",     "kind": "subtree" },
-    { "from": "Rexxc",     "to": "Rexxc",     "kind": "subtree" },
-    { "from": "S",         "to": "S",         "kind": "subtree" },
-    { "from": "System",    "to": "System",    "kind": "subtree" },
-    { "from": "Tools",     "to": "Tools",     "kind": "subtree" },
-    { "from": "Utilities", "to": "Utilities", "kind": "subtree" },
-    { "from": "WBStartup", "to": "WBStartup", "kind": "subtree" }
+    {
+      "from": "C",
+      "to": "C",
+      "kind": "subtree"
+    },
+    {
+      "from": "Classes",
+      "to": "Classes",
+      "kind": "subtree"
+    },
+    {
+      "from": "Devs",
+      "to": "Devs",
+      "kind": "subtree"
+    },
+    {
+      "from": "L",
+      "to": "L",
+      "kind": "subtree"
+    },
+    {
+      "from": "Libs",
+      "to": "Libs",
+      "kind": "subtree"
+    },
+    {
+      "from": "Prefs",
+      "to": "Prefs",
+      "kind": "subtree"
+    },
+    {
+      "from": "Rexxc",
+      "to": "Rexxc",
+      "kind": "subtree"
+    },
+    {
+      "from": "S",
+      "to": "S",
+      "kind": "subtree"
+    },
+    {
+      "from": "System",
+      "to": "System",
+      "kind": "subtree"
+    },
+    {
+      "from": "Tools",
+      "to": "Tools",
+      "kind": "subtree"
+    },
+    {
+      "from": "Utilities",
+      "to": "Utilities",
+      "kind": "subtree"
+    },
+    {
+      "from": "WBStartup",
+      "to": "WBStartup",
+      "kind": "subtree"
+    }
   ]
 }
