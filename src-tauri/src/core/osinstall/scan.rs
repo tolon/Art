@@ -315,7 +315,90 @@ pub fn find_media_across(folders: &[PathBuf]) -> CoreResult<Vec<FoundMedia>> {
         seen.push(canonical);
         found.extend(find_media(folder)?);
     }
-    Ok(found)
+    Ok(dedupe_identical_disks(found))
+}
+
+/// Drop a disk that a folder already contributed **byte for byte**.
+///
+/// The same reasoning as the canonical-path check above, extended from
+/// identity of *path* to identity of *content*: a user who keeps a copy of
+/// their `Workbench3.2.adf` in a second folder has one disk, and telling them
+/// it is ambiguous with itself is a refusal with no decision behind it -
+/// either copy builds the same tree.
+///
+/// **This covers duplicates inside one folder too**, not only across two,
+/// because every plan reaches the media through here - `wb.adf` and
+/// `wb-backup.adf` side by side in one folder is the same non-question. That
+/// is wider than the folder-list problem this function was added for, and is
+/// said out loud rather than left as a side effect somebody discovers.
+///
+/// **It never resolves a real disagreement.** Only exact duplicates are
+/// dropped; two disks sharing a name and differing by one byte stay, and stay
+/// ambiguous. That case is real and was measured on 2026-08-24: the owner's
+/// AmigaOS 3.2 folder and its `Update3.2.2/ADFs` folder each carry a
+/// `DiskDoctor.adf` of exactly 901 120 bytes with **different** SHA-256s -
+/// the update ships a newer DiskDoctor under the identical volume name, and
+/// which one somebody wants is not ART's to decide.
+///
+/// Hashing only happens when a name repeats, so the ordinary scan pays
+/// nothing.
+///
+/// A file whose hash cannot be read is kept rather than dropped - an
+/// unreadable duplicate is not a proven duplicate - and that branch is
+/// **not tested, disclosed rather than dressed up**: `find_media` has already
+/// opened every one of these files to read its volume name off the root
+/// block, so by the time this runs there is no ordinary way for one to be
+/// unreadable. Mutation confirms it: dropping the entry instead of keeping it
+/// leaves every test green. It stays because the alternative is silently
+/// losing a disk on a race nobody has seen, and that costs one line.
+fn dedupe_identical_disks(found: Vec<FoundMedia>) -> Vec<FoundMedia> {
+    let repeated: Vec<String> = found
+        .iter()
+        .map(|entry| entry.volume_name.clone())
+        .filter(|name| {
+            found
+                .iter()
+                .filter(|other| other.volume_name.eq_ignore_ascii_case(name))
+                .count()
+                > 1
+        })
+        .collect();
+    if repeated.is_empty() {
+        return found;
+    }
+
+    let mut kept: Vec<FoundMedia> = Vec::new();
+    let mut hashes: Vec<(String, String)> = Vec::new();
+    for entry in found {
+        let repeats = repeated
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(&entry.volume_name));
+        if !repeats {
+            kept.push(entry);
+            continue;
+        }
+        let Some(hash) = file_sha256(&entry.path) else {
+            kept.push(entry);
+            continue;
+        };
+        let already = hashes
+            .iter()
+            .any(|(name, seen)| name.eq_ignore_ascii_case(&entry.volume_name) && seen == &hash);
+        if already {
+            continue;
+        }
+        hashes.push((entry.volume_name.clone(), hash));
+        kept.push(entry);
+    }
+    kept
+}
+
+fn file_sha256(path: &std::path::Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).ok()?;
+    Some(format!("{:x}", hasher.finalize()))
 }
 
 /// Every package archive in `folder`, identified from **inside** each file.
@@ -662,10 +745,22 @@ mod tests {
         assert!(hotfix.path.ends_with("hotfix.adf"));
     }
 
-    /// **The same disk in two folders is refused by name, never resolved by
-    /// order.** Picking the one from the folder listed first would be ART
-    /// choosing between two of somebody's disks on the strength of the order
-    /// they happened to add them in.
+    /// **Two disks of one name that are not the same disk stay ambiguous,
+    /// and are refused by name rather than resolved by order.** Picking the
+    /// one from the folder listed first would be ART choosing between two of
+    /// somebody's disks on the strength of the order they happened to add
+    /// them in.
+    ///
+    /// The two differ by one file, which is the point: before 2026-08-24 this
+    /// test's fixture made two *identical* disks, so it was also asserting
+    /// that an exact copy is ambiguous with itself - which the rule above was
+    /// never about. See the test below.
+    ///
+    /// **This is the case the owner's own material is in.** Their AmigaOS 3.2
+    /// folder and its `Update3.2.2/ADFs` folder each carry a `DiskDoctor.adf`
+    /// of exactly 901 120 bytes with different SHA-256s: the update ships a
+    /// newer DiskDoctor under the identical volume name, and which one they
+    /// want is not ART's to decide.
     #[test]
     fn the_same_volume_in_two_folders_stays_ambiguous() {
         let dir = scratch("scan-across-dupes");
@@ -675,13 +770,44 @@ mod tests {
             std::fs::create_dir_all(folder).unwrap();
         }
         media(&one, "Workbench3.2", "wb.adf", &[]);
-        media(&two, "Workbench3.2", "wb-copy.adf", &[]);
+        media(
+            &two,
+            "Workbench3.2",
+            "wb-newer.adf",
+            &[("C/Version", b"newer", 0)],
+        );
 
         let found = find_media_across(&[one, two]).unwrap();
         let MediaMatch::Ambiguous(both) = media_for(&found, "Workbench3.2") else {
-            panic!("two copies must not resolve to one");
+            panic!("two different disks must not resolve to one");
         };
         assert_eq!(both.len(), 2, "and the refusal names both");
+    }
+
+    /// **An exact copy is one disk, not two.** The canonical-path rule above
+    /// says the same folder named twice is one folder; this is the same
+    /// reasoning by content rather than by path, and a user who keeps a copy
+    /// of a disk in a second folder has one disk.
+    ///
+    /// It cannot resolve a real disagreement: only byte-for-byte duplicates
+    /// are dropped, and the test above proves a one-file difference is enough
+    /// to keep both.
+    #[test]
+    fn an_exact_copy_of_a_disk_in_two_folders_is_one_disk() {
+        let dir = scratch("scan-across-identical");
+        let one = dir.join("one");
+        let two = dir.join("two");
+        for folder in [&one, &two] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        let original = media(&one, "Workbench3.2", "wb.adf", &[("C/List", b"x", 0)]);
+        std::fs::copy(&original, two.join("wb-copy.adf")).unwrap();
+
+        let found = find_media_across(&[one.clone(), two]).unwrap();
+        let MediaMatch::Found(entry) = media_for(&found, "Workbench3.2") else {
+            panic!("an exact copy is not a decision anybody has to make");
+        };
+        assert!(entry.path.starts_with(&one), "the first one named wins");
     }
 
     /// One folder named twice is one folder. A user who picks their media

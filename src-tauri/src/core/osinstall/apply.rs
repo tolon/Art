@@ -3602,6 +3602,47 @@ mod tests {
         }
     }
 
+    /// **What is actually on these folders' disks**, which is the step
+    /// work-list item 8 asks for before either update recipe is written: a
+    /// recipe written from volume names read off a web page is exactly how a
+    /// tree that was AmigaOS 3.5 shipped as 3.9
+    /// ([ART-159](../../../docs/ISSUES.md#fixed)).
+    ///
+    /// Several folders, separated by `;` - the shape `find_media_across`
+    /// takes, and the shape an update release needs, since it is the base
+    /// media plus the update's own disks.
+    ///
+    /// ```text
+    /// set ART_OSINSTALL_MEDIA=<base folder>;<update folder>
+    /// cargo test list_every_volume_when_asked -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "reads the user's real media; run explicitly with ART_OSINSTALL_MEDIA"]
+    fn list_every_volume_when_asked() {
+        let Ok(media) = std::env::var("ART_OSINSTALL_MEDIA") else {
+            eprintln!("set ART_OSINSTALL_MEDIA to one or more folders, separated by ;");
+            return;
+        };
+        let folders: Vec<PathBuf> = media.split(';').map(PathBuf::from).collect();
+        let found = crate::core::osinstall::scan::find_media_across(&folders).unwrap();
+        println!("folders={} volumes={}", folders.len(), found.len());
+        for entry in &found {
+            let mut source = AdfSource::open(&entry.path).unwrap();
+            let walked = source.walk("").unwrap();
+            let files = walked.iter().filter(|e| !e.is_dir).count();
+            println!(
+                "  {:<24} {:>4} files  {}",
+                entry.volume_name,
+                files,
+                entry
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            );
+        }
+    }
+
     /// Throwaway diagnostic (Task 4): lists what the real 3.9 disc actually
     /// holds near its root, to find the real path the shipped recipe's
     /// `OS-Version3.9/Workbench3.5/*` rules got wrong. Same env-var gate as
