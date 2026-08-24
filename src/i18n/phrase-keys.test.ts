@@ -901,6 +901,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
             from: "C",
             to: "C",
             isDir: true,
+            decompress: false,
             bytes: 0,
           },
         ],

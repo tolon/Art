@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fonts and replaces none of yours: the thirteen names share nothing with the
   fonts the base release installs, checked against the disc rather than
   assumed.
+- **AmigaOS 3.2: the help system is readable now.** Your 3.2 disks keep most
+  of their Locale content compressed, and the real installer expands it while
+  copying. ART did not: 3 263 files — every help page, in every language, plus
+  the Turkish fonts and catalogs — reached the volume still packed and under
+  the wrong name, so AmigaOS never found them. They are expanded now, which
+  makes an installed tree about seven megabytes larger and actually complete.
 - **AmigaOS 3.2: every keyboard layout, as a tick-box.** Your 3.2 set keeps
   twenty-two keyboard layouts — Turkish among them — on a shelf, and the
   drawer AmigaOS loads them from held twenty-two icons and nothing else. Tick

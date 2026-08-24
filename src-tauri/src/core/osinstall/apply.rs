@@ -170,6 +170,7 @@ use serde::{Deserialize, Serialize};
 use super::plan::{InstallPlan, PlanItem};
 use super::source::MediaSource;
 use super::startup::merge_user_startup;
+use crate::core::archive::compress;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::hashing::{sha256_bytes, sha256_file};
 use crate::core::jobs::ProgressSink;
@@ -689,7 +690,20 @@ impl<'a> TreeWriter<'a> {
                     item.to, item.media
                 ))
             })?;
-            let bytes = source.read(&item.from)?;
+            let raw = source.read(&item.from)?;
+            // ART-228. The release's own Installer expands these on the way
+            // in and drops the suffix; `plan` has already dropped the suffix
+            // from `item.to`, so writing the packed bytes here would put a
+            // file the Amiga cannot read under the name it will look for —
+            // worse than leaving it alone.
+            let bytes = if item.decompress {
+                compress::decompress(&raw).map_err(|e| CoreError::Malformed {
+                    format: "compress".into(),
+                    detail: format!("'{}' on media '{}': {e}", item.from, item.media),
+                })?
+            } else {
+                raw
+            };
             let entry = source.entry(&item.from)?.ok_or_else(|| {
                 CoreError::InvalidInput(format!(
                     "'{}' is no longer on media '{}'",
@@ -1596,6 +1610,7 @@ mod tests {
                 to: "C/LoadModule".into(),
                 is_dir: false,
                 bytes: 3,
+                decompress: false,
             },
             PlanItem {
                 component: "modules-a1200".into(),
@@ -1604,6 +1619,7 @@ mod tests {
                 to: "C/Other".into(),
                 is_dir: false,
                 bytes: 4,
+                decompress: false,
             },
         ];
         let total_bytes = items.iter().map(|i| i.bytes).sum();
@@ -1665,6 +1681,7 @@ mod tests {
                 to: "Storage/DOSDrivers/AUX".into(),
                 is_dir: false,
                 bytes: 10,
+                decompress: false,
             },
             PlanItem {
                 component: "workbench-base".into(),
@@ -1673,6 +1690,7 @@ mod tests {
                 to: "Devs/Prices: 1993".into(),
                 is_dir: false,
                 bytes: 7,
+                decompress: false,
             },
         ];
         let total_bytes = items.iter().map(|i| i.bytes).sum();
@@ -1729,6 +1747,7 @@ mod tests {
                 to: "Devs/Prices: 1993".into(),
                 is_dir: false,
                 bytes: 5,
+                decompress: false,
             },
             PlanItem {
                 component: "workbench-base".into(),
@@ -1737,6 +1756,7 @@ mod tests {
                 to: "Devs/Prices? 1993".into(),
                 is_dir: false,
                 bytes: 6,
+                decompress: false,
             },
         ];
         let plan = InstallPlan {
@@ -1844,6 +1864,7 @@ mod tests {
                 to: "Devs/Prices: 1993".into(),
                 is_dir: false,
                 bytes: 5,
+                decompress: false,
             },
             PlanItem {
                 component: "workbench-base".into(),
@@ -1852,6 +1873,7 @@ mod tests {
                 to: "Devs/prices? 1993".into(),
                 is_dir: false,
                 bytes: 6,
+                decompress: false,
             },
         ];
         let plan = InstallPlan {
@@ -2778,6 +2800,7 @@ mod tests {
             to: "Plain".into(),
             is_dir: false,
             bytes: 16,
+            decompress: false,
         }];
         let plan = InstallPlan {
             release: "Test".into(),
@@ -3144,6 +3167,7 @@ mod tests {
             to: "S/User-Startup".into(),
             is_dir: false,
             bytes: starter.len() as u64,
+            decompress: false,
         });
         plan.user_startup = vec![UserStartupContribution {
             component: "amissl".into(),
@@ -3267,6 +3291,7 @@ mod tests {
             to: "S/User-Startup".into(),
             is_dir: false,
             bytes: starter.len() as u64,
+            decompress: false,
         });
         plan.user_startup = vec![UserStartupContribution {
             component: "amissl".into(),
@@ -3418,6 +3443,12 @@ mod tests {
         println!("refusals={:?}", planned.refusals);
         println!("total_bytes={}", planned.total_bytes);
         println!("items={}", planned.items.len());
+        // ART-228: how many of them the medium ships compressed, printed so
+        // a run records it rather than a reader having to count the tree.
+        println!(
+            "compressed items={}",
+            planned.items.iter().filter(|i| i.decompress).count()
+        );
 
         let modules_on = planned.components_on.iter().any(|id| id == "modules-a1200");
         println!("modules-a1200 on without being chosen: {modules_on}");
@@ -3477,6 +3508,17 @@ mod tests {
         // component, chosen above: twenty-two keymap files into
         // `Devs/Keymaps`, which until now held twenty-two icons and nothing
         // they pointed at.
+        // **The byte totals grew again on 2026-08-24, and by seven megabytes.**
+        // ART-228: the medium ships **3 263** of these files `compress`-format
+        // `.Z`, and the release's own Installer expands them and drops the
+        // suffix. ART does the same now, so the tree holds what a real
+        // install holds rather than a drawer of packed files under names
+        // nothing reads. That is also why `planned.total_bytes` and
+        // `outcome.bytes` stop agreeing here — a `.Z` stream carries no
+        // expanded length, so the plan cannot predict it without reading
+        // every file, which is a price the live preview must not pay. The
+        // numbers below are what `apply` wrote, measured.
+        //
         // **`want_media` is not `want_components`, and 2026-08-24 is when
         // that stopped being the same number.** `built_from` carries one
         // record per *medium*; every component had its own disk until
@@ -3485,9 +3527,9 @@ mod tests {
         // Asserting one count against both is the kind of conflation that
         // holds until it quietly does not.
         let (want_components, want_media, want_files, want_dirs, want_bytes) = if rom_major < 47 {
-            (29, 28, 3976, 281, 12_751_572)
+            (29, 28, 3976, 281, 19_839_113)
         } else {
-            (28, 27, 3972, 278, 12_702_052)
+            (28, 27, 3972, 278, 19_789_593)
         };
         assert_eq!(
             planned.components_on.len(),
@@ -5433,6 +5475,7 @@ mod tests {
             to: fixtures::OVERWRITTEN_PATH.into(),
             is_dir: false,
             bytes: 8,
+            decompress: false,
         }];
         let mut writer = TreeWriter::new(&root, read_manifest(&root).files);
         writer.place(&items, &mut sources, &NoProgress).unwrap();

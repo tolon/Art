@@ -2376,6 +2376,7 @@ mod tests {
             to: to.to_string(),
             is_dir: false,
             bytes,
+            decompress: false,
         };
 
         let plan = InstallPlan {
@@ -4209,11 +4210,24 @@ mod tests {
                 to: "C".into(),
                 is_dir: true,
                 bytes: 0,
+                decompress: false,
             };
             let value = serde_json::to_value(&item).unwrap();
             expect_keys(
                 &value,
-                &["component", "media", "from", "to", "isDir", "bytes"],
+                &[
+                    "component",
+                    "media",
+                    "from",
+                    "to",
+                    "isDir",
+                    "bytes",
+                    // ART-228: whether `apply` expands these bytes on the
+                    // way in. On the wire because the file list is the only
+                    // place a person can see that `dos.catalog.Z` on the
+                    // medium becomes `dos.catalog` in the tree.
+                    "decompress",
+                ],
             );
             assert_eq!(value["isDir"], true);
         }

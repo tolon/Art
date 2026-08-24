@@ -241,6 +241,7 @@ const ITEM_WORKBENCH: PlanItem = {
   from: "DF0:C/Format",
   to: "C/Format",
   isDir: false,
+  decompress: false,
   bytes: 2 * 1024 * 1024,
 };
 
@@ -250,6 +251,7 @@ const ITEM_EXTRAS: PlanItem = {
   from: "DF0:Tools/HDToolBox",
   to: "Tools/HDToolBox",
   isDir: false,
+  decompress: false,
   bytes: 3 * 1024 * 1024,
 };
 

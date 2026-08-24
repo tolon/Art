@@ -26,81 +26,252 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-228** 🟠 **Every AmigaOS 3.2 tree ART builds carries 3 263 files the
-release's own Installer would have decompressed and renamed — the whole help
-system, and for a Turkish user the fonts and catalogs too** — *found
-2026-08-24 while measuring work-list item 2*
-`src-tauri/src/core/osinstall/apply.rs` ·
-`…/recipes/amigaos-3.2.json`
+**ART-226** 🟠 **Every tree ART builds has an empty `Devs/Keymaps`, so whatever
+language the user chose they can only type on an American keyboard — and for
+Turkish the keymap is not on the CD at all** — *found 2026-08-24 by the owner,
+typing into the Turkish 3.9 tree ART had just built and booted*
+`src-tauri/src/core/osinstall/recipes/amigaos-3.9.json` ·
+`…/amigaos-3.2.json`
 
-Counted on ART's own output, `E:\amiga\ProjeART\dist-3.2` — the tree that
-booted a licensed Kickstart to a clean Workbench:
+The fonts were fixed ([ART-225](#fixed)) and the Workbench menus render `ç ü ş
+Ğ` correctly. The owner then tried to **type** them and could not: *"klavye
+örtüsünde türkçe yok, sadece amerikan var"*.
 
-| where | `.Z` files |
+**Measured, on the disc and in the tree rather than reasoned about:**
+
+- `KEYMAPS:` is assigned to `DEVS:Keymaps`, and a keymap is loaded from there
+  (`SetKeyMapDefault`, AmigaOS Keymap Library documentation).
+- The tree's `Devs/Keymaps` is **empty** — and so is the disc's
+  `OS-Version3.9/Workbench3.5/Devs/Keymaps`, which carries only its own
+  `Keymaps.info`. ART copies an empty drawer faithfully; this is not a copying
+  defect. The disc's twenty keymaps sit in `Storage/Keymaps`, which is the
+  *shelf*: nothing on it is selectable until something puts a copy in
+  `Devs/Keymaps`. The real Installer is what asks the user and copies one.
+- So the only keymap any ART-built system has is the one in ROM, `usa`. That
+  is true for a German, French or Italian tree exactly as much as for a
+  Turkish one, and no screen in ART mentions it.
+
+**And Turkish is worse than "not copied": the disc does not carry it.** 36
+distinct keymap names across the whole ISO, and not one Turkish
+(`OS-Version3.9`'s `Special-Locale/türkçe` branch is fonts and nothing else —
+[ART-159](#fixed) measured that).
+
+**The owner's own reasoning found it, and it was right.** *"Bir araştır, Türk
+bayrağı varsa keymap vardır"* — the disc ships
+`Workbench3.9/Locale/Flags/Keymaps/türkçe`, a flag icon for a keymap it does
+not have. The flag set is broader than the disc's keymaps (`a`, `be`, `cdn2`,
+`oe`, `usa0`…`usa3` are flagged and absent too), so a flag proves the keymap
+exists *in the AmigaOS world*, not on this medium — and it does exist.
+
+**Where it is: `Locale3_9.lha`, the official AmigaOS 3.9 Locale update, which
+the owner already has.** Measured against their copy:
+
+| | |
 |---|---|
-| `Locale/Help` | **3 225** |
-| `Locale/Support` | 38 |
+| `Locale3.9/Locale/Devs/Keymaps/türkçe` | **1 008 bytes** (+ `.info`, 2 730) |
+| keymaps in the archive | **49**, against the CD's 20 |
+| `Locale/Countries/türkiye.country` | 538 bytes |
+| `Locale/Languages/türkçe.language` | 2 520 bytes |
+| `Locale/Flags/Countries/türkiye`, `Flags/Keymaps/türkçe` | 420 / 544 bytes |
+| `Locale/Providers/Türkiye` | 1 598 bytes |
+| `Locale/Fonts/türkçe` | **15 font families** — a strict superset of the CD's 13, adding `AmigaSans-iso9` and `helveticagr-ISO9`, missing none |
 
-In the English help branch that is **215 files out of 215**: not one plain
-file. `Locale/Catalogs/türkçe/Sys` holds exactly one file, `installer.catalog`.
+So the archive is a better source for Turkish than the CD in every respect ART
+already covers, and it is the only source for the two things ART cannot
+otherwise offer: the keymap and the country file.
 
-**`.Z` is Unix `compress` (LZW)** — first bytes `1f 9d` on
-`Locale-TR.adf`'s `Catalogs/türkçe/Sys/dos.catalog.Z`, read out of the owner's
-own disk.
+**Not fixed, because two of the three questions are the owner's, not a defect
+round's:**
 
-**The release says what should happen, in its own Installer script.**
-`Install3.2.adf`'s `Install/Install` (177 688 bytes) defines a procedure that
-walks a drawer, and for every name ending `.Z` strips the last two characters
-and copies with the Amiga `Installer`'s own decompressing option:
+1. **Should ART place a keymap at all?** Copying one from `Storage/Keymaps`
+   into `Devs/Keymaps` is a change to what the user types with — small, but a
+   system-wide default, and the kind of thing §92 says to offer rather than
+   assume. A tick-box per language, or one that follows the chosen locale.
+2. **Should `Locale3_9.lha` become a source?** It is an archive, not the
+   install medium, so it is a **package** in ART's own vocabulary
+   (`core/osinstall/package.rs`, `source_archive.rs`) rather than a recipe
+   component — the shape `locale-turkish` already uses for
+   `BoingBag39-2-turkce.lha`. Whether it is offered as one package or as a
+   Turkish slice of one is a catalogue decision.
+3. **Does the 3.2 side have the same hole?** Almost certainly, and partly
+   measured already: the owner's `Locale-TR.adf` carries
+   `Support/Fonts/topaz_iso-8859-9` and `SevenAlone_iso-8859-9` — Turkish
+   fonts the 3.2 recipe's `locale-tr` component does **not** place, which is
+   [ART-159](#fixed)'s defect again in the other recipe — and no keymap
+   either. Not confirmed against the shipped rules yet; recorded so the next
+   round starts from a measurement rather than a suspicion.
 
-    (procedure UNCOMPRESS sourcedir targetdir scanpattern
-      (foreach sourcedir scanpattern
-        (set #target @each-name)
-        (if (= (substr @each-name (- (strlen @each-name) 2)) ".Z")
-          (set #target (substr @each-name 0 (- (strlen @each-name) 2))))
-        …
-        (copyfiles (source …) (dest targetdir) (compression) (newname #target))))
+**What must not happen**, stated because it is the tempting shortcut: ART does
+not author a keymap and does not ship one. `Locale3_9.lha` is the user's own
+file, exactly like every other package ART applies.
 
-and calls it on, among others, `Support/Fonts` — the drawer that carries the
-Turkish ISO-8859-9 fonts. So the file that should reach the volume is
-`dos.catalog`, decompressed; what ART writes is `dos.catalog.Z`, compressed.
-**Both the contents and the name are wrong**, which is why nothing downstream
-notices: a manifest that records `dos.catalog.Z` and a volume that holds
-`dos.catalog.Z` agree with each other perfectly.
+**Question 1 answered by the owner, 2026-08-24: yes, and all of them.**
+*"klavye örtüsünü koyalım dağıtıma, biz bütün klavyeler olsun yaptığımız
+dağıtımda"* — every keymap the medium carries goes into `Devs/Keymaps`, not
+one chosen at build time. Measured for that build:
 
-**No decompressor exists anywhere on the 3.2 media** — every `C/` drawer on
-all 35 ADFs was searched and there is no `uncompress`, `unpack`, `lha` or
-`lzx`. The Amiga `Installer` does it itself, which is exactly why a
-host-side reimplementation has to do it too rather than shell out to
-something.
+- The shelf is on the **3.9 overlay**, not the 3.5 layer:
+  `OS-Version3.9/Workbench3.9/Storage/Keymaps` — **22 keymaps**, each with its
+  own `.info`, 44 entries: `1251Q_US_RUS`, `1251_GB1_RUS`, `1251_GB_RUS`, `br`,
+  `br2`, `br3-ABNT2`, `cat`, `cdn`, `ch1`, `ch2`, `d`, `dk`, `e`, `f`, `gb`,
+  `i`, `n`, `po`, `s`, `si`, `türkçe`, `usa2`. **`türkçe` is on that shelf** —
+  which narrows this entry's opening claim: the 3.9 CD does carry a Turkish
+  keymap after all, on the shelf where nothing selects it. `Locale3_9.lha`
+  remains the richer source (49 keymaps, and the country/language/flag files),
+  but it is no longer the *only* one.
+- **The icons belong too, and that is measured rather than assumed.** The CD
+  carries a real, bootable AmigaOS system in `Emergency-Boot`, and its
+  `Devs/Keymaps` holds thirteen keymaps **each beside its `.info`**. That is
+  what a working system looks like, so both go.
 
-**This is the [ART-159](#fixed)/[ART-225](#fixed) class again and larger than
-either.** The tree builds, verifies clean against its own manifest, and boots
-— and its entire help system is unreadable, in every language. For English
-that is a help system; for a Turkish user it is also the fonts and the twenty
-catalogs.
+**Built 2026-08-23/24 — a tick-box, on the owner's second thought.** Asked
+whether `required` or optional, they first said necessary and then refined it:
+*"dağıtımın içine konulabilir olsun, kutucuklu; bazı insanlar istemeyebilir ama
+az insan"*. So `keymaps` is `required: false`, declared after the two layers
+that touch `Devs`, one `Subtree` rule from the 3.9 overlay's shelf into
+`Devs/Keymaps`, and no `overrides` — the drawer it fills arrives empty and
+nothing of anyone's is replaced.
 
-**Not fixed. What it needs, and what it does not:**
+**A `Subtree` rule and not a list of forty-four `File` rules, because
+[ART-225](#fixed) happened.** A `File` rule's `to` is whatever the author
+typed; a subtree rule carries the medium's own spelling for every child. This
+drawer's twenty-second entry is `türkçe`, and the run proves the choice:
 
-- **An LZW `compress` reader in `core/archive`**, applied by `apply` when a
-  rule's source name ends `.Z`, writing the decompressed bytes under the name
-  without the suffix. `.Z` is a small, fully specified format; ART already
-  owns read-only decompressors behind one security gate and this belongs
-  beside them, bounded like the rest.
-- **A decision that is the owner's**: whether ART follows the release and
-  decompresses *silently* — which is what the Installer does and what makes a
-  tree correct — or records it. Recording is not free: 3 263 rows saying "and
-  it was decompressed" is noise, while saying nothing means a manifest whose
-  `sha256` is of bytes that are not on the medium. The honest shape is
-  probably to record the medium's own name and hash beside the placed one,
-  which is a manifest change rather than a copying one.
-- It does **not** need the Amiga. This is a host-side copy, like everything
-  else `apply` does.
+    keymaps: 44 entries, non-ASCII: ["türkçe", "türkçe.info"]
 
-**Whether AmigaOS 3.9 has the same hole is not measured.** The 3.9 recipe
-places `OS-Version3.9/Locale/Help` and the disc is a CD rather than a floppy
-set, so it may well ship those files plain. Checking is one listing and
-belongs with the fix rather than with this filing.
+That name was never typed into the recipe, into a test, or into this file's
+rule list — the disc carried it.
+
+**Measured against the owner's own disc**, all six components on
+(`apply::tests::build_the_real_39_language_components_when_asked`): **0
+refusals**, 2384 items, **1973 files** (44 more than before) / 194 directories
+/ 19 117 756 bytes in **16.28 s**. `keymaps` contributed 45 plan items — the 44
+entries plus the destination drawer a subtree rule always emits. No refusal
+means no collision either, which is what says declaring no override was right.
+
+**Mutations.** `required` flipped to `true` fails the recipe test on its own
+sentence; the destination changed to `Storage/Keymaps` likewise. A third was
+aimed at a `from` naming a path the disc lacks — and it **did not test what it
+was built to test**: `Workbench3.5/Storage/Keymaps` turns out to *exist* and be
+empty, so planning one item and no children is correct behaviour, not a silent
+failure. The concern behind it — that a mistyped subtree `from` might place
+nothing quietly — is **refuted** by reading `plan::expand_rules`, which calls
+`source.entry(&rule.from)` before every rule and pushes `MediaPathMissing` when
+it is `None`, subtree included; `a_path_the_recipe_expects_and_the_media_lacks_is_a_refusal_not_a_skip`
+already pins it. Recorded because a wrong elimination costs more than none.
+
+**Question 3 answered and built, 2026-08-24: the 3.2 recipe had the same hole,
+and worse.** Measured on ART's own `dist-3.2`: `Devs/Keymaps` holds twenty-two
+entries and **every one is a `.info`** — icons pointing at nothing, and the
+only usable keymap the one in ROM. The keymaps are on `Storage3.2`, the shelf,
+and **`tr` is among them**, so AmigaOS 3.2 ships a Turkish keymap that ART was
+not installing.
+
+**Solved the opposite way to the 3.9 side, and for the same reason rather than
+a different one.** The 3.2 component names its twenty-two keymaps as `File`
+rules; the 3.9 one takes its shelf whole with a `Subtree`. The 3.2 shelf
+carries a `.info` beside every keymap and `Devs/Keymaps` **already holds
+icons** — different, better ones (`Workbench3.2`'s `d.info` is 1 256 bytes,
+`Storage3.2`'s is 450), so a subtree rule would have replaced twenty-two good
+icons with shelf ones. On the 3.9 disc that drawer arrives empty, so there the
+shelf's icons are the only icons there are and `Emergency-Boot` shows a real
+system carrying keymap and icon both. Each recipe follows its own medium.
+Listing names is only safe here because the 3.2 shelf is ASCII; the 3.9 shelf
+holds `türkçe`, which is why that one may not be written this way
+([ART-225](#fixed)).
+
+**Measured against the owner's own 3.2 ADFs, both ROMs**, through
+`apply::tests::run_the_real_engine_against_the_users_own_media_when_asked`:
+
+| paired Kickstart | components on | files | dirs | bytes | media |
+|---|---|---|---|---|---|
+| V40 (`40.68` A1200) | 29 | 3 976 | 281 | 12 751 572 | 28 |
+| V47 (3.2's own `kicka1200.rom`) | 28 | 3 972 | 278 | 12 702 052 | 27 |
+
+0 refusals on both. On disk afterwards: **22 keymaps beside the 22 icons**,
+`tr` among them at 988 bytes, and `d.info` still 1 256 bytes — the system's own
+icon, not the shelf's. The keymaps are 34 940 bytes.
+
+**Two things fell out of that run that are worth more than the fix.**
+
+- **[ART-224](#fixed) is now measured on real material.** The byte total moved
+  by **exactly 15 934** before `keymaps` was even switched on, and that is the
+  GlowIcons ordering fix arriving in a tree: ten monitor icons at 1 452 bytes
+  against 476 is 9 760, and the six DOSDrivers icons account for the other
+  6 174. Until now that fix had only been measured by comparing two ADFs.
+- **`built_from` is not `components_on`.** The hook asserted one number
+  against both, which held only while every component had its own disk;
+  `keymaps` comes off `Storage3.2`, which `storage` already reads. One more
+  component, no more media. The two are separate pins now.
+
+**Still open: question 2** — `Locale3_9.lha` as a package. The keymap there is
+the same one, but the archive also carries `türkiye.country`, a 2 520-byte
+`türkçe.language`, both flags and 15 font families.
+
+**Fixed 2026-08-24, and verified on the owner's own material.**
+`core/amigainstall/finish.rs` — a typed vocabulary of two operations,
+`protect` and `replace-keeping-backup`, declared per package in
+`amiga_installer.post_install` and applied by `commands::amigainstall::perform`
+**on the host**, against the staged copy, between a `Succeeded` run and
+[`stage::settle`].
+
+**Host, not Amiga, and that is the design decision worth keeping.** HstWB does
+these as AmigaDOS lines because it has no host side while the install runs.
+ART has one, and moving the work there dissolved all three problems at once:
+no quoting (`Devs/AmigaOS ROM Update` has spaces, and `workvol` refuses `"`
+and whitespace on purpose — that refusal is right for an installer's own
+argument list and would have had to be weakened), no fifth `RunOutcome` (a
+failure is an ordinary `CoreError` raised *before* `settle`, so the copy is
+not promoted and the user's tree is untouched — §92's existing answer), and no
+emulator in the tests (all fifteen run in a tempdir).
+
+**The run, end to end, on a fresh copy of a pre-BoingBag tree:**
+
+| | |
+|---|---|
+| BoingBag 1 | `Succeeded`/`Promoted`, **169.1 s**, 3 863 files / 20 136 129 bytes |
+| BoingBag 2 | `Succeeded`/`Promoted`, **138.0 s**, 3 873 files / 20 855 334 bytes |
+
+BoingBag 1 reported all ten steps, one line each — `----rwed -> --p-rwed` for
+the seven commands, `----rwed -> -s--rwed` for the three scripts. The file
+count moved 3 859 → 3 863 and the bytes 20 135 997 → 20 136 129 against the
+un-fixed run earlier the same day, and that arithmetic closes exactly: four of
+the ten had no sidecar at all, so four were created, 4 × 33 = **132 bytes**.
+
+BoingBag 2 reported one line — *"'Devs/AmigaOS ROM Update.BB39-2' is now
+'Devs/AmigaOS ROM Update'; the previous one is at 'AmigaOS ROM Update.old'"* —
+and `Devs/` afterwards is what it should be:
+
+    AmigaOS ROM Update        321 768   sha256 14a12599...
+    AmigaOS ROM Update.BB39-2 321 768   sha256 14a12599...   (the same file)
+    AmigaOS ROM Update.old    127 956   sha256 308ff5ea...   (with its sidecar)
+
+So `SetPatch` now loads BoingBag 2's ROM update, and the one it replaced is
+kept rather than lost.
+
+**Mutations: seven against `finish.rs`, all seven fell** — dropping the
+missing-file refusal, dropping the letter check, overwriting the oldest backup
+instead of refusing, leaving a stale sidecar behind, not carrying the sidecar
+across, replacing without backing up, and joining the path instead of gating
+it through `safe_join`.
+
+**What is deliberately still not done**, because nothing has measured a need
+for it against ART's own result: HstWB's WarpUp library copies, its locale
+catalogs, the HDToolBox icon position, the second `Updater` run for
+`XAD-Update`, and copying `C/Installer` into `SYS:C` and `SYS:Utilities`. Each
+becomes a variant in `finish.rs` on the day a measurement asks for one;
+building an operation for an unmeasured step is how a vocabulary grows past
+what anyone can check. `NSDPatch.cfg` is left alone on purpose — it is
+user-editable configuration and a reference copy beside it is the right shape,
+which is the same conclusion HstWB reaches by touching neither.
+
+**Corrected 2026-08-24: this entry was in the Fixed section for part of a day
+and should not have been.** Closing [ART-227](#fixed) cut a span that ran from
+its own heading to the next one it named, and this entry sat inside it, so it
+travelled along. Question 1 is built and question 3 is built; **question 2 is
+not**, which is what keeps it here. Recorded rather than quietly moved back,
+because an entry that appears fixed is exactly as misleading as a fixed one
+that appears open.
 
 **ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
 neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
@@ -392,6 +563,147 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-228** 🟠 **Every AmigaOS 3.2 tree ART builds carries 3 263 files the
+release's own Installer would have decompressed and renamed — the whole help
+system, and for a Turkish user the fonts and catalogs too** — *found
+2026-08-24 while measuring work-list item 2*
+`src-tauri/src/core/osinstall/apply.rs` ·
+`…/recipes/amigaos-3.2.json`
+
+Counted on ART's own output, `E:\amiga\ProjeART\dist-3.2` — the tree that
+booted a licensed Kickstart to a clean Workbench:
+
+| where | `.Z` files |
+|---|---|
+| `Locale/Help` | **3 225** |
+| `Locale/Support` | 38 |
+
+In the English help branch that is **215 files out of 215**: not one plain
+file. `Locale/Catalogs/türkçe/Sys` holds exactly one file, `installer.catalog`.
+
+**`.Z` is Unix `compress` (LZW)** — first bytes `1f 9d` on
+`Locale-TR.adf`'s `Catalogs/türkçe/Sys/dos.catalog.Z`, read out of the owner's
+own disk.
+
+**The release says what should happen, in its own Installer script.**
+`Install3.2.adf`'s `Install/Install` (177 688 bytes) defines a procedure that
+walks a drawer, and for every name ending `.Z` strips the last two characters
+and copies with the Amiga `Installer`'s own decompressing option:
+
+    (procedure UNCOMPRESS sourcedir targetdir scanpattern
+      (foreach sourcedir scanpattern
+        (set #target @each-name)
+        (if (= (substr @each-name (- (strlen @each-name) 2)) ".Z")
+          (set #target (substr @each-name 0 (- (strlen @each-name) 2))))
+        …
+        (copyfiles (source …) (dest targetdir) (compression) (newname #target))))
+
+and calls it on, among others, `Support/Fonts` — the drawer that carries the
+Turkish ISO-8859-9 fonts. So the file that should reach the volume is
+`dos.catalog`, decompressed; what ART writes is `dos.catalog.Z`, compressed.
+**Both the contents and the name are wrong**, which is why nothing downstream
+notices: a manifest that records `dos.catalog.Z` and a volume that holds
+`dos.catalog.Z` agree with each other perfectly.
+
+**No decompressor exists anywhere on the 3.2 media** — every `C/` drawer on
+all 35 ADFs was searched and there is no `uncompress`, `unpack`, `lha` or
+`lzx`. The Amiga `Installer` does it itself, which is exactly why a
+host-side reimplementation has to do it too rather than shell out to
+something.
+
+**This is the [ART-159](#fixed)/[ART-225](#fixed) class again and larger than
+either.** The tree builds, verifies clean against its own manifest, and boots
+— and its entire help system is unreadable, in every language. For English
+that is a help system; for a Turkish user it is also the fonts and the twenty
+catalogs.
+
+**Not fixed. What it needs, and what it does not:**
+
+- **An LZW `compress` reader in `core/archive`**, applied by `apply` when a
+  rule's source name ends `.Z`, writing the decompressed bytes under the name
+  without the suffix. `.Z` is a small, fully specified format; ART already
+  owns read-only decompressors behind one security gate and this belongs
+  beside them, bounded like the rest.
+- **A decision that is the owner's**: whether ART follows the release and
+  decompresses *silently* — which is what the Installer does and what makes a
+  tree correct — or records it. Recording is not free: 3 263 rows saying "and
+  it was decompressed" is noise, while saying nothing means a manifest whose
+  `sha256` is of bytes that are not on the medium. The honest shape is
+  probably to record the medium's own name and hash beside the placed one,
+  which is a manifest change rather than a copying one.
+- It does **not** need the Amiga. This is a host-side copy, like everything
+  else `apply` does.
+
+**Whether AmigaOS 3.9 has the same hole is not measured.** The 3.9 recipe
+places `OS-Version3.9/Locale/Help` and the disc is a CD rather than a floppy
+set, so it may well ship those files plain. Checking is one listing and
+belongs with the fix rather than with this filing.
+
+**Fixed 2026-08-24.** `core/archive/compress.rs` — a `compress(1)` LZW reader,
+read only, written rather than depended on: `.Z` is small and fully specified,
+and a crate would have joined `cargo deny`'s surface for about a hundred lines
+while a decompressor pointed at untrusted bytes is exactly the thing whose
+bounds want to be visible. Every one of them is: the code width is checked
+against the header's own maximum, the dictionary cannot grow past it, an
+undefined code is refused by name, and the output is capped at 64 MB.
+
+`plan` marks an item `decompress` when the medium's name ends `.Z` and strips
+the suffix from the destination — because the release drops it too, so the
+tree holds `dos.catalog` and the manifest records that name and the hash of
+those bytes. `apply` expands on the way in.
+
+**Checked against a tool that is not ART.** `assign.help` off the owner's own
+`Locale-EN.adf`: ART writes 8 216 bytes with SHA-256
+`93043d551fc9465a8104ea41…`, and 7-Zip decompressing the same source produces
+the same bytes and the same hash. A permanent hook
+(`compress::oracle_hook::matches_7zip_on_a_real_file`, `#[ignore]`d,
+env-gated) does that comparison on any `.Z` it is pointed at.
+
+**Measured on the owner's own 3.2 ADFs, both ROMs.** `compressed items=3263`
+either way, 0 refusals, and **no `.Z` left in the tree**:
+
+| paired Kickstart | files | dirs | bytes |
+|---|---|---|---|
+| V40 (`40.68` A1200) | 3 976 | 281 | **19 839 113** (was 12 751 572) |
+| V47 (3.2's own `kicka1200.rom`) | 3 972 | 278 | **19 789 593** (was 12 702 052) |
+
+Seven megabytes of content that used to reach the volume packed and misnamed.
+`Locale/Help/english/Sys/Commands` now holds `addbuffers.help`,
+`adddatatypes.help`, `assign.help` — the names AmigaOS looks for.
+
+**What it cost, said plainly.** `planned.total_bytes` and `outcome.bytes` no
+longer agree for a tree with compressed content, and [ART-156](#fixed)
+established that they should. A `.Z` stream carries no expanded length, so the
+only way for the plan to predict it is to expand every file — and `plan()`
+runs live while a person ticks boxes, so that price would be paid on every
+keystroke. `PlanItem::bytes` stays the medium's own figure, the new
+`decompress` field says when the two differ, and the hook pins what `apply`
+actually wrote. This is a loss, not a wash.
+
+**The one path with no test, disclosed rather than claimed.** A `compress`
+stream may reset its dictionary mid-way, and that branch is implemented from
+the specification and exercised by nothing. No file on the owner's media gets
+near it — a reset happens when the dictionary fills, 65 536 entries at the
+16-bit maximum these files declare, and the largest `.Z` here is a few
+kilobytes. A fixture was attempted with a hand-written encoder emitting a
+clear code, and **7-Zip refused to agree with it**, which says the encoder's
+padding was wrong and says nothing about the decoder's. Tuning the encoder
+against 7-Zip and then testing the decoder against the tuned encoder is a
+circle wearing an oracle's clothes, so it was not done. The branch is written
+because a stream that resets and is silently truncated would be worse than one
+that is untested.
+
+**The manifest question this entry raised is answered by not arising.** The
+worry was that recording the placed bytes' hash would describe something that
+is not on the medium. It records what is *in the tree*, which is what `verify`
+reads back and what a person is asking about; the medium is named in the same
+row. Nothing is lost, so nothing was added.
+
+**Still not measured: whether AmigaOS 3.9 ships any `.Z`.** Its recipe reads a
+CD rather than a floppy set and may well carry those files plain. The hook now
+prints `compressed items=`, so the next 3.9 run answers it for free.
+
+
 **ART-227** 🟠 **ART runs a BoingBag's `Updater` exactly the way the one
 readable distribution builder does, and then stops — the fix-ups that builder
 performs *after* it are not done, and one of them is what activates BoingBag
@@ -549,246 +861,6 @@ before the result marker. Two things that must not be got wrong:
   and here it provably cannot. `one_token` must **not** be applied to these
   fields — that is the one existing check the new path deliberately does not
   reuse, and the reason belongs in the code beside it.
-
-**ART-226** 🟠 **Every tree ART builds has an empty `Devs/Keymaps`, so whatever
-language the user chose they can only type on an American keyboard — and for
-Turkish the keymap is not on the CD at all** — *found 2026-08-24 by the owner,
-typing into the Turkish 3.9 tree ART had just built and booted*
-`src-tauri/src/core/osinstall/recipes/amigaos-3.9.json` ·
-`…/amigaos-3.2.json`
-
-The fonts were fixed ([ART-225](#fixed)) and the Workbench menus render `ç ü ş
-Ğ` correctly. The owner then tried to **type** them and could not: *"klavye
-örtüsünde türkçe yok, sadece amerikan var"*.
-
-**Measured, on the disc and in the tree rather than reasoned about:**
-
-- `KEYMAPS:` is assigned to `DEVS:Keymaps`, and a keymap is loaded from there
-  (`SetKeyMapDefault`, AmigaOS Keymap Library documentation).
-- The tree's `Devs/Keymaps` is **empty** — and so is the disc's
-  `OS-Version3.9/Workbench3.5/Devs/Keymaps`, which carries only its own
-  `Keymaps.info`. ART copies an empty drawer faithfully; this is not a copying
-  defect. The disc's twenty keymaps sit in `Storage/Keymaps`, which is the
-  *shelf*: nothing on it is selectable until something puts a copy in
-  `Devs/Keymaps`. The real Installer is what asks the user and copies one.
-- So the only keymap any ART-built system has is the one in ROM, `usa`. That
-  is true for a German, French or Italian tree exactly as much as for a
-  Turkish one, and no screen in ART mentions it.
-
-**And Turkish is worse than "not copied": the disc does not carry it.** 36
-distinct keymap names across the whole ISO, and not one Turkish
-(`OS-Version3.9`'s `Special-Locale/türkçe` branch is fonts and nothing else —
-[ART-159](#fixed) measured that).
-
-**The owner's own reasoning found it, and it was right.** *"Bir araştır, Türk
-bayrağı varsa keymap vardır"* — the disc ships
-`Workbench3.9/Locale/Flags/Keymaps/türkçe`, a flag icon for a keymap it does
-not have. The flag set is broader than the disc's keymaps (`a`, `be`, `cdn2`,
-`oe`, `usa0`…`usa3` are flagged and absent too), so a flag proves the keymap
-exists *in the AmigaOS world*, not on this medium — and it does exist.
-
-**Where it is: `Locale3_9.lha`, the official AmigaOS 3.9 Locale update, which
-the owner already has.** Measured against their copy:
-
-| | |
-|---|---|
-| `Locale3.9/Locale/Devs/Keymaps/türkçe` | **1 008 bytes** (+ `.info`, 2 730) |
-| keymaps in the archive | **49**, against the CD's 20 |
-| `Locale/Countries/türkiye.country` | 538 bytes |
-| `Locale/Languages/türkçe.language` | 2 520 bytes |
-| `Locale/Flags/Countries/türkiye`, `Flags/Keymaps/türkçe` | 420 / 544 bytes |
-| `Locale/Providers/Türkiye` | 1 598 bytes |
-| `Locale/Fonts/türkçe` | **15 font families** — a strict superset of the CD's 13, adding `AmigaSans-iso9` and `helveticagr-ISO9`, missing none |
-
-So the archive is a better source for Turkish than the CD in every respect ART
-already covers, and it is the only source for the two things ART cannot
-otherwise offer: the keymap and the country file.
-
-**Not fixed, because two of the three questions are the owner's, not a defect
-round's:**
-
-1. **Should ART place a keymap at all?** Copying one from `Storage/Keymaps`
-   into `Devs/Keymaps` is a change to what the user types with — small, but a
-   system-wide default, and the kind of thing §92 says to offer rather than
-   assume. A tick-box per language, or one that follows the chosen locale.
-2. **Should `Locale3_9.lha` become a source?** It is an archive, not the
-   install medium, so it is a **package** in ART's own vocabulary
-   (`core/osinstall/package.rs`, `source_archive.rs`) rather than a recipe
-   component — the shape `locale-turkish` already uses for
-   `BoingBag39-2-turkce.lha`. Whether it is offered as one package or as a
-   Turkish slice of one is a catalogue decision.
-3. **Does the 3.2 side have the same hole?** Almost certainly, and partly
-   measured already: the owner's `Locale-TR.adf` carries
-   `Support/Fonts/topaz_iso-8859-9` and `SevenAlone_iso-8859-9` — Turkish
-   fonts the 3.2 recipe's `locale-tr` component does **not** place, which is
-   [ART-159](#fixed)'s defect again in the other recipe — and no keymap
-   either. Not confirmed against the shipped rules yet; recorded so the next
-   round starts from a measurement rather than a suspicion.
-
-**What must not happen**, stated because it is the tempting shortcut: ART does
-not author a keymap and does not ship one. `Locale3_9.lha` is the user's own
-file, exactly like every other package ART applies.
-
-**Question 1 answered by the owner, 2026-08-24: yes, and all of them.**
-*"klavye örtüsünü koyalım dağıtıma, biz bütün klavyeler olsun yaptığımız
-dağıtımda"* — every keymap the medium carries goes into `Devs/Keymaps`, not
-one chosen at build time. Measured for that build:
-
-- The shelf is on the **3.9 overlay**, not the 3.5 layer:
-  `OS-Version3.9/Workbench3.9/Storage/Keymaps` — **22 keymaps**, each with its
-  own `.info`, 44 entries: `1251Q_US_RUS`, `1251_GB1_RUS`, `1251_GB_RUS`, `br`,
-  `br2`, `br3-ABNT2`, `cat`, `cdn`, `ch1`, `ch2`, `d`, `dk`, `e`, `f`, `gb`,
-  `i`, `n`, `po`, `s`, `si`, `türkçe`, `usa2`. **`türkçe` is on that shelf** —
-  which narrows this entry's opening claim: the 3.9 CD does carry a Turkish
-  keymap after all, on the shelf where nothing selects it. `Locale3_9.lha`
-  remains the richer source (49 keymaps, and the country/language/flag files),
-  but it is no longer the *only* one.
-- **The icons belong too, and that is measured rather than assumed.** The CD
-  carries a real, bootable AmigaOS system in `Emergency-Boot`, and its
-  `Devs/Keymaps` holds thirteen keymaps **each beside its `.info`**. That is
-  what a working system looks like, so both go.
-
-**Built 2026-08-23/24 — a tick-box, on the owner's second thought.** Asked
-whether `required` or optional, they first said necessary and then refined it:
-*"dağıtımın içine konulabilir olsun, kutucuklu; bazı insanlar istemeyebilir ama
-az insan"*. So `keymaps` is `required: false`, declared after the two layers
-that touch `Devs`, one `Subtree` rule from the 3.9 overlay's shelf into
-`Devs/Keymaps`, and no `overrides` — the drawer it fills arrives empty and
-nothing of anyone's is replaced.
-
-**A `Subtree` rule and not a list of forty-four `File` rules, because
-[ART-225](#fixed) happened.** A `File` rule's `to` is whatever the author
-typed; a subtree rule carries the medium's own spelling for every child. This
-drawer's twenty-second entry is `türkçe`, and the run proves the choice:
-
-    keymaps: 44 entries, non-ASCII: ["türkçe", "türkçe.info"]
-
-That name was never typed into the recipe, into a test, or into this file's
-rule list — the disc carried it.
-
-**Measured against the owner's own disc**, all six components on
-(`apply::tests::build_the_real_39_language_components_when_asked`): **0
-refusals**, 2384 items, **1973 files** (44 more than before) / 194 directories
-/ 19 117 756 bytes in **16.28 s**. `keymaps` contributed 45 plan items — the 44
-entries plus the destination drawer a subtree rule always emits. No refusal
-means no collision either, which is what says declaring no override was right.
-
-**Mutations.** `required` flipped to `true` fails the recipe test on its own
-sentence; the destination changed to `Storage/Keymaps` likewise. A third was
-aimed at a `from` naming a path the disc lacks — and it **did not test what it
-was built to test**: `Workbench3.5/Storage/Keymaps` turns out to *exist* and be
-empty, so planning one item and no children is correct behaviour, not a silent
-failure. The concern behind it — that a mistyped subtree `from` might place
-nothing quietly — is **refuted** by reading `plan::expand_rules`, which calls
-`source.entry(&rule.from)` before every rule and pushes `MediaPathMissing` when
-it is `None`, subtree included; `a_path_the_recipe_expects_and_the_media_lacks_is_a_refusal_not_a_skip`
-already pins it. Recorded because a wrong elimination costs more than none.
-
-**Question 3 answered and built, 2026-08-24: the 3.2 recipe had the same hole,
-and worse.** Measured on ART's own `dist-3.2`: `Devs/Keymaps` holds twenty-two
-entries and **every one is a `.info`** — icons pointing at nothing, and the
-only usable keymap the one in ROM. The keymaps are on `Storage3.2`, the shelf,
-and **`tr` is among them**, so AmigaOS 3.2 ships a Turkish keymap that ART was
-not installing.
-
-**Solved the opposite way to the 3.9 side, and for the same reason rather than
-a different one.** The 3.2 component names its twenty-two keymaps as `File`
-rules; the 3.9 one takes its shelf whole with a `Subtree`. The 3.2 shelf
-carries a `.info` beside every keymap and `Devs/Keymaps` **already holds
-icons** — different, better ones (`Workbench3.2`'s `d.info` is 1 256 bytes,
-`Storage3.2`'s is 450), so a subtree rule would have replaced twenty-two good
-icons with shelf ones. On the 3.9 disc that drawer arrives empty, so there the
-shelf's icons are the only icons there are and `Emergency-Boot` shows a real
-system carrying keymap and icon both. Each recipe follows its own medium.
-Listing names is only safe here because the 3.2 shelf is ASCII; the 3.9 shelf
-holds `türkçe`, which is why that one may not be written this way
-([ART-225](#fixed)).
-
-**Measured against the owner's own 3.2 ADFs, both ROMs**, through
-`apply::tests::run_the_real_engine_against_the_users_own_media_when_asked`:
-
-| paired Kickstart | components on | files | dirs | bytes | media |
-|---|---|---|---|---|---|
-| V40 (`40.68` A1200) | 29 | 3 976 | 281 | 12 751 572 | 28 |
-| V47 (3.2's own `kicka1200.rom`) | 28 | 3 972 | 278 | 12 702 052 | 27 |
-
-0 refusals on both. On disk afterwards: **22 keymaps beside the 22 icons**,
-`tr` among them at 988 bytes, and `d.info` still 1 256 bytes — the system's own
-icon, not the shelf's. The keymaps are 34 940 bytes.
-
-**Two things fell out of that run that are worth more than the fix.**
-
-- **[ART-224](#fixed) is now measured on real material.** The byte total moved
-  by **exactly 15 934** before `keymaps` was even switched on, and that is the
-  GlowIcons ordering fix arriving in a tree: ten monitor icons at 1 452 bytes
-  against 476 is 9 760, and the six DOSDrivers icons account for the other
-  6 174. Until now that fix had only been measured by comparing two ADFs.
-- **`built_from` is not `components_on`.** The hook asserted one number
-  against both, which held only while every component had its own disk;
-  `keymaps` comes off `Storage3.2`, which `storage` already reads. One more
-  component, no more media. The two are separate pins now.
-
-**Still open: question 2** — `Locale3_9.lha` as a package. The keymap there is
-the same one, but the archive also carries `türkiye.country`, a 2 520-byte
-`türkçe.language`, both flags and 15 font families.
-
-**Fixed 2026-08-24, and verified on the owner's own material.**
-`core/amigainstall/finish.rs` — a typed vocabulary of two operations,
-`protect` and `replace-keeping-backup`, declared per package in
-`amiga_installer.post_install` and applied by `commands::amigainstall::perform`
-**on the host**, against the staged copy, between a `Succeeded` run and
-[`stage::settle`].
-
-**Host, not Amiga, and that is the design decision worth keeping.** HstWB does
-these as AmigaDOS lines because it has no host side while the install runs.
-ART has one, and moving the work there dissolved all three problems at once:
-no quoting (`Devs/AmigaOS ROM Update` has spaces, and `workvol` refuses `"`
-and whitespace on purpose — that refusal is right for an installer's own
-argument list and would have had to be weakened), no fifth `RunOutcome` (a
-failure is an ordinary `CoreError` raised *before* `settle`, so the copy is
-not promoted and the user's tree is untouched — §92's existing answer), and no
-emulator in the tests (all fifteen run in a tempdir).
-
-**The run, end to end, on a fresh copy of a pre-BoingBag tree:**
-
-| | |
-|---|---|
-| BoingBag 1 | `Succeeded`/`Promoted`, **169.1 s**, 3 863 files / 20 136 129 bytes |
-| BoingBag 2 | `Succeeded`/`Promoted`, **138.0 s**, 3 873 files / 20 855 334 bytes |
-
-BoingBag 1 reported all ten steps, one line each — `----rwed -> --p-rwed` for
-the seven commands, `----rwed -> -s--rwed` for the three scripts. The file
-count moved 3 859 → 3 863 and the bytes 20 135 997 → 20 136 129 against the
-un-fixed run earlier the same day, and that arithmetic closes exactly: four of
-the ten had no sidecar at all, so four were created, 4 × 33 = **132 bytes**.
-
-BoingBag 2 reported one line — *"'Devs/AmigaOS ROM Update.BB39-2' is now
-'Devs/AmigaOS ROM Update'; the previous one is at 'AmigaOS ROM Update.old'"* —
-and `Devs/` afterwards is what it should be:
-
-    AmigaOS ROM Update        321 768   sha256 14a12599...
-    AmigaOS ROM Update.BB39-2 321 768   sha256 14a12599...   (the same file)
-    AmigaOS ROM Update.old    127 956   sha256 308ff5ea...   (with its sidecar)
-
-So `SetPatch` now loads BoingBag 2's ROM update, and the one it replaced is
-kept rather than lost.
-
-**Mutations: seven against `finish.rs`, all seven fell** — dropping the
-missing-file refusal, dropping the letter check, overwriting the oldest backup
-instead of refusing, leaving a stale sidecar behind, not carrying the sidecar
-across, replacing without backing up, and joining the path instead of gating
-it through `safe_join`.
-
-**What is deliberately still not done**, because nothing has measured a need
-for it against ART's own result: HstWB's WarpUp library copies, its locale
-catalogs, the HDToolBox icon position, the second `Updater` run for
-`XAD-Update`, and copying `C/Installer` into `SYS:C` and `SYS:Utilities`. Each
-becomes a variant in `finish.rs` on the day a measurement asks for one;
-building an operation for an unmeasured step is how a vocabulary grows past
-what anyone can check. `NSDPatch.cfg` is left alone on purpose — it is
-user-editable configuration and a reference copy beside it is the right shape,
-which is the same conclusion HstWB reaches by touching neither.
-
 
 **ART-225** 🟠 ✅ **Thirteen font descriptors were placed as `X.FONT` and the
 running Amiga could see none of them — `diskfont.library` matches the `.font`

@@ -206,6 +206,14 @@ export interface PlanItem {
   from: string;
   to: string;
   isDir: boolean;
+  /** Whether ART expands these bytes on the way in (ART-228).
+   *
+   *  AmigaOS 3.2's media ships most of its Locale content `compress`-format,
+   *  and the release's own Installer expands it and drops the `.Z`. `to`
+   *  already carries the name without the suffix, so this is the only field
+   *  that says the file on the medium and the file in the tree are not the
+   *  same bytes. */
+  decompress: boolean;
   bytes: number;
 }
 
