@@ -51,6 +51,7 @@ import { useRomPairing } from "@/lib/useRomPairing";
 import { isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { usePowerMode } from "@/lib/uxmode";
+import { useBuildSession } from "@/lib/useBuildSession";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { size } from "@/lib/size";
 import { Field } from "@/components/osbuilder/Field";
@@ -58,16 +59,28 @@ import { errorText } from "@/lib/errorText";
 
 export function VolumePreload() {
   const { t } = useTranslation();
+  const { session, setCard } = useBuildSession();
   const powerMode = usePowerMode();
   const toolPath = useSettingsStore((state) => state.settings.hstImagerPath);
   const updateSettings = useSettingsStore((state) => state.update);
 
   // --- what the user chose, remembered ------------------------------------
-  const [imagePath, setImagePath] = useRemembered<string | null>(
-    "preload.image",
-    isTextOrNothing,
-    null
-  );
+  /**
+   * **The same card the card builder just wrote** (ART-197's remaining
+   * duplicate, wave 2).
+   *
+   * This screen kept `preload.image` and the card builder kept
+   * `cardBuilder.dest` until 2026-08-24: two remembered keys for one card, so
+   * a user who had just watched ART lay out an image was asked to go and find
+   * it. ART-197's own words for that shape — *a carry the user cannot see is
+   * the same defect as one that never happened.*
+   *
+   * `seedCardImage` migrates both, hand-picked first: a card somebody went and
+   * chose here outranks one ART wrote, because moving a setting is still
+   * changing it.
+   */
+  const imagePath = session.card.image;
+  const setImagePath = setCard;
   const [driver, setDriver] = useRemembered<string | null>(
     "preload.driver",
     isTextOrNothing,
