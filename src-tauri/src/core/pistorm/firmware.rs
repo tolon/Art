@@ -277,7 +277,7 @@ fn is_managed_overlay(trimmed: &str) -> bool {
 /// When a file is shaped like that, **the release knows its own boot layout
 /// and ART does not.** ART's single `kernel_file` is for the other case: a
 /// file it is writing from nothing, or a flat one it wrote itself.
-fn selects_boot_per_board(existing: &str) -> bool {
+pub(crate) fn selects_boot_per_board(existing: &str) -> bool {
     existing
         .lines()
         .map(str::trim)

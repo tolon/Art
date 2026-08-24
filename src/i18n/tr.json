@@ -1001,7 +1001,17 @@
       "confirmDelete": "'{{name}}' seti silinsin mi? ART bir kopyasını saklar, yani geri alınabilir — ama set listeden çıkar.",
       "deleted": "'{{name}}' seti silindi.",
       "deletedWithBackup": "'{{name}}' seti silindi. Bir kopyası {{path}} konumunda.",
-      "deleteKeeps": "Bir seti silmek kopyasını saklar. Kartın çalıştırdığı set silinemez — önce başka birini etkin yapın."
+      "deleteKeeps": "Bir seti silmek kopyasını saklar. Kartın çalıştırdığı set silinemez — önce başka birini etkin yapın.",
+      "effect": {
+        "kickstartChanges": "Amiga artık {{from}} yerine {{to}} yükleyecek.",
+        "kickstartSet": "Amiga {{to}} yükleyecek.",
+        "kernelChanges": "Pi artık {{from}} yerine {{to}} açacak.",
+        "kernelSet": "Pi {{to}} açacak.",
+        "kickstartMissing": "{{name}} bu kartta yok. Amiga Kickstart'sız açılırdı.",
+        "kernelMissing": "{{name}} bu kartta yok. Pi açacak bir şey bulamazdı.",
+        "noKernel": "Bu set hiçbir çekirdek adlandırmıyor. Kartınız başka bir yoldan açılıyorsa sorun değil; ama elle düzenlenirken satırını kaybetmiş bir dosya da böyle görünür.",
+        "perBoard": "Bu set çekirdeğini açılışta karttan seçiyor, o yüzden ART hangisi olduğunu denetlemedi - sürüm kendi açılış düzenini biliyor."
+      }
     }
   },
   "gotek": {

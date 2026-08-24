@@ -366,8 +366,17 @@ and is what [G16](#g16--multiboot-as-a-first-class-build--done-2026-08-24-engine
 carries out: Kickstart's own early-startup menu plus boot priorities, with a
 custom boot manager explicitly out of scope — recorded, as this row asked.
 
-Still open below: editing an existing card's boot order, and the RECOVERY:
-template.
+**Activating a set says what it means, since 2026-08-24.** The preview was a
+text diff, which hides nothing and reads nothing: `kernel=Emu68-pistorm.gz`
+becoming `kernel=Emu68.img` is one changed character on screen and a card that
+does not boot on the bench. `core/pistorm/activation.rs` names which Kickstart
+the Amiga will load, which kernel the Pi will boot, and whether either is on
+the card at all — and refuses to name anything when the file chooses per board,
+because there its `initramfs` is firmware rather than a Kickstart (ART-204).
+
+Still open below: editing an existing card's boot order, the RECOVERY:
+template, and **which volume a set is for** — ART knows the ROM and kernel a
+set names, not which system partition it belongs with.
 
 
 - Set bootable flags and **boot priority** per partition on an existing RDB

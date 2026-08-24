@@ -414,6 +414,12 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // and a size that leaves the first system less than its own partition —
     // are enumerated in `phrase-keys.test.ts`, which is again the check this
     // one cannot make.
-    expect(dynamicCalls).toBe(136);
+    // 136 → 137 (SD-3 G16, what activating a firmware set means): one, and the
+    // same shape as the three above it. `activationPhrase` maps an
+    // `ActivationEffect` to a key and the PiStorm studio renders it above the
+    // diff; `phrase-keys.test.ts` enumerates all six variants, including both
+    // arms of the two that read differently when there is nothing to change
+    // *from*.
+    expect(dynamicCalls).toBe(137);
   });
 });

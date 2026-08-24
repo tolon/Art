@@ -39,6 +39,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   AmigaOS 3.2.2.1 needs: your own 3.2 floppies plus the update disks beside
   them.
 
+- **Switching firmware sets now tells you what will actually change.** ART
+  showed you the two files side by side, which hides nothing and says nothing:
+  a kernel name changing is one character in a diff and a Pi that does not
+  boot. Before the button you are now told which Kickstart the Amiga will
+  load, which kernel the Pi will boot, and — said loudest — if either of them
+  is **not on the card**, because that failure appears on the Amiga where
+  nothing on your screen would have warned you. Where the file picks its
+  kernel from the board at start-up, ART says so and checks nothing: the
+  release knows its own boot layout and ART does not.
+
 #### Fixed
 - **ART would have built a 20 GB FFS partition that corrupts the drive.** A
   Kickstart before v46 cannot address past 4 GB on FFS, and going past it does

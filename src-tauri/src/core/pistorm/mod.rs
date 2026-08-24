@@ -13,6 +13,7 @@
 //! Both files are **merged, never regenerated** (spec §39, §40). They carry the
 //! Raspberry Pi's own settings, and a regenerated `cmdline.txt` has no `root=`.
 
+pub mod activation;
 pub mod firmware;
 pub mod hardware;
 pub mod options;
@@ -445,6 +446,12 @@ pub struct ConfigSetPreview {
     pub file_name: String,
     pub before: String,
     pub after: String,
+    /// What the change *means*, which a diff cannot say.
+    ///
+    /// A line moving from one kernel name to another is one changed character
+    /// to a diff and a card that does not boot to a Pi - [ART-103](../../../../docs/ISSUES.md)
+    /// exactly, reached by a different road. See [`activation::ActivationEffect`].
+    pub effects: Vec<activation::ActivationEffect>,
 }
 
 /// Where a named set's text would come from.
@@ -500,6 +507,12 @@ pub fn preview_config_set(
             .unwrap_or_default(),
         before: read_or_empty(&path),
         after: config_set_text(root, source, from, setup)?,
+        // Empty on purpose. This preview writes `config_<name>.txt`, which is
+        // not the file the Pi reads - `config.txt` is - so "the kernel
+        // changes" would be a sentence about a file that boots nothing. The
+        // check belongs where the set becomes the boot config, which is
+        // `preview_activate_config_set`.
+        effects: Vec::new(),
     })
 }
 
@@ -587,15 +600,36 @@ pub fn delete_config_set(root: &Path, name: &str) -> CoreResult<Option<String>> 
 }
 
 /// What activating a set would do to `config.txt` (spec §92).
+/// The file names directly in the boot partition's root.
+///
+/// Directories are left out: `kernel=` and `initramfs` name files, and a
+/// folder that happens to share a name is not one of them. An unreadable
+/// folder gives an empty list, which makes every name look absent - said here
+/// because that is the failure mode, and it is the safe direction: a warning
+/// nobody needed rather than a silent one nobody got.
+fn file_names_in(root: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.path().is_file())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
 pub fn preview_activate_config_set(root: &Path, name: &str) -> CoreResult<ConfigSetPreview> {
     let path = config_set_path(root, name)?;
     if !path.is_file() {
         return Err(CoreError::InvalidInput(format!("There is no '{name}' set")));
     }
+    let before = read_or_empty(&root.join("config.txt"));
+    let after = std::fs::read_to_string(path)?;
     Ok(ConfigSetPreview {
         file_name: "config.txt".into(),
-        before: read_or_empty(&root.join("config.txt")),
-        after: std::fs::read_to_string(path)?,
+        effects: activation::activation_effects(&before, &after, &file_names_in(root)),
+        before,
+        after,
     })
 }
 
@@ -643,6 +677,76 @@ mod tests {
             std::fs::write(dir.join(name), contents).unwrap();
         }
         Card(dir)
+    }
+
+    /// **The check reaching a real folder**, which is the half the pure tests
+    /// in `activation.rs` cannot cover: they are handed a file list, and this
+    /// is where the list comes from.
+    ///
+    /// The set names a kernel no release has ever carried - ART-103's own
+    /// wrong name - and the card does not have it. Before this, activating it
+    /// showed a one-character diff and produced a card that would not boot.
+    #[test]
+    fn activating_a_set_that_names_a_missing_kernel_says_so() {
+        let card = card(&[
+            (
+                "config.txt",
+                "kernel=Emu68-pistorm.gz
+initramfs kick.rom
+",
+            ),
+            ("Emu68-pistorm.gz", "x"),
+            ("kick.rom", "x"),
+            (
+                "config_broken.txt",
+                "kernel=Emu68.img
+initramfs kick.rom
+",
+            ),
+        ]);
+
+        let preview = preview_activate_config_set(card.path(), "broken").unwrap();
+        assert!(
+            preview
+                .effects
+                .contains(&activation::ActivationEffect::KernelNotOnTheCard {
+                    name: "Emu68.img".into()
+                }),
+            "{:?}",
+            preview.effects
+        );
+    }
+
+    /// The other arm. Without it the test above passes on a preview that calls
+    /// everything missing - which is exactly what an empty file list would do.
+    #[test]
+    fn activating_a_set_whose_files_are_all_there_reports_only_the_change() {
+        let card = card(&[
+            (
+                "config.txt",
+                "kernel=Emu68-pistorm.gz
+initramfs kick.rom
+",
+            ),
+            ("Emu68-pistorm.gz", "x"),
+            ("kick.rom", "x"),
+            ("kick31.rom", "x"),
+            (
+                "config_31.txt",
+                "kernel=Emu68-pistorm.gz
+initramfs kick31.rom
+",
+            ),
+        ]);
+
+        let preview = preview_activate_config_set(card.path(), "31").unwrap();
+        assert_eq!(
+            preview.effects,
+            vec![activation::ActivationEffect::KickstartChanges {
+                from: Some("kick.rom".into()),
+                to: "kick31.rom".into()
+            }]
+        );
     }
 
     /// A 256 KB block that passes `verify_kickstart_checksum`.
