@@ -2145,7 +2145,11 @@
       "rescan": "Yeniden tara",
       "rescanned_one": "{{count}} hatırlanan tarama atıldı. Diskler yeniden okunacak.",
       "rescanned_other": "{{count}} hatırlanan tarama atıldı. Diskler yeniden okunacak.",
-      "rescannedNone": "Hatırlanan bir şey yoktu. Diskler zaten yeniden okunuyor."
+      "rescannedNone": "Hatırlanan bir şey yoktu. Diskler zaten yeniden okunuyor.",
+      "addFolder": "Başka klasör ekle",
+      "removeFolder": "Kaldır",
+      "addTitle": "Bu sürümün disketlerini tutan başka bir klasör seçin",
+      "addHint": "AmigaOS 3.2.2.1, 3.2 disketleriniz artı Update ve Hotfix klasörleri — her birini ekleyin."
     },
     "rom": {
       "label": "Eşlenen Kickstart",

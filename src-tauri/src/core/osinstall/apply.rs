@@ -2690,6 +2690,7 @@ mod tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             rom: Some(fixtures::fake_rom(&dir, 40)), // pre-V47: the condition holds
             chosen: vec!["workbench-base".to_string()],
             excluded: vec!["modules-a1200".to_string()],
@@ -3422,6 +3423,7 @@ mod tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: PathBuf::from(&media),
+            extra_media_folders: Vec::new(),
             rom: Some(PathBuf::from(&rom)),
             chosen,
             excluded: Vec::new(),
@@ -3808,6 +3810,7 @@ mod tests {
             // it is actually planning against.
             release: "AmigaOS 3.9".to_string(),
             media_folder,
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: Vec::new(),
             excluded: Vec::new(),
@@ -3944,6 +3947,7 @@ mod tests {
             // `find_the_directory_byte_overcount_when_asked` above.
             release: "AmigaOS 3.9".to_string(),
             media_folder,
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: Vec::new(),
             excluded: Vec::new(),
@@ -4142,6 +4146,7 @@ mod tests {
             package_folder: None,
             release: "AmigaOS 3.9".to_string(),
             media_folder,
+            extra_media_folders: Vec::new(),
             rom: None,
             // All three optional components at once, on purpose: the euro
             // files have to meet `locale-base`'s copies for the override to
@@ -4469,6 +4474,7 @@ mod tests {
             package_folder: Some(PathBuf::from(&packages)),
             release: "AmigaOS 3.9".to_string(),
             media_folder,
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: vec!["locale-base".to_string(), "keymaps".to_string()],
             excluded: Vec::new(),
@@ -4636,6 +4642,7 @@ mod tests {
         crate::core::osinstall::plan::InstallRequest {
             release: "Test OS".to_string(),
             media_folder: media.to_path_buf(),
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: Vec::new(),
             excluded: Vec::new(),
@@ -5806,6 +5813,7 @@ mod tests {
             package_folder: Some(package_folder.clone()),
             release: "AmigaOS 3.9".to_string(),
             media_folder,
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: vec!["locale-base".to_string()],
             excluded: Vec::new(),
@@ -6079,6 +6087,7 @@ mod tests {
             package_folder: None,
             release: "AmigaOS 3.9".to_string(),
             media_folder,
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: vec!["locale-base".to_string()],
             excluded: Vec::new(),

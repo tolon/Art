@@ -265,10 +265,16 @@ pub fn osinstall_plan(request: InstallRequest) -> AppResult<PlanResult> {
     // translate, never as `find_media`'s own English sentence. See the
     // module doc comment. Narrowed to `CoreError::Io` for the same reason
     // `osinstall_scan_media` narrows it — see that command's own comment.
-    if let Err(CoreError::Io(_)) = find_media(&request.media_folder) {
-        return Ok(PlanResult::FolderUnreadable {
-            folder: request.media_folder.display().to_string(),
-        });
+    // **Every folder the user named, not only the first** (work-list item 8).
+    // A 3.2.2.1 install reads from three, and a plan that checked one of them
+    // would refuse on the button with `find_media`'s own English sentence
+    // instead of naming the folder that went away.
+    for folder in std::iter::once(&request.media_folder).chain(request.extra_media_folders.iter()) {
+        if let Err(CoreError::Io(_)) = find_media(folder) {
+            return Ok(PlanResult::FolderUnreadable {
+                folder: folder.display().to_string(),
+            });
+        }
     }
     let recipe = recipe::by_release(&request.release)?;
     // ART-196: the cache and any nested package payload both stage under the
@@ -3060,6 +3066,7 @@ mod tests {
             package_folder: None,
             release: "AmigaOS 3.9".to_string(),
             media_folder: PathBuf::from(&media),
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: Vec::new(),
             excluded: Vec::new(),
@@ -3209,6 +3216,7 @@ mod tests {
             package_folder: None,
             release: "AmigaOS 3.9".to_string(),
             media_folder: PathBuf::from(&media),
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: vec!["locale-base".to_string()],
             excluded: Vec::new(),
@@ -3342,6 +3350,7 @@ mod tests {
             package_folder: None,
             release: release.clone(),
             media_folder: PathBuf::from(&media),
+            extra_media_folders: Vec::new(),
             rom: Some(PathBuf::from(&rom)),
             chosen,
             excluded: Vec::new(),
@@ -3827,6 +3836,7 @@ mod tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: missing.clone(),
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: vec!["workbench-base".to_string()],
             excluded: Vec::new(),
@@ -3853,6 +3863,7 @@ mod tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: dir.clone(),
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: vec!["workbench-base".to_string()],
             excluded: Vec::new(),

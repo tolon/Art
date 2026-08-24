@@ -2145,7 +2145,11 @@
       "rescan": "Scan again",
       "rescanned_one": "{{count}} remembered scan dropped. The discs will be read again.",
       "rescanned_other": "{{count}} remembered scans dropped. The discs will be read again.",
-      "rescannedNone": "Nothing was being remembered. The discs are read again anyway."
+      "rescannedNone": "Nothing was being remembered. The discs are read again anyway.",
+      "addFolder": "Add another folder",
+      "removeFolder": "Remove",
+      "addTitle": "Choose another folder holding this release's disks",
+      "addHint": "AmigaOS 3.2.2.1 is your 3.2 disks plus the Update and Hotfix folders — add each one."
     },
     "rom": {
       "label": "Paired Kickstart",

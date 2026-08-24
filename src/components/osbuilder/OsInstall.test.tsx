@@ -1338,3 +1338,89 @@ describe("the tree it builds is the tree the next steps get (ART-197)", () => {
     expect(shown.length).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Work-list item 8: media in more than one folder
+// ---------------------------------------------------------------------------
+//
+// AmigaOS 3.2.2.1 is the user's own 3.2 ADFs plus the update disks plus the
+// hotfix disk, and Hyperion ships the last two as `ADFs/Update/` and
+// `ADFs/Hotfix/` inside a single download. Until this existed, whichever
+// folder they named, every component from the other one came back
+// `MediaMissing` -- so the install could not be expressed at all.
+
+describe("media in more than one folder", () => {
+  it("sends every added folder to the planner, not only the first", async () => {
+    await renderFull();
+    planMock.mockClear();
+
+    dialogOpenMock.mockResolvedValue("E:\\media\\Update");
+    await userEvent.click(screen.getByRole("button", { name: /add another folder/i }));
+
+    await waitFor(() => expect(planMock).toHaveBeenCalled());
+    const sent = planMock.mock.calls.at(-1)![0] as InstallRequest;
+    expect(sent.mediaFolder).toBe("E:\\media");
+    expect(sent.extraMediaFolders).toEqual(["E:\\media\\Update"]);
+  });
+
+  it("shows what was added, so the user can see what ART will read", async () => {
+    await renderFull();
+    dialogOpenMock.mockResolvedValue("E:\\media\\Hotfix");
+    await userEvent.click(screen.getByRole("button", { name: /add another folder/i }));
+
+    const rows = await screen.findAllByTestId("extra-media-folder");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain("E:\\media\\Hotfix");
+  });
+
+  it("takes one back out again", async () => {
+    await renderFull();
+    dialogOpenMock.mockResolvedValue("E:\\media\\Update");
+    await userEvent.click(screen.getByRole("button", { name: /add another folder/i }));
+    await screen.findAllByTestId("extra-media-folder");
+
+    planMock.mockClear();
+    await userEvent.click(screen.getByRole("button", { name: /^remove$/i }));
+
+    await waitFor(() => expect(screen.queryAllByTestId("extra-media-folder")).toHaveLength(0));
+    await waitFor(() => expect(planMock).toHaveBeenCalled());
+    const sent = planMock.mock.calls.at(-1)![0] as InstallRequest;
+    expect(sent.extraMediaFolders).toEqual([]);
+  });
+
+  it("does not add the same folder twice, nor the one already chosen above", async () => {
+    // The core reads a folder named twice exactly once; a screen that showed
+    // it twice would be contradicting the core about what it is going to do.
+    await renderFull();
+    dialogOpenMock.mockResolvedValue("E:\\media\\Update");
+    const add = screen.getByRole("button", { name: /add another folder/i });
+    await userEvent.click(add);
+    await screen.findAllByTestId("extra-media-folder");
+    await userEvent.click(add);
+
+    expect(screen.queryAllByTestId("extra-media-folder")).toHaveLength(1);
+
+    dialogOpenMock.mockResolvedValue("E:\\media");
+    await userEvent.click(add);
+    expect(screen.queryAllByTestId("extra-media-folder")).toHaveLength(1);
+  });
+
+  /// Per release, like the media folder itself (ART-207): a 3.2.2.1 install's
+  /// update folder means nothing to a 3.9 one.
+  it("remembers them per release", async () => {
+    seedRemembered({
+      ...FULL_FIELDS,
+      "osinstall.extraMediaFolders": ["E:\\media\\Update"],
+      "osinstall.extraMediaFolders.AmigaOS 3.9": [],
+    });
+    render(<OsInstall />);
+    await screen.findByText(i18n.t("osinstall.plan.heading"));
+    expect(screen.queryAllByTestId("extra-media-folder")).toHaveLength(1);
+
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: i18n.t("osinstall.release.label") }),
+      "AmigaOS 3.9"
+    );
+    await waitFor(() => expect(screen.queryAllByTestId("extra-media-folder")).toHaveLength(0));
+  });
+});

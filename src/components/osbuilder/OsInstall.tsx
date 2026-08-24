@@ -262,6 +262,29 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     null
   );
 
+  /**
+   * **More folders holding this release's media** (work-list item 8).
+   *
+   * AmigaOS 3.2.2.1 is not one folder of disks: it is the user's own 3.2 ADFs
+   * plus the update disks plus the hotfix disk, and Hyperion ships the last
+   * two as `ADFs/Update/` and `ADFs/Hotfix/` inside a single download. Until
+   * this existed, whichever folder they named, every component from the other
+   * came back `MediaMissing`.
+   *
+   * Per release, for the same reason `mediaFolder` is (ART-207): a 3.2.2.1
+   * install's update folder means nothing to a 3.9 one.
+   *
+   * **Order is not precedence.** The same volume name in two folders is
+   * refused by name (`scan::media_for`), never resolved by which was added
+   * first — picking one would be ART choosing between two of somebody's disks
+   * on the strength of the order they clicked.
+   */
+  const [extraMediaFolders, setExtraMediaFolders] = useRemembered<string[]>(
+    rememberedComponentKey("osinstall.extraMediaFolders", release),
+    isTextList,
+    []
+  );
+
   // A disc dropped on the panel names a *file*; the scanner takes the folder
   // that holds it, which is also where its sibling discs and ADFs live. The
   // user dropped it, so this is them setting the value — it goes through the
@@ -648,6 +671,8 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
 
     const shared = {
       mediaFolder,
+      // Work-list item 8: a 3.2.2.1 install reads from three folders.
+      extraMediaFolders: extraMediaFolders,
       rom: romPath,
       chosen: sanitized,
       destination: destination ?? "",
@@ -714,7 +739,13 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     // now per release — but listing them would re-plan on a release switch
     // twice: once for `release`, once for the setters that changed with it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaFolder, romPath, chosen, destination, excludedConditional, release, catalogue, reuseScan, rescanNonce]);
+  // `extraMediaFolders` is in here for the reason the test that found it
+  // names: without it, adding a folder changed what ART *would* read and
+  // left the screen showing the refusals from before it was added — a
+  // preview describing a plan nobody asked for any more. `chosen` and
+  // `excludedConditional` are arrays in this list already, so the identity
+  // question ART-178/ART-195 raise is one `useRemembered` has answered.
+  }, [mediaFolder, extraMediaFolders, romPath, chosen, destination, excludedConditional, release, catalogue, reuseScan, rescanNonce]);
 
   // `subscribeSafely` (Task 7's own fix round, F7/ART-165): the bare
   // `.then((fn) => { unlisten = fn })` shape this used to have could both
@@ -911,6 +942,20 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     if (typeof picked === "string") setMediaFolder(picked);
   }
 
+  async function addMediaFolder() {
+    const picked = await open({
+      directory: true,
+      multiple: false,
+      title: t("osinstall.media.addTitle"),
+    });
+    if (typeof picked !== "string") return;
+    // Adding the same folder twice is not an error and not a second folder.
+    // The core reads it once either way; not showing it twice is the screen
+    // agreeing with the core rather than contradicting it.
+    if (picked === mediaFolder || extraMediaFolders.includes(picked)) return;
+    setExtraMediaFolders([...extraMediaFolders, picked]);
+  }
+
   /**
    * Drop every remembered listing and re-plan against the discs themselves.
    *
@@ -1035,6 +1080,34 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           onChoose={() => void chooseMediaFolder()}
           choose={t("common.browse")}
         />
+        {extraMediaFolders.map((folder) => (
+          <div
+            key={folder}
+            data-testid="extra-media-folder"
+            style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 6px" }}
+          >
+            <span className="faint" style={{ fontSize: 11, wordBreak: "break-all", flex: 1 }}>
+              {folder}
+            </span>
+            <button
+              className="btn"
+              style={{ fontSize: 11 }}
+              onClick={() =>
+                setExtraMediaFolders(extraMediaFolders.filter((kept) => kept !== folder))
+              }
+            >
+              {t("osinstall.media.removeFolder")}
+            </button>
+          </div>
+        ))}
+        <div style={{ margin: "0 0 12px" }}>
+          <button className="btn" style={{ fontSize: 11 }} onClick={() => void addMediaFolder()}>
+            {t("osinstall.media.addFolder")}
+          </button>
+          <span className="faint" style={{ fontSize: 10, marginLeft: 8 }}>
+            {t("osinstall.media.addHint")}
+          </span>
+        </div>
         {mediaScan?.outcome === "folder-unreadable" && (
           <p className="badge badge-err" style={{ fontSize: 11, margin: "0 0 12px", display: "inline-block" }}>
             {t("osinstall.media.unreadable")}

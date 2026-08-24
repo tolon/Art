@@ -114,8 +114,8 @@ use serde::{Deserialize, Serialize};
 
 use super::package::Package;
 use super::scan::{
-    find_media, find_packages, media_for, open_media_cached, open_package_staging_in, package_for,
-    MediaMatch, PackageMedium,
+    find_media_across, find_packages, media_for, open_media_cached, open_package_staging_in,
+    package_for, MediaMatch, PackageMedium,
 };
 use super::scan_cache::ScanCache;
 use super::source::MediaSource;
@@ -430,6 +430,27 @@ pub struct InstallPlan {
 #[serde(rename_all = "camelCase")]
 pub struct InstallRequest {
     pub media_folder: PathBuf,
+    /// More folders holding install media, read alongside
+    /// [`InstallRequest::media_folder`].
+    ///
+    /// **Work-list item 8.** AmigaOS 3.2.2.1 is not one folder of disks: it is
+    /// the user's own 3.2 ADFs plus the update disks plus the hotfix disk, and
+    /// Hyperion ships the last two as `ADFs/Update/` and `ADFs/Hotfix/` inside
+    /// a single download. A model with one media folder cannot express that
+    /// install at all.
+    ///
+    /// A **second field** rather than turning `media_folder` into a list, and
+    /// that is deliberate: the first folder is the question the screen has
+    /// always asked and the one [`InstallPlan`] reports a wrong-folder verdict
+    /// about, so widening it would have rewritten every caller to say "the
+    /// first one" — which is a precedence rule, and there is none here.
+    /// Duplicated volume names across folders are **refused by name**
+    /// (`scan::media_for`), never resolved by order.
+    ///
+    /// `#[serde(default)]` for the reason the fields below carry one: a
+    /// request serialised before this existed must still deserialise.
+    #[serde(default)]
+    pub extra_media_folders: Vec<PathBuf>,
     /// The paired Kickstart, if the user supplied one. `None` refuses any
     /// component whose [`Condition`] needs it to be decided — see
     /// [`condition_holds`].
@@ -1118,7 +1139,10 @@ fn plan_over_with_cache(
     );
     refusals.extend(detect_exclusive_group_conflicts(recipe, &components_on));
 
-    let found = find_media(&request.media_folder)?;
+    // Every folder the user named, not only the first (work-list item 8).
+    let mut folders = vec![request.media_folder.clone()];
+    folders.extend(request.extra_media_folders.iter().cloned());
+    let found = find_media_across(&folders)?;
     let mut media_paths: BTreeMap<String, PathBuf> = BTreeMap::new();
     let mut items: Vec<PlanItem> = Vec::new();
 
@@ -1727,6 +1751,7 @@ mod plan_tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec!["extras".to_string()],
             destination: dir.join("dist"),
@@ -1807,6 +1832,7 @@ mod plan_tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: vec!["subtree-owner".to_string(), "file-writer".to_string()],
             destination: dir.join("dist"),
@@ -1814,6 +1840,96 @@ mod plan_tests {
             scan_cache: Default::default(),
         };
         plan(&request, &recipe).unwrap()
+    }
+
+    // -----------------------------------------------------------------
+    // Work-list item 8: an install whose media is in more than one folder.
+    // -----------------------------------------------------------------
+
+    /// **The shape AmigaOS 3.2.2.1 ships in**, at the level that matters: a
+    /// plan whose components come from two folders at once, refusing nothing.
+    ///
+    /// This is the capability the recipes were blocked behind. Before it, a
+    /// user with their 3.2 ADFs in one folder and Hyperion's `ADFs/Update/` in
+    /// another could not express the install at all — whichever folder they
+    /// named, every component from the other one came back `MediaMissing`.
+    #[test]
+    fn a_plan_reads_media_out_of_every_folder_it_was_given() {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-two-folders");
+        let base = dir.join("base");
+        let update = dir.join("Update");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(&update).unwrap();
+        crate::core::osinstall::fixtures::media(&base, "Base", "base.adf", &[("C/One", b"1", 0)]);
+        crate::core::osinstall::fixtures::media(
+            &update,
+            "Later",
+            "later.adf",
+            &[("C/Two", b"2", 0)],
+        );
+
+        let component = |id: &str, media: &str, from: &str| Component {
+            id: id.to_string(),
+            media: media.to_string(),
+            rules: vec![PathRule {
+                from: from.to_string(),
+                to: from.to_string(),
+                kind: RuleKind::File,
+            }],
+            required: true,
+            condition: None,
+            overrides: vec![],
+            user_startup: vec![],
+            activate: vec![],
+            exclusive_group: None,
+            label_key: None,
+            available: true,
+        };
+        let recipe = Recipe {
+            release: "Test".to_string(),
+            components: vec![
+                component("from-base", "Base", "C/One"),
+                component("from-update", "Later", "C/Two"),
+            ],
+        };
+
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2".to_string(),
+            media_folder: base.clone(),
+            extra_media_folders: vec![update.clone()],
+            rom: None,
+            chosen: vec!["from-base".to_string(), "from-update".to_string()],
+            destination: dir.join("dist"),
+            excluded: Vec::new(),
+            scan_cache: Default::default(),
+        };
+
+        let planned = plan(&request, &recipe).unwrap();
+        assert!(
+            planned.refusals.is_empty(),
+            "both folders were named: {:?}",
+            planned.refusals
+        );
+        assert_eq!(planned.items.len(), 2);
+
+        // **And the other arm**, without which the test above passes on a
+        // plan that reads the whole disk anyway: naming only the first folder
+        // has to refuse the component that is in the second.
+        let one_folder = InstallRequest {
+            extra_media_folders: Vec::new(),
+            ..request
+        };
+        let narrower = plan(&one_folder, &recipe).unwrap();
+        assert_eq!(
+            narrower.refusals.len(),
+            1,
+            "the update disk is in a folder nobody named: {:?}",
+            narrower.refusals
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A single-component recipe whose one rule declares `kind: "file"`
@@ -1855,6 +1971,7 @@ mod plan_tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: vec!["a".to_string()],
             destination: dir.join("dist"),
@@ -1898,6 +2015,7 @@ mod plan_tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: vec!["a".to_string()],
             destination: dir.join("dist"),
@@ -1946,6 +2064,7 @@ mod plan_tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: vec!["a".to_string(), "b".to_string()],
             destination: dir.join("dist"),
@@ -2014,6 +2133,7 @@ mod plan_tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             // major 40 < 47, so `modules-b` switches on by its own
             // condition — never named in `chosen`.
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 40)),
@@ -2076,6 +2196,7 @@ mod plan_tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: vec!["a".to_string()],
             destination: dir.join("dist"),
@@ -2159,6 +2280,7 @@ mod plan_tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: vec!["a".to_string()],
             destination: scratch.join("dist"),
@@ -2420,6 +2542,7 @@ mod plan_tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: vec!["storage".to_string()],
             destination: dir.join("dist"),
@@ -2590,6 +2713,7 @@ mod plan_tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder.clone(),
+            extra_media_folders: Vec::new(),
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&scratch, 47)),
             chosen: vec!["extras".to_string()],
             destination: scratch.join("dist"),
@@ -2705,6 +2829,7 @@ mod plan_tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 40)),
             chosen: vec!["workbench-base".to_string()],
             excluded: vec!["modules-a1200".to_string()],
@@ -2755,6 +2880,7 @@ mod plan_tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec!["workbench-base".to_string(), "extras".to_string()],
             excluded: vec!["extras".to_string()],
@@ -2788,6 +2914,7 @@ mod plan_tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec![],
             excluded: vec!["workbench-base".to_string()],
@@ -3011,6 +3138,7 @@ mod plan_tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             rom: Some(bad_rom),
             chosen: vec!["workbench-base".to_string()],
             destination: dir.join("dist"),
@@ -3050,6 +3178,7 @@ mod plan_tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec!["workbench-base".to_string()],
             destination: dir.join("dist"),
@@ -3128,6 +3257,7 @@ mod plan_tests {
             package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
+            extra_media_folders: Vec::new(),
             rom: None,
             // Reverse of the recipe's own declaration order — see the doc
             // comment above.
@@ -3320,6 +3450,7 @@ mod plan_tests {
         InstallRequest {
             release: "Test OS".to_string(),
             media_folder: media.to_path_buf(),
+            extra_media_folders: Vec::new(),
             rom: None,
             chosen: Vec::new(),
             excluded: Vec::new(),
