@@ -1873,6 +1873,7 @@ mod plan_tests {
 
         let recipe = Recipe {
             layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![
                 Component {
@@ -1948,6 +1949,7 @@ mod plan_tests {
         );
         let recipe = Recipe {
             layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![Component {
                 layer: None,
@@ -2136,6 +2138,7 @@ mod plan_tests {
         };
         let recipe = Recipe {
             layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![
                 component("from-base", "Base", "C/One"),
@@ -2199,6 +2202,7 @@ mod plan_tests {
 
         let recipe = Recipe {
             layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![Component {
                 layer: None,
@@ -2246,6 +2250,7 @@ mod plan_tests {
 
         let recipe = Recipe {
             layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![Component {
                 layer: None,
@@ -2315,6 +2320,7 @@ mod plan_tests {
         };
         let recipe = Recipe {
             layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![make("a", "A"), make("b", "B")],
         };
@@ -2379,6 +2385,7 @@ mod plan_tests {
         };
         let recipe = Recipe {
             layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![
                 make("modules-a", "ModulesA", "C/ModuleA", None),
@@ -2436,6 +2443,7 @@ mod plan_tests {
 
         let recipe = Recipe {
             layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![Component {
                 layer: None,
@@ -2523,6 +2531,7 @@ mod plan_tests {
 
         let recipe = Recipe {
             layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![Component {
                 layer: None,
@@ -2786,6 +2795,7 @@ mod plan_tests {
 
         let recipe = Recipe {
             layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![Component {
                 layer: None,
@@ -3537,6 +3547,7 @@ mod plan_tests {
         };
         let recipe = Recipe {
             layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![
                 make("alpha", "A", "x", &["Assign Alpha: SYS:"]),

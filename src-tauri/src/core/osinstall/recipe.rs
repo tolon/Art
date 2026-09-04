@@ -30,7 +30,7 @@ const AMIGAOS_39_JSON: &str = include_str!("recipes/amigaos-3.9.json");
 /// `Component` and `PathRule` derive `Eq` and a `serde_json::Value` is not
 /// `Eq` — putting a catch-all on the real types would change types the whole
 /// crate compares, to check a file.
-const RECIPE_KEYS: &[&str] = &["release", "components", "layers"];
+const RECIPE_KEYS: &[&str] = &["release", "components", "layers", "base"];
 const COMPONENT_KEYS: &[&str] = &[
     "id",
     "media",
@@ -141,8 +141,15 @@ fn check_unknown_keys(json: &str) -> CoreResult<()> {
     Ok(())
 }
 
-/// Parse and validate a recipe.
-pub fn parse(json: &str) -> CoreResult<Recipe> {
+/// Parse and validate a recipe, exactly as its file says — no `base` is
+/// resolved, so a recipe that names one still carries only its own
+/// components afterwards.
+///
+/// Used directly by tests that police the file's own data (`raw_recipe`,
+/// `raw_shipped_recipes`) and by [`resolve_base`], which needs the base
+/// recipe's components before anything is merged onto them. [`parse`] is
+/// what every other caller wants.
+pub fn parse_unresolved(json: &str) -> CoreResult<Recipe> {
     // Before deserialising, so a misspelling is named rather than dropped
     // (ART-183) — a component missing the thing it plainly asked for is the
     // confident-and-wrong shape, not a parse error anybody would notice.
@@ -153,6 +160,85 @@ pub fn parse(json: &str) -> CoreResult<Recipe> {
     })?;
     validate(&recipe)?;
     Ok(recipe)
+}
+
+/// Parse, validate, and resolve `base` if the recipe declares one.
+///
+/// This is the parse every caller outside this module wants: a resolved
+/// recipe behaves as if its base's components had been typed into the file
+/// by hand, so nothing downstream — `plan()`, the install screen — has to
+/// know inheritance exists.
+pub fn parse(json: &str) -> CoreResult<Recipe> {
+    resolve_base(parse_unresolved(json)?)
+}
+
+/// Replace `recipe.base` with its components, stamped onto the **first**
+/// declared layer, in front of this recipe's own.
+///
+/// Depth is one on purpose. Nothing ART ships needs a chain, and a chain
+/// would need a cycle guard whose failure mode is a stack overflow in a
+/// binary built with `panic = "abort"`. A base that itself declares a `base`
+/// is refused by name.
+fn resolve_base(recipe: Recipe) -> CoreResult<Recipe> {
+    let Some(base_release) = recipe.base.clone() else {
+        return Ok(recipe);
+    };
+    let base = by_release_unresolved(&base_release)?;
+    merge_base(base, recipe)
+}
+
+/// [`resolve_base`]'s merge, with the base recipe already in hand — split
+/// out so a test can exercise the collision refusal below against two
+/// inline recipes (`merge_for_test`) rather than needing a shipped release
+/// to look up. `resolve_base` is the only production caller.
+fn merge_base(base: Recipe, recipe: Recipe) -> CoreResult<Recipe> {
+    if base.base.is_some() {
+        return Err(CoreError::Malformed {
+            format: "recipe".into(),
+            detail: format!(
+                "'{}' is based on '{}', which is itself based on another recipe; \
+                 ART resolves one level only",
+                recipe.release, base.release
+            ),
+        });
+    }
+    let Some(first) = recipe.layers.first().map(|l| l.id.clone()) else {
+        return Err(CoreError::Malformed {
+            format: "recipe".into(),
+            detail: format!(
+                "'{}' is based on '{}' but declares no layers, \
+                 so there is nowhere to put the inherited components",
+                recipe.release, base.release
+            ),
+        });
+    };
+    let mut components: Vec<Component> = base
+        .components
+        .into_iter()
+        .map(|mut c| {
+            c.layer = Some(first.clone());
+            c
+        })
+        .collect();
+    for own in &recipe.components {
+        if components.iter().any(|c| c.id == own.id) {
+            return Err(CoreError::Malformed {
+                format: "recipe".into(),
+                detail: format!(
+                    "'{}' declares a component '{}' that '{}' already declares; \
+                     an update amends a component through `overrides`, never by reusing its id",
+                    recipe.release, own.id, base.release
+                ),
+            });
+        }
+    }
+    components.extend(recipe.components.iter().cloned());
+    let resolved = Recipe {
+        components,
+        ..recipe
+    };
+    validate(&resolved)?;
+    Ok(resolved)
 }
 
 /// Check one `/`-separated path field (`from` or `to`) against the same
@@ -362,6 +448,21 @@ pub fn by_release(release: &str) -> CoreResult<Recipe> {
     }
 }
 
+/// [`by_release`]'s own match arm set, parsed with [`parse_unresolved`]
+/// instead of [`parse`] — what [`resolve_base`] needs when a recipe names
+/// this release as its `base`, so that a base's own `base` (refused at depth
+/// one) is seen before anything is merged, and so that resolving 3.2.2 does
+/// not first resolve 3.2 against itself.
+fn by_release_unresolved(release: &str) -> CoreResult<Recipe> {
+    match release {
+        "AmigaOS 3.2" => parse_unresolved(AMIGAOS_32_JSON),
+        "AmigaOS 3.9" => parse_unresolved(AMIGAOS_39_JSON),
+        other => Err(CoreError::InvalidInput(format!(
+            "ART ships no install recipe for {other}"
+        ))),
+    }
+}
+
 /// The `overrides` any shipped component declares, whichever kind of recipe
 /// ships it — a release's own component or a package (ART-170).
 ///
@@ -519,6 +620,7 @@ mod tests {
                 package.id.clone(),
                 Recipe {
                     release: package.id.clone(),
+                    base: None,
                     layers: vec![],
                     components: vec![package.component],
                 },
@@ -576,6 +678,7 @@ mod tests {
                 package.id.clone(),
                 Recipe {
                     release: package.id.clone(),
+                    base: None,
                     layers: vec![],
                     components: vec![package.component],
                 },
@@ -2104,6 +2207,125 @@ mod tests {
         assert_eq!(
             recipe.layers[0].label_key.as_deref(),
             Some("osinstall.layer.base32")
+        );
+    }
+
+    // ---- base: a recipe may inherit another release's components ----
+
+    /// The raw JSON text behind one of ART's own shipped releases —
+    /// [`an_unlayered_recipe_is_byte_for_byte_what_its_file_says`] compares
+    /// the resolved recipe against this rather than against `parse`'s own
+    /// output, so a merge step that quietly changed something would have to
+    /// change it away from the file itself, not just away from a second call
+    /// to the function under test.
+    fn json_for(release: &str) -> &'static str {
+        match release {
+            "AmigaOS 3.2" => AMIGAOS_32_JSON,
+            "AmigaOS 3.9" => AMIGAOS_39_JSON,
+            other => {
+                panic!("'{other}' is offered by releases() but json_for() has no raw JSON for it")
+            }
+        }
+    }
+
+    /// [`resolve_base`] minus its shipped-release lookup: parses `base_json`
+    /// and `derived_json` and merges the second onto the first exactly as
+    /// `resolve_base` would once it had found the base recipe by name. Lets
+    /// the collision refusal be tested against an inline base rather than
+    /// one of the two releases ART actually ships, so the test does not have
+    /// to wait on a real update recipe existing.
+    fn merge_for_test(base_json: &str, derived_json: &str) -> CoreResult<Recipe> {
+        let base = parse_unresolved(base_json)?;
+        let derived = parse_unresolved(derived_json)?;
+        merge_base(base, derived)
+    }
+
+    #[test]
+    #[ignore = "waiting for Task 8's AmigaOS 3.2.2 recipe"]
+    fn a_based_recipe_inherits_its_bases_components_on_the_first_layer() {
+        let recipe = by_release("AmigaOS 3.2.2").expect("the 3.2.2 recipe resolves");
+        let inherited = recipe
+            .component("workbench-base")
+            .expect("the base recipe's components are inherited");
+        assert_eq!(inherited.layer.as_deref(), Some("base"));
+        assert_eq!(
+            recipe
+                .component("update-322-system")
+                .unwrap()
+                .layer
+                .as_deref(),
+            Some("update-3.2.2"),
+            "the recipe's own components keep the layer they declared"
+        );
+    }
+
+    #[test]
+    fn an_unlayered_recipe_is_byte_for_byte_what_its_file_says() {
+        // The 3.2 and 3.9 recipes declare no `base` and no `layers`, so
+        // resolution must be a no-op for them. Compared field by field rather
+        // than by count, because a merge that dropped a rule would keep the
+        // count if it also added one.
+        for release in ["AmigaOS 3.2", "AmigaOS 3.9"] {
+            let resolved = by_release(release).unwrap();
+            let raw = parse_unresolved(json_for(release)).unwrap();
+            assert_eq!(resolved, raw, "{release} must not change under resolution");
+        }
+    }
+
+    #[test]
+    fn a_base_that_names_an_unknown_release_is_refused() {
+        let err = resolve_base(
+            parse_unresolved(
+                r#"{"release":"X","base":"AmigaOS 9.9",
+                    "layers":[{"id":"base"}],
+                    "components":[]}"#,
+            )
+            .unwrap(),
+        )
+        .expect_err("an unknown base is a recipe error");
+        assert!(err.to_string().contains("AmigaOS 9.9"));
+    }
+
+    #[test]
+    fn a_based_recipe_may_not_redeclare_one_of_its_bases_component_ids() {
+        let err = merge_for_test(
+            /* base   */
+            r#"{"release":"B","components":[{"id":"a","media":"M","rules":[]}]}"#,
+            /* derived*/
+            r#"{"release":"D","base":"B",
+                "layers":[{"id":"base"},{"id":"up"}],
+                "components":[{"id":"a","media":"M2","layer":"up","rules":[]}]}"#,
+        )
+        .expect_err("a redeclared id is a recipe error, not a silent replacement");
+        assert!(
+            err.to_string().contains("'a'"),
+            "the refusal names the id that collides"
+        );
+    }
+
+    /// **Depth is one on purpose.** A base that itself declares a `base`
+    /// would need a cycle guard whose failure mode, in a binary built with
+    /// `panic = "abort"`, is the whole application dying rather than a
+    /// caught error. Refusing by name at depth one avoids needing that
+    /// guard at all. Not one of the brief's four written tests — the fifth
+    /// mutation row asks for a two-level fixture instead of a named test —
+    /// but recorded here rather than only in the mutation table, so the
+    /// property survives a future edit to this file even if nobody re-reads
+    /// the plan that produced it.
+    #[test]
+    fn a_base_that_is_itself_based_on_something_is_refused() {
+        let err = merge_for_test(
+            /* base   */
+            r#"{"release":"B","base":"Grandparent","layers":[{"id":"base"}],
+                "components":[{"id":"a","media":"M","layer":"base","rules":[]}]}"#,
+            /* derived*/
+            r#"{"release":"D","base":"B","layers":[{"id":"base"}],"components":[]}"#,
+        )
+        .expect_err("a base that is itself based on something is refused rather than chained");
+        let text = err.to_string();
+        assert!(
+            text.contains("'D'") && text.contains("'B'"),
+            "the refusal names both the recipe and the base it points at: {text}"
         );
     }
 }

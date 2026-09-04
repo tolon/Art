@@ -325,6 +325,14 @@ pub struct MediaLayer {
 pub struct Recipe {
     /// `"AmigaOS 3.2"`.
     pub release: String,
+    /// Another recipe's `release` string, whose components this one inherits.
+    ///
+    /// **A release update is layered, and the release says so itself**:
+    /// AmigaOS 3.2.2's own `HowToInstall` requires "a successful installation
+    /// of AmigaOS 3.2 or 3.2.1". Expressing that as `base` keeps the base's
+    /// thirty-odd components in one file instead of two copies that drift.
+    #[serde(default)]
+    pub base: Option<String>,
     /// The media sets this recipe reads from, in the order a release states.
     /// Empty means one implicit layer, which is every recipe that shipped
     /// before this existed.
@@ -1283,6 +1291,7 @@ pub(crate) mod fixtures {
     pub fn package_test_recipe() -> super::Recipe {
         super::Recipe {
             release: "Test OS".to_string(),
+            base: None,
             layers: vec![],
             components: vec![super::Component {
                 activate: vec![],
