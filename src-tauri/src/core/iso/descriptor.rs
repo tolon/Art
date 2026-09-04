@@ -354,8 +354,10 @@ pub fn decode_ucs2_be(bytes: &[u8]) -> String {
     // An odd trailing byte cannot form a character; ignore it rather than
     // reading one byte past the field.
     let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|p| u16::from_be_bytes([p[0], p[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p| u16::from_be_bytes(*p))
         .take_while(|&u| u != 0)
         .collect();
     std::char::decode_utf16(units)
@@ -496,7 +498,12 @@ mod tests {
         assert_eq!(decode_ucs2_be(&bytes), "Grüße");
         // The same bytes read little-endian are a different string entirely,
         // which is what makes the endianness load-bearing.
-        let swapped: Vec<u8> = bytes.chunks_exact(2).flat_map(|p| [p[1], p[0]]).collect();
+        let swapped: Vec<u8> = bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|p| [p[1], p[0]])
+            .collect();
         assert_ne!(decode_ucs2_be(&swapped), "Grüße");
     }
 

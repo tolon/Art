@@ -641,8 +641,8 @@ pub fn verify_kickstart_checksum(bytes: &[u8]) -> bool {
     }
 
     let mut sum = 0u32;
-    for chunk in bytes.chunks_exact(4) {
-        let val = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    for chunk in bytes.as_chunks::<4>().0 {
+        let val = u32::from_be_bytes(*chunk);
         let (new_sum, carry) = sum.overflowing_add(val);
         sum = new_sum.wrapping_add(carry as u32);
     }
@@ -739,8 +739,8 @@ mod tests {
         let at = bytes.len() - 24;
         bytes[at..at + 4].copy_from_slice(&[0, 0, 0, 0]);
         let mut sum = 0u32;
-        for chunk in bytes.chunks_exact(4) {
-            let val = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        for chunk in bytes.as_chunks::<4>().0 {
+            let val = u32::from_be_bytes(*chunk);
             let (next, carry) = sum.overflowing_add(val);
             sum = next.wrapping_add(carry as u32);
         }

@@ -1,0 +1,121 @@
+name: Release
+
+# A tag is the trigger, and the tag is the claim: pushing `v0.9.0` publishes
+# the installers built from that exact commit.
+#
+# Why this exists as its own workflow. CI already builds the bundle and uploads
+# it as a *workflow artifact*, which expires, needs a GitHub account to reach,
+# and is not what a link in the README can point at. A release is the opposite
+# of all three. Nothing here re-runs the checks — CI runs on every branch
+# including the one the tag is on, so a tag pushed at a red commit is a red
+# build sitting beside a green release, which is why the gate below refuses to
+# publish unless the version fields agree.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and publish (e.g. v0.9.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish (Windows x64)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      # Three files carry the version and Tauri, cargo and the installer
+      # filename each read a different one. A mismatch ships an installer whose
+      # name disagrees with its own About box, and it is silent — so it is a
+      # gate rather than a note.
+      - name: The tag and the three version fields must agree
+        shell: bash
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          want="${tag#v}"
+          pkg=$(node -p "require('./package.json').version")
+          conf=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          crate=$(grep -m1 '^version = ' src-tauri/Cargo.toml | cut -d'"' -f2)
+          echo "tag=$want package.json=$pkg tauri.conf.json=$conf Cargo.toml=$crate"
+          if [ "$want" != "$pkg" ] || [ "$want" != "$conf" ] || [ "$want" != "$crate" ]; then
+            echo "::error::the tag and the version fields disagree; nothing is published"
+            exit 1
+          fi
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+
+      - name: Install Rust stable (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The two suites run here as well as in CI, because a release is the one
+      # build nobody re-runs by hand and "the commit was green last week" is
+      # not the same claim as "this artefact was built from a green tree".
+      - name: Frontend tests
+        run: pnpm test
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Build installers
+        run: pnpm tauri build
+
+      # The notes are cut out of CHANGELOG.md rather than written again, so
+      # there is one description of a release and not two that can disagree.
+      # A version with no section is a refusal: publishing a release whose
+      # notes are silently empty is worse than not publishing one.
+      - name: Take the release notes from the changelog
+        shell: bash
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          want="${tag#v}"
+          awk -v v="## [$want]" '
+            index($0, v) == 1 { taking = 1; next }
+            taking && /^## \[/ { exit }
+            taking { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "::error::CHANGELOG.md has no section for $want; nothing is published"
+            exit 1
+          fi
+          wc -l RELEASE_NOTES.md
+
+      # ART ships no Amiga content, so the installers are the whole release.
+      # `fail_on_unmatched_files` matters: a bundle that silently did not build
+      # would otherwise publish an empty release that looks finished.
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ART ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          draft: true
+          files: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+          fail_on_unmatched_files: true

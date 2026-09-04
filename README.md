@@ -418,7 +418,36 @@ documents no way in. ART leaves them blank rather than guessing.
 | Phase definitions | [docs/roadmap.md](docs/roadmap.md) |
 | Released changes | [CHANGELOG.md](CHANGELOG.md) |
 
+## Install
+
+**[Download the latest release](https://github.com/tolon/Art/releases/latest)** —
+Windows 10/11, 64-bit. Two installers, and either is fine:
+
+| File | What it is |
+|---|---|
+| `Amiga Retro Toolkit_<version>_x64_en-US.msi` | the Windows Installer package — use this one if your machine is managed, or if you want to deploy it |
+| `Amiga Retro Toolkit_<version>_x64-setup.exe` | the NSIS installer — a smaller download and the usual choice |
+
+Nothing else is needed: the WebView2 runtime ART draws its interface with is
+already on Windows 10 and 11, and ART bundles no Amiga content, so there is
+nothing to license or download alongside it.
+
+**The installers are not code-signed**, so SmartScreen will say "Windows
+protected your PC" the first time. That is the absence of a certificate, not a
+verdict on the file — *More info* → *Run anyway*. If you would rather not take
+anybody's word for it, the release is built by
+[a public workflow](.github/workflows/release.yml) from the tagged commit, and
+you can build the same installers yourself with the steps below.
+
+**Where ART puts things**: settings and the operation log go in
+`%APPDATA%\com.amiga-retro-toolkit.desktop\`, and working files go wherever
+you point the scratch folder in Settings (it asks once, up front). ART does
+not write to any of your own disks unless you ask it to, and every operation
+that changes a file backs it up first.
+
 ## Requirements
+
+*For building from source. To just use ART, see [Install](#install) above.*
 
 | Tool | Version | Notes |
 |------|---------|-------|
@@ -473,8 +502,8 @@ Build output:
 
 ```
 src-tauri/target/release/bundle/
-├── msi/   Amiga Retro Toolkit_0.8.5_x64_en-US.msi
-└── nsis/  Amiga Retro Toolkit_0.8.5_x64-setup.exe
+├── msi/   Amiga Retro Toolkit_0.9.0_x64_en-US.msi
+└── nsis/  Amiga Retro Toolkit_0.9.0_x64-setup.exe
 ```
 
 ## Architecture

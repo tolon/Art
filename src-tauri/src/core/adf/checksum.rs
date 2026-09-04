@@ -112,9 +112,11 @@ mod tests {
         let cks = block_checksum(&block, 20);
         block[20..24].copy_from_slice(&cks.to_be_bytes());
 
-        let total = block.chunks_exact(4).fold(0u32, |acc, w| {
-            acc.wrapping_add(u32::from_be_bytes([w[0], w[1], w[2], w[3]]))
-        });
+        let total = block
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .fold(0u32, |acc, w| acc.wrapping_add(u32::from_be_bytes(*w)));
         assert_eq!(total, 0, "a valid block sums to zero");
     }
 
@@ -129,11 +131,11 @@ mod tests {
 
         let expected = {
             let mut sum: u32 = 0;
-            for (i, w) in block.chunks_exact(4).enumerate() {
+            for (i, w) in block.as_chunks::<4>().0.iter().enumerate() {
                 if i == 5 {
                     continue;
                 }
-                sum = sum.wrapping_add(u32::from_be_bytes([w[0], w[1], w[2], w[3]]));
+                sum = sum.wrapping_add(u32::from_be_bytes(*w));
             }
             sum.wrapping_neg()
         };

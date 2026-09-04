@@ -747,7 +747,7 @@ mod tests {
         // Find the folder in the root.
         let root = &fat[cluster_at(root_cluster)..][..bps * spc];
         let mut folder = None;
-        for chunk in root.chunks_exact(32) {
+        for chunk in root.as_chunks::<32>().0 {
             if chunk[0] == 0 {
                 break;
             }
@@ -767,7 +767,7 @@ mod tests {
         // hand in a copy of the image.
         let mut dot = None;
         let mut dotdot = None;
-        for (index, chunk) in inside.chunks_exact(32).enumerate() {
+        for (index, chunk) in inside.as_chunks::<32>().0.iter().enumerate() {
             if chunk[0] == 0 {
                 break;
             }

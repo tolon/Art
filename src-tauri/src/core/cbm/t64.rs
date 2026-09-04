@@ -112,7 +112,7 @@ impl T64Archive {
         file.read_exact(&mut table)?;
 
         let mut entries = Vec::new();
-        for record in table.chunks_exact(RECORD_LEN) {
+        for record in table.as_chunks::<RECORD_LEN>().0 {
             // Type 0 is a free slot. Anything else is a used one — the
             // "normal file" type is 1, but tools wrote other values and the
             // data is still there, so the type is not a gate.
