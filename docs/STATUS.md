@@ -982,7 +982,11 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
   by rounds on 2026-08-24 and 08-25, and two of its own sentences had gone
   stale in the meantime.
 - **The list to walk, top to bottom**, is
-  [superpowers/specs/2026-09-04-work-list.md](superpowers/specs/2026-09-04-work-list.md).
+  [superpowers/specs/2026-09-04-work-list.md](superpowers/specs/2026-09-04-work-list.md)
+  — seven items, ordered by importance rather than by size, and **the first
+  two are the two below**: they used to sit outside the sequence because they
+  run in parallel, which was true and made them invisible. Items 3, 5 and 7
+  are the build queue in that order; 1, 2, 4 and 6 are the owner's.
 - Per-gap state is the stage table above; per-feature state is
   [FEATURES.md](FEATURES.md). Neither is retold here.
 
