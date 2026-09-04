@@ -387,6 +387,45 @@ pub struct ApplyOutcome {
     pub files: u64,
     pub directories: u64,
     pub bytes: u64,
+    /// One verdict per [`super::plan::InstallPlan::removals`] entry, by
+    /// name — never collapsed into `files`/`directories`/`bytes`, which
+    /// describe what was *placed*. See [`RemovalVerdict`].
+    pub removed: Vec<RemovalVerdict>,
+}
+
+/// What happened when [`apply`] tried to remove one destination — see
+/// [`super::plan::PlanRemoval`].
+///
+/// **Three states, never collapsed to two.** [`RemovalState::NotPresent`] is
+/// its own outcome, not folded into either of the others: the component that
+/// would have placed the path may simply have been switched off, which is a
+/// legitimate build, not a failed removal and not a no-op success either.
+/// Conflating it with [`RemovalState::Removed`] would claim ART deleted a
+/// file that was never there; conflating it with [`RemovalState::Failed`]
+/// would tell a user to go investigate a problem that does not exist
+/// (CLAUDE.md's "the failure that does not crash").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RemovalState {
+    /// The path was there, and now it is not.
+    Removed,
+    /// The path was not there to begin with.
+    NotPresent,
+    /// The path was there and could not be removed. Carries the OS error's
+    /// own sentence — reported, never claimed away (CLAUDE.md's "the screen
+    /// may not out-claim the core").
+    Failed(String),
+}
+
+/// One [`super::plan::PlanRemoval`] entry, resolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovalVerdict {
+    /// The destination that was asked to go — matches
+    /// [`super::plan::PlanRemoval::to`] exactly, so a screen can find its own
+    /// row by the same key it showed in the plan.
+    pub to: String,
+    pub state: RemovalState,
 }
 
 /// Decode raw bytes as Latin-1 — see the module doc comment's "Latin-1, not
@@ -1196,6 +1235,33 @@ pub fn apply_staging_in(
         }
     }
 
+    // Removals — always **after** every placement above, including
+    // `S:User-Startup`'s own composition, and in `plan.removals`'s own
+    // order, which is the merged recipe's own component order (`plan()`
+    // walks `components_on`, which walks `recipe.components`). Running
+    // these any earlier would mean a base component's own rule simply puts
+    // the file back, which is precisely the bug an update's `removes` exists
+    // to fix — see `Component::removes` and `PlanRemoval`.
+    if !plan.removals.is_empty() {
+        // Same checkpoint every other step takes: between whole units of
+        // work, never mid-write.
+        if sink.is_cancelled() {
+            return Err(if outcome.files > 0 {
+                CoreError::CancelledPartway {
+                    files: outcome.files,
+                }
+            } else {
+                CoreError::Cancelled
+            });
+        }
+
+        let mut removed = Vec::with_capacity(plan.removals.len());
+        for removal in &plan.removals {
+            removed.push(perform_removal(root, removal, &mut outcome, &mut files));
+        }
+        outcome.removed = removed;
+    }
+
     sink.report(total, Some(total), "done");
 
     // Last, deliberately — see the module doc comment. Everything above this
@@ -1211,6 +1277,108 @@ pub fn apply_staging_in(
     write_manifest(root, &manifest)?;
 
     Ok(outcome)
+}
+
+/// Perform one [`super::plan::PlanRemoval`], after every placement has
+/// already run.
+///
+/// **Never a hard error.** A removal's own failure is a fact about *that
+/// entry*, exactly like a host recycle failure in `core::hostfs` is about
+/// *that file* — the run as a whole has already placed everything else
+/// successfully, and one path this component could not delete must not turn
+/// a finished install into a reported failure that discards the tree
+/// (`apply_staging_in`'s caller only sees `Err` as "nothing was built").
+///
+/// `outcome` and `files` are mutated in place on a genuine removal: the
+/// manifest must stop claiming a file `verify_volume` can never find again,
+/// and this run's own `files`/`bytes`/`directories` counts must stop
+/// counting bytes that are no longer on disk (CLAUDE.md's "a manifest lying
+/// about the tree it describes").
+///
+/// **Directories are handled, though nothing shipped removes one** (see
+/// `validate_removals`'s own doc comment) — `to` is whatever a rule's `to`
+/// was, and a `Subtree` rule's `to` is a drawer. Nested `FileRecord`s under
+/// it are stripped from the manifest and their bytes/count are subtracted
+/// from `outcome`, but `outcome.directories` is decremented by exactly one
+/// (the drawer itself) rather than walked for every nested drawer `apply`
+/// created underneath it — an approximation with no test depending on it,
+/// recorded here rather than silently.
+fn perform_removal(
+    root: &Path,
+    removal: &super::plan::PlanRemoval,
+    outcome: &mut ApplyOutcome,
+    files: &mut Vec<FileRecord>,
+) -> RemovalVerdict {
+    let target = match super::host_destination(root, &removal.to) {
+        Ok(target) => target,
+        Err(err) => {
+            return RemovalVerdict {
+                to: removal.to.clone(),
+                state: RemovalState::Failed(err.to_string()),
+            }
+        }
+    };
+
+    // `symlink_metadata`, not `metadata`: a broken symlink left on the tree
+    // by something outside ART would make `metadata` itself return
+    // `NotFound`, silently reporting `NotPresent` for a path that plainly
+    // exists and needs removing.
+    let meta = match std::fs::symlink_metadata(&target) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            // Its own outcome, not a failure — see `RemovalState`'s doc
+            // comment: the component that would have placed this path may
+            // simply have been switched off.
+            return RemovalVerdict {
+                to: removal.to.clone(),
+                state: RemovalState::NotPresent,
+            };
+        }
+        Err(err) => {
+            return RemovalVerdict {
+                to: removal.to.clone(),
+                state: RemovalState::Failed(err.to_string()),
+            };
+        }
+    };
+
+    let deleted = if meta.is_dir() {
+        std::fs::remove_dir_all(&target)
+    } else {
+        std::fs::remove_file(&target)
+    };
+    if let Err(err) = deleted {
+        return RemovalVerdict {
+            to: removal.to.clone(),
+            state: RemovalState::Failed(err.to_string()),
+        };
+    }
+
+    // The manifest and this run's own counters must stop claiming what is no
+    // longer there — see this function's own doc comment.
+    let key = super::destination_key(&removal.to);
+    let nested_prefix = format!("{key}/");
+    let mut freed_bytes = 0u64;
+    let mut freed_files = 0u64;
+    files.retain(|record| {
+        let record_key = super::destination_key(&record.path);
+        let matches = record_key == key || record_key.starts_with(&nested_prefix);
+        if matches {
+            freed_bytes += record.bytes;
+            freed_files += 1;
+        }
+        !matches
+    });
+    outcome.files = outcome.files.saturating_sub(freed_files);
+    outcome.bytes = outcome.bytes.saturating_sub(freed_bytes);
+    if meta.is_dir() {
+        outcome.directories = outcome.directories.saturating_sub(1);
+    }
+
+    RemovalVerdict {
+        to: removal.to.clone(),
+        state: RemovalState::Removed,
+    }
 }
 
 /// Serialise `manifest` to the tree's own `distribution.json`.
@@ -1639,6 +1807,7 @@ mod tests {
             user_startup: Vec::new(),
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
+            removals: Vec::new(),
         };
         (plan, dir)
     }
@@ -1710,6 +1879,7 @@ mod tests {
             user_startup: Vec::new(),
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
+            removals: Vec::new(),
         };
         (plan, dir)
     }
@@ -1776,6 +1946,7 @@ mod tests {
             user_startup: Vec::new(),
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
+            removals: Vec::new(),
         };
 
         let root = dir.join("dist");
@@ -1893,6 +2064,7 @@ mod tests {
             user_startup: Vec::new(),
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
+            removals: Vec::new(),
         };
 
         let root = dir.join("dist");
@@ -2292,6 +2464,7 @@ mod tests {
             files: 0,
             directories: 0,
             bytes: 0,
+            ..Default::default()
         };
         let mut files = Vec::new();
 
@@ -2351,6 +2524,7 @@ mod tests {
             files: 0,
             directories: 0,
             bytes: 0,
+            ..Default::default()
         };
         let mut files = Vec::new();
 
@@ -2394,6 +2568,7 @@ mod tests {
             files: 0,
             directories: 0,
             bytes: 0,
+            ..Default::default()
         };
         let mut files = Vec::new();
 
@@ -2430,6 +2605,7 @@ mod tests {
             files: 0,
             directories: 0,
             bytes: 0,
+            ..Default::default()
         };
         let mut files = Vec::new();
         let switches = [activation(
@@ -2819,6 +2995,7 @@ mod tests {
             user_startup: Vec::new(),
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
+            removals: Vec::new(),
         };
 
         let root = dir.join("dist");
@@ -6342,6 +6519,207 @@ mod tests {
             manifest.files.len(),
             full.files as usize,
             "one record per file in the tree (ART-124)"
+        );
+    }
+
+    // ---- Task 4: a component may remove a path an overridden one placed ----
+
+    /// A minimal recipe with the real shape: `base` places `Tools/X`,
+    /// `update` removes it and declares an override over `base` (without
+    /// which `recipe.rs`'s own `validate_removals` would refuse this
+    /// recipe outright). `base` is **not** required, so a test can build
+    /// against it either on or off; `update` is required, so its own
+    /// removal always runs.
+    ///
+    /// Reduced from AmigaOS 3.2.2's real case
+    /// (`Tools/TextEditFileTypes/Default4Types`, reaching the tree from
+    /// `Extras3.2`) to one file, so the fixture states only what this task
+    /// is about.
+    fn recipe_with_removal() -> crate::core::osinstall::Recipe {
+        use crate::core::osinstall::{Component, PathRule, Recipe, RuleKind};
+
+        Recipe {
+            release: "Test OS".to_string(),
+            base: None,
+            layers: vec![],
+            components: vec![
+                Component {
+                    id: "base".to_string(),
+                    media: "Base".to_string(),
+                    rules: vec![PathRule {
+                        from: "TESTFILE".to_string(),
+                        to: "Tools/X".to_string(),
+                        kind: RuleKind::File,
+                    }],
+                    required: false,
+                    condition: None,
+                    overrides: Vec::new(),
+                    user_startup: Vec::new(),
+                    activate: Vec::new(),
+                    exclusive_group: None,
+                    label_key: None,
+                    available: true,
+                    layer: None,
+                    removes: Vec::new(),
+                },
+                Component {
+                    id: "update".to_string(),
+                    media: "Update".to_string(),
+                    rules: Vec::new(),
+                    required: true,
+                    condition: None,
+                    overrides: vec!["base".to_string()],
+                    user_startup: Vec::new(),
+                    activate: Vec::new(),
+                    exclusive_group: None,
+                    label_key: None,
+                    available: true,
+                    layer: None,
+                    removes: vec!["Tools/X".to_string()],
+                },
+            ],
+        }
+    }
+
+    /// The media folder [`recipe_with_removal`] needs: `Base` carries the
+    /// file `update` will remove, and `Update` is a plain, empty disk —
+    /// `update` places nothing of its own, but its own volume still has to
+    /// resolve, or `plan()` refuses the whole thing with `MediaMissing`
+    /// before removals ever enter the picture.
+    fn media_for_removal_recipe(folder: &Path, with_base: bool) {
+        if with_base {
+            fixtures::media(
+                folder,
+                "Base",
+                "base.adf",
+                &[("TESTFILE", b"unsupported", 0x00)],
+            );
+        }
+        fixtures::media(folder, "Update", "update.adf", &[]);
+    }
+
+    /// `apply_with(&dir, &tree)`: `base` is chosen, so `Tools/X` really is
+    /// placed before `update`'s own removal has anything to act on.
+    fn request_for_scratch(
+        dir: &Path,
+        tree: &Path,
+    ) -> crate::core::osinstall::plan::InstallRequest {
+        let folder = dir.join("media");
+        std::fs::create_dir_all(&folder).unwrap();
+        media_for_removal_recipe(&folder, true);
+        crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "Test OS".to_string(),
+            media_folder: folder,
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: vec!["base".to_string()],
+            excluded: Vec::new(),
+            destination: tree.to_path_buf(),
+            scan_cache: Default::default(),
+        }
+    }
+
+    /// The other half of the same fixture: `base` is never chosen, so
+    /// nothing ever placed `Tools/X` — a legitimate build, not a failed one
+    /// (see the test this exists for).
+    fn request_without_the_base_component() -> crate::core::osinstall::plan::InstallRequest {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = fixtures::scratch(&format!("apply-removes-no-base-{n}"));
+        let folder = dir.join("media");
+        std::fs::create_dir_all(&folder).unwrap();
+        media_for_removal_recipe(&folder, false);
+        crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "Test OS".to_string(),
+            media_folder: folder,
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: Vec::new(),
+            excluded: Vec::new(),
+            destination: dir.join("tree"),
+            scan_cache: Default::default(),
+        }
+    }
+
+    /// `plan()` then `apply()`, in one call — every test in this section
+    /// wants exactly that pair and nothing more.
+    fn apply_with(
+        recipe: &crate::core::osinstall::Recipe,
+        request: &crate::core::osinstall::plan::InstallRequest,
+    ) -> CoreResult<ApplyOutcome> {
+        let plan = crate::core::osinstall::plan::plan(request, recipe)?;
+        apply(&plan, &request.destination, &NoProgress)
+    }
+
+    #[test]
+    fn a_component_removes_a_path_an_overridden_component_placed() {
+        let dir = fixtures::scratch("apply-removes");
+        let tree = dir.join("tree");
+        let report = apply_with(&recipe_with_removal(), &request_for_scratch(&dir, &tree)).unwrap();
+
+        assert!(
+            !tree.join("Tools/X").exists(),
+            "the removal actually removed it"
+        );
+        let verdict = report
+            .removed
+            .iter()
+            .find(|r| r.to == "Tools/X")
+            .expect("the removal is reported by name");
+        assert!(matches!(verdict.state, RemovalState::Removed));
+
+        // The manifest and the run's own counts must agree with the tree
+        // that is actually there — see `perform_removal`'s own doc comment.
+        let manifest = read_manifest(&tree);
+        assert!(
+            !manifest.files.iter().any(|f| f.path == "Tools/X"),
+            "a removed file must not go on being claimed by distribution.json"
+        );
+        assert_eq!(manifest.files.len(), report.files as usize);
+    }
+
+    #[test]
+    fn a_removal_of_something_that_is_not_there_is_an_outcome_not_a_failure() {
+        // The base component is off, so nothing placed Tools/X. That is a
+        // legitimate build, not a failed one.
+        let report = apply_with(
+            &recipe_with_removal(),
+            &request_without_the_base_component(),
+        );
+        let report = report.unwrap();
+        let verdict = report.removed.iter().find(|r| r.to == "Tools/X").unwrap();
+        assert!(
+            matches!(verdict.state, RemovalState::NotPresent),
+            "not present is its own verdict, distinct from Removed and from Failed"
+        );
+    }
+
+    /// The mutation table's own third row (recipe.rs's guard is
+    /// `a_removal_may_only_name_a_path_an_overridden_component_places`) has
+    /// no counterpart at the `apply()` level to mutate against — dropping
+    /// the check lives entirely in `recipe.rs::validate`. This test instead
+    /// pins the fourth row: a removal that ran but was never reported would
+    /// leave `report.removed` unable to answer either assertion above, so
+    /// both existing tests already guard silence as a side effect. Recorded
+    /// here so a reviewer does not go looking for a fifth test that was
+    /// never meant to exist.
+    #[test]
+    fn every_planned_removal_gets_its_own_verdict() {
+        let dir = fixtures::scratch("apply-removes-verdict-count");
+        let tree = dir.join("tree");
+        let report = apply_with(&recipe_with_removal(), &request_for_scratch(&dir, &tree)).unwrap();
+        assert_eq!(
+            report.removed.len(),
+            1,
+            "one verdict for the one entry in plan.removals, never silently dropped"
         );
     }
 }

@@ -297,6 +297,17 @@ pub struct Component {
     /// order, which is the thing this design exists to avoid.
     #[serde(default)]
     pub layer: Option<String>,
+    /// Destinations this component **deletes from the distribution tree**.
+    ///
+    /// AmigaOS 3.2.2's Installer deletes `Tools/TextEditFileTypes/Default4Types`
+    /// as unsupported, and that file reaches an ART tree from `Extras3.2`. A
+    /// `from`/`to` rule cannot say it.
+    ///
+    /// **Only inside the tree ART is building.** This never names a path on
+    /// the user's own disks; `core/hostfs`'s recycler is a different thing for
+    /// a different threat and this does not become it.
+    #[serde(default)]
+    pub removes: Vec<String>,
 }
 
 fn yes() -> bool {
@@ -1326,6 +1337,7 @@ pub(crate) mod fixtures {
                 label_key: None,
                 layer: None,
                 available: true,
+                removes: Vec::new(),
             }],
         }
     }
@@ -1353,6 +1365,7 @@ pub(crate) mod fixtures {
             label_key: None,
             layer: None,
             available: true,
+            removes: Vec::new(),
         };
         super::package::Package {
             id: "test-package".to_string(),
@@ -1436,6 +1449,7 @@ pub(crate) mod fixtures {
             label_key: None,
             layer: None,
             available: true,
+            removes: Vec::new(),
         };
         super::package::Package {
             id: "test-package-two".to_string(),

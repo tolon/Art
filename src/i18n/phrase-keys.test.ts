@@ -1036,6 +1036,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         userStartup: [],
         activations: [],
         mediaStamps: {},
+        removals: [],
       },
     };
     const ready = {

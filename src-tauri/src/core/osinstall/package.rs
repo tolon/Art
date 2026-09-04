@@ -588,6 +588,7 @@ impl RawPackage {
             label_key: None,
             layer: None,
             available: true,
+            removes: Vec::new(),
         };
         Package {
             id: self.id,
@@ -2013,6 +2014,7 @@ mod tests {
                 label_key: None,
                 layer: None,
                 available: true,
+                removes: Vec::new(),
             },
         }
     }

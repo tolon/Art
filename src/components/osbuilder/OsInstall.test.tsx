@@ -322,6 +322,7 @@ function planResultFor(req: InstallRequest): PlanResult {
       userStartup: [],
       activations: [],
       mediaStamps: {},
+      removals: [],
     },
   };
 }
@@ -913,6 +914,7 @@ describe("a folder that is simply the wrong one (ART-208)", () => {
           userStartup: [],
           activations: [],
           mediaStamps: {},
+          removals: [],
         },
       } satisfies PlanResult)
     );
@@ -990,6 +992,7 @@ describe("a folder that is simply the wrong one (ART-208)", () => {
         userStartup: [],
         activations: [],
         mediaStamps: {},
+        removals: [],
       },
     } satisfies PlanResult);
     releaseForMediaMock.mockReset().mockResolvedValue(null);
@@ -1089,6 +1092,7 @@ describe("a refusal renders as a sentence, not a blank", () => {
       userStartup: [],
       activations: [],
       mediaStamps: {},
+      removals: [],
     };
     planMock.mockReset().mockResolvedValue({ outcome: "planned", plan: refusedPlan } satisfies PlanResult);
 
@@ -1243,7 +1247,7 @@ describe("a release switch does not leave the other release's answers on screen 
   const FINISHED_39: OsInstallResult = {
     job_id: 1,
     destination: "E:\\amiga\\dist-3.9",
-    outcome: { root: "E:\\amiga\\dist-3.9", files: 1915, directories: 75, bytes: 1024 },
+    outcome: { root: "E:\\amiga\\dist-3.9", files: 1915, directories: 75, bytes: 1024, removed: [] },
   };
 
   it("takes a finished install's report down when the release changes", async () => {
@@ -1309,7 +1313,7 @@ describe("the tree it builds is the tree the next steps get (ART-197)", () => {
   const FINISHED: OsInstallResult = {
     job_id: 1,
     destination: "E:\\amiga\\dist-3.9",
-    outcome: { root: "E:\\amiga\\dist-3.9", files: 1915, directories: 75, bytes: 1024 },
+    outcome: { root: "E:\\amiga\\dist-3.9", files: 1915, directories: 75, bytes: 1024, removed: [] },
   };
 
   it("hands a finished install's destination to the session", async () => {

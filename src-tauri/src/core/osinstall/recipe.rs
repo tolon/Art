@@ -44,6 +44,7 @@ const COMPONENT_KEYS: &[&str] = &[
     "available",
     "label_key",
     "layer",
+    "removes",
 ];
 const RULE_KEYS: &[&str] = &["from", "to", "kind"];
 const CONDITION_KEYS: &[&str] = &["condition", "major"];
@@ -315,6 +316,12 @@ pub(super) fn validate_component(format: &str, component: &Component) -> CoreRes
         validate_path(format, &component.id, "from", &rule.from, true)?;
         validate_path(format, &component.id, "to", &rule.to, false)?;
     }
+    // A removal names a destination in the tree, exactly like a rule's own
+    // `to` — the same AmigaDOS name rules apply, and `removes: [""]` is
+    // exactly as meaningless as a `to` of `""` would be.
+    for removed in &component.removes {
+        validate_path(format, &component.id, "removes", removed, false)?;
+    }
     Ok(())
 }
 
@@ -376,6 +383,71 @@ fn validate(recipe: &Recipe) -> CoreResult<()> {
         }
 
         validate_component("recipe", component)?;
+    }
+    validate_removals(recipe)?;
+    Ok(())
+}
+
+/// Every `Component::removes` entry names a destination some **other**
+/// component in this recipe actually places, and that component's id is one
+/// this component declares an `overrides` over.
+///
+/// **Why this and not `validate_component`.** A single component's own data
+/// cannot answer either half of this — "does anything place this path" and
+/// "is the placer named in my own `overrides`" both need the *rest* of the
+/// recipe, which is exactly why this runs once over the whole component list
+/// rather than per component like [`validate_component`]'s path checks.
+///
+/// **Why refuse rather than skip.** A `removes` entry naming nobody's
+/// destination is either a typo (the recipe author meant a path that is
+/// spelled differently) or a claim about a tree this recipe cannot see —
+/// there is no other component in ART's own binary to have placed it, since
+/// recipes are `include_str!`-ed and closed. And a `removes` entry naming a
+/// real destination without declaring the override is the undeclared-claim
+/// shape `no_two_components_claim_one_destination_without_declaring_it`
+/// already refuses for a `from`/`to` rule — a component that can make a file
+/// disappear without saying whose file it is taking is a stronger claim than
+/// one that merely overwrites it, not a weaker one.
+///
+/// A rule's `to` is the only shape checked against — a `Subtree` rule's own
+/// destination is a merge point among components that place into it
+/// (`recipe.rs`'s own module doc comment), never something a `removes` entry
+/// is expected to name; nothing shipped removes a whole drawer.
+fn validate_removals(recipe: &Recipe) -> CoreResult<()> {
+    for component in &recipe.components {
+        for removed in &component.removes {
+            let placers: Vec<&str> = recipe
+                .components
+                .iter()
+                .filter(|other| other.id != component.id)
+                .filter(|other| other.rules.iter().any(|rule| rule.to == *removed))
+                .map(|other| other.id.as_str())
+                .collect();
+
+            if placers.is_empty() {
+                return Err(CoreError::Malformed {
+                    format: "recipe".into(),
+                    detail: format!(
+                        "'{}' removes '{removed}', which no component in this recipe places",
+                        component.id
+                    ),
+                });
+            }
+
+            let declared = placers
+                .iter()
+                .any(|placer| component.overrides.iter().any(|o| o == placer));
+            if !declared {
+                return Err(CoreError::Malformed {
+                    format: "recipe".into(),
+                    detail: format!(
+                        "'{}' removes '{removed}', which '{}' places, but '{}' does not declare \
+                         an override over '{}'",
+                        component.id, placers[0], component.id, placers[0]
+                    ),
+                });
+            }
+        }
     }
     Ok(())
 }
@@ -2354,5 +2426,72 @@ mod tests {
             "the inherited component must be stamped with the recipe's first declared layer \
              ('alpha'), not 'beta' or any other"
         );
+    }
+
+    // ---- Task 4: a component may remove a path an overridden one placed ----
+
+    /// The brief's own written test: `b` removes `a`'s file without
+    /// declaring an override over `a`.
+    #[test]
+    fn a_removal_may_only_name_a_path_an_overridden_component_places() {
+        let err = parse(
+            r#"{"release":"X",
+                "components":[
+                  {"id":"a","media":"M","rules":[{"from":"P","to":"Tools/X","kind":"file"}]},
+                  {"id":"b","media":"N","rules":[],"removes":["Tools/X"]}
+                ]}"#,
+        )
+        .expect_err("b removes a's file without declaring it overrides a");
+        let text = err.to_string();
+        assert!(text.contains("'b'") && text.contains("Tools/X") && text.contains("'a'"));
+    }
+
+    /// The other half of the same rule: declaring the override makes the
+    /// identical recipe parse.
+    #[test]
+    fn a_removal_of_a_path_an_overridden_component_places_is_allowed() {
+        let recipe = parse(
+            r#"{"release":"X",
+                "components":[
+                  {"id":"a","media":"M","rules":[{"from":"P","to":"Tools/X","kind":"file"}]},
+                  {"id":"b","media":"N","rules":[],"overrides":["a"],"removes":["Tools/X"]}
+                ]}"#,
+        )
+        .expect("declaring the override is exactly what makes the removal legitimate");
+        assert_eq!(recipe.component("b").unwrap().removes, vec!["Tools/X"]);
+    }
+
+    /// A `removes` entry naming a path **nobody** in the recipe places is a
+    /// typo or a claim about a tree this recipe cannot see — either way, not
+    /// something to build silently.
+    #[test]
+    fn a_removal_naming_a_path_nobody_places_is_refused() {
+        let err = parse(
+            r#"{"release":"X",
+                "components":[
+                  {"id":"a","media":"M","rules":[],"removes":["Tools/Nowhere"]}
+                ]}"#,
+        )
+        .expect_err("nothing in this recipe places 'Tools/Nowhere'");
+        let text = err.to_string();
+        assert!(
+            text.contains("'a'") && text.contains("Tools/Nowhere"),
+            "{text}"
+        );
+    }
+
+    /// `removes` is a `to`-shaped path like any other — an empty entry is
+    /// exactly as meaningless as an empty `to`, and [`validate_path`] already
+    /// refuses that for rules; `removes` must get the identical check.
+    #[test]
+    fn an_empty_removal_path_is_refused() {
+        let err = parse(
+            r#"{"release":"X",
+                "components":[
+                  {"id":"a","media":"M","rules":[],"removes":[""]}
+                ]}"#,
+        )
+        .expect_err("an empty removal path is as meaningless as an empty destination");
+        assert!(err.to_string().contains("'a'"));
     }
 }

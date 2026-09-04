@@ -89,7 +89,7 @@ use crate::core::jobs::ProgressSink;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::osinstall::apply::{
     add_package_staging_in, apply_staging_in, refuse_unless_free, ApplyOutcome,
-    DistributionManifest, FileRecord, MANIFEST_FILE_NAME,
+    DistributionManifest, FileRecord, RemovalState, RemovalVerdict, MANIFEST_FILE_NAME,
 };
 use crate::core::osinstall::chain::{self, FoundTree, TreeSummary};
 use crate::core::osinstall::collide::{self, CollisionReport, Incoming};
@@ -1678,6 +1678,7 @@ pub fn osinstall_add_package(
                 files: 0,
                 directories: 0,
                 bytes: 0,
+                ..Default::default()
             };
             let mut failure: Option<CoreError> = None;
             for (package, archive) in &resolved {
@@ -1754,6 +1755,28 @@ pub struct OsInstallResult {
     pub outcome: ApplyOutcome,
 }
 
+/// One line per [`RemovalVerdict`], for [`osinstall_apply`]'s own oplog
+/// record — never a raw `{:?}`, so the log reads the way every other detail
+/// in this file does: a name, then a plain-English state.
+///
+/// `RemovalState::Failed`'s own sentence is carried too, because a removal
+/// that failed is exactly the kind of thing an operator reading the log
+/// later needs the reason for, not only the fact.
+fn removed_detail(removed: &[RemovalVerdict]) -> String {
+    removed
+        .iter()
+        .map(|verdict| {
+            let state = match &verdict.state {
+                RemovalState::Removed => "removed".to_string(),
+                RemovalState::NotPresent => "not present".to_string(),
+                RemovalState::Failed(detail) => format!("failed: {detail}"),
+            };
+            format!("{}: {state}", verdict.to)
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 /// Build the distribution tree. Returns a job id (§54) — an install copies an
 /// entire operating system, and `apply()` already reports progress per file
 /// it places (`sink.report(done, Some(total), &item.to)`, `core/osinstall/apply.rs`),
@@ -1806,14 +1829,29 @@ pub fn osinstall_apply(
             .detail("Release", plan.release.clone())
             .detail("Components", plan.components_on.join(", "));
         let record = match &outcome {
-            Ok(done) => record
-                .detail("Files", done.files.to_string())
-                .detail("Directories", done.directories.to_string())
-                .detail("Bytes", done.bytes.to_string())
-                // Verification is its own step (`osinstall_verify`), run
-                // against the volume this tree is later copied onto — not
-                // here, where nothing has been read back yet.
-                .outcome(OperationOutcome::verified(false)),
+            Ok(done) => {
+                let record = record
+                    .detail("Files", done.files.to_string())
+                    .detail("Directories", done.directories.to_string())
+                    .detail("Bytes", done.bytes.to_string());
+                // Removals go through the log the same way placements do —
+                // one record for the whole run, with a detail naming every
+                // entry, never one log line per file (CLAUDE.md; the same
+                // shape `commands/adf.rs` already uses for every other
+                // operation this module logs). Omitted entirely when nothing
+                // was asked to be removed, which is every shipped recipe
+                // until AmigaOS 3.2.2's own recipe uses the field.
+                let record = if done.removed.is_empty() {
+                    record
+                } else {
+                    record.detail("Removed", removed_detail(&done.removed))
+                };
+                record
+                    // Verification is its own step (`osinstall_verify`), run
+                    // against the volume this tree is later copied onto — not
+                    // here, where nothing has been read back yet.
+                    .outcome(OperationOutcome::verified(false))
+            }
             Err(err) => record.failure(err.code(), err.to_string()),
         };
         write_to_path(&log_path, &record);
@@ -2451,6 +2489,7 @@ mod tests {
             user_startup: Vec::new(),
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
+            removals: Vec::new(),
         };
         (dir, plan)
     }
@@ -2851,6 +2890,7 @@ mod tests {
             user_startup: Vec::new(),
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
+            removals: Vec::new(),
         };
 
         let preview =
@@ -4206,9 +4246,13 @@ mod tests {
                 files: 3,
                 directories: 1,
                 bytes: 42,
+                ..Default::default()
             };
             let value = serde_json::to_value(&outcome).unwrap();
-            expect_keys(&value, &["root", "files", "directories", "bytes"]);
+            expect_keys(
+                &value,
+                &["root", "files", "directories", "bytes", "removed"],
+            );
         }
 
         /// Deliberately **not** camelCased — `job_id` matches `LayoutResult`
@@ -4250,6 +4294,7 @@ mod tests {
                     "packages",
                     "packageMedia",
                     "userStartup",
+                    "removals",
                 ],
             );
         }

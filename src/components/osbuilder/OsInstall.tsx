@@ -1672,6 +1672,32 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           <p className="muted" style={{ fontSize: 12, margin: 0 }}>
             {t("osinstall.result.nextStep")}
           </p>
+          {/* An update's own `removes` (Component.removes) — reported per
+              entry, by name and by result, so the screen never claims a file
+              was removed when the core said it could not (CLAUDE.md). Hidden
+              entirely when nothing removed anything, which is every shipped
+              recipe until AmigaOS 3.2.2's own recipe uses the field. */}
+          {result.outcome.removed.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <h3 style={{ fontSize: 13, margin: "0 0 4px" }}>
+                {t("osinstall.result.removed.heading")}
+              </h3>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11 }}>
+                {result.outcome.removed.map((verdict) => (
+                  <li key={verdict.to}>
+                    {verdict.to} —{" "}
+                    {verdict.state === "removed"
+                      ? t("osinstall.result.removed.state.removed")
+                      : verdict.state === "not-present"
+                        ? t("osinstall.result.removed.state.notPresent")
+                        : t("osinstall.result.removed.state.failed", {
+                            detail: verdict.state.failed,
+                          })}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </section>
       )}
 

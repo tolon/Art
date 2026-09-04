@@ -310,6 +310,15 @@ export interface PlannedActivation {
   to: string;
 }
 
+/** One destination `osinstallApply` will delete from the tree after every
+ *  placement has run — an update deleting a file its own base release
+ *  placed, `Tools/TextEditFileTypes/Default4Types` in AmigaOS 3.2.2 being
+ *  the real case. */
+export interface PlanRemoval {
+  component: string;
+  to: string;
+}
+
 export interface InstallPlan {
   release: string;
   items: PlanItem[];
@@ -351,6 +360,11 @@ export interface InstallPlan {
    *  folders. */
   packageMedia: Record<string, { path: string; member: string | null }>;
   userStartup: UserStartupContribution[];
+  /** Every destination a switched-on component removes. Not emptied on a
+   *  refusal, unlike `activations` — a removal names a destination
+   *  declaratively, the same way a `userStartup` line does. Empty for every
+   *  shipped recipe until AmigaOS 3.2.2's own recipe uses the field. */
+  removals: PlanRemoval[];
 }
 
 /** What planning found, or why the media folder itself could not be looked
@@ -359,12 +373,28 @@ export type PlanResult =
   | { outcome: "planned"; plan: InstallPlan }
   | { outcome: "folder-unreadable"; folder: string };
 
+/** What happened when `osinstallApply` tried to remove one destination —
+ *  see `PlanRemoval`. `"not-present"` is its own outcome, not a failure: the
+ *  component that would have placed the path may simply have been switched
+ *  off. `failed` carries the core's own sentence — the screen must never
+ *  claim a removal succeeded when the core said it could not. */
+export type RemovalState = "removed" | "not-present" | { failed: string };
+
+export interface RemovalVerdict {
+  to: string;
+  state: RemovalState;
+}
+
 /** What `osinstallApply` actually did. */
 export interface ApplyOutcome {
   root: string;
   files: number;
   directories: number;
   bytes: number;
+  /** One verdict per `InstallPlan.removals` entry, by name — never
+   *  collapsed, and never silent (CLAUDE.md's "reported per entry, by name
+   *  and by result"). */
+  removed: RemovalVerdict[];
 }
 
 export const OSINSTALL_EVENT = "osinstall-result";

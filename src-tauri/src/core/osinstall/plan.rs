@@ -307,6 +307,25 @@ pub struct PlannedActivation {
     pub to: String,
 }
 
+/// One destination [`apply`](super::apply::apply) will delete from the tree
+/// after every placement has run — see [`super::Component::removes`].
+///
+/// Resolved at plan time, from the same `components_on` set every other
+/// per-component contribution (`user_startup`, `activations`) is, so `apply`
+/// never has to consult the recipe again — the same reason those two travel
+/// on the plan rather than being looked up a second time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanRemoval {
+    /// The component that asked — named so a screen can group this with
+    /// everything else that component does, the same way [`PlannedActivation::component`]
+    /// is.
+    pub component: String,
+    /// The destination to remove, `/`-separated, exactly as
+    /// [`super::Component::removes`] states it.
+    pub to: String,
+}
+
 /// What [`plan`] produces: either a full description of what would be
 /// written, or every reason it cannot proceed — never both. Any refusal at
 /// all empties `items` and `media_paths` (see the module doc comment); the
@@ -453,6 +472,24 @@ pub struct InstallPlan {
     /// nothing to check rather than as everything having changed.
     #[serde(default)]
     pub media_stamps: BTreeMap<String, MediaStamp>,
+    /// Every destination a switched-on component removes — see
+    /// [`super::Component::removes`] and [`PlanRemoval`]. Populated alongside
+    /// `components_on`, the same rule [`InstallPlan::user_startup`] follows
+    /// and for the same reason: every shipped component today removes
+    /// nothing, so this is empty in practice until AmigaOS 3.2.2's own
+    /// recipe uses the field.
+    ///
+    /// **Not emptied on a refusal**, unlike [`InstallPlan::activations`]:
+    /// an activation is checked against the plan's own `items` and is
+    /// meaningless once those are empty, but a removal names a destination
+    /// declaratively — the same way a `user_startup` line does — so stating
+    /// it costs nothing even when the plan as a whole cannot proceed.
+    ///
+    /// `#[serde(default)]` for the reason every other field added after
+    /// `InstallPlan` first shipped carries one: a plan serialised before this
+    /// field existed must still deserialise.
+    #[serde(default)]
+    pub removals: Vec<PlanRemoval>,
 }
 
 /// What the user asked for.
@@ -1511,6 +1548,21 @@ fn plan_over_with_cache(
         .collect();
     refusals.extend(detect_missing_activations(&items, &activations));
 
+    // Same source as `user_startup` above (`recipe.component`, over
+    // `components_on`, in recipe order) and for the same reason: `apply`
+    // only ever consumes an `InstallPlan`, never the `Recipe` itself, so
+    // whatever it needs to perform a removal has to travel on the plan.
+    let removals: Vec<PlanRemoval> = components_on
+        .iter()
+        .filter_map(|id| recipe.component(id))
+        .flat_map(|component| {
+            component.removes.iter().map(|to| PlanRemoval {
+                component: component.id.clone(),
+                to: to.clone(),
+            })
+        })
+        .collect();
+
     // Stamped from the paths the plan resolved, before anything empties them.
     // A medium that cannot be stat-ed is simply not stamped: `apply` reads a
     // missing stamp as "nothing was recorded", never as "it changed".
@@ -1569,6 +1621,7 @@ fn plan_over_with_cache(
         user_startup,
         activations,
         media_stamps,
+        removals,
     })
 }
 
@@ -1968,6 +2021,7 @@ mod plan_tests {
                     exclusive_group: None,
                     label_key: None,
                     available: true,
+                    removes: Vec::new(),
                 },
                 Component {
                     layer: None,
@@ -1986,6 +2040,7 @@ mod plan_tests {
                     exclusive_group: None,
                     label_key: None,
                     available: true,
+                    removes: Vec::new(),
                 },
             ],
         };
@@ -2044,6 +2099,7 @@ mod plan_tests {
                 exclusive_group: None,
                 label_key: None,
                 available: true,
+                removes: Vec::new(),
             }],
         };
         (dir, recipe, folder)
@@ -2212,6 +2268,7 @@ mod plan_tests {
             label_key: None,
             layer: None,
             available: true,
+            removes: Vec::new(),
         };
         let recipe = Recipe {
             layers: vec![],
@@ -2300,6 +2357,7 @@ mod plan_tests {
                 exclusive_group: None,
                 label_key: None,
                 available: true,
+                removes: Vec::new(),
             }],
         };
 
@@ -2349,6 +2407,7 @@ mod plan_tests {
                 exclusive_group: None,
                 label_key: None,
                 available: true,
+                removes: Vec::new(),
             }],
         };
 
@@ -2398,6 +2457,7 @@ mod plan_tests {
             exclusive_group: None,
             label_key: None,
             available: true,
+            removes: Vec::new(),
         };
         let recipe = Recipe {
             layers: vec![],
@@ -2464,6 +2524,7 @@ mod plan_tests {
             exclusive_group: Some("modules".to_string()),
             label_key: None,
             available: true,
+            removes: Vec::new(),
         };
         let recipe = Recipe {
             layers: vec![],
@@ -2545,6 +2606,7 @@ mod plan_tests {
                 exclusive_group: None,
                 label_key: None,
                 available: true,
+                removes: Vec::new(),
             }],
         };
 
@@ -2634,6 +2696,7 @@ mod plan_tests {
                 exclusive_group: None,
                 label_key: None,
                 available: true,
+                removes: Vec::new(),
             }],
         };
 
@@ -2901,6 +2964,7 @@ mod plan_tests {
                 exclusive_group: None,
                 label_key: None,
                 available: true,
+                removes: Vec::new(),
             }],
         };
 
@@ -3636,6 +3700,7 @@ mod plan_tests {
             exclusive_group: None,
             label_key: None,
             available: true,
+            removes: Vec::new(),
         };
         let recipe = Recipe {
             layers: vec![],
@@ -3881,6 +3946,7 @@ mod plan_tests {
             exclusive_group: None,
             label_key: None,
             available: true,
+            removes: Vec::new(),
         };
         Package {
             id: id.to_string(),
