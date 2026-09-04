@@ -464,7 +464,7 @@ fn resolve_base(recipe: Recipe) -> CoreResult<Recipe> {
 - [ ] **Step 4: Run the tests**
 
 Run: `cd src-tauri && cargo test osinstall::recipe::`
-Expected: the `AmigaOS 3.2.2` tests still fail (Task 8 writes that file); the rest PASS. **Mark the two 3.2.2 tests `#[ignore]` with the reason `waiting for Task 8's recipe`, and remove the `#[ignore]` in Task 8.** Do not delete them — an ignored test with a named reason is a promise; a deleted one is nothing.
+Expected: the one test that names `AmigaOS 3.2.2` still fails (Task 8 writes that file); the rest PASS. **Mark that one test `#[ignore]` with the reason `waiting for Task 8's recipe`, and remove the `#[ignore]` in Task 8.** Do not delete it — an ignored test with a named reason is a promise; a deleted one is nothing. (An earlier draft of this plan said "two"; counted against the tests above, there is exactly one — `a_based_recipe_inherits_its_bases_components_on_the_first_layer`.)
 
 - [ ] **Step 5: Mutations**
 
@@ -1484,7 +1484,8 @@ fn the_empty_3_2_1_placeholder_is_gone() {
 }
 ```
 
-Then remove the `#[ignore]` from Task 2's two 3.2.2 tests.
+Then remove the `#[ignore]` from Task 2's one 3.2.2 test,
+`a_based_recipe_inherits_its_bases_components_on_the_first_layer`.
 
 - [ ] **Step 2: Run and watch them fail**
 
