@@ -138,6 +138,13 @@ pub struct RomFacts {
     /// Kept whole so `plan()` can record the pairing without reading the file
     /// twice — and so a future condition can ask about the machine.
     pub info: crate::core::rom::RomInfo,
+    /// The paired Kickstart's own resident modules — what
+    /// [`Condition::ResidentOlderThan`] reads. Not folded into `major`: the
+    /// header version and a resident's own version answer two different
+    /// questions (the design's §5, reproduced on
+    /// `core::rom::residents`'s own doc comment), and this task exists
+    /// precisely because they were found to disagree.
+    pub residents: Vec<crate::core::rom::RomResident>,
 }
 
 /// Read the paired Kickstart's own stated major.
@@ -152,7 +159,18 @@ pub fn rom_facts(rom: &Path) -> CoreResult<RomFacts> {
     let (major, _minor) = crate::core::rom::stated_version(&bytes).ok_or_else(|| {
         CoreError::InvalidInput("this file does not state a Kickstart version".into())
     })?;
-    Ok(RomFacts { major, info })
+    // A dump whose size `core::rom::residents` does not recognise (never a
+    // plain 512 KiB or 256 KiB image) fails the *resident* scan without
+    // failing `rom_facts` itself — the header above already answered the
+    // question `rom_facts` exists to answer. An empty table is exactly what
+    // [`Condition::ResidentOlderThan`] needs to see nothing named in it: "the
+    // ROM does not carry this resident", never a guess either way.
+    let residents = crate::core::rom::residents(&bytes).unwrap_or_default();
+    Ok(RomFacts {
+        major,
+        info,
+        residents,
+    })
 }
 
 /// Whether a conditional component switches on, given the facts already
@@ -166,6 +184,46 @@ pub fn condition_holds(
     match condition {
         Condition::RomOlderThan { major } => Ok(rom.major < *major),
         Condition::RomAtLeast { major } => Ok(rom.major >= *major),
+        Condition::ResidentOlderThan {
+            resident,
+            major,
+            minor,
+        } => Ok(resident_older_than(
+            &rom.residents,
+            resident,
+            *major,
+            *minor,
+        )),
+    }
+}
+
+/// [`Condition::ResidentOlderThan`]'s own comparison, split out so it can be
+/// exercised directly against hand-built facts (`resident_condition_holds`
+/// in the tests below) without a real ROM file.
+///
+/// The comparison is lexicographic on `(major, minor)` — the major alone
+/// when `minor` is `None`, which is how `strap`'s condition in the shipped
+/// recipe is meant to be written: the design's §5 measured `strap` at 45.1
+/// for 3.2 and 47.2 for both 3.2.1 and 3.2.2, so only the major actually
+/// needs comparing there. **A resident the ROM does not carry never
+/// satisfies this** — `find_map` below yields `None` for an absent name, and
+/// `unwrap_or(false)` turns "unknown" into "does not hold", never into
+/// "older".
+fn resident_older_than(
+    residents: &[crate::core::rom::RomResident],
+    name: &str,
+    major: u16,
+    minor: Option<u16>,
+) -> bool {
+    let Some((found_major, found_minor)) = crate::core::rom::resident_revision(residents, name)
+    else {
+        // The ROM does not carry this resident at all — absent is not
+        // "older" (see the module doc comment and this variant's own).
+        return false;
+    };
+    match minor {
+        Some(wanted_minor) => (found_major, found_minor) < (major, wanted_minor),
+        None => found_major < major,
     }
 }
 
@@ -1697,10 +1755,17 @@ pub(crate) fn rom_requirement(recipe: &Recipe, components_on: &[String]) -> Opti
         .iter()
         .filter_map(|component| {
             let is_on = components_on.iter().any(|on| on == &component.id);
-            match component.condition? {
-                Condition::RomOlderThan { major } if !is_on => Some(major),
-                Condition::RomAtLeast { major } if is_on => Some(major),
-                _ => None,
+            match &component.condition {
+                Some(Condition::RomOlderThan { major }) if !is_on => Some(*major),
+                Some(Condition::RomOlderThan { .. }) => None,
+                Some(Condition::RomAtLeast { major }) if is_on => Some(*major),
+                Some(Condition::RomAtLeast { .. }) => None,
+                // A resident's own version does not state a Kickstart floor
+                // for the whole tree the way `RomOlderThan`/`RomAtLeast` do
+                // — it is answered from the paired ROM's resident table, not
+                // the header `rom_requirement` reasons about here.
+                Some(Condition::ResidentOlderThan { .. }) => None,
+                None => None,
             }
         })
         .max()
@@ -1733,7 +1798,36 @@ mod condition_tests {
                 major: Some(major),
                 whdload_crc16: None,
             },
+            residents: Vec::new(),
         }
+    }
+
+    /// Facts carrying only the two residents AmigaOS 3.2.2's Modules step
+    /// asks about, built from plain numbers — never a real ROM file, which
+    /// ART neither ships nor needs to read for this.
+    fn residents_of(exec: (u16, u16), strap: (u16, u16)) -> RomFacts {
+        let mut facts = fake_rom_facts(47);
+        facts.residents = vec![
+            crate::core::rom::RomResident {
+                name: "exec.library".into(),
+                version: exec.0 as u8,
+                id: format!("exec {}.{} (test)", exec.0, exec.1),
+            },
+            crate::core::rom::RomResident {
+                name: "strap".into(),
+                version: strap.0 as u8,
+                id: format!("strap {}.{} (test)", strap.0, strap.1),
+            },
+        ];
+        facts
+    }
+
+    /// `condition_holds` wrapped for a `Condition` known to be a
+    /// `ResidentOlderThan` against facts known to identify a ROM — both true
+    /// of every call these tests make, so the `Result`'s other two cases
+    /// (an unrelated condition kind, an unidentified ROM) never arise here.
+    fn resident_condition_holds(condition: &Condition, facts: &RomFacts) -> bool {
+        condition_holds(condition, Some(facts)).expect("a resident condition against known facts")
     }
 
     /// `Workbench3.2.adf:S/Startup-sequence` opens with
@@ -1944,6 +2038,60 @@ mod condition_tests {
         std::fs::write(&path, b"this is not a Kickstart image").unwrap();
 
         assert!(matches!(rom_facts(&path), Err(CoreError::InvalidInput(_))));
+    }
+
+    /// The evidence for [`Condition::ResidentOlderThan`] existing at all
+    /// (design §5): the release's own Modules step asks a running machine
+    /// for `exec.library`'s revision and for `strap`'s version, and a header
+    /// proxy collapses the 3.2 and 3.2.1 rows into one outcome.
+    #[test]
+    fn the_modules_condition_answers_what_the_release_answers_for_all_three_roms() {
+        let exec_older = Condition::ResidentOlderThan {
+            resident: "exec".into(),
+            major: 47,
+            minor: Some(10),
+        };
+        let strap_older = Condition::ResidentOlderThan {
+            resident: "strap".into(),
+            major: 47,
+            minor: None,
+        };
+        // (exec, strap), measured out of the owner's own A1200 Kickstarts.
+        let kick_32 = residents_of((47, 7), (45, 1));
+        let kick_321 = residents_of((47, 8), (47, 2));
+        let kick_322 = residents_of((47, 10), (47, 2));
+
+        assert!(resident_condition_holds(&exec_older, &kick_32));
+        assert!(
+            resident_condition_holds(&strap_older, &kick_32),
+            "3.2's ROM gets the larger file set"
+        );
+
+        assert!(resident_condition_holds(&exec_older, &kick_321));
+        assert!(
+            !resident_condition_holds(&strap_older, &kick_321),
+            "3.2.1's ROM gets the smaller set - Shell-Seg and the three libraries are \
+             withheld, which is exactly what the header proxy got wrong"
+        );
+
+        assert!(!resident_condition_holds(&exec_older, &kick_322));
+        assert!(
+            !resident_condition_holds(&strap_older, &kick_322),
+            "3.2.2's own ROM needs no softkicked modules at all"
+        );
+    }
+
+    #[test]
+    fn a_condition_naming_a_resident_the_rom_does_not_carry_does_not_hold() {
+        let c = Condition::ResidentOlderThan {
+            resident: "nosuchthing".into(),
+            major: 47,
+            minor: None,
+        };
+        assert!(
+            !resident_condition_holds(&c, &residents_of((47, 7), (45, 1))),
+            "an absent resident switches nothing on - never a default of `older`"
+        );
     }
 }
 

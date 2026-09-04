@@ -420,14 +420,25 @@ impl From<&crate::core::osinstall::Component> for ComponentSummary {
             label_key: component.label_key.clone(),
             required: component.required,
             available: component.available,
-            condition_major: component.condition.and_then(|condition| match condition {
-                Condition::RomOlderThan { major } => Some(major),
-                Condition::RomAtLeast { .. } => None,
-            }),
-            requires_rom_major: component.condition.and_then(|condition| match condition {
-                Condition::RomAtLeast { major } => Some(major),
-                Condition::RomOlderThan { .. } => None,
-            }),
+            condition_major: component
+                .condition
+                .clone()
+                .and_then(|condition| match condition {
+                    Condition::RomOlderThan { major } => Some(major),
+                    Condition::RomAtLeast { .. } => None,
+                    // A resident's own version, not the ROM header's — a
+                    // different number that this field must not be dressed up
+                    // as (see the field's own doc comment).
+                    Condition::ResidentOlderThan { .. } => None,
+                }),
+            requires_rom_major: component
+                .condition
+                .clone()
+                .and_then(|condition| match condition {
+                    Condition::RomAtLeast { major } => Some(major),
+                    Condition::RomOlderThan { .. } => None,
+                    Condition::ResidentOlderThan { .. } => None,
+                }),
             exclusive_group: component.exclusive_group.clone(),
             overrides: component.overrides.clone(),
         }

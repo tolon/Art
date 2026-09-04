@@ -515,6 +515,194 @@ pub fn stated_version(bytes: &[u8]) -> Option<(u16, u16)> {
     Some((major, minor))
 }
 
+/// One entry out of a Kickstart's own resident module table.
+///
+/// `version` is `rt_Version`, the module's major alone — a Resident carries
+/// no minor field at all. The minor a caller actually wants lives only in
+/// `id`'s free-text second word (`"exec 47.10 (21.01.2023)"`), which is why
+/// [`resident_version`] parses `id` rather than reporting `version` twice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RomResident {
+    /// `rt_Name` — the module's own name, e.g. `"exec.library"`.
+    pub name: String,
+    /// `rt_Version`, the major alone.
+    pub version: u8,
+    /// `rt_IdString`, e.g. `"exec 47.10 (21.01.2023)"`.
+    pub id: String,
+}
+
+/// `0x4AFC` is the m68k `ILLEGAL` instruction and turns up in ordinary code
+/// too, so it cannot be trusted alone — see [`residents`].
+const RESIDENT_MATCH_WORD: u16 = 0x4AFC;
+
+/// `sizeof(struct Resident)`: two words (`rt_MatchWord`, `rt_MatchTag` is a
+/// long) … the fields through `rt_Init` add up to 26 bytes on a 32-bit m68k
+/// with no padding, which is what every real Kickstart lays out.
+const RESIDENT_SIZE: usize = 26;
+
+/// Where a Kickstart image of this size maps in the Amiga's address space.
+///
+/// A `Resident`'s own pointers (`rt_MatchTag`, `rt_Name`, `rt_IdString`) are
+/// absolute 68000 addresses, not offsets into the dump file — so reading one
+/// back requires knowing where the file's byte 0 sits in memory, and that
+/// depends on the image's size. An unrecognised size has no answer: refusing
+/// beats guessing a base that would silently misread every pointer in the
+/// file.
+fn rom_base(len: usize) -> Option<u32> {
+    match len {
+        0x8_0000 => Some(0xF8_0000), // 512 KiB
+        0x4_0000 => Some(0xFC_0000), // 256 KiB
+        _ => None,
+    }
+}
+
+fn resident_malformed(detail: impl Into<String>) -> CoreError {
+    CoreError::Malformed {
+        format: "Kickstart resident table".into(),
+        detail: detail.into(),
+    }
+}
+
+/// Read a NUL-terminated string out of the image, given an absolute pointer
+/// into it — the one place a `Resident`'s pointer becomes a file offset.
+///
+/// Every caller goes through this rather than indexing `bytes` with a
+/// pointer-derived offset directly, because the pointer comes from a file
+/// ART did not write: a pointer below the image's own base, or past its end,
+/// is a [`CoreError`] naming the problem, never a clamp and never a silent
+/// truncation. The release profile aborts on an out-of-range index, so this
+/// is the difference between a refusal and taking the whole application down
+/// over one untrusted ROM.
+fn string_at(bytes: &[u8], base: u32, pointer: u32) -> CoreResult<String> {
+    let offset = pointer
+        .checked_sub(base)
+        .ok_or_else(|| resident_malformed("a resident points below the ROM base"))?
+        as usize;
+    let tail = bytes
+        .get(offset..)
+        .ok_or_else(|| resident_malformed("a resident points past the end of the ROM"))?;
+    let end = tail.iter().position(|b| *b == 0).unwrap_or(tail.len());
+    Ok(String::from_utf8_lossy(&tail[..end]).into_owned())
+}
+
+/// Walk a Kickstart image for its `Resident` modules (ART's own reader —
+/// AmigaOS itself does this at boot, in `InitResident`/`InitCode`).
+///
+/// ## Why the self-pointer, and not the match word alone
+///
+/// `0x4AFC` is the m68k `ILLEGAL` instruction, and a 512 KiB image is mostly
+/// ordinary 68000 code — that word occurs there by coincidence, repeatedly.
+/// What AmigaOS's own loader actually trusts is `rt_MatchTag`, which every
+/// real `Resident` sets to point **at its own `rt_MatchWord`**. A scan that
+/// stops at the match word alone finds rubbish; requiring `rt_MatchTag ==
+/// base + offset` is what turns the scan into a real one.
+///
+/// ## Why this exists instead of trusting the ROM header (design §5)
+///
+/// AmigaOS 3.2.2's Modules step doesn't ask a ROM file anything — it asks
+/// the **running machine** for `exec.library`'s revision and for `strap`'s
+/// version, and decides from those two numbers alone. ART has no running
+/// machine, only the paired ROM file, so it has to read the same two facts
+/// out of the image instead. The header (`stated_version`) does not carry
+/// them: measured against the owner's own three A1200 Kickstarts —
+///
+/// | Paired Kickstart | header  | `exec.library` | `strap` | release does |
+/// |---|---|---|---|---|
+/// | 3.2 `kicka1200.rom`        | 47.96  | 47.7  | **45.1** | modules on, larger set  |
+/// | 3.2.1 `A1200.47.102.rom`   | 47.102 | 47.8  | 47.2     | modules on, smaller set |
+/// | 3.2.2 `A1200.47.111.rom`   | 47.111 | 47.10 | 47.2     | modules off             |
+///
+/// the header collapses the first two rows into one outcome, and would place
+/// `Shell-Seg` and three library modules onto a 47.102 machine that the
+/// release deliberately withholds them from. `exec.library`'s and `strap`'s
+/// own resident entries carry the two numbers the release actually reads —
+/// so this reads those instead of the header.
+pub fn residents(bytes: &[u8]) -> CoreResult<Vec<RomResident>> {
+    let base = rom_base(bytes.len())
+        .ok_or_else(|| resident_malformed("not a recognised Kickstart image size"))?;
+
+    let mut found = Vec::new();
+    let mut offset = 0usize;
+    while offset + RESIDENT_SIZE <= bytes.len() {
+        let word = u16::from_be_bytes([bytes[offset], bytes[offset + 1]]);
+        if word == RESIDENT_MATCH_WORD {
+            let tag = u32::from_be_bytes([
+                bytes[offset + 2],
+                bytes[offset + 3],
+                bytes[offset + 4],
+                bytes[offset + 5],
+            ]);
+            // The only thing separating a real Resident from an ILLEGAL
+            // opcode that happens to sit in ordinary code: a real one's
+            // rt_MatchTag points at itself.
+            let self_pointer = base.checked_add(offset as u32);
+            if self_pointer == Some(tag) {
+                let version = bytes[offset + 11];
+                let name_ptr = u32::from_be_bytes([
+                    bytes[offset + 14],
+                    bytes[offset + 15],
+                    bytes[offset + 16],
+                    bytes[offset + 17],
+                ]);
+                let id_ptr = u32::from_be_bytes([
+                    bytes[offset + 18],
+                    bytes[offset + 19],
+                    bytes[offset + 20],
+                    bytes[offset + 21],
+                ]);
+                let name = string_at(bytes, base, name_ptr)?;
+                let id = string_at(bytes, base, id_ptr)?;
+                found.push(RomResident { name, version, id });
+            }
+        }
+        offset += 2;
+    }
+    Ok(found)
+}
+
+/// The `(major, minor)` revision a named resident's own ID string states —
+/// `exec.library`'s `"exec 47.10 (21.01.2023)"` reads `(47, 10)`.
+///
+/// Deliberately not `rt_Version`: that field carries the major alone, and
+/// the minor the AmigaOS 3.2.2 Modules step actually compares lives only in
+/// this free-text string's second word. `name` is matched against the ID
+/// string's **first** word (`"exec"`, `"strap"`) — the same short name the
+/// release's own installer script asks about — not against `rt_Name`, which
+/// carries the longer library name (`"exec.library"`).
+///
+/// `None` covers three different things ART cannot tell apart from the
+/// caller's side, all of which mean the same thing to a [`Condition`] built
+/// on this: no resident of that name, an ID string that does not parse, or
+/// an image this reader refuses outright. A malformed string yields `None`
+/// rather than a partial number — a caller comparing versions must never see
+/// a `major` with no `minor` behind it dressed up as `(major, 0)`.
+///
+/// [`Condition`]: crate::core::osinstall::Condition
+pub fn resident_version(bytes: &[u8], name: &str) -> Option<(u16, u16)> {
+    let table = residents(bytes).ok()?;
+    resident_revision(&table, name)
+}
+
+/// The same lookup as [`resident_version`], over a table already read —
+/// shared with `core::osinstall::plan::resident_older_than` so a
+/// [`Condition`]'s own comparison and the version this module hands the UI
+/// parse the exact same ID-string grammar rather than two copies drifting
+/// apart.
+///
+/// [`Condition`]: crate::core::osinstall::Condition
+pub(crate) fn resident_revision(residents: &[RomResident], name: &str) -> Option<(u16, u16)> {
+    residents.iter().find_map(|resident| {
+        let mut words = resident.id.split_whitespace();
+        if words.next()? != name {
+            return None;
+        }
+        let mut parts = words.next()?.split('.');
+        let major = parts.next()?.parse().ok()?;
+        let minor = parts.next()?.parse().ok()?;
+        Some((major, minor))
+    })
+}
+
 /// The marketing version a Kickstart major belongs to.
 ///
 /// Only the ones Commodore shipped; an unknown major is reported by its
@@ -1241,5 +1429,85 @@ mod tests {
         assert_eq!(compute_crc32(b""), 0);
         // Standard test vector: "123456789" -> 0xCBF43926
         assert_eq!(compute_crc32(b"123456789"), 0xCBF4_3926);
+    }
+
+    /// A 512 KiB image with one hand-built `Resident` at a known offset.
+    fn rom_with_resident(offset: usize, name: &str, version: u8, id: &str) -> Vec<u8> {
+        const BASE: u32 = 0xF8_0000;
+        let mut rom = vec![0u8; 512 * 1024];
+        let name_at = offset + 64;
+        let id_at = offset + 128;
+        rom[offset..offset + 2].copy_from_slice(&0x4AFCu16.to_be_bytes());
+        rom[offset + 2..offset + 6].copy_from_slice(&(BASE + offset as u32).to_be_bytes());
+        rom[offset + 11] = version;
+        rom[offset + 14..offset + 18].copy_from_slice(&(BASE + name_at as u32).to_be_bytes());
+        rom[offset + 18..offset + 22].copy_from_slice(&(BASE + id_at as u32).to_be_bytes());
+        rom[name_at..name_at + name.len()].copy_from_slice(name.as_bytes());
+        rom[id_at..id_at + id.len()].copy_from_slice(id.as_bytes());
+        rom
+    }
+
+    #[test]
+    fn a_resident_is_found_by_its_own_self_pointer() {
+        let rom = rom_with_resident(0x400, "exec.library", 47, "exec 47.10 (21.01.2023)");
+        let found = residents(&rom).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "exec.library");
+        assert_eq!(found[0].version, 47);
+        assert_eq!(found[0].id, "exec 47.10 (21.01.2023)");
+    }
+
+    #[test]
+    fn a_match_word_whose_tag_points_elsewhere_is_not_a_resident() {
+        // 0x4AFC is the m68k ILLEGAL instruction and occurs in ordinary code.
+        // Only the self-pointer separates a real Resident from a coincidence.
+        let mut rom = rom_with_resident(0x400, "exec.library", 47, "exec 47.10 (x)");
+        rom[0x800..0x802].copy_from_slice(&0x4AFCu16.to_be_bytes());
+        rom[0x802..0x806].copy_from_slice(&0xF8_0000u32.to_be_bytes()); // points at 0, not itself
+        assert_eq!(residents(&rom).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn resident_version_reads_the_revision_out_of_the_id_string() {
+        let rom = rom_with_resident(0x400, "exec.library", 47, "exec 47.10 (21.01.2023)");
+        assert_eq!(resident_version(&rom, "exec"), Some((47, 10)));
+        assert_eq!(resident_version(&rom, "strap"), None);
+    }
+
+    #[test]
+    fn a_name_pointer_outside_the_image_is_refused_not_read() {
+        let mut rom = rom_with_resident(0x400, "exec.library", 47, "exec 47.10 (x)");
+        rom[0x400 + 14..0x400 + 18].copy_from_slice(&0xFFFF_FFFEu32.to_be_bytes());
+        assert!(
+            residents(&rom).is_err(),
+            "a pointer outside the image is a refusal"
+        );
+    }
+
+    #[test]
+    fn an_image_of_an_unexpected_size_has_no_base_and_is_refused() {
+        assert!(residents(&vec![0u8; 1234]).is_err());
+    }
+
+    /// **Not run by default.** `cargo test -- --ignored` or a direct name
+    /// runs it, and only `ART_ROM` set makes it do anything — this is the
+    /// hook the design's §5 table (reproduced on [`residents`]'s own doc
+    /// comment) came from, and running it again is how that table is kept
+    /// honest rather than trusted. Read-only: it never copies, moves or
+    /// modifies the file it names.
+    #[test]
+    #[ignore = "needs the owner's own 3.2-family Kickstarts"]
+    fn read_the_real_roms_residents_when_asked() {
+        let Ok(path) = std::env::var("ART_ROM") else {
+            return;
+        };
+        let bytes = std::fs::read(path).unwrap();
+        println!(
+            "ART_ROM_RESULT header={:?} exec={:?} strap={:?}",
+            stated_version(&bytes),
+            resident_version(&bytes, "exec"),
+            resident_version(&bytes, "strap"),
+        );
+        assert!(resident_version(&bytes, "exec").is_some());
     }
 }

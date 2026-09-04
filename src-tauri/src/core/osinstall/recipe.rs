@@ -47,7 +47,7 @@ const COMPONENT_KEYS: &[&str] = &[
     "removes",
 ];
 const RULE_KEYS: &[&str] = &["from", "to", "kind"];
-const CONDITION_KEYS: &[&str] = &["condition", "major"];
+const CONDITION_KEYS: &[&str] = &["condition", "major", "resident", "minor"];
 const ACTIVATION_KEYS: &[&str] = &["kind", "name"];
 const LAYER_KEYS: &[&str] = &["id", "label_key"];
 

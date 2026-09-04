@@ -116,7 +116,12 @@ pub struct PathRule {
 }
 
 /// When a component applies without the user being asked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// No longer [`Copy`] as of [`ResidentOlderThan`](Self::ResidentOlderThan):
+/// that variant carries an owned `String`, so callers that used to read a
+/// `Condition` out of a `&Component` by value now match on a reference (see
+/// `plan::rom_requirement`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "condition", rename_all = "kebab-case")]
 pub enum Condition {
     /// On when the paired Kickstart's own stated major is below this.
@@ -148,6 +153,42 @@ pub enum Condition {
     /// Same evidence rule as its sibling: the ROM's own header answers it
     /// (`core::rom::stated_version`), never `KNOWN_ROMS` (ART-104).
     RomAtLeast { major: u16 },
+    /// The named resident **inside the paired Kickstart** is older than this.
+    ///
+    /// `exec` and `strap` are the two names AmigaOS 3.2.2's own Modules step
+    /// asks about — but it does not ask a ROM file at all, it asks the
+    /// **running machine** for `exec.library`'s revision and for `strap`'s
+    /// version. ART has no running machine, so this reads the same two
+    /// numbers out of the paired ROM's own resident table
+    /// (`core::rom::resident_version`) instead.
+    ///
+    /// Deliberately distinct from [`Condition::RomOlderThan`], which asks
+    /// the ROM's own *header* version — a different number that tracks
+    /// neither `exec.library` nor `strap`, measured against the owner's own
+    /// three A1200 Kickstarts (the design's §5, reproduced on
+    /// `core::rom::residents`'s own doc comment):
+    ///
+    /// | Paired Kickstart | header | `exec.library` | `strap` | release does |
+    /// |---|---|---|---|---|
+    /// | 3.2 `kicka1200.rom`      | 47.96  | 47.7  | **45.1** | modules on, larger set  |
+    /// | 3.2.1 `A1200.47.102.rom` | 47.102 | 47.8  | 47.2     | modules on, smaller set |
+    /// | 3.2.2 `A1200.47.111.rom` | 47.111 | 47.10 | 47.2     | modules off             |
+    ///
+    /// A header proxy collapses the first two rows into one outcome and
+    /// would place `Shell-Seg` and three library modules onto a 47.102
+    /// machine the release deliberately withholds them from — which is why
+    /// this condition exists rather than a `minor` field on `RomOlderThan`.
+    ///
+    /// The comparison is lexicographic on `(major, minor)`, and the major
+    /// alone when `minor` is `None`. **A resident the ROM does not carry
+    /// never satisfies this** — absent is not "older"; defaulting the other
+    /// way would switch the component on for every ROM ART cannot read.
+    ResidentOlderThan {
+        resident: String,
+        major: u16,
+        #[serde(default)]
+        minor: Option<u16>,
+    },
 }
 
 /// The Kickstart a distribution tree was planned against, and what it needs
