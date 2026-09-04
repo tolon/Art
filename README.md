@@ -462,8 +462,8 @@ Windows 10/11, 64-bit. Two installers, and either is fine:
 
 | File | What it is |
 |---|---|
-| `Amiga Retro Toolkit_<version>_x64_en-US.msi` | the Windows Installer package — use this one if your machine is managed, or if you want to deploy it |
-| `Amiga Retro Toolkit_<version>_x64-setup.exe` | the NSIS installer — a smaller download and the usual choice |
+| `Amiga.Retro.Toolkit_<version>_x64_en-US.msi` | the Windows Installer package — use this one if your machine is managed, or if you want to deploy it |
+| `Amiga.Retro.Toolkit_<version>_x64-setup.exe` | the NSIS installer — a smaller download and the usual choice |
 
 Nothing else is needed: the WebView2 runtime ART draws its interface with is
 already on Windows 10 and 11, and ART bundles no Amiga content, so there is
