@@ -1256,7 +1256,7 @@ describe("a release switch does not leave the other release's answers on screen 
       bytes: 1024,
       removed: [],
       icons: [],
-      failed: 0,
+      iconMergeFailures: 0,
     },
   };
 
@@ -1330,7 +1330,7 @@ describe("the tree it builds is the tree the next steps get (ART-197)", () => {
       bytes: 1024,
       removed: [],
       icons: [],
-      failed: 0,
+      iconMergeFailures: 0,
     },
   };
 

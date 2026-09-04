@@ -397,12 +397,27 @@ pub struct ApplyOutcome {
     /// the merge amends bytes already counted, it does not add a file. See
     /// [`IconMergeVerdict`].
     pub icons: Vec<IconMergeVerdict>,
-    /// How many of this run's own icon merges came back
+    /// How many entries in [`ApplyOutcome::icons`] came back
     /// [`IconMergeState::Failed`] — `DestinationAbsent` does **not** count
-    /// (CLAUDE.md: a skip is not a failure). A screen can also just filter
-    /// `icons` itself; this is the quick "did anything fail" a progress
-    /// summary wants without walking the list.
-    pub failed: u64,
+    /// (CLAUDE.md: a skip is not a failure).
+    ///
+    /// **Named for exactly what it counts, and nothing wider.** It does
+    /// **not** include a [`RemovalState::Failed`] in [`ApplyOutcome::removed`]
+    /// — there is deliberately no single outcome-wide failure tally. Fix
+    /// round 1 (Task 6) is why: an earlier version of this field was called
+    /// `failed` and its own doc comment called it "the quick 'did anything
+    /// fail' a progress summary wants", which is an instruction to widen it
+    /// the first time somebody reads that sentence rather than the field's
+    /// actual contents — and a `failed: 0` shown for a run where a removal
+    /// genuinely failed is exactly CLAUDE.md's "the failure that does not
+    /// crash" (the badge that once asserted a copy was discarded over the
+    /// core's own "could not be removed"). The per-entry verdict lists
+    /// (`icons`, `removed`) are the truth; a screen that wants a combined
+    /// "did anything fail" computes it from both lists rather than from a
+    /// single number that could quietly disagree with them — and a future
+    /// failure kind does not have to remember to feed a shared counter to
+    /// stay honest.
+    pub icon_merge_failures: u64,
 }
 
 /// What happened when [`apply`] tried to remove one destination — see
@@ -679,6 +694,14 @@ impl<'a> TreeWriter<'a> {
     ///
     /// A sidecar ART cannot parse is removed rather than kept: it no longer
     /// describes the file that is there, and ART cannot say what it claims.
+    ///
+    /// **Never called for a `merge_icon` item.** An icon-tooltypes rule
+    /// changes only the icon's own bytes, never the AmigaDOS
+    /// protection/date/comment a sidecar records, so `merge_icon` leaves the
+    /// sidecar exactly as whichever placement wrote it and carries the same
+    /// `protection` value into its own [`FileRecord`] — see `merge_icon`'s
+    /// own comment. The manifest/sidecar agreement this function exists to
+    /// keep still holds: neither side changed.
     fn settle_sidecar(
         &self,
         target: &Path,
@@ -776,12 +799,15 @@ impl<'a> TreeWriter<'a> {
                 crate::core::safety::atomic::atomic_write(target, &merged)?;
 
                 // The sidecar beside `target` is left exactly as the
-                // component that placed the icon wrote it: this merge
-                // changes only the icon's own bytes (tool types and stack
-                // size), never the AmigaDOS protection/date/comment a
-                // sidecar records, so nothing here has anything new to say
-                // about them. The manifest record's own `protection` field
-                // carries the same value forward for the same reason.
+                // component that placed the icon wrote it — see
+                // `settle_sidecar`'s own doc comment, "never called for a
+                // `merge_icon` item" — because this merge changes only the
+                // icon's own bytes (tool types and stack size), never the
+                // AmigaDOS protection/date/comment a sidecar records, so
+                // nothing here has anything new to say about them. The
+                // manifest record's own `protection` field carries the same
+                // value forward for the same reason, which is what keeps the
+                // manifest and the untouched sidecar still agreeing.
                 let key = super::destination_key(&item.to);
                 let protection = self
                     .record_index
@@ -807,7 +833,7 @@ impl<'a> TreeWriter<'a> {
                 });
             }
             Err(err) => {
-                self.outcome.failed += 1;
+                self.outcome.icon_merge_failures += 1;
                 self.outcome.icons.push(IconMergeVerdict {
                     to: item.to.clone(),
                     state: IconMergeState::Failed(err.to_string()),
@@ -7110,6 +7136,6 @@ mod tests {
             matches!(verdict.state, IconMergeState::DestinationAbsent),
             "the release's own `if exists` guard — skipped, never failed"
         );
-        assert_eq!(report.failed, 0);
+        assert_eq!(report.icon_merge_failures, 0);
     }
 }

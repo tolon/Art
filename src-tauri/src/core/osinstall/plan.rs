@@ -1048,6 +1048,11 @@ pub(crate) fn expand_rules(
                     from: rule.from.clone(),
                     to: rule.to.clone(),
                     is_dir: false,
+                    // The source icon's own on-media size, not the merged
+                    // result's — `apply` cannot know the spliced length
+                    // without doing the splice, the same pre-existing
+                    // estimate-vs-actual gap `total_bytes`'s own doc comment
+                    // already documents for a `.Z` stream (ART-156).
                     bytes: entry.size,
                     decompress: false,
                     merge_icon: true,

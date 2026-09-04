@@ -420,9 +420,16 @@ export interface ApplyOutcome {
    *  `files`/`bytes`, which already account for the icon through whichever
    *  item placed it first. */
   icons: IconMergeVerdict[];
-  /** How many of this run's own icon merges came back `failed` —
-   *  `"destination-absent"` does not count (a skip is not a failure). */
-  failed: number;
+  /** How many entries in `icons` came back `failed` — `"destination-absent"`
+   *  does not count (a skip is not a failure).
+   *
+   *  Named for exactly what it counts: it does **not** include a `removed`
+   *  entry whose state is `failed`. There is deliberately no single
+   *  outcome-wide failure tally (fix round 1) — the per-entry verdict lists
+   *  (`icons`, `removed`) are the truth, and a screen wanting a combined
+   *  "did anything fail" computes it from both rather than trusting one
+   *  number that could quietly disagree with them. */
+  iconMergeFailures: number;
 }
 
 export const OSINSTALL_EVENT = "osinstall-result";

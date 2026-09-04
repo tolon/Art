@@ -4258,11 +4258,13 @@ mod tests {
                     "directories",
                     "bytes",
                     "removed",
-                    // Task 6: one verdict per `merge_icon` item, and the
-                    // run's own failure tally — see `ApplyOutcome::icons`
-                    // and `ApplyOutcome::failed`.
+                    // Task 6: one verdict per `merge_icon` item, and how many
+                    // of those came back `Failed` — see `ApplyOutcome::icons`
+                    // and `ApplyOutcome::icon_merge_failures` (fix round 1:
+                    // named for exactly what it counts, not an outcome-wide
+                    // tally).
                     "icons",
-                    "failed",
+                    "iconMergeFailures",
                 ],
             );
         }
