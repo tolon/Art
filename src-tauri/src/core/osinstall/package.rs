@@ -586,6 +586,7 @@ impl RawPackage {
             activate: Vec::new(),
             exclusive_group: None,
             label_key: None,
+            layer: None,
             available: true,
         };
         Package {
@@ -2010,6 +2011,7 @@ mod tests {
                 activate: Vec::new(),
                 exclusive_group: None,
                 label_key: None,
+                layer: None,
                 available: true,
             },
         }

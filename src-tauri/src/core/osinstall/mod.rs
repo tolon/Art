@@ -291,22 +291,59 @@ pub struct Component {
     /// Registered but not built (CLAUDE.md, §96): shown as Coming Later.
     #[serde(default = "yes")]
     pub available: bool,
+    /// Which [`MediaLayer`] this component's `media` lives in. `None` is the
+    /// only legal value in an unlayered recipe and is refused in a layered
+    /// one — a component that searched every layer would be resolving by
+    /// order, which is the thing this design exists to avoid.
+    #[serde(default)]
+    pub layer: Option<String>,
 }
 
 fn yes() -> bool {
     true
 }
 
+/// One set of install media a recipe reads from, named so a component can
+/// say which set its `media` lives in.
+///
+/// **A layer is stated by the recipe, never inferred from the order folders
+/// were added.** Two AmigaOS releases can ship a disk under one volume name —
+/// the owner's 3.2 and 3.2.2 sets each carry a `DiskDoctor`, 901 120 bytes
+/// apiece with different SHA-256s — and which of them a component wants is a
+/// fact about the release, not about which folder somebody picked first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaLayer {
+    pub id: String,
+    /// An **i18n key** for this layer's own folder field on the media step,
+    /// for the reason `Component::label_key` is a key: the recipe is data in
+    /// the Rust tree with no compiler between it and the screen.
+    #[serde(default)]
+    pub label_key: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Recipe {
     /// `"AmigaOS 3.2"`.
     pub release: String,
+    /// The media sets this recipe reads from, in the order a release states.
+    /// Empty means one implicit layer, which is every recipe that shipped
+    /// before this existed.
+    #[serde(default)]
+    pub layers: Vec<MediaLayer>,
     pub components: Vec<Component>,
 }
 
 impl Recipe {
     pub fn component(&self, id: &str) -> Option<&Component> {
         self.components.iter().find(|c| c.id == id)
+    }
+
+    pub fn is_layered(&self) -> bool {
+        !self.layers.is_empty()
+    }
+
+    pub fn layer_ids(&self) -> Vec<&str> {
+        self.layers.iter().map(|l| l.id.as_str()).collect()
     }
 }
 
@@ -1246,6 +1283,7 @@ pub(crate) mod fixtures {
     pub fn package_test_recipe() -> super::Recipe {
         super::Recipe {
             release: "Test OS".to_string(),
+            layers: vec![],
             components: vec![super::Component {
                 activate: vec![],
                 id: "base-c".to_string(),
@@ -1261,6 +1299,7 @@ pub(crate) mod fixtures {
                 user_startup: Vec::new(),
                 exclusive_group: None,
                 label_key: None,
+                layer: None,
                 available: true,
             }],
         }
@@ -1287,6 +1326,7 @@ pub(crate) mod fixtures {
             user_startup: Vec::new(),
             exclusive_group: None,
             label_key: None,
+            layer: None,
             available: true,
         };
         super::package::Package {
@@ -1369,6 +1409,7 @@ pub(crate) mod fixtures {
             user_startup: Vec::new(),
             exclusive_group: None,
             label_key: None,
+            layer: None,
             available: true,
         };
         super::package::Package {

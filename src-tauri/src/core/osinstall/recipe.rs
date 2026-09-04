@@ -30,7 +30,7 @@ const AMIGAOS_39_JSON: &str = include_str!("recipes/amigaos-3.9.json");
 /// `Component` and `PathRule` derive `Eq` and a `serde_json::Value` is not
 /// `Eq` — putting a catch-all on the real types would change types the whole
 /// crate compares, to check a file.
-const RECIPE_KEYS: &[&str] = &["release", "components"];
+const RECIPE_KEYS: &[&str] = &["release", "components", "layers"];
 const COMPONENT_KEYS: &[&str] = &[
     "id",
     "media",
@@ -43,10 +43,12 @@ const COMPONENT_KEYS: &[&str] = &[
     "exclusive_group",
     "available",
     "label_key",
+    "layer",
 ];
 const RULE_KEYS: &[&str] = &["from", "to", "kind"];
 const CONDITION_KEYS: &[&str] = &["condition", "major"];
 const ACTIVATION_KEYS: &[&str] = &["kind", "name"];
+const LAYER_KEYS: &[&str] = &["id", "label_key"];
 
 /// Refuse the first key that is neither known at its level nor a `_…` note.
 ///
@@ -91,6 +93,16 @@ fn check_unknown_keys(json: &str) -> CoreResult<()> {
         })?;
 
     check_keys(&value, RECIPE_KEYS, "the recipe")?;
+
+    if let Some(layers) = value.get("layers").and_then(|l| l.as_array()) {
+        for layer in layers {
+            let id = layer
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("a layer with no id");
+            check_keys(layer, LAYER_KEYS, &format!("layer '{id}'"))?;
+        }
+    }
 
     let Some(components) = value.get("components").and_then(|c| c.as_array()) else {
         return Ok(());
@@ -220,9 +232,21 @@ pub(super) fn validate_component(format: &str, component: &Component) -> CoreRes
     Ok(())
 }
 
-/// Everything a recipe must get right before ART trusts it: no two
-/// components sharing an id, plus [`validate_component`] for each one.
+/// Everything a recipe must get right before ART trusts it: no two layers
+/// sharing an id, no two components sharing an id, every component naming a
+/// layer exactly when the recipe is layered and one it actually declares,
+/// plus [`validate_component`] for each one.
 fn validate(recipe: &Recipe) -> CoreResult<()> {
+    let mut seen_layers = std::collections::HashSet::new();
+    for layer in &recipe.layers {
+        if !seen_layers.insert(layer.id.as_str()) {
+            return Err(CoreError::Malformed {
+                format: "recipe".into(),
+                detail: format!("two layers share the id '{}'", layer.id),
+            });
+        }
+    }
+
     let mut seen_ids = std::collections::HashSet::new();
     for component in &recipe.components {
         if !seen_ids.insert(component.id.as_str()) {
@@ -231,6 +255,40 @@ fn validate(recipe: &Recipe) -> CoreResult<()> {
                 detail: format!("two components share the id '{}'", component.id),
             });
         }
+
+        match (recipe.is_layered(), component.layer.as_deref()) {
+            (true, None) => {
+                return Err(CoreError::Malformed {
+                    format: "recipe".into(),
+                    detail: format!(
+                        "component '{}' names no layer, and this recipe declares {}",
+                        component.id,
+                        recipe.layer_ids().join(", ")
+                    ),
+                })
+            }
+            (true, Some(named)) if !seen_layers.contains(named) => {
+                return Err(CoreError::Malformed {
+                    format: "recipe".into(),
+                    detail: format!(
+                        "component '{}' names the layer '{named}', which this recipe does not \
+                         declare",
+                        component.id
+                    ),
+                })
+            }
+            (false, Some(named)) => {
+                return Err(CoreError::Malformed {
+                    format: "recipe".into(),
+                    detail: format!(
+                        "component '{}' names the layer '{named}', but this recipe declares none",
+                        component.id
+                    ),
+                })
+            }
+            _ => {}
+        }
+
         validate_component("recipe", component)?;
     }
     Ok(())
@@ -461,6 +519,7 @@ mod tests {
                 package.id.clone(),
                 Recipe {
                     release: package.id.clone(),
+                    layers: vec![],
                     components: vec![package.component],
                 },
             ));
@@ -517,6 +576,7 @@ mod tests {
                 package.id.clone(),
                 Recipe {
                     release: package.id.clone(),
+                    layers: vec![],
                     components: vec![package.component],
                 },
             ));
@@ -1979,5 +2039,71 @@ mod tests {
         let offered = super::releases();
         assert!(offered.contains(&"AmigaOS 3.2"), "got {offered:?}");
         assert!(offered.contains(&"AmigaOS 3.9"), "got {offered:?}");
+    }
+
+    // ---- Layered media (Task 1): a component says which layer it lives in ----
+
+    #[test]
+    fn a_recipe_with_no_layers_is_unlayered_and_components_need_no_layer() {
+        let recipe = parse(r#"{"release":"X","components":[{"id":"a","media":"M","rules":[]}]}"#)
+            .expect("an unlayered recipe still parses");
+        assert!(!recipe.is_layered());
+        assert!(recipe.layers.is_empty());
+        assert_eq!(recipe.component("a").unwrap().layer, None);
+    }
+
+    #[test]
+    fn a_component_in_a_layered_recipe_must_name_its_layer() {
+        let err = parse(
+            r#"{"release":"X",
+                "layers":[{"id":"base"},{"id":"update"}],
+                "components":[{"id":"a","media":"M","rules":[]}]}"#,
+        )
+        .expect_err("a component with no layer is a recipe error");
+        let text = err.to_string();
+        assert!(
+            text.contains("'a'") && text.contains("layer"),
+            "the refusal has to name the component and the missing field, got: {text}"
+        );
+    }
+
+    #[test]
+    fn a_component_may_not_name_a_layer_the_recipe_does_not_declare() {
+        let err = parse(
+            r#"{"release":"X",
+                "layers":[{"id":"base"}],
+                "components":[{"id":"a","media":"M","layer":"update","rules":[]}]}"#,
+        )
+        .expect_err("an undeclared layer is a recipe error");
+        let text = err.to_string();
+        assert!(
+            text.contains("'a'") && text.contains("update"),
+            "the refusal has to name the component and the layer it asked for, got: {text}"
+        );
+    }
+
+    #[test]
+    fn two_layers_may_not_share_an_id() {
+        let err = parse(
+            r#"{"release":"X",
+                "layers":[{"id":"base"},{"id":"base"}],
+                "components":[]}"#,
+        )
+        .expect_err("duplicate layer ids are a recipe error");
+        assert!(err.to_string().contains("base"));
+    }
+
+    #[test]
+    fn a_layer_carries_its_label_key() {
+        let recipe = parse(
+            r#"{"release":"X",
+                "layers":[{"id":"base","label_key":"osinstall.layer.base32"}],
+                "components":[{"id":"a","media":"M","layer":"base","rules":[]}]}"#,
+        )
+        .expect("a labelled layer parses");
+        assert_eq!(
+            recipe.layers[0].label_key.as_deref(),
+            Some("osinstall.layer.base32")
+        );
     }
 }

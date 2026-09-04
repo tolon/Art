@@ -1872,9 +1872,11 @@ mod plan_tests {
         );
 
         let recipe = Recipe {
+            layers: vec![],
             release: "Test".to_string(),
             components: vec![
                 Component {
+                    layer: None,
                     id: "subtree-owner".to_string(),
                     media: "Owner".to_string(),
                     rules: vec![PathRule {
@@ -1892,6 +1894,7 @@ mod plan_tests {
                     available: true,
                 },
                 Component {
+                    layer: None,
                     id: "file-writer".to_string(),
                     media: "Writer".to_string(),
                     rules: vec![PathRule {
@@ -1944,8 +1947,10 @@ mod plan_tests {
             &[("Keymaps/türkçe", b"tr", 0), ("Keymaps/usa", b"us", 0)],
         );
         let recipe = Recipe {
+            layers: vec![],
             release: "Test".to_string(),
             components: vec![Component {
+                layer: None,
                 id: "keymaps".to_string(),
                 media: "Shelf".to_string(),
                 rules: vec![PathRule {
@@ -2126,9 +2131,11 @@ mod plan_tests {
             activate: vec![],
             exclusive_group: None,
             label_key: None,
+            layer: None,
             available: true,
         };
         let recipe = Recipe {
+            layers: vec![],
             release: "Test".to_string(),
             components: vec![
                 component("from-base", "Base", "C/One"),
@@ -2191,8 +2198,10 @@ mod plan_tests {
         crate::core::osinstall::fixtures::media(&folder, "M", "m.adf", &[("C/inner", b"x", 0)]);
 
         let recipe = Recipe {
+            layers: vec![],
             release: "Test".to_string(),
             components: vec![Component {
+                layer: None,
                 id: "a".to_string(),
                 media: "M".to_string(),
                 rules: vec![PathRule {
@@ -2236,8 +2245,10 @@ mod plan_tests {
         crate::core::osinstall::fixtures::media(&folder, "M", "m.adf", &[("readme", b"x", 0)]);
 
         let recipe = Recipe {
+            layers: vec![],
             release: "Test".to_string(),
             components: vec![Component {
+                layer: None,
                 id: "a".to_string(),
                 media: "M".to_string(),
                 rules: vec![PathRule {
@@ -2285,6 +2296,7 @@ mod plan_tests {
         crate::core::osinstall::fixtures::media(&folder, "B", "b.adf", &[("C/Assign", b"two", 0)]);
 
         let make = |id: &str, media: &str| Component {
+            layer: None,
             id: id.to_string(),
             media: media.to_string(),
             rules: vec![PathRule {
@@ -2302,6 +2314,7 @@ mod plan_tests {
             available: true,
         };
         let recipe = Recipe {
+            layers: vec![],
             release: "Test".to_string(),
             components: vec![make("a", "A"), make("b", "B")],
         };
@@ -2347,6 +2360,7 @@ mod plan_tests {
         );
 
         let make = |id: &str, media: &str, to: &str, condition: Option<Condition>| Component {
+            layer: None,
             id: id.to_string(),
             media: media.to_string(),
             rules: vec![PathRule {
@@ -2364,6 +2378,7 @@ mod plan_tests {
             available: true,
         };
         let recipe = Recipe {
+            layers: vec![],
             release: "Test".to_string(),
             components: vec![
                 make("modules-a", "ModulesA", "C/ModuleA", None),
@@ -2420,8 +2435,10 @@ mod plan_tests {
         std::fs::write(folder.join("os39.iso"), bytes).unwrap();
 
         let recipe = Recipe {
+            layers: vec![],
             release: "Test".to_string(),
             components: vec![Component {
+                layer: None,
                 id: "a".to_string(),
                 media: "AmigaOS3.9".to_string(),
                 rules: vec![PathRule {
@@ -2505,8 +2522,10 @@ mod plan_tests {
         std::fs::write(folder.join("os39.iso"), bytes).unwrap();
 
         let recipe = Recipe {
+            layers: vec![],
             release: "Test".to_string(),
             components: vec![Component {
+                layer: None,
                 id: "a".to_string(),
                 media: "AmigaOS3.9".to_string(),
                 rules: vec![PathRule {
@@ -2766,8 +2785,10 @@ mod plan_tests {
         );
 
         let recipe = Recipe {
+            layers: vec![],
             release: "Test".to_string(),
             components: vec![Component {
+                layer: None,
                 id: "storage".to_string(),
                 media: "Shelf".to_string(),
                 rules: vec![PathRule {
@@ -3497,6 +3518,7 @@ mod plan_tests {
         crate::core::osinstall::fixtures::media(&folder, "C", "c.adf", &[("z", b"three", 0)]);
 
         let make = |id: &str, media: &str, from: &str, lines: &[&str]| Component {
+            layer: None,
             activate: vec![],
             id: id.to_string(),
             media: media.to_string(),
@@ -3514,6 +3536,7 @@ mod plan_tests {
             available: true,
         };
         let recipe = Recipe {
+            layers: vec![],
             release: "Test".to_string(),
             components: vec![
                 make("alpha", "A", "x", &["Assign Alpha: SYS:"]),
@@ -3737,6 +3760,7 @@ mod plan_tests {
     /// be exercised without three more fixtures.
     fn extra_package(id: &str, media: &str, requires: &[&str]) -> Package {
         let component = Component {
+            layer: None,
             id: id.to_string(),
             media: media.to_string(),
             rules: vec![PathRule {
