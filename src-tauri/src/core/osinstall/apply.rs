@@ -1243,20 +1243,21 @@ pub fn apply_staging_in(
     // the file back, which is precisely the bug an update's `removes` exists
     // to fix — see `Component::removes` and `PlanRemoval`.
     if !plan.removals.is_empty() {
-        // Same checkpoint every other step takes: between whole units of
-        // work, never mid-write.
-        if sink.is_cancelled() {
-            return Err(if outcome.files > 0 {
-                CoreError::CancelledPartway {
-                    files: outcome.files,
-                }
-            } else {
-                CoreError::Cancelled
-            });
-        }
-
         let mut removed = Vec::with_capacity(plan.removals.len());
         for removal in &plan.removals {
+            // Per entry, like `switch_on`'s own activation loop — each
+            // removal is a whole unit of work (CLAUDE.md: "between whole
+            // units of work, never mid-write"), so cancelling here leaves
+            // some removals unperformed but never one half-done.
+            if sink.is_cancelled() {
+                return Err(if outcome.files > 0 {
+                    CoreError::CancelledPartway {
+                        files: outcome.files,
+                    }
+                } else {
+                    CoreError::Cancelled
+                });
+            }
             removed.push(perform_removal(root, removal, &mut outcome, &mut files));
         }
         outcome.removed = removed;
@@ -1291,18 +1292,24 @@ pub fn apply_staging_in(
 ///
 /// `outcome` and `files` are mutated in place on a genuine removal: the
 /// manifest must stop claiming a file `verify_volume` can never find again,
-/// and this run's own `files`/`bytes`/`directories` counts must stop
-/// counting bytes that are no longer on disk (CLAUDE.md's "a manifest lying
-/// about the tree it describes").
+/// and this run's own `files`/`bytes` counts must stop counting bytes that
+/// are no longer on disk (CLAUDE.md's "a manifest lying about the tree it
+/// describes").
 ///
-/// **Directories are handled, though nothing shipped removes one** (see
-/// `validate_removals`'s own doc comment) — `to` is whatever a rule's `to`
-/// was, and a `Subtree` rule's `to` is a drawer. Nested `FileRecord`s under
-/// it are stripped from the manifest and their bytes/count are subtracted
-/// from `outcome`, but `outcome.directories` is decremented by exactly one
-/// (the drawer itself) rather than walked for every nested drawer `apply`
-/// created underneath it — an approximation with no test depending on it,
-/// recorded here rather than silently.
+/// **A directory is refused, never removed (fix round 1, Finding 1).**
+/// `recipe::validate_removals` only accepts a `removes` entry whose placer is
+/// a `RuleKind::File` rule, so a **validated** recipe can never reach the
+/// `meta.is_dir()` arm below — but `InstallPlan` round-trips over the wire
+/// (`osinstall_apply` takes back whatever plan it is given, the same trust
+/// `apply()` already extends to `plan.items` without re-checking them
+/// against the recipe that produced them), so a forged or hand-built plan
+/// can still name a directory here. The first version of this function
+/// removed it anyway and decremented `outcome.directories` by exactly one
+/// however many nested drawers actually went away — an approximation this
+/// fix round's review named directly (spec §89's "don't claim support that
+/// isn't implemented and tested", in the shape of a count nobody checked).
+/// Refusing it cleanly, as a named [`RemovalState::Failed`], is the honest
+/// answer once the recipe format itself can no longer ask for it.
 fn perform_removal(
     root: &Path,
     removal: &super::plan::PlanRemoval,
@@ -1342,12 +1349,20 @@ fn perform_removal(
         }
     };
 
-    let deleted = if meta.is_dir() {
-        std::fs::remove_dir_all(&target)
-    } else {
-        std::fs::remove_file(&target)
-    };
-    if let Err(err) = deleted {
+    if meta.is_dir() {
+        // Unreachable from a validated recipe — see this function's own doc
+        // comment for why a directory can still arrive here from a forged
+        // plan, and why the answer is a named failure rather than an
+        // approximate drawer removal.
+        return RemovalVerdict {
+            to: removal.to.clone(),
+            state: RemovalState::Failed(
+                "this names a drawer, not a file — ART removes files, never drawers".to_string(),
+            ),
+        };
+    }
+
+    if let Err(err) = std::fs::remove_file(&target) {
         return RemovalVerdict {
             to: removal.to.clone(),
             state: RemovalState::Failed(err.to_string()),
@@ -1355,14 +1370,15 @@ fn perform_removal(
     }
 
     // The manifest and this run's own counters must stop claiming what is no
-    // longer there — see this function's own doc comment.
+    // longer there — see this function's own doc comment. Exact match only:
+    // a `File` rule's own destination is never a prefix another record sits
+    // under (only a `Subtree` rule's `to` is, and the directory arm above
+    // already refused before reaching here).
     let key = super::destination_key(&removal.to);
-    let nested_prefix = format!("{key}/");
     let mut freed_bytes = 0u64;
     let mut freed_files = 0u64;
     files.retain(|record| {
-        let record_key = super::destination_key(&record.path);
-        let matches = record_key == key || record_key.starts_with(&nested_prefix);
+        let matches = super::destination_key(&record.path) == key;
         if matches {
             freed_bytes += record.bytes;
             freed_files += 1;
@@ -1371,9 +1387,6 @@ fn perform_removal(
     });
     outcome.files = outcome.files.saturating_sub(freed_files);
     outcome.bytes = outcome.bytes.saturating_sub(freed_bytes);
-    if meta.is_dir() {
-        outcome.directories = outcome.directories.saturating_sub(1);
-    }
 
     RemovalVerdict {
         to: removal.to.clone(),

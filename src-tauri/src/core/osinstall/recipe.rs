@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use super::{Component, Recipe};
+use super::{Component, Recipe, RuleKind};
 use crate::core::error::{CoreError, CoreResult};
 
 const AMIGAOS_32_JSON: &str = include_str!("recipes/amigaos-3.2.json");
@@ -389,14 +389,15 @@ fn validate(recipe: &Recipe) -> CoreResult<()> {
 }
 
 /// Every `Component::removes` entry names a destination some **other**
-/// component in this recipe actually places, and that component's id is one
-/// this component declares an `overrides` over.
+/// component in this recipe places with a **`RuleKind::File`** rule, and
+/// that component's id is one this component declares an `overrides` over.
 ///
 /// **Why this and not `validate_component`.** A single component's own data
-/// cannot answer either half of this — "does anything place this path" and
-/// "is the placer named in my own `overrides`" both need the *rest* of the
-/// recipe, which is exactly why this runs once over the whole component list
-/// rather than per component like [`validate_component`]'s path checks.
+/// cannot answer any of this — "does anything place this path", "does it
+/// place it as a file or as a whole drawer" and "is the placer named in my
+/// own `overrides`" all need the *rest* of the recipe, which is exactly why
+/// this runs once over the whole component list rather than per component
+/// like [`validate_component`]'s path checks.
 ///
 /// **Why refuse rather than skip.** A `removes` entry naming nobody's
 /// destination is either a typo (the recipe author meant a path that is
@@ -409,22 +410,37 @@ fn validate(recipe: &Recipe) -> CoreResult<()> {
 /// disappear without saying whose file it is taking is a stronger claim than
 /// one that merely overwrites it, not a weaker one.
 ///
-/// A rule's `to` is the only shape checked against — a `Subtree` rule's own
-/// destination is a merge point among components that place into it
-/// (`recipe.rs`'s own module doc comment), never something a `removes` entry
-/// is expected to name; nothing shipped removes a whole drawer.
+/// **A `Subtree` placer is refused, never accepted as "close enough"
+/// (fix round 1).** The first version of this check matched a rule's `to`
+/// regardless of `kind`, on the reasoning that a `Subtree` rule's own
+/// destination is a merge point rather than a claim (true for collisions,
+/// `recipe.rs`'s own module doc comment) — but a *removal* of that path is
+/// not a merge question, it is "delete this drawer", and ART removes files,
+/// never drawers: `apply::perform_removal` cannot honestly report how many
+/// nested files a drawer removal took with it, which is exactly the
+/// "don't claim support that isn't implemented and tested" shape (spec
+/// §89) in its quietest form — a JSON key whose validator accepts a shape
+/// the engine can only approximate. So this is checked and refused *here*,
+/// at the point the recipe format could otherwise say something ART cannot
+/// honestly do, rather than left for `apply()` to discover.
 fn validate_removals(recipe: &Recipe) -> CoreResult<()> {
     for component in &recipe.components {
         for removed in &component.removes {
-            let placers: Vec<&str> = recipe
-                .components
-                .iter()
-                .filter(|other| other.id != component.id)
-                .filter(|other| other.rules.iter().any(|rule| rule.to == *removed))
-                .map(|other| other.id.as_str())
-                .collect();
+            let mut file_placers: Vec<&str> = Vec::new();
+            let mut subtree_placers: Vec<&str> = Vec::new();
+            for other in recipe.components.iter().filter(|o| o.id != component.id) {
+                for rule in &other.rules {
+                    if rule.to != *removed {
+                        continue;
+                    }
+                    match rule.kind {
+                        RuleKind::File => file_placers.push(other.id.as_str()),
+                        RuleKind::Subtree => subtree_placers.push(other.id.as_str()),
+                    }
+                }
+            }
 
-            if placers.is_empty() {
+            if file_placers.is_empty() && subtree_placers.is_empty() {
                 return Err(CoreError::Malformed {
                     format: "recipe".into(),
                     detail: format!(
@@ -434,7 +450,22 @@ fn validate_removals(recipe: &Recipe) -> CoreResult<()> {
                 });
             }
 
-            let declared = placers
+            if file_placers.is_empty() {
+                // Only `Subtree` placers exist — see this function's own doc
+                // comment on why that is refused rather than accepted.
+                return Err(CoreError::Malformed {
+                    format: "recipe".into(),
+                    detail: format!(
+                        "'{}' removes '{removed}', which '{}' places as a whole drawer (a \
+                         Subtree rule), not a file — ART removes files, never drawers, because \
+                         it cannot honestly report how many nested files a drawer removal took \
+                         with it",
+                        component.id, subtree_placers[0]
+                    ),
+                });
+            }
+
+            let declared = file_placers
                 .iter()
                 .any(|placer| component.overrides.iter().any(|o| o == placer));
             if !declared {
@@ -443,7 +474,7 @@ fn validate_removals(recipe: &Recipe) -> CoreResult<()> {
                     detail: format!(
                         "'{}' removes '{removed}', which '{}' places, but '{}' does not declare \
                          an override over '{}'",
-                        component.id, placers[0], component.id, placers[0]
+                        component.id, file_placers[0], component.id, file_placers[0]
                     ),
                 });
             }
@@ -2493,5 +2524,32 @@ mod tests {
         )
         .expect_err("an empty removal path is as meaningless as an empty destination");
         assert!(err.to_string().contains("'a'"));
+    }
+
+    /// **Fix round 1, Finding 1.** A `removes` entry naming a destination
+    /// only a `Subtree` rule places is refused, even when the override is
+    /// properly declared — `b` overrides `a` here, so the *only* thing
+    /// wrong is that `a` places `Tools` as a whole drawer rather than as a
+    /// file. `apply::perform_removal` cannot honestly report how many
+    /// nested files a drawer removal took with it, so the format must not
+    /// be able to say it at all.
+    #[test]
+    fn a_removal_of_a_path_a_subtree_rule_places_is_refused() {
+        let err = parse(
+            r#"{"release":"X",
+                "components":[
+                  {"id":"a","media":"M","rules":[{"from":"X","to":"Tools","kind":"subtree"}]},
+                  {"id":"b","media":"N","rules":[],"overrides":["a"],"removes":["Tools"]}
+                ]}"#,
+        )
+        .expect_err("a's placer for 'Tools' is a Subtree rule, not a File rule");
+        let text = err.to_string();
+        assert!(
+            text.contains("'b'")
+                && text.contains("Tools")
+                && text.contains("'a'")
+                && text.contains("drawer"),
+            "names the remover, the path, the placer, and why: {text}"
+        );
     }
 }
