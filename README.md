@@ -1,5 +1,6 @@
 # Amiga Retro Toolkit (ART)
 
+[![Latest release](https://img.shields.io/github/v/release/tolon/Art?label=download&color=success)](https://github.com/tolon/Art/releases/latest)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 ![Platform: Windows 10/11 x64](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-informational)
 ![Rust 1.93+](https://img.shields.io/badge/rust-1.93%2B-orange)
@@ -13,6 +14,16 @@ ADF, HDF, LHA, ROM, Gotek, WinUAE and collection management into one coherent,
 drag-and-drop-driven application.
 
 > **DROP IT INTO ART.**
+
+**0.9.0 is out, and it is asking for testers.**
+[Download it](https://github.com/tolon/Art/releases/latest), try it on your own
+Amiga files, and tell it what it got wrong — the nine things that still need
+someone other than the author are listed under
+[What still needs testing](#what-still-needs-testing), each with what to run
+and what a good or a bad result looks like. **A result that went well is worth
+reporting too.** ART is written for real Amigas rather than for emulation, and
+the one thing nobody has done yet is flash a card it built and start an A500
+with it.
 
 ![A real Workbench 1.3 Extras disk open beside a Windows drive](docs/assets/files.png)
 
@@ -297,6 +308,32 @@ Kickstart refusal, judged clear, and the launch then worked
 ([ART-062](docs/ISSUES.md#open)). That is one sentence out of 1916, so the
 language as a whole is still unseen — but it is no longer zero.
 
+### How to report what you find
+
+**[Open an issue](https://github.com/tolon/Art/issues/new)** — a result that
+went *well* is as useful as one that did not, because the gaps below are
+unverified in both directions.
+
+Four things make a report actionable, and the third is the one people leave
+out:
+
+1. **What you did, what you expected, what happened instead.** One sentence
+   each is enough.
+2. **Your ART version** — Settings → About shows it, taken from the build
+   itself so it cannot disagree with the installer — and your Windows version.
+3. **The sentence ART showed you, copied rather than described.** ART's
+   refusals carry an `ART-NNN` id on purpose; that id says exactly which check
+   fired, and *"it said something about a Kickstart"* does not.
+4. **`operations.jsonl`**, if a file was involved — it is in
+   `%LOCALAPPDATA%\com.amiga-retro-toolkit.desktop\logs\` and it records every
+   operation ART performed, whether it succeeded, and what it backed up. Paste
+   the last few lines. `art.log` beside it has the technical detail.
+
+**Nothing in either file is sent anywhere by ART** — you attach them or you
+do not. And if something went wrong with your own Amiga files, say so first:
+ART backs up before it changes anything, so the backup path is in that log and
+recovering it comes before diagnosing anything.
+
 **Still open, and each one is a concrete gap rather than a vague "try it and
 see"** — what to run, and what a good or bad result looks like:
 
@@ -439,11 +476,18 @@ anybody's word for it, the release is built by
 [a public workflow](.github/workflows/release.yml) from the tagged commit, and
 you can build the same installers yourself with the steps below.
 
-**Where ART puts things**: settings and the operation log go in
-`%APPDATA%\com.amiga-retro-toolkit.desktop\`, and working files go wherever
-you point the scratch folder in Settings (it asks once, up front). ART does
-not write to any of your own disks unless you ask it to, and every operation
-that changes a file backs it up first.
+**Where ART puts things** — worth knowing before you report anything, because
+two of these are what a bug report needs:
+
+| What | Where |
+|---|---|
+| Settings, the catalogue, the download cache | `%APPDATA%\com.amiga-retro-toolkit.desktop\` |
+| `art.log` and `operations.jsonl` — every operation ART performed, and what happened | `%LOCALAPPDATA%\com.amiga-retro-toolkit.desktop\logs\` |
+| Working files (staging, previews, unpacked packages) | wherever you point the scratch folder — ART asks once, up front, and pressing Next keeps the default |
+
+ART does not write to any of your own disks unless you ask it to, and every
+operation that changes a file backs it up first and tells you where the backup
+went.
 
 ## Requirements
 
