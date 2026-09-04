@@ -18,7 +18,7 @@ Update it at the end of any session that changes what works.
 
 | | |
 |---|---|
-| **Last updated** | 2026-09-04 — a documentation sweep: every number in this table re-measured against the tree, and the decayed copies removed. **The last change to what ART does was 2026-08-25** — the AGS export assessed and deliberately not built. This cell used to carry a *"Before that: …"* chain of every earlier round; that chain is the [session log](session-log.md)'s job, it had already drifted a day behind it, and it is deleted rather than duplicated |
+| **Last updated** | 2026-09-04 — **[v0.9.0 released](https://github.com/tolon/Art/releases/tag/v0.9.0)** with both installers attached, and taken to the community for testing. Cutting it found `main` had been **red** on the current toolchain and that there was no way to publish an installer at all; both fixed. Earlier the same day, a documentation sweep re-measured every number in this table and removed the copies that had decayed. Per-round detail is the [session log](session-log.md) |
 | **Version** | **0.9.0** (2026-09-04) — the first version cut as a GitHub release with installers attached, built by `.github/workflows/release.yml` from the tagged commit. 0.8.5 was the first published for other people to use. Deliberately not 1.0: of 233 marked rows in [FEATURES.md](FEATURES.md), 162 are green — **32 amber, 33 not started, 6 stubs** (counted 2026-09-04, after G14's network half was found marked "not started" three rounds after it shipped; the previous figure, "30 amber", predates several rounds), and as the row above says, what is left in SD-1 is not code: a card flashed and an A500 booted. That is the bar for 1.0, not a bigger number |
 | **Current stage** | **SD-0, SD-1, SD-2 and SD-4 built; SD-3 mostly, SD-5 part-built.** The per-gap detail is the stage table further down this file, which is maintained gap by gap — this cell no longer retells it. Three sentences that have not changed and are the ones to read first: **what is left in SD-1 is not code — a card flashed and an A500 booted**; what emulation has settled is the **filesystem** side (a PFS3 volume ART formatted, and an AmigaOS 3.2 tree ART built, each boot a licensed Kickstart to a clean Workbench — so `expansion.library` and the real `pfs3aio` binary have accepted ART's disk, which is not provisional), and it does **not** touch the card path, where an MBR, an Amiga disk starting 1.1 GB in and Emu68's `brcm-sdhc.device` are the untested rung ([ART-095](ISSUES.md)); and **no card ART built has been flashed or booted** |
 | **Build** | PASS |
@@ -968,10 +968,19 @@ into this one, because the oldest of them still contradicted the newest.
 narrative is one line in the [session log](session-log.md), its reasoning is in
 `docs/superpowers/`, and the defect register is [ISSUES.md](ISSUES.md).*
 
-### Where the work stands (verified 2026-09-04)
+### Where the work stands (end of 2026-09-04)
 
-- **`main` is clean and there is no live phase branch.** Last merge:
-  *"Merge docs-ags-assessed: the AGS export, assessed"*.
+- **[v0.9.0 is released](https://github.com/tolon/Art/releases/tag/v0.9.0)**,
+  with both installers attached, and the owner has taken it to the community
+  for testing. **The next session starts by reading what came back** — issues
+  on the repository, and whatever the owner was told directly. A report that
+  went *well* counts: the nine gaps in the README are unverified in both
+  directions, so a green result closes one as surely as a defect opens one.
+- **`main` is clean, CI is green on it, and there is no live phase branch.**
+  Last merge: *"Merge release-recorded: 0.9.0 is out"*. CI went green for the
+  first time that day only after the clippy fix — the 2026-09-01 toolchain
+  rejects `chunks_exact` with a constant size, and `main` had been red without
+  anybody noticing.
 - **Five open entries**, and none of them is unstarted code:
   [ART-166](ISSUES.md) and [ART-117](ISSUES.md) are standing decisions
   (re-checked 2026-08-25 and 2026-08-16 respectively),
@@ -987,8 +996,26 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
   two are the two below**: they used to sit outside the sequence because they
   run in parallel, which was true and made them invisible. Items 3, 5 and 7
   are the build queue in that order; 1, 2, 4 and 6 are the owner's.
+- **The build round to open, when there is one to open, is item 3** — a
+  release update is layered and ART cannot say so, which is why a 3.2.2
+  install is refused today with the media already in hand. It needs a design
+  decision before code: "the base, then the update" is an order the release
+  states, not one the user clicked.
 - Per-gap state is the stage table above; per-feature state is
   [FEATURES.md](FEATURES.md). Neither is retold here.
+
+### How a release goes out now
+
+Recorded because it did not exist before 2026-09-04 and nobody should have to
+work it out twice. Raise the version in **all three** files
+(`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`), close
+the CHANGELOG's `[Unreleased]` section under the new number, push, **wait for
+CI to go green on that commit**, then push a `vX.Y.Z` tag.
+`.github/workflows/release.yml` does the rest and refuses rather than shipping
+something wrong: it stops if the tag and the three version fields disagree,
+and it stops if the CHANGELOG has no section for that version. It publishes a
+**draft**, so a person presses the last button — and before pressing it, launch
+the built `.exe` once. "It compiled" is not the same claim as "it opens".
 
 ### Blocked on a person, not on code
 
