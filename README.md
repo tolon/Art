@@ -283,7 +283,7 @@ since stopped being a gap:
 **Proven since this section was written.** The shipped release build has been
 driven by a person rather than only by `pnpm tauri dev`, and it immediately
 found two defects nothing in 2260 tests had ([ART-195](docs/ISSUES.md#fixed),
-[ART-196](docs/ISSUES.md#open)) — which is the argument for this whole section.
+[ART-196](docs/ISSUES.md#fixed)) — which is the argument for this whole section.
 Titles have been played from the Collection panel by hand: an `.rp9` floppy
 title (`3D Demo`), and — on 2026-08-21, through the new A1200 WHDLoad profile —
 `Akira` (AGA) and `1000 Miglia` (OCS-era), both of which ran. `1000 Miglia` is
