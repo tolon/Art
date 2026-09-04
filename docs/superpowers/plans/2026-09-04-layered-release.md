@@ -4,7 +4,7 @@
 
 **Goal:** Let ART express an AmigaOS release that arrives as a base plus an update, so the owner's own 3.2 + 3.2.2 media builds a tree that says `Release 3.2.2`.
 
-**Architecture:** A recipe declares ordered **media layers** and each component says which layer its `media` lives in, so nothing is resolved by the order the user clicked in. A recipe may `base` itself on another and inherit its components. Three smaller capabilities the 3.2.2 update actually needs come with it: a component that `removes` a path, an `.info` tooltype-and-stack merger, and a ROM condition that can compare a minor.
+**Architecture:** A recipe declares ordered **media layers** and each component says which layer its `media` lives in, so nothing is resolved by the order the user clicked in. A recipe may `base` itself on another and inherit its components. Three smaller capabilities the 3.2.2 update actually needs come with it: a component that `removes` a path, an `.info` tooltype-and-stack merger, and a reader for a Kickstart's resident table so a condition can ask what the release's own installer asks.
 
 **Tech Stack:** Rust (`src-tauri/src/core/osinstall`, `core/amigaicon`, `core/rom`), recipe JSON compiled in with `include_str!`, React + `react-i18next` for the media step, Python for the oracle script.
 
@@ -42,7 +42,7 @@ green suite look identical from the shell.
 
 | File | Responsibility | Task |
 |---|---|---|
-| `src-tauri/src/core/osinstall/mod.rs` | `MediaLayer`, `Component.layer`, `Component.removes`, `RuleKind::IconTooltypes`, `Condition::RomOlderThan.minor`, `RefusalReason` additions | 1, 4, 6, 7 |
+| `src-tauri/src/core/osinstall/mod.rs` | `MediaLayer`, `Component.layer`, `Component.removes`, `RuleKind::IconTooltypes`, `Condition::ResidentOlderThan`, `RefusalReason` additions | 1, 4, 6, 7 |
 | `src-tauri/src/core/osinstall/recipe.rs` | key lists, `validate`, `base` resolution, `releases()`, `by_release` | 1, 2, 8 |
 | `src-tauri/src/core/osinstall/recipes/amigaos-3.2.2.json` | the new recipe (created) | 8 |
 | `src-tauri/src/core/osinstall/recipes/amigaos-3.2.json` | the empty `update-3.2.1` placeholder goes | 8 |
@@ -51,7 +51,9 @@ green suite look identical from the shell.
 | `src-tauri/src/core/osinstall/apply.rs` | applying removals and the icon merge, `DistributionManifest.layers` | 4, 6, 9 |
 | `src-tauri/src/core/osinstall/identify.rs` | `release_of_tree`, per-layer media identification | 9 |
 | `src-tauri/src/core/amigaicon/mod.rs` | `.info` layout, tooltypes, stack, merge (created) | 5 |
-| `src-tauri/src/commands/osinstall.rs` | the folder-per-layer adapter, the release sentence | 3, 9 |
+| `src-tauri/src/commands/osinstall.rs` | the folder-per-layer adapter, the release sentence, `osinstall_layers` | 3, 9, 10 |
+| `src-tauri/src/lib.rs` | `invoke_handler![]` gains `osinstall_layers` | 10 |
+| `src-tauri/src/core/rom/mod.rs` | the Kickstart resident-table reader | 7 |
 | `src/lib/osinstall.ts` | the typed request wrapper | 3 |
 | `src/components/osbuilder/OsInstall.tsx` | one labelled folder field per layer | 10 |
 | `src/i18n/{en,tr}.json` | layer labels, the removal and icon verdicts, the release sentence | 4, 6, 8, 9, 10 |
@@ -598,21 +600,42 @@ fn a_byte_identical_disk_twice_inside_one_layer_is_still_one_disk() {
 
 In `plan.rs`'s `mod tests`:
 
+**This test builds its own two-layer recipe rather than reaching for
+`AmigaOS 3.2.2`** — that file does not exist until Task 8, and the behaviour
+under test is the layer mechanism, not the shipped recipe:
+
 ```rust
+/// A minimal layered recipe: one component per layer, both naming a volume
+/// the fixture writes into both folders.
+fn two_layer_recipe() -> Recipe {
+    recipe::parse(
+        r#"{"release":"T","layers":[{"id":"base"},{"id":"up"}],
+            "components":[
+              {"id":"a","media":"DiskDoctor","layer":"base","required":true,
+               "rules":[{"from":"C/DiskDoctor","to":"C/DiskDoctor","kind":"file"}]},
+              {"id":"b","media":"DiskDoctor","layer":"up","required":true,
+               "overrides":["a"],
+               "rules":[{"from":"C/DiskDoctor","to":"C/DiskDoctor","kind":"file"}]}
+            ]}"#,
+    )
+    .unwrap()
+}
+
 #[test]
 fn two_layers_on_one_folder_refuse_by_naming_the_fields() {
     let dir = scratch("plan-same-folder");
     let one = dir.join("everything");
-    write_full_32_media(&one);
+    std::fs::create_dir_all(&one).unwrap();
+    media(&one, "DiskDoctor", "dd.adf", &[("C/DiskDoctor", b"x", 0)]);
 
     let request = InstallRequest {
         media_folders: BTreeMap::from([
             ("base".to_string(), one.clone()),
-            ("update-3.2.2".to_string(), one.clone()),
+            ("up".to_string(), one.clone()),
         ]),
-        ..request_for("AmigaOS 3.2.2", &dir)
+        ..request_for_scratch(&dir)
     };
-    let plan = plan(&recipe_322(), &request).unwrap();
+    let plan = plan(&two_layer_recipe(), &request).unwrap();
 
     let same_folder = plan
         .refusals
@@ -1103,84 +1126,258 @@ Message: `feat(osinstall): an icon-tooltypes rule amends an icon already in the 
 
 ---
 
-## Task 7: A ROM condition that can compare a minor
+## Task 7: Read a ROM's resident table, and condition on it
 
 **Files:**
+- Modify: `src-tauri/src/core/rom/mod.rs` (a resident reader)
 - Modify: `src-tauri/src/core/osinstall/mod.rs:101-135` (`Condition`), `recipe.rs:48` (`CONDITION_KEYS`)
-- Modify: `src-tauri/src/core/osinstall/plan.rs` (`condition_holds`)
-- Test: inline in `plan.rs`
+- Modify: `src-tauri/src/core/osinstall/plan.rs` (`condition_holds`, the ROM facts it reads)
+- Test: inline in `rom/mod.rs` and `plan.rs`
 
 **Interfaces:**
-- Consumes: `core::rom::stated_version(&[u8]) -> Option<(u16, u16)>`, which already returns both halves
-- Produces: `Condition::RomOlderThan { major: u16, minor: Option<u16> }`
+- Consumes: nothing from earlier tasks
+- Produces: `rom::RomResident { name: String, version: u8, id: String }`;
+  `rom::residents(&[u8]) -> CoreResult<Vec<RomResident>>`;
+  `rom::resident_version(&[u8], name: &str) -> Option<(u16, u16)>`;
+  `Condition::ResidentOlderThan { resident: String, major: u16, minor: Option<u16> }`
+
+**Why this is not the `minor` field an earlier draft of this plan called for.**
+The design's §5 records the measurement that killed that one: the release's
+Modules test asks a running machine for `exec.library`'s revision and for
+`strap`'s version, and the ROM **header** tracks neither. Read out of the three
+A1200 Kickstarts the owner holds — 47.96 carries `exec 47.7` and `strap 45.1`;
+47.102 carries `exec 47.8` and `strap 47.2`; 47.111 carries `exec 47.10` and
+`strap 47.2` — a header proxy collapses two different outcomes into one, and
+would place `Shell-Seg` and three library modules onto a 47.102 machine that
+the release deliberately withholds them from.
+
+**The format.** A `Resident` is 26 bytes: `rt_MatchWord` (`0x4AFC`),
+`rt_MatchTag` (a pointer **to the struct itself** — this is what makes the scan
+reliable), `rt_EndSkip`, `rt_Flags`, `rt_Version`, `rt_Type`, `rt_Pri`,
+`rt_Name`, `rt_IdString`, `rt_Init`. A 512 KiB image maps at `0xF80000`, a
+256 KiB one at `0xFC0000`. The revision lives only in the ID string
+(`exec 47.10 (21.01.2023)`); `rt_Version` carries the major alone.
 
 - [ ] **Step 1: Write the failing tests**
 
+In `core/rom/mod.rs`'s `mod tests`:
+
 ```rust
-#[test]
-fn rom_older_than_compares_the_minor_when_one_is_given() {
-    let c = Condition::RomOlderThan { major: 47, minor: Some(111) };
-    assert!(condition_holds(&c, Some((47, 102))), "47.102 is older than 47.111");
-    assert!(!condition_holds(&c, Some((47, 111))), "47.111 is not older than itself");
-    assert!(!condition_holds(&c, Some((47, 120))));
-    assert!(condition_holds(&c, Some((40, 68))), "a 3.1 ROM is older whatever its minor");
+/// A 512 KiB image with one hand-built `Resident` at a known offset.
+fn rom_with_resident(offset: usize, name: &str, version: u8, id: &str) -> Vec<u8> {
+    const BASE: u32 = 0xF8_0000;
+    let mut rom = vec![0u8; 512 * 1024];
+    let name_at = offset + 64;
+    let id_at = offset + 128;
+    rom[offset..offset + 2].copy_from_slice(&0x4AFCu16.to_be_bytes());
+    rom[offset + 2..offset + 6].copy_from_slice(&(BASE + offset as u32).to_be_bytes());
+    rom[offset + 11] = version;
+    rom[offset + 14..offset + 18].copy_from_slice(&(BASE + name_at as u32).to_be_bytes());
+    rom[offset + 18..offset + 22].copy_from_slice(&(BASE + id_at as u32).to_be_bytes());
+    rom[name_at..name_at + name.len()].copy_from_slice(name.as_bytes());
+    rom[id_at..id_at + id.len()].copy_from_slice(id.as_bytes());
+    rom
 }
 
 #[test]
-fn rom_older_than_without_a_minor_behaves_exactly_as_it_did() {
-    let c = Condition::RomOlderThan { major: 47, minor: None };
-    assert!(condition_holds(&c, Some((40, 68))));
-    assert!(!condition_holds(&c, Some((47, 0))));
-    assert!(!condition_holds(&c, Some((47, 111))));
+fn a_resident_is_found_by_its_own_self_pointer() {
+    let rom = rom_with_resident(0x400, "exec.library", 47, "exec 47.10 (21.01.2023)");
+    let found = residents(&rom).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].name, "exec.library");
+    assert_eq!(found[0].version, 47);
+    assert_eq!(found[0].id, "exec 47.10 (21.01.2023)");
+}
+
+#[test]
+fn a_match_word_whose_tag_points_elsewhere_is_not_a_resident() {
+    // 0x4AFC is the m68k ILLEGAL instruction and occurs in ordinary code.
+    // Only the self-pointer separates a real Resident from a coincidence.
+    let mut rom = rom_with_resident(0x400, "exec.library", 47, "exec 47.10 (x)");
+    rom[0x800..0x802].copy_from_slice(&0x4AFCu16.to_be_bytes());
+    rom[0x802..0x806].copy_from_slice(&0xF8_0000u32.to_be_bytes()); // points at 0, not itself
+    assert_eq!(residents(&rom).unwrap().len(), 1);
+}
+
+#[test]
+fn resident_version_reads_the_revision_out_of_the_id_string() {
+    let rom = rom_with_resident(0x400, "exec.library", 47, "exec 47.10 (21.01.2023)");
+    assert_eq!(resident_version(&rom, "exec"), Some((47, 10)));
+    assert_eq!(resident_version(&rom, "strap"), None);
+}
+
+#[test]
+fn a_name_pointer_outside_the_image_is_refused_not_read() {
+    let mut rom = rom_with_resident(0x400, "exec.library", 47, "exec 47.10 (x)");
+    rom[0x400 + 14..0x400 + 18].copy_from_slice(&0xFFFF_FFFEu32.to_be_bytes());
+    assert!(residents(&rom).is_err(), "a pointer outside the image is a refusal");
+}
+
+#[test]
+fn an_image_of_an_unexpected_size_has_no_base_and_is_refused() {
+    assert!(residents(&vec![0u8; 1234]).is_err());
+}
+```
+
+In `plan.rs`'s `mod tests`, against the three real Kickstarts as **numbers** —
+no ROM file is shipped, needed, or read:
+
+```rust
+#[test]
+fn the_modules_condition_answers_what_the_release_answers_for_all_three_roms() {
+    let exec_older = Condition::ResidentOlderThan {
+        resident: "exec".into(), major: 47, minor: Some(10),
+    };
+    let strap_older = Condition::ResidentOlderThan {
+        resident: "strap".into(), major: 47, minor: None,
+    };
+    // (exec, strap), measured out of the owner's own A1200 Kickstarts.
+    let kick_32  = residents_of((47, 7),  (45, 1));
+    let kick_321 = residents_of((47, 8),  (47, 2));
+    let kick_322 = residents_of((47, 10), (47, 2));
+
+    assert!(resident_condition_holds(&exec_older, &kick_32));
+    assert!(
+        resident_condition_holds(&strap_older, &kick_32),
+        "3.2's ROM gets the larger file set"
+    );
+
+    assert!(resident_condition_holds(&exec_older, &kick_321));
+    assert!(
+        !resident_condition_holds(&strap_older, &kick_321),
+        "3.2.1's ROM gets the smaller set - Shell-Seg and the three libraries are \
+         withheld, which is exactly what the header proxy got wrong"
+    );
+
+    assert!(!resident_condition_holds(&exec_older, &kick_322));
+    assert!(
+        !resident_condition_holds(&strap_older, &kick_322),
+        "3.2.2's own ROM needs no softkicked modules at all"
+    );
+}
+
+#[test]
+fn a_condition_naming_a_resident_the_rom_does_not_carry_does_not_hold() {
+    let c = Condition::ResidentOlderThan {
+        resident: "nosuchthing".into(), major: 47, minor: None,
+    };
+    assert!(
+        !resident_condition_holds(&c, &residents_of((47, 7), (45, 1))),
+        "an absent resident switches nothing on - never a default of `older`"
+    );
 }
 ```
 
 - [ ] **Step 2: Run and watch them fail**
 
-Run: `cd src-tauri && cargo test osinstall::plan:: -- rom_older`
-Expected: FAIL — `RomOlderThan` has no `minor`.
+Run: `cd src-tauri && cargo test rom:: -- resident` then
+`cargo test osinstall::plan:: -- modules_condition`
+Expected: FAIL — `residents` does not exist.
 
-- [ ] **Step 3: Add the field**
+- [ ] **Step 3: Write the resident reader**
+
+In `core/rom/mod.rs`. Every pointer becomes an offset through one bounded
+helper, and a pointer outside the image is a `CoreError`, never a clamp:
 
 ```rust
-    RomOlderThan {
+const RESIDENT_MATCH_WORD: u16 = 0x4AFC;
+const RESIDENT_SIZE: usize = 26;
+
+/// Where a Kickstart image of this size maps in the Amiga's address space.
+fn rom_base(len: usize) -> Option<u32> {
+    match len {
+        0x8_0000 => Some(0xF8_0000), // 512 KiB
+        0x4_0000 => Some(0xFC_0000), // 256 KiB
+        _ => None,
+    }
+}
+
+fn string_at(bytes: &[u8], base: u32, pointer: u32) -> CoreResult<String> {
+    let offset = pointer
+        .checked_sub(base)
+        .ok_or_else(|| malformed("a resident points below the ROM base"))?
+        as usize;
+    let tail = bytes
+        .get(offset..)
+        .ok_or_else(|| malformed("a resident points past the end of the ROM"))?;
+    let end = tail.iter().position(|b| *b == 0).unwrap_or(tail.len());
+    Ok(String::from_utf8_lossy(&tail[..end]).into_owned())
+}
+```
+
+`residents` walks two bytes at a time and accepts a candidate **only** when
+`rt_MatchTag == base + offset`.
+
+`resident_version(bytes, "exec")` finds the resident whose ID string's first
+word is `name`, then parses `major.minor` out of the second word. A malformed
+ID string yields `None` rather than a partial number.
+
+- [ ] **Step 4: Add the condition**
+
+```rust
+    /// The named resident **inside the paired Kickstart** is older than this.
+    ///
+    /// `exec` and `strap` are the two AmigaOS 3.2.2's Modules step asks
+    /// about. Deliberately distinct from [`Condition::RomOlderThan`], which
+    /// asks the ROM's own stated version - a different number that tracks
+    /// neither of these, measured in the design's section 5.
+    ResidentOlderThan {
+        resident: String,
         major: u16,
-        /// Compared only when given, so every recipe written before this
-        /// existed keeps its exact meaning.
-        ///
-        /// AmigaOS 3.2.2's Modules step needs it: its own test is
-        /// `exec.library` below 47.10 or `version res strap` below 47, asked
-        /// of a **running machine**. ART has a ROM file's header, so it asks
-        /// the nearest question it can answer — "older than the ROM this
-        /// update ships", 47.111 — and the difference is stated on the
-        /// screen rather than smoothed over. It errs towards switching the
-        /// modules on, which is the direction the release's own
-        /// `HowToInstall` recommends.
         #[serde(default)]
         minor: Option<u16>,
     },
 ```
 
-Add `"minor"` to `CONDITION_KEYS`. `condition_holds` compares the pair
-lexicographically when `minor` is `Some`, and the major alone when it is
-`None`.
+Add `"resident"` and `"minor"` to `CONDITION_KEYS`. `plan`'s ROM facts gain the
+residents read from the paired Kickstart, and the comparison is lexicographic
+on `(major, minor)` — the major alone when `minor` is `None`. **A resident the
+ROM does not carry never satisfies the condition**: absent is not "older".
 
-- [ ] **Step 4: Run the tests**
+- [ ] **Step 5: Run the tests**
 
-Run: `cd src-tauri && cargo test osinstall::`
-Expected: PASS — the 3.2 recipe's `modules-a1200` still behaves identically.
+Run: `cd src-tauri && cargo test rom:: && cargo test osinstall::`
+Expected: PASS — and the 3.2 recipe's `modules-a1200`, still on
+`rom-older-than major 47`, behaves exactly as it did.
 
-- [ ] **Step 5: Mutations**
+- [ ] **Step 6: Add the real-ROM hook**
+
+`#[ignore]`d, env-gated, read-only against the owner's own Kickstarts. The
+three numbers above are a measurement, and this is what keeps them one:
+
+```rust
+#[test]
+#[ignore = "needs the owner's own 3.2-family Kickstarts"]
+fn read_the_real_roms_residents_when_asked() {
+    let Ok(path) = std::env::var("ART_ROM") else { return };
+    let bytes = std::fs::read(path).unwrap();
+    println!(
+        "ART_ROM_RESULT header={:?} exec={:?} strap={:?}",
+        stated_version(&bytes),
+        resident_version(&bytes, "exec"),
+        resident_version(&bytes, "strap"),
+    );
+    assert!(resident_version(&bytes, "exec").is_some());
+}
+```
+
+Run it against all three and check the printed numbers against the design's §5
+table. A mismatch is a finding, not a reason to adjust the table.
+
+- [ ] **Step 7: Mutations**
 
 | Mutation | Test that must fail |
 |---|---|
-| ignore `minor` and compare the major only | `rom_older_than_compares_the_minor_when_one_is_given` |
-| compare `minor` even when it is `None` (treating it as 0) | `rom_older_than_without_a_minor_behaves_exactly_as_it_did` |
-| use `<=` instead of `<` on the pair | the "not older than itself" assertion |
+| accept a `0x4AFC` without checking the self-pointer | `a_match_word_whose_tag_points_elsewhere_is_not_a_resident` |
+| clamp an out-of-range pointer instead of refusing | `a_name_pointer_outside_the_image_is_refused_not_read` |
+| take the revision from `rt_Version` instead of the ID string | `resident_version_reads_the_revision_out_of_the_id_string` |
+| compare the major only | the 3.2.1 rows of `the_modules_condition_answers_what_the_release_answers_for_all_three_roms` |
+| treat an absent resident as older | `a_condition_naming_a_resident_the_rom_does_not_carry_does_not_hold` |
+| default `rom_base` to `0xF80000` whatever the size | `an_image_of_an_unexpected_size_has_no_base_and_is_refused` |
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
-Message: `feat(osinstall): a ROM condition may name a minor`
+Message: `feat(rom): read a Kickstart's resident table, and condition on it`
 
 ---
 
@@ -1341,14 +1538,61 @@ Skeleton; fill every rule from the census:
       ]
     }
     // … update-322-classes, update-322-diskdoctor, the seventeen locales,
-    //   update-322-modules-a1200
+    //   update-322-modules-a1200, update-322-modules-a1200-strap
   ]
 }
 ```
 
-`update-322-modules-a1200` carries
-`"condition": { "condition": "rom-older-than", "major": 47, "minor": 111 }`
-and `"exclusive_group": "modules"`.
+**The two Modules components**, and the design's §5 is why there are two and
+not one — the release's inner branch picks a different file set for a 3.2 ROM
+than for a 3.2.1 one, which a single component cannot say:
+
+```jsonc
+{
+  "id": "update-322-modules-a1200",
+  "media": "ModulesA1200_3.2.2",
+  "layer": "update-3.2.2",
+  "exclusive_group": "modules",
+  "condition": { "condition": "resident-older-than", "resident": "exec", "major": 47, "minor": 10 },
+  "overrides": ["storage", "workbench-base"],
+  "rules": [
+    { "from": "LIBS/A1200",            "to": "Libs/A1200",            "kind": "subtree" },
+    { "from": "LIBS/intuition.library","to": "Libs/intuition.library","kind": "file" },
+    { "from": "L/Ram-Handler",         "to": "L/Ram-Handler",         "kind": "file" },
+    { "from": "L/System-startup",      "to": "L/System-startup",      "kind": "file" }
+  ]
+},
+{
+  "id": "update-322-modules-a1200-strap",
+  "media": "ModulesA1200_3.2.2",
+  "layer": "update-3.2.2",
+  "condition": { "condition": "resident-older-than", "resident": "strap", "major": 47 },
+  "overrides": ["update-322-modules-a1200", "workbench-base"],
+  "rules": [
+    { "from": "L/Shell-Seg",           "to": "L/Shell-Seg",           "kind": "file" },
+    { "from": "L/Ram-Handler",         "to": "L/Ram-Handler",         "kind": "file" },
+    { "from": "L/System-startup",      "to": "L/System-startup",      "kind": "file" },
+    { "from": "LIBS/dos.library",      "to": "Libs/dos.library",      "kind": "file" },
+    { "from": "LIBS/gadtools.library", "to": "Libs/gadtools.library", "kind": "file" },
+    { "from": "LIBS/graphics.library", "to": "Libs/graphics.library", "kind": "file" }
+  ]
+}
+```
+
+**Those rules are measured, not inferred.** `xdftool ModulesA1200_3.2.2.adf
+list` was run: the disk carries exactly one machine drawer,
+`LIBS/A1200/exec.library`, which is what the release's `(A500|A600|…|CD32)`
+pattern over `LIBS` matches — so a single `subtree LIBS/A1200` says the same
+thing without a wildcard the recipe format does not have. `LIBS/intuition.library`,
+`L/{Ram-Handler,Shell-Seg,System-startup}` and
+`LIBS/{dos,gadtools,graphics}.library` are all present.
+
+**Two things on that disk deliberately stay behind.** `DEVS/A1200/scsi.device`
+is there and the 3.2.2 script never copies `DEVS` — only the base 3.2 recipe's
+own `modules-a1200` does, from a different disk under a different installer.
+`L/FastFileSystem`, `LIBS/Modules/` and `LIBS/Resources/` are likewise on the
+disk and untouched by this update. A rule for any of them would be ART
+installing something the release does not.
 
 - [ ] **Step 4: Register it**
 
@@ -1499,14 +1743,51 @@ Message: `feat(osinstall): report the release the built tree states about itself
 ## Task 10: One folder field per layer
 
 **Files:**
+- Modify: `src-tauri/src/commands/osinstall.rs` (a new `osinstall_layers` command)
+- Modify: `src-tauri/src/lib.rs` (`invoke_handler![]`)
+- Modify: `src/lib/osinstall.ts` (the typed wrapper)
 - Modify: `src/components/osbuilder/OsInstall.tsx:283-284` (the remembered key), `:1118-1155` (the fields)
 - Modify: `src/lib/buildSession.ts` (the remembered value becomes per-layer)
 - Modify: `src/i18n/{en,tr}.json`
-- Test: `src/components/osbuilder/OsInstall.test.tsx`
+- Test: `src/components/osbuilder/OsInstall.test.tsx`, inline in `commands/osinstall.rs`
 
 **Interfaces:**
 - Consumes: Task 3's `mediaFolders`, Task 8's `label_key`s
-- Produces: nothing downstream
+- Produces: `osinstall_layers(release) -> Vec<MediaLayer>`; `layersFor(release): Promise<InstallLayer[]>` in `src/lib/osinstall.ts`
+
+**The gap this task closes, found by the pre-flight scan.** Nothing carries a
+release's layers to the frontend. `INSTALL_RELEASES` in `src/lib/osinstall.ts`
+is a hand-maintained list pinned to `recipe::releases()` by a test, but layers
+carry an order and a `label_key` as well as an id — three facts, not one, and
+duplicating them by hand is how the recipe and the screen drift apart. So a
+command, following `osinstall_release_for_media`'s shape exactly:
+
+```rust
+/// The media layers the named release's recipe declares, in its own order.
+#[tauri::command]
+pub async fn osinstall_layers(release: String) -> Result<Vec<MediaLayer>, AppError> {
+    Ok(recipe::by_release(&release)?.layers)
+}
+```
+
+registered in `lib.rs`'s `invoke_handler![]` (a new command must be in **both**
+that list and a typed wrapper — the frontend never calls `invoke` from a
+component), with:
+
+```ts
+/** One media folder the chosen release asks for, in the recipe's own order. */
+export interface InstallLayer {
+  id: string;
+  labelKey: string | null;
+}
+
+export async function layersFor(release: InstallRelease): Promise<InstallLayer[]> {
+  return invoke<InstallLayer[]>("osinstall_layers", { release });
+}
+```
+
+An unlayered release answers with an empty array, which is what makes the
+"unchanged for AmigaOS 3.2" test below meaningful rather than accidental.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1550,13 +1831,17 @@ Expected: FAIL — no per-layer fields.
 
 - [ ] **Step 3: Implement**
 
-The media step reads the chosen release's layers (a new typed wrapper over the
-recipe, or the layers returned with the plan — whichever the existing data flow
-already carries) and renders a `Field` per layer, labelled with `t(labelKey)`.
+The media step calls `layersFor(release)` when the release changes and renders
+one `Field` per layer, in the returned order, labelled with `t(labelKey)`. An
+**empty** array means unlayered, and the step renders exactly what it renders
+today — the single `Field` plus the existing add-folder list, untouched.
+
 The remembered key is `osinstall.mediaFolder.<release>.<layerId>`, read through
 `recallInto` with the existing guard, so a stale settings file falls back to
-the default rather than putting a bad value on screen. An unlayered release
-renders exactly what it renders today.
+the default rather than putting a bad value on screen. Per-layer keys are the
+point: the standing rule is that nothing changes unless the user changes it,
+and a single key shared across layers would hand the update field the base
+folder the first time a user switched releases.
 
 - [ ] **Step 4: Run the tests**
 
@@ -1716,7 +2001,7 @@ into `tail` — the pipeline's exit code is `tail`'s.
 ## Self-review notes
 
 - **Spec coverage.** §1 → Tasks 1, 3, 10. §2 → Task 8. §3 → Task 4. §4 →
-  Tasks 5, 6. §5 → Task 7. §6 → Task 9. §7 is the "not built" list and needs
+  Tasks 5, 6. §5 → Task 7, whose scope grew when a measurement refuted the header proxy: a Kickstart resident-table reader and two conditions, not one `minor` field. §6 → Task 9. §7 is the "not built" list and needs
   no task; its `WBStartup` no-op claim is asserted by Task 8's collision test
   plus a dedicated assertion added there. §8's two `ART-NNN`s → Task 11 step 6.
   §9's mutation table is distributed across every task's `Mutations` block.

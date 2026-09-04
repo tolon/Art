@@ -302,6 +302,52 @@ DefIcons,MenuTools,RAWBInfo}.info` and `Workbench3.2` carries
 programs with no icons beside them. Worth its own `ART-NNN`, independent of
 this round.
 
+## 9. The Modules condition, measured out of the ROMs themselves
+
+§4's table left the Modules step's real test as a gap: the release asks the
+**running machine** for `exec.library`'s version and for `version res strap`,
+and ART has a ROM file. The design's first answer was a proxy — "older than the
+47.111 this update ships" — read off the ROM header. **The proxy is wrong, and
+only a measurement could show it.**
+
+A Kickstart's own `Resident` structures carry both numbers. Scanning the three
+A1200 ROMs the owner holds (a `Resident` is found by its `rt_MatchWord`
+`0x4AFC` followed by an `rt_MatchTag` pointing at itself; a 512 KiB image maps
+at `0xF80000`), 45 residents each:
+
+| Kickstart | ROM header | `exec.library` | `strap` |
+|---|---|---|---|
+| `AmigaOs 3.2/ROM/kicka1200.rom` | 47.96 | `exec 47.7 (12.11.2020)` | `strap 45.1 (11.5.2018)` |
+| `Update3.2.1/ROMs/A1200.47.102.rom` | 47.102 | `exec 47.8 (27.10.2021)` | `strap 47.2 (30.5.2021)` |
+| `Update3.2.2/ROMs/A1200.47.111.rom` | 47.111 | `exec 47.10 (21.01.2023)` | `strap 47.2 (30.5.2021)` |
+
+Run the script's own conditions against those numbers:
+
+| Paired ROM | `exec_rev < 10 \|\| strap < 47` | Which extra files |
+|---|---|---|
+| 3.2 (47.96) | **on** — exec 47.7 | `strap < 47`, so `L/(Ram-Handler\|Shell-Seg\|System-startup)` **and** `LIBS/(dos\|gadtools\|graphics).library` |
+| 3.2.1 (47.102) | **on** — exec 47.8 | strap is 47, so only `L/(Ram-Handler\|System-startup)` |
+| 3.2.2 (47.111) | **off** | none |
+
+**Three outcomes, where the header proxy sees two.** "Older than 47.111" puts
+the 3.2 ROM's larger file set onto a machine with a 47.102 ROM — copying
+`Shell-Seg` and three library modules that the release deliberately does not
+copy for that ROM. Not a difference anybody could have argued their way to.
+
+**And no new logic operator is needed to express it**, which the numbers also
+settle: the smaller set is a strict subset of the larger, so declaring the two
+conditions as two independent components gives the right files in all three
+cases — 3.2 switches both on and their union is the larger set; 3.2.1 switches
+only the smaller on; 3.2.2 switches neither. The two components place two of
+the same paths, so one declares `overrides` over the other, exactly as any
+other pair would.
+
+What this costs: `Condition` needs to name the two residents rather than the
+ROM header, and `core/rom` needs to read a ROM's resident table — a scan over
+bytes ART did not write, so `checked_add`/`checked_mul` and a bounded
+pointer-to-offset conversion throughout, and a refusal rather than a guess when
+a pointer lands outside the image.
+
 ---
 
 ## What this measurement changes

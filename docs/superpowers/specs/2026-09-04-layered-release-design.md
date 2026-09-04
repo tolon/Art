@@ -244,25 +244,87 @@ end-of-file or at the start of a trailing IFF block, and that
 owner's media — and it is the check that says the structure is right rather
 than plausible.
 
-## 5. Conditions that can say `47.111`
+## 5. Conditions that ask the ROM what the release asks the machine
 
-`Condition::RomOlderThan` carries a `major` only. The Modules step's real test
-is a revision comparison, and `core::rom::stated_version` already returns
-`(major, minor)` — the minor is thrown away at the condition, not at the
-source. So: `RomOlderThan { major, #[serde(default)] minor: Option<u16> }`,
-with `None` behaving exactly as today.
+**This section replaced a proxy that a measurement refuted, and the refutation
+is worth more than the replacement.** The design first said: condition the
+Modules component on the ROM header being "older than the 47.111 this update
+ships". The release's own test is `exec.library` below 47.10 **or** `version
+res strap` below 47, asked of a running machine — so the proxy read the one
+number ART already had and hoped it tracked. Research note §9 measured whether
+it does, out of the three A1200 ROMs' own `Resident` structures:
 
-`update-322-modules-a1200`'s condition is **"the paired Kickstart is older than
-the one this update ships"** — older than 47.111.
+| Paired ROM | header | `exec.library` | `strap` | The release's answer |
+|---|---|---|---|---|
+| 3.2 | 47.96 | 47.7 | **45.1** | on, **larger** file set |
+| 3.2.1 | 47.102 | 47.8 | 47.2 | on, **smaller** file set |
+| 3.2.2 | 47.111 | 47.10 | 47.2 | off |
 
-**This is not the installer's own test, and the difference is stated rather
-than smoothed over.** The release asks the *running* machine: `exec.library`
-below 47.10, or `version res strap` below 47. ART has no running machine; it
-has the header of a ROM file. The substitute errs towards switching the
-modules **on**, which is the direction Hyperion's own `HowToInstall`
-recommends ("we recommend using the softkick options for this update"), and
-which costs a `LoadModule` double boot rather than a machine that will not
-start.
+**Three outcomes, and the proxy sees two.** It would put the 3.2 ROM's larger
+set — `Shell-Seg` plus `dos`, `gadtools` and `graphics.library` — onto a
+machine with a 47.102 ROM, files the release deliberately withholds there.
+
+### What replaces it
+
+`core::rom` gains a reader for a Kickstart's **resident table**:
+
+```rust
+/// One `Resident` as the ROM declares it: `rt_MatchWord` 0x4AFC, an
+/// `rt_MatchTag` pointing at itself, `rt_Version`, and the two strings.
+pub struct RomResident { pub name: String, pub version: u8, pub id: String }
+pub fn residents(bytes: &[u8]) -> CoreResult<Vec<RomResident>>;
+/// `("exec", 47, 10)` from `exec 47.10 (21.01.2023)`.
+pub fn resident_version(bytes: &[u8], name: &str) -> Option<(u16, u16)>;
+```
+
+A 512 KiB image maps at `0xF80000` and a 256 KiB one at `0xFC0000`; every
+pointer is converted to an offset and **bounds-checked before it is read**, and
+a pointer landing outside the image is a refusal rather than a guess.
+
+Two new `Condition` variants, each naming the resident it asks about:
+
+```jsonc
+{ "condition": "resident-older-than", "resident": "exec",  "major": 47, "minor": 10 }
+{ "condition": "resident-older-than", "resident": "strap", "major": 47 }
+```
+
+`Condition::RomOlderThan` and `RomAtLeast` are untouched — they ask about the
+ROM's own stated version, which is a different question and is what the 3.2
+recipe's `modules-a1200` and 3.9's floor already mean.
+
+### Two components, and no `and`/`or` operator needed
+
+The release's outer test is a disjunction — `exec_rev < 10` **or**
+`strap < 47` — and a `Condition` is one variant, so an `or` looks unavoidable.
+The measurement removes it. Across the whole 3.2 family the strap disjunct
+**never changes the answer**, because `strap` crossed 47 at 3.2.1 (45.1 → 47.2)
+while `exec` crossed 47.10 only at 3.2.2 (47.8 → 47.10):
+
+| Paired ROM | `exec < 47.10` | `strap < 47` | disjunction | **`exec < 47.10` alone** |
+|---|---|---|---|---|
+| 3.2 | true | true | on | **on** ✓ |
+| 3.2.1 | true | false | on | **on** ✓ |
+| 3.2.2 | false | false | off | **off** ✓ |
+
+So the outer condition is `resident-older-than exec 47.10`, exactly, and the
+inner branch is its own component:
+
+| Component | Condition | Rules |
+|---|---|---|
+| `update-322-modules-a1200` | `resident-older-than exec 47.10` | `LIBS/(A500\|A600\|A1000\|A1200\|A2000A\|A2000B\|A3000\|A4000D\|A4000T\|CD32)`, `LIBS/intuition.library`, `L/(Ram-Handler\|System-startup)` |
+| `update-322-modules-a1200-strap` | `resident-older-than strap 47` | `L/(Ram-Handler\|Shell-Seg\|System-startup)`, `LIBS/(dos\|gadtools\|graphics).library`; `overrides: ["update-322-modules-a1200"]` |
+
+3.2 switches both on and the strap component adds `Shell-Seg` and the three
+libraries over the first's files; 3.2.1 switches only the first on; 3.2.2
+switches neither. Each of those three is a test.
+
+**The stated limit.** A Kickstart with `exec` at 47.10 or newer *and* `strap`
+below 47 would switch the second component on without the first, placing the
+`L` files without the machine modules. **No such ROM exists in this family** —
+the table above is why — and expressing the case exactly would mean either an
+operator ART does not have or the machine-module rules written out twice. It is
+recorded here rather than papered over, and the recipe test asserts the three
+ROMs that do exist.
 
 ## 6. The tree says what it is
 
