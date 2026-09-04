@@ -153,7 +153,7 @@ export interface InstallRequest {
  * entry here surfaces as a refusal on screen and never as the wrong
  * operating system being written.
  */
-export const INSTALL_RELEASES = ["AmigaOS 3.2", "AmigaOS 3.9"] as const;
+export const INSTALL_RELEASES = ["AmigaOS 3.2", "AmigaOS 3.2.2", "AmigaOS 3.9"] as const;
 
 export type InstallRelease = (typeof INSTALL_RELEASES)[number];
 

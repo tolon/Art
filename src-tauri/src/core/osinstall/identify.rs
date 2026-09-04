@@ -70,23 +70,31 @@ use crate::core::CoreResult;
 /// Volume names that belong to more than one AmigaOS release, so their
 /// presence says nothing about which one a folder holds.
 ///
-/// **Three entries, each cited**, and deliberately not a general table:
+/// **Four entries, each cited**, and deliberately not a general table:
 ///
 /// | name | releases carrying it | source |
 /// |---|---|---|
 /// | `Fonts` | 3.1, 3.1.4, 3.2 | HstWB `amiga-os-entries.csv`; abime.net 3.1 guide |
 /// | `Locale` | 3.1, 3.1.4, 3.2 | as above |
 /// | `Storage` | 3.0 and earlier | the 3.1 set suffixes it (`Storage3.1`), earlier ones do not |
+/// | `DiskDoctor` | AmigaOS 3.2 and 3.2.2 | ART's own two recipes (Task 8) |
 ///
 /// `Storage` is here without a second source and is inert today — no shipped
 /// recipe names it, so it can only ever be ignored — but leaving it out would
 /// mean a bare `Storage` disk counting as evidence the day a recipe does.
 ///
-/// `DiskDoctor` is deliberately **absent** even though HstWB lists it under
-/// both 3.2 and 3.2.1: ART's 3.2 recipe covers 3.2.1 (it carries the
-/// `update-3.2.1` component off `Update3.2.1`), so both answers are the same
-/// answer here and the name really is evidence.
-pub const AMBIGUOUS_ACROSS_RELEASES: [&str; 3] = ["Fonts", "Locale", "Storage"];
+/// **`DiskDoctor` used to be deliberately absent** — until Task 8, ART's 3.2
+/// recipe covered 3.2.1 as well (the `update-3.2.1` placeholder off
+/// `Update3.2.1`), so only one recipe ever named `DiskDoctor` and the name
+/// really was evidence. AmigaOS 3.2.2 is now its own recipe with its **own**
+/// `DiskDoctor` volume — measured byte-different from 3.2's (see
+/// `core::osinstall` module doc comment, ART-224/ART-097's sibling note) —
+/// so a bare `DiskDoctor` floppy found beside nothing else is genuinely
+/// consistent with either release and must not tip [`identify`] into naming
+/// the more specific one on a coincidence of labelling. The layering
+/// subsumption below (`base`-aware) still lets AmigaOS 3.2.2's *other* own
+/// media (`Update3.2.2` and the rest) settle it outright.
+pub const AMBIGUOUS_ACROSS_RELEASES: [&str; 4] = ["Fonts", "Locale", "Storage", "DiskDoctor"];
 
 /// What one release's signature made of the media actually in hand.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -211,11 +219,57 @@ pub fn identify(volume_names: &[String]) -> CoreResult<MediaVerdict> {
         }
     }
 
-    let named: Vec<ReleaseEvidence> = candidates
+    let mut named: Vec<ReleaseEvidence> = candidates
         .iter()
         .filter(|c| !c.distinguishing.is_empty())
         .cloned()
         .collect();
+
+    // A based release (Task 8: `"AmigaOS 3.2.2"` on `"AmigaOS 3.2"`) inherits
+    // its base's *entire* component list, so every one of the base's own
+    // volume names is, correctly, also this release's own distinguishing
+    // evidence — a folder holding nothing but `Workbench3.2` would otherwise
+    // name both `"AmigaOS 3.2"` and `"AmigaOS 3.2.2"` at once, which is not
+    // real ambiguity (a collector owning two unrelated releases' discs) but
+    // one release being a superset of the other's signature.
+    //
+    // Resolved the same way a person would: **the update's own media, never
+    // the inherited base's, is what tells the two apart.** If a based
+    // release has found evidence among components that are genuinely its
+    // own — declared on a layer other than the first, which `merge_base`
+    // reserves for the stamped-in base — that release wins outright and its
+    // base is dropped from `named`. If it found nothing but the base's own
+    // names (the ordinary "just the base, nothing more" case), the based
+    // release itself is dropped instead: it was never really evidenced, only
+    // inherited into existence.
+    for release in recipe::releases() {
+        let recipe = recipe::by_release(release)?;
+        let Some(base_release) = recipe.base.clone() else {
+            continue;
+        };
+        let first_layer = recipe.layers.first().map(|l| l.id.as_str());
+        let own_media: std::collections::HashSet<&str> = recipe
+            .components
+            .iter()
+            .filter(|c| c.layer.as_deref() != first_layer)
+            .map(|c| c.media.as_str())
+            .collect();
+
+        let has_own_evidence = named
+            .iter()
+            .find(|c| c.release == *release)
+            .is_some_and(|c| {
+                c.distinguishing
+                    .iter()
+                    .any(|found| own_media.iter().any(|m| super::amiga_names_equal(found, m)))
+            });
+
+        if has_own_evidence {
+            named.retain(|c| c.release != base_release);
+        } else {
+            named.retain(|c| c.release != *release);
+        }
+    }
 
     Ok(match named.len() {
         1 => MediaVerdict::Identified {
@@ -560,10 +614,21 @@ mod tests {
 
     /// The cited list is the one hand-maintained thing here, so it is checked
     /// against the recipes rather than trusted: a name that no shipped recipe
-    /// mentions can only ever be inert, and one that two recipes mention would
-    /// be a real collision this module resolves the wrong way round.
+    /// mentions can only ever be inert, and one that two *unrelated* recipes
+    /// mention would be a real collision this module resolves the wrong way
+    /// round.
+    ///
+    /// **A base and the release it is inherited into are the one exception**
+    /// (Task 8). `"AmigaOS 3.2.2"` carries every one of `"AmigaOS 3.2"`'s own
+    /// components verbatim, so `Fonts`, `Locale` and now `DiskDoctor` are
+    /// named by both **on purpose** — that is inheritance, not two
+    /// independent recipes coincidentally choosing the same volume name, and
+    /// `identify`'s own base-subsumption pass is what actually resolves it.
+    /// Two releases sharing a name without one being the other's `base` is
+    /// still refused: that combination genuinely needs a decision this
+    /// module does not make.
     #[test]
-    fn every_ambiguous_name_is_either_inert_or_named_by_exactly_one_recipe() {
+    fn every_ambiguous_name_is_either_inert_or_named_by_a_base_and_its_own_release() {
         for shared in AMBIGUOUS_ACROSS_RELEASES {
             let mut naming: Vec<&str> = Vec::new();
             for release in recipe::releases() {
@@ -576,10 +641,18 @@ mod tests {
                     naming.push(release);
                 }
             }
+            let allowed = naming.len() <= 1 || {
+                naming.len() == 2 && {
+                    let a = recipe::by_release(naming[0]).unwrap();
+                    let b = recipe::by_release(naming[1]).unwrap();
+                    a.base.as_deref() == Some(naming[1]) || b.base.as_deref() == Some(naming[0])
+                }
+            };
             assert!(
-                naming.len() <= 1,
+                allowed,
                 "'{shared}' is named by {naming:?}; two shipped recipes sharing an \
-                 already-ambiguous name needs a decision this module does not make"
+                 already-ambiguous name, neither based on the other, needs a decision this \
+                 module does not make"
             );
         }
     }

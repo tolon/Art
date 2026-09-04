@@ -2218,6 +2218,10 @@
       "chooseTitle": "Dağıtım ağacının nereye kurulacağını seç",
       "hint": "Yeni ya da boş bir klasör. Seçme penceresinde Yeni klasör ile oluşturup seçebilirsin — ART yalnızca içinde bir şey olan klasörü reddeder."
     },
+    "layer": {
+      "base32": "AmigaOS 3.2 ortamı",
+      "update322": "AmigaOS 3.2.2 güncelleme ortamı"
+    },
     "components": {
       "heading": "Bileşenler",
       "intro": "Yukarıda seçilen sürümün bileşenleri. Bazıları her zaman kurulur; geri kalanı isteğe bağlıdır, ya da eşlenen Kickstart ihtiyaç duyduğunda kendiliğinden açılır.",
@@ -2227,7 +2231,8 @@
       "name": {
         "os32": {
           "keymaps": "Klavye düzenleri",
-          "storage": "Storage rafı — sürücüler, monitörler, hazır ayarlar"
+          "storage": "Storage rafı — sürücüler, monitörler, hazır ayarlar",
+          "diskdoctor": "DiskDoctor (AmigaOS 3.2)"
         },
         "os39": {
           "base": "Workbench 3.5 taban katmanı",
@@ -2236,6 +2241,30 @@
           "locale": "Locale — katalog, dil ve ülke dosyaları",
           "overlay": "Workbench 3.9 katmanı",
           "turkishFonts": "Türkçe fontlar (ISO-8859-9)"
+        },
+        "os322": {
+          "system": "AmigaOS 3.2.2 sistem güncellemesi",
+          "classes": "AmigaOS 3.2.2 sınıflar (Classes) güncellemesi",
+          "diskdoctor": "DiskDoctor (AmigaOS 3.2.2)",
+          "localeCz": "AmigaOS 3.2.2 dil güncellemesi — Çekçe",
+          "localeDe": "AmigaOS 3.2.2 dil güncellemesi — Almanca",
+          "localeDk": "AmigaOS 3.2.2 dil güncellemesi — Danca",
+          "localeEn": "AmigaOS 3.2.2 dil güncellemesi — İngilizce",
+          "localeEs": "AmigaOS 3.2.2 dil güncellemesi — İspanyolca",
+          "localeFr": "AmigaOS 3.2.2 dil güncellemesi — Fransızca",
+          "localeGr": "AmigaOS 3.2.2 dil güncellemesi — Yunanca",
+          "localeIt": "AmigaOS 3.2.2 dil güncellemesi — İtalyanca",
+          "localeNl": "AmigaOS 3.2.2 dil güncellemesi — Felemenkçe",
+          "localeNo": "AmigaOS 3.2.2 dil güncellemesi — Norveççe",
+          "localePl": "AmigaOS 3.2.2 dil güncellemesi — Lehçe",
+          "localePt": "AmigaOS 3.2.2 dil güncellemesi — Portekizce",
+          "localeRs": "AmigaOS 3.2.2 dil güncellemesi — Sırpça",
+          "localeRu": "AmigaOS 3.2.2 dil güncellemesi — Rusça",
+          "localeSe": "AmigaOS 3.2.2 dil güncellemesi — İsveççe",
+          "localeTr": "AmigaOS 3.2.2 dil güncellemesi — Türkçe",
+          "localeUk": "AmigaOS 3.2.2 dil güncellemesi — İngilizce (Britanya)",
+          "modulesA1200": "AmigaOS 3.2.2 A1200 modülleri",
+          "modulesA1200Strap": "AmigaOS 3.2.2 A1200 modülleri (strap)"
         }
       },
       "reason": {

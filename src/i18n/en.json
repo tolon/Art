@@ -2218,6 +2218,10 @@
       "chooseTitle": "Choose where to build the distribution tree",
       "hint": "A new or empty folder. In the picker you can make one with New folder and choose it — ART refuses only a folder that already has something in it."
     },
+    "layer": {
+      "base32": "AmigaOS 3.2 media",
+      "update322": "AmigaOS 3.2.2 update media"
+    },
     "components": {
       "heading": "Components",
       "intro": "The components of the release chosen above. Some are always installed; the rest are optional, or switch on by themselves when the paired Kickstart needs them.",
@@ -2227,7 +2231,8 @@
       "name": {
         "os32": {
           "keymaps": "Keyboard layouts",
-          "storage": "Storage shelf — drivers, monitors, presets"
+          "storage": "Storage shelf — drivers, monitors, presets",
+          "diskdoctor": "DiskDoctor (AmigaOS 3.2)"
         },
         "os39": {
           "base": "Workbench 3.5 base layer",
@@ -2236,6 +2241,30 @@
           "locale": "Locale — catalogs, languages, countries",
           "overlay": "Workbench 3.9 overlay",
           "turkishFonts": "Turkish fonts (ISO-8859-9)"
+        },
+        "os322": {
+          "system": "AmigaOS 3.2.2 system update",
+          "classes": "AmigaOS 3.2.2 classes update",
+          "diskdoctor": "DiskDoctor (AmigaOS 3.2.2)",
+          "localeCz": "AmigaOS 3.2.2 locale update — Czech",
+          "localeDe": "AmigaOS 3.2.2 locale update — German",
+          "localeDk": "AmigaOS 3.2.2 locale update — Danish",
+          "localeEn": "AmigaOS 3.2.2 locale update — English",
+          "localeEs": "AmigaOS 3.2.2 locale update — Spanish",
+          "localeFr": "AmigaOS 3.2.2 locale update — French",
+          "localeGr": "AmigaOS 3.2.2 locale update — Greek",
+          "localeIt": "AmigaOS 3.2.2 locale update — Italian",
+          "localeNl": "AmigaOS 3.2.2 locale update — Dutch",
+          "localeNo": "AmigaOS 3.2.2 locale update — Norwegian",
+          "localePl": "AmigaOS 3.2.2 locale update — Polish",
+          "localePt": "AmigaOS 3.2.2 locale update — Portuguese",
+          "localeRs": "AmigaOS 3.2.2 locale update — Serbian",
+          "localeRu": "AmigaOS 3.2.2 locale update — Russian",
+          "localeSe": "AmigaOS 3.2.2 locale update — Swedish",
+          "localeTr": "AmigaOS 3.2.2 locale update — Turkish",
+          "localeUk": "AmigaOS 3.2.2 locale update — British English",
+          "modulesA1200": "AmigaOS 3.2.2 A1200 modules",
+          "modulesA1200Strap": "AmigaOS 3.2.2 A1200 modules (strap)"
         }
       },
       "reason": {

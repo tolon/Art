@@ -3745,13 +3745,12 @@ mod tests {
     /// deliberately left **out** of `chosen` — the point of this run is to
     /// prove the condition switches it on by itself against the user's real
     /// V40 Kickstart, not to force it on the way `chosen` would.
-    /// `update-3.2.1` is left out because it is `available: false` in the
-    /// recipe (registered, not implemented — see `CLAUDE.md`'s "don't claim
-    /// support that isn't implemented and tested"), so a real screen would
-    /// never offer it. `backdrops` **is** chosen now: it stopped being a
-    /// guess when the running system named its own path (ART-127), and a
-    /// tree without it boots to a Preferences error about a missing
-    /// wallpaper.
+    /// The `update-3.2.1` placeholder this comment used to name is gone
+    /// (Task 8): AmigaOS 3.2.2 is its own recipe now, layered on this one,
+    /// rather than a not-yet-built component of it.
+    /// `backdrops` **is** chosen now: it stopped being a guess when the
+    /// running system named its own path (ART-127), and a tree without it
+    /// boots to a Preferences error about a missing wallpaper.
     #[test]
     #[ignore = "touches the user's real media and E:\\amiga\\ProjeART; run explicitly, see the doc comment"]
     fn run_the_real_engine_against_the_users_own_media_when_asked() {

@@ -10,6 +10,7 @@ use crate::core::error::{CoreError, CoreResult};
 
 const AMIGAOS_32_JSON: &str = include_str!("recipes/amigaos-3.2.json");
 const AMIGAOS_39_JSON: &str = include_str!("recipes/amigaos-3.9.json");
+const AMIGAOS_322_JSON: &str = include_str!("recipes/amigaos-3.2.2.json");
 
 /// Every key a recipe may carry, by the level it sits at.
 ///
@@ -239,6 +240,17 @@ fn merge_base(base: Recipe, recipe: Recipe) -> CoreResult<Recipe> {
         ..recipe
     };
     validate(&resolved)?;
+    // `validate()` skips `validate_removals` whenever `base` is set, because
+    // an *unresolved* based recipe's own `removes` may legitimately name a
+    // destination the base places (AmigaOS 3.2.2's `update-322-system`
+    // removes a file `extras`, a base-layer component, places) — a check
+    // `parse_unresolved`'s standalone `validate()` call cannot answer, since
+    // the base's own components are not there yet. `resolved.base` is still
+    // `Some(_)` (carried through by `..recipe`), so that same skip would
+    // apply here too if left to `validate()` alone — which would mean no
+    // based recipe's removals were ever checked at all. Run it explicitly,
+    // once, against the component list that actually has everything.
+    validate_removals(&resolved)?;
     Ok(resolved)
 }
 
@@ -329,6 +341,16 @@ pub(super) fn validate_component(format: &str, component: &Component) -> CoreRes
 /// sharing an id, no two components sharing an id, every component naming a
 /// layer exactly when the recipe is layered and one it actually declares,
 /// plus [`validate_component`] for each one.
+///
+/// **[`validate_removals`] is skipped whenever `recipe.base` is set.** A
+/// based recipe's own `removes` may legitimately name a destination the
+/// *base* places — AmigaOS 3.2.2's `update-322-system` removes a file
+/// `extras`, a base-layer component, places — and this function is called on
+/// the recipe standalone, before [`merge_base`] has brought the base's
+/// components in. Checking removals here would refuse every based recipe
+/// that removes anything the base placed, on the grounds that nothing in
+/// *this file alone* places it. [`merge_base`] calls [`validate_removals`]
+/// itself, explicitly, once the component list actually has everything.
 fn validate(recipe: &Recipe) -> CoreResult<()> {
     let mut seen_layers = std::collections::HashSet::new();
     for layer in &recipe.layers {
@@ -384,7 +406,9 @@ fn validate(recipe: &Recipe) -> CoreResult<()> {
 
         validate_component("recipe", component)?;
     }
-    validate_removals(recipe)?;
+    if recipe.base.is_none() {
+        validate_removals(recipe)?;
+    }
     Ok(())
 }
 
@@ -531,6 +555,14 @@ pub fn amigaos_39() -> CoreResult<Recipe> {
     parse(AMIGAOS_39_JSON)
 }
 
+/// The shipped AmigaOS 3.2.2 recipe — a `base` of `"AmigaOS 3.2"` plus one
+/// `update-3.2.2` layer, per AmigaOS 3.2.2's own `HowToInstall` ("a successful
+/// installation of AmigaOS 3.2 or 3.2.1"). See the recipe file's own
+/// `_why_this_recipe_exists` note for what was measured and where.
+pub fn amigaos_322() -> CoreResult<Recipe> {
+    parse(AMIGAOS_322_JSON)
+}
+
 /// Every release ART ships a recipe for, in the order a picker should list
 /// them.
 ///
@@ -539,7 +571,7 @@ pub fn amigaos_39() -> CoreResult<Recipe> {
 /// recipe files are two halves of one fact, and a release in only one of them
 /// is a release the user either cannot reach or cannot install.
 pub fn releases() -> &'static [&'static str] {
-    &["AmigaOS 3.2", "AmigaOS 3.9"]
+    &["AmigaOS 3.2", "AmigaOS 3.2.2", "AmigaOS 3.9"]
 }
 
 /// The shipped recipe for `release`.
@@ -551,6 +583,7 @@ pub fn releases() -> &'static [&'static str] {
 pub fn by_release(release: &str) -> CoreResult<Recipe> {
     match release {
         "AmigaOS 3.2" => amigaos_32(),
+        "AmigaOS 3.2.2" => amigaos_322(),
         "AmigaOS 3.9" => amigaos_39(),
         other => Err(CoreError::InvalidInput(format!(
             "ART ships no install recipe for {other}"
@@ -566,6 +599,7 @@ pub fn by_release(release: &str) -> CoreResult<Recipe> {
 fn by_release_unresolved(release: &str) -> CoreResult<Recipe> {
     match release {
         "AmigaOS 3.2" => parse_unresolved(AMIGAOS_32_JSON),
+        "AmigaOS 3.2.2" => parse_unresolved(AMIGAOS_322_JSON),
         "AmigaOS 3.9" => parse_unresolved(AMIGAOS_39_JSON),
         other => Err(CoreError::InvalidInput(format!(
             "ART ships no install recipe for {other}"
@@ -763,6 +797,7 @@ mod tests {
         fn raw_json(release: &str) -> &'static str {
             match release {
                 "AmigaOS 3.2" => AMIGAOS_32_JSON,
+                "AmigaOS 3.2.2" => AMIGAOS_322_JSON,
                 "AmigaOS 3.9" => AMIGAOS_39_JSON,
                 other => panic!(
                     "'{other}' is offered by releases() but raw_shipped_recipes() has no raw \
@@ -1507,14 +1542,26 @@ mod tests {
         );
     }
 
-    /// `backdrops` stays off on purpose — the brief is explicit that where
-    /// the real installer places these wallpapers has not been established,
-    /// and this project does not guess at destinations. A flipped
-    /// `available` would ship that guess silently.
+    /// `available: false` is §96's "Coming Later" box: a component that is
+    /// registered but not yet built, kept visible rather than hidden.
+    ///
+    /// Used to be checked against the shipped `update-3.2.1` placeholder —
+    /// `available: false` with no rules — until Task 8 removed it: AmigaOS
+    /// 3.2.2's own `HowToInstall` wants "3.2 **or** 3.2.1", so installing
+    /// cumulatively needs one recipe (3.2.2, layered on 3.2), not a second
+    /// placeholder recipe for the update in between. Constructs its own
+    /// example now, so this test does not depend on any one shipped
+    /// component staying unbuilt forever.
     #[test]
-    fn backdrops_and_update_3_2_1_are_not_yet_available() {
-        let recipe = recipe();
-        assert!(!recipe.component("update-3.2.1").unwrap().available);
+    fn a_component_declared_unavailable_says_so() {
+        let json = r#"{
+            "release": "X",
+            "components": [
+                { "id": "a", "media": "M", "rules": [], "available": false }
+            ]
+        }"#;
+        let recipe = parse(json).expect("an unavailable component is still a valid recipe");
+        assert!(!recipe.component("a").unwrap().available);
     }
 
     /// **The destination was measured, so `backdrops` is on (ART-127).**
@@ -2357,7 +2404,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "waiting for Task 8's AmigaOS 3.2.2 recipe"]
     fn a_based_recipe_inherits_its_bases_components_on_the_first_layer() {
         let recipe = by_release("AmigaOS 3.2.2").expect("the 3.2.2 recipe resolves");
         let inherited = recipe
@@ -2564,5 +2610,110 @@ mod tests {
                 && text.contains("drawer"),
             "names the remover, the path, the placer, and why: {text}"
         );
+    }
+
+    // ---- Task 8: the AmigaOS 3.2.2 recipe ----
+
+    #[test]
+    fn the_322_recipe_resolves_and_declares_two_layers() {
+        let r = by_release("AmigaOS 3.2.2").unwrap();
+        assert_eq!(r.layer_ids(), vec!["base", "update-3.2.2"]);
+        assert_eq!(r.base.as_deref(), Some("AmigaOS 3.2"));
+    }
+
+    #[test]
+    fn the_two_diskdoctors_are_two_components_in_two_layers() {
+        let r = by_release("AmigaOS 3.2.2").unwrap();
+        assert_eq!(
+            r.component("diskdoctor").unwrap().layer.as_deref(),
+            Some("base")
+        );
+        let update = r.component("update-322-diskdoctor").unwrap();
+        assert_eq!(update.layer.as_deref(), Some("update-3.2.2"));
+        assert_eq!(update.media, "DiskDoctor");
+        assert!(update.overrides.iter().any(|o| o == "diskdoctor"));
+    }
+
+    #[test]
+    fn every_locale_component_names_only_drawers_its_own_disk_carries() {
+        // -EN carries Help alone; only -CZ, -RS and -RU carry Languages.
+        let r = by_release("AmigaOS 3.2.2").unwrap();
+        let en = r.component("update-322-locale-en").unwrap();
+        assert!(en.rules.iter().all(|rule| rule.from.starts_with("Help")));
+        for id in [
+            "update-322-locale-cz",
+            "update-322-locale-rs",
+            "update-322-locale-ru",
+        ] {
+            assert!(
+                r.component(id)
+                    .unwrap()
+                    .rules
+                    .iter()
+                    .any(|rule| rule.from == "Languages"),
+                "{id} carries Languages"
+            );
+        }
+        for id in ["update-322-locale-tr", "update-322-locale-de"] {
+            assert!(
+                !r.component(id)
+                    .unwrap()
+                    .rules
+                    .iter()
+                    .any(|rule| rule.from == "Languages"),
+                "{id} does not, and a rule for it would refuse MediaMissing"
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_places_the_drawers_the_release_leaves_alone() {
+        let r = by_release("AmigaOS 3.2.2").unwrap();
+        for component in &r.components {
+            for rule in &component.rules {
+                assert!(
+                    !rule.from.starts_with("Other") && rule.from != "ReadMe",
+                    "'{}' places '{}', which the release's own installer does not",
+                    component.id,
+                    rule.from
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_ten_c_tools_the_release_does_not_place_are_not_placed() {
+        let r = by_release("AmigaOS 3.2.2").unwrap();
+        let system = r.component("update-322-system").unwrap();
+        for tool in ["C/AmigaModel", "C/CopyTooltypes", "C/GuessBootDev"] {
+            assert!(
+                !system.rules.iter().any(|rule| rule.from == tool),
+                "{tool} is an install-time helper, not a file the release places"
+            );
+        }
+        assert_eq!(
+            system
+                .rules
+                .iter()
+                .filter(|r| r.from.starts_with("C/"))
+                .count(),
+            10
+        );
+    }
+
+    #[test]
+    fn the_update_removes_the_file_the_release_removes() {
+        let r = by_release("AmigaOS 3.2.2").unwrap();
+        let system = r.component("update-322-system").unwrap();
+        assert!(system
+            .removes
+            .iter()
+            .any(|p| p == "Tools/TextEditFileTypes/Default4Types"));
+        assert!(system.overrides.iter().any(|o| o == "extras"));
+    }
+
+    #[test]
+    fn the_empty_3_2_1_placeholder_is_gone() {
+        assert!(amigaos_32().unwrap().component("update-3.2.1").is_none());
     }
 }
