@@ -7,6 +7,7 @@
 //! See `docs/architecture.md` for the layered design.
 
 pub mod adf;
+pub mod amigaicon;
 pub mod amigainstall;
 pub mod amiganet;
 pub mod amigaver;
