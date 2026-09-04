@@ -39,6 +39,17 @@ export interface FoundMedia {
   /** Read from **inside** the image — never derived from `path`. */
   volumeName: string;
   kind: MediaKind;
+  /**
+   * Which media layer this disk was found in, by the layer's own id.
+   *
+   * Absent, not `null` — an **unlayered** scan has no layer to name, which is
+   * every scan before layered recipes existed and still every scan
+   * `osinstallScanMedia` runs today. The Rust side skips the field entirely
+   * rather than serialising it as `null` (`#[serde(skip_serializing_if)]`),
+   * so an old-shaped result and a layered one are told apart by whether the
+   * key is there at all.
+   */
+  layer?: string;
 }
 
 /** What scanning a media folder found, or why it could not be looked at. */

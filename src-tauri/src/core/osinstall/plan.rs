@@ -475,7 +475,10 @@ pub struct InstallRequest {
     /// about, so widening it would have rewritten every caller to say "the
     /// first one" — which is a precedence rule, and there is none here.
     /// Duplicated volume names across folders are **refused by name**
-    /// (`scan::media_for`), never resolved by order.
+    /// (`scan::media_for_layer`, asked with `layer: None` here — this field
+    /// only exists for the unlayered case; a layered recipe asks the same
+    /// question once per layer instead, against `media_folders` below),
+    /// never resolved by order.
     ///
     /// `#[serde(default)]` for the reason the fields below carry one: a
     /// request serialised before this existed must still deserialise.
