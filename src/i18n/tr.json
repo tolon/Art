@@ -2163,6 +2163,7 @@
       "mediaPathMissing": "{{component}}'in kendi {{path}} yolu {{media}}'da eksik — bu diskin farklı bir sürümü gibi görünüyor.",
       "mediaUnreadable": "{{component}} için {{volume}} {{path}} konumunda bulundu, ancak ART onu okuyamadı: {{reason}}",
       "romUnknown": "Kickstart tanımlanamadı, bu yüzden ART sürümüne bağlı şeylere karar veremiyor.",
+      "residentTableUnreadable": "\"{{component}}\", eşleştirilen Kickstart'ın kendi {{resident}} modülünün yeterince eski olup olmadığını bilmek zorunda, ama ART bunu kontrol etmek için bu ROM'un modül tablosunu okuyamadı. Makinenizin buna ihtiyacı olduğunu biliyorsanız \"{{component}}\"'i kendiniz işaretleyin.",
       "destinationCollision": "{{path}} birden fazla bileşen tarafından isteniyor ({{components}}) ve hiçbiri diğerinin üzerine yazabileceğini belirtmiyor.",
       "mediaAmbiguous": "Medya klasöründe {{component}}'in ihtiyaç duyduğu {{volume}} birim adını taşıyan birden fazla dosya var: {{paths}}.",
       "layersShareFolder": "{{layers}} aynı klasörü ({{folder}}) gösteriyor, bu yüzden ART bunları birbirinden ayırt edemiyor — her katmana kendi klasörünü ver.",

@@ -144,7 +144,23 @@ pub struct RomFacts {
     /// questions (the design's §5, reproduced on
     /// `core::rom::residents`'s own doc comment), and this task exists
     /// precisely because they were found to disagree.
+    ///
+    /// **Empty means two different things, and `residents_readable` is what
+    /// tells them apart.** `core::rom::residents` failing on a dump this
+    /// module's header already identified (an unrecognised image size) also
+    /// produces an empty `Vec` here — the same shape a ROM that genuinely
+    /// carries no such resident produces. Reading `residents` alone cannot
+    /// distinguish "this Kickstart does not need the modules" from "ART
+    /// could not tell", which is exactly the confident-wrong sentence
+    /// fix round 1 of this task found: `condition_holds` checks
+    /// `residents_readable` first and refuses
+    /// ([`RefusalReason::ResidentTableUnreadable`]) rather than silently
+    /// reading "unreadable" as "absent".
     pub residents: Vec<crate::core::rom::RomResident>,
+    /// Whether `core::rom::residents` actually succeeded reading the table
+    /// above — see that field's own doc comment for why this cannot be
+    /// inferred from an empty `Vec`.
+    pub residents_readable: bool,
 }
 
 /// Read the paired Kickstart's own stated major.
@@ -162,21 +178,34 @@ pub fn rom_facts(rom: &Path) -> CoreResult<RomFacts> {
     // A dump whose size `core::rom::residents` does not recognise (never a
     // plain 512 KiB or 256 KiB image) fails the *resident* scan without
     // failing `rom_facts` itself — the header above already answered the
-    // question `rom_facts` exists to answer. An empty table is exactly what
-    // [`Condition::ResidentOlderThan`] needs to see nothing named in it: "the
-    // ROM does not carry this resident", never a guess either way.
-    let residents = crate::core::rom::residents(&bytes).unwrap_or_default();
+    // question `rom_facts` exists to answer. But the failure is not
+    // discarded: `residents_readable` carries it forward so
+    // `condition_holds` can tell "this ROM does not carry the resident"
+    // apart from "ART could not read this ROM's table at all" rather than
+    // treating both as the same empty `Vec` (fix round 1, F1).
+    let (residents, residents_readable) = match crate::core::rom::residents(&bytes) {
+        Ok(table) => (table, true),
+        Err(_) => (Vec::new(), false),
+    };
     Ok(RomFacts {
         major,
         info,
         residents,
+        residents_readable,
     })
 }
 
 /// Whether a conditional component switches on, given the facts already
 /// read about the paired ROM — `None` when the ROM could not be identified
 /// at all, which refuses rather than guessing (see the module doc comment).
+///
+/// `component` names the caller's own component id and is used for exactly
+/// one thing: building [`RefusalReason::ResidentTableUnreadable`], which —
+/// unlike [`RefusalReason::RomUnknown`] — is a fact about *this* component's
+/// own question rather than about the ROM as a whole, so it has to say which
+/// component asked (fix round 1, F1).
 pub fn condition_holds(
+    component: &str,
     condition: &Condition,
     rom: Option<&RomFacts>,
 ) -> Result<bool, RefusalReason> {
@@ -188,12 +217,27 @@ pub fn condition_holds(
             resident,
             major,
             minor,
-        } => Ok(resident_older_than(
-            &rom.residents,
-            resident,
-            *major,
-            *minor,
-        )),
+        } => {
+            // The ROM is identified fine — only its own module table could
+            // not be read. That is a different, actionable fact from "the
+            // ROM does not carry this resident", and folding the two
+            // together is exactly what fix round 1 found: it would switch
+            // the softkick modules component quietly off for a user whose
+            // dump ART simply could not scan, with no refusal and nothing on
+            // screen (see `RomFacts::residents`'s own doc comment).
+            if !rom.residents_readable {
+                return Err(RefusalReason::ResidentTableUnreadable {
+                    component: component.to_string(),
+                    resident: resident.clone(),
+                });
+            }
+            Ok(resident_older_than(
+                &rom.residents,
+                resident,
+                *major,
+                *minor,
+            ))
+        }
     }
 }
 
@@ -801,15 +845,24 @@ fn resolve_components_on(
             continue;
         }
         if let Some(condition) = &component.condition {
-            match condition_holds(condition, rom_facts) {
+            match condition_holds(&component.id, condition, rom_facts) {
                 Ok(true) => is_on = true,
                 Ok(false) => {}
-                Err(reason) => {
+                // `RomUnknown` is one fact about the whole plan's ROM and is
+                // deduped so it is not repeated once per conditional
+                // component sharing it. `ResidentTableUnreadable` (and any
+                // future per-component refusal) is a fact about *this*
+                // component's own question — pushed every time, never
+                // suppressed by an unrelated component's `RomUnknown`, and
+                // never deduped against itself, since a component can carry
+                // at most one `Condition` and so can raise this at most once.
+                Err(RefusalReason::RomUnknown) => {
                     if !rom_unknown_reported {
-                        refusals.push(reason);
+                        refusals.push(RefusalReason::RomUnknown);
                         rom_unknown_reported = true;
                     }
                 }
+                Err(reason) => refusals.push(reason),
             }
         }
         if is_on {
@@ -1799,6 +1852,7 @@ mod condition_tests {
                 whdload_crc16: None,
             },
             residents: Vec::new(),
+            residents_readable: true,
         }
     }
 
@@ -1823,11 +1877,15 @@ mod condition_tests {
     }
 
     /// `condition_holds` wrapped for a `Condition` known to be a
-    /// `ResidentOlderThan` against facts known to identify a ROM — both true
-    /// of every call these tests make, so the `Result`'s other two cases
-    /// (an unrelated condition kind, an unidentified ROM) never arise here.
+    /// `ResidentOlderThan` against facts known to identify a ROM **and**
+    /// carry a readable resident table — both true of every call these tests
+    /// make, so the `Result`'s other cases (an unrelated condition kind, an
+    /// unidentified ROM, an unreadable resident table) never arise here. The
+    /// component name is irrelevant to every assertion built on this helper,
+    /// so a fixed placeholder stands in for it.
     fn resident_condition_holds(condition: &Condition, facts: &RomFacts) -> bool {
-        condition_holds(condition, Some(facts)).expect("a resident condition against known facts")
+        condition_holds("modules-a1200", condition, Some(facts))
+            .expect("a resident condition against known, readable facts")
     }
 
     /// `Workbench3.2.adf:S/Startup-sequence` opens with
@@ -1836,14 +1894,22 @@ mod condition_tests {
     #[test]
     fn a_pre_v47_rom_turns_the_modules_component_on() {
         let facts = fake_rom_facts(40);
-        let holds = condition_holds(&Condition::RomOlderThan { major: 47 }, Some(&facts));
+        let holds = condition_holds(
+            "modules-a1200",
+            &Condition::RomOlderThan { major: 47 },
+            Some(&facts),
+        );
         assert_eq!(holds, Ok(true));
     }
 
     #[test]
     fn a_v47_rom_leaves_it_off() {
         let facts = fake_rom_facts(47);
-        let holds = condition_holds(&Condition::RomOlderThan { major: 47 }, Some(&facts));
+        let holds = condition_holds(
+            "modules-a1200",
+            &Condition::RomOlderThan { major: 47 },
+            Some(&facts),
+        );
         assert_eq!(holds, Ok(false));
     }
 
@@ -1860,7 +1926,11 @@ mod condition_tests {
         for (major, expected) in [(37u16, false), (39, false), (40, true), (47, true)] {
             let facts = fake_rom_facts(major);
             assert_eq!(
-                condition_holds(&Condition::RomAtLeast { major: 40 }, Some(&facts)),
+                condition_holds(
+                    "workbench-base",
+                    &Condition::RomAtLeast { major: 40 },
+                    Some(&facts)
+                ),
                 Ok(expected),
                 "a V{major} ROM against a V40 floor"
             );
@@ -1973,7 +2043,11 @@ mod condition_tests {
     /// to choose.
     #[test]
     fn an_unidentified_rom_refuses_rather_than_guessing() {
-        let holds = condition_holds(&Condition::RomOlderThan { major: 47 }, None);
+        let holds = condition_holds(
+            "modules-a1200",
+            &Condition::RomOlderThan { major: 47 },
+            None,
+        );
         assert_eq!(holds, Err(RefusalReason::RomUnknown));
     }
 
@@ -2044,8 +2118,18 @@ mod condition_tests {
     /// (design §5): the release's own Modules step asks a running machine
     /// for `exec.library`'s revision and for `strap`'s version, and a header
     /// proxy collapses the 3.2 and 3.2.1 rows into one outcome.
+    ///
+    /// **The 3.2.1 row lives in its own test**
+    /// ([`a_3_2_1_rom_gets_the_smaller_module_set`]) rather than as a third
+    /// assertion here (review fix round 1, F2). It is the row that actually
+    /// tells a real `(major, minor)` comparison apart from a major-only one
+    /// — 3.2 and 3.2.2 both happen to come out right under a major-only
+    /// comparison too, so a mutation that drops the minor entirely still
+    /// passed this test's *first* assertion and never reached the row the
+    /// distinction is about. Named on its own, that mutation has nowhere
+    /// else to hide.
     #[test]
-    fn the_modules_condition_answers_what_the_release_answers_for_all_three_roms() {
+    fn the_modules_condition_answers_what_the_release_answers_for_3_2_and_3_2_2() {
         let exec_older = Condition::ResidentOlderThan {
             resident: "exec".into(),
             major: 47,
@@ -2058,7 +2142,6 @@ mod condition_tests {
         };
         // (exec, strap), measured out of the owner's own A1200 Kickstarts.
         let kick_32 = residents_of((47, 7), (45, 1));
-        let kick_321 = residents_of((47, 8), (47, 2));
         let kick_322 = residents_of((47, 10), (47, 2));
 
         assert!(resident_condition_holds(&exec_older, &kick_32));
@@ -2067,17 +2150,39 @@ mod condition_tests {
             "3.2's ROM gets the larger file set"
         );
 
+        assert!(!resident_condition_holds(&exec_older, &kick_322));
+        assert!(
+            !resident_condition_holds(&strap_older, &kick_322),
+            "3.2.2's own ROM needs no softkicked modules at all"
+        );
+    }
+
+    /// **The row a header proxy — and a major-only comparison — gets wrong**
+    /// (review fix round 1, F2; this is the entire reason this task was
+    /// rewritten away from `RomOlderThan`'s header version). Split out of
+    /// `the_modules_condition_answers_what_the_release_answers_for_3_2_and_3_2_2`
+    /// so this specific row fails on its own rather than being reachable
+    /// only after two earlier assertions that a weaker guard can satisfy by
+    /// accident.
+    #[test]
+    fn a_3_2_1_rom_gets_the_smaller_module_set() {
+        let exec_older = Condition::ResidentOlderThan {
+            resident: "exec".into(),
+            major: 47,
+            minor: Some(10),
+        };
+        let strap_older = Condition::ResidentOlderThan {
+            resident: "strap".into(),
+            major: 47,
+            minor: None,
+        };
+        let kick_321 = residents_of((47, 8), (47, 2));
+
         assert!(resident_condition_holds(&exec_older, &kick_321));
         assert!(
             !resident_condition_holds(&strap_older, &kick_321),
             "3.2.1's ROM gets the smaller set - Shell-Seg and the three libraries are \
              withheld, which is exactly what the header proxy got wrong"
-        );
-
-        assert!(!resident_condition_holds(&exec_older, &kick_322));
-        assert!(
-            !resident_condition_holds(&strap_older, &kick_322),
-            "3.2.2's own ROM needs no softkicked modules at all"
         );
     }
 
@@ -2091,6 +2196,75 @@ mod condition_tests {
         assert!(
             !resident_condition_holds(&c, &residents_of((47, 7), (45, 1))),
             "an absent resident switches nothing on - never a default of `older`"
+        );
+    }
+
+    /// Facts identifying a ROM whose header parsed fine but whose resident
+    /// table could not be read — the case `core::rom::residents` returning
+    /// `Err` on an image `rom_facts` already identified produces.
+    fn unreadable_resident_facts() -> RomFacts {
+        let mut facts = fake_rom_facts(47);
+        facts.residents_readable = false;
+        facts
+    }
+
+    /// **Review fix round 1, F1.** Before this fix, `rom_facts` folded a
+    /// failed resident scan into the same empty `Vec` a ROM that genuinely
+    /// carries no such resident produces — so a component conditioned on
+    /// `ResidentOlderThan` was silently switched off, with no refusal and
+    /// nothing on screen, exactly the "endings stay distinct" rule this
+    /// project keeps re-learning the cost of breaking.
+    ///
+    /// **Absence from `components_on` has more than one cause here, so this
+    /// does not assert that alone** — a legitimately-unsatisfied condition
+    /// also leaves the component off `components_on`, and a test that
+    /// stopped there would pass against both the fix and the defect it
+    /// fixes. This asserts the specific refusal by value: which component,
+    /// which resident.
+    #[test]
+    fn an_unreadable_resident_table_refuses_the_component_by_name_rather_than_silently_switching_it_off(
+    ) {
+        let recipe = Recipe {
+            layers: vec![],
+            base: None,
+            release: "Test".to_string(),
+            components: vec![Component {
+                layer: None,
+                id: "modules-a1200".to_string(),
+                media: "ModulesA1200".to_string(),
+                rules: vec![],
+                required: false,
+                condition: Some(Condition::ResidentOlderThan {
+                    resident: "exec".into(),
+                    major: 47,
+                    minor: Some(10),
+                }),
+                overrides: vec![],
+                user_startup: vec![],
+                activate: vec![],
+                exclusive_group: None,
+                label_key: None,
+                available: true,
+                removes: Vec::new(),
+            }],
+        };
+        let facts = unreadable_resident_facts();
+        let mut refusals = Vec::new();
+        let on = resolve_components_on(&recipe, &[], &[], Some(&facts), &mut refusals);
+
+        assert!(
+            !on.contains(&"modules-a1200".to_string()),
+            "an undecidable condition must not switch the component on"
+        );
+        assert_eq!(
+            refusals,
+            vec![RefusalReason::ResidentTableUnreadable {
+                component: "modules-a1200".to_string(),
+                resident: "exec".to_string(),
+            }],
+            "the component must be refused by this specific, named sentence - not merely \
+             absent from components_on, which a legitimately-unsatisfied condition would also \
+             produce"
         );
     }
 }

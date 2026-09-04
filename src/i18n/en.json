@@ -2163,6 +2163,7 @@
       "mediaPathMissing": "{{component}}'s own {{path}} is missing from {{media}} — this looks like a different revision of that disk.",
       "mediaUnreadable": "{{volume}} was found for {{component}} at {{path}}, but ART could not read it: {{reason}}",
       "romUnknown": "The Kickstart could not be identified, so ART cannot decide what depends on its version.",
+      "residentTableUnreadable": "\"{{component}}\" needs to know whether the paired Kickstart's own {{resident}} module is old enough, but ART could not read this ROM's module table to check. Tick \"{{component}}\" yourself if you know your machine needs it.",
       "destinationCollision": "{{path}} is wanted by more than one component ({{components}}), and neither declares it may override the other.",
       "mediaAmbiguous": "More than one file in the media folder carries the volume name {{volume}} that {{component}} needs: {{paths}}.",
       "layersShareFolder": "{{layers}} are pointed at the same folder ({{folder}}), so ART cannot tell them apart — give each layer its own folder.",

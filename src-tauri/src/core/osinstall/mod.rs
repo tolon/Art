@@ -789,6 +789,30 @@ pub enum RefusalReason {
     },
     /// The ROM was not identified, so a `Condition` cannot be decided.
     RomUnknown,
+    /// The paired Kickstart **was** identified — its header states a version
+    /// fine — but its resident module table could not be read, so a
+    /// [`Condition::ResidentOlderThan`] naming `resident` cannot be decided
+    /// for `component`.
+    ///
+    /// **A different fact than [`RomUnknown`](Self::RomUnknown).** That
+    /// variant means the ROM itself could not be identified at all, and is
+    /// reported once for the whole plan because it is a fact about the ROM,
+    /// not about any one component. This one is a fact about *this*
+    /// component's own question — the ROM is fine, only the scan
+    /// [`core::rom::residents`] runs over it failed — so a plan with two
+    /// components each asking about a different resident gets two of these,
+    /// named separately, while every unrelated component still plans
+    /// exactly as if nothing happened.
+    ///
+    /// Exists because folding an unreadable scan into an empty resident
+    /// table (which `ResidentOlderThan`'s own "absent is not older" rule
+    /// requires for a resident the ROM genuinely does not carry) would make
+    /// "this Kickstart does not need the modules" and "ART could not tell"
+    /// look identical — a confident wrong sentence on screen, and the
+    /// scenario the whole "endings stay distinct" rule exists to rule out.
+    ///
+    /// [`core::rom::residents`]: crate::core::rom::residents
+    ResidentTableUnreadable { component: String, resident: String },
     /// A component asks to switch something on that no rule puts on the tree
     /// — see [`Activation`]. Refused rather than skipped: a `Devs/Monitors`
     /// entry copied from a file that is not on the disk is either a silent

@@ -4541,6 +4541,7 @@ mod tests {
                     | RefusalReason::MediaPathMissing { .. }
                     | RefusalReason::MediaUnreadable { .. }
                     | RefusalReason::RomUnknown
+                    | RefusalReason::ResidentTableUnreadable { .. }
                     | RefusalReason::DestinationCollision { .. }
                     | RefusalReason::MediaAmbiguous { .. }
                     | RefusalReason::LayersShareFolder { .. }
@@ -4595,6 +4596,14 @@ mod tests {
                     &["refusal", "component", "volume_name", "path", "reason"],
                 ),
                 (RefusalReason::RomUnknown, "rom-unknown", &["refusal"]),
+                (
+                    RefusalReason::ResidentTableUnreadable {
+                        component: "modules-a1200".into(),
+                        resident: "exec".into(),
+                    },
+                    "resident-table-unreadable",
+                    &["refusal", "component", "resident"],
+                ),
                 (
                     RefusalReason::DestinationCollision {
                         path: "C/Assign".into(),

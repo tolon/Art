@@ -211,6 +211,15 @@ export type RefusalReason =
       reason: string;
     }
   | { refusal: "rom-unknown" }
+  // The paired Kickstart WAS identified — only its own resident module
+  // table could not be read, so a `resident-older-than` condition naming
+  // `resident` cannot be decided for `component`. A different fact from
+  // `rom-unknown` (review fix round 1, F1): that one is undecidable because
+  // ART cannot tell what ROM this is at all; this one names a ROM that is
+  // fine and a specific question about it ART could not answer, and it is
+  // named per component rather than deduplicated across the whole plan,
+  // because two components can ask about two different residents.
+  | { refusal: "resident-table-unreadable"; component: string; resident: string }
   | { refusal: "destination-collision"; path: string; components: string[] }
   | {
       refusal: "media-ambiguous";
@@ -1157,6 +1166,11 @@ export function refusalPhrase(reason: RefusalReason): Phrase {
       };
     case "rom-unknown":
       return { key: "osinstall.refusal.romUnknown" };
+    case "resident-table-unreadable":
+      return {
+        key: "osinstall.refusal.residentTableUnreadable",
+        params: { component: reason.component, resident: reason.resident },
+      };
     case "destination-collision":
       return {
         key: "osinstall.refusal.destinationCollision",
