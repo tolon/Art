@@ -62,8 +62,11 @@ amiga-retro-toolkit/
 │   │   ├── lib.rs              #   Tauri builder, plugins, state, handlers
 │   │   ├── error.rs            #   AppError (serializes to frontend)
 │   │   ├── commands/           #   #[tauri::command] adapters
+│   │   ├── scratch.rs          #   the one staging root everything goes through (ART-196)
+│   │   ├── net/                #   the only place in ART that opens a connection
 │   │   ├── tools/               #   platform-specific: launches external programs
-│   │   │   └── hst_imager.rs   #     the VolumeFormatter that shells out (outside core/)
+│   │   │   ├── hst_imager.rs   #     the VolumeFormatter that shells out (outside core/)
+│   │   │   └── recycle_bin.rs  #     the HostRecycler: IFileOperation, also outside core/
 │   │   └── core/               #   AMIGA CORE (platform-independent)
 │   │       ├── error.rs        #     CoreError
 │   │       ├── detect.rs       #     format detection
@@ -77,7 +80,7 @@ amiga-retro-toolkit/
 │   │       │   ├── registry.rs #       registry + engine
 │   │       │   └── builtin.rs  #       the catalogue of offered actions
 │   │       ├── adf/            #     bootblock, blocks, fs, extract, create...
-│   │       ├── volume/        #     the only filesystem writer: mount, write/, journal
+│   │       ├── volume/        #     ART's own OFS/FFS writer: mount, write/, journal
 │   │       ├── archive/       #     the one extraction gate (LHA, ZIP, 7z)
 │   │       ├── iso/, cbm/     #     ISO9660 discs; Commodore 8-bit images, read-only
 │   │       ├── lha/            #     LHA reading, safe_extract, whdload detection
@@ -93,7 +96,8 @@ amiga-retro-toolkit/
 │   │       ├── gameindex/      #    the title catalogue (core/collection.rs retired onto it)
 │   │       ├── launch/, artwork/, sources/, whdload/
 │   │       ├── gotek.rs, pistorm/, winuae.rs, rom/, profile.rs
-│   │       ├── hostfs.rs, dirsize.rs, amigaver.rs, analysis.rs
+│   │       ├── hostfs.rs, dirsize.rs, amigaver.rs, analysis.rs, vhd/
+│   │       ├── amiganet/       #    seeding an Amiga's network before its first boot
 │   │       └── recovery.rs, conversion.rs, binary.rs   # stubs, see FEATURES.md
 │   ├── capabilities/           #   Tauri 2 permission model
 │   ├── migrations/             #   SQLite migrations
@@ -106,8 +110,8 @@ amiga-retro-toolkit/
 
 ## The core independence rule
 
-`src-tauri/src/core/` compiles with **only `std` + `serde` + `sha2` + `thiserror`
-+ `delharc` + `zip` + `sevenz-rust2` + `quick-xml` + `fatfs` + `libpfs3`** — the
+`src-tauri/src/core/` compiles with **only `std` + `serde` + `serde_json` + `sha2` + `log`
++ `thiserror` + `delharc` + `zip` + `sevenz-rust2` + `quick-xml` + `fatfs` + `libpfs3`** — the
 three decompressors are read-only and sit behind `core/archive`'s single security
 gate; `quick-xml` reads exactly one thing, `rp9-manifest.xml` inside an `.rp9`
 package, and reads it *through* that gate rather than from a path, so the
@@ -127,8 +131,13 @@ Concretely: if a `core/` module needs to do something platform-specific (open
 a file dialog, detect a USB drive, launch WinUAE), it exposes a **trait**, and
 the implementation lives outside the core.
 
+There are three: `MirrorClient` (`core/sources/mirror.rs` → `net/http_mirror.rs`, the
+network), `VolumeFormatter` (below) and `HostRecycler` (`core/hostfs.rs` →
+`tools/recycle_bin.rs`, which is how a file the user deletes goes to the Windows Recycle
+Bin rather than into a recovery mechanism ART invented — ART-080).
+
 `core/preload::VolumeFormatter` (`probe`, `import_filesystem`, `format_partition`, `copy_in`)
-is the newest instance: `src-tauri/src/tools/hst_imager.rs` launches `hst.imager.exe` and lives
+is the largest of them: `src-tauri/src/tools/hst_imager.rs` launches `hst.imager.exe` and lives
 outside `core/` for exactly this reason, while `core/preload/native.rs` — PFS3 through
 `libpfs3`, FFS through `core/volume/write` — launches nothing and lives inside it. Native is the
 product's default; `hst-imager` is a fallback the caller in `commands/` chooses per operation,

@@ -75,8 +75,27 @@ what is.
 
 ## Test corpus
 
-Tests use **synthetic, legally-clean fixtures** generated in `tempdir()`
-during the test run. ART never distributes copyrighted commercial content.
+Tests use **synthetic, legally-clean fixtures** generated in a scratch
+directory during the test run. ART never distributes copyrighted commercial
+content.
+
+Three rules about that scratch, each of them paid for once:
+
+- **Take a `core::ScratchDir`; it removes itself on `Drop`.** A trailing
+  `remove_dir_all` is skipped exactly when a test panics, which is when a red
+  suite leaks most — 169 291 directories and ~987 GB into `%TEMP%` in one
+  session, filling a 2 TB system drive ([ART-184](ISSUES.md#fixed)).
+- **The name must be unique within the process, not just per run.** Cargo runs
+  the whole suite in one process, so the pid is shared and `as_nanos()` alone
+  can repeat; use a process-wide counter, or the thread id where the test is
+  counting directories rather than making one
+  ([ART-059](ISSUES.md#fixed)/[ART-164](ISSUES.md#fixed)/[ART-173](ISSUES.md#fixed),
+  and [ART-182](ISSUES.md#fixed) for the thread-id case). The sweep is
+  `scripts/scratch-counter-sweep.py`.
+- **`TMP` is forced off the system drive** by `src-tauri/.cargo/config.toml`.
+  That is machine-local relief for the leak, not a fix for it, and it is why a
+  fresh checkout on another machine should set the same thing before a long
+  run.
 
 Fixture plan (built up per phase):
 - valid ADF (blank, formatted)

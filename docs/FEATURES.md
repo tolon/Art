@@ -467,4 +467,5 @@ When you finish a feature:
    (`core/workflow/builtin.rs`) — an action registered `available: false`
    should be flipped to `true` in the same change.
 3. Update the format table if the change alters what ART can claim to support.
-4. Add a line to the session log in [STATUS.md](STATUS.md).
+4. Add a row to the [session log](session-log.md) — it moved out of STATUS.md
+   on 2026-09-04.

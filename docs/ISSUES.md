@@ -26,321 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-226** 🟠 **Every tree ART builds has an empty `Devs/Keymaps`, so whatever
-language the user chose they can only type on an American keyboard — and for
-Turkish the keymap is not on the CD at all** — *found 2026-08-24 by the owner,
-typing into the Turkish 3.9 tree ART had just built and booted*
-`src-tauri/src/core/osinstall/recipes/amigaos-3.9.json` ·
-`…/amigaos-3.2.json`
-
-The fonts were fixed ([ART-225](#fixed)) and the Workbench menus render `ç ü ş
-Ğ` correctly. The owner then tried to **type** them and could not: *"klavye
-örtüsünde türkçe yok, sadece amerikan var"*.
-
-**Measured, on the disc and in the tree rather than reasoned about:**
-
-- `KEYMAPS:` is assigned to `DEVS:Keymaps`, and a keymap is loaded from there
-  (`SetKeyMapDefault`, AmigaOS Keymap Library documentation).
-- The tree's `Devs/Keymaps` is **empty** — and so is the disc's
-  `OS-Version3.9/Workbench3.5/Devs/Keymaps`, which carries only its own
-  `Keymaps.info`. ART copies an empty drawer faithfully; this is not a copying
-  defect. The disc's twenty keymaps sit in `Storage/Keymaps`, which is the
-  *shelf*: nothing on it is selectable until something puts a copy in
-  `Devs/Keymaps`. The real Installer is what asks the user and copies one.
-- So the only keymap any ART-built system has is the one in ROM, `usa`. That
-  is true for a German, French or Italian tree exactly as much as for a
-  Turkish one, and no screen in ART mentions it.
-
-**And Turkish is worse than "not copied": the disc does not carry it.** 36
-distinct keymap names across the whole ISO, and not one Turkish
-(`OS-Version3.9`'s `Special-Locale/türkçe` branch is fonts and nothing else —
-[ART-159](#fixed) measured that).
-
-**The owner's own reasoning found it, and it was right.** *"Bir araştır, Türk
-bayrağı varsa keymap vardır"* — the disc ships
-`Workbench3.9/Locale/Flags/Keymaps/türkçe`, a flag icon for a keymap it does
-not have. The flag set is broader than the disc's keymaps (`a`, `be`, `cdn2`,
-`oe`, `usa0`…`usa3` are flagged and absent too), so a flag proves the keymap
-exists *in the AmigaOS world*, not on this medium — and it does exist.
-
-**Where it is: `Locale3_9.lha`, the official AmigaOS 3.9 Locale update, which
-the owner already has.** Measured against their copy:
-
-| | |
-|---|---|
-| `Locale3.9/Locale/Devs/Keymaps/türkçe` | **1 008 bytes** (+ `.info`, 2 730) |
-| keymaps in the archive | **49**, against the CD's 20 |
-| `Locale/Countries/türkiye.country` | 538 bytes |
-| `Locale/Languages/türkçe.language` | 2 520 bytes |
-| `Locale/Flags/Countries/türkiye`, `Flags/Keymaps/türkçe` | 420 / 544 bytes |
-| `Locale/Providers/Türkiye` | 1 598 bytes |
-| `Locale/Fonts/türkçe` | **15 font families** — a strict superset of the CD's 13, adding `AmigaSans-iso9` and `helveticagr-ISO9`, missing none |
-
-So the archive is a better source for Turkish than the CD in every respect ART
-already covers, and it is the only source for the two things ART cannot
-otherwise offer: the keymap and the country file.
-
-**Not fixed, because two of the three questions are the owner's, not a defect
-round's:**
-
-1. **Should ART place a keymap at all?** Copying one from `Storage/Keymaps`
-   into `Devs/Keymaps` is a change to what the user types with — small, but a
-   system-wide default, and the kind of thing §92 says to offer rather than
-   assume. A tick-box per language, or one that follows the chosen locale.
-2. **Should `Locale3_9.lha` become a source?** It is an archive, not the
-   install medium, so it is a **package** in ART's own vocabulary
-   (`core/osinstall/package.rs`, `source_archive.rs`) rather than a recipe
-   component — the shape `locale-turkish` already uses for
-   `BoingBag39-2-turkce.lha`. Whether it is offered as one package or as a
-   Turkish slice of one is a catalogue decision.
-3. **Does the 3.2 side have the same hole?** Almost certainly, and partly
-   measured already: the owner's `Locale-TR.adf` carries
-   `Support/Fonts/topaz_iso-8859-9` and `SevenAlone_iso-8859-9` — Turkish
-   fonts the 3.2 recipe's `locale-tr` component does **not** place, which is
-   [ART-159](#fixed)'s defect again in the other recipe — and no keymap
-   either. Not confirmed against the shipped rules yet; recorded so the next
-   round starts from a measurement rather than a suspicion.
-
-**What must not happen**, stated because it is the tempting shortcut: ART does
-not author a keymap and does not ship one. `Locale3_9.lha` is the user's own
-file, exactly like every other package ART applies.
-
-**Question 1 answered by the owner, 2026-08-24: yes, and all of them.**
-*"klavye örtüsünü koyalım dağıtıma, biz bütün klavyeler olsun yaptığımız
-dağıtımda"* — every keymap the medium carries goes into `Devs/Keymaps`, not
-one chosen at build time. Measured for that build:
-
-- The shelf is on the **3.9 overlay**, not the 3.5 layer:
-  `OS-Version3.9/Workbench3.9/Storage/Keymaps` — **22 keymaps**, each with its
-  own `.info`, 44 entries: `1251Q_US_RUS`, `1251_GB1_RUS`, `1251_GB_RUS`, `br`,
-  `br2`, `br3-ABNT2`, `cat`, `cdn`, `ch1`, `ch2`, `d`, `dk`, `e`, `f`, `gb`,
-  `i`, `n`, `po`, `s`, `si`, `türkçe`, `usa2`. **`türkçe` is on that shelf** —
-  which narrows this entry's opening claim: the 3.9 CD does carry a Turkish
-  keymap after all, on the shelf where nothing selects it. `Locale3_9.lha`
-  remains the richer source (49 keymaps, and the country/language/flag files),
-  but it is no longer the *only* one.
-- **The icons belong too, and that is measured rather than assumed.** The CD
-  carries a real, bootable AmigaOS system in `Emergency-Boot`, and its
-  `Devs/Keymaps` holds thirteen keymaps **each beside its `.info`**. That is
-  what a working system looks like, so both go.
-
-**Built 2026-08-23/24 — a tick-box, on the owner's second thought.** Asked
-whether `required` or optional, they first said necessary and then refined it:
-*"dağıtımın içine konulabilir olsun, kutucuklu; bazı insanlar istemeyebilir ama
-az insan"*. So `keymaps` is `required: false`, declared after the two layers
-that touch `Devs`, one `Subtree` rule from the 3.9 overlay's shelf into
-`Devs/Keymaps`, and no `overrides` — the drawer it fills arrives empty and
-nothing of anyone's is replaced.
-
-**A `Subtree` rule and not a list of forty-four `File` rules, because
-[ART-225](#fixed) happened.** A `File` rule's `to` is whatever the author
-typed; a subtree rule carries the medium's own spelling for every child. This
-drawer's twenty-second entry is `türkçe`, and the run proves the choice:
-
-    keymaps: 44 entries, non-ASCII: ["türkçe", "türkçe.info"]
-
-That name was never typed into the recipe, into a test, or into this file's
-rule list — the disc carried it.
-
-**Measured against the owner's own disc**, all six components on
-(`apply::tests::build_the_real_39_language_components_when_asked`): **0
-refusals**, 2384 items, **1973 files** (44 more than before) / 194 directories
-/ 19 117 756 bytes in **16.28 s**. `keymaps` contributed 45 plan items — the 44
-entries plus the destination drawer a subtree rule always emits. No refusal
-means no collision either, which is what says declaring no override was right.
-
-**Mutations.** `required` flipped to `true` fails the recipe test on its own
-sentence; the destination changed to `Storage/Keymaps` likewise. A third was
-aimed at a `from` naming a path the disc lacks — and it **did not test what it
-was built to test**: `Workbench3.5/Storage/Keymaps` turns out to *exist* and be
-empty, so planning one item and no children is correct behaviour, not a silent
-failure. The concern behind it — that a mistyped subtree `from` might place
-nothing quietly — is **refuted** by reading `plan::expand_rules`, which calls
-`source.entry(&rule.from)` before every rule and pushes `MediaPathMissing` when
-it is `None`, subtree included; `a_path_the_recipe_expects_and_the_media_lacks_is_a_refusal_not_a_skip`
-already pins it. Recorded because a wrong elimination costs more than none.
-
-**Question 3 answered and built, 2026-08-24: the 3.2 recipe had the same hole,
-and worse.** Measured on ART's own `dist-3.2`: `Devs/Keymaps` holds twenty-two
-entries and **every one is a `.info`** — icons pointing at nothing, and the
-only usable keymap the one in ROM. The keymaps are on `Storage3.2`, the shelf,
-and **`tr` is among them**, so AmigaOS 3.2 ships a Turkish keymap that ART was
-not installing.
-
-**Solved the opposite way to the 3.9 side, and for the same reason rather than
-a different one.** The 3.2 component names its twenty-two keymaps as `File`
-rules; the 3.9 one takes its shelf whole with a `Subtree`. The 3.2 shelf
-carries a `.info` beside every keymap and `Devs/Keymaps` **already holds
-icons** — different, better ones (`Workbench3.2`'s `d.info` is 1 256 bytes,
-`Storage3.2`'s is 450), so a subtree rule would have replaced twenty-two good
-icons with shelf ones. On the 3.9 disc that drawer arrives empty, so there the
-shelf's icons are the only icons there are and `Emergency-Boot` shows a real
-system carrying keymap and icon both. Each recipe follows its own medium.
-Listing names is only safe here because the 3.2 shelf is ASCII; the 3.9 shelf
-holds `türkçe`, which is why that one may not be written this way
-([ART-225](#fixed)).
-
-**Measured against the owner's own 3.2 ADFs, both ROMs**, through
-`apply::tests::run_the_real_engine_against_the_users_own_media_when_asked`:
-
-| paired Kickstart | components on | files | dirs | bytes | media |
-|---|---|---|---|---|---|
-| V40 (`40.68` A1200) | 29 | 3 976 | 281 | 12 751 572 | 28 |
-| V47 (3.2's own `kicka1200.rom`) | 28 | 3 972 | 278 | 12 702 052 | 27 |
-
-0 refusals on both. On disk afterwards: **22 keymaps beside the 22 icons**,
-`tr` among them at 988 bytes, and `d.info` still 1 256 bytes — the system's own
-icon, not the shelf's. The keymaps are 34 940 bytes.
-
-**Two things fell out of that run that are worth more than the fix.**
-
-- **[ART-224](#fixed) is now measured on real material.** The byte total moved
-  by **exactly 15 934** before `keymaps` was even switched on, and that is the
-  GlowIcons ordering fix arriving in a tree: ten monitor icons at 1 452 bytes
-  against 476 is 9 760, and the six DOSDrivers icons account for the other
-  6 174. Until now that fix had only been measured by comparing two ADFs.
-- **`built_from` is not `components_on`.** The hook asserted one number
-  against both, which held only while every component had its own disk;
-  `keymaps` comes off `Storage3.2`, which `storage` already reads. One more
-  component, no more media. The two are separate pins now.
-
-**Question 2 answered and half built, 2026-08-24.** `Locale3_9.lha` is now a
-shipped package, `locale-39` — and **the split is the release's own, not
-ART's**. Its installer (`Locale3.9/Install-Locale`, `$VER: Install-Locale
-45.4`) asks with `askoptions` which of twenty languages the user wants, then
-does two different things:
-
-| | |
-|---|---|
-| **per language**, via its own `P_CopyDirByLang` | `Locale/Catalogs/<lang>`, `Locale/Help/<lang>`, `Fonts/<lang>`, `Libs/<lang>` |
-| **wholesale**, whatever was chosen | `Locale/Flags`, `Locale/Providers`, `Locale/Languages`, `Devs/Keymaps`, `L`, `Devs/Printers` |
-
-`locale-39` is the wholesale half, six subtree rules in that order — and the
-keymaps are in it, which is why the owner's original question is answered by
-it. Measured against their own archive and disc: 0 refusals, **239 plan items**
-from the package, 2 026 files written, and `Devs/Keymaps` afterwards holds
-**49 keymaps** where the CD shelf gives 22, with `türkçe` among them, carried
-by the medium's own spelling
-(`apply::tests::install_the_locale_update_when_asked`).
-
-Four overrides, each a real collision rather than a precaution, and the one
-that matters is proven: dropping `keymaps` from the list makes a real run
-refuse with `DestinationCollision { path: "Devs/Keymaps/türkçe", components:
-["keymaps", "locale-39"] }` and ninety-odd siblings. Three cheaper mutations —
-a destination retyped, `requires_components` emptied, a rule dropped — all
-fell too.
-
-> **The selecting half landed 2026-08-24, and it is what the owner's original
-> sentence was about.** Placing every keymap was never enough: *"klavye
-> örtüsünde türkçe yok"* is about which one the machine **boots with**.
->
-> **Measured on the trees ART has actually built, not recalled.** Both the 3.2
-> and the 3.9 tree carry `C/SetKeyboard`, and both their own
-> `S/Startup-Sequence` files end with `IF EXISTS S:User-Startup` /
-> `Execute S:User-Startup` — so a `SetKeyboard <name>` line in ART's own marked
-> block is read at every boot, and it runs **after** `IPrefs`, which makes it
-> the last word. The alternative, `ENVARC:Sys/input.prefs`, is a binary file
-> ART would be overwriting on the user's behalf; a line in a block ART already
-> owns is neither.
->
-> `InstallRequest::keymap`, `plan()` and a picker on the install step whose
-> options are **read off the plan's own items** — so a layout it offers cannot
-> then be refused for not being there, and `RefusalReason::KeymapMissing` is
-> reachable only by a stale remembered value, which is exactly when it should
-> fire. That refusal exists because the tree's own `S/SetKeyboard` ends with
-> `echo "ERROR: Can't load keymap"`: a line naming a keymap the install does
-> not place prints that at every boot and looks like ART did the thing.
->
-> **No default.** Nothing chosen leaves the system on the ROM's `usa`, exactly
-> as before — choosing somebody's keyboard for them is not ART's to do.
->
-> *Tests:* 5 in `plan.rs`, 7 over `keymapsIn`, 5 on the screen. Fifteen
-> mutations, fifteen fell. **Two real defects came out of writing the tests
-> rather than out of review**: the plan did not re-run when the keyboard
-> changed, so the picker would have done nothing; and the section **vanished
-> during every re-plan**, unmounting the control the user had just touched.
-> Both fixed here.
-
-**Two threads stay open, and neither is a decision any more:**
-
-1. **The per-language half of `locale-39`.** ART's package model wraps one
-   component with fixed rules, so "the Turkish slice" means either a package
-   per language or a package that takes one as a parameter. Shipping twenty
-   languages' catalogs and fonts because somebody wanted one would be ART
-   answering a question the release asks.
-2. **The 3.2 recipe's Turkish content.** `locale-tr` places only `Languages`
-   and `Help`; `Locale-TR.adf` also carries `Catalogs/türkçe` (20 catalogs
-   against the base disk's one, `installer.catalog`) and
-   `Support/Fonts/topaz_iso-8859-9`. [ART-228](#fixed) removed the reason to
-   wait — those files are `compress`-format and ART can now expand them —
-   but where a `Support/Fonts` drawer belongs on the volume is a question the
-   3.2 Installer answers and nobody has read that part of its script yet.
-
-**Fixed 2026-08-24, and verified on the owner's own material.**
-`core/amigainstall/finish.rs` — a typed vocabulary of two operations,
-`protect` and `replace-keeping-backup`, declared per package in
-`amiga_installer.post_install` and applied by `commands::amigainstall::perform`
-**on the host**, against the staged copy, between a `Succeeded` run and
-[`stage::settle`].
-
-**Host, not Amiga, and that is the design decision worth keeping.** HstWB does
-these as AmigaDOS lines because it has no host side while the install runs.
-ART has one, and moving the work there dissolved all three problems at once:
-no quoting (`Devs/AmigaOS ROM Update` has spaces, and `workvol` refuses `"`
-and whitespace on purpose — that refusal is right for an installer's own
-argument list and would have had to be weakened), no fifth `RunOutcome` (a
-failure is an ordinary `CoreError` raised *before* `settle`, so the copy is
-not promoted and the user's tree is untouched — §92's existing answer), and no
-emulator in the tests (all fifteen run in a tempdir).
-
-**The run, end to end, on a fresh copy of a pre-BoingBag tree:**
-
-| | |
-|---|---|
-| BoingBag 1 | `Succeeded`/`Promoted`, **169.1 s**, 3 863 files / 20 136 129 bytes |
-| BoingBag 2 | `Succeeded`/`Promoted`, **138.0 s**, 3 873 files / 20 855 334 bytes |
-
-BoingBag 1 reported all ten steps, one line each — `----rwed -> --p-rwed` for
-the seven commands, `----rwed -> -s--rwed` for the three scripts. The file
-count moved 3 859 → 3 863 and the bytes 20 135 997 → 20 136 129 against the
-un-fixed run earlier the same day, and that arithmetic closes exactly: four of
-the ten had no sidecar at all, so four were created, 4 × 33 = **132 bytes**.
-
-BoingBag 2 reported one line — *"'Devs/AmigaOS ROM Update.BB39-2' is now
-'Devs/AmigaOS ROM Update'; the previous one is at 'AmigaOS ROM Update.old'"* —
-and `Devs/` afterwards is what it should be:
-
-    AmigaOS ROM Update        321 768   sha256 14a12599...
-    AmigaOS ROM Update.BB39-2 321 768   sha256 14a12599...   (the same file)
-    AmigaOS ROM Update.old    127 956   sha256 308ff5ea...   (with its sidecar)
-
-So `SetPatch` now loads BoingBag 2's ROM update, and the one it replaced is
-kept rather than lost.
-
-**Mutations: seven against `finish.rs`, all seven fell** — dropping the
-missing-file refusal, dropping the letter check, overwriting the oldest backup
-instead of refusing, leaving a stale sidecar behind, not carrying the sidecar
-across, replacing without backing up, and joining the path instead of gating
-it through `safe_join`.
-
-**What is deliberately still not done**, because nothing has measured a need
-for it against ART's own result: HstWB's WarpUp library copies, its locale
-catalogs, the HDToolBox icon position, the second `Updater` run for
-`XAD-Update`, and copying `C/Installer` into `SYS:C` and `SYS:Utilities`. Each
-becomes a variant in `finish.rs` on the day a measurement asks for one;
-building an operation for an unmeasured step is how a vocabulary grows past
-what anyone can check. `NSDPatch.cfg` is left alone on purpose — it is
-user-editable configuration and a reference copy beside it is the right shape,
-which is the same conclusion HstWB reaches by touching neither.
-
-**Corrected 2026-08-24: this entry was in the Fixed section for part of a day
-and should not have been.** Closing [ART-227](#fixed) cut a span that ran from
-its own heading to the next one it named, and this entry sat inside it, so it
-travelled along. Question 1 is built and question 3 is built; **question 2 is
-not**, which is what keeps it here. Recorded rather than quietly moved back,
-because an entry that appears fixed is exactly as misleading as a fixed one
-that appears open.
-
 **ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
 neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
 8's real run, on `content-layer`*
@@ -604,7 +289,7 @@ than a dead end.
 Revisit only if someone actually meets the case and `hst-imager` cannot serve
 it — not before.
 
-**ART-062** 🔵 **One Turkish sentence has been read on screen; the other 1899 keys have not**
+**ART-062** 🔵 **A handful of Turkish strings have been read on screen; the other ~1900 keys have not** (1916 leaf keys as of 2026-09-04 — count them, the figures written into this entry have been overtaken twice)
 `src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
 was verified by `pnpm test`'s key-parity check and by reading the JSON — never
 by opening the running application and looking at a screen. Several Turkish
@@ -641,7 +326,27 @@ worked.
 That is one sentence, not the catalogue — but it is the first time any
 Turkish string in ART has been read on screen by someone who speaks it, and
 it was one of the hardest kind: a refusal that has to leave the reader knowing
-what to do next. The other 1774 remain unseen.
+what to do next. Essentially all of the rest remain unseen. (Since then the
+owner has also read the Workbench menus of a Turkish tree ART built, which is
+a different claim — that is AmigaOS rendering ART's *output*, not ART's own
+interface.)
+
+**ART-235** 🔵 **The test-scratch sweep reports a site that is not a defect**
+*found 2026-09-04 by re-running the sweeps during a documentation pass*
+`scripts/scratch-counter-sweep.py`
+
+`scratch-counter-sweep.py` reports **1** site "needing a counter":
+`commands/osinstall.rs::staging_is_removed_however_the_preview_ends`. That
+helper keys its prefix on the **thread id** as well as the process id — which
+is [ART-182](#fixed)'s own fix and is unique within the process, exactly what
+the sweep exists to require — but the sweep recognises only an atomic counter,
+so it reports the right shape as a wrong one.
+
+Nothing is broken; what is damaged is the guard. STATUS.md's Tests row said
+this sweep "reports zero", and a zero that is really a one-with-an-excuse
+trains a reader to skim past the next real finding. Either teach the sweep the
+thread-id shape or convert that one helper to the counter — the first is
+better, because the thread-id keying is the *stronger* of the two here.
 
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
@@ -661,6 +366,281 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-226** 🟠 ✅ **Every tree ART builds has an empty `Devs/Keymaps`, so whatever
+language the user chose they can only type on an American keyboard — and for
+Turkish the keymap is not on the CD at all** — *found 2026-08-24 by the owner,
+typing into the Turkish 3.9 tree ART had just built and booted*
+`src-tauri/src/core/osinstall/recipes/amigaos-3.9.json` ·
+`…/amigaos-3.2.json`
+
+The fonts were fixed ([ART-225](#fixed)) and the Workbench menus render `ç ü ş
+Ğ` correctly. The owner then tried to **type** them and could not: *"klavye
+örtüsünde türkçe yok, sadece amerikan var"*.
+
+**Measured, on the disc and in the tree rather than reasoned about:**
+
+- `KEYMAPS:` is assigned to `DEVS:Keymaps`, and a keymap is loaded from there
+  (`SetKeyMapDefault`, AmigaOS Keymap Library documentation).
+- The tree's `Devs/Keymaps` is **empty** — and so is the disc's
+  `OS-Version3.9/Workbench3.5/Devs/Keymaps`, which carries only its own
+  `Keymaps.info`. ART copies an empty drawer faithfully; this is not a copying
+  defect. The disc's twenty keymaps sit in `Storage/Keymaps`, which is the
+  *shelf*: nothing on it is selectable until something puts a copy in
+  `Devs/Keymaps`. The real Installer is what asks the user and copies one.
+- So the only keymap any ART-built system has is the one in ROM, `usa`. That
+  is true for a German, French or Italian tree exactly as much as for a
+  Turkish one, and no screen in ART mentions it.
+
+**And Turkish is worse than "not copied": the disc does not carry it.** 36
+distinct keymap names across the whole ISO, and not one Turkish
+(`OS-Version3.9`'s `Special-Locale/türkçe` branch is fonts and nothing else —
+[ART-159](#fixed) measured that).
+
+**The owner's own reasoning found it, and it was right.** *"Bir araştır, Türk
+bayrağı varsa keymap vardır"* — the disc ships
+`Workbench3.9/Locale/Flags/Keymaps/türkçe`, a flag icon for a keymap it does
+not have. The flag set is broader than the disc's keymaps (`a`, `be`, `cdn2`,
+`oe`, `usa0`…`usa3` are flagged and absent too), so a flag proves the keymap
+exists *in the AmigaOS world*, not on this medium — and it does exist.
+
+**Where it is: `Locale3_9.lha`, the official AmigaOS 3.9 Locale update, which
+the owner already has.** Measured against their copy:
+
+| | |
+|---|---|
+| `Locale3.9/Locale/Devs/Keymaps/türkçe` | **1 008 bytes** (+ `.info`, 2 730) |
+| keymaps in the archive | **49**, against the CD's 20 |
+| `Locale/Countries/türkiye.country` | 538 bytes |
+| `Locale/Languages/türkçe.language` | 2 520 bytes |
+| `Locale/Flags/Countries/türkiye`, `Flags/Keymaps/türkçe` | 420 / 544 bytes |
+| `Locale/Providers/Türkiye` | 1 598 bytes |
+| `Locale/Fonts/türkçe` | **15 font families** — a strict superset of the CD's 13, adding `AmigaSans-iso9` and `helveticagr-ISO9`, missing none |
+
+So the archive is a better source for Turkish than the CD in every respect ART
+already covers, and it is the only source for the two things ART cannot
+otherwise offer: the keymap and the country file.
+
+**Not fixed, because two of the three questions are the owner's, not a defect
+round's:**
+
+1. **Should ART place a keymap at all?** Copying one from `Storage/Keymaps`
+   into `Devs/Keymaps` is a change to what the user types with — small, but a
+   system-wide default, and the kind of thing §92 says to offer rather than
+   assume. A tick-box per language, or one that follows the chosen locale.
+2. **Should `Locale3_9.lha` become a source?** It is an archive, not the
+   install medium, so it is a **package** in ART's own vocabulary
+   (`core/osinstall/package.rs`, `source_archive.rs`) rather than a recipe
+   component — the shape `locale-turkish` already uses for
+   `BoingBag39-2-turkce.lha`. Whether it is offered as one package or as a
+   Turkish slice of one is a catalogue decision.
+3. **Does the 3.2 side have the same hole?** Almost certainly, and partly
+   measured already: the owner's `Locale-TR.adf` carries
+   `Support/Fonts/topaz_iso-8859-9` and `SevenAlone_iso-8859-9` — Turkish
+   fonts the 3.2 recipe's `locale-tr` component does **not** place, which is
+   [ART-159](#fixed)'s defect again in the other recipe — and no keymap
+   either. Not confirmed against the shipped rules yet; recorded so the next
+   round starts from a measurement rather than a suspicion.
+
+**What must not happen**, stated because it is the tempting shortcut: ART does
+not author a keymap and does not ship one. `Locale3_9.lha` is the user's own
+file, exactly like every other package ART applies.
+
+**Question 1 answered by the owner, 2026-08-24: yes, and all of them.**
+*"klavye örtüsünü koyalım dağıtıma, biz bütün klavyeler olsun yaptığımız
+dağıtımda"* — every keymap the medium carries goes into `Devs/Keymaps`, not
+one chosen at build time. Measured for that build:
+
+- The shelf is on the **3.9 overlay**, not the 3.5 layer:
+  `OS-Version3.9/Workbench3.9/Storage/Keymaps` — **22 keymaps**, each with its
+  own `.info`, 44 entries: `1251Q_US_RUS`, `1251_GB1_RUS`, `1251_GB_RUS`, `br`,
+  `br2`, `br3-ABNT2`, `cat`, `cdn`, `ch1`, `ch2`, `d`, `dk`, `e`, `f`, `gb`,
+  `i`, `n`, `po`, `s`, `si`, `türkçe`, `usa2`. **`türkçe` is on that shelf** —
+  which narrows this entry's opening claim: the 3.9 CD does carry a Turkish
+  keymap after all, on the shelf where nothing selects it. `Locale3_9.lha`
+  remains the richer source (49 keymaps, and the country/language/flag files),
+  but it is no longer the *only* one.
+- **The icons belong too, and that is measured rather than assumed.** The CD
+  carries a real, bootable AmigaOS system in `Emergency-Boot`, and its
+  `Devs/Keymaps` holds thirteen keymaps **each beside its `.info`**. That is
+  what a working system looks like, so both go.
+
+**Built 2026-08-23/24 — a tick-box, on the owner's second thought.** Asked
+whether `required` or optional, they first said necessary and then refined it:
+*"dağıtımın içine konulabilir olsun, kutucuklu; bazı insanlar istemeyebilir ama
+az insan"*. So `keymaps` is `required: false`, declared after the two layers
+that touch `Devs`, one `Subtree` rule from the 3.9 overlay's shelf into
+`Devs/Keymaps`, and no `overrides` — the drawer it fills arrives empty and
+nothing of anyone's is replaced.
+
+**A `Subtree` rule and not a list of forty-four `File` rules, because
+[ART-225](#fixed) happened.** A `File` rule's `to` is whatever the author
+typed; a subtree rule carries the medium's own spelling for every child. This
+drawer's twenty-second entry is `türkçe`, and the run proves the choice:
+
+    keymaps: 44 entries, non-ASCII: ["türkçe", "türkçe.info"]
+
+That name was never typed into the recipe, into a test, or into this file's
+rule list — the disc carried it.
+
+**Measured against the owner's own disc**, all six components on
+(`apply::tests::build_the_real_39_language_components_when_asked`): **0
+refusals**, 2384 items, **1973 files** (44 more than before) / 194 directories
+/ 19 117 756 bytes in **16.28 s**. `keymaps` contributed 45 plan items — the 44
+entries plus the destination drawer a subtree rule always emits. No refusal
+means no collision either, which is what says declaring no override was right.
+
+**Mutations.** `required` flipped to `true` fails the recipe test on its own
+sentence; the destination changed to `Storage/Keymaps` likewise. A third was
+aimed at a `from` naming a path the disc lacks — and it **did not test what it
+was built to test**: `Workbench3.5/Storage/Keymaps` turns out to *exist* and be
+empty, so planning one item and no children is correct behaviour, not a silent
+failure. The concern behind it — that a mistyped subtree `from` might place
+nothing quietly — is **refuted** by reading `plan::expand_rules`, which calls
+`source.entry(&rule.from)` before every rule and pushes `MediaPathMissing` when
+it is `None`, subtree included; `a_path_the_recipe_expects_and_the_media_lacks_is_a_refusal_not_a_skip`
+already pins it. Recorded because a wrong elimination costs more than none.
+
+**Question 3 answered and built, 2026-08-24: the 3.2 recipe had the same hole,
+and worse.** Measured on ART's own `dist-3.2`: `Devs/Keymaps` holds twenty-two
+entries and **every one is a `.info`** — icons pointing at nothing, and the
+only usable keymap the one in ROM. The keymaps are on `Storage3.2`, the shelf,
+and **`tr` is among them**, so AmigaOS 3.2 ships a Turkish keymap that ART was
+not installing.
+
+**Solved the opposite way to the 3.9 side, and for the same reason rather than
+a different one.** The 3.2 component names its twenty-two keymaps as `File`
+rules; the 3.9 one takes its shelf whole with a `Subtree`. The 3.2 shelf
+carries a `.info` beside every keymap and `Devs/Keymaps` **already holds
+icons** — different, better ones (`Workbench3.2`'s `d.info` is 1 256 bytes,
+`Storage3.2`'s is 450), so a subtree rule would have replaced twenty-two good
+icons with shelf ones. On the 3.9 disc that drawer arrives empty, so there the
+shelf's icons are the only icons there are and `Emergency-Boot` shows a real
+system carrying keymap and icon both. Each recipe follows its own medium.
+Listing names is only safe here because the 3.2 shelf is ASCII; the 3.9 shelf
+holds `türkçe`, which is why that one may not be written this way
+([ART-225](#fixed)).
+
+**Measured against the owner's own 3.2 ADFs, both ROMs**, through
+`apply::tests::run_the_real_engine_against_the_users_own_media_when_asked`:
+
+| paired Kickstart | components on | files | dirs | bytes | media |
+|---|---|---|---|---|---|
+| V40 (`40.68` A1200) | 29 | 3 976 | 281 | 12 751 572 | 28 |
+| V47 (3.2's own `kicka1200.rom`) | 28 | 3 972 | 278 | 12 702 052 | 27 |
+
+0 refusals on both. On disk afterwards: **22 keymaps beside the 22 icons**,
+`tr` among them at 988 bytes, and `d.info` still 1 256 bytes — the system's own
+icon, not the shelf's. The keymaps are 34 940 bytes.
+
+**Two things fell out of that run that are worth more than the fix.**
+
+- **[ART-224](#fixed) is now measured on real material.** The byte total moved
+  by **exactly 15 934** before `keymaps` was even switched on, and that is the
+  GlowIcons ordering fix arriving in a tree: ten monitor icons at 1 452 bytes
+  against 476 is 9 760, and the six DOSDrivers icons account for the other
+  6 174. Until now that fix had only been measured by comparing two ADFs.
+- **`built_from` is not `components_on`.** The hook asserted one number
+  against both, which held only while every component had its own disk;
+  `keymaps` comes off `Storage3.2`, which `storage` already reads. One more
+  component, no more media. The two are separate pins now.
+
+**Question 2 answered and half built, 2026-08-24.** `Locale3_9.lha` is now a
+shipped package, `locale-39` — and **the split is the release's own, not
+ART's**. Its installer (`Locale3.9/Install-Locale`, `$VER: Install-Locale
+45.4`) asks with `askoptions` which of twenty languages the user wants, then
+does two different things:
+
+| | |
+|---|---|
+| **per language**, via its own `P_CopyDirByLang` | `Locale/Catalogs/<lang>`, `Locale/Help/<lang>`, `Fonts/<lang>`, `Libs/<lang>` |
+| **wholesale**, whatever was chosen | `Locale/Flags`, `Locale/Providers`, `Locale/Languages`, `Devs/Keymaps`, `L`, `Devs/Printers` |
+
+`locale-39` is the wholesale half, six subtree rules in that order — and the
+keymaps are in it, which is why the owner's original question is answered by
+it. Measured against their own archive and disc: 0 refusals, **239 plan items**
+from the package, 2 026 files written, and `Devs/Keymaps` afterwards holds
+**49 keymaps** where the CD shelf gives 22, with `türkçe` among them, carried
+by the medium's own spelling
+(`apply::tests::install_the_locale_update_when_asked`).
+
+Four overrides, each a real collision rather than a precaution, and the one
+that matters is proven: dropping `keymaps` from the list makes a real run
+refuse with `DestinationCollision { path: "Devs/Keymaps/türkçe", components:
+["keymaps", "locale-39"] }` and ninety-odd siblings. Three cheaper mutations —
+a destination retyped, `requires_components` emptied, a rule dropped — all
+fell too.
+
+> **The selecting half landed 2026-08-24, and it is what the owner's original
+> sentence was about.** Placing every keymap was never enough: *"klavye
+> örtüsünde türkçe yok"* is about which one the machine **boots with**.
+>
+> **Measured on the trees ART has actually built, not recalled.** Both the 3.2
+> and the 3.9 tree carry `C/SetKeyboard`, and both their own
+> `S/Startup-Sequence` files end with `IF EXISTS S:User-Startup` /
+> `Execute S:User-Startup` — so a `SetKeyboard <name>` line in ART's own marked
+> block is read at every boot, and it runs **after** `IPrefs`, which makes it
+> the last word. The alternative, `ENVARC:Sys/input.prefs`, is a binary file
+> ART would be overwriting on the user's behalf; a line in a block ART already
+> owns is neither.
+>
+> `InstallRequest::keymap`, `plan()` and a picker on the install step whose
+> options are **read off the plan's own items** — so a layout it offers cannot
+> then be refused for not being there, and `RefusalReason::KeymapMissing` is
+> reachable only by a stale remembered value, which is exactly when it should
+> fire. That refusal exists because the tree's own `S/SetKeyboard` ends with
+> `echo "ERROR: Can't load keymap"`: a line naming a keymap the install does
+> not place prints that at every boot and looks like ART did the thing.
+>
+> **No default.** Nothing chosen leaves the system on the ROM's `usa`, exactly
+> as before — choosing somebody's keyboard for them is not ART's to do.
+>
+> *Tests:* 5 in `plan.rs`, 7 over `keymapsIn`, 5 on the screen. Fifteen
+> mutations, fifteen fell. **Two real defects came out of writing the tests
+> rather than out of review**: the plan did not re-run when the keyboard
+> changed, so the picker would have done nothing; and the section **vanished
+> during every re-plan**, unmounting the control the user had just touched.
+> Both fixed here.
+
+**Both remaining threads closed after this was written, and the two paragraphs below are kept as filed with the correction beside each:**
+
+1. **The per-language half of `locale-39`.** ART's package model wraps one
+   component with fixed rules, so "the Turkish slice" means either a package
+   per language or a package that takes one as a parameter. Shipping twenty
+   languages' catalogs and fonts because somebody wanted one would be ART
+   answering a question the release asks.
+2. **The 3.2 recipe's Turkish content.** `locale-tr` placed only `Languages`
+   and `Help` when this was written; `Locale-TR.adf` also carries `Catalogs/türkçe` (20 catalogs
+   against the base disk's one, `installer.catalog`) and
+   `Support/Fonts/topaz_iso-8859-9`. [ART-228](#fixed) removed the reason to
+   wait — those files are `compress`-format and ART can now expand them —
+   but where a `Support/Fonts` drawer belongs on the volume is a question the
+   3.2 Installer answers and nobody has read that part of its script yet.
+
+**Corrected 2026-08-24: this entry was in the Fixed section for part of a day
+and should not have been.** Closing [ART-227](#fixed) cut a span that ran from
+its own heading to the next one it named, and this entry sat inside it, so it
+travelled along. Question 1 is built and question 3 is built; **question 2 is
+not**, which is what keeps it here. Recorded rather than quietly moved back,
+because an entry that appears fixed is exactly as misleading as a fixed one
+that appears open.
+
+**Closed 2026-09-04, by checking the entry against the tree rather than
+against itself.** All three questions are answered and two of the sentences
+above had gone stale:
+
+| Question | Where it was answered |
+|---|---|
+| 1 — place a keymap at all | the tick-box `keymaps` component, 2026-08-24, with `SetKeyboard` in ART's own block in `S:User-Startup` |
+| 2 — `Locale3_9.lha` as a package | `locale-39` wholesale (2026-08-24), then its per-language half `locale-turkish` (2026-08-25) — the "one package or a slice" question answered itself: per language is what the 3.2 recipe's fifteen `locale-*` components already are |
+| 3 — the same hole on the 3.2 side | [ART-234](#fixed), 2026-08-24: `locale-tr` in the shipped `amigaos-3.2.json` now carries `Support/Fonts` → `Fonts` and `Support/Prefs` → `Prefs`, the destination read out of `Install3.2.adf`'s own Installer script rather than chosen |
+
+*Verified by reading `core/osinstall/recipes/amigaos-3.2.json` itself — the
+four rules are there for `locale-tr` and for `locale-gr`, `locale-pl` and
+`locale-ru` alike — not by trusting the rows above. What is **not** claimed:
+nobody has booted a 3.2 tree and typed Turkish into it since ART-234 landed;
+the 3.9 tree is the one the owner read `ç ü ş Ğ` in.*
+
 
 **ART-231** 🔴 ✅ **The WiFi credentials were written to a drawer no Amiga
 opens** — *found and fixed 2026-08-24, hours after shipping it*
@@ -1339,6 +1319,65 @@ before the result marker. Two things that must not be got wrong:
   and here it provably cannot. `one_token` must **not** be applied to these
   fields — that is the one existing check the new path deliberately does not
   reuse, and the reason belongs in the code beside it.
+
+*The account below was found in [ART-226](#open) on 2026-09-04 and moved here, which is the other half of the mis-cut span ART-226's own last paragraph describes: that entry travelled into Fixed and was moved back, and this text travelled with it and stayed. So ART-227 sat closed with no account of how, under an open entry's heading.*
+
+**Fixed 2026-08-24, and verified on the owner's own material.**
+`core/amigainstall/finish.rs` — a typed vocabulary of two operations,
+`protect` and `replace-keeping-backup`, declared per package in
+`amiga_installer.post_install` and applied by `commands::amigainstall::perform`
+**on the host**, against the staged copy, between a `Succeeded` run and
+[`stage::settle`].
+
+**Host, not Amiga, and that is the design decision worth keeping.** HstWB does
+these as AmigaDOS lines because it has no host side while the install runs.
+ART has one, and moving the work there dissolved all three problems at once:
+no quoting (`Devs/AmigaOS ROM Update` has spaces, and `workvol` refuses `"`
+and whitespace on purpose — that refusal is right for an installer's own
+argument list and would have had to be weakened), no fifth `RunOutcome` (a
+failure is an ordinary `CoreError` raised *before* `settle`, so the copy is
+not promoted and the user's tree is untouched — §92's existing answer), and no
+emulator in the tests (all fifteen run in a tempdir).
+
+**The run, end to end, on a fresh copy of a pre-BoingBag tree:**
+
+| | |
+|---|---|
+| BoingBag 1 | `Succeeded`/`Promoted`, **169.1 s**, 3 863 files / 20 136 129 bytes |
+| BoingBag 2 | `Succeeded`/`Promoted`, **138.0 s**, 3 873 files / 20 855 334 bytes |
+
+BoingBag 1 reported all ten steps, one line each — `----rwed -> --p-rwed` for
+the seven commands, `----rwed -> -s--rwed` for the three scripts. The file
+count moved 3 859 → 3 863 and the bytes 20 135 997 → 20 136 129 against the
+un-fixed run earlier the same day, and that arithmetic closes exactly: four of
+the ten had no sidecar at all, so four were created, 4 × 33 = **132 bytes**.
+
+BoingBag 2 reported one line — *"'Devs/AmigaOS ROM Update.BB39-2' is now
+'Devs/AmigaOS ROM Update'; the previous one is at 'AmigaOS ROM Update.old'"* —
+and `Devs/` afterwards is what it should be:
+
+    AmigaOS ROM Update        321 768   sha256 14a12599...
+    AmigaOS ROM Update.BB39-2 321 768   sha256 14a12599...   (the same file)
+    AmigaOS ROM Update.old    127 956   sha256 308ff5ea...   (with its sidecar)
+
+So `SetPatch` now loads BoingBag 2's ROM update, and the one it replaced is
+kept rather than lost.
+
+**Mutations: seven against `finish.rs`, all seven fell** — dropping the
+missing-file refusal, dropping the letter check, overwriting the oldest backup
+instead of refusing, leaving a stale sidecar behind, not carrying the sidecar
+across, replacing without backing up, and joining the path instead of gating
+it through `safe_join`.
+
+**What is deliberately still not done**, because nothing has measured a need
+for it against ART's own result: HstWB's WarpUp library copies, its locale
+catalogs, the HDToolBox icon position, the second `Updater` run for
+`XAD-Update`, and copying `C/Installer` into `SYS:C` and `SYS:Utilities`. Each
+becomes a variant in `finish.rs` on the day a measurement asks for one;
+building an operation for an unmeasured step is how a vocabulary grows past
+what anyone can check. `NSDPatch.cfg` is left alone on purpose — it is
+user-editable configuration and a reference copy beside it is the right shape,
+which is the same conclusion HstWB reaches by touching neither.
 
 **ART-225** 🟠 ✅ **Thirteen font descriptors were placed as `X.FONT` and the
 running Amiga could see none of them — `diskfont.library` matches the `.font`
@@ -3805,7 +3844,7 @@ hazard from the other side. Comparing structurally at each call site puts the
 same reasoning in a dozen places. Neither is obviously right, and picking one
 inside a debt round would have hidden the measurement that found it.
 
-## How it was closed, and why the objection above turned out not to bite
+### How it was closed, and why the objection above turned out not to bite
 
 **Inside `useRemembered`**, and inside `useRememberedShape` too — which was
 worse and went unmentioned when this was filed, because `recallInto` builds a
@@ -3847,7 +3886,7 @@ release build; fixed the same day*
 `src/lib/useRemembered.ts` · `src/lib/remembered.ts::sameRemembered` ·
 `src-tauri/src/commands/jobs.rs::spawn_job_in_lane` · `src/components/JobBar.tsx`
 
-## What was filed, and what it actually was
+### What was filed, and what it actually was
 
 Filed as "four preview jobs run at once, and changing the selection cancels
 nothing". That was the visible half and it was true, but it was not the cause.
@@ -3865,7 +3904,7 @@ between whole staged files, and the runner turns `CoreError::Cancelled` into a
 settling the cancelled preview's promise set state — and any state change fed
 the loop below another turn.
 
-## The cause: an identity that changed on every render
+### The cause: an identity that changed on every render
 
 `recall` returns the caller's `fallback` when nothing is stored, and every call
 site spells its fallback inline: `useRemembered(key, isTextList, [])`. A fresh
@@ -3908,7 +3947,7 @@ stored and nothing loops. On 3.9 the keys are `osinstall.chosen.AmigaOS 3.9`
 and `osinstall.excludedConditional.AmigaOS 3.9`, which nothing had ever
 written. The owner was installing 3.9.
 
-## The fixes, both of them
+### The fixes, both of them
 
 1. **`useRemembered` and `useRememberedShape` hand back the value they handed
    back last time when it is structurally the same value** (`sameRemembered`).
@@ -3926,7 +3965,7 @@ written. The owner was installing 3.9.
    superseded job reported as `Cancelled` would have replaced four stacked
    running rows with four stacked cancelled ones.
 
-## Measured
+### Measured
 
 `plan()` over the owner's `AmigaOS39.iso`, release build
 (`scan_cache::tests::measure_a_real_disc_cold_concurrent_and_warm`):
@@ -4040,7 +4079,7 @@ durably and re-plans; the **Reuse the last scan of unchanged discs** tickbox
 beside it is remembered through `useRemembered` with an `isFlag` guard, and
 switching it off skips storing as well as looking up.
 
-## Measured
+### Measured
 
 `plan()` over the owner's `AmigaOS39.iso` (468 MB, 8 584 entries, 1 517 plan
 items), release build:
@@ -4093,7 +4132,7 @@ was built the same day*
 `src-tauri/src/core/launch/mod.rs::machine_for_request` ·
 `src-tauri/src/commands/launch.rs::profile_for_request`
 
-## What was filed, and why it was not built
+### What was filed, and why it was not built
 
 The original entry proposed reading `ws_ExpMem` out of each slave — WHDLoad's
 autodoc (<https://www.whdload.de/docs/autodoc.html>, Overview) describes it as
@@ -4104,7 +4143,7 @@ request rather than a title's whole requirement, reading it would cost a
 catalogue schema bump and a rescan of every user's collection, and it answers
 a smaller question than the one that was actually wrong.
 
-## What was actually wrong
+### What was actually wrong
 
 The memory was the symptom; the **machine** was the defect. A WHDLoad launch
 took its machine from `machine_for(catalogue chipset, user default)`, so an
@@ -4115,7 +4154,7 @@ it. Sizing that machine from the original game's chipset means as many launch
 configurations as there are catalogue entries, each of which has to be right
 on its own.
 
-## The fix
+### The fix
 
 One named profile, `AmigaProfile::whdload_a1200`: **68EC020, AGA, 2 MB Chip,
 8 MB Fast, Kickstart 3.x** — the owner's decision, and the machine WHDLoad's
@@ -4146,7 +4185,7 @@ still enforced separately, on the ROM, by `WHDLOAD_MIN_KICKSTART_MAJOR` — an
 A1200 profile does not silently accept a Kickstart 1.3 dump, and a user with
 no 3.x ROM gets `NoRomMeetsWhdloadMinimum { machine: A1200 }`.
 
-## What is *not* claimed
+### What is *not* claimed
 
 **The decision was taken on an argument, and the argument is recorded because
 that is what it was.** Whether routing an OCS-only title through this AGA/68020
@@ -4236,7 +4275,7 @@ assignment, the Settings value dropped, the machine guard dropped, the
 Kickstart floor set to 0, and the profile's Fast RAM / Chip RAM / CPU /
 chipset each changed); every one was caught.
 
-## The review round, and two things it changed
+### The review round, and two things it changed
 
 The whole-branch review checked both remaining concerns in the code rather
 than taking them from the report, and both were real.
@@ -4302,7 +4341,7 @@ Task 10's bisection the same day*
 `src-tauri/src/core/amigainstall/workvol.rs::startup_sequence` ·
 `src-tauri/src/core/winuae.rs::real_version_hook::probe_script`
 
-## What was wrong
+### What was wrong
 
 The tree's own `S/Startup-Sequence` runs `C:AddDataTypes REFRESH QUIET`, which
 registers the descriptors in `DEVS:DataTypes` with `datatypes.library`.
@@ -4315,7 +4354,7 @@ byte, wrote none of the 3 795 files and never returned. `Status`, run on the
 machine while it hung, showed the process alive. Four runs across two rounds
 ended by terminating the emulator, at 180 s, 400 s, 414 s and 1 200 s.
 
-## How it was found, and what it cost to look in the wrong places first
+### How it was found, and what it cost to look in the wrong places first
 
 **One line fixes it, and four plausible stories did not.** Each row is one
 WinUAE run against a fresh copy of the same tree with the same package and
@@ -4344,7 +4383,7 @@ Two earlier hypotheses were also tested and are negatives with evidence:
   at once and prints `Updater: required argument missing` — read on the host —
   so the binary loads, runs, parses and can write to a redirected stream.
 
-## The fix
+### The fix
 
 Two lines in `startup_sequence`, guarded exactly as ART-189's `SetPatch` is:
 
@@ -4361,7 +4400,7 @@ That is the tree's own order. `core::winuae::real_version_hook::probe_script`
 gained the same lines, because an instrument that sets up a different machine
 from the product answers questions about a machine nobody runs.
 
-## What it produced
+### What it produced
 
 **Both BoingBags installed, through the product `compose` → `install` path, on
 the owner's own material:**
@@ -4382,7 +4421,7 @@ and the result was **booted and asked**, not inferred:
 
 where the same tree answered `Workbench 45.1 (13-Nov-00)` before.
 
-## What is *not* claimed
+### What is *not* claimed
 
 *Observed:* with the line the install happens and without it the `Updater`
 hangs for ever — six runs, same tree, same package. *Not observed:* which call
@@ -4393,7 +4432,7 @@ falling back to `LockPubScreen(NULL)`, `CreateMsgPort`,
 **before** it opens `xadmaster.library` — so the wait is somewhere in that GUI.
 Saying more would be a story rather than a measurement.
 
-## The CD half, built in Task 9, and now measured rather than assumed
+### The CD half, built in Task 9, and now measured rather than assumed
 
 `LaunchMedia` carries a `cd_image_path` and emits `cdimage0=`, `scsi=true` and
 `win32.map_cd_drives=true`; a recipe declares the medium and the request
