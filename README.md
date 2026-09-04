@@ -294,7 +294,7 @@ title on the A1200 profile is the claim** — not every OCS title in a
 collection. And a **Turkish** sentence has finally
 been read on a running screen by someone who speaks it: the new WHDLoad
 Kickstart refusal, judged clear, and the launch then worked
-([ART-062](docs/ISSUES.md#open)). That is one sentence out of 1900 keys, so the
+([ART-062](docs/ISSUES.md#open)). That is one sentence out of 1916, so the
 language as a whole is still unseen — but it is no longer zero.
 
 **Still open, and each one is a concrete gap rather than a vague "try it and
@@ -491,18 +491,22 @@ Amiga Core (Rust, platform-independent)
 ├── card (an SD card as the list of disks the m68k side sees)
 ├── osinstall (a distribution tree, built from your own install media)
 ├── preload (putting that tree onto a card) · gameindex · artwork
-├── archive (lha · zip · 7z, read-only) · rom · cbm · binary
+├── amigainstall (running a package's own installer, on the Amiga)
+├── distro (which distributions, as data) · amiganet · layout · launch
+├── archive (lha · zip · 7z, read-only) · iso · rom · cbm · whdload · vhd
 ├── analysis · compatibility · conversion · validation · hashing
 ├── security (hostile input) · safety (your data against ART itself) · jobs
+├── sources (the mirrors, and every rule about where ART may fetch from)
         ↓
 Platform Services → Windows
 ```
 
 The Amiga core is **platform-independent Rust** — no Tauri types, no Windows
 APIs, and no network. Where it needs something platform-specific it declares a
-trait and the implementation lives outside: `MirrorClient` is the one real
-instance, and `src-tauri/src/net/` is the only place in ART that opens a
-connection. This keeps the core unit-testable and leaves a future CLI shell
+trait and the implementation lives outside — three of them: `MirrorClient` (the
+network), `VolumeFormatter` (launching an external imager) and `HostRecycler`
+(the Windows Recycle Bin). `src-tauri/src/net/` is the only place in ART that
+opens a connection. This keeps the core unit-testable and leaves a future CLI shell
 open. See [docs/architecture.md](docs/architecture.md).
 
 ## License

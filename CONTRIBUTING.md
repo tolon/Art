@@ -14,10 +14,12 @@ pnpm, MSVC Build Tools).
 2. Pick an issue from [docs/ISSUES.md](docs/ISSUES.md), or open one to discuss
    a change. **If you are looking for where help is wanted right now**, see
    [README.md § What still needs testing](README.md#what-still-needs-testing)
-   — seven concrete gaps, each with what to run and what a good or bad result
-   looks like. Five are Play scenarios; the other two are the Amiga-side
-   install screen driven by a person, and a PiStorm card ART built, flashed
-   and booted (the bar for 1.0). Trying one of these and reporting back
+   — **nine** concrete gaps, each with what to run and what a good or bad
+   result looks like. Five are Play scenarios; two need a person at a screen
+   (the Amiga-side install panel and the Aminet studio); and two need real
+   hardware — a card carrying two AmigaOS environments, and a PiStorm card ART
+   built, flashed and booted (the bar for 1.0). Trying one of these and
+   reporting back
    (good or bad) is as useful as a code change.
 3. Branch from `main`.
 4. Follow the stage plan — **do not implement future-stage features** until the
@@ -33,8 +35,11 @@ pnpm, MSVC Build Tools).
    ```
 
 6. Every feature must have tests. See [docs/testing.md](docs/testing.md).
-7. Update the tracking docs: a session-log line in
-   [docs/STATUS.md](docs/STATUS.md), a flipped row in
+7. Update the tracking docs: a row at the top of
+   [docs/session-log.md](docs/session-log.md), the snapshot and the "Picking up
+   next session" block in [docs/STATUS.md](docs/STATUS.md) if either moved
+   (**update that block in place — do not stack a new one on top of it**), a
+   flipped row in
    [docs/FEATURES.md](docs/FEATURES.md) if you finished a feature, and an
    `ART-NNN` entry in [docs/ISSUES.md](docs/ISSUES.md) if you found or fixed a
    defect.
