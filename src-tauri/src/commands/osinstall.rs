@@ -269,7 +269,20 @@ pub fn osinstall_plan(request: InstallRequest) -> AppResult<PlanResult> {
     // A 3.2.2.1 install reads from three, and a plan that checked one of them
     // would refuse on the button with `find_media`'s own English sentence
     // instead of naming the folder that went away.
-    for folder in std::iter::once(&request.media_folder).chain(request.extra_media_folders.iter()) {
+    //
+    // A layered recipe's folders are `media_folders`'s values, one per layer;
+    // an unlayered one keeps the flat `media_folder` + `extra_media_folders`
+    // pair it always had. Checked by presence of `media_folders`, not by
+    // asking the recipe, because this loop runs before `recipe::by_release`
+    // below and has no recipe to ask yet.
+    let folders_to_check: Vec<PathBuf> = if request.media_folders.is_empty() {
+        std::iter::once(request.media_folder.clone())
+            .chain(request.extra_media_folders.iter().cloned())
+            .collect()
+    } else {
+        request.media_folders.values().cloned().collect()
+    };
+    for folder in &folders_to_check {
         if let Err(CoreError::Io(_)) = find_media(folder) {
             return Ok(PlanResult::FolderUnreadable {
                 folder: folder.display().to_string(),
@@ -3067,6 +3080,7 @@ mod tests {
             release: "AmigaOS 3.9".to_string(),
             media_folder: PathBuf::from(&media),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: Vec::new(),
@@ -3218,6 +3232,7 @@ mod tests {
             release: "AmigaOS 3.9".to_string(),
             media_folder: PathBuf::from(&media),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["locale-base".to_string()],
@@ -3353,6 +3368,7 @@ mod tests {
             release: release.clone(),
             media_folder: PathBuf::from(&media),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(PathBuf::from(&rom)),
             chosen,
@@ -3840,6 +3856,7 @@ mod tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: missing.clone(),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["workbench-base".to_string()],
@@ -3868,6 +3885,7 @@ mod tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: dir.clone(),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["workbench-base".to_string()],
@@ -4075,8 +4093,11 @@ mod tests {
                 path: PathBuf::from("E:\\wb.adf"),
                 volume_name: "Workbench3.2".into(),
                 kind: MediaKind::Floppy,
+                layer: None,
             };
             let value = serde_json::to_value(&media).unwrap();
+            // `layer` is absent, not `null`, when the scan was unlayered —
+            // see `FoundMedia::layer`'s own doc comment.
             expect_keys(&value, &["path", "volumeName", "kind"]);
             assert_eq!(value["kind"], "floppy");
         }
@@ -4448,6 +4469,7 @@ mod tests {
                     | RefusalReason::RomUnknown
                     | RefusalReason::DestinationCollision { .. }
                     | RefusalReason::MediaAmbiguous { .. }
+                    | RefusalReason::LayersShareFolder { .. }
                     | RefusalReason::ExclusiveGroupConflict { .. }
                     | RefusalReason::RuleKindMismatch { .. }
                     | RefusalReason::PackageUnknown { .. }
@@ -4515,6 +4537,14 @@ mod tests {
                     },
                     "media-ambiguous",
                     &["refusal", "component", "volume_name", "paths"],
+                ),
+                (
+                    RefusalReason::LayersShareFolder {
+                        layers: vec!["base".into(), "up".into()],
+                        folder: r"D:\media\everything".into(),
+                    },
+                    "layers-share-folder",
+                    &["refusal", "layers", "folder"],
                 ),
                 (
                     RefusalReason::ExclusiveGroupConflict {

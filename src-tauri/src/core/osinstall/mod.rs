@@ -753,6 +753,21 @@ pub enum RefusalReason {
         volume_name: String,
         paths: Vec<String>,
     },
+    /// Two or more of a layered recipe's [`MediaLayer`]s were pointed at the
+    /// **same folder**.
+    ///
+    /// A layer is how a layered recipe tells the base release's own
+    /// `DiskDoctor` apart from an update's `DiskDoctor` sharing its name —
+    /// which one a component wants is a fact about the recipe, never about
+    /// which folder happened to answer first. Pointing two layers at one
+    /// folder cannot be resolved by looking harder at that folder; it means
+    /// the folders that would keep the two disks apart were never given.
+    /// `layers` carries every layer id sharing the folder, for the reason
+    /// `MediaAmbiguous::paths` already gives: the user's next question is
+    /// always "which ones?". Named by the fields, not by the disks it would
+    /// otherwise fail to tell apart — the layer step is where this is caught,
+    /// before any component's media is even looked for.
+    LayersShareFolder { layers: Vec<String>, folder: String },
     /// Two or more components sharing an `exclusive_group` are both
     /// switched on at once — `plan()` checks this against the **resolved**
     /// set (`InstallPlan::components_on`), not the request, because a
@@ -1250,6 +1265,7 @@ pub(crate) mod fixtures {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: std::collections::BTreeMap::new(),
             keymap: None,
             rom,
             chosen: chosen.iter().map(|s| s.to_string()).collect(),

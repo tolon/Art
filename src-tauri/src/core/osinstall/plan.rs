@@ -114,8 +114,8 @@ use serde::{Deserialize, Serialize};
 
 use super::package::Package;
 use super::scan::{
-    find_media_across, find_packages, media_for, open_media_cached, open_package_staging_in,
-    package_for, MediaMatch, PackageMedium,
+    find_media_across, find_media_in_layers, find_packages, media_for_layer, open_media_cached,
+    open_package_staging_in, package_for, MediaMatch, PackageMedium,
 };
 use super::scan_cache::ScanCache;
 use super::source::MediaSource;
@@ -481,6 +481,15 @@ pub struct InstallRequest {
     /// request serialised before this existed must still deserialise.
     #[serde(default)]
     pub extra_media_folders: Vec<PathBuf>,
+    /// One media folder per layer the recipe declares, keyed by
+    /// [`super::MediaLayer::id`].
+    ///
+    /// `media_folder` and `extra_media_folders` above stay for the reason
+    /// they were given a `#[serde(default)]` in the first place: a request
+    /// serialised before this field existed must still deserialise. When this
+    /// map is empty they are read exactly as before, onto the single layer.
+    #[serde(default)]
+    pub media_folders: BTreeMap<String, PathBuf>,
     /// The keyboard layout the finished system should boot with — a name in
     /// `Devs/Keymaps`, e.g. `türkçe`.
     ///
@@ -738,6 +747,42 @@ fn detect_exclusive_group_conflicts(
             refusals.push(RefusalReason::ExclusiveGroupConflict {
                 group: group.to_string(),
                 components,
+            });
+        }
+    }
+    refusals
+}
+
+/// Every group of two or more layers the caller pointed at **the same
+/// folder**.
+///
+/// A layer changes which question `media_for_layer` asks, never how the
+/// answer is treated — and pointing `base` and `up` at one folder is not "two
+/// layers agreeing on a folder", it is one folder unable to answer two
+/// different questions at once. Left unchecked, a component in `base` and one
+/// in `up` naming the same volume would both resolve to the identical file,
+/// silently discarding the whole reason layers exist: telling the 3.2 disk
+/// apart from the 3.2.2 disk that shares its name.
+///
+/// Compared by canonical path, the same normalisation
+/// [`find_media_across`](super::scan::find_media_across) already applies to
+/// tell "the same folder twice" from "two different folders" — a user who
+/// reaches the same directory through two different-looking paths (a drive
+/// letter and a UNC path, say) has still pointed both layers at one place.
+fn layers_sharing_a_folder(layers: &[(String, PathBuf)]) -> Vec<RefusalReason> {
+    let mut by_folder: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
+    for (layer, folder) in layers {
+        let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.clone());
+        by_folder.entry(canonical).or_default().push(layer.clone());
+    }
+
+    let mut refusals = Vec::new();
+    for (folder, mut sharing) in by_folder {
+        if sharing.len() > 1 {
+            sharing.sort();
+            refusals.push(RefusalReason::LayersShareFolder {
+                layers: sharing,
+                folder: folder.display().to_string(),
             });
         }
     }
@@ -1197,10 +1242,32 @@ fn plan_over_with_cache(
     );
     refusals.extend(detect_exclusive_group_conflicts(recipe, &components_on));
 
-    // Every folder the user named, not only the first (work-list item 8).
-    let mut folders = vec![request.media_folder.clone()];
-    folders.extend(request.extra_media_folders.iter().cloned());
-    let found = find_media_across(&folders)?;
+    // A layered recipe reads each component's media from the layer the
+    // recipe names it under; an unlayered one keeps the flat, ordered list
+    // work-list item 8 added — `media_folder` plus every
+    // `extra_media_folders` entry, one implicit layer with no name.
+    let layers: Vec<(String, PathBuf)> = if recipe.is_layered() {
+        recipe
+            .layers
+            .iter()
+            .filter_map(|l| {
+                request
+                    .media_folders
+                    .get(&l.id)
+                    .map(|f| (l.id.clone(), f.clone()))
+            })
+            .collect()
+    } else {
+        let mut folders = vec![request.media_folder.clone()];
+        folders.extend(request.extra_media_folders.iter().cloned());
+        folders.into_iter().map(|f| (String::new(), f)).collect()
+    };
+    refusals.extend(layers_sharing_a_folder(&layers));
+    let found = if recipe.is_layered() {
+        find_media_in_layers(&layers)?
+    } else {
+        find_media_across(&layers.iter().map(|(_, f)| f.clone()).collect::<Vec<_>>())?
+    };
     let mut media_paths: BTreeMap<String, PathBuf> = BTreeMap::new();
     let mut items: Vec<PlanItem> = Vec::new();
 
@@ -1216,27 +1283,31 @@ fn plan_over_with_cache(
         };
 
         // Never `if let MediaMatch::Found(..)` — see the module doc comment.
-        let found_media = match media_for(&found, &component.media) {
-            MediaMatch::Missing => {
-                refusals.push(RefusalReason::MediaMissing {
-                    component: component.id.clone(),
-                    volume_name: component.media.clone(),
-                });
-                continue;
-            }
-            MediaMatch::Ambiguous(matches) => {
-                refusals.push(RefusalReason::MediaAmbiguous {
-                    component: component.id.clone(),
-                    volume_name: component.media.clone(),
-                    paths: matches
-                        .iter()
-                        .map(|m| m.path.display().to_string())
-                        .collect(),
-                });
-                continue;
-            }
-            MediaMatch::Found(found_media) => found_media,
-        };
+        // Resolved inside the component's own layer (`Component::layer`) —
+        // `None` for an unlayered recipe, which asks across the whole flat
+        // list exactly as before layers existed.
+        let found_media =
+            match media_for_layer(&found, component.layer.as_deref(), &component.media) {
+                MediaMatch::Missing => {
+                    refusals.push(RefusalReason::MediaMissing {
+                        component: component.id.clone(),
+                        volume_name: component.media.clone(),
+                    });
+                    continue;
+                }
+                MediaMatch::Ambiguous(matches) => {
+                    refusals.push(RefusalReason::MediaAmbiguous {
+                        component: component.id.clone(),
+                        volume_name: component.media.clone(),
+                        paths: matches
+                            .iter()
+                            .map(|m| m.path.display().to_string())
+                            .collect(),
+                    });
+                    continue;
+                }
+                MediaMatch::Found(found_media) => found_media,
+            };
         let media_path = found_media.path.clone();
 
         // Never `?` on either of these — ART-119 (#5). A disk that is
@@ -1835,6 +1906,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec!["extras".to_string()],
@@ -1921,6 +1993,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["subtree-owner".to_string(), "file-writer".to_string()],
@@ -1980,6 +2053,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder.to_path_buf(),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: keymap.map(str::to_string),
             rom: None,
             chosen: vec!["keymaps".to_string()],
@@ -2152,6 +2226,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: base.clone(),
             extra_media_folders: vec![update.clone()],
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["from-base".to_string(), "from-update".to_string()],
@@ -2173,6 +2248,7 @@ mod plan_tests {
         // has to refuse the component that is in the second.
         let one_folder = InstallRequest {
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             ..request
         };
@@ -2230,6 +2306,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["a".to_string()],
@@ -2278,6 +2355,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["a".to_string()],
@@ -2331,6 +2409,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["a".to_string(), "b".to_string()],
@@ -2404,6 +2483,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             // major 40 < 47, so `modules-b` switches on by its own
             // condition — never named in `chosen`.
@@ -2471,6 +2551,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["a".to_string()],
@@ -2559,6 +2640,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["a".to_string()],
@@ -2825,6 +2907,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["storage".to_string()],
@@ -2997,6 +3080,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder.clone(),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&scratch, 47)),
             chosen: vec!["extras".to_string()],
@@ -3114,6 +3198,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 40)),
             chosen: vec!["workbench-base".to_string()],
@@ -3166,6 +3251,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec!["workbench-base".to_string(), "extras".to_string()],
@@ -3201,6 +3287,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec![],
@@ -3426,6 +3513,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(bad_rom),
             chosen: vec!["workbench-base".to_string()],
@@ -3479,6 +3567,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec!["workbench-base".to_string()],
@@ -3562,6 +3651,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             // Reverse of the recipe's own declaration order — see the doc
@@ -3756,6 +3846,7 @@ mod plan_tests {
             release: "Test OS".to_string(),
             media_folder: media.to_path_buf(),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: Vec::new(),
@@ -4169,5 +4260,75 @@ mod plan_tests {
         .unwrap();
 
         assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+    }
+
+    // -----------------------------------------------------------------
+    // Layered media (Task 3): resolution inside `plan()` itself.
+    // -----------------------------------------------------------------
+
+    /// A minimal layered recipe: one component per layer, both naming a
+    /// volume the fixture writes into both folders.
+    ///
+    /// Built by hand rather than reaching for `AmigaOS 3.2.2` — that recipe
+    /// does not exist until Task 8, and the behaviour under test is the
+    /// layer mechanism itself, not the shipped recipe.
+    fn two_layer_recipe() -> Recipe {
+        crate::core::osinstall::recipe::parse(
+            r#"{"release":"T","layers":[{"id":"base"},{"id":"up"}],
+                "components":[
+                  {"id":"a","media":"DiskDoctor","layer":"base","required":true,
+                   "rules":[{"from":"C/DiskDoctor","to":"C/DiskDoctor","kind":"file"}]},
+                  {"id":"b","media":"DiskDoctor","layer":"up","required":true,
+                   "overrides":["a"],
+                   "rules":[{"from":"C/DiskDoctor","to":"C/DiskDoctor","kind":"file"}]}
+                ]}"#,
+        )
+        .unwrap()
+    }
+
+    /// A bare-minimum request, so a test that only cares about
+    /// `media_folders` does not have to restate every other field.
+    fn request_for_scratch(dir: &Path) -> InstallRequest {
+        InstallRequest {
+            release: "T".to_string(),
+            media_folder: dir.join("unused"),
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: Vec::new(),
+            excluded: Vec::new(),
+            packages: Vec::new(),
+            package_folder: None,
+            destination: dir.join("dist"),
+            scan_cache: Default::default(),
+        }
+    }
+
+    #[test]
+    fn two_layers_on_one_folder_refuse_by_naming_the_fields() {
+        let dir = fixtures::scratch("plan-same-folder");
+        let one = dir.join("everything");
+        std::fs::create_dir_all(&one).unwrap();
+        fixtures::media(&one, "DiskDoctor", "dd.adf", &[("C/DiskDoctor", b"x", 0)]);
+
+        let request = InstallRequest {
+            media_folders: BTreeMap::from([
+                ("base".to_string(), one.clone()),
+                ("up".to_string(), one.clone()),
+            ]),
+            ..request_for_scratch(&dir)
+        };
+        let plan = plan(&request, &two_layer_recipe()).unwrap();
+
+        let same_folder = plan
+            .refusals
+            .iter()
+            .find(|r| matches!(r, RefusalReason::LayersShareFolder { .. }))
+            .expect("the refusal names the fields, not the disks");
+        let RefusalReason::LayersShareFolder { layers, .. } = same_folder else {
+            unreachable!()
+        };
+        assert_eq!(layers.len(), 2);
     }
 }

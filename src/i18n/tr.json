@@ -2165,6 +2165,7 @@
       "romUnknown": "Kickstart tanımlanamadı, bu yüzden ART sürümüne bağlı şeylere karar veremiyor.",
       "destinationCollision": "{{path}} birden fazla bileşen tarafından isteniyor ({{components}}) ve hiçbiri diğerinin üzerine yazabileceğini belirtmiyor.",
       "mediaAmbiguous": "Medya klasöründe {{component}}'in ihtiyaç duyduğu {{volume}} birim adını taşıyan birden fazla dosya var: {{paths}}.",
+      "layersShareFolder": "{{layers}} aynı klasörü ({{folder}}) gösteriyor, bu yüzden ART bunları birbirinden ayırt edemiyor — her katmana kendi klasörünü ver.",
       "exclusiveGroupConflict": "{{components}} aynı anda açık olamaz — {{group}} grubundan yalnızca biri seçilebilir.",
       "ruleKindMismatch": "{{component}}'in {{from}} için kuralı bir {{expected}} bekliyordu, ama medya bir {{found}} taşıyor.",
       "packageUnknown": "\"{{package}}\", ART'ın tarifini gönderdiği bir paket değil — uygulanamaz. Tikini kaldır; bu genelde ART'ın eski bir sürümünün kaydettiği bir seçimdir.",

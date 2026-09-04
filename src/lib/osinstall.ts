@@ -75,6 +75,17 @@ export interface InstallRequest {
    */
   extraMediaFolders?: string[];
   /**
+   * One media folder per layer a layered recipe declares, keyed by the
+   * layer's own id (`core::osinstall::MediaLayer::id`).
+   *
+   * `mediaFolder` and `extraMediaFolders` above stay for the reason they
+   * were given `#[serde(default)]` in the first place: a request built
+   * before this field existed must still work. When this map is empty they
+   * are read exactly as before, onto the single implicit layer — an
+   * unlayered recipe never reads this field at all.
+   */
+  mediaFolders?: Record<string, string>;
+  /**
    * The keyboard layout the finished system boots with — a name in
    * `Devs/Keymaps` (ART-226's other half).
    *
@@ -193,6 +204,11 @@ export type RefusalReason =
       volume_name: string;
       paths: string[];
     }
+  // Two of a layered recipe's own layers were pointed at one folder — caught
+  // before any component's media is even looked for, because the folder
+  // that would tell the base release's disk apart from the update's disk
+  // sharing its name was never given.
+  | { refusal: "layers-share-folder"; layers: string[]; folder: string }
   | { refusal: "exclusive-group-conflict"; group: string; components: string[] }
   | {
       refusal: "rule-kind-mismatch";
@@ -1078,6 +1094,11 @@ export function refusalPhrase(reason: RefusalReason): Phrase {
           volume: reason.volume_name,
           paths: reason.paths.join(", "),
         },
+      };
+    case "layers-share-folder":
+      return {
+        key: "osinstall.refusal.layersShareFolder",
+        params: { layers: reason.layers.join(", "), folder: reason.folder },
       };
     case "exclusive-group-conflict":
       return {

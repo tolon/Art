@@ -2165,6 +2165,7 @@
       "romUnknown": "The Kickstart could not be identified, so ART cannot decide what depends on its version.",
       "destinationCollision": "{{path}} is wanted by more than one component ({{components}}), and neither declares it may override the other.",
       "mediaAmbiguous": "More than one file in the media folder carries the volume name {{volume}} that {{component}} needs: {{paths}}.",
+      "layersShareFolder": "{{layers}} are pointed at the same folder ({{folder}}), so ART cannot tell them apart — give each layer its own folder.",
       "exclusiveGroupConflict": "{{components}} cannot both be on — only one of {{group}} may be chosen.",
       "ruleKindMismatch": "{{component}}'s rule for {{from}} expected a {{expected}}, but the media holds a {{found}}.",
       "packageUnknown": "\"{{package}}\" is not a package ART ships a recipe for — it cannot be applied. Untick it; this is usually a choice saved by an older version of ART.",
