@@ -1,6 +1,6 @@
 [package]
 name = "amiga-retro-toolkit"
-version = "0.8.5"
+version = "0.9.0"
 description = "ART — The Swiss Army Knife for Amiga Files"
 authors = ["tolon"]
 edition = "2021"

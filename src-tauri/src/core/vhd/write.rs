@@ -173,8 +173,10 @@ impl<F: Read + Seek> DynamicVhd<F> {
         file.read_exact(&mut raw)
             .map_err(|_| malformed("the block table is shorter than the header says"))?;
         let bat: Vec<u32> = raw
-            .chunks_exact(4)
-            .map(|c| u32::from_be_bytes(c.try_into().expect("4 bytes")))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_be_bytes(*c))
             .collect();
 
         Ok(Self {

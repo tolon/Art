@@ -6,6 +6,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+Nothing yet.
+
+## [0.9.0] - 2026-09-04
+
+**What this release is, in one paragraph.** 0.8.5 could build an AmigaOS 3.2
+distribution tree from your own floppies. 0.9.0 builds one from a **CD** as
+well (3.9), runs a package's **own installer inside an emulator** when the
+host cannot place its files, writes a **PiStorm card** that can carry two
+complete AmigaOS environments and says which one starts, puts your **WiFi**
+on the card before its first boot, installs the official 3.9 **Locale**
+update including its Turkish half, and writes a 32 GiB card image that costs
+six megabytes on disk. It also refuses several things it used to do wrong:
+an FFS partition too large for the Kickstart on the card, an install that
+would overwrite an existing tree without saying so, and a `.hdf` that is
+really a VHD.
+
+**Still not claimed:** no card ART built has been flashed and booted on real
+hardware. That is this project's own bar for 1.0, and it is not met yet.
+
+The full list, newest first:
+
+### The Turkish half of the 3.9 Locale update, and a disk that stops being ambiguous with itself (2026-08-25)
+
+#### Added
+- **The official 3.9 Locale update installs its Turkish half.** The release's
+  own installer asks which of twenty languages you want and then does two
+  different things: some directories go in wholesale, others per language.
+  ART now does both — `locale-39` for the wholesale half (49 keymaps against
+  the CD's 22, `türkçe` among them) and `locale-39-turkish` for the language
+  half. The per-language package is **two rules where the installer has
+  four**, and that is measured rather than trimmed: Turkish has content in
+  `Locale/Catalogs` (33 entries) and `Fonts` (56), and none in `Help` or
+  `Libs`. Naming all four would have made the package refuse itself on your
+  own archive.
+- A font family from that update lands in `Fonts/` itself rather than
+  `Fonts/türkçe/`, because that is where `diskfont.library` looks — read out
+  of the archive's own installer, the same shape the 3.2 Installer uses.
+
+#### Fixed
+- **The same disk in two folders is one disk when it really is the same
+  disk.** Adding your 3.2 media folder and an update folder that both carry a
+  byte-identical copy of a disk no longer reports every one of them as
+  ambiguous. Two disks of one name that differ are still refused by name —
+  ART will not choose between two of your disks on the strength of the order
+  you added the folders in.
+
+### Built on the current Rust toolchain (2026-09-04)
+
+#### Fixed
+- Ten places where a fixed-size chunk was read the older way now use
+  `as_chunks`, which the 2026-09-01 Rust toolchain's clippy requires. Two of
+  them lose a `try_into().expect(...)` that could never have fired, so the
+  code no longer writes down a panic path it does not have. No behaviour
+  changed: the ADF checksum, the ROM checksum, the FAT32 directory reader,
+  the ISO UCS-2 decoder, the VHD block table and the T64 record table all
+  read exactly what they read before, and the 2 626-test suite says so.
+
 ### Two AmigaOS on one card, WiFi before the first boot, and a partition ART now refuses to build (2026-08-24)
 
 #### Added

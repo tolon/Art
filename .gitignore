@@ -63,3 +63,6 @@ src-tauri/.cargo/config.toml
 # (10,570 mutants; one small file did not finish in ten minutes). Left ignored
 # so a future experiment does not litter the tree.
 src-tauri/mutants.out/
+
+# Written by .github/workflows/release.yml from CHANGELOG.md at publish time.
+RELEASE_NOTES.md
