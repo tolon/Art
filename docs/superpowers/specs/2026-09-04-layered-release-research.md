@@ -103,8 +103,9 @@ operations, in order, with the counts measured off the disks:
 
 **Media → tree (a recipe could express these):**
 
-1. `COPYDISKCONTENT Update3.2.2` — 17 named directories, **non-recursive**,
-   pattern `(#?.Z)` only, `.Z` dropped: **39 files** (C 10, Devs 1, L 1,
+1. `COPYDISKCONTENT Update3.2.2` — 17 entries, the last of them the disk root,
+   walked **non-recursively**, pattern `(#?.Z)` only, `.Z` dropped:
+   **39 files** (C 10, Devs 1, L 1,
    Libs 6, Locale/Countries 4, Prefs 2, System 2, Tools 3, Tools/Commodities 3,
    Tools/TextEditFileTypes 4, Utilities 1, WBStartup 2).
 2. `Update/Release` → `Prefs/Env-Archive/Versions/Release` — 14 bytes reading
@@ -118,9 +119,30 @@ operations, in order, with the counts measured off the disks:
    → `Locale/Languages`; `Catalogs/<lang>/Sys` → `Locale/Catalogs/<lang>/Sys`;
    `Help/<lang>/Sys` with its subdirectories and `.Images` →
    `Locale/Help/<lang>/Sys`; `Support/Fonts` → `Fonts`;
-   `Support/Prefs/Presets` → `Prefs/Presets`. For Turkish that is 40 files,
-   including a `helvetica_iso-8859-9` font family and `Font-TR.prefs` (the one
-   file on that disk that is *not* `.Z`).
+   `Support/Prefs/Presets` → `Prefs/Presets`. For Turkish that is **39 files**
+   placed off a disk listing 40 (the 40th is `Disk.info`), including a
+   `helvetica_iso-8859-9` font family and `Font-TR.prefs` — the one placed file
+   on that disk that is *not* `.Z`.
+
+   **The 17 locale disks do not have one shape, and a rule list written from
+   one of them would be wrong about the rest.** Counted:
+
+   | Disk | Placed | Top-level drawers |
+   |---|---|---|
+   | `-EN` | 23 | `Help` only — English needs no catalogs |
+   | `-DE -DK -ES -FR -GR -IT -NL -NO -PT -SE -UK` | 28–43 | `Catalogs`, `Help` |
+   | `-PL -TR` | 45, 39 | `Catalogs`, `Help`, `Support` |
+   | `-RS` | 239 | `Catalogs`, `Help`, `Languages` |
+   | `-CZ` | 281 | `Catalogs`, `Help`, `Languages`, `Support`, **`Other`** |
+   | `-RU` | 35 | `Catalogs`, `Help`, `Languages`, `Support`, **`Other`**, `ReadMe` |
+
+   Only **three** disks carry `Languages` at all. And `Other`
+   (`Other/Keymaps/cz_ISO-8859-2` on CZ, `Other/ENVARC/Sys/topaz.font` on RU)
+   together with RU's root `ReadMe` is material the release ships and **its own
+   installer never copies** — `UPDATELOCALE` handles `Languages`, `Catalogs`,
+   `Help`, `Support/Fonts` and `Support/Prefs/Presets`, and nothing else. ART
+   must not place it either; a drawer the release leaves for the user to
+   install by hand is not ART's to install for them.
 7. Modules disk, **conditional** (see below): `LIBS/(A500|A600|A1000|A1200|
    A2000A|A2000B|A3000|A4000D|A4000T|CD32)` and `LIBS/intuition.library`;
    plus, if the ROM is older still, `L/(Ram-Handler|Shell-Seg|System-startup)`
@@ -291,9 +313,10 @@ this round.
 2. **The ambiguity is one disk per update**, so resolving it is a small part
    of the work and must not be mistaken for the item.
 3. **`.Z` is already built** (`core/archive/compress.rs`, ART-228, wired
-   through `plan` and `apply`) — see the correction in §3. Roughly 70 of the
-   ~120 files a Turkish 3.2.2 install places ride that path, so the largest
-   single piece of this work is done and tested.
+   through `plan` and `apply`) — see the correction in §3. A Turkish 3.2.2
+   install places about **120** files (39 + 2 system, 31 classes, 3 DiskDoctor,
+   39 Turkish locale, a handful of modules) and **108 of them are `.Z`**, so
+   the largest single piece of this work is done and tested.
 4. **`Condition` cannot express `47.10`.** The Modules step's real test is a
    revision comparison and ART's condition carries a major only.
 5. **Three operations read the target tree** (§4, items 9–12). A recipe of

@@ -59,9 +59,25 @@ two fields were given when they were added.
 
 `FoundMedia` gains the layer id it was found in. `find_media_across` takes
 `(layer_id, folder)` pairs instead of a flat list; `media_for` is asked within
-one layer. Everything else about resolution is untouched: **two disks of one
-name inside one layer are still `MediaMatch::Ambiguous` and still a refusal**,
-and `dedupe_identical_disks` still drops byte-identical copies first.
+one layer. **Two disks of one name inside one layer are still
+`MediaMatch::Ambiguous` and still a refusal** — the layer changes which
+question is asked, never how an ambiguous answer is treated.
+
+Two things about resolution *do* have to change with it, and both are the kind
+that fail quietly if they are missed:
+
+- **`dedupe_identical_disks` becomes per-layer.** Today it runs over one flat
+  list, which is right when there is one; across layers it would drop a
+  byte-identical `Workbench3.2` from the update folder and leave that layer
+  unable to resolve a component that names it. Identity of content answers
+  "is this one disk or two?" **within** a layer; across layers the same bytes
+  in two roles are two answers.
+- **Two layers pointed at one folder is a refusal that says so.** A user who
+  extracted the update into their base folder makes every layer see both
+  `DiskDoctor`s, so both layers refuse `MediaAmbiguous` — true, but it reads
+  as a problem with their disks rather than with the two fields. The layers
+  are compared by canonical path first and the refusal names the real cause:
+  *"the base and update fields point at the same folder"*.
 
 ### Why not "the later folder wins"
 
@@ -89,21 +105,36 @@ the user does own.
 ## 2. `amigaos-3.2.2.json`
 
 `release: "AmigaOS 3.2.2"`, `base: "AmigaOS 3.2"`, the two layers above.
-Inherited: the base recipe's 30 components, on layer `base`. Added, all on
-layer `update-3.2.2`:
+Inherited: the base recipe's components on layer `base` — 30 today, **29 once
+the empty `update-3.2.1` placeholder goes** (below). Added, all on layer
+`update-3.2.2`:
 
 | Component | Media | Rules | Files |
 |---|---|---|---|
 | `update-322-system` | `Update3.2.2` | ten `File` rules for `C/*.Z` (the drawer also holds `AmigaModel`, `CopyTooltypes` and `GuessBootDev`, which the release does not place); `Subtree` for `DEVS`→`Devs`, `L`, `LIBS`→`Libs`, `Locale/Countries`, `Prefs`, `System`, `Tools`, `Utilities`, `WBStartup`; `File` `Update/Release`→`Prefs/Env-Archive/Versions/Release` and `Update/Startup-HardDrive`→`S/Startup-Sequence` | 39 + 2 |
 | `update-322-classes` | `Classes3.2.2` | `Subtree Classes → Classes` | 31 |
 | `update-322-diskdoctor` | `DiskDoctor` | `File` ×3: `c/DAControl`, `c/DiskDoctor`, `Devs/trackfile.device` | 3 |
-| `update-322-locale-XX` ×17 | `Locale3.2.2-XX` | `Catalogs`→`Locale/Catalogs`, `Help`→`Locale/Help`, `Languages`→`Locale/Languages`, `Support/Fonts`→`Fonts`, `Support/Prefs/Presets`→`Prefs/Presets`, each written only where that disk carries it | 40 for TR |
+| `update-322-locale-XX` ×17 | `Locale3.2.2-XX` | up to five: `Catalogs`→`Locale/Catalogs`, `Help`→`Locale/Help`, `Languages`→`Locale/Languages`, `Support/Fonts`→`Fonts`, `Support/Prefs/Presets`→`Prefs/Presets` — **per disk, never one list copied seventeen times** | 39 for TR |
 | `update-322-modules-a1200` | `ModulesA1200_3.2.2` | the base `modules-a1200`'s shape, `exclusive_group: "modules"` | a handful |
 
 `update-322-system` and `update-322-classes` are `required: true`: picking the
 3.2.2 release and supplying no update media is a refusal that names what is
 missing, which is the honest outcome. The locale components mirror the base's —
 the user ticks the languages they want.
+
+**The seventeen locale components have seventeen different rule lists**, and
+that is measured rather than tidy (research note §4): `-EN` carries `Help`
+alone, eleven disks carry `Catalogs` and `Help`, only `-CZ`, `-RS` and `-RU`
+carry `Languages`. Writing the five-rule list onto all of them would refuse
+`MediaMissing` on a path the disk simply does not have. Two of the seventeen,
+`-CZ` and `-RS`, have **no base component to override** — they are whole
+locales the base set does not ship.
+
+**`Other` and `ReadMe` are deliberately not placed.** `Locale3.2.2-CZ` carries
+`Other/Keymaps/cz_ISO-8859-2`, `-RU` carries `Other/ENVARC/Sys/topaz.font` and
+a root `ReadMe`, and the release's own `UPDATELOCALE` copies none of them. A
+drawer the release leaves for the user to install by hand is not ART's to
+install for them — the same rule as the ten `C/` tools above.
 
 **`.Z` needs nothing.** `plan::expand_rules` already marks an entry compressed
 and strips the suffix from the destination, and `apply` decompresses as it
@@ -275,8 +306,8 @@ copyright line or ART's own dropdown.
    component places any of them; AmigaOS starts what the icon says. Found by
    this research, about the base recipe, not the update.
 2. **The `.Z` decoder's dictionary-reset branch is still unexercised**
-   (`core/archive/compress.rs`'s own disclosure). This round pushes ~70 more
-   files through that decoder without changing that.
+   (`core/archive/compress.rs`'s own disclosure). This round pushes about 108
+   more files through that decoder without changing that.
 
 ## 9. Testing
 
@@ -287,6 +318,8 @@ copyrighted Amiga content.
 |---|---|
 | A name claimed in two layers resolves to the layer the recipe names | point the component at the other layer — the other file's bytes must land |
 | A name claimed twice **inside** one layer still refuses | remove the ambiguity check; the plan must stop refusing |
+| A byte-identical disk in two layers survives in both | dedupe across layers instead of within one; the second layer must fail to resolve it |
+| Two layers on one folder refuse by naming the fields | drop the canonical-path comparison; the refusal must fall back to naming the disks |
 | A component with no layer in a multi-layer recipe is a recipe error | drop the check; the recipe must load |
 | A `base` that cycles is refused | drop the cycle guard; loading must hang or overflow |
 | Merged-recipe destination collisions need `overrides` | delete one `overrides` entry; the recipe test must fail |
