@@ -2284,6 +2284,14 @@
           "notPresent": "Zaten yoktu — kaldırılacak bir şey olmadı",
           "failed": "Kaldırılamadı: {{detail}}"
         }
+      },
+      "icons": {
+        "heading": "Değiştirilen simgeler",
+        "state": {
+          "merged": "Değiştirildi — araç türleri ve yığın boyutu güncellendi",
+          "destinationAbsent": "Zaten yoktu — değiştirilecek bir şey olmadı",
+          "failed": "Değiştirilemedi: {{detail}}"
+        }
       }
     },
     "verify": {

@@ -2452,6 +2452,7 @@ mod tests {
             is_dir: false,
             bytes,
             decompress: false,
+            merge_icon: false,
         };
 
         let plan = InstallPlan {
@@ -4251,7 +4252,18 @@ mod tests {
             let value = serde_json::to_value(&outcome).unwrap();
             expect_keys(
                 &value,
-                &["root", "files", "directories", "bytes", "removed"],
+                &[
+                    "root",
+                    "files",
+                    "directories",
+                    "bytes",
+                    "removed",
+                    // Task 6: one verdict per `merge_icon` item, and the
+                    // run's own failure tally — see `ApplyOutcome::icons`
+                    // and `ApplyOutcome::failed`.
+                    "icons",
+                    "failed",
+                ],
             );
         }
 
@@ -4311,6 +4323,7 @@ mod tests {
                 is_dir: true,
                 bytes: 0,
                 decompress: false,
+                merge_icon: false,
             };
             let value = serde_json::to_value(&item).unwrap();
             expect_keys(
@@ -4327,6 +4340,9 @@ mod tests {
                     // place a person can see that `dos.catalog.Z` on the
                     // medium becomes `dos.catalog` in the tree.
                     "decompress",
+                    // Whether this is a `RuleKind::IconTooltypes` item — see
+                    // `PlanItem::merge_icon`'s own doc comment.
+                    "mergeIcon",
                 ],
             );
             assert_eq!(value["isDir"], true);

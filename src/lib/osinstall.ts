@@ -168,8 +168,11 @@ export function isInstallRelease(value: unknown): value is InstallRelease {
   return typeof value === "string" && (INSTALL_RELEASES as readonly string[]).includes(value);
 }
 
-/** Whether a rule takes one file or a whole subtree. */
-export type RuleKind = "file" | "subtree";
+/** Whether a rule takes one file, a whole subtree, or amends an icon already
+ *  in the tree. `"icon-tooltypes"` merges an icon's tool types and stack
+ *  size into the file already at `to`, rather than copying `from` over it —
+ *  see `PlanItem.mergeIcon`. */
+export type RuleKind = "file" | "subtree" | "icon-tooltypes";
 
 /** Why an install cannot proceed. A value, never a sentence (ART-060) — the
  *  screen translates it. */
@@ -275,6 +278,12 @@ export interface PlanItem {
    *  same bytes. */
   decompress: boolean;
   bytes: number;
+  /** Whether this is a `"icon-tooltypes"` rule's item — `osinstallApply`
+   *  amends the icon already at `to` with the source's tool types and stack
+   *  size rather than copying `from` over it. `false` for every `"file"` and
+   *  `"subtree"` item, which is every item a recipe produced before this
+   *  rule kind existed. */
+  mergeIcon: boolean;
 }
 
 /** One switched-on component's own contribution to `S:User-Startup`. */
@@ -385,6 +394,18 @@ export interface RemovalVerdict {
   state: RemovalState;
 }
 
+/** What happened when `osinstallApply` tried to amend an icon already in the
+ *  tree with a `mergeIcon` item. `"destination-absent"` is its own outcome,
+ *  not a failure — modeled on `RemovalState` for the identical reason: the
+ *  component that would have placed the icon may simply be switched off.
+ *  `failed` carries the core's own sentence. */
+export type IconMergeState = "merged" | "destination-absent" | { failed: string };
+
+export interface IconMergeVerdict {
+  to: string;
+  state: IconMergeState;
+}
+
 /** What `osinstallApply` actually did. */
 export interface ApplyOutcome {
   root: string;
@@ -395,6 +416,13 @@ export interface ApplyOutcome {
    *  collapsed, and never silent (CLAUDE.md's "reported per entry, by name
    *  and by result"). */
   removed: RemovalVerdict[];
+  /** One verdict per `mergeIcon` item, by destination — never folded into
+   *  `files`/`bytes`, which already account for the icon through whichever
+   *  item placed it first. */
+  icons: IconMergeVerdict[];
+  /** How many of this run's own icon merges came back `failed` —
+   *  `"destination-absent"` does not count (a skip is not a failure). */
+  failed: number;
 }
 
 export const OSINSTALL_EVENT = "osinstall-result";

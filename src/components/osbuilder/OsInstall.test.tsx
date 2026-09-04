@@ -272,6 +272,7 @@ const ITEM_WORKBENCH: PlanItem = {
   isDir: false,
   decompress: false,
   bytes: 2 * 1024 * 1024,
+  mergeIcon: false,
 };
 
 const ITEM_EXTRAS: PlanItem = {
@@ -282,6 +283,7 @@ const ITEM_EXTRAS: PlanItem = {
   isDir: false,
   decompress: false,
   bytes: 3 * 1024 * 1024,
+  mergeIcon: false,
 };
 
 /** The plan `osinstallPlan` would answer for a given request — items follow
@@ -1247,7 +1249,15 @@ describe("a release switch does not leave the other release's answers on screen 
   const FINISHED_39: OsInstallResult = {
     job_id: 1,
     destination: "E:\\amiga\\dist-3.9",
-    outcome: { root: "E:\\amiga\\dist-3.9", files: 1915, directories: 75, bytes: 1024, removed: [] },
+    outcome: {
+      root: "E:\\amiga\\dist-3.9",
+      files: 1915,
+      directories: 75,
+      bytes: 1024,
+      removed: [],
+      icons: [],
+      failed: 0,
+    },
   };
 
   it("takes a finished install's report down when the release changes", async () => {
@@ -1313,7 +1323,15 @@ describe("the tree it builds is the tree the next steps get (ART-197)", () => {
   const FINISHED: OsInstallResult = {
     job_id: 1,
     destination: "E:\\amiga\\dist-3.9",
-    outcome: { root: "E:\\amiga\\dist-3.9", files: 1915, directories: 75, bytes: 1024, removed: [] },
+    outcome: {
+      root: "E:\\amiga\\dist-3.9",
+      files: 1915,
+      directories: 75,
+      bytes: 1024,
+      removed: [],
+      icons: [],
+      failed: 0,
+    },
   };
 
   it("hands a finished install's destination to the session", async () => {

@@ -1698,6 +1698,34 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
               </ul>
             </div>
           )}
+          {/* An `icon-tooltypes` rule (RuleKind) — reported per entry, by
+              name and by result, the same discipline `removed` follows just
+              above and for the same reason: "not present" is a legitimate
+              build (the component that would have placed the icon may be
+              switched off), never a failure. Hidden entirely when nothing
+              amended an icon, which is every shipped recipe until AmigaOS
+              3.2.2's own recipe uses the rule. */}
+          {result.outcome.icons.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <h3 style={{ fontSize: 13, margin: "0 0 4px" }}>
+                {t("osinstall.result.icons.heading")}
+              </h3>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11 }}>
+                {result.outcome.icons.map((verdict) => (
+                  <li key={verdict.to}>
+                    {verdict.to} —{" "}
+                    {verdict.state === "merged"
+                      ? t("osinstall.result.icons.state.merged")
+                      : verdict.state === "destination-absent"
+                        ? t("osinstall.result.icons.state.destinationAbsent")
+                        : t("osinstall.result.icons.state.failed", {
+                            detail: verdict.state.failed,
+                          })}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </section>
       )}
 

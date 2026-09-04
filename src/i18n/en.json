@@ -2284,6 +2284,14 @@
           "notPresent": "Not present — nothing needed removing",
           "failed": "Could not be removed: {{detail}}"
         }
+      },
+      "icons": {
+        "heading": "Icons amended",
+        "state": {
+          "merged": "Amended — tool types and stack size updated",
+          "destinationAbsent": "Not present — nothing to amend",
+          "failed": "Could not be amended: {{detail}}"
+        }
       }
     },
     "verify": {

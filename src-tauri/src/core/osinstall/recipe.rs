@@ -434,7 +434,14 @@ fn validate_removals(recipe: &Recipe) -> CoreResult<()> {
                         continue;
                     }
                     match rule.kind {
-                        RuleKind::File => file_placers.push(other.id.as_str()),
+                        // An icon-tooltypes rule amends one file at `to`,
+                        // exactly like a `File` rule places one — see
+                        // `RuleKind::IconTooltypes`'s own doc comment on why
+                        // it participates in every file-level check a `File`
+                        // rule does.
+                        RuleKind::File | RuleKind::IconTooltypes => {
+                            file_placers.push(other.id.as_str())
+                        }
                         RuleKind::Subtree => subtree_placers.push(other.id.as_str()),
                     }
                 }
@@ -987,8 +994,10 @@ mod tests {
     /// alternative makes the check depend on the components' array
     /// position, and reordering a *set* — which carries no meaning of its
     /// own — must never be able to flip a test from green to red.
-    /// **This sees `RuleKind::File` rules only, and every rule in the
-    /// shipped AmigaOS 3.9 recipe is a `Subtree`** — so for that recipe it
+    /// **This sees `RuleKind::File` and `RuleKind::IconTooltypes` rules
+    /// only — the two kinds that claim one file rather than merge into a
+    /// drawer — and every rule in the shipped AmigaOS 3.9 recipe is a
+    /// `Subtree`** — so for that recipe it
     /// passes *vacuously*, and would pass just as happily with every
     /// `overrides` array emptied. That is deliberate rather than an
     /// oversight (a `Subtree` destination is a merge point, not a claim, and
@@ -1002,7 +1011,11 @@ mod tests {
         for (release, recipe) in shipped_recipes() {
             let mut claimants: HashMap<&str, Vec<&Component>> = HashMap::new();
             for component in &recipe.components {
-                for rule in component.rules.iter().filter(|r| r.kind == RuleKind::File) {
+                for rule in component
+                    .rules
+                    .iter()
+                    .filter(|r| matches!(r.kind, RuleKind::File | RuleKind::IconTooltypes))
+                {
                     claimants
                         .entry(rule.to.as_str())
                         .or_default()

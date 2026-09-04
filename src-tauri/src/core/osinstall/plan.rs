@@ -245,6 +245,13 @@ pub struct PlanItem {
     /// recorded here rather than papered over, because the alternative was to
     /// make the preview slow enough that nobody uses it.
     pub decompress: bool,
+    /// Whether this item is a [`RuleKind::IconTooltypes`] rule — `apply`
+    /// amends the icon already at `to` with `core::amigaicon::merge_tooltypes`
+    /// rather than copying `from` over it. `false` for every `File` and
+    /// `Subtree` item, which is every item a recipe produced before this
+    /// rule kind existed.
+    #[serde(default)]
+    pub merge_icon: bool,
 }
 
 /// What a medium looked like when the plan was made.
@@ -1015,6 +1022,35 @@ pub(crate) fn expand_rules(
                     is_dir: false,
                     bytes: entry.size,
                     decompress: compressed,
+                    merge_icon: false,
+                });
+            }
+            RuleKind::IconTooltypes if entry.is_dir => {
+                // Same shape as the `File` mismatch just above, for the same
+                // reason: emitting it anyway would carry `is_dir: true` and
+                // escape `detect_collisions`, which only looks at files.
+                refusals.push(RefusalReason::RuleKindMismatch {
+                    component: component.id.clone(),
+                    from: rule.from.clone(),
+                    expected: RuleKind::IconTooltypes,
+                    found: RuleKind::Subtree,
+                });
+            }
+            RuleKind::IconTooltypes => {
+                // Unlike a `File` rule, `to` is never renamed for a `.Z`
+                // suffix — an icon is never `compress`-format — and `apply`
+                // reads `from`'s bytes as the *source* of a splice into
+                // whatever is already at `to`, never writes them there
+                // directly. See `PlanItem::merge_icon`.
+                items.push(PlanItem {
+                    component: component.id.clone(),
+                    media: component.media.clone(),
+                    from: rule.from.clone(),
+                    to: rule.to.clone(),
+                    is_dir: false,
+                    bytes: entry.size,
+                    decompress: false,
+                    merge_icon: true,
                 });
             }
             RuleKind::Subtree if !entry.is_dir => {
@@ -1043,6 +1079,7 @@ pub(crate) fn expand_rules(
                     is_dir: true,
                     bytes: 0,
                     decompress: false,
+                    merge_icon: false,
                 });
                 for walked in source.walk(&rule.from)? {
                     let relative = relative_to(&walked.path, &rule.from);
@@ -1066,6 +1103,7 @@ pub(crate) fn expand_rules(
                         is_dir: walked.is_dir,
                         bytes: walked.size,
                         decompress: compressed,
+                        merge_icon: false,
                     });
                 }
             }
@@ -2762,6 +2800,107 @@ mod plan_tests {
         assert!(plan.items.is_empty());
     }
 
+    /// One claimant a `File` rule, one an `IconTooltypes` rule, over the
+    /// same destination, with no `overrides` declared — `RuleKind::IconTooltypes`'s
+    /// own doc comment promises it "participates in the destination-collision
+    /// check exactly like a `File` rule", and this is that promise, exercised
+    /// against `detect_collisions` itself rather than only asserted in a
+    /// comment. Task 8's own AmigaOS 3.2.2 recipe does not exist yet, so this
+    /// is a synthetic two-component recipe built for exactly this test —
+    /// Task 8 runs the identical mutation (a `merge_icon` item quietly exempt
+    /// from the collision check) against its own shipped recipe.
+    fn plan_with_icon_rule_and_file_rule_colliding() -> InstallPlan {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-icon-collision");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        crate::core::osinstall::fixtures::media(
+            &folder,
+            "A",
+            "a.adf",
+            &[("Tools/IconEdit.info", b"one", 0)],
+        );
+        crate::core::osinstall::fixtures::media(
+            &folder,
+            "B",
+            "b.adf",
+            &[("Tools/IconEdit.info", b"two", 0)],
+        );
+
+        let recipe = Recipe {
+            layers: vec![],
+            base: None,
+            release: "Test".to_string(),
+            components: vec![
+                Component {
+                    layer: None,
+                    id: "a".to_string(),
+                    media: "A".to_string(),
+                    rules: vec![PathRule {
+                        from: "Tools/IconEdit.info".to_string(),
+                        to: "Tools/IconEdit.info".to_string(),
+                        kind: RuleKind::File,
+                    }],
+                    required: false,
+                    condition: None,
+                    overrides: vec![],
+                    user_startup: vec![],
+                    activate: vec![],
+                    exclusive_group: None,
+                    label_key: None,
+                    available: true,
+                    removes: Vec::new(),
+                },
+                Component {
+                    layer: None,
+                    id: "b".to_string(),
+                    media: "B".to_string(),
+                    rules: vec![PathRule {
+                        from: "Tools/IconEdit.info".to_string(),
+                        to: "Tools/IconEdit.info".to_string(),
+                        kind: RuleKind::IconTooltypes,
+                    }],
+                    required: false,
+                    condition: None,
+                    // Deliberately undeclared — the point of the test.
+                    overrides: vec![],
+                    user_startup: vec![],
+                    activate: vec![],
+                    exclusive_group: None,
+                    label_key: None,
+                    available: true,
+                    removes: Vec::new(),
+                },
+            ],
+        };
+
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2".to_string(),
+            media_folder: folder,
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: vec!["a".to_string(), "b".to_string()],
+            destination: dir.join("dist"),
+            excluded: Vec::new(),
+            scan_cache: Default::default(),
+        };
+        plan(&request, &recipe).unwrap()
+    }
+
+    #[test]
+    fn an_icon_rule_and_a_file_rule_over_one_path_without_an_override_is_a_collision() {
+        let plan = plan_with_icon_rule_and_file_rule_colliding();
+        assert!(matches!(
+            plan.refusals.as_slice(),
+            [RefusalReason::DestinationCollision { path, components }]
+                if path == "Tools/IconEdit.info" && components.len() == 2
+        ));
+        assert!(plan.items.is_empty());
+    }
+
     /// Carried item 4, closed: the shape above is `File` vs `File`, which
     /// `recipe.rs`'s own static check already covers, so it does not prove
     /// `detect_collisions` looks at *walked* items at all. This is the test
@@ -2799,6 +2938,72 @@ mod plan_tests {
                 if component == "a"
                     && from == "C"
                     && *expected == RuleKind::File
+                    && *found == RuleKind::Subtree
+        ));
+        assert!(plan.items.is_empty());
+    }
+
+    /// The same shape as [`a_file_rule_over_a_directory_is_a_kind_mismatch`],
+    /// for `IconTooltypes`: it resolves against a media file exactly like a
+    /// `File` rule, so a directory at `from` is refused by name rather than
+    /// silently emitted as a `merge_icon` item nothing can actually merge.
+    fn plan_with_an_icon_rule_over_a_directory() -> InstallPlan {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-kind-icon-over-dir");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        crate::core::osinstall::fixtures::media(&folder, "M", "m.adf", &[("C/inner", b"x", 0)]);
+
+        let recipe = Recipe {
+            layers: vec![],
+            base: None,
+            release: "Test".to_string(),
+            components: vec![Component {
+                layer: None,
+                id: "a".to_string(),
+                media: "M".to_string(),
+                rules: vec![PathRule {
+                    from: "C".to_string(),
+                    to: "C".to_string(),
+                    kind: RuleKind::IconTooltypes,
+                }],
+                required: false,
+                condition: None,
+                overrides: vec![],
+                user_startup: vec![],
+                activate: vec![],
+                exclusive_group: None,
+                label_key: None,
+                available: true,
+                removes: Vec::new(),
+            }],
+        };
+
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2".to_string(),
+            media_folder: folder,
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: vec!["a".to_string()],
+            destination: dir.join("dist"),
+            excluded: Vec::new(),
+            scan_cache: Default::default(),
+        };
+        plan(&request, &recipe).unwrap()
+    }
+
+    #[test]
+    fn an_icon_rule_over_a_directory_is_a_kind_mismatch() {
+        let plan = plan_with_an_icon_rule_over_a_directory();
+        assert!(matches!(
+            plan.refusals.as_slice(),
+            [RefusalReason::RuleKindMismatch { component, from, expected, found }]
+                if component == "a"
+                    && from == "C"
+                    && *expected == RuleKind::IconTooltypes
                     && *found == RuleKind::Subtree
         ));
         assert!(plan.items.is_empty());
@@ -2858,6 +3063,7 @@ mod plan_tests {
             is_dir,
             bytes: 4,
             decompress: false,
+            merge_icon: false,
         }
     }
 
@@ -3465,6 +3671,7 @@ mod plan_tests {
                 // real, sector-rounded number.
                 bytes: 2048,
                 decompress: false,
+                merge_icon: false,
             },
             PlanItem {
                 component: "workbench-base".into(),
@@ -3474,6 +3681,7 @@ mod plan_tests {
                 is_dir: false,
                 bytes: 100,
                 decompress: false,
+                merge_icon: false,
             },
         ];
         assert_eq!(
@@ -3502,6 +3710,7 @@ mod plan_tests {
             is_dir: false,
             bytes,
             decompress: false,
+            merge_icon: false,
         };
         let items = vec![
             item("workbench-base", "C/Format", 100),
@@ -3530,6 +3739,7 @@ mod plan_tests {
             is_dir: false,
             bytes,
             decompress: false,
+            merge_icon: false,
         };
         let items = vec![
             item("workbench-base", "C/ASSIGN", 100),

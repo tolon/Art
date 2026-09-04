@@ -557,8 +557,20 @@ describe("osinstallBlocker", () => {
     expect(
       osinstallBlocker({
         ...READY,
-        plan: planned({ items: [{ component: "workbench-base", media: "Workbench3.2", from: "DF0:C/Format", to: "C/Format", isDir: false,
-    decompress: false, bytes: 10 }] }),
+        plan: planned({
+          items: [
+            {
+              component: "workbench-base",
+              media: "Workbench3.2",
+              from: "DF0:C/Format",
+              to: "C/Format",
+              isDir: false,
+              decompress: false,
+              bytes: 10,
+              mergeIcon: false,
+            },
+          ],
+        }),
       })
     ).toBeNull();
   });
@@ -605,8 +617,18 @@ describe("osinstallBlocker", () => {
       found: ["Workbench3.2", "Locale-TR"],
       plan: planned({
         refusals: [MEDIA_MISSING("storage", "Storage3.2")],
-        items: [{ component: "workbench-base", media: "Workbench3.2", from: "DF0:C/Format", to: "C/Format", isDir: false,
-    decompress: false, bytes: 10 }],
+        items: [
+          {
+            component: "workbench-base",
+            media: "Workbench3.2",
+            from: "DF0:C/Format",
+            to: "C/Format",
+            isDir: false,
+            decompress: false,
+            bytes: 10,
+            mergeIcon: false,
+          },
+        ],
       }),
     });
     expect(blocker?.key).toBe("osinstall.blocked.refusals");

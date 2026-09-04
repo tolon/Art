@@ -77,12 +77,32 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::error::{CoreError, CoreResult};
 
-/// Whether a rule takes one file or a whole subtree.
+/// Whether a rule takes one file, a whole subtree, or amends an icon already
+/// in the tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RuleKind {
     File,
     Subtree,
+    /// Merge `from`'s tool types and stack size into the file already at
+    /// `to` — `core::amigaicon::merge_tooltypes`. Exists because AmigaOS
+    /// 3.2.2's update ships `Tools/IconEdit.info` with `do_StackSize`
+    /// **doubled**, from 4 096 to 8 192, for a binary the same update
+    /// replaces, while the icon an ART-built tree already carries is not the
+    /// update's own icon at all — it is the GlowIcons one, 1 486 bytes of
+    /// appended ColorIcon artwork heavier and sitting at a different desktop
+    /// position. A plain `File` rule would drop that artwork; skipping the
+    /// icon update entirely would run the replaced binary on the old,
+    /// undersized stack. So this rule amends rather than replaces, the same
+    /// way the release's own installer does.
+    ///
+    /// Resolves against a media **file**, exactly like [`RuleKind::File`] —
+    /// a directory at `from` is a [`RefusalReason::RuleKindMismatch`], the
+    /// same as its siblings — and participates in the destination-collision
+    /// check exactly like a `File` rule: it amends a file some other
+    /// component placed, so the component using it must declare `overrides`
+    /// naming that component.
+    IconTooltypes,
 }
 
 /// One path taken out of a component's media.
@@ -1192,7 +1212,9 @@ pub(crate) mod fixtures {
         for component in recipe.components.iter().filter(|c| c.media == volume) {
             for rule in &component.rules {
                 match rule.kind {
-                    super::RuleKind::File => entries.push((rule.from.clone(), b"data".to_vec(), 0)),
+                    super::RuleKind::File | super::RuleKind::IconTooltypes => {
+                        entries.push((rule.from.clone(), b"data".to_vec(), 0))
+                    }
                     super::RuleKind::Subtree if !rule.from.is_empty() => {
                         entries.push((format!("{}/placeholder", rule.from), b"data".to_vec(), 0));
                     }

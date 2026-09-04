@@ -391,6 +391,18 @@ pub struct ApplyOutcome {
     /// name — never collapsed into `files`/`directories`/`bytes`, which
     /// describe what was *placed*. See [`RemovalVerdict`].
     pub removed: Vec<RemovalVerdict>,
+    /// One verdict per [`super::plan::PlanItem::merge_icon`] item, by
+    /// destination — never folded into `files`/`bytes`, which already
+    /// account for the icon through whichever `File` item placed it first;
+    /// the merge amends bytes already counted, it does not add a file. See
+    /// [`IconMergeVerdict`].
+    pub icons: Vec<IconMergeVerdict>,
+    /// How many of this run's own icon merges came back
+    /// [`IconMergeState::Failed`] — `DestinationAbsent` does **not** count
+    /// (CLAUDE.md: a skip is not a failure). A screen can also just filter
+    /// `icons` itself; this is the quick "did anything fail" a progress
+    /// summary wants without walking the list.
+    pub failed: u64,
 }
 
 /// What happened when [`apply`] tried to remove one destination — see
@@ -426,6 +438,46 @@ pub struct RemovalVerdict {
     /// row by the same key it showed in the plan.
     pub to: String,
     pub state: RemovalState,
+}
+
+/// What happened when `apply` tried to amend an icon already in the tree
+/// with a [`super::plan::PlanItem::merge_icon`] item — see
+/// `core::amigaicon::merge_tooltypes`.
+///
+/// **Three states, never collapsed to two — modeled on [`RemovalState`] for
+/// the identical reason.** [`IconMergeState::DestinationAbsent`] is its own
+/// outcome, not folded into [`IconMergeState::Failed`]: the component that
+/// would have placed the icon may simply be switched off (AmigaOS 3.2.2's
+/// own recipe amends `Tools/IconEdit.info` only when a base component placed
+/// it first), which is a legitimate build, not a failed merge — this is the
+/// release's own `if exists` guard, made real. Conflating it with
+/// [`IconMergeState::Merged`] would claim ART amended a file that was never
+/// there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IconMergeState {
+    /// `to` existed and now carries `from`'s tool types and stack size, with
+    /// every other byte — including a trailing ColorIcon/NewIcon — untouched.
+    Merged,
+    /// `to` did not exist in the tree at the point this item ran. Skipped,
+    /// never a failure — see this type's own doc comment.
+    DestinationAbsent,
+    /// `to` existed and `core::amigaicon::merge_tooltypes` refused it — a
+    /// destination or source that does not parse as an icon, or one with no
+    /// `ToolTypes` block to splice. Carries the core's own sentence, never
+    /// claimed away (CLAUDE.md: "the screen may not out-claim the core").
+    Failed(String),
+}
+
+/// One [`super::plan::PlanItem::merge_icon`] item, resolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IconMergeVerdict {
+    /// The destination that was amended — matches
+    /// [`super::plan::PlanItem::to`] exactly, so a screen can find its own
+    /// row by the same key it showed in the plan.
+    pub to: String,
+    pub state: IconMergeState,
 }
 
 /// Decode raw bytes as Latin-1 — see the module doc comment's "Latin-1, not
@@ -674,6 +726,97 @@ impl<'a> TreeWriter<'a> {
         }
     }
 
+    /// One [`super::plan::PlanItem::merge_icon`] item: amend the icon
+    /// already at `target` with `item.from`'s tool types and stack size,
+    /// through `core::amigaicon::merge_tooltypes`, rather than copying
+    /// `item.from` over it — see `super::RuleKind::IconTooltypes`'s own doc
+    /// comment for why.
+    ///
+    /// Never a hard error for an absent destination or a malformed icon —
+    /// exactly the discipline [`perform_removal`] already follows for a
+    /// removal, and for the identical reason: a per-entry fact, pushed onto
+    /// [`ApplyOutcome::icons`], never one that stops the whole run.
+    fn merge_icon(
+        &mut self,
+        item: &PlanItem,
+        target: &Path,
+        sources: &mut BTreeMap<String, Box<dyn MediaSource>>,
+    ) -> CoreResult<()> {
+        let dest_bytes = match std::fs::read(target) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                // The release's own `if exists` guard, made real: the
+                // component that would have placed this icon may simply be
+                // switched off. A legitimate build, not a failed merge — see
+                // `IconMergeState`'s own doc comment.
+                self.outcome.icons.push(IconMergeVerdict {
+                    to: item.to.clone(),
+                    state: IconMergeState::DestinationAbsent,
+                });
+                return Ok(());
+            }
+            Err(err) => return Err(CoreError::Io(err)),
+        };
+
+        let source = sources.get_mut(&item.media).ok_or_else(|| {
+            CoreError::InvalidInput(format!(
+                "'{}' names media '{}', which this plan never opened",
+                item.to, item.media
+            ))
+        })?;
+        let source_bytes = source.read(&item.from)?;
+
+        match crate::core::amigaicon::merge_tooltypes(&dest_bytes, &source_bytes) {
+            Ok(merged) => {
+                // `atomic_write`, not `guarded_write` — the same reason
+                // every other write in `place` uses it: this module keeps
+                // its own account of what a previous run left
+                // (`FileRecord::overwrote`), not a `.art-backup/` beside the
+                // tree.
+                crate::core::safety::atomic::atomic_write(target, &merged)?;
+
+                // The sidecar beside `target` is left exactly as the
+                // component that placed the icon wrote it: this merge
+                // changes only the icon's own bytes (tool types and stack
+                // size), never the AmigaDOS protection/date/comment a
+                // sidecar records, so nothing here has anything new to say
+                // about them. The manifest record's own `protection` field
+                // carries the same value forward for the same reason.
+                let key = super::destination_key(&item.to);
+                let protection = self
+                    .record_index
+                    .get(&key)
+                    .and_then(|&at| self.files[at].protection);
+
+                self.record(
+                    &item.to,
+                    FileRecord {
+                        path: item.to.clone(),
+                        host_path: host_path_of(&item.to),
+                        component: item.component.clone(),
+                        media: item.media.clone(),
+                        sha256: sha256_bytes(&merged),
+                        bytes: merged.len() as u64,
+                        protection,
+                        overwrote: None,
+                    },
+                );
+                self.outcome.icons.push(IconMergeVerdict {
+                    to: item.to.clone(),
+                    state: IconMergeState::Merged,
+                });
+            }
+            Err(err) => {
+                self.outcome.failed += 1;
+                self.outcome.icons.push(IconMergeVerdict {
+                    to: item.to.clone(),
+                    state: IconMergeState::Failed(err.to_string()),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Place `items` under the root, in order, reading each one's bytes out
     /// of `sources`.
     ///
@@ -716,6 +859,11 @@ impl<'a> TreeWriter<'a> {
                 if self.made_dirs.insert(super::destination_key(&item.to)) && !existed {
                     self.outcome.directories += 1;
                 }
+                continue;
+            }
+
+            if item.merge_icon {
+                self.merge_icon(item, &target, sources)?;
                 continue;
             }
 
@@ -1792,6 +1940,7 @@ mod tests {
                 is_dir: false,
                 bytes: 3,
                 decompress: false,
+                merge_icon: false,
             },
             PlanItem {
                 component: "modules-a1200".into(),
@@ -1801,6 +1950,7 @@ mod tests {
                 is_dir: false,
                 bytes: 4,
                 decompress: false,
+                merge_icon: false,
             },
         ];
         let total_bytes = items.iter().map(|i| i.bytes).sum();
@@ -1864,6 +2014,7 @@ mod tests {
                 is_dir: false,
                 bytes: 10,
                 decompress: false,
+                merge_icon: false,
             },
             PlanItem {
                 component: "workbench-base".into(),
@@ -1873,6 +2024,7 @@ mod tests {
                 is_dir: false,
                 bytes: 7,
                 decompress: false,
+                merge_icon: false,
             },
         ];
         let total_bytes = items.iter().map(|i| i.bytes).sum();
@@ -1931,6 +2083,7 @@ mod tests {
                 is_dir: false,
                 bytes: 5,
                 decompress: false,
+                merge_icon: false,
             },
             PlanItem {
                 component: "workbench-base".into(),
@@ -1940,6 +2093,7 @@ mod tests {
                 is_dir: false,
                 bytes: 6,
                 decompress: false,
+                merge_icon: false,
             },
         ];
         let plan = InstallPlan {
@@ -2049,6 +2203,7 @@ mod tests {
                 is_dir: false,
                 bytes: 5,
                 decompress: false,
+                merge_icon: false,
             },
             PlanItem {
                 component: "workbench-base".into(),
@@ -2058,6 +2213,7 @@ mod tests {
                 is_dir: false,
                 bytes: 6,
                 decompress: false,
+                merge_icon: false,
             },
         ];
         let plan = InstallPlan {
@@ -2993,6 +3149,7 @@ mod tests {
             is_dir: false,
             bytes: 16,
             decompress: false,
+            merge_icon: false,
         }];
         let plan = InstallPlan {
             release: "Test".into(),
@@ -3361,6 +3518,7 @@ mod tests {
             is_dir: false,
             bytes: starter.len() as u64,
             decompress: false,
+            merge_icon: false,
         });
         plan.user_startup = vec![UserStartupContribution {
             component: "amissl".into(),
@@ -3485,6 +3643,7 @@ mod tests {
             is_dir: false,
             bytes: starter.len() as u64,
             decompress: false,
+            merge_icon: false,
         });
         plan.user_startup = vec![UserStartupContribution {
             component: "amissl".into(),
@@ -5832,6 +5991,7 @@ mod tests {
             is_dir: false,
             bytes: 8,
             decompress: false,
+            merge_icon: false,
         }];
         let mut writer = TreeWriter::new(&root, read_manifest(&root).files);
         writer.place(&items, &mut sources, &NoProgress).unwrap();
@@ -6734,5 +6894,222 @@ mod tests {
             1,
             "one verdict for the one entry in plan.removals, never silently dropped"
         );
+    }
+
+    // ---- Task 6: the `icon-tooltypes` rule kind ----
+
+    /// The ColorIcon artwork appended after `Tools/IconEdit.info`'s classic
+    /// fields in an ART-built tree — the GlowIcons icon carries 1 486 real
+    /// bytes of it (`core::amigaicon`'s own module doc comment). Stands in
+    /// for "whatever a real appended IFF FORM would be"; the point of the
+    /// test is that it survives the merge byte for byte, not what it says.
+    const TRAILING: &[u8] = b"FORM....ICONFACE....pretend glowicons artwork";
+
+    /// A minimal, valid Amiga `.info`, built by hand exactly the way
+    /// `core::amigaicon`'s own module doc comment describes the classic
+    /// layout — a second, independent encoding of the same format, not a
+    /// re-export of Task 5's own private test helper, so a wiring mistake in
+    /// either module's offsets cannot hide behind the other's agreeing with
+    /// itself.
+    fn synthetic_icon(tooltypes: &[&str], stack: u32, trailing: &[u8]) -> Vec<u8> {
+        const MAGIC: u16 = 0xE310;
+        const HEADER_LEN: usize = 78;
+        const OFF_TOOL_TYPES: usize = 54;
+        const OFF_STACK_SIZE: usize = 74;
+
+        let mut buf = vec![0u8; HEADER_LEN];
+        buf[0..2].copy_from_slice(&MAGIC.to_be_bytes());
+        buf[OFF_TOOL_TYPES..OFF_TOOL_TYPES + 4].copy_from_slice(&1u32.to_be_bytes());
+        buf[OFF_STACK_SIZE..OFF_STACK_SIZE + 4].copy_from_slice(&stack.to_be_bytes());
+
+        let size = ((tooltypes.len() + 1) * 4) as u32;
+        buf.extend_from_slice(&size.to_be_bytes());
+        for tt in tooltypes {
+            let bytes = tt.as_bytes();
+            buf.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+            buf.extend_from_slice(bytes);
+        }
+        buf.extend_from_slice(trailing);
+        buf
+    }
+
+    /// `base` places `Tools/IconEdit.info` with a 4096 stack, one tool type
+    /// and [`TRAILING`] appended after it — standing in for the GlowIcons
+    /// icon an ART-built tree already carries. `update` amends it with an
+    /// `IconTooltypes` rule from a media icon carrying 8192 and one more
+    /// tool type and no trailing block of its own — AmigaOS 3.2.2's own
+    /// change to `Tools/IconEdit.info` (`core::amigaicon`'s module doc
+    /// comment). `update` is `required` and declares `overrides` over
+    /// `base`, the same shape [`recipe_with_removal`] already uses for an
+    /// update component that amends what a base component placed.
+    fn recipe_with_icon_rule() -> crate::core::osinstall::Recipe {
+        use crate::core::osinstall::{Component, PathRule, Recipe, RuleKind};
+
+        Recipe {
+            release: "Test OS".to_string(),
+            base: None,
+            layers: vec![],
+            components: vec![
+                Component {
+                    id: "base".to_string(),
+                    media: "Base".to_string(),
+                    rules: vec![PathRule {
+                        from: "Tools/IconEdit.info".to_string(),
+                        to: "Tools/IconEdit.info".to_string(),
+                        kind: RuleKind::File,
+                    }],
+                    required: false,
+                    condition: None,
+                    overrides: Vec::new(),
+                    user_startup: Vec::new(),
+                    activate: Vec::new(),
+                    exclusive_group: None,
+                    label_key: None,
+                    available: true,
+                    layer: None,
+                    removes: Vec::new(),
+                },
+                Component {
+                    id: "update".to_string(),
+                    media: "Update".to_string(),
+                    rules: vec![PathRule {
+                        from: "Tools/IconEdit.info".to_string(),
+                        to: "Tools/IconEdit.info".to_string(),
+                        kind: RuleKind::IconTooltypes,
+                    }],
+                    required: true,
+                    condition: None,
+                    overrides: vec!["base".to_string()],
+                    user_startup: Vec::new(),
+                    activate: Vec::new(),
+                    exclusive_group: None,
+                    label_key: None,
+                    available: true,
+                    layer: None,
+                    removes: Vec::new(),
+                },
+            ],
+        }
+    }
+
+    /// The media folder [`recipe_with_icon_rule`] needs: `Base` carries the
+    /// icon `update` amends, and `Update` carries the source icon to merge
+    /// from — `update` is `required`, so its own media always has to
+    /// resolve, or `plan()` refuses the whole thing with `MediaMissing`
+    /// before the merge ever enters the picture. Same shape as
+    /// [`media_for_removal_recipe`], one component's media earlier.
+    fn media_for_icon_recipe(folder: &Path, with_base: bool) {
+        if with_base {
+            fixtures::media(
+                folder,
+                "Base",
+                "base.adf",
+                &[(
+                    "Tools/IconEdit.info",
+                    synthetic_icon(&["A=1"], 4096, TRAILING).as_slice(),
+                    0x00,
+                )],
+            );
+        }
+        fixtures::media(
+            folder,
+            "Update",
+            "update.adf",
+            &[(
+                "Tools/IconEdit.info",
+                synthetic_icon(&["A=1", "(STACK=8192)"], 8192, b"").as_slice(),
+                0x00,
+            )],
+        );
+    }
+
+    /// `base` is chosen, so `Tools/IconEdit.info` really is placed before
+    /// `update`'s own merge has anything to act on.
+    fn request_for_icon_scratch(
+        dir: &Path,
+        tree: &Path,
+    ) -> crate::core::osinstall::plan::InstallRequest {
+        let folder = dir.join("media");
+        std::fs::create_dir_all(&folder).unwrap();
+        media_for_icon_recipe(&folder, true);
+        crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "Test OS".to_string(),
+            media_folder: folder,
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: vec!["base".to_string()],
+            excluded: Vec::new(),
+            destination: tree.to_path_buf(),
+            scan_cache: Default::default(),
+        }
+    }
+
+    /// The other half of the same fixture: `base` is never chosen, so
+    /// nothing ever placed `Tools/IconEdit.info` — a legitimate build, not a
+    /// failed one (see the test this exists for).
+    fn request_without_the_component_that_places_the_icon(
+    ) -> crate::core::osinstall::plan::InstallRequest {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = fixtures::scratch(&format!("apply-icon-no-base-{n}"));
+        let folder = dir.join("media");
+        std::fs::create_dir_all(&folder).unwrap();
+        media_for_icon_recipe(&folder, false);
+        crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "Test OS".to_string(),
+            media_folder: folder,
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: Vec::new(),
+            excluded: Vec::new(),
+            destination: dir.join("tree"),
+            scan_cache: Default::default(),
+        }
+    }
+
+    #[test]
+    fn an_icon_rule_merges_into_the_icon_already_in_the_tree() {
+        let dir = fixtures::scratch("apply-icon-rule");
+        let tree = dir.join("tree");
+        apply_with(
+            &recipe_with_icon_rule(),
+            &request_for_icon_scratch(&dir, &tree),
+        )
+        .unwrap();
+
+        let merged = std::fs::read(tree.join("Tools/IconEdit.info")).unwrap();
+        assert_eq!(crate::core::amigaicon::stack_size(&merged).unwrap(), 8192);
+        let l = crate::core::amigaicon::layout(&merged).unwrap();
+        assert_eq!(
+            &merged[l.trailing], TRAILING,
+            "the tree's own ColorIcon survived"
+        );
+    }
+
+    #[test]
+    fn an_icon_rule_whose_destination_is_absent_is_skipped_and_says_so() {
+        let report = apply_with(
+            &recipe_with_icon_rule(),
+            &request_without_the_component_that_places_the_icon(),
+        )
+        .unwrap();
+        let verdict = report
+            .icons
+            .iter()
+            .find(|v| v.to == "Tools/IconEdit.info")
+            .expect("the skip is reported by name");
+        assert!(
+            matches!(verdict.state, IconMergeState::DestinationAbsent),
+            "the release's own `if exists` guard — skipped, never failed"
+        );
+        assert_eq!(report.failed, 0);
     }
 }
