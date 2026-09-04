@@ -2328,4 +2328,31 @@ mod tests {
             "the refusal names both the recipe and the base it points at: {text}"
         );
     }
+
+    /// **A standing guard for the direction the ignored 3.2.2 test cannot
+    /// cover until Task 8.** `merge_base` stamps every inherited component
+    /// with the derived recipe's *first* declared layer — this fixture
+    /// declares two, `alpha` and `beta`, specifically so that stamping the
+    /// wrong one is a different, nameable string rather than a coincidence.
+    /// The assertion checks that string, not merely `Some(_)`: a mutation
+    /// that stamped `beta` (the last layer) must produce a message showing
+    /// `Some("beta")`, not a green test that never looked.
+    #[test]
+    fn a_based_recipes_inherited_components_are_stamped_with_the_first_layer_not_any_other() {
+        let merged = merge_for_test(
+            /* base   */
+            r#"{"release":"B","components":[{"id":"inherited","media":"M","rules":[]}]}"#,
+            /* derived*/
+            r#"{"release":"D","base":"B",
+                "layers":[{"id":"alpha"},{"id":"beta"}],
+                "components":[{"id":"own","media":"M2","layer":"beta","rules":[]}]}"#,
+        )
+        .expect("a two-layer derived recipe resolves against its base");
+        assert_eq!(
+            merged.component("inherited").unwrap().layer.as_deref(),
+            Some("alpha"),
+            "the inherited component must be stamped with the recipe's first declared layer \
+             ('alpha'), not 'beta' or any other"
+        );
+    }
 }
