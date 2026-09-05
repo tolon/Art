@@ -42,7 +42,7 @@
 //! expensive defects are made of, so those names are carried in the report and
 //! **counted as nothing**.
 //!
-//! That list is the one hand-maintained thing in this file, it is three
+//! That list is the one hand-maintained thing in this file, it is four
 //! entries long, each is cited, and [`AMBIGUOUS_ACROSS_RELEASES`] says so.
 //!
 //! # What it will not do
@@ -242,6 +242,18 @@ pub fn identify(volume_names: &[String]) -> CoreResult<MediaVerdict> {
     // names (the ordinary "just the base, nothing more" case), the based
     // release itself is dropped instead: it was never really evidenced, only
     // inherited into existence.
+    //
+    // **One own disk is not the whole update (fix round 1, Finding 3).** The
+    // first version subsumed the base on *any* own-layer match, so a
+    // complete AmigaOS 3.2 disk set plus a single stray AmigaOS 3.2.2 disk
+    // (say, one locale update the owner happened to also have) answered
+    // "AmigaOS 3.2.2" outright — a confident wrong sentence that sends a
+    // user looking for the rest of an update set they never meant to
+    // install. Gated on `missing_required.is_empty()` too: a based release
+    // only wins when its *own* required media (`update-322-system`'s
+    // `Update3.2.2`, not just any one of its optional locale disks) is
+    // actually all present, the same bar `release_holding` already holds an
+    // unbased release to.
     for release in recipe::releases() {
         let recipe = recipe::by_release(release)?;
         let Some(base_release) = recipe.base.clone() else {
@@ -259,9 +271,10 @@ pub fn identify(volume_names: &[String]) -> CoreResult<MediaVerdict> {
             .iter()
             .find(|c| c.release == *release)
             .is_some_and(|c| {
-                c.distinguishing
-                    .iter()
-                    .any(|found| own_media.iter().any(|m| super::amiga_names_equal(found, m)))
+                c.missing_required.is_empty()
+                    && c.distinguishing
+                        .iter()
+                        .any(|found| own_media.iter().any(|m| super::amiga_names_equal(found, m)))
             });
 
         if has_own_evidence {
@@ -463,6 +476,33 @@ mod tests {
         assert!(evidence
             .distinguishing
             .contains(&"Workbench3.2".to_string()));
+        assert!(evidence.missing_required.is_empty());
+    }
+
+    /// **Fix round 1, Finding 3.** A complete AmigaOS 3.2 disk set plus one
+    /// stray AmigaOS 3.2.2 disk that happens not to be required
+    /// (`Locale3.2.2-DE`, one optional locale update) used to answer "AmigaOS
+    /// 3.2.2" outright — the base-subsumption pass triggered on *any* own
+    /// evidence, so one locale disk was enough to claim the whole update.
+    /// That is a confident wrong sentence: `Update3.2.2`, the update's own
+    /// required media, is not here, so this is a 3.2 folder with an extra
+    /// disk in it, not a 3.2.2 folder. Gating subsumption on the based
+    /// release's own `missing_required` being empty is what keeps this one
+    /// disk from claiming the whole update.
+    #[test]
+    fn one_stray_322_disk_beside_a_complete_32_set_does_not_claim_the_whole_update() {
+        let evidence = identified(&[
+            "Workbench3.2",
+            "Install3.2",
+            "Extras3.2",
+            "Storage3.2",
+            "Locale3.2.2-DE",
+        ]);
+        assert_eq!(
+            evidence.release, "AmigaOS 3.2",
+            "one optional update disk must not promote this to AmigaOS 3.2.2 while \
+             Update3.2.2 itself is still missing"
+        );
         assert!(evidence.missing_required.is_empty());
     }
 

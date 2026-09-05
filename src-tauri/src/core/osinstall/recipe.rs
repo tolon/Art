@@ -2518,6 +2518,43 @@ mod tests {
         );
     }
 
+    /// **Fix round 1, Finding 2.** `validate()` skips `validate_removals`
+    /// whenever `recipe.base` is set (so a based recipe's own `removes` can
+    /// legitimately name a destination the *base* places), and `merge_base`
+    /// is what is supposed to run that check once, explicitly, against the
+    /// fully merged component list. Nothing else calls `validate_removals`
+    /// on a based recipe — so if that one line in `merge_base` is ever
+    /// deleted, a based recipe's `removes` stops being checked at all, and
+    /// this is the test that would notice: `a` (the base's own component)
+    /// places `Tools/X` as a `File`, `b` (the derived recipe's own, on the
+    /// `up` layer) removes it without declaring an `overrides` over `a` —
+    /// the same undeclared-claim shape
+    /// `a_removal_may_only_name_a_path_an_overridden_component_places`
+    /// already refuses for an unbased recipe, asserted here across the
+    /// `base` boundary instead.
+    #[test]
+    fn a_based_recipes_removal_is_still_checked_against_the_merged_component_list() {
+        let err = merge_for_test(
+            /* base   */
+            r#"{"release":"B","components":[
+                  {"id":"a","media":"M","rules":[{"from":"P","to":"Tools/X","kind":"file"}]}
+                ]}"#,
+            /* derived*/
+            r#"{"release":"D","base":"B",
+                "layers":[{"id":"base"},{"id":"up"}],
+                "components":[
+                  {"id":"b","media":"N","layer":"up","rules":[],"removes":["Tools/X"]}
+                ]}"#,
+        )
+        .expect_err("b removes a's file across the base boundary without declaring it overrides a");
+        let text = err.to_string();
+        assert!(
+            text.contains("'b'") && text.contains("Tools/X") && text.contains("'a'"),
+            "names the remover, the path and the placer, even though the placer came from the \
+             base rather than from this recipe's own file: {text}"
+        );
+    }
+
     // ---- Task 4: a component may remove a path an overridden one placed ----
 
     /// The brief's own written test: `b` removes `a`'s file without
@@ -2634,6 +2671,42 @@ mod tests {
         assert!(update.overrides.iter().any(|o| o == "diskdoctor"));
     }
 
+    /// **Fix round 1, Finding 1.** `update-322-diskdoctor`'s rules were
+    /// copied from the base AmigaOS 3.2 recipe's own `diskdoctor` component
+    /// rather than measured, and they were wrong in both directions: it
+    /// placed `C/FixROMLibs`, which `Update3.2.2.adf`'s own installer
+    /// (`Install/Install`) never copies, and it omitted
+    /// `Devs/trackfile.device`, which the installer does copy. Both files
+    /// are really on the `DiskDoctor` disk, so nothing refused and nothing
+    /// failed — exactly the confident-wrong shape this project pays most
+    /// for. Nothing read this component's rules before this test; now
+    /// something does.
+    #[test]
+    fn update_322_diskdoctor_places_exactly_the_three_files_the_installer_does() {
+        let r = by_release("AmigaOS 3.2.2").unwrap();
+        let update = r.component("update-322-diskdoctor").unwrap();
+        let pairs: Vec<(&str, &str)> = update
+            .rules
+            .iter()
+            .map(|rule| (rule.from.as_str(), rule.to.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                ("C/DAControl", "C/DAControl"),
+                ("C/DiskDoctor", "C/DiskDoctor"),
+                ("Devs/trackfile.device", "Devs/trackfile.device"),
+            ],
+            "exactly what Update3.2.2.adf's own Install/Install script copies from DiskDoctor \
+             — never C/FixROMLibs, which is the base 3.2 diskdoctor's own rule for a different \
+             disk"
+        );
+        assert!(
+            update.rules.iter().all(|rule| rule.kind == RuleKind::File),
+            "all three are single files, never a Subtree"
+        );
+    }
+
     #[test]
     fn every_locale_component_names_only_drawers_its_own_disk_carries() {
         // -EN carries Help alone; only -CZ, -RS and -RU carry Languages.
@@ -2661,7 +2734,17 @@ mod tests {
                     .rules
                     .iter()
                     .any(|rule| rule.from == "Languages"),
-                "{id} does not, and a rule for it would refuse MediaMissing"
+                // Fix round 1, Finding 4: this used to say "a rule for it
+                // would refuse MediaMissing", which overstates it — every
+                // locale disk carries a `Languages` drawer, empty on
+                // fourteen of them (measured: `-TR` and `-DE` both have it,
+                // with zero files inside), so a rule here would resolve and
+                // place nothing, not refuse. Still wrong to write, because
+                // it is not what the release's own `UPDATELOCALE` procedure
+                // does for these two languages.
+                "{id} does not carry a non-empty Languages drawer, and a rule for it would \
+                 place an empty subtree rather than match what the release's own installer \
+                 does"
             );
         }
     }

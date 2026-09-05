@@ -70,6 +70,17 @@
       ]
     },
     {
+      "_why_these_three_and_not_the_base_diskdoctors_three": [
+        "Fix round 1, Finding 1. This component's rules were copied from the",
+        "base AmigaOS 3.2 recipe's own `diskdoctor` instead of being measured —",
+        "that component's `C/FixROMLibs` is right for *that* disk and wrong for",
+        "this one. Measured off `Update3.2.2.adf:Install/Install` itself (the",
+        "DiskDoctor block, design note ss2 / research note ss4 item 5): the",
+        "installer copies `c/DAControl` and `c/DiskDoctor` into `C`, and",
+        "`Devs/trackfile.device` into `Devs` — three files, never `FixROMLibs`.",
+        "`recipe.rs`'s `update_322_diskdoctor_places_exactly_the_three_files_the_installer_does`",
+        "is the test that reads this component's rules; there was none before."
+      ],
       "id": "update-322-diskdoctor",
       "media": "DiskDoctor",
       "layer": "update-3.2.2",
@@ -78,7 +89,7 @@
       "rules": [
         { "from": "C/DAControl", "to": "C/DAControl", "kind": "file" },
         { "from": "C/DiskDoctor", "to": "C/DiskDoctor", "kind": "file" },
-        { "from": "C/FixROMLibs", "to": "C/FixROMLibs", "kind": "file" }
+        { "from": "Devs/trackfile.device", "to": "Devs/trackfile.device", "kind": "file" }
       ]
     },
     {
