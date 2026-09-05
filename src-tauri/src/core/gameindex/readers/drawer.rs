@@ -23,6 +23,23 @@ use crate::core::gameindex::record::{
 use crate::core::hashing::sha256_bytes;
 use crate::core::whdload;
 
+/// The largest a slave file may be before ART gives up on it.
+///
+/// **M1.** Mirrors `readers::lhadrawer::MAX_SLAVE_BYTES` and
+/// `readers::whdhdf::MAX_SLAVE_BYTES` exactly, and closes the gap between this
+/// reader and those two: both already refuse an oversized candidate before
+/// reading it, so a file over this size was never going to be catalogued by
+/// either of them — leaving this reader unbounded did not let ART read
+/// anything the others could not, it only meant a `.slave` of any size, real
+/// or not, was pulled whole into memory under `panic = "abort"`, and that the
+/// id `run_install`'s catalogue join computes for a pack could disagree with
+/// the id the *other* two readers would have computed for the very same
+/// bytes, because they would have refused it at this size and this reader
+/// would not have. With all three readers refusing at the same size, no
+/// reader can ever produce an id for a file none of the others would — the
+/// divergence the ledger asked about does not survive this fix either.
+const MAX_SLAVE_BYTES: u64 = 2 * 1024 * 1024;
+
 /// Whether `name`'s extension is `.slave`, compared case-insensitively — the
 /// same way iGame's own `strcasestr` does it. A real drawer carries either
 /// `.slave` or `.Slave`, and neither is more correct than the other.
@@ -77,7 +94,24 @@ fn dir_name_of(dir: &Path) -> String {
 /// Every other outcome — no icon, an icon ART cannot parse, an icon that
 /// names nothing — comes back as `None`, because none of those settle an
 /// ambiguous drawer either; only a stated name does.
+///
+/// **N1.** `<dir-name>.info` is the *only* icon consulted — measured
+/// convention (every drawer and its Project icon share a name in the 893 this
+/// was built against), not an AmigaDOS rule. A drawer named `Turrican 3` whose
+/// own icon happens to be called `Turrican3.info` is refused rather than
+/// guessed at, which is the right call (§14/§34) — but the rule itself is
+/// parochial, and a future reader that wants to look further should start
+/// here.
 fn icon_named_slave(dir: &Path, dir_name: &str) -> Option<String> {
+    // Bounded (M1): an icon is small, and this is the user's own disk rather
+    // than a file ART wrote — a name that happens to collide with a much
+    // larger file must not be read whole into memory to find that out.
+    let size = std::fs::metadata(dir.join(format!("{dir_name}.info")))
+        .ok()?
+        .len();
+    if size > MAX_SLAVE_BYTES {
+        return None;
+    }
     let bytes = std::fs::read(dir.join(format!("{dir_name}.info"))).ok()?;
     let tooltypes = amigaicon::tooltypes(&bytes).ok()?;
     whdload::launch_options(&tooltypes).slave
@@ -121,7 +155,19 @@ pub fn read_drawer(dir: &Path) -> CoreResult<Option<GameRecord>> {
         many => resolve_ambiguous(dir, many)?,
     };
 
-    let bytes = std::fs::read(dir.join(&slave_name))?;
+    let slave_path = dir.join(&slave_name);
+    // Bounded (M1): checked before a single byte is read, the same way
+    // `scan::MAX_TITLE_BYTES` is checked before a 29 GB card image is hashed.
+    // A real WHDLoad slave is kilobytes; a file this large named `.slave` is
+    // not a slave ART can trust, whatever else it might be.
+    let size = std::fs::metadata(&slave_path)?.len();
+    if size > MAX_SLAVE_BYTES {
+        return Err(CoreError::InvalidInput(format!(
+            "'{slave_name}' is {size} bytes, past the {MAX_SLAVE_BYTES}-byte ceiling for a real \
+             WHDLoad slave"
+        )));
+    }
+    let bytes = std::fs::read(&slave_path)?;
     let facts = slave::read_slave(&bytes)?;
 
     let title = match facts.name.clone().filter(|name| !name.is_empty()) {
@@ -296,6 +342,27 @@ mod tests {
             Media::WhdloadDrawer { slave, .. } => assert_eq!(slave, "Two.slave"),
             other => panic!("got {other:?}"),
         }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// M1: a candidate named `*.slave` past the size ceiling is refused
+    /// before it is read, the same as `readers::lhadrawer` and
+    /// `readers::whdhdf` already refuse one. Built with `set_len` (sparse),
+    /// same as `scan`'s own oversized-file test, so this stays fast rather
+    /// than actually allocating 2 MB+ in a test.
+    #[test]
+    fn an_oversized_slave_is_refused_without_being_read_whole() {
+        let root = scratch("oversized");
+        let dir = root.join("Huge");
+        std::fs::create_dir_all(&dir).unwrap();
+        let slave = dir.join("Huge.slave");
+        let file = std::fs::File::create(&slave).unwrap();
+        file.set_len(MAX_SLAVE_BYTES + 1).unwrap();
+        drop(file);
+
+        let err = read_drawer(&dir).expect_err("a file this large is not a real slave");
+        assert!(err.to_string().contains("Huge.slave"), "{err}");
+
         std::fs::remove_dir_all(&root).ok();
     }
 

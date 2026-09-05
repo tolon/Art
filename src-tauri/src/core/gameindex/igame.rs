@@ -149,6 +149,42 @@ impl Omitted {
             | Omitted::Empty { key } => key,
         }
     }
+
+    /// Whether this is worth telling somebody about.
+    ///
+    /// **`Empty` is not.** Most titles have no genre, no year and no chipset
+    /// ART could state — that is the ordinary case `render`'s own doc calls
+    /// "ART knows no year", not a failure of anything. Surfacing it on every
+    /// write would bury the two omissions somebody can actually act on
+    /// (`TooLong`, `RefusedByIGame`) in noise that says nothing wrong
+    /// happened.
+    fn is_notable(&self) -> bool {
+        !matches!(self, Omitted::Empty { .. })
+    }
+}
+
+impl std::fmt::Display for Omitted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Omitted::TooLong { key, bytes } => write!(
+                f,
+                "{key} is {bytes} bytes — too long for iGame's 64-byte line"
+            ),
+            Omitted::RefusedByIGame { key, reason } => write!(f, "{key}: {reason}"),
+            Omitted::Empty { key } => write!(f, "ART knows no {key}"),
+        }
+    }
+}
+
+/// The omissions worth telling a user about, in the order `render` found
+/// them. English (ART-060), the same as a `CoreError`'s own message — the
+/// screen shows it beside the translated sentence rather than inside it.
+pub fn notable_omissions(omitted: &[Omitted]) -> Vec<String> {
+    omitted
+        .iter()
+        .filter(|o| o.is_notable())
+        .map(|o| o.to_string())
+        .collect()
 }
 
 /// The file's text, and what did not go into it.
@@ -285,58 +321,121 @@ pub fn merge_into(existing: &str, data: &IGameData) -> Rendered {
     }
 }
 
+/// What one write into `<dir>/igame.data` settled on.
+///
+/// Decided from a **single** read of the file that may already be there —
+/// the second half of I3's fix. `apply_one` used to read and render the file
+/// once to decide whether anything would change, discard that, then call
+/// [`write_beside`] which read and rendered it again to actually write —
+/// two disk reads and two renders to answer one question. This enum is what
+/// lets a caller get that answer *and* the write in one call.
+///
+/// **`AlreadyCurrent` and `NothingFit` are not the same fact, even though
+/// both leave the file untouched.** The first is a file that already said
+/// exactly what ART would write — a real "nothing to do". The second is a
+/// title with nothing ART could put in the file at all: every managed field
+/// was empty, too long for iGame's line, or refused by iGame itself.
+/// Writing an *empty* `igame.data` for the second case (I2) would look
+/// exactly like [`WriteOutcome::Written`] to anything checking whether a
+/// file exists or counting bytes copied, and would say nothing to iGame —
+/// CLAUDE.md's own worst class of defect, arriving here as a written,
+/// verified file with nothing in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WriteOutcome {
+    /// Nothing was there before; a fresh file was written.
+    Written,
+    /// A file was already there and its managed keys were rewritten in place.
+    Merged,
+    /// A file was already there and already said exactly this. Nothing was
+    /// touched.
+    AlreadyCurrent,
+    /// Nothing survived iGame's own rules to write — every field was empty,
+    /// too long, or refused. Nothing was touched: an existing file (if any)
+    /// is left exactly as it was rather than blanked.
+    NothingFit,
+}
+
 /// What writing one did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Written {
     pub path: String,
-    /// Whether a file was already there and was edited rather than replaced.
-    pub merged: bool,
+    pub outcome: WriteOutcome,
+    /// Where the previous file went, taken only for [`WriteOutcome::Merged`]
+    /// under a policy that keeps generations. `None` for every other
+    /// outcome: nothing to preserve for a fresh file, and nothing changed for
+    /// either `Unchanged`-shaped outcome.
+    pub backup: Option<String>,
     pub omitted: Vec<Omitted>,
 }
 
-/// Put an `igame.data` in a game's drawer, editing one already there.
+/// Put an `igame.data` beside a slave, editing one already there.
 ///
-/// Goes through `core::safety::atomic_write`, like every other write to a
-/// user's file: a half-written `igame.data` is a drawer iGame reads a broken
-/// line out of.
-pub fn write_into(drawer: &Path, data: &IGameData) -> CoreResult<Written> {
+/// Reads the file **once** and decides everything from that one read:
+/// whether it already says this ([`WriteOutcome::AlreadyCurrent`]), whether
+/// there is nothing to say at all ([`WriteOutcome::NothingFit`]), or whether
+/// to write — fresh or merged. Only the last case touches the file, and only
+/// then through [`crate::core::safety::atomic_write`]: a truncated
+/// `igame.data` is one iGame reads half of, and a half-written line is worse
+/// than none.
+///
+/// `backup_policy` is the caller's own choice, because the two real callers
+/// want different things from the exact same write: `commands/whdload.rs`'s
+/// `run_install` passes [`crate::core::safety::BackupPolicy::NONE`] — nothing
+/// of the user's is being touched, because ART unpacked this drawer moments
+/// ago, so there is nothing to preserve — while `igamewrite::apply_one`
+/// passes [`crate::core::safety::BackupPolicy::CONFIG`], because that
+/// `igame.data` may be one the user (or another tool) wrote by hand. A backup
+/// is only ever taken immediately before [`WriteOutcome::Merged`] actually
+/// overwrites something; nothing is backed up for a fresh file or for either
+/// outcome that leaves the file alone.
+pub fn write_beside(
+    drawer: &Path,
+    data: &IGameData,
+    backup_policy: crate::core::safety::BackupPolicy,
+) -> CoreResult<Written> {
     let path = drawer.join(FILE_NAME);
     let existing = std::fs::read_to_string(&path).ok();
-    let merged = existing.is_some();
     let rendered = match &existing {
         Some(text) => merge_into(text, data),
         None => render(data),
     };
+
+    if existing.as_deref() == Some(rendered.text.as_str()) {
+        return Ok(Written {
+            path: path.display().to_string(),
+            outcome: WriteOutcome::AlreadyCurrent,
+            backup: None,
+            omitted: rendered.omitted,
+        });
+    }
+    if rendered.text.is_empty() {
+        return Ok(Written {
+            path: path.display().to_string(),
+            outcome: WriteOutcome::NothingFit,
+            backup: None,
+            omitted: rendered.omitted,
+        });
+    }
+
+    let backup = if existing.is_some() {
+        crate::core::safety::backup_file(&path, backup_policy)?
+    } else {
+        None
+    };
+
     crate::core::safety::atomic_write(&path, rendered.text.as_bytes())?;
     Ok(Written {
         path: path.display().to_string(),
-        merged,
+        outcome: if existing.is_some() {
+            WriteOutcome::Merged
+        } else {
+            WriteOutcome::Written
+        },
+        backup: backup.map(|p| p.display().to_string()),
         omitted: rendered.omitted,
     })
-}
-
-/// Put an `igame.data` beside a slave, in a tree ART itself just built.
-///
-/// **This is the default path and needs no ceremony**, unlike a write into
-/// the user's own, pre-existing collection: nothing of the user's is being
-/// touched, because ART made this drawer moments ago — a card it is laying a
-/// WHDLoad pack onto, or a distribution tree it is building. If iGame already
-/// reads a file there — a re-run of a build, say — it is edited rather than
-/// replaced ([`merge_into`]'s rule); otherwise a fresh one is written
-/// ([`render`]).
-///
-/// Goes through [`crate::core::safety::atomic_write`], the same as
-/// [`write_into`]: a truncated `igame.data` is one iGame reads half of, and a
-/// half-written line is worse than none.
-pub fn write_beside(slave_dir: &Path, data: &IGameData) -> CoreResult<Rendered> {
-    let path = slave_dir.join(FILE_NAME);
-    let rendered = match std::fs::read_to_string(&path) {
-        Ok(existing) => merge_into(&existing, data),
-        Err(_) => render(data),
-    };
-    crate::core::safety::atomic_write(&path, rendered.text.as_bytes())?;
-    Ok(rendered)
 }
 
 /// How much room a WHDLoad hardfile has left, so a route can be judged rather
@@ -675,8 +774,13 @@ mod tests {
         std::fs::create_dir_all(&drawer).unwrap();
         std::fs::write(drawer.join("Turrican2.slave"), b"not really a slave").unwrap();
 
-        let done = write_into(&drawer, &data()).unwrap();
-        assert!(!done.merged, "there was nothing there");
+        let done =
+            write_beside(&drawer, &data(), crate::core::safety::BackupPolicy::CONFIG).unwrap();
+        assert_eq!(
+            done.outcome,
+            WriteOutcome::Written,
+            "there was nothing there"
+        );
         // iGame looks in the same directory as the slave.
         let written = std::fs::read_to_string(drawer.join(FILE_NAME)).unwrap();
         assert!(written.contains("title=Turrican II"));
@@ -690,8 +794,13 @@ mod tests {
         std::fs::create_dir_all(&drawer).unwrap();
         std::fs::write(drawer.join(FILE_NAME), b"favourite=yes\ntitle=Mine\n").unwrap();
 
-        let done = write_into(&drawer, &data()).unwrap();
-        assert!(done.merged, "and the screen can say the file was edited");
+        let done =
+            write_beside(&drawer, &data(), crate::core::safety::BackupPolicy::CONFIG).unwrap();
+        assert_eq!(
+            done.outcome,
+            WriteOutcome::Merged,
+            "and the screen can say the file was edited"
+        );
         let written = std::fs::read_to_string(drawer.join(FILE_NAME)).unwrap();
         assert!(written.contains("favourite=yes"));
         assert!(written.contains("title=Turrican II"));
@@ -737,7 +846,7 @@ mod tests {
             title: Some("Turrican".into()),
             ..Default::default()
         };
-        write_beside(&dir, &data).unwrap();
+        write_beside(&dir, &data, crate::core::safety::BackupPolicy::NONE).unwrap();
         let text = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
         assert!(text.contains("title=Turrican"));
 
@@ -756,7 +865,7 @@ mod tests {
             title: Some("Tag".into()),
             ..Default::default()
         };
-        write_beside(&dir, &data).unwrap();
+        write_beside(&dir, &data, crate::core::safety::BackupPolicy::CONFIG).unwrap();
         let text = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
         assert!(text.contains("; mine"), "a comment is not ART's to delete");
         assert!(
@@ -769,6 +878,8 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// A title too long to fit, but a genre that does: the file is still
+    /// written, the title is left out and named, and nothing is truncated.
     #[test]
     fn a_value_that_will_not_fit_is_left_out_and_named() {
         let root = scratch("igame-long");
@@ -776,15 +887,114 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let data = IGameData {
             title: Some("x".repeat(200)),
+            genre: Some("Puzzle".into()),
             ..Default::default()
         };
-        let rendered = write_beside(&dir, &data).unwrap();
+        let written = write_beside(&dir, &data, crate::core::safety::BackupPolicy::NONE).unwrap();
+        assert_eq!(written.outcome, WriteOutcome::Written);
         assert!(
-            rendered.omitted.iter().any(|o| o.key() == "title"),
+            written.omitted.iter().any(|o| o.key() == "title"),
             "a truncated title is a wrong title on the Amiga's screen"
         );
         let text = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
         assert!(!text.contains("title="));
+        assert!(
+            text.contains("genre=Puzzle"),
+            "what does fit is still written"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// **I2's own fix.** A title too long to fit and nothing else known at
+    /// all: before this fix, `render` returned an empty string and
+    /// `write_beside` wrote it anyway — an `igame.data` with nothing in it,
+    /// reported the same as a real write. Now nothing is written at all, the
+    /// outcome says so by name, and the omission is still reported.
+    #[test]
+    fn a_title_alone_that_does_not_fit_writes_nothing_at_all() {
+        let root = scratch("igame-nothing-fits");
+        let dir = root.join("Games/NothingFits");
+        std::fs::create_dir_all(&dir).unwrap();
+        let data = IGameData {
+            title: Some("x".repeat(200)),
+            ..Default::default()
+        };
+        let written = write_beside(&dir, &data, crate::core::safety::BackupPolicy::NONE).unwrap();
+        assert_eq!(
+            written.outcome,
+            WriteOutcome::NothingFit,
+            "nothing survived to write, and that must not read as Written"
+        );
+        assert!(written.omitted.iter().any(|o| o.key() == "title"));
+        assert!(
+            !dir.join(FILE_NAME).exists(),
+            "an empty igame.data is worse than no file: it looks written and says nothing"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A file that already exists can never come back empty when nothing new
+    /// fits. `merge_into` only ever appends to or rewrites an existing line —
+    /// it never drops one — so its output cannot be shorter than the file it
+    /// started from, and an existing non-empty file can never merge down to
+    /// nothing. That is *why* this case surfaces as `AlreadyCurrent` rather
+    /// than `NothingFit` (which can only happen for a **fresh** file — see
+    /// `a_title_alone_that_does_not_fit_writes_nothing_at_all`): either way,
+    /// nothing is touched, and somebody's own hand-curated `igame.data`
+    /// survives ART having nothing new to add.
+    #[test]
+    fn nothing_fitting_does_not_blank_an_existing_file() {
+        let root = scratch("igame-nothing-fits-existing");
+        let dir = root.join("Games/Kept");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE_NAME), "; mine\nfavourite=yes\n").unwrap();
+        let data = IGameData {
+            title: Some("x".repeat(200)),
+            ..Default::default()
+        };
+        let written = write_beside(&dir, &data, crate::core::safety::BackupPolicy::CONFIG).unwrap();
+        assert_eq!(
+            written.outcome,
+            WriteOutcome::AlreadyCurrent,
+            "nothing new fits, so the file merges back to exactly what it was"
+        );
+        assert!(
+            written.omitted.iter().any(|o| o.key() == "title"),
+            "the title that did not fit is still named, even though nothing was written"
+        );
+        assert_eq!(written.backup, None, "nothing changed, nothing to back up");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(FILE_NAME)).unwrap(),
+            "; mine\nfavourite=yes\n",
+            "ART had nothing new to say, so the user's own file is untouched"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A second write with nothing new is `AlreadyCurrent`, takes no backup,
+    /// and touches nothing — `write_beside`'s own version of the idempotency
+    /// `igamewrite::apply_one` used to compute for itself with a second read.
+    #[test]
+    fn a_second_identical_write_is_already_current_and_touches_nothing() {
+        let root = scratch("igame-already-current");
+        let dir = root.join("Games/Twice");
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = write_beside(&dir, &data(), crate::core::safety::BackupPolicy::CONFIG).unwrap();
+        assert_eq!(first.outcome, WriteOutcome::Written);
+        let before = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+
+        let second =
+            write_beside(&dir, &data(), crate::core::safety::BackupPolicy::CONFIG).unwrap();
+        assert_eq!(second.outcome, WriteOutcome::AlreadyCurrent);
+        assert_eq!(second.backup, None, "nothing changed, nothing to back up");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(FILE_NAME)).unwrap(),
+            before,
+            "the file itself is untouched"
+        );
 
         std::fs::remove_dir_all(&root).ok();
     }

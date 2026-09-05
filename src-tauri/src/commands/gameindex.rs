@@ -600,6 +600,13 @@ pub fn igamewrite_apply(
     registry: State<'_, Arc<JobRegistry>>,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<JobId> {
+    // M4: what the user actually asked for, before `records_for_ids` drops
+    // any id the catalogue no longer carries and before `plan` refuses
+    // anything without a route. The oplog's own "Asked" detail is meant to
+    // answer "did this run reach everything I selected" — counting the
+    // post-filter, post-refusal number there made a run that silently lost
+    // ids on the way in read as `complete` even though it never touched them.
+    let asked = ids.len();
     let records = records_for_ids(&app, &ids)?;
     let plan = igamewrite::plan(&records);
     if plan.items.is_empty() {
@@ -613,7 +620,6 @@ pub fn igamewrite_apply(
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
     let title = format!("Writing igame.data for {} title(s)", plan.items.len());
-    let asked = plan.items.len();
 
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
         let outcome = igamewrite::apply(&plan, progress);

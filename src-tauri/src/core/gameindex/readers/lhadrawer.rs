@@ -11,6 +11,15 @@
 //! a slave candidate**; a change that reads every member to find them would
 //! pass every test here and be unusable on the real archive.
 //!
+//! **Log-and-continue per winner, the same as every other reader (I1).** A
+//! truncated, oversized, or simply-not-a-slave member used to fail the whole
+//! archive's scan with `?` — one junk `.slave` in an 8858-entry archive
+//! reported as one error instead of the other 892 titles it sat beside. The
+//! owner's own 893 slaves are uniformly clean, which is exactly why neither
+//! the synthetic fixtures nor the real-material run ever surfaced this: a
+//! behaviour tuned to one collection's shape rather than measured against
+//! what somebody else's archive can contain.
+//!
 //! Two rules carried over unchanged from [`readers::drawer`](super::drawer),
 //! the directory version of this same idea:
 //!
@@ -34,6 +43,14 @@
 //! *already* ambiguous, which is rare. Nothing changes for the common path
 //! of one slave, one drawer. A drawer with no icon, or an icon naming
 //! neither candidate, still gets no title, the same as before.
+//!
+//! **N1.** `<dir-name>.info` is the *only* icon either reader ever consults —
+//! measured convention (every drawer and its Project icon share a name in the
+//! 893 this was built against), not an AmigaDOS rule. A drawer named
+//! `Turrican 3` whose own icon happens to be called `Turrican3.info` is
+//! refused rather than guessed at, which is the right call (§14/§34) — but
+//! the *rule* itself is parochial, and a future reader that wants to look
+//! further should start here rather than assume the name always matches.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -181,15 +198,28 @@ pub fn read_archive_drawers(path: &Path) -> CoreResult<Vec<GameRecord>> {
     for (inner, candidates) in by_inner {
         let (index, slave_name) = match candidates.as_slice() {
             [(index, slave_name)] => (*index, *slave_name),
-            many => match settle_by_icon(backend.as_mut(), &entries, inner, many)? {
-                Some(settled) => settled,
-                None => {
+            many => match settle_by_icon(backend.as_mut(), &entries, inner, many) {
+                Ok(Some(settled)) => settled,
+                Ok(None) => {
                     let names: Vec<&str> = many.iter().map(|(_, name)| *name).collect();
                     log::debug!(
                         "gameindex: skipping {inner}: {} candidate slaves ({}) and nothing \
                          states which is the title",
                         many.len(),
                         names.join(", ")
+                    );
+                    continue;
+                }
+                // A corrupt or oversized icon is a fact about *this* drawer,
+                // not about the archive: the icon that would have settled it
+                // could not be read, so the drawer is refused the same way as
+                // "nothing states which one" — the other 892 drawers are not
+                // this one's problem (I1).
+                Err(err) => {
+                    log::debug!(
+                        "gameindex: skipping {inner}: could not read its icon to settle \
+                         which of {} slaves is the title: {err}",
+                        many.len()
                     );
                     continue;
                 }
@@ -208,8 +238,28 @@ pub fn read_archive_drawers(path: &Path) -> CoreResult<Vec<GameRecord>> {
     for (index, inner, slave_name) in winners {
         // Bounded: a slave header is small and this archive is a file ART
         // did not write.
-        let bytes = backend.read(index, MAX_SLAVE_BYTES)?;
-        let facts = slave::read_slave(&bytes)?;
+        //
+        // **I1.** Both of these used to propagate with `?`, so one truncated,
+        // oversized or simply-not-a-slave member took the whole archive's
+        // scan down with it — 892 good titles reported as one error. Every
+        // other reader in this module is log-and-continue per item
+        // (`scan::scan_titles_with`'s own comment: "one unreadable file must
+        // not lose the other 1696"); a winning candidate that turns out to be
+        // junk gets exactly that same treatment, never the whole function's.
+        let bytes = match backend.read(index, MAX_SLAVE_BYTES) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                log::debug!("gameindex: skipping {inner}/{slave_name}: {err}");
+                continue;
+            }
+        };
+        let facts = match slave::read_slave(&bytes) {
+            Ok(facts) => facts,
+            Err(err) => {
+                log::debug!("gameindex: skipping {inner}/{slave_name}: {err}");
+                continue;
+            }
+        };
 
         let title = match facts.name.clone().filter(|name| !name.is_empty()) {
             Some(name) => Fact::new(name, Provenance::WhdloadSlave),
@@ -394,6 +444,58 @@ mod tests {
             Media::WhdloadArchive { inner, .. } => assert_eq!(inner, "D/Tag"),
             other => panic!("got {other:?}"),
         }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// **I1's own fix.** One drawer's `.slave` is junk — not a slave header at
+    /// all — sitting beside a perfectly good one. Before this fix,
+    /// `slave::read_slave`'s `?` took the whole function down with it: this
+    /// asserts the good drawer still comes back rather than the call
+    /// returning `Err` for the archive as a whole.
+    #[test]
+    fn one_junk_slave_does_not_lose_the_others_in_the_archive() {
+        let root = scratch("one-junk");
+        let archive = synthetic_lha(
+            &root,
+            &[
+                ("D/Good/Good.slave", slave_bytes("Good")),
+                ("D/Junk/Junk.slave", b"not a slave header at all".to_vec()),
+                ("D/AlsoGood/AlsoGood.slave", slave_bytes("AlsoGood")),
+            ],
+        );
+        let found = read_archive_drawers(&archive).unwrap();
+        let titles: Vec<&str> = found.iter().map(|r| r.title.value.as_str()).collect();
+        assert_eq!(
+            titles,
+            vec!["AlsoGood", "Good"],
+            "the junk slave is skipped; the other two drawers still catalogue: {found:?}"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The oversized half of the same fix: a slave whose header claims (or
+    /// whose real bytes are) larger than `MAX_SLAVE_BYTES` is skipped the
+    /// same way, not propagated as an archive-wide error.
+    #[test]
+    fn an_oversized_slave_does_not_lose_the_others_in_the_archive() {
+        let root = scratch("one-oversized");
+        let archive = synthetic_lha(
+            &root,
+            &[
+                ("D/Good/Good.slave", slave_bytes("Good")),
+                (
+                    "D/Huge/Huge.slave",
+                    vec![0u8; (MAX_SLAVE_BYTES + 1) as usize],
+                ),
+            ],
+        );
+        let found = read_archive_drawers(&archive).unwrap();
+        let titles: Vec<&str> = found.iter().map(|r| r.title.value.as_str()).collect();
+        assert_eq!(
+            titles,
+            vec!["Good"],
+            "the oversized slave is skipped, not an error for the whole archive: {found:?}"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 

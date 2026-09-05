@@ -95,6 +95,14 @@ export interface WhdloadOutcome {
   verified: number;
   icon_installed: boolean;
   skipped: string[];
+  /**
+   * What ART knew about this title but could not fit into `igame.data` — a
+   * title too long for iGame's line, most often. Empty when nothing was
+   * left out, and empty (not an error) when nothing was written at all
+   * because ART had no route to write it: best-effort metadata, never a
+   * reason to call an otherwise-successful install a failure.
+   */
+  igame_omitted: string[];
   backup: string | null;
 }
 

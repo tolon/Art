@@ -1682,11 +1682,13 @@
         "action": "Write igame.data",
         "refused": "ART cannot write igame.data for this title yet: {{reason}}",
         "backup": "The previous version was kept at {{path}}.",
+        "omitted": "ART could not fit: {{fields}}.",
         "result": {
           "written": "A new igame.data was written beside the slave.",
           "merged": "The existing igame.data was updated with what ART knows; anything else in it was kept.",
           "skipped": "igame.data already said this — nothing was changed.",
-          "failed": "Could not write igame.data."
+          "failed": "Could not write igame.data.",
+          "cancelled": "Stopped before this title was reached."
         }
       }
     },
@@ -1755,6 +1757,7 @@
     },
     "report": {
       "notWritten": "Not written:",
+      "igameOmitted": "igame.data left out:",
       "backupKept": "The previous image was kept at {{backup}}"
     },
     "verdict": {

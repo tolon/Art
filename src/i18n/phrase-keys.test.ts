@@ -280,6 +280,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       verified: 3,
       icon_installed: true,
       skipped: [],
+      igame_omitted: [],
       backup: null,
     };
     for (const icon_installed of [true, false]) {

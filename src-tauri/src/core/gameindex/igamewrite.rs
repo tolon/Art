@@ -47,10 +47,10 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::gameindex::igame::{self, IGameData};
+use crate::core::gameindex::igame::{self, IGameData, WriteOutcome};
 use crate::core::gameindex::record::{GameRecord, Media};
 use crate::core::jobs::ProgressSink;
-use crate::core::safety::{self, BackupPolicy};
+use crate::core::safety::BackupPolicy;
 
 /// One title `plan` found a real route for.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +105,12 @@ pub struct IGameVerdict {
     /// changed. `None` for `Written` (nothing to back up) and for `Skipped`
     /// (nothing changed).
     pub backup: Option<String>,
+    /// What ART knew about this title but could not put in the file — a
+    /// title too long for iGame's line, or a value iGame itself refuses.
+    /// English (ART-060), the same as `state`'s own detail string. Empty for
+    /// `Failed` (the write never got far enough to know) and whenever
+    /// nothing was left out.
+    pub omitted: Vec<String>,
 }
 
 /// What a whole run did.
@@ -184,62 +190,48 @@ pub fn plan(records: &[GameRecord]) -> IGamePlan {
 ///
 /// Never called with the cancel flag already set — `apply` checks that
 /// **between** entries, so once this starts it always finishes.
+///
+/// **I3.** This used to read and render the file itself just to decide
+/// `Skipped` versus proceed, then call [`igame::write_beside`] — which read
+/// and rendered the same file again — and finally ignored what that call
+/// returned in favour of its own `existed` flag for the `Merged`/`Written`
+/// choice. `write_beside` now makes that whole decision from a single read,
+/// so this is one call, and every field on the verdict — the ending, the
+/// backup path, what was left out — comes from what it actually did rather
+/// than being re-derived beside it.
 fn apply_one(item: &IGamePlanItem) -> IGameVerdict {
     let dir = Path::new(&item.dir);
-    let path = dir.join(igame::FILE_NAME);
-    let existing = std::fs::read_to_string(&path).ok();
-    let existed = existing.is_some();
-
-    let would_be = match &existing {
-        Some(text) => igame::merge_into(text, &item.data),
-        None => igame::render(&item.data),
-    };
-
-    // Nothing would change: say so, and touch nothing. Claiming "merged" here
-    // would be a sentence about an edit that never happened.
-    if existing.as_deref() == Some(would_be.text.as_str()) {
-        return IGameVerdict {
-            dir: item.dir.clone(),
-            state: IGameState::Skipped(
-                "igame.data already says this; nothing was changed".to_string(),
-            ),
-            backup: None,
-        };
-    }
-
-    // A backup before an existing file is changed — never before a fresh one,
-    // which has nothing to preserve.
-    let backup = if existed {
-        match safety::backup_file(&path, BackupPolicy::CONFIG) {
-            Ok(backup) => backup,
-            Err(err) => {
-                return IGameVerdict {
-                    dir: item.dir.clone(),
-                    state: IGameState::Failed(err.to_string()),
-                    backup: None,
-                };
+    match igame::write_beside(dir, &item.data, BackupPolicy::CONFIG) {
+        Ok(written) => {
+            let state = match written.outcome {
+                WriteOutcome::Written => IGameState::Written,
+                WriteOutcome::Merged => IGameState::Merged,
+                WriteOutcome::AlreadyCurrent => IGameState::Skipped(
+                    "igame.data already says this; nothing was changed".to_string(),
+                ),
+                // I2: nothing ART knows about this title would survive
+                // iGame's own rules — every field was empty, too long, or
+                // refused. `write_beside` already refused to write an empty
+                // file for it; this is that refusal's own sentence, not
+                // "written" or "merged" about a file that says nothing.
+                WriteOutcome::NothingFit => IGameState::Skipped(
+                    "none of what ART knows about this title would fit iGame's 64-byte line; \
+                     nothing was written"
+                        .to_string(),
+                ),
+            };
+            IGameVerdict {
+                dir: item.dir.clone(),
+                state,
+                backup: written.backup,
+                omitted: igame::notable_omissions(&written.omitted),
             }
         }
-    } else {
-        None
-    };
-
-    // The actual write goes through Task 5's writer and only that — this
-    // module never writes `igame.data` itself.
-    match igame::write_beside(dir, &item.data) {
-        Ok(_) => IGameVerdict {
-            dir: item.dir.clone(),
-            state: if existed {
-                IGameState::Merged
-            } else {
-                IGameState::Written
-            },
-            backup: backup.map(|p| p.display().to_string()),
-        },
         Err(err) => IGameVerdict {
             dir: item.dir.clone(),
             state: IGameState::Failed(err.to_string()),
-            backup: backup.map(|p| p.display().to_string()),
+            backup: None,
+            omitted: Vec::new(),
         },
     }
 }
@@ -515,6 +507,41 @@ mod tests {
             matches!(changed.verdicts[0].state, IGameState::Merged),
             "a real change is still applied: {:?}",
             changed.verdicts[0].state
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// **I2's own fix, from this module's side.** A title too long to fit and
+    /// nothing else known produces `WriteOutcome::NothingFit` inside
+    /// `write_beside`; this module must map that to `Skipped`, name what did
+    /// not fit, and never let `igame.data` appear on disk with nothing in it.
+    #[test]
+    fn a_title_that_does_not_fit_is_skipped_and_writes_no_file() {
+        let root = scratch("nothing-fits");
+        let dir = synthetic_drawer(&root, "Long", "Long.slave");
+        let mut record = drawer_record(&dir);
+        record.title = Fact::new("x".repeat(200), Provenance::UserEdit);
+        // `synthetic_drawer`'s fixture slave states a copyright ("1992
+        // Someone"), which `read_drawer` turns into a year fact — leaving it
+        // in place would let `year=1992` fit and the file would still be
+        // written, just missing its title. Nulled here so nothing at all
+        // survives, which is the case this test is actually about.
+        record.year = None;
+
+        let outcome = apply(&plan(&[record]), &NoProgress);
+        let verdict = &outcome.verdicts[0];
+        assert!(
+            matches!(verdict.state, IGameState::Skipped(_)),
+            "nothing survived to write; this must not read as Written: {:?}",
+            verdict.state
+        );
+        assert!(
+            !verdict.omitted.is_empty(),
+            "the title that did not fit must be named, not just silently dropped"
+        );
+        assert!(
+            !dir.join(igame::FILE_NAME).exists(),
+            "an empty igame.data is worse than none: it reads as a written file"
         );
         std::fs::remove_dir_all(&root).ok();
     }

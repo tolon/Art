@@ -124,6 +124,12 @@ pub struct WhdloadOutcome {
     pub icon_installed: bool,
     /// Anything left behind, with the reason. Never silent.
     pub skipped: Vec<String>,
+    /// What ART knew about this title but could not fit into `igame.data` —
+    /// a title too long for iGame's line, most often. Empty when nothing was
+    /// left out, and empty (not an error) when nothing was written at all
+    /// because ART had no route to write it — this is best-effort metadata,
+    /// never a reason to call an otherwise-successful install a failure.
+    pub igame_omitted: Vec<String>,
     /// Where the previous image went, for the whole-file strategy.
     pub backup: Option<String>,
 }
@@ -281,6 +287,20 @@ fn build_plan(
     // else the user is about to decide on.
     cost.name_problems
         .retain(|problem| !problem.relative.is_empty());
+
+    // M2: `run_install` writes `igame.data` into the pack's own drawer
+    // alongside everything counted above, but nothing above ever measured
+    // it — the archive never carries this file, so no `SourceEntry` names
+    // it. A rendered file is a few dozen bytes, but AmigaDOS allocates whole
+    // blocks: a header block plus at least one data block (the same
+    // reasoning `igame::free_bytes_in_hardfile`'s own doc uses). Reserved
+    // here as a small, fixed margin rather than by rendering the real file
+    // early — that would mean plumbing the catalogue lookup into a planning
+    // path that has no need of it otherwise, for two blocks out of what is
+    // usually thousands. On a volume with room to spare this changes
+    // nothing; on one within two blocks of the edge, it is the difference
+    // between a preview that lied and one that did not.
+    cost.blocks_needed += 2;
 
     let volume_name = read_volume_name(&device, &geometry).unwrap_or_else(|| entry.name.clone());
 
@@ -569,14 +589,32 @@ fn run_install(
     // Best-effort and disclosed rather than tested: a failure anywhere in
     // that lookup, or in the write itself, must not turn an
     // otherwise-successful install into a reported failure over a file
-    // WHDLoad itself never reads.
+    // WHDLoad itself never reads. `BackupPolicy::NONE` because this drawer is
+    // one ART unpacked moments ago — nothing of the user's exists yet to
+    // preserve.
+    //
+    // I2: what did not fit is carried into the outcome rather than dropped —
+    // a title too long for iGame's line used to produce an *empty*
+    // `igame.data` that this install then counted and reported as written and
+    // verified, about a file that said nothing. `write_beside` itself now
+    // refuses to write that empty file at all (`WriteOutcome::NothingFit`),
+    // so the file simply will not be among what `copy_into_volume` finds
+    // below — no separate accounting needed here for that half of the fix.
     let igame_data = igame_data_for_pack(&pack_root, catalogue_dir, &layout.name);
-    if let Err(err) = crate::core::gameindex::igame::write_beside(&pack_root, &igame_data) {
-        log::debug!(
-            "whdload: could not write igame.data beside '{}': {err}",
-            layout.name
-        );
-    }
+    let igame_omitted = match crate::core::gameindex::igame::write_beside(
+        &pack_root,
+        &igame_data,
+        crate::core::safety::BackupPolicy::NONE,
+    ) {
+        Ok(written) => crate::core::gameindex::igame::notable_omissions(&written.omitted),
+        Err(err) => {
+            log::debug!(
+                "whdload: could not write igame.data beside '{}': {err}",
+                layout.name
+            );
+            Vec::new()
+        }
+    };
 
     // Sidecars on: the archive may carry `.uaem` files, and a slave's bits are
     // the difference between a game that starts and one that does not (§7.2).
@@ -637,6 +675,7 @@ fn run_install(
         verified: report.files_verified,
         icon_installed,
         skipped: report.skipped,
+        igame_omitted,
         backup: committed.backup,
     })
 }
@@ -1220,6 +1259,125 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **I2, from the install path.** A catalogued title over iGame's line
+    /// length, with nothing else known about it, must not produce an empty
+    /// `igame.data` counted as a written, verified file. Uses the same
+    /// catalogue-hit machinery as the test above, but with a title long
+    /// enough that nothing survives `render` at all — genre/year/chipset are
+    /// left `None` deliberately, so the file would be completely empty
+    /// without this fix rather than merely missing one field.
+    #[test]
+    fn a_catalogued_title_too_long_for_igame_writes_no_empty_file() {
+        use crate::core::gameindex::readers::drawer::read_drawer;
+        use crate::core::gameindex::record::{Fact, Provenance};
+        use crate::core::gameindex::store::{CachedEntry, CatalogueRoot, CATALOGUE_SCHEMA};
+
+        let dir = scratch("igame-nothing-fits");
+        let slave = crate::core::gameindex::readers::slave::tests_support::build_slave(
+            "Turrican",
+            "1992 Someone",
+            16,
+        );
+
+        let archive = dir.join("Turrican.lha");
+        std::fs::write(
+            &archive,
+            crate::core::lha::tests::make_lha_with(&[("Turrican/Turrican.slave", &slave)]),
+        )
+        .unwrap();
+
+        let probe_dir = dir.join("probe").join("Turrican");
+        std::fs::create_dir_all(&probe_dir).unwrap();
+        std::fs::write(probe_dir.join("Turrican.slave"), &slave).unwrap();
+        let fresh = read_drawer(&probe_dir).unwrap().expect("this is a title");
+
+        let catalogue_dir = dir.join("catalogue");
+        let collection_root = dir.join("collection");
+        std::fs::create_dir_all(&collection_root).unwrap();
+        let root_key = collection_root.to_string_lossy().into_owned();
+        crate::core::gameindex::store::add_root(&catalogue_dir, Path::new(&root_key)).unwrap();
+        let mut record = fresh.clone();
+        // The AmigaDOS drawer name ("Turrican") stays short — a user override
+        // has no such limit, and this is exactly how one could get this long.
+        record.title = Fact::new("T".repeat(80), Provenance::UserEdit);
+        // The fixture slave states a copyright ("1992 Someone"), which
+        // `read_drawer` turns into a year fact; left in place, `year=1992`
+        // would still fit and igame.data would still be written (just
+        // missing its title). Nulled so nothing at all survives, which is
+        // what this test is actually about.
+        record.year = None;
+        crate::core::gameindex::store::write_root(
+            &catalogue_dir,
+            &CatalogueRoot {
+                schema: CATALOGUE_SCHEMA,
+                root: root_key,
+                scanned_at: None,
+                index_schema: crate::core::gameindex::record::GAMEINDEX_SCHEMA,
+                entries: vec![CachedEntry {
+                    path: probe_dir
+                        .join("Turrican.slave")
+                        .to_string_lossy()
+                        .into_owned(),
+                    size: 0,
+                    mtime_ms: 0,
+                    record,
+                }],
+            },
+        )
+        .unwrap();
+
+        let image = dir.join("Games.hdf");
+        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
+        std::fs::write(&image, &bytes).unwrap();
+
+        let outcome = run_install(
+            &archive,
+            &image,
+            0,
+            0,
+            &std::env::temp_dir(),
+            &catalogue_dir,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(
+            outcome.files, 1,
+            "the slave only — no igame.data with nothing in it counted as a file"
+        );
+        assert!(
+            outcome.igame_omitted.iter().any(|o| o.contains("title")),
+            "what did not fit must be named: {:?}",
+            outcome.igame_omitted
+        );
+
+        let entry = super::super::volume_write::pick_volume(&image, 0).unwrap();
+        let (device, geometry) = mount(&image, &entry).unwrap();
+        let set = crate::core::volume::write::layout::BlockSet::new(geometry.block_size);
+        let drawer = crate::core::volume::write::dir::entries_in(
+            &device,
+            &set,
+            &geometry,
+            geometry.root_block,
+        )
+        .unwrap()
+        .into_iter()
+        .find(|found| found.name == "Turrican")
+        .expect("the drawer must be on the disk");
+        let inside =
+            crate::core::volume::write::dir::entries_in(&device, &set, &geometry, drawer.block)
+                .unwrap();
+        assert!(
+            !inside
+                .iter()
+                .any(|found| found.name == crate::core::gameindex::igame::FILE_NAME),
+            "no igame.data at all — not an empty one — when nothing fit: {:?}",
+            inside.iter().map(|f| &f.name).collect::<Vec<_>>()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Installing the same game twice must not silently write over the first
     /// one — and the refusal has to arrive before anything is touched.
     #[test]
@@ -1500,6 +1658,100 @@ mod tests {
         assert_eq!(std::fs::read(&image).unwrap(), before);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The pack's own block cost, **without** the fix's +2 reservation —
+    /// mirrors `build_plan` up to (not including) the line under test, so it
+    /// gives an answer that does not move when that line is mutated away.
+    /// Used only by the test below; production code has exactly one copy of
+    /// this computation, in `build_plan` itself.
+    fn raw_pack_cost(archive: &Path, image: &Path) -> CopyPlan {
+        let info = open_archive(archive).unwrap();
+        let _ = detect_whdload(&info.entries);
+        let (scratch, _) = unpack_for_install(archive, &std::env::temp_dir(), &NoProgress).unwrap();
+        let entries = walk(scratch.path()).unwrap();
+        let layout = analyse(&entries).unwrap();
+        let pack_root = if layout.root.is_empty() {
+            scratch.path().to_path_buf()
+        } else {
+            crate::core::security::path::safe_join(scratch.path(), &layout.root).unwrap()
+        };
+        let folder = HostFolder::new(&pack_root, true);
+        let mut sources: Vec<SourceEntry> = {
+            use crate::core::volume::write::copy::CopySource;
+            folder.entries().unwrap()
+        };
+        sources.push(SourceEntry {
+            relative: layout.name.clone(),
+            is_dir: true,
+            bytes: 0,
+        });
+        if let Some(icon) = &layout.icon {
+            sources.push(SourceEntry {
+                relative: layout.icon_name(),
+                is_dir: false,
+                bytes: std::fs::metadata(scratch.path().join(icon))
+                    .map(|meta| meta.len())
+                    .unwrap_or(0),
+            });
+        }
+        let entry = super::super::volume_write::pick_volume(image, 0).unwrap();
+        let (device, geometry) = mount(image, &entry).unwrap();
+        plan_copy(&device, &geometry, &sources, &[]).unwrap()
+    }
+
+    /// **M2.** `igame.data` is written into the pack's own drawer, but
+    /// `build_plan`'s cost never measured it — nothing in the archive names
+    /// it, so no `SourceEntry` ever carried its size. Finds the exact volume
+    /// size whose free space matches the pack's own **raw** cost — enough for
+    /// the archive's own files, and not one block more — and asserts
+    /// `build_plan` still refuses it. `raw_pack_cost` gives the boundary
+    /// independently of the fix, so this fails if the reservation is ever
+    /// removed rather than merely proving an arbitrarily-small disk is
+    /// refused (that is `a_pack_too_big_for_the_disk_is_refused_with_the_numbers`'s
+    /// own test).
+    #[test]
+    fn the_free_space_check_reserves_room_for_igame_data_too() {
+        let dir = scratch("m2-margin");
+        let archive = dir.join("Turrican.lha");
+        whdload_archive(&archive);
+        let image = dir.join("Games.hdf");
+
+        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
+        std::fs::write(&image, &bytes).unwrap();
+        let raw_needed = raw_pack_cost(&archive, &image).blocks_needed;
+
+        let plan_at = |total_blocks: u32| -> WhdloadPlan {
+            let (bytes, _) = ffs_volume(total_blocks, DosType::new(*b"DOS\x01"));
+            std::fs::write(&image, &bytes).unwrap();
+            build_plan(&archive, &image, 0, 0, &std::env::temp_dir()).unwrap()
+        };
+
+        // Binary search for the smallest volume whose free space reaches the
+        // pack's raw need. `lo` is known too small; `hi` is comfortably big.
+        let (mut lo, mut hi) = (8u32, 1760u32);
+        while lo + 1 < hi {
+            let mid = lo + (hi - lo) / 2;
+            if plan_at(mid).cost.blocks_free >= raw_needed {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        let exact = plan_at(hi);
+        assert_eq!(
+            exact.cost.blocks_free, raw_needed,
+            "expected the search to land exactly on the raw need (free space moves by one \
+             block per total_blocks near this size)"
+        );
+        assert!(
+            exact.refusal.is_some(),
+            "there is room for the pack's own files and nothing else — the two-block \
+             igame.data reservation is the only thing that should refuse this: {exact:?}"
+        );
+        assert!(exact.refusal.as_ref().unwrap().reason.contains("blocks"));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Install a pack and leave the disk for `scripts/oracle-check.py`.

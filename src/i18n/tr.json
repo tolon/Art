@@ -1682,11 +1682,13 @@
         "action": "igame.data yaz",
         "refused": "ART bu başlık için henüz igame.data yazamaz: {{reason}}",
         "backup": "Önceki sürüm {{path}} konumunda saklandı.",
+        "omitted": "ART şunları sığdıramadı: {{fields}}.",
         "result": {
           "written": "Slave'in yanına yeni bir igame.data yazıldı.",
           "merged": "Var olan igame.data, ART'ın bildikleriyle güncellendi; içindeki başka her şey korundu.",
           "skipped": "igame.data zaten bunu söylüyordu — hiçbir şey değişmedi.",
-          "failed": "igame.data yazılamadı."
+          "failed": "igame.data yazılamadı.",
+          "cancelled": "Bu başlığa ulaşılmadan durduruldu."
         }
       }
     },
@@ -1755,6 +1757,7 @@
     },
     "report": {
       "notWritten": "Yazılmadı:",
+      "igameOmitted": "igame.data'dan çıkarılanlar:",
       "backupKept": "Önceki imaj {{backup}} konumunda saklandı"
     },
     "verdict": {

@@ -625,6 +625,26 @@ export function TitleDetail({
                 ` ${igameOutcome.verdicts[0].state.detail}`}
               {igameOutcome.verdicts[0].backup &&
                 ` ${t("collection.detail.igamewrite.backup", { path: igameOutcome.verdicts[0].backup })}`}
+              {/* I2: what did not fit is named, never silently dropped —
+                  raw English (ART-060), the same as the state's own detail
+                  string just above. */}
+              {igameOutcome.verdicts[0].omitted.length > 0 &&
+                ` ${t("collection.detail.igamewrite.omitted", {
+                  fields: igameOutcome.verdicts[0].omitted.join("; "),
+                })}`}
+            </p>
+          )}
+          {/* M5: a stopped run must read as "you stopped it", not as
+              "nothing happened" — `verdicts` is empty for a single-title run
+              cancelled before it started, which the block above renders
+              nothing for. */}
+          {igameOutcome?.cancelled && igameOutcome.verdicts.length === 0 && (
+            <p
+              data-testid="igamewrite-result"
+              className="badge badge-warn"
+              style={{ display: "block", fontSize: 11, padding: "4px 8px", marginTop: 6 }}
+            >
+              {t("collection.detail.igamewrite.result.cancelled")}
             </p>
           )}
         </section>

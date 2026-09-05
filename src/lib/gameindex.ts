@@ -459,6 +459,13 @@ export interface IGameVerdict {
    *  `null` for `written` (nothing to back up) and `skipped` (nothing
    *  changed). */
   backup: string | null;
+  /**
+   * What ART knew about this title but could not put in the file — a title
+   * too long for iGame's line, most often. English (ART-060), the same as
+   * `state`'s own detail string. Empty for `failed` (the write never got
+   * far enough to know) and whenever nothing was left out.
+   */
+  omitted: string[];
 }
 
 /** What a whole run did. */
