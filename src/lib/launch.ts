@@ -102,7 +102,17 @@ export type LaunchRefusal =
   | { kind: "no-whdload-machine-rom"; machine: Machine }
   | { kind: "no-system-volume" }
   | { kind: "file-missing"; path: string }
-  | { kind: "nothing-to-mount" };
+  | { kind: "nothing-to-mount" }
+  /**
+   * `Media::WhdloadArchive` — a WHDLoad drawer still inside an archive ART
+   * has not unpacked. Never raised by `core::launch::plan_for` itself: the
+   * command layer refuses this before a `RequestKind` is ever built, the
+   * same way `"file-missing"` is raised outside `plan_for` too. Distinct
+   * from every other refusal here because it is not fixable by adding a ROM
+   * or a system volume — the fix is to unpack `file`, which is why the
+   * sentence names it.
+   */
+  | { kind: "archived-whdload"; file: string };
 
 export interface LaunchPlan {
   machine: Machine;
@@ -241,6 +251,11 @@ export function refusalPhrase(refusal: LaunchRefusal): Phrase {
       };
     case "nothing-to-mount":
       return { key: "collection.detail.play.refusal.nothingToMount" };
+    case "archived-whdload":
+      return {
+        key: "collection.detail.play.refusal.archivedWhdload",
+        params: { file: refusal.file },
+      };
   }
 }
 

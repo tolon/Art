@@ -1595,7 +1595,9 @@
         "floppies_one": "{{count}} disket",
         "floppies_other": "{{count}} disket",
         "hardfile": "Sabit disk imajı — {{file}}",
-        "whdload": "WHDLoad — {{slave}}"
+        "whdload": "WHDLoad — {{slave}}",
+        "whdloadDrawer": "WHDLoad klasörü — {{slave}}",
+        "whdloadArchive": "WHDLoad klasörü (henüz açılmadı) — {{slave}}, {{file}} içinde"
       },
       "publisher": "Yayıncı",
       "year": "Yıl",
@@ -1657,7 +1659,8 @@
           "noWhdloadMachineRom": "WHDLoad başlıkları ART'ın {{machine}} profilinde çalışır; bu yüzden bu başlatma bir {{machine}} Kickstart 3.x istiyor. Başka bir model için olan Kickstart — örneğin A500/A600/A2000 için bir 3.1 — ne kadar yeni olursa olsun buna uymaz. ROM klasörünüze bir {{machine}} Kickstart'ı ekleyin.",
           "noSystemVolume": "Bu WHDLoad başlığı önyüklenebilir bir sistem gerektiriyor ve ayarlanmış değil.",
           "fileMissing": "'{{path}}' artık yok.",
-          "nothingToMount": "Bu başlık takılacak bir disk belirtmiyor — WinUAE'nin yükleyeceği hiçbir şey yok."
+          "nothingToMount": "Bu başlık takılacak bir disk belirtmiyor — WinUAE'nin yükleyeceği hiçbir şey yok.",
+          "archivedWhdload": "Bu WHDLoad klasörü, henüz açılmamış olan '{{file}}' arşivinin içinde. Önce arşivi açın, sonra tekrar deneyin."
         }
       },
       "kickstart": {
@@ -1673,6 +1676,19 @@
           "placed": "{{to}} konumuna yerleştirildi.",
           "occupied": "Reddedildi: {{to}} konumunda başka bir ROM var. Hiçbir şey yazılmadı.",
           "alreadyThere": "Zaten orada, değiştirilmedi — {{to}}."
+        }
+      },
+      "igamewrite": {
+        "action": "igame.data yaz",
+        "refused": "ART bu başlık için henüz igame.data yazamaz: {{reason}}",
+        "backup": "Önceki sürüm {{path}} konumunda saklandı.",
+        "omitted": "ART şunları sığdıramadı: {{fields}}.",
+        "result": {
+          "written": "Slave'in yanına yeni bir igame.data yazıldı.",
+          "merged": "Var olan igame.data, ART'ın bildikleriyle güncellendi; içindeki başka her şey korundu.",
+          "skipped": "igame.data zaten bunu söylüyordu — hiçbir şey değişmedi.",
+          "failed": "igame.data yazılamadı.",
+          "cancelled": "Bu başlığa ulaşılmadan durduruldu."
         }
       }
     },
@@ -1741,6 +1757,7 @@
     },
     "report": {
       "notWritten": "Yazılmadı:",
+      "igameOmitted": "igame.data'dan çıkarılanlar:",
       "backupKept": "Önceki imaj {{backup}} konumunda saklandı"
     },
     "verdict": {

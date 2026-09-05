@@ -519,6 +519,16 @@ function Report({ outcome, powerMode }: { outcome: WhdloadOutcome; powerMode: bo
         </div>
       )}
 
+      {/* I2: a title too long for iGame's line, most often — named rather
+          than silently dropped, and never a reason to call an install a
+          failure by itself (`igame.data` is best-effort metadata WHDLoad
+          itself never reads). */}
+      {outcome.igame_omitted.length > 0 && (
+        <div className="faint" style={{ fontSize: 11, marginTop: 6 }}>
+          {t("whdload.report.igameOmitted")} {outcome.igame_omitted.join(" · ")}
+        </div>
+      )}
+
       {powerMode && outcome.backup && (
         <div className="faint" style={{ fontSize: 11, marginTop: 4, wordBreak: "break-all" }}>
           {t("whdload.report.backupKept", { backup: outcome.backup })}

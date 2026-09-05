@@ -437,6 +437,11 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // `amigaos-3.2.2.json` recipe is the only producer of an
     // `osinstall.layer.*` key, and an unlayered recipe's empty `layers` means
     // this call site is simply never reached for AmigaOS 3.2 or 3.9.
-    expect(dynamicCalls).toBe(139);
+    // 139 -> 140 (Task 6, writing igame.data into the user's own collection):
+    // one, the same `Phrase`-off-a-mapper shape as the four above it.
+    // `igameVerdictPhrase` turns an `IGameState` into a key and
+    // `TitleDetail.tsx` renders it over the write's own result;
+    // `phrase-keys.test.ts` enumerates all four variants.
+    expect(dynamicCalls).toBe(140);
   });
 });

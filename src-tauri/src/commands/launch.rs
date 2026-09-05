@@ -26,7 +26,7 @@ use crate::core::hdf::detect_hardfile_shape;
 use crate::core::launch::extract::{unpack_floppies, unpack_hardfile};
 use crate::core::launch::whdload_boot::write_boot_dir;
 use crate::core::launch::{
-    is_whdload_shaped, machine_for_request, plan_for, Chipset, LaunchKind, LaunchPlan,
+    is_whdload_shaped, machine_for, machine_for_request, plan_for, Chipset, LaunchKind, LaunchPlan,
     LaunchRefusal, LaunchRequest, LaunchRom, Machine, RequestKind, DEFAULT_WHDLOAD_FAST_RAM_MB,
     WHDLOAD_PROFILE_MACHINE,
 };
@@ -140,13 +140,26 @@ fn default_whdload_fast_ram_mb() -> u32 {
 /// is a default ART chose, and this is the user saying otherwise for one
 /// title.
 fn resolved_machine(request: &LaunchArgs) -> Machine {
-    request.machine_override.unwrap_or_else(|| {
-        machine_for_request(
-            &request_kind_from(request),
-            chipset_from(request.chipset.as_deref()),
-            request.default_machine,
-        )
-    })
+    request
+        .machine_override
+        .unwrap_or_else(|| match request_kind_from(request) {
+            Some(kind) => machine_for_request(
+                &kind,
+                chipset_from(request.chipset.as_deref()),
+                request.default_machine,
+            ),
+            // `Media::WhdloadArchive` has no `RequestKind` at all (see
+            // `request_kind_from`'s own doc comment) — nothing this decides can
+            // reach a mount or a launch, a machine model is not a launch
+            // outcome. Falling back to the plain, non-WHDLoad inference is
+            // harmless here; the real refusal (`archived_refusal`) is what stops
+            // this title going any further, and both real command entry points
+            // check it before this function ever runs.
+            None => machine_for(
+                chipset_from(request.chipset.as_deref()),
+                request.default_machine,
+            ),
+        })
 }
 
 /// `Media` → the shape `core/launch::plan_for` reads.
@@ -171,11 +184,34 @@ fn resolved_machine(request: &LaunchArgs) -> Machine {
 /// (`core::gameindex::readers::whdhdf`'s own header), so there is no system
 /// volume to mount alongside it and no boot directory for ART to write; the
 /// slave's name is a fact carried on the record, not something a launch needs
-/// to act on. `RequestKind::Whdload` still exists in `core::launch` for the
-/// shape it was built for — an already-unpacked drawer that needs a separate
-/// bootable system, the same shape `core::whdload` installs onto a card — but
-/// no `Media` variant reaches it today: nothing in `core::gameindex` catalogues
-/// a loose drawer or an `.lha` archive as a title.
+/// to act on.
+///
+/// `Media::WhdloadDrawer` is the shape `RequestKind::Whdload` was actually
+/// built for: an already-unpacked drawer that needs a separate bootable
+/// system, the same shape `core::whdload` installs onto a card. `dir` maps
+/// straight onto `drawer` — the system volume and Y1/Y2 choice are not part
+/// of `Media` at all, they are `args.system_volume` / `args.one_click`, and
+/// `plan_for` folds them in.
+///
+/// `Media::WhdloadArchive` reaches **neither** `RequestKind::Whdload` nor
+/// `RequestKind::Hardfile`, and this function returns `None` for it rather
+/// than any `RequestKind` at all: `RequestKind::Whdload` needs a directory on
+/// a filesystem and this is a path inside a compressed file ART has not
+/// unpacked. This was originally an exhaustive `match` returning a plain
+/// `RequestKind`, with the archived arm mapped to a deliberately inert
+/// `Floppies { images: vec![] }` and a comment warning never to give it a
+/// shape that could pass for real media — but a fix-round review found that
+/// promise already broken once (`uae_config_for`'s own tests call this
+/// function directly, ungated) and about to be broken a second time, by a
+/// Task 6 caller. **`Option<RequestKind>` makes the promise the compiler's
+/// job**: a caller cannot obtain a `RequestKind` for `Media::WhdloadArchive`
+/// without handling the `None` case, so there is no arm left to get wrong.
+/// [`archived_refusal`] is the paired function that turns that `None` into
+/// the sentence the user actually sees; it is deliberately a *second*,
+/// independently exhaustive match over `Media` rather than something this
+/// function calls internally — adding a future `Media` variant that has no
+/// `RequestKind` still forces both to be updated, and Rust's own
+/// exhaustiveness check is the thing enforcing that, not a comment.
 ///
 /// **`whdload` on the request is not the same field it looks like.** It is
 /// `RequestKind::Hardfile::whdload` — whether `core::launch::plan_for` must
@@ -189,19 +225,48 @@ fn resolved_machine(request: &LaunchArgs) -> Machine {
 /// [`launch_title_inner`] is what turns either shape into real paths on
 /// disk; the preview shows the disk/hardfile name the user recognises rather
 /// than a temporary directory they have never seen.
-fn request_kind_from(args: &LaunchArgs) -> RequestKind {
+fn request_kind_from(args: &LaunchArgs) -> Option<RequestKind> {
     match &args.media {
-        Media::Floppies { ordered } => RequestKind::Floppies {
+        Media::Floppies { ordered } => Some(RequestKind::Floppies {
             images: ordered.clone(),
-        },
-        Media::Hardfile { file } => RequestKind::Hardfile {
+        }),
+        Media::Hardfile { file } => Some(RequestKind::Hardfile {
             image: file.clone(),
             whdload: false,
-        },
-        Media::WhdloadHardfile { file, .. } => RequestKind::Hardfile {
+        }),
+        Media::WhdloadHardfile { file, .. } => Some(RequestKind::Hardfile {
             image: file.clone(),
             whdload: true,
-        },
+        }),
+        Media::WhdloadDrawer { dir, slave } => Some(RequestKind::Whdload {
+            drawer: dir.clone(),
+            slave: slave.clone(),
+        }),
+        Media::WhdloadArchive { .. } => None,
+    }
+}
+
+/// Why [`request_kind_from`] returned `None` — the sentence [`refusal_error`]
+/// and the confirmation screen actually show. Kept as its own exhaustive
+/// match over `Media` rather than folded into `request_kind_from`, so a
+/// future `Media` variant that has no `RequestKind` has to earn an arm here
+/// too, independently — see that function's own doc comment.
+///
+/// `Media::WhdloadArchive` is the one shape this catalogue can hold that has
+/// no `RequestKind` worth reaching: the drawer is real, but it is a path
+/// inside a compressed file, and `RequestKind::Whdload` needs a directory on
+/// a filesystem. Checked before `plan_for` is ever reached, so an archived
+/// title never takes the launchable path — that wrong turn, for a different
+/// `Media` variant, is exactly ART-147.
+fn archived_refusal(media: &Media) -> Option<LaunchRefusal> {
+    match media {
+        Media::WhdloadArchive { file, .. } => {
+            Some(LaunchRefusal::ArchivedWhdload { file: file.clone() })
+        }
+        Media::Floppies { .. }
+        | Media::Hardfile { .. }
+        | Media::WhdloadHardfile { .. }
+        | Media::WhdloadDrawer { .. } => None,
     }
 }
 
@@ -256,8 +321,25 @@ pub struct LaunchPreview {
 /// the logic worth exercising directly in a test, without a running Tauri
 /// app to produce one.
 fn preview_for(request: &LaunchArgs, roms: &[LaunchRom]) -> LaunchPreview {
+    // `Media::WhdloadArchive` has no `RequestKind` at all (see
+    // `request_kind_from`'s own doc comment) — the compiler, not a check
+    // above this line, is what stops that title reaching `plan_for`.
+    let Some(kind) = request_kind_from(request) else {
+        return LaunchPreview {
+            plan: None,
+            // Unreachable today: `request_kind_from` returns `None` only for
+            // the shape `archived_refusal` refuses. A fallback refusal
+            // rather than `.expect()`/a panic, so the two matches drifting
+            // apart in the future is a preview with the wrong sentence,
+            // never a crash.
+            refusal: Some(
+                archived_refusal(&request.media).unwrap_or(LaunchRefusal::NothingToMount),
+            ),
+            mounts: vec![],
+            memory: None,
+        };
+    };
     let machine = resolved_machine(request);
-    let kind = request_kind_from(request);
     let plan = plan_for(&LaunchRequest {
         machine,
         roms,
@@ -333,6 +415,10 @@ fn refusal_error(refusal: LaunchRefusal) -> CoreError {
             "this title's media names no disk to mount — there is nothing for WinUAE to load"
                 .to_string()
         }
+        LaunchRefusal::ArchivedWhdload { file } => format!(
+            "'{file}' is a WHDLoad drawer inside an archive ART has not unpacked — \
+             unpack it first, then try again"
+        ),
     };
     CoreError::InvalidInput(message)
 }
@@ -686,6 +772,21 @@ fn launch_title_inner(
     scratch_root: &Path,
     app: &AppHandle,
 ) -> Result<u32, CoreError> {
+    // `Media::WhdloadArchive` has no `RequestKind` at all (see
+    // `request_kind_from`'s own doc comment) — the compiler, not a check
+    // above this line, is what stops that title reaching a mount or a ROM
+    // scan.
+    let Some(kind) = request_kind_from(request) else {
+        return Err(refusal_error(archived_refusal(&request.media).unwrap_or(
+            // Unreachable today: `request_kind_from` returns `None` only for
+            // the shape `archived_refusal` refuses. A fallback refusal
+            // rather than `.expect()`/a panic, so the two matches drifting
+            // apart in the future is a wrong sentence, never a crash
+            // (`panic = "abort"` takes the whole application with it).
+            LaunchRefusal::NothingToMount,
+        )));
+    };
+
     let roms: Vec<LaunchRom> = scan_rom_directory(Path::new(&request.rom_dir))
         .unwrap_or_default()
         .iter()
@@ -693,7 +794,6 @@ fn launch_title_inner(
         .collect();
 
     let machine = resolved_machine(request);
-    let kind = request_kind_from(request);
     // Computed again, not carried from the preview: the screen may have sat
     // open for a while, and a ROM folder or a file on disk can change under
     // it in the meantime.
@@ -977,7 +1077,8 @@ mod tests {
     /// this whole block exists to rule out.
     fn uae_config_for(request: &LaunchArgs, roms: &[LaunchRom]) -> String {
         let machine = resolved_machine(request);
-        let kind = request_kind_from(request);
+        let kind = request_kind_from(request)
+            .expect("every fixture this helper is given is a launchable Media shape");
         let plan = plan_for(&LaunchRequest {
             machine,
             roms,
@@ -1251,6 +1352,30 @@ mod tests {
         assert!(preview.memory.is_none());
     }
 
+    /// The real path a screen calling `launch_plan` takes for an archived
+    /// title: refused before `plan_for` ever runs, with a ROM folder that
+    /// would otherwise happily settle a plan — proving the refusal comes
+    /// from the media shape and not from a missing ROM.
+    #[test]
+    fn preview_for_refuses_an_archived_drawer_before_planning() {
+        let request = args(Media::WhdloadArchive {
+            file: "WHDLoadDemos100.lha".into(),
+            inner: "Demos/T/Tag".into(),
+            slave: "Tag.Slave".into(),
+        });
+
+        let preview = preview_for(&request, &[a1200_rom()]);
+
+        assert!(preview.plan.is_none());
+        assert!(preview.memory.is_none());
+        match preview.refusal {
+            Some(LaunchRefusal::ArchivedWhdload { file }) => {
+                assert_eq!(file, "WHDLoadDemos100.lha");
+            }
+            other => panic!("expected ArchivedWhdload, got {other:?}"),
+        }
+    }
+
     // ---- mount_notes_for: what the confirmation screen is told ------------
     //
     // Design §4.4: the read-only system image, the writable game drawer and
@@ -1429,7 +1554,7 @@ mod tests {
             ordered: vec!["Disk1.adf".into(), "Disk2.adf".into()],
         });
         match request_kind_from(&a) {
-            RequestKind::Floppies { images } => {
+            Some(RequestKind::Floppies { images }) => {
                 assert_eq!(
                     images,
                     vec!["Disk1.adf".to_string(), "Disk2.adf".to_string()]
@@ -1450,7 +1575,7 @@ mod tests {
             file: "af-application.hdf".into(),
         });
         match request_kind_from(&a) {
-            RequestKind::Hardfile { image, whdload } => {
+            Some(RequestKind::Hardfile { image, whdload }) => {
                 assert_eq!(image, "af-application.hdf");
                 assert!(!whdload, "a plain hardfile is not WHDLoad-shaped");
             }
@@ -1475,12 +1600,101 @@ mod tests {
             slave: "1000Miglia.Slave".into(),
         });
         match request_kind_from(&a) {
-            RequestKind::Hardfile { image, whdload } => {
+            Some(RequestKind::Hardfile { image, whdload }) => {
                 assert_eq!(image, "1000 Miglia.hdf");
                 assert!(whdload, "a self-booting WHDLoad hardfile is WHDLoad-shaped");
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// `archived_refusal` as a plain sentence — the same conversion
+    /// `require_exists` already leans on for `FileMissing`.
+    fn launch_refusal_for(args: &LaunchArgs) -> Option<String> {
+        archived_refusal(&args.media).map(|refusal| refusal_error(refusal).to_string())
+    }
+
+    /// An unpacked drawer is the one shape `RequestKind::Whdload` exists for
+    /// — `dir` maps straight onto `drawer`.
+    #[test]
+    fn an_unpacked_drawer_launches_through_the_whdload_path() {
+        let a = args(Media::WhdloadDrawer {
+            dir: "Games/Turrican".into(),
+            slave: "Turrican.slave".into(),
+        });
+        match request_kind_from(&a) {
+            Some(RequestKind::Whdload { drawer, slave }) => {
+                assert_eq!(drawer, "Games/Turrican");
+                assert_eq!(slave, "Turrican.slave");
+            }
+            other => panic!("a drawer is the one shape that path exists for, got {other:?}"),
+        }
+    }
+
+    /// ART-147, for the shape this task adds: an archived drawer must never
+    /// take the launchable path, and must say why in a sentence that names
+    /// the archive.
+    #[test]
+    fn an_archived_drawer_is_not_launchable_and_says_which_archive() {
+        let a = args(Media::WhdloadArchive {
+            file: "WHDLoadDemos100.lha".into(),
+            inner: "Demos/T/Tag".into(),
+            slave: "Tag.Slave".into(),
+        });
+        let refusal =
+            launch_refusal_for(&a).expect("an archived title cannot be launched and must say so");
+        assert!(
+            refusal.contains("WHDLoadDemos100.lha"),
+            "the refusal names the archive the user has to unpack, got: {refusal}"
+        );
+        assert_eq!(
+            request_kind_from(&a),
+            None,
+            "an archived title must never reach the launchable path - that is ART-147, and \
+             `Option` rather than a boolean check on the result is what makes the compiler \
+             enforce it at every call site"
+        );
+    }
+
+    /// Fix-round review, Task 1: a review found `uae_config_for`'s tests
+    /// call `request_kind_from` directly, with no `archived_refusal` gate in
+    /// front of it at all — a second, real call site of exactly the shape
+    /// ART-147 already proved easy to reproduce, and Task 6 adds a third.
+    /// `Option<RequestKind>` is what turns that from "a convention every
+    /// caller must remember" into "a value every caller must unwrap or
+    /// propagate" — this test pins that promise directly, for every `Media`
+    /// shape this catalogue can hold, rather than trusting the four tests
+    /// above (each written before the mistake was found) to add up to it.
+    #[test]
+    fn request_kind_from_yields_nothing_for_an_archived_drawer_and_something_for_every_other_shape()
+    {
+        assert_eq!(
+            request_kind_from(&args(Media::WhdloadArchive {
+                file: "WHDLoadDemos100.lha".into(),
+                inner: "Demos/T/Tag".into(),
+                slave: "Tag.Slave".into(),
+            })),
+            None
+        );
+
+        assert!(request_kind_from(&args(Media::Floppies {
+            ordered: vec!["a.adf".into()],
+        }))
+        .is_some());
+        assert!(request_kind_from(&args(Media::Hardfile {
+            file: "a.hdf".into(),
+        }))
+        .is_some());
+        assert!(request_kind_from(&args(Media::WhdloadHardfile {
+            file: "a.hdf".into(),
+            slave: "a.slave".into(),
+        }))
+        .is_some());
+        assert!(request_kind_from(&args(Media::WhdloadDrawer {
+            dir: "Games/Turrican".into(),
+            slave: "Turrican.slave".into(),
+        }))
+        .is_some());
     }
 
     #[test]

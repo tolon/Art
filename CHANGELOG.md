@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A WHDLoad collection kept as drawers is catalogued.** If your WHDLoad
+  titles are folders — one `.slave` and its data in each, the way whdload.de
+  and the big collection archives ship them — the Collection screen now finds
+  them. It finds them inside an `.lha` too, without unpacking it: an archive
+  of a thousand drawers is read header to header. Both kinds sit beside the
+  hardfiles, floppies and `.rp9` packages already catalogued.
+- **iGame can be told what ART knows.** ART writes `igame.data` beside each
+  slave, so the launcher shows your titles by name with their genre and year
+  instead of by folder. Onto a copy ART makes, that is automatic and touches
+  nothing of yours. Onto your own collection it is an explicit action: you see
+  exactly which files would be written first, every existing one is backed up,
+  and the result is reported **per title, by name** — twelve written and one
+  refused says which one, because a host filesystem has no journal to undo.
+- **What a drawer wants at launch is read from its own icon.** WHDLoad's
+  settings live in the icon's ToolTypes — `SLAVE=`, `PRELOAD`, `BUTTONWAIT`
+  and the rest — and ART reads them rather than assuming defaults. It stops at
+  the icon's own "don't edit below" marker, because most of what follows is
+  image data, not settings. ART reads these and never writes them: your icons
+  are yours.
+
+### Fixed
+
+- **A WHDLoad archive with one unreadable drawer no longer costs you the rest.**
+  One bad slave used to abandon the whole scan; now that drawer is skipped by
+  name and the other 892 are catalogued.
+- **Scanning a large WHDLoad archive is 80× faster.** A real 663 MB archive
+  took two minutes and twenty seconds to scan and now takes under two seconds.
+  It was being read in an order that made the decompressor start over.
+
 - **AmigaOS 3.2.2 is an installable release.** A recipe can now say that a
   release arrives as a **base plus an update**: it declares ordered media
   *layers* and inherits another release's components, so the OS Builder asks

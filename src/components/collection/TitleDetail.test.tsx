@@ -38,6 +38,8 @@ const artworkForTitleMock = vi.hoisted(() => vi.fn());
 const dialogOpenMock = vi.hoisted(() => vi.fn());
 const offersMock = vi.hoisted(() => vi.fn());
 const placeMock = vi.hoisted(() => vi.fn());
+const igamewritePlanMock = vi.hoisted(() => vi.fn());
+const igamewriteApplyMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/artwork", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/artwork")>()),
@@ -62,6 +64,8 @@ vi.mock("@/lib/gameindex", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/gameindex")>()),
   kickstartOffersFor: offersMock,
   placeKickstart: placeMock,
+  igamewritePlan: igamewritePlanMock,
+  igamewriteApply: igamewriteApplyMock,
 }));
 
 vi.mock("@/lib/launch", async (importOriginal) => ({
@@ -118,6 +122,8 @@ beforeEach(() => {
   dialogOpenMock.mockReset();
   offersMock.mockReset().mockResolvedValue([]);
   placeMock.mockReset();
+  igamewritePlanMock.mockReset().mockResolvedValue({ items: [], refusals: [] });
+  igamewriteApplyMock.mockReset();
 });
 
 afterEach(() => cleanup());
@@ -250,6 +256,151 @@ describe("a slow answer for the previous title cannot paint over this one", () =
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(picture()?.src).toContain("lotus.png");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 6 review fix (I4): the igame.data verdict section had no component
+// test at all, though this file already existed. The four verdict sentences
+// and the cancelled ending are the exact risk surface CLAUDE.md's "the
+// failure that does not crash" names — a wrong sentence here would pass
+// every Rust test and every `phrase-keys` check, which only prove the four
+// keys *resolve*, not that the right one is *rendered* for the right state.
+// ---------------------------------------------------------------------------
+
+function drawerEntry(id: string, title: string): CatalogueEntry {
+  const entry = entryFor(id, title);
+  return {
+    ...entry,
+    record: {
+      ...entry.record,
+      media: { kind: "whdload-drawer", dir: `E:\\games\\${title}`, slave: `${title}.slave` },
+    },
+  };
+}
+
+function planWithOneItem(dir: string, title: string) {
+  return { items: [{ dir, title, data: { title, chipset: null, genre: null, year: null, players: null, exe: null } }], refusals: [] };
+}
+
+describe("the igame.data verdict section (I4)", () => {
+  it("says a fresh file was written", async () => {
+    igamewritePlanMock.mockResolvedValue(planWithOneItem("E:\\games\\Turrican", "Turrican"));
+    igamewriteApplyMock.mockResolvedValue({
+      verdicts: [{ dir: "E:\\games\\Turrican", state: { state: "written" }, backup: null, omitted: [] }],
+      cancelled: false,
+    });
+    renderPanel(drawerEntry("t1", "Turrican"));
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: i18n.t("collection.detail.igamewrite.action") })
+    );
+    const said = await screen.findByTestId("igamewrite-result");
+    expect(said.textContent).toBe(i18n.t("collection.detail.igamewrite.result.written"));
+    expect(said.className).toContain("badge-ok");
+  });
+
+  it("says the existing file was merged", async () => {
+    igamewritePlanMock.mockResolvedValue(planWithOneItem("E:\\games\\Lotus", "Lotus"));
+    igamewriteApplyMock.mockResolvedValue({
+      verdicts: [{ dir: "E:\\games\\Lotus", state: { state: "merged" }, backup: "E:\\games\\Lotus\\.art-backup\\igame.data.1.bak", omitted: [] }],
+      cancelled: false,
+    });
+    renderPanel(drawerEntry("t2", "Lotus"));
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: i18n.t("collection.detail.igamewrite.action") })
+    );
+    const said = await screen.findByTestId("igamewrite-result");
+    expect(said.textContent).toContain(i18n.t("collection.detail.igamewrite.result.merged"));
+    expect(said.textContent).toContain("E:\\games\\Lotus\\.art-backup\\igame.data.1.bak");
+    expect(said.className).toContain("badge-ok");
+  });
+
+  it("says nothing changed, and it is not styled as an error", async () => {
+    igamewritePlanMock.mockResolvedValue(planWithOneItem("E:\\games\\Twice", "Twice"));
+    igamewriteApplyMock.mockResolvedValue({
+      verdicts: [
+        {
+          dir: "E:\\games\\Twice",
+          state: { state: "skipped", detail: "igame.data already says this; nothing was changed" },
+          backup: null,
+          omitted: [],
+        },
+      ],
+      cancelled: false,
+    });
+    renderPanel(drawerEntry("t3", "Twice"));
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: i18n.t("collection.detail.igamewrite.action") })
+    );
+    const said = await screen.findByTestId("igamewrite-result");
+    expect(said.textContent).toBe(
+      `${i18n.t("collection.detail.igamewrite.result.skipped")} igame.data already says this; nothing was changed`
+    );
+    expect(said.className).not.toContain("badge-err");
+  });
+
+  it("says the write failed, and only this ending is styled as an error", async () => {
+    igamewritePlanMock.mockResolvedValue(planWithOneItem("E:\\games\\Locked", "Locked"));
+    igamewriteApplyMock.mockResolvedValue({
+      verdicts: [
+        { dir: "E:\\games\\Locked", state: { state: "failed", detail: "permission denied" }, backup: null, omitted: [] },
+      ],
+      cancelled: false,
+    });
+    renderPanel(drawerEntry("t4", "Locked"));
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: i18n.t("collection.detail.igamewrite.action") })
+    );
+    const said = await screen.findByTestId("igamewrite-result");
+    expect(said.textContent).toBe(`${i18n.t("collection.detail.igamewrite.result.failed")} permission denied`);
+    expect(said.className).toContain("badge-err");
+  });
+
+  /// **I2's own UI half.** A title too long for iGame's line is named, not
+  /// silently dropped, alongside whichever ending the write actually had.
+  it("names what did not fit, beside the ending", async () => {
+    igamewritePlanMock.mockResolvedValue(planWithOneItem("E:\\games\\Long", "Long"));
+    igamewriteApplyMock.mockResolvedValue({
+      verdicts: [
+        {
+          dir: "E:\\games\\Long",
+          state: { state: "written" },
+          backup: null,
+          omitted: ["title is 203 bytes — too long for iGame's 64-byte line"],
+        },
+      ],
+      cancelled: false,
+    });
+    renderPanel(drawerEntry("t5", "Long"));
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: i18n.t("collection.detail.igamewrite.action") })
+    );
+    const said = await screen.findByTestId("igamewrite-result");
+    expect(said.textContent).toContain(
+      i18n.t("collection.detail.igamewrite.omitted", {
+        fields: "title is 203 bytes — too long for iGame's 64-byte line",
+      })
+    );
+  });
+
+  /// **M5.** A run stopped before this title was reached must not look like
+  /// nothing happened at all — the sentence has to say the run was stopped,
+  /// not just fall through to no badge rendering anything.
+  it("says the run was stopped, not nothing at all", async () => {
+    igamewritePlanMock.mockResolvedValue(planWithOneItem("E:\\games\\Stopped", "Stopped"));
+    igamewriteApplyMock.mockResolvedValue({ verdicts: [], cancelled: true });
+    renderPanel(drawerEntry("t6", "Stopped"));
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: i18n.t("collection.detail.igamewrite.action") })
+    );
+    const said = await screen.findByTestId("igamewrite-result");
+    expect(said.textContent).toBe(i18n.t("collection.detail.igamewrite.result.cancelled"));
   });
 });
 

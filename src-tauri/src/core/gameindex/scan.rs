@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::core::error::CoreResult;
-use crate::core::gameindex::readers::{rp9, slave, tosec, whdhdf};
+use crate::core::gameindex::readers::{self, rp9, slave, tosec, whdhdf};
 use crate::core::gameindex::record::{
     derive_id, ChipsetRequirement, Fact, GameRecord, KickstartNeed, Media, Provenance, SourceRef,
     GAMEINDEX_SCHEMA,
@@ -48,6 +48,26 @@ pub fn scan_titles(dir: &Path) -> CoreResult<Vec<CatalogueEntry>> {
 }
 
 /// Scan a folder, reporting progress and honouring cancellation.
+///
+/// **Three questions, not one.** [`collect_indexable`] answers "which loose
+/// files look like a title" — an `.rp9`, a hardfile, a bare floppy image.
+/// [`collect_drawers`] answers a different one: "which directories are
+/// themselves a WHDLoad drawer". And [`collect_archive_candidates`] answers a
+/// third: "which archives might hold drawers ART has not unpacked". A folder
+/// scan without the second and third questions catalogues zero titles for a
+/// user whose whole collection is unpacked drawers or a `.lha` full of
+/// them — which is exactly what shipped before this was wired in: the two
+/// readers existed, had their own tests, and nothing outside a test ever
+/// called them.
+///
+/// Nothing double-counts by construction rather than by a check written here:
+/// the file walk only ever matches an extension in [`is_indexable`]'s list,
+/// the drawer walk only ever matches a *directory*, and an archive is neither
+/// — so the same path can never be picked up by two of the three passes. Two
+/// different-looking sources naming the exact same bytes (an unpacked drawer
+/// and the archive it was unpacked from, say) still collapse to one entry,
+/// the same way two loose copies of one ADF already did — `by_id`'s
+/// content-derived key, not a rule specific to drawers.
 pub fn scan_titles_with(
     dir: &Path,
     progress: &dyn ProgressSink,
@@ -63,21 +83,25 @@ pub fn scan_titles_with(
     // an indefinite phase rather than an invented percentage.
     progress.report(0, None, "Looking for titles…");
     let files = collect_indexable(dir);
+    let drawers = collect_drawers(dir);
+    let archives = collect_archive_candidates(dir);
 
-    let total = files.len() as u64;
+    let total = (files.len() + drawers.len() + archives.len()) as u64;
     let mut by_id: BTreeMap<String, CatalogueEntry> = BTreeMap::new();
+    let mut done: u64 = 0;
 
-    for (index, path) in files.iter().enumerate() {
+    for path in &files {
         // Between whole files is the only safe place to stop, and nothing has
         // been written in any case.
         if progress.is_cancelled() {
             return Err(cancelled_error());
         }
+        done += 1;
         let short = path
             .file_name()
             .map(|name| name.to_string_lossy().to_string())
             .unwrap_or_default();
-        progress.report(index as u64 + 1, Some(total), &short);
+        progress.report(done, Some(total), &short);
 
         match read_one(path) {
             Ok(Some(record)) => {
@@ -94,6 +118,69 @@ pub fn scan_titles_with(
             // is the exception: it is the user's answer, not a bad file.
             Err(err) if is_cancelled_error(&err) => return Err(err),
             Err(err) => log::debug!("gameindex: skipping {}: {err}", path.display()),
+        }
+    }
+
+    for dir_path in &drawers {
+        if progress.is_cancelled() {
+            return Err(cancelled_error());
+        }
+        done += 1;
+        let short = dir_path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        progress.report(done, Some(total), &short);
+
+        // Same shape as the file loop above: one unreadable or ambiguous
+        // drawer must not lose the other 892.
+        match readers::drawer::read_drawer(dir_path) {
+            Ok(Some(record)) => {
+                by_id.entry(record.id.clone()).or_insert(CatalogueEntry {
+                    path: dir_path.to_string_lossy().to_string(),
+                    record,
+                });
+            }
+            Ok(None) => {}
+            Err(err) => log::debug!("gameindex: skipping drawer {}: {err}", dir_path.display()),
+        }
+    }
+
+    for archive_path in &archives {
+        if progress.is_cancelled() {
+            return Err(cancelled_error());
+        }
+        done += 1;
+        let short = archive_path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        progress.report(done, Some(total), &short);
+
+        // `read_archive_drawers` itself is log-and-continue per drawer inside
+        // the archive (one junk `.slave` must not lose the other 892); this
+        // arm is for the archive as a whole being unreadable — a `.zip` that
+        // is really something else, a truncated download — which must not
+        // lose every other archive in the folder either. A cancellation is
+        // the one exception (N-3): `read_archive_drawers` now checks between
+        // its own whole units too, and its own stop must propagate rather
+        // than being logged and swallowed as if it were a bad archive.
+        match readers::lhadrawer::read_archive_drawers(archive_path, progress) {
+            Ok(records) => {
+                for record in records {
+                    by_id.entry(record.id.clone()).or_insert(CatalogueEntry {
+                        path: archive_path.to_string_lossy().to_string(),
+                        record,
+                    });
+                }
+            }
+            Err(err) if is_cancelled_error(&err) => return Err(err),
+            Err(err) => {
+                log::debug!(
+                    "gameindex: skipping archive {}: {err}",
+                    archive_path.display()
+                )
+            }
         }
     }
 
@@ -146,6 +233,89 @@ pub(crate) fn collect_indexable(dir: &Path) -> Vec<PathBuf> {
     files.retain(|path| is_indexable(path));
     files.sort();
     files
+}
+
+/// Every directory under `root` that [`readers::drawer::is_drawer`] accepts —
+/// a directory holding exactly the shape a WHDLoad drawer holds, walked with
+/// the same depth limit and symlink rule [`collect_indexable`] uses.
+///
+/// A directory component named `data`/`Data`, compared case-insensitively, is
+/// never visited. `Demos/T/Tag`'s payload is `data/01` … `data/82` — iGame's
+/// own `examineFolder` skips the same names, and a walk that descended into
+/// one would invent a title per payload file where there is one drawer.
+///
+/// **A file scan and a directory scan are two questions.** [`collect_indexable`]
+/// answers the first and is left exactly as it is; folding the two together
+/// is how one of them starts guessing.
+pub fn collect_drawers(root: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    collect_drawer_dirs(root, &mut dirs, 0);
+    dirs.sort();
+    dirs
+}
+
+/// Whether `path`'s extension is one [`readers::lhadrawer::read_archive_drawers`]
+/// might find a drawer inside — matched to what [`crate::core::archive::open`]
+/// can actually open. **Not `7z`**, on purpose (N-2, round 2 of this review):
+/// `SevenZBackend::read` reopens and forward-decodes the archive on every
+/// call — its own doc names this the quadratic case — and `read_archive_drawers`
+/// calls `read` once per candidate slave. On a large `.7z` that is the same
+/// class of defect as the 140-second one this project has already paid for,
+/// with a worse constant. `lha`/`lzh` is the design's own scope and is
+/// measured against a real 663 MB archive (`readers::lhadrawer`'s own doc).
+/// `zip` is included because the fixture proving it actually works
+/// (`readers::lhadrawer::tests::a_drawer_inside_a_zip_is_found_too`) turned
+/// out to be a few lines, not a new format's worth of work — widening this
+/// list again in the future should cost the same test, not skip it.
+fn is_archive_candidate(path: &Path) -> bool {
+    path.extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .is_some_and(|e| matches!(e.as_str(), "lha" | "lzh" | "zip"))
+}
+
+/// Every archive under `dir` worth asking [`readers::lhadrawer::read_archive_drawers`]
+/// about — the same walk [`collect_indexable`] uses, filtered on
+/// [`is_archive_candidate`] instead of [`is_indexable`]. A file can match at
+/// most one of the two filters (no shared extension between them), so this
+/// pass and the file pass never see the same path twice.
+pub(crate) fn collect_archive_candidates(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    collect(dir, &mut files, 0);
+    files.retain(|path| is_archive_candidate(path));
+    files.sort();
+    files
+}
+
+fn is_payload_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .is_some_and(|n| n.eq_ignore_ascii_case("data"))
+}
+
+fn collect_drawer_dirs(dir: &Path, acc: &mut Vec<PathBuf>, depth: usize) {
+    if depth >= MAX_SCAN_DEPTH {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // Same symlink rule as `collect`: a directory symlink pointing back
+        // up the tree is skipped rather than followed.
+        let is_symlink = std::fs::symlink_metadata(&path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        if is_symlink || !path.is_dir() {
+            continue;
+        }
+        if path.file_name().is_some_and(is_payload_name) {
+            continue;
+        }
+        if readers::drawer::is_drawer(&path) {
+            acc.push(path.clone());
+        }
+        collect_drawer_dirs(&path, acc, depth + 1);
+    }
 }
 
 /// Read one file, or `Ok(None)` when it is not something the index describes.
@@ -483,6 +653,27 @@ mod tests {
         path
     }
 
+    /// ART-147: `from_hardfile` recorded self-booting hardfiles as
+    /// `WhdloadDrawer`, which sent Play looking for a system volume the file
+    /// never needed. A hardfile is never a drawer, whatever is inside it —
+    /// `Media::WhdloadDrawer` and `Media::WhdloadArchive` each have exactly
+    /// one producer, and neither is the hardfile reader.
+    #[test]
+    fn the_hardfile_reader_produces_neither_drawer_variant() {
+        let dir = scratch("producer-discipline");
+        let image = write_hardfile_game(&dir, "1000MigliaHD", "1000Miglia", "1000 Miglia");
+
+        let record = read_one(&image).unwrap().expect("this is a title");
+
+        assert!(
+            matches!(record.media, Media::WhdloadHardfile { .. }),
+            "a self-booting hardfile is WhdloadHardfile and nothing else, got {:?}",
+            record.media
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A folder holding one of each kind comes back with one record each, and
     /// each record names the source that produced it.
     #[test]
@@ -507,6 +698,61 @@ mod tests {
                 ("Zool", Provenance::TosecName),
             ],
             "the slave's own name beats the file's"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **C1's own fix.** Before this, `collect_drawers` and
+    /// `read_archive_drawers` had tests of their own but no production
+    /// caller — a folder holding nothing but drawers catalogued zero titles.
+    /// One of each of the three shapes a WHDLoad title can take in a
+    /// collection folder, mixed with one ordinary loose ADF: the scan must
+    /// find all four, and the archived drawer must come back tagged
+    /// `WhdloadArchive`, not silently merged into the unpacked one.
+    #[test]
+    fn a_folder_with_all_three_whdload_shapes_yields_one_record_each() {
+        let dir = scratch("all-shapes");
+        write_loose_adf(&dir, "Zool (1992)(Gremlin).adf");
+        let drawer = dir.join("Turrican");
+        std::fs::create_dir_all(&drawer).unwrap();
+        std::fs::write(
+            drawer.join("Turrican.slave"),
+            build_slave("Turrican", "1990 Rainbow Arts", 16),
+        )
+        .unwrap();
+        let archive = dir.join("Demos.lha");
+        std::fs::write(
+            &archive,
+            crate::core::lha::tests::make_lha_with(&[(
+                "Demos/Tag/Tag.Slave",
+                &build_slave("Tag", "1992 Someone", 16),
+            )]),
+        )
+        .unwrap();
+
+        let found = scan_titles(&dir).unwrap();
+        assert_eq!(
+            found.len(),
+            3,
+            "the loose ADF, the unpacked drawer and the archived drawer: {found:?}"
+        );
+
+        let by_title: BTreeMap<&str, &Media> = found
+            .iter()
+            .map(|e| (e.record.title.value.as_str(), &e.record.media))
+            .collect();
+        assert!(
+            matches!(by_title.get("Zool"), Some(Media::Floppies { .. })),
+            "{found:?}"
+        );
+        assert!(
+            matches!(by_title.get("Turrican"), Some(Media::WhdloadDrawer { .. })),
+            "{found:?}"
+        );
+        assert!(
+            matches!(by_title.get("Tag"), Some(Media::WhdloadArchive { .. })),
+            "{found:?}"
         );
 
         std::fs::remove_dir_all(&dir).ok();

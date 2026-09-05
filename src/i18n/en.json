@@ -1595,7 +1595,9 @@
         "floppies_one": "{{count}} floppy disk",
         "floppies_other": "{{count}} floppy disks",
         "hardfile": "Hard disk image — {{file}}",
-        "whdload": "WHDLoad — {{slave}}"
+        "whdload": "WHDLoad — {{slave}}",
+        "whdloadDrawer": "WHDLoad drawer — {{slave}}",
+        "whdloadArchive": "WHDLoad drawer (not yet unpacked) — {{slave}}, in {{file}}"
       },
       "publisher": "Publisher",
       "year": "Year",
@@ -1657,7 +1659,8 @@
           "noWhdloadMachineRom": "WHDLoad titles run on ART's {{machine}} profile, so this launch needs an {{machine}} Kickstart 3.x. A Kickstart for another model — a 3.1 for the A500/A600/A2000, say — does not suit it however new it is. Add an {{machine}} Kickstart to your ROM folder.",
           "noSystemVolume": "This WHDLoad title needs a bootable system, and none is set.",
           "fileMissing": "'{{path}}' no longer exists.",
-          "nothingToMount": "This title names no disk to mount — there is nothing for WinUAE to load."
+          "nothingToMount": "This title names no disk to mount — there is nothing for WinUAE to load.",
+          "archivedWhdload": "This WHDLoad drawer is still inside '{{file}}', which has not been unpacked. Unpack the archive, then try again."
         }
       },
       "kickstart": {
@@ -1673,6 +1676,19 @@
           "placed": "Placed at {{to}}.",
           "occupied": "Refused: a different ROM is already at {{to}}. Nothing was written.",
           "alreadyThere": "Already there, unchanged — {{to}}."
+        }
+      },
+      "igamewrite": {
+        "action": "Write igame.data",
+        "refused": "ART cannot write igame.data for this title yet: {{reason}}",
+        "backup": "The previous version was kept at {{path}}.",
+        "omitted": "ART could not fit: {{fields}}.",
+        "result": {
+          "written": "A new igame.data was written beside the slave.",
+          "merged": "The existing igame.data was updated with what ART knows; anything else in it was kept.",
+          "skipped": "igame.data already said this — nothing was changed.",
+          "failed": "Could not write igame.data.",
+          "cancelled": "Stopped before this title was reached."
         }
       }
     },
@@ -1741,6 +1757,7 @@
     },
     "report": {
       "notWritten": "Not written:",
+      "igameOmitted": "igame.data left out:",
       "backupKept": "The previous image was kept at {{backup}}"
     },
     "verdict": {
