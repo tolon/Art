@@ -10,6 +10,7 @@ pub mod adf;
 pub mod amigaicon;
 pub mod amigainstall;
 pub mod amiganet;
+pub mod amigaprefs;
 pub mod amigaver;
 pub mod analysis;
 pub mod archive;
