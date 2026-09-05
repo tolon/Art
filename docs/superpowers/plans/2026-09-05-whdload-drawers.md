@@ -69,7 +69,7 @@ python scripts/control-byte-sweep.py
 
 - [ ] **Step 1: Write the failing tests**
 
-In `record.rs`'s `mod tests`:
+In `record.rs`'s `mod tests` (the schema and variant tests; the producer-discipline test in step 5 goes in `scan.rs`, where `from_hardfile` lives):
 
 ```rust
 #[test]
