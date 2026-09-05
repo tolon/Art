@@ -223,7 +223,11 @@ def main() -> int:
             )
             return 1
 
-    print(f"\nAll {checked} real .info file(s) round-tripped through core/amigaicon.")
+    round_tripped = checked - (no_tooltypes or 0)
+    print(
+        f"\nAll {checked} real .info file(s) parsed; {round_tripped} of them round-tripped "
+        f"through merge_tooltypes ({no_tooltypes or 0} carry no ToolTypes block)."
+    )
     return 0
 
 

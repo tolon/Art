@@ -298,6 +298,23 @@
         "them — a rule for any of them would be ART installing something the",
         "release does not."
       ],
+      "_why_overrides_modules_a1200": [
+        "Final whole-branch review, Finding B. `exclusive_group: \"modules\"`",
+        "was copied onto this component from the base `modules-a1200`'s shape",
+        "without asking whether the group still meant the same thing once both",
+        "could be on at once — a pre-47 Kickstart satisfies both this",
+        "component's own condition (`exec < 47.10`) and the base layer's",
+        "(`rom-older-than 47`) at the same time, which is the ordinary case for",
+        "the real Amigas this project exists for, not an edge case. They are",
+        "not a user's choice between two machines (what the group exists to",
+        "police); they are two halves of one release's answer for one",
+        "machine, so `plan::detect_exclusive_group_conflicts` now scopes the",
+        "group per layer and does not refuse this pair. What is still real:",
+        "both components' rules name `LIBS/A1200` as a `Subtree`, so declaring",
+        "the override here is what lets this update's own newer files in that",
+        "drawer win over the base's, the same shape `update-322-diskdoctor`",
+        "and `workbench-39` already use for a genuine two-layer overlap."
+      ],
       "id": "update-322-modules-a1200",
       "media": "ModulesA1200_3.2.2",
       "layer": "update-3.2.2",
@@ -309,7 +326,7 @@
         "major": 47,
         "minor": 10
       },
-      "overrides": ["storage", "workbench-base"],
+      "overrides": ["modules-a1200", "storage", "workbench-base"],
       "rules": [
         { "from": "LIBS/A1200", "to": "Libs/A1200", "kind": "subtree" },
         { "from": "LIBS/intuition.library", "to": "Libs/intuition.library", "kind": "file" },

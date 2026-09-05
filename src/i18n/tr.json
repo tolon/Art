@@ -2163,7 +2163,7 @@
       "mediaPathMissing": "{{component}}'in kendi {{path}} yolu {{media}}'da eksik — bu diskin farklı bir sürümü gibi görünüyor.",
       "mediaUnreadable": "{{component}} için {{volume}} {{path}} konumunda bulundu, ancak ART onu okuyamadı: {{reason}}",
       "romUnknown": "Kickstart tanımlanamadı, bu yüzden ART sürümüne bağlı şeylere karar veremiyor.",
-      "residentTableUnreadable": "\"{{component}}\", eşleştirilen Kickstart'ın kendi {{resident}} modülünün yeterince eski olup olmadığını bilmek zorunda, ama ART bunu kontrol etmek için bu ROM'un modül tablosunu okuyamadı. Makinenizin buna ihtiyacı olduğunu biliyorsanız \"{{component}}\"'i kendiniz işaretleyin.",
+      "residentTableUnreadable": "\"{{component}}\", eşleştirilen Kickstart'ın kendi {{resident}} modülünün yeterince eski olup olmadığını bilmek zorunda, ama ART bunu kontrol etmek için bu ROM'un modül tablosunu okuyamadı. Makinenizin buna ihtiyacı olduğunu biliyorsanız bileşen listesinden \"{{component}}\"'i kendiniz işaretleyin.",
       "destinationCollision": "{{path}} birden fazla bileşen tarafından isteniyor ({{components}}) ve hiçbiri diğerinin üzerine yazabileceğini belirtmiyor.",
       "mediaAmbiguous": "Medya klasöründe {{component}}'in ihtiyaç duyduğu {{volume}} birim adını taşıyan birden fazla dosya var: {{paths}}.",
       "layersShareFolder": "{{layers}} aynı klasörü ({{folder}}) gösteriyor, bu yüzden ART bunları birbirinden ayırt edemiyor — her katmana kendi klasörünü ver.",
@@ -2220,7 +2220,7 @@
       "hint": "Yeni ya da boş bir klasör. Seçme penceresinde Yeni klasör ile oluşturup seçebilirsin — ART yalnızca içinde bir şey olan klasörü reddeder."
     },
     "layer": {
-      "base32": "AmigaOS 3.2 ortamı",
+      "base32": "AmigaOS 3.2 temel ortamı",
       "update322": "AmigaOS 3.2.2 güncelleme ortamı",
       "wrongLayer": "Bu klasör bu alanın istediğini değil, {{actual}} disklerini taşıyor ({{found}}). Klasörü {{actual}} alanına taşıyın, ya da bu alanın istediği disklerin bulunduğu klasörü seçin."
     },
@@ -2313,7 +2313,8 @@
         "confirmed": "Ağacın kendisi \"{{stated}}\" diyor — kendi Prefs/Env-Archive/Versions/Release imi, yapılan kurulumla uyuşuyor.",
         "mismatch": "Ağacın kendisi bu kurulumun hedeflediği \"{{expected}}\" değil, \"{{stated}}\" diyor — bir sorun bildirirken bu ekrana değil ağacın kendi imine güven.",
         "unstated": "Ağaç kendi sürüm imini taşımıyor (Prefs/Env-Archive/Versions/Release) — bir güncelleme katmanı yazmadıysa bu beklenen bir durumdur.",
-        "unreadable": "ART, ağacın kendi sürüm imini kontrol etmek için okuyamadı ({{detail}}) — bu, ağacın sürüm belirtmediği anlamına gelmez; im dosyasının kendisiyle ilgili sıra dışı bir durum var."
+        "unreadable": "ART, ağacın kendi sürüm imini kontrol etmek için okuyamadı ({{detail}}) — bu, ağacın sürüm belirtmediği anlamına gelmez; im dosyasının kendisiyle ilgili sıra dışı bir durum var.",
+        "expectedUnknown": "Ağacın kendisi \"{{stated}}\" diyor — ART bu sürüm için doğru bir ağacın ne söylemesi gerektiğini henüz ölçmedi, bu yüzden bu, bir uyuşmazlık olarak değil olduğu gibi bildiriliyor."
       },
       "removed": {
         "heading": "Kaldırılan",

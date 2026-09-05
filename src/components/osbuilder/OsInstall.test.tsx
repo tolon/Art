@@ -1190,6 +1190,53 @@ describe("a refusal renders as a sentence, not a blank", () => {
     expect(rendered.textContent?.trim().length).toBeGreaterThan(0);
     expect(KEY_SHAPE.test(rendered.textContent ?? "")).toBe(false);
   });
+
+  // **Final whole-branch review, Finding F.** This is the one refusal that
+  // tells the user to go and tick the named component themselves — and a
+  // raw recipe id ("modules-a1200") is not a checkbox a person can find on
+  // screen; the checklist shows it by its label ("ModulesA1200_3.2", this
+  // fixture's `COMPONENTS_32` entry, since it declares no `labelKey`).
+  it("names the component to tick by its own label, never the raw recipe id", async () => {
+    const refusal: RefusalReason = {
+      refusal: "resident-table-unreadable",
+      component: "modules-a1200",
+      resident: "exec",
+    };
+    const refusedPlan: InstallPlan = {
+      release: "3.2",
+      items: [],
+      refusals: [refusal],
+      totalBytes: 0,
+      totalFiles: 0,
+      componentsOn: ["workbench-base", "install-libs"],
+      mediaPaths: {},
+      packages: [],
+      packageMedia: {},
+      userStartup: [],
+      activations: [],
+      mediaStamps: {},
+      removals: [],
+      layers: [],
+    };
+    planMock
+      .mockReset()
+      .mockResolvedValue({ outcome: "planned", plan: refusedPlan } satisfies PlanResult);
+
+    seedRemembered({
+      "osinstall.mediaFolder": "E:\\media",
+      "osinstall.destination": "E:\\dist",
+    });
+    render(<OsInstall />);
+
+    // Computed the way the screen itself computes it (Finding F's own fix):
+    // the raw id resolved to `COMPONENTS_32`'s `modules-a1200` entry's own
+    // label, "ModulesA1200_3.2" (it declares no `labelKey`, so `label()`
+    // falls back to the component's `media`).
+    const phrase = refusalPhrase(refusal);
+    const expectedSentence = i18n.t(phrase.key, { ...phrase.params, component: "ModulesA1200_3.2" });
+    const rendered = await screen.findByText(expectedSentence);
+    expect(rendered.textContent).not.toContain("modules-a1200");
+  });
 });
 
 describe("the screen says what a layering component would replace (ART-175)", () => {
@@ -1608,6 +1655,38 @@ describe("Task 9: the tree's own release marker gets its own line", () => {
     );
     expect(
       screen.queryByText(i18n.t("osinstall.result.statedRelease.unstated"))
+    ).toBeNull();
+  });
+
+  // **Final whole-branch review, Finding E.** A differing marker for a
+  // release ART has never measured (AmigaOS 3.9 today) must render its own
+  // sentence, and never the "mismatch" wording — that would tell the user
+  // their correct tree is wrong for a formula nobody has checked.
+  it("reports a differing marker for an unmeasured release plainly, never as a mismatch", async () => {
+    const announce = captureAnnounce();
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(announce.current).not.toBeNull());
+
+    act(() =>
+      announce.current!({
+        job_id: 1,
+        destination: "E:\\amiga\\dist",
+        outcome: BASE_OUTCOME,
+        stated_release: { verdict: "expected-unknown", stated: "Release 3.5" },
+      })
+    );
+
+    await screen.findByText(
+      i18n.t("osinstall.result.statedRelease.expectedUnknown", { stated: "Release 3.5" })
+    );
+    expect(
+      screen.queryByText(
+        i18n.t("osinstall.result.statedRelease.mismatch", {
+          expected: "Release 3.9",
+          stated: "Release 3.5",
+        })
+      )
     ).toBeNull();
   });
 });

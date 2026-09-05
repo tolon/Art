@@ -1110,28 +1110,67 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
   });
 
   it("osinstall refusalPhrase: every RefusalReason variant resolves", () => {
-    const reasons: OsInstallRefusalReason[] = [
-      { refusal: "media-missing", component: "extras", volume_name: "Extras3.2" },
-      { refusal: "media-path-missing", component: "extras", media: "Extras3.2", path: "L" },
+    // Final whole-branch review, Finding D. This used to be a plain
+    // `OsInstallRefusalReason[]` array literal — and TypeScript does not
+    // force an array literal to be exhaustive, so this branch added two
+    // variants (`resident-table-unreadable`, Task 7; `layers-share-folder`,
+    // Task 3) to the union and neither was ever added here. Both keys exist
+    // in both catalogues, so nothing broke — but the one test whose whole
+    // job is catching a `Phrase` pointing at a key nobody added went blind
+    // to the two newest variants while its own name still claimed "every".
+    //
+    // A mapped type over `OsInstallRefusalReason["refusal"]` closes the gap
+    // the same way a `switch` with no `default` does: the object literal
+    // below must carry a property for every tag the union has, or this file
+    // fails to typecheck (`pnpm lint`) before any test runs — the next
+    // variant's author is told by the compiler, not by a reviewer.
+    const reasonsByVariant: {
+      [K in OsInstallRefusalReason["refusal"]]: Extract<OsInstallRefusalReason, { refusal: K }>;
+    } = {
+      "media-missing": { refusal: "media-missing", component: "extras", volume_name: "Extras3.2" },
+      "media-path-missing": {
+        refusal: "media-path-missing",
+        component: "extras",
+        media: "Extras3.2",
+        path: "L",
+      },
       // ART-119 (#5): the disk is present and unreadable — a per-component
       // refusal now, rather than a `CoreError` that failed the whole plan.
-      {
+      "media-unreadable": {
         refusal: "media-unreadable",
         component: "extras",
         volume_name: "Extras3.2",
         path: "D:\media\Extras3.2.adf",
         reason: "not an AmigaDOS volume",
       },
-      { refusal: "rom-unknown" },
-      { refusal: "destination-collision", path: "C/Assign", components: ["a", "b"] },
-      {
+      "rom-unknown": { refusal: "rom-unknown" },
+      "resident-table-unreadable": {
+        refusal: "resident-table-unreadable",
+        component: "update-322-modules-a1200",
+        resident: "exec",
+      },
+      "destination-collision": {
+        refusal: "destination-collision",
+        path: "C/Assign",
+        components: ["a", "b"],
+      },
+      "media-ambiguous": {
         refusal: "media-ambiguous",
         component: "workbench-base",
         volume_name: "Workbench3.2",
         paths: ["a", "b"],
       },
-      { refusal: "exclusive-group-conflict", group: "modules", components: ["a", "b"] },
-      {
+      "layers-share-folder": {
+        refusal: "layers-share-folder",
+        layers: ["base", "update-3.2.2"],
+        folder: "D:\\amiga\\media",
+      },
+      "exclusive-group-conflict": {
+        refusal: "exclusive-group-conflict",
+        group: "modules",
+        components: ["a", "b"],
+      },
+      "rule-kind-mismatch": {
         refusal: "rule-kind-mismatch",
         component: "a",
         from: "C",
@@ -1141,38 +1180,46 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       // Task 7 (SD-2 · G5's content layer, packages): six variants
       // `plan()`'s own package block could already raise, unreachable until
       // packages became selectable.
-      { refusal: "package-unknown", package: "locale-turkish" },
-      { refusal: "package-folder-missing", packages: ["locale-turkish"] },
-      {
+      "package-unknown": { refusal: "package-unknown", package: "locale-turkish" },
+      "package-folder-missing": {
+        refusal: "package-folder-missing",
+        packages: ["locale-turkish"],
+      },
+      "package-requirement-missing": {
         refusal: "package-requirement-missing",
         package: "boingbag-39-2",
         requires: "boingbag-39-1",
       },
-      {
+      "package-component-missing": {
         refusal: "package-component-missing",
         package: "locale-turkish",
         component: "locale-base",
       },
-      { refusal: "package-archive-missing", package: "locale-turkish", media: "LocaleUpdate" },
-      {
+      "package-archive-missing": {
+        refusal: "package-archive-missing",
+        package: "locale-turkish",
+        media: "LocaleUpdate",
+      },
+      "package-archive-ambiguous": {
         refusal: "package-archive-ambiguous",
         package: "locale-turkish",
         media: "LocaleUpdate",
         paths: ["a", "b"],
       },
-      {
+      // ---- M3 / ART-166: a package ART cannot place from the host at all.
+      "package-not-placeable-on-host": {
         refusal: "package-not-placeable-on-host",
         package: "boingbag-39-1",
         block: "encrypted-payload",
       },
-      {
+      "activation-source-missing": {
         refusal: "activation-source-missing",
         component: "storage",
         name: "NTSC",
         from: "Storage/Monitors/NTSC",
       },
-    ];
-    for (const reason of reasons) {
+    };
+    for (const reason of Object.values(reasonsByVariant)) {
       const phrase = osinstallRefusalPhrase(reason);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
     }

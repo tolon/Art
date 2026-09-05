@@ -4435,11 +4435,11 @@ mod tests {
             );
         }
 
-        /// The three states `src/lib/osinstall.ts`'s `StatedRelease` union
+        /// The five states `src/lib/osinstall.ts`'s `StatedRelease` union
         /// keys on — an internally tagged enum, so each variant's own fields
         /// sit alongside `verdict` rather than nested under it.
         #[test]
-        fn stated_release_serialises_as_the_four_tagged_variants_the_frontend_reads() {
+        fn stated_release_serialises_as_the_five_tagged_variants_the_frontend_reads() {
             use crate::core::osinstall::identify::StatedRelease;
 
             let confirmed = serde_json::to_value(StatedRelease::Confirmed {
@@ -4472,6 +4472,15 @@ mod tests {
                 unreadable["detail"],
                 "malformed release marker: too many bytes"
             );
+
+            // Final whole-branch review, Finding E — the fifth ending,
+            // pinned on the wire the same way the other four are.
+            let expected_unknown = serde_json::to_value(StatedRelease::ExpectedUnknown {
+                stated: "Release 3.5".into(),
+            })
+            .unwrap();
+            assert_eq!(expected_unknown["verdict"], "expected-unknown");
+            assert_eq!(expected_unknown["stated"], "Release 3.5");
         }
 
         #[test]

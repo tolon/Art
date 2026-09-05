@@ -570,7 +570,22 @@ pub fn release_of_tree(root: &Path) -> CoreResult<Option<String>> {
     })
 }
 
-/// The four sentences a finished build's own marker can produce, compared
+/// The releases whose expected `Prefs/Env-Archive/Versions/Release` marker
+/// has actually been **measured** against a real, correctly-built tree —
+/// design §5's own table, reproduced on `core::rom::residents`'s doc
+/// comment, is the same discipline applied here: "Release 3.2" and
+/// "Release 3.2.2" were read off real trees before either was relied on.
+/// AmigaOS 3.9 is deliberately absent — nobody has yet measured what a
+/// correct 3.9 tree's own marker says, and 3.9 is built from a 3.5 base
+/// layer plus an overlay, so guessing "Release 3.9" the same way the other
+/// two are guessed is exactly the "the header answers it" mistake this
+/// project keeps re-finding (CLAUDE.md, "research before design"). Naming a
+/// release here is a claim that has been checked; add one only after
+/// measuring it the same way, never merely to silence
+/// [`StatedRelease::ExpectedUnknown`].
+const MEASURED_RELEASE_MARKERS: &[&str] = &["AmigaOS 3.2", "AmigaOS 3.2.2"];
+
+/// The five sentences a finished build's own marker can produce, compared
 /// with the release ART built the tree as — see [`stated_release`] and
 /// [`release_of_tree`]'s own doc comment for why there are this many and why
 /// they may never collapse into a pass/fail.
@@ -592,13 +607,25 @@ pub fn release_of_tree(root: &Path) -> CoreResult<Option<String>> {
 /// corrupted or oversized marker read back exactly like an unremarkable
 /// AmigaOS 3.2 tree, which is the same "endings stay distinct" rule this
 /// whole task exists to enforce, broken inside the task itself.
+///
+/// **`ExpectedUnknown` is its own variant too, not folded into `Mismatch`**
+/// (final whole-branch review, Finding E). `Mismatch` is a claim that the
+/// tree is wrong, and that claim is only honest for a release whose expected
+/// marker `MEASURED_RELEASE_MARKERS` actually names — for AmigaOS 3.9, the
+/// "expected" string above is a guessed formula nobody has checked against a
+/// real tree, and a correct 3.9 build whose marker reads something else
+/// (the 3.5 base layer's own, say) must never be told it is wrong for a
+/// mistake that may be entirely ART's guess. Never folded into `Confirmed`
+/// either — the two strings really do differ, and saying so plainly, without
+/// judging which side is right, is what `stated` is for.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "verdict", rename_all = "kebab-case")]
 pub enum StatedRelease {
     /// The tree's own marker names the release ART built it as.
     Confirmed { stated: String },
-    /// The tree's own marker names something else. Both sides are reported;
-    /// which one is right is not this module's call to make.
+    /// The tree's own marker names something else, for a release whose
+    /// expected marker `MEASURED_RELEASE_MARKERS` confirms — both sides are
+    /// reported; which one is right is not this module's call to make.
     Mismatch { expected: String, stated: String },
     /// The tree carries no marker at all — not a failure. Most releases ART
     /// ships have never had an `Update/Release` to overwrite the base's own
@@ -611,6 +638,13 @@ pub enum StatedRelease {
     /// core's own sentence, never claimed away (CLAUDE.md: "the screen may
     /// not out-claim the core").
     Unreadable { detail: String },
+    /// The tree states `stated`, and it differs from the guessed formula —
+    /// but this build's own release is not in `MEASURED_RELEASE_MARKERS`, so
+    /// ART has never checked what a correct tree for it actually writes
+    /// there. Reporting a `Mismatch` here would be the confident-wrong
+    /// sentence CLAUDE.md warns against: a correct tree told it is wrong,
+    /// sent looking for a fix that does not exist.
+    ExpectedUnknown { stated: String },
 }
 
 /// Compare [`release_of_tree`] against the release a build was made for.
@@ -627,6 +661,12 @@ pub enum StatedRelease {
 /// this function is the single place that decision gets made, once, into
 /// [`StatedRelease::Unreadable`], so a caller cannot quietly re-fold the two
 /// apart ever again.
+///
+/// **A disagreement is only ever reported as `Mismatch` for a release this
+/// module has actually measured** (final whole-branch review, Finding E) —
+/// see [`MEASURED_RELEASE_MARKERS`]. For any other release, a differing
+/// marker comes back as [`StatedRelease::ExpectedUnknown`] instead: what the
+/// tree states, without judging it against a formula nobody has checked.
 pub fn stated_release(root: &Path, expected_release: &str) -> StatedRelease {
     let expected_marker = format!(
         "Release {}",
@@ -634,14 +674,16 @@ pub fn stated_release(root: &Path, expected_release: &str) -> StatedRelease {
             .split_once(' ')
             .map_or(expected_release, |(_, version)| version)
     );
+    let expected_is_measured = MEASURED_RELEASE_MARKERS.contains(&expected_release);
 
     match release_of_tree(root) {
         Ok(None) => StatedRelease::Unstated,
         Ok(Some(stated)) if stated == expected_marker => StatedRelease::Confirmed { stated },
-        Ok(Some(stated)) => StatedRelease::Mismatch {
+        Ok(Some(stated)) if expected_is_measured => StatedRelease::Mismatch {
             expected: expected_marker,
             stated,
         },
+        Ok(Some(stated)) => StatedRelease::ExpectedUnknown { stated },
         Err(err) => StatedRelease::Unreadable {
             detail: err.to_string(),
         },
@@ -1252,6 +1294,33 @@ mod tests {
                 expected: "Release 3.2.2".to_string(),
                 stated: "Release 3.2".to_string()
             }
+        );
+    }
+
+    /// **Final review, Finding E.** AmigaOS 3.9 is not in
+    /// `MEASURED_RELEASE_MARKERS`, so a 3.9 tree whose marker differs from
+    /// the guessed `"Release 3.9"` formula — the 3.5 base layer's own
+    /// `Prefs/Env-Archive/Versions/Release`, unmeasured and unoverwritten by
+    /// the 3.9 overlay, is exactly the shape that could produce this — must
+    /// never come back as `Mismatch`. A correct AmigaOS 3.9 build must not
+    /// be told it is wrong for a formula nobody has checked.
+    #[test]
+    fn stated_release_reports_a_differing_marker_as_expected_unknown_for_an_unmeasured_release() {
+        let dir = crate::core::osinstall::fixtures::scratch("stated-release-expected-unknown");
+        let root = dir.join("tree");
+        std::fs::create_dir_all(root.join("Prefs/Env-Archive/Versions")).unwrap();
+        std::fs::write(
+            root.join("Prefs/Env-Archive/Versions/Release"),
+            b"Release 3.5",
+        )
+        .unwrap();
+        assert_eq!(
+            stated_release(&root, "AmigaOS 3.9"),
+            StatedRelease::ExpectedUnknown {
+                stated: "Release 3.5".to_string()
+            },
+            "AmigaOS 3.9's own expected marker has never been measured, so a differing \
+             marker must be reported plainly, never asserted as a mismatch"
         );
     }
 

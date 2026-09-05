@@ -2163,7 +2163,7 @@
       "mediaPathMissing": "{{component}}'s own {{path}} is missing from {{media}} — this looks like a different revision of that disk.",
       "mediaUnreadable": "{{volume}} was found for {{component}} at {{path}}, but ART could not read it: {{reason}}",
       "romUnknown": "The Kickstart could not be identified, so ART cannot decide what depends on its version.",
-      "residentTableUnreadable": "\"{{component}}\" needs to know whether the paired Kickstart's own {{resident}} module is old enough, but ART could not read this ROM's module table to check. Tick \"{{component}}\" yourself if you know your machine needs it.",
+      "residentTableUnreadable": "\"{{component}}\" needs to know whether the paired Kickstart's own {{resident}} module is old enough, but ART could not read this ROM's module table to check. Tick \"{{component}}\" in the component list yourself if you know your machine needs it.",
       "destinationCollision": "{{path}} is wanted by more than one component ({{components}}), and neither declares it may override the other.",
       "mediaAmbiguous": "More than one file in the media folder carries the volume name {{volume}} that {{component}} needs: {{paths}}.",
       "layersShareFolder": "{{layers}} are pointed at the same folder ({{folder}}), so ART cannot tell them apart — give each layer its own folder.",
@@ -2220,7 +2220,7 @@
       "hint": "A new or empty folder. In the picker you can make one with New folder and choose it — ART refuses only a folder that already has something in it."
     },
     "layer": {
-      "base32": "AmigaOS 3.2 media",
+      "base32": "AmigaOS 3.2 base media",
       "update322": "AmigaOS 3.2.2 update media",
       "wrongLayer": "This folder holds {{actual}} disks ({{found}}), not what this field asks for. Move it to the {{actual}} field, or choose the folder holding what this field wants."
     },
@@ -2313,7 +2313,8 @@
         "confirmed": "The tree itself states \"{{stated}}\" — its own Prefs/Env-Archive/Versions/Release marker agrees with what was built.",
         "mismatch": "The tree itself states \"{{stated}}\", not the \"{{expected}}\" this build was for — trust the tree's own marker over this screen, and say so if you report a problem.",
         "unstated": "The tree carries no release marker of its own (Prefs/Env-Archive/Versions/Release) — that is expected unless an update layer wrote one.",
-        "unreadable": "ART could not read this tree's own release marker to check it ({{detail}}) — this is not the same as the tree stating no release; something about the marker file itself is unusual."
+        "unreadable": "ART could not read this tree's own release marker to check it ({{detail}}) — this is not the same as the tree stating no release; something about the marker file itself is unusual.",
+        "expectedUnknown": "The tree itself states \"{{stated}}\" — ART has not yet measured what a correct tree for this release should state, so this is reported as-is, not as a mismatch."
       },
       "removed": {
         "heading": "Removed",

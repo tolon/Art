@@ -677,6 +677,23 @@ pub fn residents(bytes: &[u8]) -> CoreResult<Vec<RomResident>> {
 /// rather than a partial number — a caller comparing versions must never see
 /// a `major` with no `minor` behind it dressed up as `(major, 0)`.
 ///
+/// **This is exactly the "undecidable folded into absent" shape fixed twice
+/// over in `core::osinstall::plan`, at the two call sites that actually
+/// decide a component's own fate** — final whole-branch review, Finding I.
+/// `RomFacts::residents_readable` is what those callers check *first*: it
+/// tells "this Kickstart carries no such resident" apart from "ART could not
+/// read this image's table at all", and `condition_holds` refuses with
+/// [`RefusalReason::ResidentTableUnreadable`](crate::core::osinstall::RefusalReason::ResidentTableUnreadable)
+/// rather than calling this function and treating its `None` as an answer.
+/// **A future caller of this function directly must do the same** — read
+/// [`residents`] (or `RomFacts::residents_readable`) first, and treat this
+/// function's own `None` as meaningful only once that has come back `Ok`/
+/// `true`. Today's only caller is the `#[ignore]`d real-ROM diagnostic hook,
+/// which prints the raw `Option` rather than deciding anything from it — the
+/// trap is loaded, not fired, and stays that way only as long as this
+/// comment is read before this function is called from somewhere that acts
+/// on the result.
+///
 /// [`Condition`]: crate::core::osinstall::Condition
 pub fn resident_version(bytes: &[u8], name: &str) -> Option<(u16, u16)> {
     let table = residents(bytes).ok()?;

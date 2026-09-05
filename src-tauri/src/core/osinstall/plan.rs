@@ -887,33 +887,55 @@ fn resolve_components_on(
 }
 
 /// Every `exclusive_group` with more than one of its members in the
-/// **resolved** `components_on` set. Checked against what actually
-/// resolved on, never against `InstallRequest::chosen` directly — a
-/// condition-satisfied component can be switched on without being chosen
-/// at all (that is the entire point of
-/// `a_conditional_component_is_on_without_being_chosen`), so a check
-/// against the request alone would miss exactly the case a condition
-/// exists to create. One member of a group is the ordinary case and needs
-/// no mention here; a group is inert until a second member exists to
-/// conflict with the first (Task 1's review parked this for the same
-/// reason — with one Modules disk shipped, the field could not be
-/// violated).
+/// **resolved** `components_on` set, **within the same layer**. Checked
+/// against what actually resolved on, never against `InstallRequest::chosen`
+/// directly — a condition-satisfied component can be switched on without
+/// being chosen at all (that is the entire point of
+/// `a_conditional_component_is_on_without_being_chosen`), so a check against
+/// the request alone would miss exactly the case a condition exists to
+/// create. One member of a group is the ordinary case and needs no mention
+/// here; a group is inert until a second member exists to conflict with the
+/// first (Task 1's review parked this for the same reason — with one Modules
+/// disk shipped, the field could not be violated. **That stopped being true
+/// the moment a layered recipe could inherit a base component into the same
+/// group a derived one declares** — see below.)
+///
+/// **Scoped per layer, and that is a decision, not an oversight (final
+/// review, Finding B).** `exclusive_group` exists so a user cannot pick two
+/// Modules disks for two different *machines* at once — `modules-a1200`
+/// (`rom-older-than 47`) and a hypothetical sibling for a different model
+/// would genuinely conflict, because a plan is for one machine. But
+/// AmigaOS 3.2.2 inherits `modules-a1200` as its `base` layer's component and
+/// declares its own `update-322-modules-a1200` in the `update-3.2.2` layer,
+/// **same group, same machine** — a pre-47 Kickstart 3.1 (or a 3.2 ROM, per
+/// the design's own measured table) satisfies both components' conditions at
+/// once, and they are not a user's competing choice between two machines: they
+/// are two halves of one release's answer for one machine, exactly the way
+/// `update-322-modules-a1200` declaring `overrides` over the base component
+/// resolves any file the two genuinely share. Comparing across layers here
+/// would refuse the ordinary, correct case — a pre-47 machine building
+/// AmigaOS 3.2.2 — with a sentence that names no fix, because neither
+/// component is something the user chose. Two members of one group **within
+/// one layer** is still refused: that is the case the group exists to catch.
 fn detect_exclusive_group_conflicts(
     recipe: &Recipe,
     components_on: &[String],
 ) -> Vec<RefusalReason> {
-    let mut by_group: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    let mut by_group: BTreeMap<(&str, Option<&str>), Vec<String>> = BTreeMap::new();
     for id in components_on {
         let Some(component) = recipe.component(id) else {
             continue;
         };
         if let Some(group) = &component.exclusive_group {
-            by_group.entry(group.as_str()).or_default().push(id.clone());
+            by_group
+                .entry((group.as_str(), component.layer.as_deref()))
+                .or_default()
+                .push(id.clone());
         }
     }
 
     let mut refusals = Vec::new();
-    for (group, mut components) in by_group {
+    for ((group, _layer), mut components) in by_group {
         if components.len() > 1 {
             components.sort();
             refusals.push(RefusalReason::ExclusiveGroupConflict {
@@ -1470,7 +1492,21 @@ fn plan_over_with_cache(
         folders.extend(request.extra_media_folders.iter().cloned());
         folders.into_iter().map(|f| (String::new(), f)).collect()
     };
-    refusals.extend(layers_sharing_a_folder(&layers));
+    // Only a layered recipe's ids are real `MediaLayer::id`s a user could be
+    // told apart — an unlayered recipe hands every folder the same `""`
+    // sentinel (see `layers` above), and running this check over it produces
+    // a refusal naming no layer at all for a release that declares none. The
+    // manifest side of this same sentinel was closed in Task 9's fix round;
+    // this is the same boundary one call site along.
+    // Only a layered recipe's ids are real `MediaLayer::id`s a user could be
+    // told apart — an unlayered recipe hands every folder the same `""`
+    // sentinel (see `layers` above), and running this check over it produces
+    // a refusal naming no layer at all for a release that declares none. The
+    // manifest side of this same sentinel was closed in Task 9's fix round;
+    // this is the same boundary one call site along.
+    if recipe.is_layered() {
+        refusals.extend(layers_sharing_a_folder(&layers));
+    }
     let found = if recipe.is_layered() {
         find_media_in_layers(&layers)?
     } else {
@@ -4975,6 +5011,52 @@ mod plan_tests {
         assert_eq!(layers.len(), 2);
     }
 
+    /// **Final review, Finding A.** `layers_sharing_a_folder` used to run
+    /// unconditionally, over a list whose ids are the empty-string sentinel
+    /// for every unlayered request (see `plan_over_with_cache`) — so naming
+    /// one real folder twice (`media_folder` and an `extra_media_folders`
+    /// entry pointed at the same place) refused with `LayersShareFolder {
+    /// layers: ["", ""], .. }` for a release that declares no layers at all.
+    /// That regressed the documented, shipped guarantee at
+    /// `docs/FEATURES.md:197` — "one folder named twice is one folder" —
+    /// which `find_media_across`'s canonical-path dedupe already gives an
+    /// unlayered plan silently. Gating the check on `recipe.is_layered()`
+    /// closes it; this pins the unlayered arm.
+    #[test]
+    fn an_unlayered_plan_naming_one_folder_twice_still_plans() {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-unlayered-duplicate-folder");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
+        crate::core::osinstall::fixtures::required_media(&folder, &recipe, &[]);
+
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2".to_string(),
+            media_folder: folder.clone(),
+            extra_media_folders: vec![folder.clone()],
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: Vec::new(),
+            excluded: Vec::new(),
+            destination: dir.join("dist"),
+            scan_cache: Default::default(),
+        };
+
+        let planned = plan(&request, &recipe).unwrap();
+        assert!(
+            !planned
+                .refusals
+                .iter()
+                .any(|r| matches!(r, RefusalReason::LayersShareFolder { .. })),
+            "one folder named twice on an unlayered release is one folder, not two \
+             layers sharing it: {:?}",
+            planned.refusals
+        );
+    }
+
     /// **Fix round 1, Finding 2.** An unlayered recipe (every shipped
     /// recipe until Task 8) has no real `MediaLayer::id` to report, and
     /// `""` is not one — writing a `LayerRecord { id: "", .. }` per media
@@ -4990,6 +5072,118 @@ mod plan_tests {
             plan.layers.is_empty(),
             "an unlayered recipe has no real layer ids to report: {:?}",
             plan.layers
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Final whole-branch review, Finding B: the shipped 3.2.2 recipe
+    // against a pre-47 Kickstart.
+    // -----------------------------------------------------------------
+
+    /// A synthetic Kickstart image carrying **both** facts a pre-3.2
+    /// Kickstart states: a header major below 47 (what the base layer's own
+    /// `modules-a1200` — `rom-older-than 47` — reads) and a readable
+    /// `exec.library` resident older than 47.10 (what
+    /// `update-322-modules-a1200` — `resident-older-than exec 47.10` —
+    /// reads). A real Kickstart 3.1 (V40) satisfies both at once, which is
+    /// the ordinary case for the real Amigas this project exists for — never
+    /// a real dump, ART ships none.
+    ///
+    /// Built the same way `core::rom::mod::tests::rom_with_resident` builds
+    /// its own fixture (a 512 KiB image, a `Resident` at a known offset,
+    /// `rt_MatchTag` pointing at its own match word) — that helper is private
+    /// to `core::rom`'s own test module, so this is a second, small copy
+    /// rather than a visibility change to a module this one does not
+    /// otherwise depend on.
+    fn fake_pre_47_rom_with_old_exec(dir: &Path) -> PathBuf {
+        const BASE: u32 = 0xF8_0000;
+        let mut bytes = vec![0u8; 512 * 1024];
+        // Header: major 40 (a Kickstart 3.1 / V40 header), minor arbitrary.
+        bytes[12..14].copy_from_slice(&40u16.to_be_bytes());
+        bytes[14..16].copy_from_slice(&68u16.to_be_bytes());
+
+        // One `Resident`, naming `exec.library` at revision 40.10 — older
+        // than the update's own `exec 47.10` floor.
+        let offset = 0x400usize;
+        let name = "exec.library";
+        let id = "exec 40.10 (test)";
+        let name_at = offset + 64;
+        let id_at = offset + 128;
+        bytes[offset..offset + 2].copy_from_slice(&0x4AFCu16.to_be_bytes());
+        bytes[offset + 2..offset + 6].copy_from_slice(&(BASE + offset as u32).to_be_bytes());
+        bytes[offset + 11] = 40;
+        bytes[offset + 14..offset + 18].copy_from_slice(&(BASE + name_at as u32).to_be_bytes());
+        bytes[offset + 18..offset + 22].copy_from_slice(&(BASE + id_at as u32).to_be_bytes());
+        bytes[name_at..name_at + name.len()].copy_from_slice(name.as_bytes());
+        bytes[id_at..id_at + id.len()].copy_from_slice(id.as_bytes());
+
+        let path = dir.join("kick-pre47-with-old-exec.rom");
+        std::fs::write(&path, &bytes).unwrap();
+        path
+    }
+
+    /// **Final review, Finding B.** Before the fix,
+    /// `detect_exclusive_group_conflicts` compared `exclusive_group` across
+    /// the whole merged recipe, so a pre-47 Kickstart — which switches on
+    /// *both* the inherited base `modules-a1200` (`rom-older-than 47`) and
+    /// the update's own `update-322-modules-a1200`
+    /// (`resident-older-than exec 47.10`), since both conditions are true of
+    /// the same ROM — refused the whole plan with an `ExclusiveGroupConflict`
+    /// naming two components the user never chose and cannot un-choose. That
+    /// is not a hypothetical ROM: it is a real Kickstart 3.1, the ordinary
+    /// case for the Amigas this project targets. Scoping the group per layer
+    /// closes it; this pins the shipped recipe against a synthetic one.
+    #[test]
+    fn the_shipped_322_recipe_plans_against_a_pre_47_rom_without_an_exclusive_group_refusal() {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-322-pre47-rom");
+        let rom = fake_pre_47_rom_with_old_exec(&dir);
+        let recipe = crate::core::osinstall::recipe::by_release("AmigaOS 3.2.2")
+            .expect("the shipped 3.2.2 recipe must load");
+
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2.2".to_string(),
+            media_folder: dir.join("unused"),
+            extra_media_folders: Vec::new(),
+            // No real media named: this test is about which components
+            // *resolve on* for this ROM, not about whether their media can
+            // be found — asserted below by checking the refusal list for
+            // the one specific variant under test, never emptiness.
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: Some(rom),
+            chosen: Vec::new(),
+            excluded: Vec::new(),
+            destination: dir.join("dist"),
+            scan_cache: Default::default(),
+        };
+
+        let planned = plan(&request, &recipe).unwrap();
+
+        assert!(
+            planned.components_on.iter().any(|id| id == "modules-a1200"),
+            "the base layer's own modules-a1200 (rom-older-than 47) must be on for a \
+             pre-47 header: {:?}",
+            planned.components_on
+        );
+        assert!(
+            planned
+                .components_on
+                .iter()
+                .any(|id| id == "update-322-modules-a1200"),
+            "update-322-modules-a1200 (resident-older-than exec 47.10) must be on for \
+             this ROM's own exec.library: {:?}",
+            planned.components_on
+        );
+        assert!(
+            !planned
+                .refusals
+                .iter()
+                .any(|r| matches!(r, RefusalReason::ExclusiveGroupConflict { .. })),
+            "a base component and an update component for the same machine are two \
+             halves of one release's answer, not a user's competing choice: {:?}",
+            planned.refusals
         );
     }
 }

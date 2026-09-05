@@ -3138,6 +3138,198 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------
+    // Final whole-branch review, Finding C: design §10 promised that the
+    // unlayered AmigaOS 3.2 and 3.9 recipes plan byte-identically before and
+    // after this branch, "asserted by planning both against a fixture before
+    // and after, not by inspection" — and that assertion was never written.
+    // -----------------------------------------------------------------
+
+    /// The AmigaOS 3.2 recipe's `extras` component, with the explicit
+    /// `Tools/TextEditFileTypes/Default4Types` `File` rule Task 8 added
+    /// removed again — reconstructing the component's shape from *before*
+    /// this branch, so the two can be planned and applied against the same
+    /// media and compared. The rule was added purely so a later
+    /// `update-322-system.removes` entry could name the file (`recipe.rs`'s
+    /// `validate_removals` refuses naming a `Subtree`'s destination, which is
+    /// what the `Tools` rule already below it is), not because the AmigaOS
+    /// 3.2 tree was ever meant to change.
+    fn amigaos_32_before_the_default4types_file_rule() -> crate::core::osinstall::Recipe {
+        let mut recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
+        for component in &mut recipe.components {
+            if component.id == "extras" {
+                component.rules.retain(|r| {
+                    !(r.kind == crate::core::osinstall::RuleKind::File
+                        && r.to == "Tools/TextEditFileTypes/Default4Types")
+                });
+            }
+        }
+        recipe
+    }
+
+    /// **Final review, Finding C.** With the file the new rule names actually
+    /// present on the media — exactly as a real `Extras3.2` disk carries it,
+    /// per the recipe's own comment that "the `Tools` subtree below already
+    /// carries it" — the AmigaOS 3.2 recipe must plan with no refusal and
+    /// build the identical tree whether `extras` carries the explicit
+    /// `Default4Types` `File` rule or not. This is the design §10 promise,
+    /// written as a test rather than left to inspection: before this fix
+    /// existed only as an inline recipe comment asserting "it changes
+    /// nothing about the AmigaOS 3.2 tree", true of the tree and never
+    /// checked against the refusal surface.
+    #[test]
+    fn amigaos_32_plans_and_applies_the_same_tree_before_and_after_the_default4types_file_rule() {
+        let dir = fixtures::scratch("apply-322-before-after-extras-rule");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+
+        let recipe_after = crate::core::osinstall::recipe::amigaos_32().unwrap();
+        let recipe_before = amigaos_32_before_the_default4types_file_rule();
+        assert!(
+            recipe_before.component("extras").unwrap().rules.len()
+                < recipe_after.component("extras").unwrap().rules.len(),
+            "sanity: the reconstructed 'before' recipe must actually differ from the shipped one"
+        );
+
+        // Built from the shipped (`_after`) recipe — a strict superset of
+        // what `_before` needs for `extras`, so the same media satisfies
+        // both without building it twice.
+        let wb = fixtures::entries_for(&recipe_after, "Workbench3.2");
+        let wb_refs: Vec<(&str, &[u8], u32)> = wb
+            .iter()
+            .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
+            .collect();
+        fixtures::media(&folder, "Workbench3.2", "wb.adf", &wb_refs);
+        fixtures::required_media(&folder, &recipe_after, &["Workbench3.2"]);
+
+        let extras = fixtures::entries_for(&recipe_after, "Extras3.2");
+        let extras_refs: Vec<(&str, &[u8], u32)> = extras
+            .iter()
+            .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
+            .collect();
+        fixtures::media(&folder, "Extras3.2", "extras.adf", &extras_refs);
+
+        let rom = fixtures::fake_rom(&dir, 47);
+        let request_for = |destination: &str| crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2".to_string(),
+            media_folder: folder.clone(),
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: Some(rom.clone()),
+            chosen: vec!["extras".to_string()],
+            excluded: Vec::new(),
+            destination: dir.join(destination),
+            scan_cache: Default::default(),
+        };
+
+        let plan_before =
+            crate::core::osinstall::plan::plan(&request_for("dist-before"), &recipe_before)
+                .unwrap();
+        let plan_after =
+            crate::core::osinstall::plan::plan(&request_for("dist-after"), &recipe_after).unwrap();
+
+        assert!(
+            plan_before.refusals.is_empty(),
+            "before: {:?}",
+            plan_before.refusals
+        );
+        assert!(
+            plan_after.refusals.is_empty(),
+            "design §10: with the named file present on the media, the recipe gaining an \
+             explicit rule for a file its own Tools subtree already carries must not turn \
+             into a refusal: {:?}",
+            plan_after.refusals
+        );
+
+        let root_before = dir.join("dist-before");
+        let root_after = dir.join("dist-after");
+        apply(&plan_before, &root_before, &NoProgress).unwrap();
+        apply(&plan_after, &root_after, &NoProgress).unwrap();
+
+        // Every real byte, every drawer, manifest excluded — must be
+        // identical. `assert_trees_agree`'s own generic form goes one field
+        // further and compares `overwrote` too, which is *not* the design
+        // §10 promise here: `extras` genuinely places
+        // `Tools/TextEditFileTypes/Default4Types` twice after this branch
+        // (once through its `Tools` subtree, once through the new explicit
+        // rule), so `_after`'s manifest honestly records the second write as
+        // `extras` overwriting its own first — a true fact about how many
+        // rules touched the file, never about what lands on the tree or who
+        // placed it. Measured, not assumed: this is exactly where the two
+        // manifests differ, confirming the recipe's own comment that "the
+        // same byte arrives either way".
+        assert_eq!(
+            tree_contents(&root_before),
+            tree_contents(&root_after),
+            "design §10: the AmigaOS 3.2 tree's own bytes and drawers must be identical \
+             whether `extras` carries its new explicit Default4Types rule or not"
+        );
+
+        fn sources_ignoring_self_overwrite(
+            manifest: &DistributionManifest,
+        ) -> std::collections::BTreeMap<String, Vec<(String, String)>> {
+            let mut out: std::collections::BTreeMap<String, Vec<(String, String)>> =
+                Default::default();
+            for file in &manifest.files {
+                out.entry(file.path.clone())
+                    .or_default()
+                    .push((file.component.clone(), file.media.clone()));
+            }
+            for records in out.values_mut() {
+                records.sort();
+            }
+            out
+        }
+        assert_eq!(
+            sources_ignoring_self_overwrite(&read_manifest(&root_before)),
+            sources_ignoring_self_overwrite(&read_manifest(&root_after)),
+            "every file's final component and medium must agree, whichever of `extras`'s \
+             two rules for the same path the manifest's own `overwrote` bookkeeping credits"
+        );
+    }
+
+    /// **Final review, Finding C, the 3.9 half.** `amigaos-3.9.json` was not
+    /// touched anywhere in this branch (`git log` on the file over the
+    /// branch's own range is empty), so there is no earlier shape to
+    /// reconstruct and diff against — this pins that the recipe still plans
+    /// cleanly against a complete, synthetic fixture, the same assertion
+    /// §10 asked for, for the recipe that had nothing to diff.
+    #[test]
+    fn amigaos_39_plans_cleanly_against_a_full_synthetic_fixture() {
+        let dir = fixtures::scratch("plan-39-full-fixture");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        let recipe = crate::core::osinstall::recipe::amigaos_39().unwrap();
+
+        let disc = fixtures::entries_for(&recipe, "AmigaOS3.9");
+        let disc_refs: Vec<(&str, &[u8], u32)> = disc
+            .iter()
+            .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
+            .collect();
+        fixtures::media(&folder, "AmigaOS3.9", "os39.adf", &disc_refs);
+
+        let chosen: Vec<String> = recipe.components.iter().map(|c| c.id.clone()).collect();
+        let request = crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.9".to_string(),
+            media_folder: folder,
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: Some(fixtures::fake_rom(&dir, 40)),
+            chosen,
+            excluded: Vec::new(),
+            destination: dir.join("dist"),
+            scan_cache: Default::default(),
+        };
+        let planned = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
+        assert!(planned.refusals.is_empty(), "{:?}", planned.refusals);
+    }
+
     /// The negative half of "only when there is something worth recording":
     /// `fixtures::media` always stamps a file with the current wall-clock
     /// time (`write_entries` passes `date: None`, and `add_file` falls back

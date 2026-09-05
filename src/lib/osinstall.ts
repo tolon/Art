@@ -463,21 +463,28 @@ export const OSINSTALL_EVENT = "osinstall-result";
 
 /** What the finished tree's own `Prefs/Env-Archive/Versions/Release` states,
  *  compared with the release this build was for (Task 9) — CLAUDE.md's
- *  answer to the round that shipped AmigaOS 3.5 labelled 3.9. Four states,
+ *  answer to the round that shipped AmigaOS 3.5 labelled 3.9. Five states,
  *  never one pass/fail bit: a confirmed marker, a mismatched one naming both
- *  sides, none at all, or one ART could not even read are four different
- *  sentences with four different next steps. `"unstated"` is not a failure —
- *  most releases ART ships have never had an `Update/Release` to write one.
- *  `"unreadable"` (fix round 1, Finding 1) is never the same sentence as
- *  `"unstated"`: the tree may well state a release, ART simply could not
- *  read it — an oversized or otherwise unreadable marker file, the same
- *  defect shape Task 7's `"resident-table-unreadable"` refusal exists to
- *  keep apart from a genuine absence. */
+ *  sides, one that differs for a release nobody has measured, none at all,
+ *  or one ART could not even read — five different sentences with five
+ *  different next steps. `"unstated"` is not a failure — most releases ART
+ *  ships have never had an `Update/Release` to write one. `"unreadable"`
+ *  (fix round 1, Finding 1) is never the same sentence as `"unstated"`: the
+ *  tree may well state a release, ART simply could not read it — an
+ *  oversized or otherwise unreadable marker file, the same defect shape
+ *  Task 7's `"resident-table-unreadable"` refusal exists to keep apart from
+ *  a genuine absence. `"expected-unknown"` (final whole-branch review,
+ *  Finding E) is never `"mismatch"` either: the Rust side only reports
+ *  `"mismatch"` for a release it has actually measured a correct tree's own
+ *  marker for (AmigaOS 3.2 and 3.2.2 today) — for any other release, a
+ *  differing marker comes back here instead, so a correct AmigaOS 3.9 tree
+ *  is never told it disagrees with a formula nobody has checked. */
 export type StatedRelease =
   | { verdict: "confirmed"; stated: string }
   | { verdict: "mismatch"; expected: string; stated: string }
   | { verdict: "unstated" }
-  | { verdict: "unreadable"; detail: string };
+  | { verdict: "unreadable"; detail: string }
+  | { verdict: "expected-unknown"; stated: string };
 
 export interface OsInstallResult {
   job_id: number;
