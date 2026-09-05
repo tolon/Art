@@ -63,6 +63,19 @@ ART is built on the following open-source projects:
   ART that removes a user's file, and `default-features = false` drops
   `chrono`, which it needs only to *read* the bin back — something ART never
   does
+- **png** — PNG reading and writing (MIT / Apache-2.0). Read-only in the
+  application: `core/picture` decodes a user's own PNG wallpaper into plain
+  RGB pixels ahead of quantisation and ILBM encoding; the encoder half is
+  used only by `core/picture`'s own tests, to build a synthetic fixture
+  independent of the decode path under test. Pure Rust, launches nothing and
+  reaches no network, so it stays inside `core/`'s platform-independence rule
+  the same way `delharc` and `sevenz-rust2` do
+- **jpeg-decoder** — JPEG reading (MIT / Apache-2.0). Same role as `png`
+  above, for the other format `core/picture::decode` accepts.
+  `default-features = false` drops the `rayon` feature (on by default
+  upstream), which spawns a thread pool to parallelise the IDCT step that a
+  one-shot wallpaper conversion does not need — so this crate brings no
+  transitive dependency of its own
 - **i18next / react-i18next** — internationalization (MIT)
 - **zustand** — state management (MIT)
 - **react-router-dom** — routing (MIT)
