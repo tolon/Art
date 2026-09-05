@@ -118,18 +118,20 @@ mod tests {
 
     #[test]
     fn replacing_one_body_leaves_every_other_chunk_untouched() {
+        // `synthetic_prefs` prepends PRHD, so the indices are
+        // PRHD=0, PTRN=1, XXXX=2, PTRN=3. Replace the *second* PTRN.
         let bytes = synthetic_prefs(&[
             (*b"PTRN", vec![1; 24]),
             (*b"XXXX", vec![0xAB; 10]),
             (*b"PTRN", vec![2; 24]),
         ]);
         let parsed = parse(&bytes).unwrap();
-        let out = parsed.replace_bodies(&[(1, vec![5; 40])]).unwrap();
+        let out = parsed.replace_bodies(&[(3, vec![5; 40])]).unwrap();
         let after = parse(&out).unwrap();
-        assert_eq!(after.body(0), &[1u8; 24], "first PTRN must survive verbatim");
+        assert_eq!(after.body(0), &[0u8; 6], "PRHD must survive verbatim");
+        assert_eq!(after.body(1), &[1u8; 24], "the first PTRN must survive verbatim");
         assert_eq!(after.body(2), &[0xABu8; 10], "the unknown chunk must survive verbatim");
-        assert_eq!(after.body(3), &[2u8; 24], "the second PTRN must survive verbatim");
-        assert_eq!(after.body(1), &[5u8; 40]);
+        assert_eq!(after.body(3), &[5u8; 40]);
     }
 
     #[test]
@@ -415,9 +417,11 @@ mod tests {
 
     /// The root `PTRN` of the `WBPattern.prefs` in ART's own built AmigaOS
     /// 3.2 tree: 16 reserved zero bytes, Which=0, Flags=0x2A00, Revision=0,
-    /// Depth=0, DataLength=43, then the NUL-terminated path.
+    /// Depth=0, DataLength=43, then the path — **with no terminator**. The
+    /// trailing `00` in a hex dump of that file is the IFF pad byte for an
+    /// odd chunk size (67), not part of the data.
     fn measured_picture_body() -> Vec<u8> {
-        let path = b"Sys:Prefs/Presets/Backdrops/default_pal.iff\0";
+        let path = b"Sys:Prefs/Presets/Backdrops/default_pal.iff";
         assert_eq!(path.len(), 43, "the measured DataLength is 43");
         let mut body = vec![0u8; 16];
         body.extend_from_slice(&0u16.to_be_bytes()); // Which = root
@@ -439,6 +443,22 @@ mod tests {
         body.push(3); // Depth
         body.extend_from_slice(&96u16.to_be_bytes());
         body.extend(std::iter::repeat(0xA5u8).take(96));
+        body
+    }
+
+    /// The **release's own** screen `PTRN`, from the same 3.2 file as
+    /// `measured_picture_body`: WBPF_PATTERN set but Depth=0 and a
+    /// **256-byte** blank buffer. `DataLength` is therefore *not*
+    /// `Depth * 32`, and a guard that assumed it would refuse a file
+    /// AmigaOS itself ships.
+    fn measured_blank_pattern_body() -> Vec<u8> {
+        let mut body = vec![0u8; 16];
+        body.extend_from_slice(&2u16.to_be_bytes()); // Which = screen
+        body.extend_from_slice(&0x0001u16.to_be_bytes()); // WBPF_PATTERN
+        body.push(0);
+        body.push(0); // Depth = 0
+        body.extend_from_slice(&256u16.to_be_bytes());
+        body.extend(std::iter::repeat(0u8).take(256));
         body
     }
 
@@ -470,10 +490,28 @@ mod tests {
     }
 
     #[test]
-    fn both_measured_bodies_round_trip_byte_for_byte() {
-        for body in [measured_picture_body(), measured_pattern_body()] {
+    fn every_measured_body_round_trips_byte_for_byte() {
+        for body in [
+            measured_picture_body(),
+            measured_pattern_body(),
+            measured_blank_pattern_body(),
+        ] {
             let parsed = read_backdrop(&body).unwrap();
             assert_eq!(write_backdrop(&parsed).unwrap(), body);
+        }
+    }
+
+    #[test]
+    fn a_release_pattern_chunk_with_depth_zero_and_256_bytes_is_accepted() {
+        // DataLength is not Depth * 32. The release's own screen chunk is
+        // Depth=0 with 256 bytes; refusing it would refuse AmigaOS itself.
+        let b = read_backdrop(&measured_blank_pattern_body()).unwrap();
+        match b.content {
+            Content::Pattern { depth, ref planes } => {
+                assert_eq!(depth, 0);
+                assert_eq!(planes.len(), 256);
+            }
+            _ => panic!("WBPF_PATTERN set must read as a pattern, got {:?}", b.content),
         }
     }
 
@@ -490,7 +528,12 @@ mod tests {
         .unwrap();
         assert_eq!(&out[0..16], &[0u8; 16], "wbp_Reserved is 16 bytes, not zero");
         assert_eq!(u16::from_be_bytes([out[18], out[19]]), 0x2A00);
-        assert_eq!(out.len(), 24 + "Sys:X/y.iff".len() + 1);
+        assert_eq!(
+            out.len(),
+            24 + "Sys:X/y.iff".len(),
+            "no terminator: DataLength is the exact string length"
+        );
+        assert_eq!(u16::from_be_bytes([out[22], out[23]]) as usize, "Sys:X/y.iff".len());
     }
 
     #[test]
@@ -506,23 +549,36 @@ mod tests {
     }
 
     #[test]
-    fn a_picture_path_must_be_nul_terminated() {
+    fn a_picture_path_is_not_nul_terminated() {
+        // Measured across four real PTRN chunks: DataLength is exactly the
+        // string length. Appending a NUL would make every ART path one byte
+        // longer than the one AmigaOS wrote.
         let mut body = vec![0u8; 16];
         body.extend_from_slice(&0u16.to_be_bytes());
         body.extend_from_slice(&0x2A00u16.to_be_bytes());
         body.push(0);
         body.push(0);
         body.extend_from_slice(&4u16.to_be_bytes());
-        body.extend_from_slice(b"abcd"); // no NUL
-        assert!(read_backdrop(&body).is_err());
+        body.extend_from_slice(b"abcd");
+        let b = read_backdrop(&body).unwrap();
+        assert_eq!(b.content, Content::Picture("abcd".to_string()));
+        assert_eq!(write_backdrop(&b).unwrap(), body);
     }
 
     #[test]
-    fn a_pattern_declares_thirty_two_bytes_per_plane() {
-        let mut body = measured_pattern_body();
-        body[21] = 2; // depth 2 wants 64 bytes, 96 are present
-        body[22..24].copy_from_slice(&96u16.to_be_bytes());
-        assert!(read_backdrop(&body).is_err());
+    fn a_trailing_nul_inside_the_data_is_kept_not_stripped() {
+        // A path is taken verbatim for DataLength bytes. Stripping a NUL
+        // would silently shorten a name and break the round trip.
+        let mut body = vec![0u8; 16];
+        body.extend_from_slice(&0u16.to_be_bytes());
+        body.extend_from_slice(&0x2A00u16.to_be_bytes());
+        body.push(0);
+        body.push(0);
+        body.extend_from_slice(&5u16.to_be_bytes());
+        body.extend_from_slice(b"abcd\0");
+        let b = read_backdrop(&body).unwrap();
+        assert_eq!(b.content, Content::Picture("abcd\u{0}".to_string()));
+        assert_eq!(write_backdrop(&b).unwrap(), body);
     }
 }
 ```
@@ -556,22 +612,30 @@ const PLACEMENT_MASK: u16 = 0x3000;
 pub const DEFAULT_PICTURE_FLAGS: u16 = 0x2A00;
 ```
 
-Define the four enums with `to_bits`/`from_bits` helpers over their masks, `Content`, `Backdrop`, then `read_backdrop` (bounds-check `HEADER_LEN`, read the fields at the measured offsets, require `data_length` to equal the remaining bytes, and branch on `WBPF_PATTERN`) and `write_backdrop` (16 zero bytes, the fields, the data). A `Picture` writes the path's bytes plus one NUL and sets `depth` to `0`; a `Pattern` requires `planes.len() == depth as usize * PATTERN_BYTES_PER_PLANE`. Refuse with `CoreError::Malformed { format: "WBPattern PTRN", detail }`.
+Define the four enums with `to_bits`/`from_bits` helpers over their masks, `Content`, `Backdrop`, then `read_backdrop` (bounds-check `HEADER_LEN`, read the fields at the measured offsets, require `data_length` to equal the remaining bytes, and branch on `WBPF_PATTERN`) and `write_backdrop` (16 zero bytes, the fields, the data).
+
+Two rules, both measured and both the opposite of a plausible guess:
+
+- **A `Picture` writes the path's bytes and nothing else** — no NUL, `DataLength` is the exact string length — and sets `depth` to `0`. Decode and encode the path as ISO-8859-1 (`char::from(byte)` and the inverse), the same way `env.rs` does, so a non-ASCII drawer name survives.
+- **A `Pattern` carries its bytes opaquely.** Do **not** require `planes.len() == depth * PATTERN_BYTES_PER_PLANE`: the AmigaOS 3.2 and 3.9 release ships a screen chunk with `Depth=0` and a 256-byte blank buffer, so that rule would refuse the OS's own file. `PATTERN_BYTES_PER_PLANE` stays as documentation of what a *populated* pattern looks like — the `Christmas` preset's `3 × 32 = 96` — and is not enforced. ART writes pictures this round, never patterns; the container's own length checks already bound the data.
+
+Refuse with `CoreError::Malformed { format: "WBPattern PTRN", detail }`.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cd src-tauri && cargo test amigaprefs::wbpattern`
-Expected: PASS, 8 tests.
+Expected: PASS, 10 tests.
 
 - [ ] **Step 5: Mutate the guards**
 
 | Mutation | Must fail |
 |---|---|
-| write 6 reserved bytes instead of 16 (Hatcher's own bug) | `a_written_picture_backdrop_carries_the_sixteen_reserved_bytes`, `both_measured_bodies_round_trip_byte_for_byte` |
+| write 6 reserved bytes instead of 16 (Hatcher's own bug) | `a_written_picture_backdrop_carries_the_sixteen_reserved_bytes`, `every_measured_body_round_trips_byte_for_byte` |
 | ignore `WBPF_PATTERN`, always read a path | `the_measured_pattern_backdrop_reads_as_planes` |
 | drop the `data_length` agreement check | `the_data_length_must_agree_with_what_follows` |
-| drop the NUL requirement | `a_picture_path_must_be_nul_terminated` |
-| drop the 32-bytes-per-plane check | `a_pattern_declares_thirty_two_bytes_per_plane` |
+| append a NUL to a written path | `a_picture_path_is_not_nul_terminated`, `a_written_picture_backdrop_carries_the_sixteen_reserved_bytes` |
+| strip a trailing NUL when reading | `a_trailing_nul_inside_the_data_is_kept_not_stripped` |
+| add `planes.len() == depth * 32` back as a refusal | `a_release_pattern_chunk_with_depth_zero_and_256_bytes_is_accepted` |
 
 - [ ] **Step 6: Commit**
 
@@ -1351,7 +1415,13 @@ it("renders the panel in Turkish when the language is tr", async () => { /* ... 
 
 - [ ] **Step 1: Write the oracle script**
 
-`scripts/ilbm-oracle-check.py` finds `ffmpeg` (PATH, then the winget package directory), drives a small Rust helper or a `cargo test`-generated fixture set to write ILBMs covering 1, 4 and 8 planes and both a solid and a noisy image, decodes each with `ffmpeg -i in.iff out.png`, and compares **every pixel** against what ART meant. It exits non-zero on the first mismatch and prints the coordinates. It refuses to pass silently when ffmpeg is absent — it reports "ffmpeg not found, nothing was checked", which is not the same claim as success.
+`scripts/ilbm-oracle-check.py` finds `ffmpeg` (PATH first, then `%LOCALAPPDATA%\Microsoft\WinGet\Packages` — it is installed there on this machine, `Gyan.FFmpeg` 9.0.1). The fixtures come from **the product's own encoder**, through one mechanism and no new binary: an `#[ignore]`d Rust test writes the ILBM set plus a JSON manifest of the pixels it meant into the directory named by `ART_ILBM_OUT`, and the script sets that variable, runs
+
+```bash
+cd src-tauri && ART_ILBM_OUT="<dir>" cargo test write_the_ilbm_oracle_fixtures -- --ignored --nocapture
+```
+
+then decodes each `.iff` with `ffmpeg -y -i in.iff out.png` and compares **every pixel** against the manifest. Cover 1, 4 and 8 planes, a solid image, a noisy one, and an odd width (17) so the word-alignment padding is exercised. It exits non-zero on the first mismatch and prints the coordinates. It refuses to pass silently when ffmpeg is absent — it reports "ffmpeg not found, nothing was checked", which is not the same claim as success.
 
 - [ ] **Step 2: Run it and confirm it fails against a deliberate defect**
 

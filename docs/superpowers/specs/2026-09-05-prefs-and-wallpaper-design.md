@@ -48,7 +48,7 @@ The container is a standard `FORM` … `PREF`, a 6-byte `PRHD` chunk, then **one
 | 20 | `wbp_Revision` | `i8` | `0` in every chunk |
 | 21 | `wbp_Depth` | `i8` | `0` for a picture, `3` for a pattern |
 | 22 | `wbp_DataLength` | `u16` | length of what follows |
-| 24 | data | `DataLength` bytes | a NUL-terminated path, **or** bitplanes |
+| 24 | data | `DataLength` bytes | an Amiga path, **not** NUL-terminated, **or** bitplanes |
 
 The field names are `prefs/wbpattern.h` from the NDK; the values are this
 machine's files. The flag constants are `WBPF_PATTERN` `0x0001`, `WBPF_NOREMAP`
@@ -61,14 +61,48 @@ machine's files. The flag constants are `WBPF_PATTERN` `0x0001`, `WBPF_NOREMAP`
 set means the data is raw bitplanes. Both halves were confirmed:
 
 - **Picture.** 3.2/3.9 root chunk: `Which=0`, `Flags=0x2A00`, `Depth=0`,
-  `DataLength=43`, data `Sys:Prefs/Presets/Backdrops/default_pal.iff\0` — 42
-  characters plus the NUL, exactly 43. `0x2A00` decodes as
+  `DataLength=43`, data `Sys:Prefs/Presets/Backdrops/default_pal.iff` — 43
+  characters and **no terminator**. `0x2A00` decodes as
   `PLACEMENT_SCALE | PRECISION_IMAGE | DITHER_GOOD`, and `WBPF_PATTERN` is
   clear.
 - **Pattern.** The `Christmas` preset's screen chunk: `Which=2`,
   `Flags=0x0001` (`WBPF_PATTERN`), `Depth=3`, `DataLength=0x60`=96. A pattern
   is `PAT_WIDTH`×`PAT_HEIGHT` = 16×16 bits = 32 bytes per plane, and
-  32 × 3 planes = 96. The arithmetic closes exactly.
+  32 × 3 planes = 96.
+
+**Two corrections this section carried until the plan's pre-flight scan
+re-measured it, both recorded because a spec that quietly self-heals teaches
+nobody anything.**
+
+- **The path is not NUL-terminated.** This section first read 43 as "42
+  characters plus a NUL". It is 43 characters and no terminator: the trailing
+  `00` is the IFF **pad byte** an odd chunk size requires. All four picture
+  chunks across the two files agree — 43 and 39 are odd and padded, 46 and 51
+  sit in even-sized chunks and have no trailing byte at all. Writing the NUL
+  would have made every ART path one byte longer than the one AmigaOS wrote.
+- **`DataLength` is not `Depth × 32` for a pattern.** That closes for the
+  `Christmas` chunk above and fails for the release's own screen chunk, which
+  is `Depth=0` with a **256-byte** blank buffer. So a pattern's bytes are
+  carried opaquely and round-tripped, never validated against an arithmetic
+  rule that a shipped file breaks. ART writes pictures, not patterns.
+
+Re-measure both with:
+
+```bash
+python - <<'PY'
+import struct
+d = open(r"E:\amiga\ProjeART\dist-3.2\Prefs\Env-Archive\Sys\WBPattern.prefs", "rb").read()
+off = 12
+while off + 8 <= len(d):
+    cid, size = d[off:off+4], struct.unpack(">I", d[off+4:off+8])[0]
+    body = d[off+8:off+8+size]
+    if cid == b"PTRN":
+        which, flags = struct.unpack(">HH", body[16:20])
+        depth, dl = body[21], struct.unpack(">H", body[22:24])[0]
+        print(which, hex(flags), depth, dl, body[24:24+dl][:60])
+    off += 8 + size + (size & 1)
+PY
+```
 
 `0x2A00` is **the release's own choice**, so it is ART's default for a picture
 rather than something invented here.
