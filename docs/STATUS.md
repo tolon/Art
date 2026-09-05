@@ -18,11 +18,11 @@ Update it at the end of any session that changes what works.
 
 | | |
 |---|---|
-| **Last updated** | 2026-09-05 — **AmigaOS 3.2.2 is an installable release.** A recipe can now say that a release arrives as a base plus an update: ordered media **layers**, recipe inheritance, and media resolved inside the layer its recipe names, so nothing is decided by the order folders were added in. Proved against the owner's own media — a real layered build of **4 052 files** whose tree states `Release 3.2.2`, and **485** real `.info` icons round-tripped with 0 failures. Eleven tasks, each reviewed; the reviews caught three things 2 700 tests did not. Per-round detail is the [session log](session-log.md) |
-| **Version** | **0.9.0** (2026-09-04) — the first version cut as a GitHub release with installers attached, built by `.github/workflows/release.yml` from the tagged commit. 0.8.5 was the first published for other people to use. Deliberately not 1.0: of 233 marked rows in [FEATURES.md](FEATURES.md), 162 are green — **32 amber, 33 not started, 6 stubs** (counted 2026-09-04, after G14's network half was found marked "not started" three rounds after it shipped; the previous figure, "30 amber", predates several rounds), and as the row above says, what is left in SD-1 is not code: a card flashed and an A500 booted. That is the bar for 1.0, not a bigger number |
+| **Last updated** | 2026-09-05 — **A drawer-shaped WHDLoad collection is catalogued, and iGame can be told what ART knows.** A directory holding one `.slave` is a title now, and so is a drawer *inside* an archive; `igame.data` goes beside each slave — into a tree ART built by default, into a user's own collection only as an explicit, previewed, backed-up action reported **per entry**. Proved on real material: **893** drawers found and all 893 read back, and the archive scan taken from **140 469 ms to 1 719 ms** by reading entries in index order rather than `HashMap` order. Seven tasks, each reviewed; the reviews caught the feature being **unreachable twice** while every test was green. Earlier the same day: **AmigaOS 3.2.2 is an installable release.** A recipe can now say that a release arrives as a base plus an update: ordered media **layers**, recipe inheritance, and media resolved inside the layer its recipe names, so nothing is decided by the order folders were added in. Proved against the owner's own media — a real layered build of **4 052 files** whose tree states `Release 3.2.2`, and **485** real `.info` icons round-tripped with 0 failures. Eleven tasks, each reviewed; the reviews caught three things 2 700 tests did not. Per-round detail is the [session log](session-log.md) |
+| **Version** | **0.9.0** (2026-09-04) — the first version cut as a GitHub release with installers attached, built by `.github/workflows/release.yml` from the tagged commit. 0.8.5 was the first published for other people to use. Deliberately not 1.0: of **204 marked rows** in [FEATURES.md](FEATURES.md), **153 are green — 24 amber, 21 not started, 6 stubs** (re-counted 2026-09-05 after the WHDLoad-drawer round, taking **one marker per table row**, from that row's State column). **State the method with the number**, because this row did not: the figure it carried before — 233 rows, 162 green, 32 amber, 33 not started, 6 stubs, counted 2026-09-04 — cannot be reproduced by either obvious rule. Counting every marker *cell* instead of one per row gives 262/184/32/40/6 today, so the old figure sat between the two and nobody can now say which it meant, and as the row above says, what is left in SD-1 is not code: a card flashed and an A500 booted. That is the bar for 1.0, not a bigger number |
 | **Current stage** | **SD-0, SD-1, SD-2 and SD-4 built; SD-3 mostly, SD-5 part-built.** The per-gap detail is the stage table further down this file, which is maintained gap by gap — this cell no longer retells it. Three sentences that have not changed and are the ones to read first: **what is left in SD-1 is not code — a card flashed and an A500 booted**; what emulation has settled is the **filesystem** side (a PFS3 volume ART formatted, and an AmigaOS 3.2 tree ART built, each boot a licensed Kickstart to a clean Workbench — so `expansion.library` and the real `pfs3aio` binary have accepted ART's disk, which is not provisional), and it does **not** touch the card path, where an MBR, an Amiga disk starting 1.1 GB in and Emu68's `brcm-sdhc.device` are the untested rung ([ART-095](ISSUES.md)); and **no card ART built has been flashed or booted** |
 | **Build** | PASS |
-| **Tests** | **2707 Rust passed, 0 failed, 45 ignored; 1016 frontend passed across 79 files** (re-measured 2026-09-05 after the layered-release round; the previous figures, 2626/1004, were 2026-09-04). The three new ignored ones are that round's real-material hooks — the icon oracle's `ART_ICON_DIR` walk, and the AmigaOS 3.2.2 build against the owner's own 3.2 and 3.2.2 media. Both run twice, per the standing rule. **Quote the `test result:` line, never the exit code** — on 2026-09-04 an antivirus interfering with `rustup.exe` killed the harness after about seventy tests and the shell still saw exit 0, four runs in a row, with no summary line and no failure (recorded in CLAUDE.md, "Before you commit"). The ignored ones are the real-material hooks, env-gated and run by hand - real install media, a real card, `hst.imager.exe`, Microsoft's `Get-VHD`, the owner's own 1.2 GB `AmiKit.hdf` ([ART-146](ISSUES.md#fixed)), and since 2026-08-24 the three that leave the machine for the real Aminet (`net/live_aminet.rs`). Outside the two suites: **113 contrast pairs** (`scripts/contrast-check.py`, blocking in CI, and since [ART-232](ISSUES.md#fixed) it covers the colours three screens hard-code outside the token system as well as `theme.css`). **The scratch-directory class is closed rather than reduced**: [ART-164](ISSUES.md) fixed `core::iso`, [ART-173](ISSUES.md) fixed `core::cbm` and `core::detect` (4 failures in 40 runs, two different tests, one failing with the *other* test's 1000-byte fixture), and a sweep then took every remaining test scratch helper in the crate - 70 keyed on the process id, then 26 more keyed on `as_nanos()` **alone**, which is the worse shape since two threads can share a nanosecond but not a pid. The first sweep script reported a clean zero while blind to those 26; the widened one (`scripts/scratch-counter-sweep.py`) is the reason that number means anything. As of 2026-09-04 it reports **one** site "needing a counter" and that one is a **false positive**: the helper in `commands/osinstall.rs::staging_is_removed_however_the_preview_ends` keys on the thread id rather than a counter ([ART-182](ISSUES.md#fixed)'s own fix), which is unique within the process and which the sweep does not recognise ([ART-235](ISSUES.md)) |
+| **Tests** | **2771 Rust passed, 0 failed, 47 ignored; 1027 frontend passed across 80 files** (re-measured 2026-09-05 at the end of the WHDLoad-drawer round — 30.99 s and 31.19 s, run twice per the standing rule; the previous figures, 2707/1016, were the layered-release round earlier the same day, and 2626/1004 were 2026-09-04). The two new ignored ones are this round's real-material hooks — `catalogue_a_real_drawer_collection_when_asked` (`ART_DRAWERS`, which found and read back 893 drawers) and `real_archive_scan_is_fast` (`ART_LHA_ARCHIVE`, which is how the 82× archive-scan defect was found; a synthetic fixture could not have shown it). The layered round's three before them are the icon oracle's `ART_ICON_DIR` walk and the AmigaOS 3.2.2 build against the owner's own 3.2 and 3.2.2 media. **Quote the `test result:` line, never the exit code** — on 2026-09-04 an antivirus interfering with `rustup.exe` killed the harness after about seventy tests and the shell still saw exit 0, four runs in a row, with no summary line and no failure (recorded in CLAUDE.md, "Before you commit"). The ignored ones are the real-material hooks, env-gated and run by hand - real install media, a real card, `hst.imager.exe`, Microsoft's `Get-VHD`, the owner's own 1.2 GB `AmiKit.hdf` ([ART-146](ISSUES.md#fixed)), and since 2026-08-24 the three that leave the machine for the real Aminet (`net/live_aminet.rs`). Outside the two suites: **113 contrast pairs** (`scripts/contrast-check.py`, blocking in CI, and since [ART-232](ISSUES.md#fixed) it covers the colours three screens hard-code outside the token system as well as `theme.css`). **The scratch-directory class is closed rather than reduced**: [ART-164](ISSUES.md) fixed `core::iso`, [ART-173](ISSUES.md) fixed `core::cbm` and `core::detect` (4 failures in 40 runs, two different tests, one failing with the *other* test's 1000-byte fixture), and a sweep then took every remaining test scratch helper in the crate - 70 keyed on the process id, then 26 more keyed on `as_nanos()` **alone**, which is the worse shape since two threads can share a nanosecond but not a pid. The first sweep script reported a clean zero while blind to those 26; the widened one (`scripts/scratch-counter-sweep.py`) is the reason that number means anything. As of 2026-09-04 it reports **one** site "needing a counter" and that one is a **false positive**: the helper in `commands/osinstall.rs::staging_is_removed_however_the_preview_ends` keys on the thread id rather than a counter ([ART-182](ISSUES.md#fixed)'s own fix), which is unique within the process and which the sweep does not recognise ([ART-235](ISSUES.md)) |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **Kickstart table** | 154 dumps, generated from amitools' Remus split database and verified against it on every CI run (`scripts/rom-table-check.py`, ART-104). 24 of the user's own collection now named *with their machine*, including the two 40.68 builds told apart; ART's previous ten hand-listed hashes matched none of them. **Licensed Amiga Forever ROMs are first-class input** (ART-128): decoded with the `rom.key` beside them and then identified like any dump, and refused for a card build when the key is absent — they used to reach the boot partition still encrypted, which no Amiga could start |
@@ -32,7 +32,7 @@ Update it at the end of any session that changes what works.
 | **hst-imager PFS3 oracle** | both directions, local only (`scripts/pfs3-oracle-check.py`, no `hst.imager.exe` in CI): ART writes a volume through `NativeFormatter` and `hst-imager fs dir -r` reads it back — names, sizes, and every protection-bit string, `hsparwed` cased as `hst-imager` spells it; `hst-imager` formats and fills a volume and ART reads it back through `libpfs3`, SHA-256 per file rather than a length (ART-079's exact shape) plus the same protection strings |
 | **cargo-deny** | advisories, bans, licences, sources — all ok |
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
-| **i18n** | `en.json` and `tr.json`, **1958** leaf keys each (counted 2026-09-05; this row said 1916 before the layered-release round — count them, do not quote this), parity enforced by `pnpm test` |
+| **i18n** | `en.json` and `tr.json`, **1972** leaf keys each (counted 2026-09-05 after the WHDLoad-drawer round; this row said 1958 earlier the same day and 1916 before the layered-release round — count them, do not quote this), parity enforced by `pnpm test` |
 | **Release bundle** | rebuilt 2026-09-04 for 0.9.0 — `Amiga Retro Toolkit_0.9.0_x64_en-US.msi` and `_x64-setup.exe`, both produced by `pnpm tauri build` in 5m 47s. **Not code-signed**, which the README now says rather than leaving to SmartScreen |
 | **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later**. **[v0.9.0](https://github.com/tolon/Art/releases/tag/v0.9.0) is released, 2026-09-04**, with both installers attached (NSIS 5.1 MB, MSI 6.3 MB) — built by `release.yml` from the tagged commit, after CI went green on that same commit. The built `.exe` was launched and answered before the draft was published. Work lands on `sd-1` and merges to `main` at the phase's
 end; the licence *inventory* still said MIT until 2026-08-13, months after the
@@ -995,12 +995,39 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
 
 ### Where the work stands (end of 2026-09-05)
 
-- **Work-list item 3 is done: a release update is layered, and ART can say
-  so.** `AmigaOS 3.2.2` ships as a recipe declaring `base: "AmigaOS 3.2"` and
-  two ordered media layers; a component's media is resolved inside the layer
-  its recipe names. The OS Builder's media step asks one labelled folder
-  question per layer. Proved on the owner's own media: **4 052 files**, and
-  the tree states `Release 3.2.2`. Merged from `art-layered-release`.
+- **Work-list item 5 is done: a drawer-shaped WHDLoad collection is
+  catalogued, and iGame is told what ART knows.** A directory holding one
+  `.slave` is a title, and so is a drawer *inside* an archive — two `Media`
+  variants rather than one with a location field, because an unpacked drawer
+  launches through `RequestKind::Whdload` and an archived one cannot.
+  `igame.data` goes beside each slave: into a tree ART built by default, into
+  a user's own collection only as an explicit, previewed, backed-up action
+  reported **per entry**. Proved on real material — **893** drawers found and
+  all 893 read back, and the archive scan cut from **140 469 ms to 1 719 ms**
+  once entries are read in ascending index order. On `art-whdload-drawers`.
+- **The work list's own question for item 5 was wrong, and measuring the
+  reader is what showed it.** Both routes it offered wrote `igame.data` into
+  WHDLoad **hardfiles**; iGame's own `examineFolder` walks the Amiga
+  filesystem for `.slave` files and reads `igame.data` from the directory the
+  slave is in, so a self-booting `.hdf` — which keeps its slave inside the
+  image — is invisible to it. The cost of that route was never the free space
+  those 1 697 images have left; it is that nothing would ever read the file.
+- **Two things this round learnt that outlive it:**
+  - **Green tests do not prove a feature is reachable.** The drawer scans had
+    no production caller at all, and then were wired into a function whose
+    command has no frontend callers. Both times every test was correct and
+    pinned the wrong thing. The plan was at fault — no task owned the new
+    producer's first real caller — and the third attempt was checked by
+    tracing the chain from the Collection screen's Update button to
+    `store::refresh_root` hop by hop.
+  - **A fixture that cannot fail is not a test.** Five in this branch were
+    written to prove a rule and could not have failed without it; every one
+    was caught by an implementer or a reviewer rather than by the suite.
+- **Work-list item 3 is done too**, earlier the same day: a release update is
+  layered, `AmigaOS 3.2.2` ships as a recipe declaring `base: "AmigaOS 3.2"`
+  and two ordered media layers, and a component's media is resolved inside the
+  layer its recipe names. Proved on the owner's own media: **4 052 files**,
+  and the tree states `Release 3.2.2`. Merged from `art-layered-release`.
 - **[v0.9.0 is released](https://github.com/tolon/Art/releases/tag/v0.9.0)**
   and the owner has taken it to the community. **Reading what came back is
   still the first thing a session does** — issues on the repository, and
@@ -1009,21 +1036,26 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
   closes one as surely as a defect opens one. Nothing had come back as of
   2026-09-05: no issues, three release downloads.
 - **`main` is clean and there is no live phase branch.**
-- **Nine open entries.** [ART-166](ISSUES.md) and [ART-117](ISSUES.md) are
-  standing decisions; [ART-118](ISSUES.md) and [ART-062](ISSUES.md) need a
-  person at a screen; [ART-235](ISSUES.md) is a guard reporting a false
-  positive; and the layered-release round filed four it chose not to patch at
-  the end of a round — [ART-236](ISSUES.md) (a removal leaves its `.uaem`
-  sidecar), [ART-237](ISSUES.md) (an `aria-label` on a bare `div`, and the
-  accessibility sweep nobody has run), [ART-238](ISSUES.md) (the 3.2.2
-  recipe's `overrides` has no guard) and [ART-239](ISSUES.md) (a cross-layer
-  exclusive-group conflict is never refused).
+- **Nine open entries**, four of them new since the layered round closed its
+  own four. [ART-166](ISSUES.md) and [ART-117](ISSUES.md) are standing
+  decisions; [ART-118](ISSUES.md) and [ART-062](ISSUES.md) need a person at a
+  screen; [ART-235](ISSUES.md) is a guard reporting a false positive;
+  [ART-241](ISSUES.md) is the accessibility sweep nobody has run; and the
+  drawer round filed three it chose not to patch at the end of a round —
+  [ART-242](ISSUES.md) (WHDLoad's one-click install writes and joins directly
+  in `commands/`, with no `core`-level "install a pack" function to call),
+  [ART-243](ISSUES.md) (an archive edited in place keeps ghost records no
+  Rescan clears) and [ART-244](ISSUES.md) (Update mode re-reads every archive
+  candidate on an argued rather than measured basis — and the hook that would
+  settle it is `real_archive_scan_is_fast`, already written).
 - **The list to walk** is
   [superpowers/specs/2026-09-04-work-list.md](superpowers/specs/2026-09-04-work-list.md).
-  Item 3 is closed. Items 1, 2, 4 and 6 are the owner's and can run in
-  parallel; **the next build round is item 5** — SD-2 G10 wave 2, where
-  `igame.data` goes, which needs one choice between two routes before code.
-- **Two things the layered round learnt that outlive it**, both worth reading
+  Items 3 and 5 are closed. Items 1, 2 and 4 are the owner's and can run in
+  parallel; **the next build round is item 6 or 7** — SD-5 G13's profiles
+  half, which is blocked on the owner bringing a real distribution image, or
+  SD-3 G14's wallpaper and prefs, which needs a design round first because its
+  scope does not exist yet.
+- **Two things the layered round learnt that still hold**, both worth reading
   before the next round designs anything:
   - **One real run is a data point, not coverage.** The 3.2.2 build against
     the owner's media passed and still hid a defect that would have stopped
