@@ -101,6 +101,20 @@ mod tests {
     }
 
     #[test]
+    fn the_shell_defaults_are_the_five_measured_pairs() {
+        assert_eq!(
+            SHELL_DEFAULTS,
+            [
+                ("Sys/def_shell", "CON:0/50//150/Shell/CLOSE"),
+                ("Sys/def_editor", "C:Ed"),
+                ("Sys/def_cli", "NewShell"),
+                ("Sys/def_width", "640"),
+                ("Sys/def_height", "256"),
+            ]
+        );
+    }
+
+    #[test]
     fn a_value_round_trips() {
         for v in ["Workbench:", "C:Ed", "640", "CON:0/50//150/Shell/CLOSE"] {
             assert_eq!(decode_value(&encode_value(v).unwrap()), v);

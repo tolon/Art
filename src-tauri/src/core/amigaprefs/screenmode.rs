@@ -3,9 +3,10 @@
 //!
 //! Measured against a real AmigaOS 3.9 file rather than recalled (design doc
 //! §1 — do not "correct" this from memory or from another project's
-//! source): the body is 28 bytes — 16 reserved zero bytes, then `DisplayID`
-//! (`u32`), `Width`, `Height`, `Depth` and `Control` (each `u16`), all
-//! big-endian.
+//! source): the body is 28 bytes — 16 reserved bytes (all zero in the
+//! measured file, but carried through rather than assumed, same as
+//! [`super::wbpattern`]'s `other_flags`), then `DisplayID` (`u32`), `Width`,
+//! `Height`, `Depth` and `Control` (each `u16`), all big-endian.
 //!
 //! **`Depth` is a whole `u16` at offset 24, not a byte at offset 25.** A
 //! byte write at offset 25 happens to produce the same result *for values
@@ -34,6 +35,12 @@ fn malformed(detail: impl Into<String>) -> CoreError {
 /// One `SCRM` chunk, fully decoded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScreenMode {
+    /// The 16 bytes AmigaOS reserves at the head of a `SCRM` body, carried
+    /// through verbatim. ART changes only what the user set; a byte it
+    /// cannot name is still the release's byte. Measured as all-zero in the
+    /// real file, which is exactly why nothing would have caught this being
+    /// dropped.
+    pub reserved: [u8; 16],
     pub display_id: u32,
     pub width: u16,
     pub height: u16,
@@ -51,6 +58,8 @@ pub fn read_screen_mode(body: &[u8]) -> CoreResult<ScreenMode> {
             body.len()
         )));
     }
+    let mut reserved = [0u8; RESERVED_LEN];
+    reserved.copy_from_slice(&body[0..RESERVED_LEN]);
     let display_id = u32::from_be_bytes([
         body[RESERVED_LEN],
         body[RESERVED_LEN + 1],
@@ -63,6 +72,7 @@ pub fn read_screen_mode(body: &[u8]) -> CoreResult<ScreenMode> {
     let control = u16::from_be_bytes([body[26], body[27]]);
 
     Ok(ScreenMode {
+        reserved,
         display_id,
         width,
         height,
@@ -71,11 +81,11 @@ pub fn read_screen_mode(body: &[u8]) -> CoreResult<ScreenMode> {
     })
 }
 
-/// Serialise a `SCRM` chunk body: 16 zero bytes, then the five fields,
-/// big-endian.
+/// Serialise a `SCRM` chunk body: the carried-through reserved bytes, then
+/// the five fields, big-endian.
 pub fn write_screen_mode(m: &ScreenMode) -> CoreResult<Vec<u8>> {
     let mut out = Vec::with_capacity(BODY_LEN);
-    out.extend_from_slice(&[0u8; RESERVED_LEN]);
+    out.extend_from_slice(&m.reserved);
     out.extend_from_slice(&m.display_id.to_be_bytes());
     out.extend_from_slice(&m.width.to_be_bytes());
     out.extend_from_slice(&m.height.to_be_bytes());
@@ -132,5 +142,16 @@ mod tests {
     fn a_body_that_is_not_twenty_eight_bytes_is_refused() {
         assert!(read_screen_mode(&[0u8; 27]).is_err());
         assert!(read_screen_mode(&[0u8; 29]).is_err());
+    }
+
+    #[test]
+    fn the_reserved_bytes_are_carried_not_zeroed() {
+        let mut body = measured_body();
+        body[3] = 0x5A;
+        body[15] = 0xA5;
+        let m = read_screen_mode(&body).unwrap();
+        assert_eq!(m.reserved[3], 0x5A);
+        assert_eq!(m.reserved[15], 0xA5);
+        assert_eq!(write_screen_mode(&m).unwrap(), body);
     }
 }
