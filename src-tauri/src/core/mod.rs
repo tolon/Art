@@ -30,6 +30,7 @@ pub mod gotek;
 pub mod hashing;
 pub mod hdf;
 pub mod hostfs;
+pub mod ilbm;
 pub mod iso;
 pub mod jobs;
 pub mod launch;
