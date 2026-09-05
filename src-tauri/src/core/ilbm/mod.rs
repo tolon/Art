@@ -15,7 +15,7 @@
 //! from scratch, so every `BMHD` byte is a value this code chose — and three
 //! consecutive reviews this round found the same defect: a struct designed
 //! from the fields ART *needs* rather than the fields the *file* carries,
-//! silently zeroing the rest. The question here is which of these 13 bytes
+//! silently zeroing the rest. The question here is which of these 13 fields
 //! ART invented.
 //!
 //! A real Amiga-drawn ILBM was measured for this round —
@@ -187,11 +187,20 @@ pub fn encode(image: &Indexed) -> CoreResult<Vec<u8>> {
     }
 
     let planes = planes_for(image.palette.len());
-    let indexable = 1usize << planes;
-    if image.palette.len() > indexable {
-        return Err(malformed(
-            "palette holds more colours than the plane count can index",
-        ));
+    // planes_for(n) always returns enough planes to index n colours for
+    // every n <= 256 (the bound already enforced above), so
+    // `1 << planes >= palette.len()` can never fail at runtime — this is an
+    // invariant on the record, not a reachable guard.
+    debug_assert!(
+        image.palette.len() <= 1usize << planes,
+        "planes_for must return enough planes to index the palette"
+    );
+
+    if image.width > i16::MAX as u16 || image.height > i16::MAX as u16 {
+        return Err(malformed(&format!(
+            "an ILBM page dimension is a signed 16-bit field, so {}x{} cannot be written",
+            image.width, image.height
+        )));
     }
 
     let width_u16 = image.width;
@@ -292,10 +301,45 @@ mod tests {
     }
 
     #[test]
-    fn a_palette_larger_than_the_planes_can_index_is_refused() {
+    fn a_palette_larger_than_256_entries_is_refused() {
         let mut img = two_by_two_black_and_white();
         img.palette = vec![[0, 0, 0]; 300];
-        assert!(encode(&img).is_err());
+        let err = encode(&img).unwrap_err();
+        assert!(
+            format!("{err}").contains("256"),
+            "the refusal must name the limit, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_dimension_too_large_for_a_signed_page_field_is_refused_not_wrapped() {
+        let img = Indexed {
+            width: 40_000,
+            height: 1,
+            palette: vec![[0, 0, 0], [255, 255, 255]],
+            pixels: vec![1; 40_000],
+        };
+        assert!(
+            encode(&img).is_err(),
+            "40000 does not fit an i16 page field"
+        );
+    }
+
+    #[test]
+    fn an_odd_length_chunk_is_padded_and_the_size_field_is_not() {
+        // three colours -> CMAP is 9 bytes, which is odd.
+        let img = Indexed {
+            width: 2,
+            height: 2,
+            palette: vec![[0, 0, 0], [255, 255, 255], [255, 0, 0]],
+            pixels: vec![0, 1, 2, 0],
+        };
+        let out = encode(&img).unwrap();
+        let at = out.windows(4).position(|w| w == b"CMAP").unwrap();
+        let size = u32::from_be_bytes([out[at + 4], out[at + 5], out[at + 6], out[at + 7]]);
+        assert_eq!(size, 9, "the size field states the real length");
+        assert_eq!(out[at + 8 + 9], 0, "an odd body is followed by a pad byte");
+        assert_eq!(out.len() % 2, 0, "the file itself stays word-aligned");
     }
 
     #[test]
