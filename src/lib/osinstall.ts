@@ -586,6 +586,27 @@ export async function layersFor(release: InstallRelease): Promise<InstallLayer[]
   return invoke<InstallLayer[]>("osinstall_layers", { release });
 }
 
+/**
+ * Which of `release`'s own layers `volumeNames` look like — **never** which
+ * release, that is `osinstallReleaseForMedia`'s own job. Asked once a
+ * layer's own field holds media, so the screen can say "this folder holds
+ * your update disks, not the base set" against that field itself, instead of
+ * letting the plan's own `MediaMissing` refusals name disks the user does own
+ * (Task 10 fix round, Finding 1 — `wrongMediaFolder` and `osinstallScanMedia`
+ * both answer for the flat, unlayered field only, and cannot see the mistake
+ * a two-field screen invites: the update disks pointed at the base field, or
+ * the reverse, which is still "AmigaOS 3.2.2 media" at the release level).
+ *
+ * `null` for an unlayered release (nothing to tell apart) and for a folder
+ * whose names do not distinguish one layer from another.
+ */
+export async function layerForMedia(
+  release: InstallRelease,
+  volumeNames: string[]
+): Promise<string | null> {
+  return invoke<string | null>("osinstall_layer_for_media", { release, volumeNames });
+}
+
 /** What installing the chosen components would do — or every reason it
  *  cannot. Writes nothing (§92's PREVIEW). */
 export async function osinstallPlan(request: InstallRequest): Promise<PlanResult> {

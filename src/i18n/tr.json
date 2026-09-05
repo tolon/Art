@@ -2221,7 +2221,8 @@
     },
     "layer": {
       "base32": "AmigaOS 3.2 ortamı",
-      "update322": "AmigaOS 3.2.2 güncelleme ortamı"
+      "update322": "AmigaOS 3.2.2 güncelleme ortamı",
+      "wrongLayer": "Bu klasör bu alanın istediğini değil, {{actual}} disklerini taşıyor ({{found}}). Klasörü {{actual}} alanına taşıyın, ya da bu alanın istediği disklerin bulunduğu klasörü seçin."
     },
     "components": {
       "heading": "Bileşenler",

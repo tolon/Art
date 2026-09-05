@@ -66,6 +66,7 @@ import type { RomInfo } from "@/lib/pistorm";
 const scanMediaMock = vi.hoisted(() => vi.fn());
 const componentsMock = vi.hoisted(() => vi.fn());
 const layersForMock = vi.hoisted(() => vi.fn());
+const layerForMediaMock = vi.hoisted(() => vi.fn());
 const planMock = vi.hoisted(() => vi.fn());
 const componentCollisionsMock = vi.hoisted(() => vi.fn());
 const applyMock = vi.hoisted(() => vi.fn());
@@ -83,6 +84,7 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   osinstallScanMedia: scanMediaMock,
   osinstallComponents: componentsMock,
   layersFor: layersForMock,
+  layerForMedia: layerForMediaMock,
   osinstallPlan: planMock,
   osinstallRescanMedia: rescanMock,
   osinstallReleaseForMedia: releaseForMediaMock,
@@ -403,6 +405,11 @@ beforeEach(() => {
   layersForMock
     .mockReset()
     .mockImplementation((release: string) => Promise.resolve(layersForRelease(release)));
+  // The honest default: nothing found in a layer's own folder identifies as
+  // a *different* layer of the same release, so no test gets a wrong-layer
+  // hint it did not ask for. Tests for the hint itself (Task 10 fix round,
+  // Finding 1) override this per test.
+  layerForMediaMock.mockReset().mockResolvedValue(null);
   planMock.mockReset().mockImplementation((req: InstallRequest) => Promise.resolve(planResultFor(req)));
   // Nothing layering is switched on for AmigaOS 3.2, so this is never called
   // in most tests; an empty preview is the honest default for the ones where
@@ -1847,5 +1854,53 @@ describe("one folder field per media layer the release declares (Task 10)", () =
     expect((await screen.findByLabelText(layerFieldLabel("update-3.2.2"))).textContent).toContain(
       "E:\\b"
     );
+  });
+
+  // Fix round 1, Finding 1: the mistake a two-field screen invites most —
+  // the update disks pointed at the base field, or the reverse — is still
+  // "AmigaOS 3.2.2 media" at the release level, so `wrongMediaFolder` and
+  // `osinstallReleaseForMedia` cannot see it. `layerForMedia` is the
+  // per-layer question that can.
+  it("warns a layer's own field when its folder holds a different layer's own disks", async () => {
+    const UPDATE_FOLDER = "E:\\media\\Update3.2.2";
+    scanMediaMock.mockReset().mockImplementation((folder: string) =>
+      Promise.resolve(
+        folder === UPDATE_FOLDER
+          ? ({
+              outcome: "found",
+              media: [{ path: "E:\\x", volumeName: "Update3.2.2", kind: "floppy" }],
+            } satisfies MediaScanResult)
+          : ({ outcome: "found", media: [] } satisfies MediaScanResult)
+      )
+    );
+    layerForMediaMock
+      .mockReset()
+      .mockImplementation((_release: string, names: string[]) =>
+        Promise.resolve(names.includes("Update3.2.2") ? "update-3.2.2" : null)
+      );
+
+    renderOsInstall({ release: "AmigaOS 3.2.2" });
+    // The mistake itself: the update disks, in the base field.
+    await browseLayerFolder("base", UPDATE_FOLDER);
+
+    const hint = await screen.findByTestId("layer-wrong-hint-base");
+    expect(hint.textContent).toContain("Update3.2.2");
+    // Named by what the media actually is, not a bare id.
+    expect(hint.textContent).toContain(layerFieldLabel("update-3.2.2"));
+    // The field that is actually right must carry no hint of its own.
+    expect(screen.queryByTestId("layer-wrong-hint-update-3.2.2")).toBeNull();
+  });
+
+  it("carries no hint once every field's own folder holds what it expects", async () => {
+    // The default `beforeEach` wiring already answers this way; asserted
+    // explicitly so a change to that default cannot silently start every
+    // other test in this file with a hint nobody wrote.
+    renderOsInstall({ release: "AmigaOS 3.2.2" });
+    await browseLayerFolder("base", "E:\\media\\3.2");
+    await browseLayerFolder("update-3.2.2", "E:\\media\\Update3.2.2");
+
+    await screen.findByLabelText(layerFieldLabel("base"));
+    expect(screen.queryByTestId("layer-wrong-hint-base")).toBeNull();
+    expect(screen.queryByTestId("layer-wrong-hint-update-3.2.2")).toBeNull();
   });
 });

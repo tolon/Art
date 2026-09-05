@@ -67,6 +67,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use super::recipe;
+use super::Recipe;
 use crate::core::{CoreError, CoreResult};
 
 /// Volume names that belong to more than one AmigaOS release, so their
@@ -359,6 +360,90 @@ pub fn release_holding(found: &[String]) -> CoreResult<Option<String>> {
     })
 }
 
+/// Which of `recipe`'s own layers this pile of media looks like — `None`
+/// when `recipe` declares fewer than two layers (the question does not
+/// apply), or when nothing distinguishing was found.
+///
+/// **The counterpart to [`release_holding`], one level down** (Task 10 fix
+/// round, Finding 1). That answers "which release is this folder", scoped
+/// across every shipped recipe; a layered release's own two layers share a
+/// release name, so it cannot see the mistake this answers — the update
+/// disks pointed at the base field, or the reverse. Scoped inside one
+/// already-resolved recipe rather than iterating every release the way
+/// [`identify`] does, because the question is "which of *this* release's own
+/// layers", never "which release".
+///
+/// Same evidence rule as [`identify`]: a volume name only distinguishes a
+/// layer when no *other* layer of this same recipe also names it.
+/// `DiskDoctor` is AmigaOS 3.2.2's own example — both its `base` layer
+/// (inherited from AmigaOS 3.2's own `DiskDoctor` component) and its
+/// `update-3.2.2` layer (`update-322-diskdoctor`) name a component media of
+/// `DiskDoctor`, so it decides nothing between the two, exactly as it
+/// decides nothing between releases in [`AMBIGUOUS_ACROSS_RELEASES`] — here
+/// discovered structurally, per recipe, rather than off a hand-maintained
+/// list, since the two names being compared both come from the one recipe
+/// already in hand.
+///
+/// The layer with the most distinguishing hits wins; a tie, or zero hits
+/// everywhere, answers `None` rather than guessing.
+pub fn layer_holding(recipe: &Recipe, volume_names: &[String]) -> Option<String> {
+    if recipe.layers.len() < 2 {
+        return None;
+    }
+
+    let media_of = |layer_id: &str| -> Vec<String> {
+        recipe
+            .components
+            .iter()
+            .filter(|c| c.layer.as_deref() == Some(layer_id))
+            .map(|c| c.media.clone())
+            .collect()
+    };
+
+    let mut best: Option<(&str, usize)> = None;
+    let mut tied = false;
+    for layer in &recipe.layers {
+        let mine = media_of(&layer.id);
+        let others: Vec<String> = recipe
+            .layers
+            .iter()
+            .filter(|l| l.id != layer.id)
+            .flat_map(|l| media_of(&l.id))
+            .collect();
+        let distinguishing: Vec<&String> = mine
+            .iter()
+            .filter(|name| !others.iter().any(|o| super::amiga_names_equal(o, name)))
+            .collect();
+
+        let hits = volume_names
+            .iter()
+            .filter(|found| {
+                distinguishing
+                    .iter()
+                    .any(|d| super::amiga_names_equal(d, found))
+            })
+            .count();
+
+        if hits == 0 {
+            continue;
+        }
+        match best {
+            None => best = Some((layer.id.as_str(), hits)),
+            Some((_, best_hits)) if hits > best_hits => {
+                best = Some((layer.id.as_str(), hits));
+                tied = false;
+            }
+            Some((_, best_hits)) if hits == best_hits => tied = true,
+            Some(_) => {}
+        }
+    }
+
+    if tied {
+        return None;
+    }
+    best.map(|(id, _)| id.to_string())
+}
+
 /// `Prefs/Env-Archive/Versions/Release`, relative to a distribution tree's
 /// root — the one file this project trusts to say what a *built* tree is,
 /// because a release wrote it, not because ART inferred it.
@@ -648,6 +733,166 @@ mod tests {
         // "This folder holds no install media at all" is a different sentence
         // the screen already has, and it must not be overwritten by a guess.
         assert_eq!(release_holding(&[]).unwrap(), None);
+    }
+
+    // layer_holding — Task 10 fix round, Finding 1 --------------------------
+    //
+    // The mistake a two-field screen invites and `release_holding` cannot
+    // see: both AmigaOS 3.2.2's layers belong to the one release, so pointing
+    // the update disks at the base field (or the reverse) answers "yes, this
+    // is your AmigaOS 3.2.2 media" at the release level while being exactly
+    // backwards at the layer level.
+
+    #[test]
+    fn names_the_update_layer_by_its_own_disk() {
+        let recipe = recipe::by_release("AmigaOS 3.2.2").expect("the shipped recipe must load");
+        assert_eq!(
+            layer_holding(&recipe, &names(&["Update3.2.2"])),
+            Some("update-3.2.2".to_string())
+        );
+    }
+
+    #[test]
+    fn names_the_base_layer_the_same_way_round() {
+        // Not a mirror for symmetry's sake — see `names_the_other_release_the_same_way_round`
+        // above for why this project writes the reverse case rather than
+        // trusting the first one implies it.
+        let recipe = recipe::by_release("AmigaOS 3.2.2").expect("the shipped recipe must load");
+        assert_eq!(
+            layer_holding(&recipe, &names(&["Workbench3.2"])),
+            Some("base".to_string())
+        );
+    }
+
+    #[test]
+    fn a_name_both_layers_carry_decides_nothing() {
+        // `DiskDoctor`: the base layer's own (inherited from AmigaOS 3.2) and
+        // the update layer's own (`update-322-diskdoctor`) both name it, so
+        // it must not tip this toward either — the same rule
+        // `AMBIGUOUS_ACROSS_RELEASES` states for `identify`, discovered here
+        // structurally rather than off a hand-maintained list.
+        let recipe = recipe::by_release("AmigaOS 3.2.2").expect("the shipped recipe must load");
+        assert_eq!(layer_holding(&recipe, &names(&["DiskDoctor"])), None);
+    }
+
+    #[test]
+    fn a_mix_of_both_layers_disks_answers_by_the_larger_pile() {
+        // A folder holding two update disks and one base disk (a plausible
+        // "I keep everything together" folder) names the layer with more
+        // evidence rather than refusing outright — `identify`'s own
+        // `Ambiguous` shape is for two different *releases*' worth of
+        // evidence, which is not what one release's own two layers sharing a
+        // folder means.
+        let recipe = recipe::by_release("AmigaOS 3.2.2").expect("the shipped recipe must load");
+        assert_eq!(
+            layer_holding(
+                &recipe,
+                &names(&["Update3.2.2", "Classes3.2.2", "Workbench3.2"])
+            ),
+            Some("update-3.2.2".to_string())
+        );
+    }
+
+    #[test]
+    fn nothing_distinguishing_answers_none() {
+        let recipe = recipe::by_release("AmigaOS 3.2.2").expect("the shipped recipe must load");
+        assert_eq!(layer_holding(&recipe, &names(&["MyBackup"])), None);
+        assert_eq!(layer_holding(&recipe, &[]), None);
+    }
+
+    #[test]
+    fn an_unlayered_recipe_never_answers() {
+        // The question does not apply — AmigaOS 3.2 and 3.9 both read from
+        // one implicit layer, so there is nothing to tell apart.
+        let recipe = recipe::by_release("AmigaOS 3.2").expect("the shipped recipe must load");
+        assert_eq!(
+            layer_holding(&recipe, &names(&["Workbench3.2"])),
+            None,
+            "an unlayered recipe has nothing for this question to answer"
+        );
+    }
+
+    /// A minimal component naming one volume, on one layer — everything else
+    /// is a value no shipped recipe would actually vary, held constant so the
+    /// synthetic recipe below reads as data rather than boilerplate.
+    fn layer_component(layer: &str, media: &str) -> super::super::Component {
+        super::super::Component {
+            id: format!("{layer}-{media}"),
+            media: media.to_string(),
+            rules: vec![],
+            required: false,
+            condition: None,
+            overrides: vec![],
+            user_startup: vec![],
+            activate: vec![],
+            exclusive_group: None,
+            label_key: None,
+            available: true,
+            layer: Some(layer.to_string()),
+            removes: Vec::new(),
+        }
+    }
+
+    /// **Why a synthetic recipe, when this file's own doctrine is "the table
+    /// is the recipes".** That doctrine is about not hand-maintaining a
+    /// *name* table `identify` could instead read off shipped JSON — it is
+    /// not a ban on a pure function's own unit test choosing its inputs.
+    /// Every shipped recipe has exactly two layers today, and a shared name's
+    /// exclusion can only ever move a *tied* pair of layers, never flip which
+    /// one wins, when there are only two: the shared name adds the same
+    /// count to both sides. Three layers is the smallest shape where
+    /// excluding it is observably different from not — one layer's own
+    /// disk, one it shares with a second, and a third with a real disk of
+    /// its own — which no shipped recipe has any reason to need. See
+    /// `a_shared_names_exclusion_can_hide_a_real_winner_among_three_layers`
+    /// below for what this recipe is for.
+    fn three_layer_recipe() -> Recipe {
+        Recipe {
+            release: "Test".to_string(),
+            base: None,
+            layers: vec![
+                super::super::MediaLayer {
+                    id: "a".to_string(),
+                    label_key: None,
+                },
+                super::super::MediaLayer {
+                    id: "b".to_string(),
+                    label_key: None,
+                },
+                super::super::MediaLayer {
+                    id: "c".to_string(),
+                    label_key: None,
+                },
+            ],
+            components: vec![
+                layer_component("a", "OnlyA"),
+                layer_component("a", "Shared"),
+                layer_component("b", "OnlyB"),
+                layer_component("b", "Shared"),
+                layer_component("c", "OnlyC"),
+            ],
+        }
+    }
+
+    /// **Why `a_name_both_layers_carry_decides_nothing` cannot be the whole
+    /// guard.** Mutating away the shared-name exclusion still passed that
+    /// test: with exactly two layers, adding the same count to both sides of
+    /// a comparison can only ever preserve or create a tie, never flip a
+    /// winner, and the mutated code's own tie-handling silently absorbed the
+    /// difference. This is the case where the distinction is real: `Shared`
+    /// is `a`'s and `b`'s alike, so it must decide nothing between them —
+    /// but `c`'s own disk should still win outright, which the two-layer
+    /// case has no way to exercise (a two-layer tie and "nothing decided"
+    /// look the same either way).
+    #[test]
+    fn a_shared_names_exclusion_can_hide_a_real_winner_among_three_layers() {
+        let recipe = three_layer_recipe();
+        assert_eq!(
+            layer_holding(&recipe, &names(&["Shared", "OnlyC"])),
+            Some("c".to_string()),
+            "one disk shared by two layers plus a third layer's own disk \
+             names the third layer outright, not a three-way tie"
+        );
     }
 
     /// **ART-229, the three measured cases.** Pinned as a table rather than

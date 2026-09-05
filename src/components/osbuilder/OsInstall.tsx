@@ -86,6 +86,7 @@ import {
   isForcedOnByCondition,
   isInstallRelease,
   groupCollisionsForPreview,
+  layerForMedia,
   layersFor,
   onOsInstallResult,
   osinstallApply,
@@ -340,8 +341,18 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const rememberedBag = useSettingsStore((s) => s.settings.remembered);
   const updateSettings = useSettingsStore((s) => s.update);
 
+  /**
+   * Composed through `rememberedComponentKey` (fix round 1, Finding 2)
+   * rather than a hand-built template — every sibling field on this screen
+   * (`mediaFolder`, `extraMediaFolders`, `keymap`, `chosen`, …) keys its
+   * per-release variant through that one helper, and a second, hand-rolled
+   * naming convention here bought nothing: `rememberedComponentKey` already
+   * does exactly "one base, suffixed by what it must not be confused with",
+   * and a layer id is one more thing this key must not be confused across,
+   * the same shape release already is.
+   */
   function layerFolderKey(layerId: string): string {
-    return `osinstall.mediaFolder.${release}.${layerId}`;
+    return rememberedComponentKey(`osinstall.mediaFolder.${layerId}`, release);
   }
 
   function folderForLayer(layerId: string): string | null {
@@ -379,6 +390,113 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    *  still render *something* rather than an empty label). */
   function layerLabel(layer: InstallLayer): string {
     return layer.labelKey ? t(layer.labelKey) : layer.id;
+  }
+
+  function layerById(id: string): InstallLayer | undefined {
+    return layers.find((l) => l.id === id);
+  }
+
+  /**
+   * Each layer's own scan of its own folder — fix round 1, Finding 1. The
+   * single flat field has always scanned itself (`mediaScan` below) to say
+   * "N install disks found" and to feed `wrongMediaFolder`'s release-level
+   * check; a layered release's own fields did neither, which is exactly the
+   * gap the review named: a two-field screen invites pointing the update
+   * disks at the base field, and nothing said so.
+   *
+   * The same `osinstallScanMedia` the flat field already calls, once per
+   * layer's own chosen folder rather than once for the whole request. Keyed
+   * by layer id; a layer with no folder chosen holds no entry, and a scan
+   * that throws is treated the same way the flat field's own effect treats
+   * one — absence, not a badge (a folder ART cannot read is the ordinary
+   * case here too).
+   */
+  const [layerScans, setLayerScans] = useState<Record<string, MediaScanResult | null>>({});
+  useEffect(() => {
+    if (layers.length === 0) {
+      setLayerScans({});
+      return;
+    }
+    let cancelled = false;
+    Promise.all(
+      layers.map(async (layer) => {
+        const folder = folderForLayer(layer.id);
+        if (!folder) return [layer.id, null] as const;
+        try {
+          return [layer.id, await osinstallScanMedia(folder)] as const;
+        } catch {
+          return [layer.id, null] as const;
+        }
+      })
+    ).then((entries) => {
+      if (!cancelled) setLayerScans(Object.fromEntries(entries));
+    });
+    return () => {
+      cancelled = true;
+    };
+    // `layerFoldersKey`, not the individual folders — see its own doc
+    // comment on why a derived string is the dependency rather than an
+    // object or array built off the remembered bag (ART-178).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layers, layerFoldersKey]);
+
+  /** The volume names one layer's own scan actually found — `[]` when
+   *  nothing was scanned, nothing was found, or the folder could not be
+   *  read, the same three-ways-to-nothing `foundVolumeNames` below already
+   *  collapses for the flat field. */
+  function layerFoundVolumeNames(layerId: string): string[] {
+    const scan = layerScans[layerId];
+    return scan?.outcome === "found" ? scan.media.map((m) => m.volumeName) : [];
+  }
+
+  /**
+   * Which layer each layer's own scan actually looks like — `osinstall_layer_for_media`'s
+   * own answer, asked only once a scan has found something (an empty pile
+   * decides nothing, the same gate `layer_holding` itself applies). A layer
+   * whose own scan agrees with itself, or that found nothing to compare,
+   * holds no entry.
+   */
+  const [layerIdentified, setLayerIdentified] = useState<Record<string, string | null>>({});
+  useEffect(() => {
+    if (layers.length === 0) {
+      setLayerIdentified({});
+      return;
+    }
+    let cancelled = false;
+    Promise.all(
+      layers.map(async (layer) => {
+        const found = layerFoundVolumeNames(layer.id);
+        if (found.length === 0) return [layer.id, null] as const;
+        try {
+          return [layer.id, await layerForMedia(release, found)] as const;
+        } catch {
+          return [layer.id, null] as const;
+        }
+      })
+    ).then((entries) => {
+      if (!cancelled) setLayerIdentified(Object.fromEntries(entries));
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layers, layerScans, release]);
+
+  /**
+   * The sentence for one layer's own field, when its folder's media
+   * identifies as a **different** layer of this same release — `null`
+   * otherwise, which covers "nothing scanned yet", "scan agrees with this
+   * field" and "scan found nothing distinguishing" alike, none of which are
+   * this field's problem to report.
+   */
+  function wrongLayerHint(layer: InstallLayer): string | null {
+    const actualId = layerIdentified[layer.id];
+    if (!actualId || actualId === layer.id) return null;
+    const actual = layerById(actualId);
+    return t("osinstall.layer.wrongLayer", {
+      actual: actual ? layerLabel(actual) : actualId,
+      found: layerFoundVolumeNames(layer.id).join(", "),
+    });
   }
 
   /**
@@ -1269,17 +1387,30 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           // single field plus the add-folder list below: those are the
           // unlayered screen's own shape, and a layered release does not
           // render them at all (see the module doc comment on `layers`).
-          layers.map((layer) => (
-            <Field
-              key={layer.id}
-              label={layerLabel(layer)}
-              ariaLabel={layerLabel(layer)}
-              value={folderForLayer(layer.id)}
-              empty={t("osinstall.media.none")}
-              onChoose={() => void chooseLayerFolder(layer)}
-              choose={t("common.browse")}
-            />
-          ))
+          layers.map((layer) => {
+            const hint = wrongLayerHint(layer);
+            return (
+              <div key={layer.id}>
+                <Field
+                  label={layerLabel(layer)}
+                  ariaLabel={layerLabel(layer)}
+                  value={folderForLayer(layer.id)}
+                  empty={t("osinstall.media.none")}
+                  onChoose={() => void chooseLayerFolder(layer)}
+                  choose={t("common.browse")}
+                />
+                {hint && (
+                  <p
+                    className="badge badge-err"
+                    style={{ fontSize: 11, margin: "-8px 0 12px", display: "inline-block" }}
+                    data-testid={`layer-wrong-hint-${layer.id}`}
+                  >
+                    {hint}
+                  </p>
+                )}
+              </div>
+            );
+          })
         ) : (
           <>
             <Field

@@ -2221,7 +2221,8 @@
     },
     "layer": {
       "base32": "AmigaOS 3.2 media",
-      "update322": "AmigaOS 3.2.2 update media"
+      "update322": "AmigaOS 3.2.2 update media",
+      "wrongLayer": "This folder holds {{actual}} disks ({{found}}), not what this field asks for. Move it to the {{actual}} field, or choose the folder holding what this field wants."
     },
     "components": {
       "heading": "Components",

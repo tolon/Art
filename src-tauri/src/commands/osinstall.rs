@@ -224,6 +224,28 @@ pub fn osinstall_release_for_media(volume_names: Vec<String>) -> AppResult<Optio
     )?)
 }
 
+/// Which of `release`'s own layers these volume names look like — never
+/// which release, that is [`osinstall_release_for_media`]'s job. Asked when a
+/// layer's own field holds media, so a screen can say "this folder holds
+/// your update disks, not the base set" against the field itself, instead of
+/// the plan's own `MediaMissing` refusals naming disks the user does own
+/// (Task 10 fix round, Finding 1).
+///
+/// `None` for an unlayered release (nothing to tell apart) and for a folder
+/// whose names do not distinguish one layer from another — see
+/// `identify::layer_holding`'s own doc comment.
+#[tauri::command]
+pub fn osinstall_layer_for_media(
+    release: String,
+    volume_names: Vec<String>,
+) -> AppResult<Option<String>> {
+    let recipe = recipe::by_release(&release)?;
+    Ok(crate::core::osinstall::identify::layer_holding(
+        &recipe,
+        &volume_names,
+    ))
+}
+
 /// The media layers `release`'s own shipped recipe declares, in the recipe's
 /// own order.
 ///
@@ -4339,6 +4361,30 @@ mod tests {
                     "{unlayered} declares no layers"
                 );
             }
+        }
+
+        /// `osinstall_layer_for_media`'s own adapter — three lines, and the
+        /// question it answers is genuinely different from
+        /// `osinstall_release_for_media`'s: which of *this* release's own
+        /// layers, never which release (Task 10 fix round, Finding 1).
+        #[test]
+        fn osinstall_layer_for_media_answers_the_layer_not_the_release() {
+            assert_eq!(
+                osinstall_layer_for_media("AmigaOS 3.2.2".into(), vec!["Update3.2.2".into()])
+                    .unwrap(),
+                Some("update-3.2.2".to_string())
+            );
+            assert_eq!(
+                osinstall_layer_for_media("AmigaOS 3.2.2".into(), vec!["Workbench3.2".into()])
+                    .unwrap(),
+                Some("base".to_string())
+            );
+            // An unlayered release has nothing for this question to answer.
+            assert_eq!(
+                osinstall_layer_for_media("AmigaOS 3.2".into(), vec!["Workbench3.2".into()])
+                    .unwrap(),
+                None
+            );
         }
 
         #[test]
