@@ -3970,6 +3970,204 @@ mod tests {
         assert_eq!(manifest.built_from.len(), want_media);
     }
 
+    /// **Task 11's real 3.2.2 build hook.** Everything else that exercises a
+    /// layered recipe does it against a synthetic two-file fixture
+    /// (`layered_recipe`/`apply_a_layered_build` below) or the shipped
+    /// `amigaos-3.2.2.json` parsed in isolation (`recipe.rs`'s own tests).
+    /// Neither one plans and applies the **shipped** recipe against real
+    /// media. This does: the owner's own 3.2 ADFs on the `base` layer, the
+    /// 3.2.2 update ADFs on `update-3.2.2`, paired with a real Kickstart —
+    /// and then reads the finished tree's own
+    /// `Prefs/Env-Archive/Versions/Release` back out of it, the way a real
+    /// system would answer `version full`. A green `cargo test` is a claim
+    /// about the code; this is the claim about the tree (the design's §10,
+    /// carried forward by this task's own self-review notes as "the one
+    /// thing this plan cannot promise").
+    ///
+    /// `ART_322_BASE` names the folder of 3.2 ADFs, `ART_322_UPDATE` the
+    /// folder of 3.2.2 update ADFs, `ART_322_ROM` the paired Kickstart, and
+    /// `ART_322_DEST` an empty destination folder — `apply` is
+    /// `SAFE_CREATE` and refuses an existing one, so this test does not
+    /// delete anything on the caller's behalf; the destination has to
+    /// already be empty (or absent) before this is run.
+    ///
+    /// **What the paired Kickstart is expected to state, measured rather
+    /// than assumed.** `core::rom`'s own
+    /// `read_the_real_roms_residents_when_asked` hook, pointed at the
+    /// owner's real `ROM\kicka1200.rom`, printed
+    /// `header=(47, 96) exec=(47, 7) strap=(45, 1)` — exactly the "3.2 ROM"
+    /// worked example the shipped recipe's own `update-322-modules-a1200`
+    /// and `-strap` components cite in their own `_why_two_modules_components`
+    /// note. So both should switch on (`exec 47.7 < 47.10`, `strap 45.1 <
+    /// 47.0`), unchosen — same shape as `modules-a1200` in the plain 3.2
+    /// hook above — while the *base* layer's own `modules-a1200`
+    /// (`rom-older-than 47`) should stay off, because the header's own
+    /// major is 47, not older than it. The assertions below ask the ROM
+    /// itself rather than hard-coding that answer, so a different Kickstart
+    /// pointed at this same hook is still checked against the rule its
+    /// condition actually encodes.
+    #[test]
+    #[ignore = "touches the owner's real 3.2 and 3.2.2 media and E:\\amiga\\ProjeART; run explicitly, see the doc comment"]
+    fn build_the_real_322_tree_when_asked() {
+        let (Ok(base), Ok(update), Ok(rom), Ok(dest)) = (
+            std::env::var("ART_322_BASE"),
+            std::env::var("ART_322_UPDATE"),
+            std::env::var("ART_322_ROM"),
+            std::env::var("ART_322_DEST"),
+        ) else {
+            return;
+        };
+
+        // The same base-layer choices `run_the_real_engine_against_the_users_own_media_when_asked`
+        // makes above, plus `update-322-diskdoctor` so the update layer's
+        // own DiskDoctor (measured off `Update3.2.2.adf:Install/Install`
+        // itself, per the recipe's own `_why_these_three_and_not_the_base_diskdoctors_three`
+        // note) overrides the base's.
+        let chosen: Vec<String> = [
+            "extras",
+            "locale-base",
+            "locale-de",
+            "locale-dk",
+            "locale-en",
+            "locale-es",
+            "locale-fr",
+            "locale-gr",
+            "locale-it",
+            "locale-nl",
+            "locale-no",
+            "locale-pl",
+            "locale-pt",
+            "locale-ru",
+            "locale-se",
+            "locale-tr",
+            "locale-uk",
+            "fonts",
+            "classes",
+            "glowicons",
+            "diskdoctor",
+            "mmulibs",
+            "hdtools",
+            "storage",
+            "keymaps",
+            "backdrops",
+            "update-322-diskdoctor",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+        let request = crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2.2".to_string(),
+            // Unused: `plan()` only reads `media_folder` for an unlayered
+            // recipe, and `amigaos-3.2.2` is layered — every real folder is
+            // named through `media_folders` below instead.
+            media_folder: PathBuf::from(&base),
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::from([
+                ("base".to_string(), PathBuf::from(&base)),
+                ("update-3.2.2".to_string(), PathBuf::from(&update)),
+            ]),
+            keymap: None,
+            rom: Some(PathBuf::from(&rom)),
+            chosen,
+            excluded: Vec::new(),
+            destination: PathBuf::from(&dest),
+            scan_cache: Default::default(),
+        };
+
+        let recipe = crate::core::osinstall::recipe::by_release("AmigaOS 3.2.2")
+            .expect("the shipped 3.2.2 recipe must load");
+        let planned = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
+
+        println!("release={}", planned.release);
+        println!("components_on={:?}", planned.components_on);
+        println!("refusals={:?}", planned.refusals);
+        println!("total_bytes={}", planned.total_bytes);
+        println!("items={}", planned.items.len());
+
+        assert!(
+            planned.refusals.is_empty(),
+            "the real layered plan refused: {:?}",
+            planned.refusals
+        );
+
+        let update_modules_on = planned
+            .components_on
+            .iter()
+            .any(|id| id == "update-322-modules-a1200");
+        let update_strap_on = planned
+            .components_on
+            .iter()
+            .any(|id| id == "update-322-modules-a1200-strap");
+        let base_modules_on = planned.components_on.iter().any(|id| id == "modules-a1200");
+        println!(
+            "update-322-modules-a1200={update_modules_on} \
+             update-322-modules-a1200-strap={update_strap_on} \
+             base modules-a1200={base_modules_on}"
+        );
+
+        let rom_bytes = crate::core::rom::decoded_image(std::path::Path::new(&rom)).unwrap();
+        let header_major = crate::core::rom::stated_version(&rom_bytes)
+            .map(|(major, _)| major)
+            .expect("the paired Kickstart states its own version");
+        let exec_version = crate::core::rom::resident_version(&rom_bytes, "exec");
+        let strap_version = crate::core::rom::resident_version(&rom_bytes, "strap");
+        println!("rom header major={header_major} exec={exec_version:?} strap={strap_version:?}");
+
+        assert_eq!(
+            base_modules_on,
+            header_major < 47,
+            "the base layer's own modules-a1200 (condition rom-older-than 47) \
+             must switch on exactly when the paired ROM's stated header \
+             major is below 47"
+        );
+        assert_eq!(
+            update_modules_on,
+            exec_version.is_some_and(|(major, minor)| (major, minor) < (47, 10)),
+            "update-322-modules-a1200 (condition resident-older-than exec \
+             47.10) must switch on exactly when the ROM's own exec.library \
+             is older than that"
+        );
+        assert_eq!(
+            update_strap_on,
+            strap_version.is_some_and(|(major, _)| major < 47),
+            "update-322-modules-a1200-strap (condition resident-older-than \
+             strap 47) must switch on exactly when the ROM's own strap is \
+             older than that"
+        );
+
+        let root = PathBuf::from(&dest);
+        let outcome = apply(&planned, &root, &NoProgress).unwrap();
+        println!(
+            "apply: files={} directories={} bytes={}",
+            outcome.files, outcome.directories, outcome.bytes
+        );
+
+        let manifest_text = std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap();
+        let manifest: DistributionManifest = serde_json::from_str(&manifest_text).unwrap();
+        println!(
+            "manifest: {} file(s) recorded from {} medium/media, {} layer(s)",
+            manifest.files.len(),
+            manifest.built_from.len(),
+            manifest.layers.len()
+        );
+
+        // **The tree has to say what it is.** A passing test up to this
+        // point is a claim about the code; this is the claim about the
+        // tree, and the brief is explicit that a failure here is a finding
+        // to report, never a reason to soften the assertion.
+        let stated = crate::core::osinstall::identify::release_of_tree(&root).unwrap();
+        println!("stated release={stated:?}");
+        assert_eq!(
+            stated.as_deref(),
+            Some("Release 3.2.2"),
+            "the tree has to say what it is; a passing test is a claim about \
+             the code, this file is the claim about the tree"
+        );
+    }
+
     /// Throwaway diagnostic, not part of the suite's real coverage — lists
     /// what is actually inside three of the user's real ADFs, to diagnose
     /// the refusals `run_the_real_engine_against_the_users_own_media_when_asked`

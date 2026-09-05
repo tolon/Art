@@ -486,4 +486,139 @@ mod tests {
         wrong_magic[0..2].copy_from_slice(&0x1234u16.to_be_bytes());
         assert!(layout(&wrong_magic).is_err(), "wrong magic, right length");
     }
+
+    /// Recursively collect every path under `dir` whose extension is
+    /// `.info`, case-insensitively — real Amiga media is not consistent
+    /// about case. Local to this one test: nothing else in this module
+    /// needs to walk a directory tree.
+    fn collect_info_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_info_files(&path, out);
+            } else if path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("info"))
+            {
+                out.push(path);
+            }
+        }
+    }
+
+    /// **The icon oracle's Rust half** (Task 11). `layout` and
+    /// `merge_tooltypes` above were measured against three real `.info`
+    /// files (the module doc comment's own admission). This is what checks
+    /// them against far more than three, without checking any of it into
+    /// the repository: `scripts/icon-oracle-check.py` extracts every
+    /// `.info` from the owner's own ADFs into a scratch directory and points
+    /// `ART_ICON_DIR` at it — this test never reads the owner's media
+    /// directly and is a no-op (not a failure) when the variable is unset,
+    /// so the ordinary suite stays green with nothing extracted.
+    ///
+    /// **`merge_tooltypes(x, x) == x` is only asked of icons that carry a
+    /// `ToolTypes` block, and that split is measured, not assumed.** The
+    /// first version of this test asked it of every icon and failed 302 of
+    /// 485 against the owner's real AmigaOS 3.2 media — every single one a
+    /// plain `Disk.info`, drawer icon or similar with no `ToolTypes` block
+    /// at all, and every one of those 302 had `layout` succeed cleanly first
+    /// (confirmed by printing the two `Result`s separately before writing
+    /// this comment). `merge_tooltypes`'s own doc comment already says why:
+    /// "an icon with no `ToolTypes` at all is a real but different shape
+    /// this function does not attempt to grow a new block for" — it is
+    /// documented, not a bug, and real material turns out to be *mostly*
+    /// that shape. Folding it into `failed` would be exactly the confident-
+    /// wrong sentence CLAUDE.md's "failure that does not crash" section
+    /// warns about: a report of "62% of icons are broken" over a parser that
+    /// never once failed to parse. So an icon with no `ToolTypes` block is
+    /// counted in `no_tooltypes`, printed on its own line, and never in
+    /// `failed`.
+    ///
+    /// What **is** unconditional, for every icon regardless of shape: `layout`
+    /// itself must not error, and its `trailing` range must run to the end
+    /// of the buffer (true by construction, asserted anyway so a future
+    /// change to `IconLayout` that broke it would be caught here too, not
+    /// only by the synthetic fixtures above) — the "lands exactly at
+    /// end-of-file or at the start of a trailing IFF block" claim this test
+    /// exists to check.
+    ///
+    /// A file that does not parse, whose merge does not round-trip, or
+    /// whose `trailing` region does not reach end-of-file is not a panic: it
+    /// is recorded by name in `failed` and the whole test fails once, at the
+    /// end, printing every one of them — machine-readable (`ART_ICON_RESULT
+    /// checked=… failed=… no_tooltypes=…`, one `ART_ICON_FAIL <path>` per
+    /// miss) so the driving script can report them without scraping prose.
+    #[test]
+    #[ignore = "needs a folder of real .info files"]
+    fn round_trip_every_icon_in_a_folder_when_asked() {
+        let Ok(folder) = std::env::var("ART_ICON_DIR") else {
+            return;
+        };
+        let mut entries = Vec::new();
+        collect_info_files(std::path::Path::new(&folder), &mut entries);
+        entries.sort();
+
+        let mut checked = 0usize;
+        let mut no_tooltypes = 0usize;
+        let mut failed: Vec<String> = Vec::new();
+        for entry in &entries {
+            let bytes = match std::fs::read(entry) {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    failed.push(format!("{} (could not read: {err})", entry.display()));
+                    continue;
+                }
+            };
+            checked += 1;
+
+            let parsed = match layout(&bytes) {
+                Ok(l) => l,
+                Err(err) => {
+                    failed.push(format!("{}: layout failed: {err}", entry.display()));
+                    continue;
+                }
+            };
+            // The layout has to land on the file's end, or on the start of
+            // an appended ColorIcon block — never mid-file.
+            if parsed.trailing.end != bytes.len() {
+                failed.push(format!(
+                    "{}: trailing region does not run to end-of-file",
+                    entry.display()
+                ));
+                continue;
+            }
+            if parsed.tooltypes.is_none() {
+                // A real, common shape — see the doc comment above — not a
+                // reason to call `merge_tooltypes` at all.
+                no_tooltypes += 1;
+                continue;
+            }
+            match merge_tooltypes(&bytes, &bytes) {
+                Ok(same) if same == bytes => {}
+                Ok(_) => failed.push(format!(
+                    "{}: merge_tooltypes(x, x) did not return x byte for byte",
+                    entry.display()
+                )),
+                Err(err) => failed.push(format!(
+                    "{}: merge_tooltypes failed: {err}",
+                    entry.display()
+                )),
+            }
+        }
+
+        println!(
+            "ART_ICON_RESULT checked={checked} failed={} no_tooltypes={no_tooltypes}",
+            failed.len()
+        );
+        for f in &failed {
+            println!("ART_ICON_FAIL {f}");
+        }
+        assert!(
+            failed.is_empty(),
+            "{} icon(s) did not round-trip",
+            failed.len()
+        );
+    }
 }
