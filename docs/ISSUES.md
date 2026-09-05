@@ -348,6 +348,82 @@ trains a reader to skim past the next real finding. Either teach the sweep the
 thread-id shape or convert that one helper to the counter — the first is
 better, because the thread-id keying is the *stronger* of the two here.
 
+**ART-236** 🟡 **A component's `removes` deletes the file and leaves its
+`.uaem` sidecar behind** — *found 2026-09-05 by the whole-branch review of the
+layered-release round*
+`core/osinstall/apply.rs::perform_removal`
+
+`Component.removes` (ART's answer to the AmigaOS 3.2.2 update deleting
+`Tools/TextEditFileTypes/Default4Types`) removes the file and its manifest
+`FileRecord`, and does not touch the `.uaem` sidecar beside it. The tree is
+then carrying Amiga metadata for a file that is gone.
+
+The same question was asked and answered for **icon merges** in the same round
+and the answer there was "leave it": a merge changes a file's bytes and its
+protection bits carry forward unchanged, so `settle_sidecar`'s
+manifest/sidecar-agreement invariant still holds. A removal is the opposite
+case and nobody has worked out what the invariant should say — which is why
+this is filed rather than patched. Deciding it inside a final fix wave would
+have been designing at the end of a round.
+
+Blast radius is small and bounded: a stale sidecar in a tree ART built, for a
+file no component claims. Nothing reads it back; `perform_removal` drops its
+manifest record by exact key and never consults the sidecar.
+
+**ART-237** 🔵 **An `aria-label` sits on a bare `div` in the OS Builder's media
+step** — *found 2026-09-05 by the whole-branch review of the layered-release
+round*
+`src/components/osbuilder/OsInstall.tsx`
+
+The per-layer media fields carry an `aria-label` on an element with no
+interactive role, where a screen reader will not announce it as a label.
+
+Filed rather than fixed in place, deliberately: it is the only accessibility
+finding the layered-release branch turned up, and fixing exactly the one that
+happened to be noticed is worth less than the sweep it implies. That sweep
+matters more here than the single line suggests — the Application Size setting
+(`src/lib/appZoom.ts`, Ctrl +/-/0) exists because most of the people using ART
+are over fifty, and nothing has ever audited this application against a screen
+reader.
+
+**ART-238** 🔵 **Nothing guards the 3.2.2 recipe's `overrides: ["modules-a1200"]`**
+— *found 2026-09-05 by the re-review of the layered-release round's final fix
+wave*
+`core/osinstall/recipes/amigaos-3.2.2.json`, `core/osinstall/recipe.rs`
+
+The fix that let `AmigaOS 3.2.2` plan against a pre-47 Kickstart has two
+halves: `detect_exclusive_group_conflicts` scoped by `(group, layer)`, and the
+update component declaring `overrides: ["modules-a1200"]` so its `LIBS/A1200`
+subtree lands **over** the base's rather than beside it. **The first half has a
+test; the second does not.** Delete that `overrides` entry today and the suite
+stays green — the static collision test reads `File` rules only, and the new
+pre-47 planning test resolves no media, so neither reaches the subtree
+collision the entry exists to declare.
+
+The recipe is correct as shipped. What is missing is the guard, which is
+exactly the shape that let the same round ship a `DiskDoctor` component
+placing `C/FixROMLibs` and omitting `Devs/trackfile.device` with 2 676 tests
+green. A test that plans the 3.2.2 recipe against media carrying both Modules
+disks would close it.
+
+**ART-239** 🔵 **A cross-layer exclusive-group conflict is now never refused**
+— *found 2026-09-05 by the re-review of the layered-release round's final fix
+wave*
+`core/osinstall/plan.rs::detect_exclusive_group_conflicts`
+
+Scoping the exclusive-group check by `(group, layer)` is right for the case it
+was changed for — a base component and an update component **for the same
+machine** are two halves of one release's answer, not competing choices — but
+it also means two components in the same group in *different* layers can never
+conflict, even when they genuinely are competing choices, such as a future
+update-layer Modules component for a different machine than the base layer's.
+
+No shipped recipe can express it: the 3.2.2 update layer carries only A1200
+Modules components. Recorded so that whoever adds a second machine's update
+components knows the check will not catch them, and can decide then whether
+the right rule is per-layer, per-`(group, machine)`, or something the format
+does not have yet.
+
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
