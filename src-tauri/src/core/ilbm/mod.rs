@@ -333,4 +333,40 @@ mod tests {
             "17 set bits, then padding"
         );
     }
+
+    #[test]
+    fn a_run_never_crosses_a_row_boundary() {
+        // 16 pixels wide, two rows, one plane, every pixel set: each plane row is
+        // [0xFF, 0xFF]. Packed per row that is two independent two-byte rows;
+        // packed as one buffer the four identical bytes collapse into a single
+        // run, which is a different and wrong BODY - a decoder unpacking row by
+        // row would desync on the second row and every row after it.
+        let img = Indexed {
+            width: 16,
+            height: 2,
+            palette: vec![[0, 0, 0], [255, 255, 255]],
+            pixels: vec![1; 32],
+        };
+        let out = encode(&img).unwrap();
+        let at = out.windows(4).position(|w| w == b"BODY").unwrap();
+        let size =
+            u32::from_be_bytes([out[at + 4], out[at + 5], out[at + 6], out[at + 7]]) as usize;
+        let body = &out[at + 8..at + 8 + size];
+
+        let one_row = [0xFFu8, 0xFF];
+        let mut per_row = packbits::pack_row(&one_row);
+        per_row.extend(packbits::pack_row(&one_row));
+        assert_eq!(
+            body,
+            per_row.as_slice(),
+            "each plane row is packed on its own"
+        );
+
+        let whole = packbits::pack_row(&[0xFF, 0xFF, 0xFF, 0xFF]);
+        assert_ne!(
+            body,
+            whole.as_slice(),
+            "packing the rows together is the defect this test exists for"
+        );
+    }
 }
