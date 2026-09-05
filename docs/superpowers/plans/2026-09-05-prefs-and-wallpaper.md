@@ -626,7 +626,7 @@ Refuse with `CoreError::Malformed { format: "WBPattern PTRN", detail }`.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cd src-tauri && cargo test amigaprefs::wbpattern`
-Expected: PASS, 10 tests.
+Expected: PASS, 9 tests.
 
 - [ ] **Step 5: Mutate the guards**
 
