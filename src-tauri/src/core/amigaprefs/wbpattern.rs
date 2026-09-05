@@ -31,6 +31,12 @@ const WBPF_NOREMAP: u16 = 0x0010;
 const DITHER_MASK: u16 = 0x0300;
 const PRECISION_MASK: u16 = 0x0C00;
 const PLACEMENT_MASK: u16 = 0x3000;
+/// Every bit this module gives a name to. A bit outside this mask is not
+/// unused — it is carried in `Backdrop::other_flags` and written back
+/// verbatim, because ART must not depend on the release never setting one
+/// (Task 7 edits the release's own `WBPattern.prefs` in place).
+const KNOWN_FLAG_MASK: u16 =
+    WBPF_PATTERN | WBPF_NOREMAP | DITHER_MASK | PRECISION_MASK | PLACEMENT_MASK;
 
 /// The flags the release's own root backdrop carries:
 /// `PLACEMENT_SCALE | PRECISION_IMAGE | DITHER_GOOD`. ART's default for a
@@ -176,6 +182,12 @@ pub struct Backdrop {
     pub precision: Precision,
     pub dither: Dither,
     pub no_remap: bool,
+    /// Flag bits outside every mask this module understands, carried through
+    /// verbatim. ART changes only what the user set; a bit it cannot name is
+    /// still the release's byte.
+    pub other_flags: u16,
+    /// `wbp_Revision`, carried rather than assumed zero.
+    pub revision: i8,
     pub content: Content,
 }
 
@@ -204,6 +216,7 @@ pub fn read_backdrop(body: &[u8]) -> CoreResult<Backdrop> {
     }
     let which = Which::from_bits(u16::from_be_bytes([body[16], body[17]]))?;
     let flags = u16::from_be_bytes([body[18], body[19]]);
+    let revision = body[20] as i8;
     let depth = body[21];
     let data_length = u16::from_be_bytes([body[22], body[23]]) as usize;
     let remaining = body.len() - HEADER_LEN;
@@ -229,14 +242,18 @@ pub fn read_backdrop(body: &[u8]) -> CoreResult<Backdrop> {
         precision: Precision::from_bits((flags & PRECISION_MASK) >> 10),
         dither: Dither::from_bits((flags & DITHER_MASK) >> 8),
         no_remap: flags & WBPF_NOREMAP != 0,
+        other_flags: flags & !KNOWN_FLAG_MASK,
+        revision,
         content,
     })
 }
 
 /// Serialise a `PTRN` chunk body.
 pub fn write_backdrop(b: &Backdrop) -> CoreResult<Vec<u8>> {
-    let mut flags =
-        (b.placement.to_bits() << 12) | (b.precision.to_bits() << 10) | (b.dither.to_bits() << 8);
+    let mut flags = (b.placement.to_bits() << 12)
+        | (b.precision.to_bits() << 10)
+        | (b.dither.to_bits() << 8)
+        | b.other_flags;
     if b.no_remap {
         flags |= WBPF_NOREMAP;
     }
@@ -255,7 +272,7 @@ pub fn write_backdrop(b: &Backdrop) -> CoreResult<Vec<u8>> {
     out.extend_from_slice(&[0u8; RESERVED_LEN]);
     out.extend_from_slice(&b.which.to_bits().to_be_bytes());
     out.extend_from_slice(&flags.to_be_bytes());
-    out.push(0); // Revision
+    out.push(b.revision as u8);
     out.push(depth);
     out.extend_from_slice(&data_length.to_be_bytes());
     out.extend_from_slice(&data);
@@ -380,6 +397,8 @@ mod tests {
             precision: Precision::Image,
             dither: Dither::Good,
             no_remap: false,
+            other_flags: 0,
+            revision: 0,
             content: Content::Picture("Sys:X/y.iff".to_string()),
         })
         .unwrap();
@@ -442,6 +461,29 @@ mod tests {
         body.extend_from_slice(b"abcd\0");
         let b = read_backdrop(&body).unwrap();
         assert_eq!(b.content, Content::Picture("abcd\u{0}".to_string()));
+        assert_eq!(write_backdrop(&b).unwrap(), body);
+    }
+
+    #[test]
+    fn a_flag_bit_this_module_does_not_understand_survives_a_round_trip() {
+        let mut body = measured_picture_body();
+        // 0x0040 is in no mask this module defines.
+        body[18..20].copy_from_slice(&(0x2A00u16 | 0x0040).to_be_bytes());
+        let b = read_backdrop(&body).unwrap();
+        assert_eq!(
+            b.other_flags, 0x0040,
+            "an unknown bit must be carried, not dropped"
+        );
+        assert_eq!(b.placement, Placement::Scale, "the known bits still decode");
+        assert_eq!(write_backdrop(&b).unwrap(), body);
+    }
+
+    #[test]
+    fn a_nonzero_revision_survives_a_round_trip() {
+        let mut body = measured_picture_body();
+        body[20] = 7;
+        let b = read_backdrop(&body).unwrap();
+        assert_eq!(b.revision, 7);
         assert_eq!(write_backdrop(&b).unwrap(), body);
     }
 }
