@@ -1004,7 +1004,10 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
   a user's own collection only as an explicit, previewed, backed-up action
   reported **per entry**. Proved on real material — **893** drawers found and
   all 893 read back, and the archive scan cut from **140 469 ms to 1 719 ms**
-  once entries are read in ascending index order. On `art-whdload-drawers`.
+  once entries are read in ascending index order. Merged from
+  `art-whdload-drawers` and pushed (`e42510b`, 2026-09-05); the branch and its
+  plan workspace are deleted. **Not claimed:** no `igame.data` ART wrote has
+  been read by iGame on a real Amiga.
 - **The work list's own question for item 5 was wrong, and measuring the
   reader is what showed it.** Both routes it offered wrote `igame.data` into
   WHDLoad **hardfiles**; iGame's own `examineFolder` walks the Amiga
@@ -1035,7 +1038,7 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
   nine gaps in the README are unverified in both directions, so a green result
   closes one as surely as a defect opens one. Nothing had come back as of
   2026-09-05: no issues, three release downloads.
-- **`main` is clean and there is no live phase branch.**
+- **`main` is clean and there is no live phase branch.** Two rounds landed on 2026-09-05, `art-layered-release` then `art-whdload-drawers`, each merged `--no-ff` and pushed. CI was **still running** on the second when this was written — check it before assuming a green `main`.
 - **Nine open entries**, four of them new since the layered round closed its
   own four. [ART-166](ISSUES.md) and [ART-117](ISSUES.md) are standing
   decisions; [ART-118](ISSUES.md) and [ART-062](ISSUES.md) need a person at a
