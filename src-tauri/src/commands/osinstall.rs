@@ -1347,6 +1347,7 @@ fn preview_component_collisions(
         files: manifest_files,
         paired_rom: None,
         amiga_installed: Vec::new(),
+        layers: Vec::new(),
     };
     std::fs::write(
         scratch.join(MANIFEST_FILE_NAME),
@@ -1764,6 +1765,14 @@ pub struct OsInstallResult {
     pub job_id: u64,
     pub destination: String,
     pub outcome: ApplyOutcome,
+    /// What the finished tree's own `Prefs/Env-Archive/Versions/Release`
+    /// states, compared with the release this build was for — Task 9, and
+    /// CLAUDE.md's answer to the round that shipped AmigaOS 3.5 labelled
+    /// 3.9. The OS Builder's result panel reports this as its own line,
+    /// never folded into "the build succeeded": a confirmed marker, a
+    /// mismatched one naming both sides, or none at all are three different
+    /// next steps, not one pass/fail bit.
+    pub stated_release: crate::core::osinstall::identify::StatedRelease,
 }
 
 /// One line per [`RemovalVerdict`], for [`osinstall_apply`]'s own oplog
@@ -1868,12 +1877,28 @@ pub fn osinstall_apply(
         write_to_path(&log_path, &record);
 
         let outcome = outcome?;
+
+        // Ask the tree itself, never `plan.release` — CLAUDE.md's own
+        // retelling of the AmigaOS-3.5-shipped-as-3.9 defect is exactly what
+        // this reads back rather than repeats (see
+        // `core::osinstall::identify::release_of_tree`'s own doc comment).
+        // A read failure here (an oversized or unreadable marker file) does
+        // not undo a build that already succeeded — best-effort, logged, and
+        // reported as "no release stated" rather than turning a finished
+        // install into a failed job over a report-only step.
+        let stated_release = crate::core::osinstall::identify::stated_release(&root, &plan.release)
+            .unwrap_or_else(|err| {
+                log::warn!("could not read this tree's own release marker: {err}");
+                crate::core::osinstall::identify::StatedRelease::Unstated
+            });
+
         let _ = emit_app.emit(
             OSINSTALL_EVENT,
             OsInstallResult {
                 job_id,
                 destination: for_log,
                 outcome,
+                stated_release,
             },
         );
         Ok(())
@@ -2190,6 +2215,7 @@ mod tests {
             files,
             paired_rom: None,
             amiga_installed: Vec::new(),
+            layers: Vec::new(),
         };
         std::fs::write(
             tree.join(MANIFEST_FILE_NAME),
@@ -2502,6 +2528,7 @@ mod tests {
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
             removals: Vec::new(),
+            layers: Vec::new(),
         };
         (dir, plan)
     }
@@ -2903,6 +2930,7 @@ mod tests {
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
             removals: Vec::new(),
+            layers: Vec::new(),
         };
 
         let preview =
@@ -4082,6 +4110,7 @@ mod tests {
             }],
             paired_rom: None,
             amiga_installed: Vec::new(),
+            layers: Vec::new(),
         };
         std::fs::write(
             dist_root.join(MANIFEST_FILE_NAME),
@@ -4290,9 +4319,40 @@ mod tests {
                 job_id: 7,
                 destination: "E:\\dist".into(),
                 outcome: ApplyOutcome::default(),
+                stated_release: crate::core::osinstall::identify::StatedRelease::Unstated,
             };
             let value = serde_json::to_value(&result).unwrap();
-            expect_keys(&value, &["job_id", "destination", "outcome"]);
+            expect_keys(
+                &value,
+                &["job_id", "destination", "outcome", "stated_release"],
+            );
+        }
+
+        /// The three states `src/lib/osinstall.ts`'s `StatedRelease` union
+        /// keys on — an internally tagged enum, so each variant's own fields
+        /// sit alongside `verdict` rather than nested under it.
+        #[test]
+        fn stated_release_serialises_as_the_three_tagged_variants_the_frontend_reads() {
+            use crate::core::osinstall::identify::StatedRelease;
+
+            let confirmed = serde_json::to_value(StatedRelease::Confirmed {
+                stated: "Release 3.2.2".into(),
+            })
+            .unwrap();
+            assert_eq!(confirmed["verdict"], "confirmed");
+            assert_eq!(confirmed["stated"], "Release 3.2.2");
+
+            let mismatch = serde_json::to_value(StatedRelease::Mismatch {
+                expected: "Release 3.2.2".into(),
+                stated: "Release 3.2".into(),
+            })
+            .unwrap();
+            assert_eq!(mismatch["verdict"], "mismatch");
+            assert_eq!(mismatch["expected"], "Release 3.2.2");
+            assert_eq!(mismatch["stated"], "Release 3.2");
+
+            let unstated = serde_json::to_value(StatedRelease::Unstated).unwrap();
+            assert_eq!(unstated["verdict"], "unstated");
         }
 
         #[test]
@@ -4320,6 +4380,7 @@ mod tests {
                     "packageMedia",
                     "userStartup",
                     "removals",
+                    "layers",
                 ],
             );
         }
@@ -4451,6 +4512,7 @@ mod tests {
                 files: Vec::new(),
                 paired_rom: Some(paired),
                 amiga_installed: Vec::new(),
+                layers: Vec::new(),
             };
             let manifest_value = serde_json::to_value(&manifest).unwrap();
             expect_keys(

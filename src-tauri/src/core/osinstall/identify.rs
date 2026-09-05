@@ -62,10 +62,12 @@
 //! [ART-159]: ../../../../docs/ISSUES.md
 //! [ART-222]: ../../../../docs/ISSUES.md
 
+use std::path::Path;
+
 use serde::Serialize;
 
 use super::recipe;
-use crate::core::CoreResult;
+use crate::core::{CoreError, CoreResult};
 
 /// Volume names that belong to more than one AmigaOS release, so their
 /// presence says nothing about which one a folder holds.
@@ -354,6 +356,166 @@ pub fn release_holding(found: &[String]) -> CoreResult<Option<String>> {
     Ok(match identify(found)? {
         MediaVerdict::Identified { evidence } => Some(evidence.release),
         MediaVerdict::Ambiguous { .. } | MediaVerdict::Unknown { .. } => None,
+    })
+}
+
+/// `Prefs/Env-Archive/Versions/Release`, relative to a distribution tree's
+/// root — the one file this project trusts to say what a *built* tree is,
+/// because a release wrote it, not because ART inferred it.
+const RELEASE_MARKER_PATH: &str = "Prefs/Env-Archive/Versions/Release";
+
+/// A real marker is 11 bytes (`Release 3.2`, the base disk's own copy) or 14
+/// (`Release 3.2.2\n`, the update's). 256 is generous headroom over either,
+/// not a real expectation of anything close to it — see [`release_of_tree`]'s
+/// own doc comment for why a bound is enforced rather than merely typical.
+const MAX_RELEASE_MARKER_BYTES: u64 = 256;
+
+/// What a **built** tree's own `Prefs/Env-Archive/Versions/Release` states —
+/// `None` when the tree carries no such file.
+///
+/// # This is the fix for shipping AmigaOS 3.5 labelled 3.9
+///
+/// [`identify`] above answers "which release is this pile of donor **media**"
+/// — asked before a tree exists, from volume names nobody but Commodore or
+/// Hyperion wrote. This function answers a different question, asked
+/// *after*: what does the **tree ART actually built** say about itself? The
+/// two must never be confused, because trusting the wrong kind of evidence
+/// for this second question is exactly how ART's most expensive defect
+/// happened.
+///
+/// A distribution tree that booted cleanly was shipped as AmigaOS **3.9** and
+/// was really **3.5** — eight tasks and a merged branch later. The spec that
+/// authorised it read the CD's own `Workbench3.5` top-level drawer name and a
+/// copyright line, called both "and not a mistake", and moved on. Both are
+/// consistent with more than one release; neither is the release itself
+/// stating what it is. `version full`, run against the booted system, would
+/// have answered in one line and did not get asked until after the branch
+/// merged (CLAUDE.md's "ask the artefact" rule, and the "research before
+/// design" section's own retelling of this exact round).
+///
+/// `Prefs/Env-Archive/Versions/Release` is that same kind of evidence, moved
+/// from "ask the booted system" to "ask the tree ART is about to hand
+/// someone" — a file AmigaOS's own installer writes, that ART never
+/// generates and never edits. The base `Workbench3.2` disk carries it
+/// already (`workbench-base` copies `Prefs` as a subtree, marker and all);
+/// the 3.2.2 update ships its own copy at `Update/Release` and the update's
+/// own `HowToInstall` has it overwrite the base's. A tree that carries
+/// `Release 3.2.2` is a tree an update genuinely touched, stated by the
+/// update itself — not by ART counting which components it switched on.
+///
+/// # Three answers, not two
+///
+/// Read [`super::apply::DistributionManifest::layers`]'s caller
+/// (`commands::osinstall::osinstall_apply`) for where these three sentences
+/// actually surface. This function only ever returns two things — the
+/// marker's own text, trimmed, or `None` — and the *third* sentence (the
+/// marker naming something ART did not expect) is a comparison the caller
+/// makes against the release it built, never something this function
+/// decides. Folding "found but wrong" and "not found" into one `None` would
+/// destroy the distinction CLAUDE.md's "endings stay distinct" rule exists
+/// for: an absent marker and a contradicting one call for different next
+/// steps, and a caller that only sees `None` for both cannot tell them apart.
+///
+/// # Bounded, and refused rather than truncated
+///
+/// The file is 11 or 14 bytes on every release ART has read. Reading
+/// whatever is at this path without a cap would mean a stray file — a user's
+/// own note left at a name ART did not choose, or a future release that
+/// changes the format in some way nobody here has seen — is loaded and
+/// treated as this tree's own claim about itself with no idea how large it
+/// might be. Refused outright past [`MAX_RELEASE_MARKER_BYTES`] rather than
+/// silently reading a truncated prefix (the way `collide.rs`'s own
+/// `read_bounded` does for a version-search window): a truncated *guess* at
+/// what a release states is exactly the kind of confident wrong sentence this
+/// function exists to stop making, so past the bound it says nothing rather
+/// than something built from a fragment.
+///
+/// # Absent is `None`, never the recipe's own `release` string
+///
+/// A tree with no marker at all — every release ART ships except an update
+/// layer — states no release, and that is the honest answer. Falling back to
+/// what the recipe *says* it built (`plan.release`, e.g. `"AmigaOS 3.2.2"`)
+/// would be ART asserting what it hoped rather than reading what the tree
+/// actually carries — the 3.5-as-3.9 defect again, only moved one level
+/// down. See the mutation table in the Task 9 implementation plan: that
+/// exact fallback is the mutation `a_tree_with_no_marker_says_so_rather_than_guessing`
+/// exists to catch.
+pub fn release_of_tree(root: &Path) -> CoreResult<Option<String>> {
+    let path = root.join(RELEASE_MARKER_PATH);
+
+    let metadata = match std::fs::metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(CoreError::Io(err)),
+    };
+
+    if metadata.len() > MAX_RELEASE_MARKER_BYTES {
+        return Err(CoreError::Malformed {
+            format: "release marker".into(),
+            detail: format!(
+                "'{}' is {} byte(s) — a real one is 11 or 14, and ART refuses to read past {} \
+                 rather than guess at a release from a truncated fragment",
+                path.display(),
+                metadata.len(),
+                MAX_RELEASE_MARKER_BYTES
+            ),
+        });
+    }
+
+    let bytes = std::fs::read(&path)?;
+    // Latin-1, the same convention `apply.rs`'s own module doc comment
+    // states for every AmigaDOS text file this project reads — a plain cast
+    // that can never fail, unlike `String::from_utf8`.
+    let text: String = bytes.iter().map(|&b| b as char).collect();
+    let trimmed = text.trim_end();
+
+    Ok(if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    })
+}
+
+/// The three sentences a finished build's own marker can produce, compared
+/// with the release ART built the tree as — see [`stated_release`] and
+/// [`release_of_tree`]'s own doc comment for why there are three and why
+/// they may never collapse into a pass/fail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "verdict", rename_all = "kebab-case")]
+pub enum StatedRelease {
+    /// The tree's own marker names the release ART built it as.
+    Confirmed { stated: String },
+    /// The tree's own marker names something else. Both sides are reported;
+    /// which one is right is not this module's call to make.
+    Mismatch { expected: String, stated: String },
+    /// The tree carries no marker at all — not a failure. Most releases ART
+    /// ships have never had an `Update/Release` to overwrite the base's own
+    /// copy with; only a layered update does.
+    Unstated,
+}
+
+/// Compare [`release_of_tree`] against the release a build was made for.
+///
+/// `expected_release` is a recipe's own `release` string (`"AmigaOS
+/// 3.2.2"`); the marker's own wording carries no `AmigaOS` prefix
+/// (`"Release 3.2.2"`), so the comparison strips the expected release's own
+/// first word rather than growing a second hand-maintained table for a
+/// spelling rule that is really just "the part after the space".
+pub fn stated_release(root: &Path, expected_release: &str) -> CoreResult<StatedRelease> {
+    let expected_marker = format!(
+        "Release {}",
+        expected_release
+            .split_once(' ')
+            .map_or(expected_release, |(_, version)| version)
+    );
+
+    Ok(match release_of_tree(root)? {
+        None => StatedRelease::Unstated,
+        Some(stated) if stated == expected_marker => StatedRelease::Confirmed { stated },
+        Some(stated) => StatedRelease::Mismatch {
+            expected: expected_marker,
+            stated,
+        },
     })
 }
 
@@ -695,5 +857,123 @@ mod tests {
                  module does not make"
             );
         }
+    }
+
+    // ---- Task 9: `release_of_tree` and `stated_release` ------------------
+
+    /// **The one this task exists for.** A tree that carries the marker a
+    /// real update wrote states its own release — read back, not asserted.
+    #[test]
+    fn a_tree_states_its_own_release_from_the_file_the_release_wrote() {
+        let dir = crate::core::osinstall::fixtures::scratch("release-marker");
+        let root = dir.join("tree");
+        std::fs::create_dir_all(root.join("Prefs/Env-Archive/Versions")).unwrap();
+        std::fs::write(
+            root.join("Prefs/Env-Archive/Versions/Release"),
+            b"Release 3.2.2\n",
+        )
+        .unwrap();
+        assert_eq!(
+            release_of_tree(&root).unwrap().as_deref(),
+            Some("Release 3.2.2")
+        );
+    }
+
+    /// The base disk's own copy carries no trailing newline at all (measured
+    /// 11 bytes) — trimming must not depend on one being there.
+    #[test]
+    fn the_base_disks_own_marker_with_no_trailing_newline_reads_back_too() {
+        let dir = crate::core::osinstall::fixtures::scratch("release-marker-base");
+        let root = dir.join("tree");
+        std::fs::create_dir_all(root.join("Prefs/Env-Archive/Versions")).unwrap();
+        std::fs::write(
+            root.join("Prefs/Env-Archive/Versions/Release"),
+            b"Release 3.2",
+        )
+        .unwrap();
+        assert_eq!(
+            release_of_tree(&root).unwrap().as_deref(),
+            Some("Release 3.2")
+        );
+    }
+
+    /// **The other half of the point.** No marker is `None`, never a guess
+    /// built from the recipe's own `release` string — that fallback is
+    /// exactly the AmigaOS-3.5-shipped-as-3.9 defect, moved one level down.
+    #[test]
+    fn a_tree_with_no_marker_says_so_rather_than_guessing() {
+        let dir = crate::core::osinstall::fixtures::scratch("release-marker-absent");
+        let root = dir.join("tree");
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(release_of_tree(&root).unwrap(), None);
+    }
+
+    /// Bounded, and refused rather than truncated — reading a fragment of an
+    /// oversized file and calling it "the release" would be exactly the
+    /// confident-wrong-sentence shape this function exists to avoid.
+    #[test]
+    fn a_marker_far_larger_than_any_real_one_is_refused_not_truncated() {
+        let dir = crate::core::osinstall::fixtures::scratch("release-marker-oversized");
+        let root = dir.join("tree");
+        std::fs::create_dir_all(root.join("Prefs/Env-Archive/Versions")).unwrap();
+        std::fs::write(
+            root.join("Prefs/Env-Archive/Versions/Release"),
+            vec![b'X'; (MAX_RELEASE_MARKER_BYTES + 1) as usize],
+        )
+        .unwrap();
+        let err = release_of_tree(&root).expect_err("oversized marker must be refused");
+        assert!(
+            format!("{err}").contains("release marker"),
+            "the refusal must name what it refused: {err}"
+        );
+    }
+
+    #[test]
+    fn stated_release_confirms_a_matching_marker() {
+        let dir = crate::core::osinstall::fixtures::scratch("stated-release-confirmed");
+        let root = dir.join("tree");
+        std::fs::create_dir_all(root.join("Prefs/Env-Archive/Versions")).unwrap();
+        std::fs::write(
+            root.join("Prefs/Env-Archive/Versions/Release"),
+            b"Release 3.2.2",
+        )
+        .unwrap();
+        assert_eq!(
+            stated_release(&root, "AmigaOS 3.2.2").unwrap(),
+            StatedRelease::Confirmed {
+                stated: "Release 3.2.2".to_string()
+            }
+        );
+    }
+
+    /// The sentence naming both sides — never just "this looks wrong".
+    #[test]
+    fn stated_release_names_both_sides_of_a_mismatch() {
+        let dir = crate::core::osinstall::fixtures::scratch("stated-release-mismatch");
+        let root = dir.join("tree");
+        std::fs::create_dir_all(root.join("Prefs/Env-Archive/Versions")).unwrap();
+        std::fs::write(
+            root.join("Prefs/Env-Archive/Versions/Release"),
+            b"Release 3.2",
+        )
+        .unwrap();
+        assert_eq!(
+            stated_release(&root, "AmigaOS 3.2.2").unwrap(),
+            StatedRelease::Mismatch {
+                expected: "Release 3.2.2".to_string(),
+                stated: "Release 3.2".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn stated_release_is_unstated_for_a_tree_with_no_marker() {
+        let dir = crate::core::osinstall::fixtures::scratch("stated-release-unstated");
+        let root = dir.join("tree");
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(
+            stated_release(&root, "AmigaOS 3.2").unwrap(),
+            StatedRelease::Unstated
+        );
     }
 }

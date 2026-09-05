@@ -681,6 +681,7 @@ mod tests {
             }],
             paired_rom: None,
             amiga_installed: Vec::new(),
+            layers: Vec::new(),
         }
     }
 
@@ -1103,6 +1104,7 @@ mod tests {
             }],
             paired_rom: None,
             amiga_installed: Vec::new(),
+            layers: Vec::new(),
         };
 
         let report = verify_volume(&image, None, 1, &manifest).unwrap();

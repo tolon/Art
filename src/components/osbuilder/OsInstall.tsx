@@ -1669,8 +1669,25 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           <p className="muted" style={{ fontSize: 12, margin: "0 0 8px", wordBreak: "break-all" }}>
             {t("osinstall.result.carried", { root: result.destination })}
           </p>
-          <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+          <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
             {t("osinstall.result.nextStep")}
+          </p>
+          {/* Task 9: what the tree's own release marker says, compared with
+              what this build was for — three distinct sentences, never
+              folded into a pass/fail (CLAUDE.md's answer to the round that
+              shipped AmigaOS 3.5 labelled 3.9: ask the artefact, never
+              assert). */}
+          <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+            {result.stated_release.verdict === "confirmed"
+              ? t("osinstall.result.statedRelease.confirmed", {
+                  stated: result.stated_release.stated,
+                })
+              : result.stated_release.verdict === "mismatch"
+                ? t("osinstall.result.statedRelease.mismatch", {
+                    expected: result.stated_release.expected,
+                    stated: result.stated_release.stated,
+                  })
+                : t("osinstall.result.statedRelease.unstated")}
           </p>
           {/* An update's own `removes` (Component.removes) — reported per
               entry, by name and by result, so the screen never claims a file

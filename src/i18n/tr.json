@@ -2307,6 +2307,11 @@
       "root": "Dağıtım ağacı: {{root}}",
       "carried": "Güncelleme ve Amiga'da kurulum adımları bu klasör üzerinde çalışacak: {{root}}",
       "nextStep": "Bunu bir karta kopyalamak için OS Builder → Amiga birimlerini hazırla ekranını bu klasöre yönlendir.",
+      "statedRelease": {
+        "confirmed": "Ağacın kendisi \"{{stated}}\" diyor — kendi Prefs/Env-Archive/Versions/Release imi, yapılan kurulumla uyuşuyor.",
+        "mismatch": "Ağacın kendisi bu kurulumun hedeflediği \"{{expected}}\" değil, \"{{stated}}\" diyor — bir sorun bildirirken bu ekrana değil ağacın kendi imine güven.",
+        "unstated": "Ağaç kendi sürüm imini taşımıyor (Prefs/Env-Archive/Versions/Release) — bir güncelleme katmanı yazmadıysa bu beklenen bir durumdur."
+      },
       "removed": {
         "heading": "Kaldırılan",
         "state": {

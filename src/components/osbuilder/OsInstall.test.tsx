@@ -1258,6 +1258,7 @@ describe("a release switch does not leave the other release's answers on screen 
       icons: [],
       iconMergeFailures: 0,
     },
+    stated_release: { verdict: "unstated" },
   };
 
   it("takes a finished install's report down when the release changes", async () => {
@@ -1332,6 +1333,7 @@ describe("the tree it builds is the tree the next steps get (ART-197)", () => {
       icons: [],
       iconMergeFailures: 0,
     },
+    stated_release: { verdict: "unstated" },
   };
 
   it("hands a finished install's destination to the session", async () => {
@@ -1396,6 +1398,109 @@ describe("the tree it builds is the tree the next steps get (ART-197)", () => {
     // - which is what makes the move cost nothing.
     const shown = await screen.findAllByText("E:\\amiga\\picked-by-hand");
     expect(shown.length).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 9: what the tree's own release marker says, on its own line
+// ---------------------------------------------------------------------------
+//
+// Three distinct sentences, never folded into one — CLAUDE.md's answer to
+// the round that shipped AmigaOS 3.5 labelled 3.9. Each test below sends a
+// different `stated_release` verdict and asserts the one sentence it names,
+// never the other two: collapsing "confirmed" and "mismatch" into a shared
+// wording would still pass a test that only checked *a* sentence appeared.
+
+describe("Task 9: the tree's own release marker gets its own line", () => {
+  function captureAnnounce(): { current: ((r: OsInstallResult) => void) | null } {
+    const held: { current: ((r: OsInstallResult) => void) | null } = { current: null };
+    onResultMock.mockImplementation((fn: (r: OsInstallResult) => void) => {
+      held.current = fn;
+      return Promise.resolve(() => {});
+    });
+    return held;
+  }
+
+  const BASE_OUTCOME = {
+    root: "E:\\amiga\\dist",
+    files: 10,
+    directories: 2,
+    bytes: 1024,
+    removed: [],
+    icons: [],
+    iconMergeFailures: 0,
+  };
+
+  it("reports a confirmed marker by its own text", async () => {
+    const announce = captureAnnounce();
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(announce.current).not.toBeNull());
+
+    act(() =>
+      announce.current!({
+        job_id: 1,
+        destination: "E:\\amiga\\dist",
+        outcome: BASE_OUTCOME,
+        stated_release: { verdict: "confirmed", stated: "Release 3.2.2" },
+      })
+    );
+
+    await screen.findByText(
+      i18n.t("osinstall.result.statedRelease.confirmed", { stated: "Release 3.2.2" })
+    );
+    expect(
+      screen.queryByText(i18n.t("osinstall.result.statedRelease.unstated"))
+    ).toBeNull();
+  });
+
+  // **The mutation table's third row.** Naming both sides is the point of
+  // this sentence — the frontend key this pins is exactly what collapsing
+  // the three sentences into one would break.
+  it("names both sides of a mismatch", async () => {
+    const announce = captureAnnounce();
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(announce.current).not.toBeNull());
+
+    act(() =>
+      announce.current!({
+        job_id: 1,
+        destination: "E:\\amiga\\dist",
+        outcome: BASE_OUTCOME,
+        stated_release: {
+          verdict: "mismatch",
+          expected: "Release 3.2.2",
+          stated: "Release 3.2",
+        },
+      })
+    );
+
+    await screen.findByText(
+      i18n.t("osinstall.result.statedRelease.mismatch", {
+        expected: "Release 3.2.2",
+        stated: "Release 3.2",
+      })
+    );
+    expect(screen.queryByText(/\{\{/)).toBeNull();
+  });
+
+  it("says a tree with no marker states none, not a guess", async () => {
+    const announce = captureAnnounce();
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(announce.current).not.toBeNull());
+
+    act(() =>
+      announce.current!({
+        job_id: 1,
+        destination: "E:\\amiga\\dist",
+        outcome: BASE_OUTCOME,
+        stated_release: { verdict: "unstated" },
+      })
+    );
+
+    await screen.findByText(i18n.t("osinstall.result.statedRelease.unstated"));
   });
 });
 

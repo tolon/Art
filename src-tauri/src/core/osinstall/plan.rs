@@ -547,6 +547,20 @@ pub struct InstallPlan {
     /// before this field existed must still deserialise.
     #[serde(default)]
     pub packages: Vec<String>,
+    /// Which folder each layer this build actually used its media from —
+    /// carried straight into [`super::apply::DistributionManifest::layers`]
+    /// (Task 9), so the manifest can say where each layer's media came from
+    /// without `apply` having to re-derive it from `media_paths`, which
+    /// names media, not folders.
+    ///
+    /// **Emptied on a refusal**, the same rule [`InstallPlan::media_paths`]
+    /// follows: a folder nothing was built from is not a fact about the tree
+    /// this plan describes, because this plan describes no tree.
+    ///
+    /// `#[serde(default)]` for the same reason every field added to this
+    /// struct after it first shipped carries one.
+    #[serde(default)]
+    pub layers: Vec<super::LayerRecord>,
     /// Package media name -> the archive it was found in, and the member
     /// inside it that holds the payload. The package half of
     /// [`InstallPlan::media_paths`], kept separate rather than folded into
@@ -1751,6 +1765,17 @@ fn plan_over_with_cache(
     } else {
         Vec::new()
     };
+    // `layers` follows `media_paths`'s own rule (immediately above): a folder
+    // nothing was built from is not a fact about the tree this plan
+    // describes, because a refused plan describes no tree.
+    let layers: Vec<super::LayerRecord> = if refusals.is_empty() {
+        layers
+            .into_iter()
+            .map(|(id, folder)| super::LayerRecord { id, folder })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let (total_bytes, total_files) = tree_totals(&items);
 
     let paired_rom = rom_facts.map(|facts| super::PairedRom {
@@ -1776,6 +1801,7 @@ fn plan_over_with_cache(
         activations,
         media_stamps,
         removals,
+        layers,
     })
 }
 

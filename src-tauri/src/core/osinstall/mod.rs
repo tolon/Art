@@ -393,6 +393,28 @@ pub struct MediaLayer {
     pub label_key: Option<String>,
 }
 
+/// Which folder [`plan::plan`] actually read one [`MediaLayer`]'s media from,
+/// recorded in [`apply::DistributionManifest::layers`] (Task 9).
+///
+/// **Why the manifest needs this at all.** `built_from` already names every
+/// *medium* (a volume name and its SHA-256) the tree was built from, but not
+/// which folder the user pointed each layer at — and a layered install reads
+/// from more than one folder (AmigaOS 3.2.2 is the user's own 3.2 set plus a
+/// separate update folder). `id` matches [`MediaLayer::id`] exactly, so a
+/// screen or a future "rebuild this layer" flow can join the two without
+/// guessing at order.
+///
+/// `folder` is always the path [`plan::InstallRequest::media_folders`] (or,
+/// for an unlayered recipe, `media_folder`/`extra_media_folders`) actually
+/// carried — never re-derived, for the same reason `built_from`'s SHA-256 is
+/// read off the real file rather than assumed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayerRecord {
+    pub id: String,
+    pub folder: std::path::PathBuf,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Recipe {
     /// `"AmigaOS 3.2"`.

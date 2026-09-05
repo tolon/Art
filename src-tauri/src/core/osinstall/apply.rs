@@ -348,6 +348,16 @@ pub struct DistributionManifest {
     /// of it.
     #[serde(default)]
     pub amiga_installed: Vec<AmigaInstallRecord>,
+    /// Which folder each of the recipe's own [`super::MediaLayer`]s was read
+    /// from (Task 9) — see [`super::LayerRecord`] for why this exists
+    /// alongside `built_from` rather than folded into it.
+    ///
+    /// `#[serde(default)]` for the reason every field added to this struct
+    /// after it first shipped carries one: a tree ART built before this
+    /// existed still has to read back, and "no layer folders were recorded"
+    /// is the truth for it.
+    #[serde(default)]
+    pub layers: Vec<super::LayerRecord>,
 }
 
 /// One package's Amiga-side install, as [`DistributionManifest`] records it.
@@ -1448,6 +1458,7 @@ pub fn apply_staging_in(
         files,
         paired_rom: plan.paired_rom.clone(),
         amiga_installed: Vec::new(),
+        layers: plan.layers.clone(),
     };
     write_manifest(root, &manifest)?;
 
@@ -1997,6 +2008,7 @@ mod tests {
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
             removals: Vec::new(),
+            layers: Vec::new(),
         };
         (plan, dir)
     }
@@ -2071,6 +2083,7 @@ mod tests {
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
             removals: Vec::new(),
+            layers: Vec::new(),
         };
         (plan, dir)
     }
@@ -2140,6 +2153,7 @@ mod tests {
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
             removals: Vec::new(),
+            layers: Vec::new(),
         };
 
         let root = dir.join("dist");
@@ -2260,6 +2274,7 @@ mod tests {
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
             removals: Vec::new(),
+            layers: Vec::new(),
         };
 
         let root = dir.join("dist");
@@ -3192,6 +3207,7 @@ mod tests {
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
             removals: Vec::new(),
+            layers: Vec::new(),
         };
 
         let root = dir.join("dist");
@@ -7136,5 +7152,100 @@ mod tests {
             "the release's own `if exists` guard — skipped, never failed"
         );
         assert_eq!(report.icon_merge_failures, 0);
+    }
+
+    // ---- Task 9: the manifest's own `layers` ------------------------------
+
+    /// A minimal two-layer recipe with the real shape — layer ids `base` and
+    /// `update-3.2.2`, one required component each — built with
+    /// `recipe::parse` rather than the `Recipe` struct literal so this test
+    /// exercises the same JSON path a shipped recipe goes through, the way
+    /// `plan.rs`'s own `two_layer_recipe` does for the layer mechanism
+    /// itself.
+    fn layered_recipe() -> crate::core::osinstall::Recipe {
+        crate::core::osinstall::recipe::parse(
+            r#"{"release":"Test OS","layers":[{"id":"base"},{"id":"update-3.2.2"}],
+                "components":[
+                  {"id":"base-component","media":"Base","layer":"base","required":true,
+                   "rules":[{"from":"TESTFILE","to":"Tools/X","kind":"file"}]},
+                  {"id":"update-component","media":"Update","layer":"update-3.2.2","required":true,
+                   "rules":[{"from":"UPDATEFILE","to":"Tools/Y","kind":"file"}]}
+                ]}"#,
+        )
+        .unwrap()
+    }
+
+    /// `plan()` then `apply()` against [`layered_recipe`], reading the
+    /// finished tree's own `distribution.json` back — the round trip
+    /// `the_manifest_records_which_folder_each_layer_came_from` needs.
+    fn apply_a_layered_build() -> DistributionManifest {
+        let dir = fixtures::scratch("apply-layers");
+        let base_folder = dir.join("base-media");
+        let update_folder = dir.join("update-media");
+        std::fs::create_dir_all(&base_folder).unwrap();
+        std::fs::create_dir_all(&update_folder).unwrap();
+        fixtures::media(
+            &base_folder,
+            "Base",
+            "base.adf",
+            &[("TESTFILE", b"x", 0x00)],
+        );
+        fixtures::media(
+            &update_folder,
+            "Update",
+            "update.adf",
+            &[("UPDATEFILE", b"y", 0x00)],
+        );
+
+        let request = crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "Test OS".to_string(),
+            media_folder: dir.join("unused"),
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::from([
+                ("base".to_string(), base_folder),
+                ("update-3.2.2".to_string(), update_folder),
+            ]),
+            keymap: None,
+            rom: None,
+            chosen: vec!["base-component".to_string(), "update-component".to_string()],
+            excluded: Vec::new(),
+            destination: dir.join("tree"),
+            scan_cache: Default::default(),
+        };
+
+        let plan = crate::core::osinstall::plan::plan(&request, &layered_recipe()).unwrap();
+        assert!(
+            plan.refusals.is_empty(),
+            "the layered fixture must resolve cleanly: {:?}",
+            plan.refusals
+        );
+        apply(&plan, &request.destination, &NoProgress)
+            .unwrap_or_else(|err| panic!("the layered fixture failed to build: {err}"));
+        read_manifest(&request.destination)
+    }
+
+    /// **The point of Task 9's manifest half.** `distribution.json` names
+    /// which folder each layer's media actually came from — `built_from`
+    /// already names the media itself, but not the folder a layered install
+    /// read it out of, and AmigaOS 3.2.2 always reads from more than one.
+    #[test]
+    fn the_manifest_records_which_folder_each_layer_came_from() {
+        let manifest = apply_a_layered_build();
+        let ids: Vec<&str> = manifest.layers.iter().map(|l| l.id.as_str()).collect();
+        assert_eq!(ids, vec!["base", "update-3.2.2"]);
+        assert!(manifest.layers.iter().all(|l| l.folder.is_absolute()));
+    }
+
+    /// **Mutation table row 2.** A `distribution.json` ART wrote before this
+    /// task existed carries no `layers` key at all, and it has to keep
+    /// reading back rather than refuse to load — the same rule every other
+    /// field added to this struct after it first shipped follows.
+    #[test]
+    fn an_older_manifest_with_no_layers_still_reads_back() {
+        let json = r#"{"release":"AmigaOS 3.2","builtFrom":[],"files":[]}"#;
+        let m: DistributionManifest = serde_json::from_str(json).unwrap();
+        assert!(m.layers.is_empty());
     }
 }

@@ -443,10 +443,23 @@ export interface ApplyOutcome {
 
 export const OSINSTALL_EVENT = "osinstall-result";
 
+/** What the finished tree's own `Prefs/Env-Archive/Versions/Release` states,
+ *  compared with the release this build was for (Task 9) — CLAUDE.md's
+ *  answer to the round that shipped AmigaOS 3.5 labelled 3.9. Three states,
+ *  never one pass/fail bit: a confirmed marker, a mismatched one naming both
+ *  sides, or none at all are three different sentences with three different
+ *  next steps. `"unstated"` is not a failure — most releases ART ships have
+ *  never had an `Update/Release` to write one. */
+export type StatedRelease =
+  | { verdict: "confirmed"; stated: string }
+  | { verdict: "mismatch"; expected: string; stated: string }
+  | { verdict: "unstated" };
+
 export interface OsInstallResult {
   job_id: number;
   destination: string;
   outcome: ApplyOutcome;
+  stated_release: StatedRelease;
 }
 
 /** Whether one claim about a file was confirmed, contradicted, or never

@@ -2307,6 +2307,11 @@
       "root": "Distribution tree: {{root}}",
       "carried": "The update and Amiga-side install steps will act on this folder: {{root}}",
       "nextStep": "Point the card preparation screen (OS Builder → Prepare Amiga volumes) at this folder to copy it onto a card.",
+      "statedRelease": {
+        "confirmed": "The tree itself states \"{{stated}}\" — its own Prefs/Env-Archive/Versions/Release marker agrees with what was built.",
+        "mismatch": "The tree itself states \"{{stated}}\", not the \"{{expected}}\" this build was for — trust the tree's own marker over this screen, and say so if you report a problem.",
+        "unstated": "The tree carries no release marker of its own (Prefs/Env-Archive/Versions/Release) — that is expected unless an update layer wrote one."
+      },
       "removed": {
         "heading": "Removed",
         "state": {
