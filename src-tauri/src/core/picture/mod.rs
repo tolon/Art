@@ -24,20 +24,52 @@
 //! # Constants and choices, each labelled honestly
 //!
 //! - **[`MAX_SOURCE_BYTES`] (32 MiB)** — arbitrary, not measured. It exists
-//!   to refuse an oversized source *before* any decoder allocates a byte for
-//!   it, the same "bound the read before it happens" discipline
+//!   to refuse an oversized *encoded* source before either decoder reads a
+//!   byte of it, the same "bound the read before it happens" discipline
 //!   `core/security` applies to archive entries. 32 MiB is far larger than
-//!   any reasonable desktop wallpaper source file while still refusing
-//!   comfortably before the `png` crate's own default 64 MiB decode-buffer
-//!   limit would otherwise be the only thing standing between a hostile
-//!   file and a large allocation.
-//! - **PNG dimension check (`u16::MAX` in each axis)** — reasoned, not
-//!   arbitrary: [`Rgb::width`]/[`Rgb::height`] are `u16`, so a PNG whose
-//!   `IHDR` states a larger dimension (PNG allows up to `u32::MAX`) cannot be
-//!   represented and is refused rather than silently truncated. JPEG needs
-//!   no equivalent check: its own `SOF` marker stores each dimension in 16
-//!   bits, so `jpeg-decoder`'s `ImageInfo::{width,height}` are already `u16`
-//!   and can never be a value this module would have to reject.
+//!   any reasonable desktop wallpaper source file.
+//!
+//!   **This bounds only the file on disk, not what decoding it would
+//!   allocate, and an earlier version of this doc claimed otherwise.** A
+//!   spec-valid PNG can declare a 65535x65535 image in a header a few dozen
+//!   bytes long; `png::Reader::output_buffer_size()` is a plain
+//!   `line_size * height` product with no ceiling of its own, so
+//!   `MAX_SOURCE_BYTES` does nothing to stop `decode_png` from asking for
+//!   the ~12.9 GB that implies. The `png` crate's own `Limits::default()`
+//!   (64 MiB) does not cover this either — its own doc comment says plainly
+//!   that "your allocations, e.g. when reading into a pre-allocated buffer,
+//!   are __NOT__ considered part of the limits"; it bounds the crate's
+//!   *internal* intermediate buffers, not the caller's output buffer.
+//!   `jpeg-decoder` has the same shape of gap: its
+//!   `decoding_buffer_size_limit` defaults to `usize::MAX`, and the one place
+//!   it is checked (`decode_planes`) runs *after* per-component coefficient
+//!   buffers sized from the frame dimensions have already been allocated.
+//!   **[`MAX_DECODED_BYTES`] is what actually closes this** — see its own
+//!   entry below.
+//! - **[`MAX_DECODED_BYTES`] (256 MiB)** — reasoned, not measured, but
+//!   anchored to real numbers rather than picked out of the air: a 4K RGB
+//!   picture is 3840 x 2160 x 3 = 24.9 MB, and even an 8K one is
+//!   7680 x 4320 x 3 ≈ 99.5 MB, so 256 MiB admits any screen resolution a
+//!   real wallpaper would target with wide headroom while still refusing a
+//!   header that lies about its own dimensions. [`decode`] computes
+//!   `width * height * 3` with `checked_mul` from the decoder's own header
+//!   info — *before* either decoder allocates a pixel buffer — and refuses
+//!   over this budget by name. The crates' own limit-setters
+//!   (`png::Decoder::set_limits`, `jpeg_decoder::Decoder::
+//!   set_max_decoding_buffer_size`) are also given this same value, purely
+//!   as defence in depth for an internal allocation this module does not
+//!   itself compute — the check above is what actually holds the line.
+//! - **Dimension check (`i16::MAX` in each axis, both formats)** — reasoned,
+//!   not arbitrary, and shared by PNG and JPEG through one function
+//!   ([`refuse_if_oversized`]): `core::ilbm::encode`'s own first precondition
+//!   refuses a `width`/`height` above `i16::MAX` (an ILBM `BMHD`'s
+//!   `pageWidth`/`pageHeight` are signed 16-bit fields), so `quantise::
+//!   quantise` cannot itself guarantee that precondition unless `decode`
+//!   already enforces the same bound on its input. PNG's own `IHDR` field is
+//!   `u32` and JPEG's `SOF` field is `u16`, so both can in principle state a
+//!   value between `i16::MAX + 1` and their own format ceiling — a JPEG
+//!   declaring, say, 40000 pixels wide fits `u16` but not `i16::MAX`, so
+//!   JPEG needs this check exactly as much as PNG does.
 //! - **Box filter, never enlarging** — [`scale_to_fit`] only ever shrinks:
 //!   the scale factor is `min(max_w / src.width, max_h / src.height)`, and
 //!   the function returns *before* computing that factor when the source
@@ -62,8 +94,14 @@ use crate::core::error::{CoreError, CoreResult};
 pub mod quantise;
 
 /// A source file over this many bytes is refused before any decoder reads
-/// it. See the module doc's "Constants and choices" section for why 32 MiB.
+/// it. See the module doc's "Constants and choices" section for why 32 MiB
+/// — and for why this alone does **not** bound a decoded image's size.
 pub const MAX_SOURCE_BYTES: usize = 32 * 1024 * 1024;
+
+/// A decoded image over this many bytes (`width * height * 3`) is refused
+/// before either decoder allocates a pixel buffer for it. See the module
+/// doc's "Constants and choices" section for why 256 MiB.
+pub const MAX_DECODED_BYTES: usize = 256 * 1024 * 1024;
 
 const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
 const JPEG_MAGIC: [u8; 3] = [0xFF, 0xD8, 0xFF];
@@ -73,6 +111,42 @@ fn malformed(format: &str, detail: &str) -> CoreError {
         format: format.to_string(),
         detail: detail.to_string(),
     }
+}
+
+/// Refuse `width x height` for `format` ("PNG" or "JPEG") before any caller
+/// allocates a pixel buffer for it: each dimension must fit the signed
+/// 16-bit field `core::ilbm::encode` itself requires, and the decoded byte
+/// count (`width * height * 3`, computed with `checked_mul` so a value near
+/// `u32::MAX` cannot wrap into something that looks small) must not exceed
+/// [`MAX_DECODED_BYTES`]. See the module doc for why each bound is what it
+/// is.
+fn refuse_if_oversized(format: &str, width: u32, height: u32) -> CoreResult<()> {
+    if width > i16::MAX as u32 || height > i16::MAX as u32 {
+        return Err(malformed(
+            format,
+            &format!(
+                "a {width}x{height} {format} exceeds {} pixels in a dimension, the signed \
+                 16-bit limit core::ilbm::encode itself enforces per axis",
+                i16::MAX
+            ),
+        ));
+    }
+
+    let decoded_bytes = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(3))
+        .ok_or_else(|| malformed(format, "width times height times 3 overflows"))?;
+    if decoded_bytes > MAX_DECODED_BYTES as u64 {
+        return Err(malformed(
+            format,
+            &format!(
+                "a {width}x{height} {format} would decode to {decoded_bytes} bytes, over ART's \
+                 {MAX_DECODED_BYTES} byte decoded-image budget; refused before allocating a \
+                 buffer for it"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// A fully decoded picture: one `[u8; 3]` per pixel, row-major, no palette.
@@ -115,7 +189,16 @@ pub fn decode(bytes: &[u8]) -> CoreResult<Rgb> {
 }
 
 fn decode_png(bytes: &[u8]) -> CoreResult<Rgb> {
-    let mut decoder = png::Decoder::new(bytes);
+    // `set_limits` is defence in depth, not the bound this module relies on
+    // (see the module doc's `MAX_DECODED_BYTES` entry): it governs the
+    // crate's own internal buffers, not the `vec![0u8; ...]` this function
+    // allocates itself below, which `refuse_if_oversized` gates instead.
+    let mut decoder = png::Decoder::new_with_limits(
+        bytes,
+        png::Limits {
+            bytes: MAX_DECODED_BYTES,
+        },
+    );
     // EXPAND turns a palette image into full RGB(A) and a sub-8-bit
     // grayscale image up to 8 bits; STRIP_16 reduces a 16-bit-per-sample
     // image to 8. Together every PNG this can decode ends up 8 bits per
@@ -127,15 +210,11 @@ fn decode_png(bytes: &[u8]) -> CoreResult<Rgb> {
 
     let header = reader.info();
     let (width, height) = (header.width, header.height);
-    if width > u16::MAX as u32 || height > u16::MAX as u32 {
-        return Err(malformed(
-            "PNG",
-            &format!(
-                "a {width}x{height} PNG is wider or taller than ART can hold in a 16-bit image \
-                 dimension"
-            ),
-        ));
-    }
+    // Checked from the header, before the pixel buffer below is allocated:
+    // `output_buffer_size()` is a plain `line_size * height` product with no
+    // budget of its own (see the module doc), so this call is what actually
+    // stands between a crafted header and a multi-gigabyte allocation.
+    refuse_if_oversized("PNG", width, height)?;
 
     let mut buf = vec![0u8; reader.output_buffer_size()];
     let frame = reader.next_frame(&mut buf).map_err(|err| {
@@ -193,23 +272,37 @@ fn decode_png(bytes: &[u8]) -> CoreResult<Rgb> {
 
 fn decode_jpeg(bytes: &[u8]) -> CoreResult<Rgb> {
     let mut decoder = jpeg_decoder::Decoder::new(bytes);
-    let raw = decoder.decode().map_err(|err| {
-        malformed(
-            "JPEG",
-            &format!("the JPEG image data could not be decoded: {err}"),
-        )
-    })?;
-    // `jpeg_decoder::Decoder::info()` returns `None` only before `decode()`
-    // has returned `Ok` (see its own doc comment); that already happened on
-    // the line above, so this is an established library invariant rather
-    // than a state this module has to guard against.
+    // Defence in depth only, for the same reason `png::Decoder::set_limits`
+    // is set in `decode_png`: `jpeg-decoder`'s own limit defaults to
+    // `usize::MAX` and is checked only inside `decode_planes`, after
+    // per-component buffers sized from the frame dimensions are already
+    // allocated. `refuse_if_oversized` below, called before `decode()` is
+    // ever reached, is what actually bounds this.
+    decoder.set_max_decoding_buffer_size(MAX_DECODED_BYTES);
+
+    // `read_info` parses only as far as the `SOF` marker — the frame's
+    // dimensions and component count — without touching any entropy-coded
+    // scan data, so the dimension and budget check below runs before
+    // `decode()` allocates anything sized from them.
+    decoder
+        .read_info()
+        .map_err(|err| malformed("JPEG", &format!("the JPEG header could not be read: {err}")))?;
+    // `jpeg_decoder::Decoder::info()` returns `None` only before `read_info`
+    // or `decode` has returned `Ok` (see its own doc comment); `read_info`
+    // already did on the line above, so this is an established library
+    // invariant rather than a state this module has to guard against.
     let info = decoder
         .info()
-        .expect("jpeg-decoder records frame info once decode() has returned Ok");
+        .expect("jpeg-decoder records frame info once read_info() has returned Ok");
+    refuse_if_oversized("JPEG", u32::from(info.width), u32::from(info.height))?;
 
-    let pixels: Vec<[u8; 3]> = match info.pixel_format {
-        jpeg_decoder::PixelFormat::RGB24 => raw.as_chunks::<3>().0.to_vec(),
-        jpeg_decoder::PixelFormat::L8 => raw.iter().map(|&g| [g, g, g]).collect(),
+    // Checked from `info` — already known once `read_info` returns, since a
+    // JPEG's component count and precision are part of its `SOF` header —
+    // and refused *before* `decode()` is called at all: there is no reason
+    // to spend a full entropy decode on data this module is going to refuse
+    // to interpret as colour anyway.
+    match info.pixel_format {
+        jpeg_decoder::PixelFormat::RGB24 | jpeg_decoder::PixelFormat::L8 => {}
         jpeg_decoder::PixelFormat::L16 | jpeg_decoder::PixelFormat::CMYK32 => {
             return Err(malformed(
                 "JPEG",
@@ -217,6 +310,22 @@ fn decode_jpeg(bytes: &[u8]) -> CoreResult<Rgb> {
                  or CMYK pixel format that a wrong colour conversion could silently misread, so \
                  it is refused rather than guessed at",
             ));
+        }
+    }
+
+    let raw = decoder.decode().map_err(|err| {
+        malformed(
+            "JPEG",
+            &format!("the JPEG image data could not be decoded: {err}"),
+        )
+    })?;
+
+    let pixels: Vec<[u8; 3]> = match info.pixel_format {
+        jpeg_decoder::PixelFormat::RGB24 => raw.as_chunks::<3>().0.to_vec(),
+        jpeg_decoder::PixelFormat::L8 => raw.iter().map(|&g| [g, g, g]).collect(),
+        // Already refused above; `decode()` is never reached for these.
+        jpeg_decoder::PixelFormat::L16 | jpeg_decoder::PixelFormat::CMYK32 => {
+            unreachable!("L16/CMYK32 are refused before decode() is called")
         }
     };
 
@@ -333,6 +442,82 @@ pub(crate) mod tests_support {
             pixels: vec![colour; width as usize * height as usize],
         }
     }
+
+    /// The CRC-32 every PNG chunk carries (ISO 3309 / ITU-T V.42),
+    /// reproduced from the PNG specification's own reference implementation
+    /// (Appendix D, explicitly public domain there) so this fixture needs no
+    /// dependency merely to compute one checksum.
+    fn png_chunk_crc32(type_and_body: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFFu32;
+        for &byte in type_and_body {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    0xEDB8_8320 ^ (crc >> 1)
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        crc ^ 0xFFFF_FFFF
+    }
+
+    /// Just enough of a PNG to make `png::Decoder::read_info` succeed and
+    /// report the given — possibly huge — dimensions: the signature, a real
+    /// `IHDR` (with a correct CRC, since the decoder validates it), and the
+    /// first eight bytes of an `IDAT` chunk header. Nothing more: `read_info`
+    /// stops scanning the instant it recognises the `IDAT` *type*, before it
+    /// reads a byte of that chunk's body or checks its CRC, so no pixel
+    /// data — real or fake — needs to exist at all for the dimension and
+    /// decoded-budget checks under test here, which run right after
+    /// `read_info` and before `next_frame` would ever try to use it. This is
+    /// deliberately not a openable PNG.
+    pub fn png_header_declaring(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n']);
+
+        let mut ihdr = b"IHDR".to_vec();
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.push(8); // bit depth
+        ihdr.push(2); // colour type: truecolour (RGB)
+        ihdr.push(0); // compression method
+        ihdr.push(0); // filter method
+        ihdr.push(0); // interlace method
+        bytes.extend_from_slice(&((ihdr.len() - 4) as u32).to_be_bytes());
+        bytes.extend_from_slice(&ihdr);
+        bytes.extend_from_slice(&png_chunk_crc32(&ihdr).to_be_bytes());
+
+        // The start of an `IDAT` chunk header — length, then type — with no
+        // body and no CRC following it.
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(b"IDAT");
+        bytes
+    }
+
+    /// Just enough of a JPEG to make `jpeg_decoder::Decoder::read_info`
+    /// succeed and report the given dimensions and component count: an SOI
+    /// marker and one minimal baseline `SOF0` segment. `read_info` returns
+    /// as soon as it has parsed the frame header, before any entropy-coded
+    /// scan data is read, so — unlike PNG — not even a following chunk is
+    /// needed: this is the whole file.
+    pub fn jpeg_header_declaring(width: u16, height: u16, components: u8) -> Vec<u8> {
+        let mut bytes = vec![0xFF, 0xD8]; // SOI
+        bytes.push(0xFF);
+        bytes.push(0xC0); // SOF0 (baseline)
+        let segment_len = 6u16 + 3 * u16::from(components);
+        bytes.extend_from_slice(&(segment_len + 2).to_be_bytes());
+        bytes.push(8); // precision
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.push(components);
+        for id in 1..=components {
+            bytes.push(id); // component identifier
+            bytes.push(0x11); // 1x1 sampling factors
+            bytes.push(0); // quantisation table selector
+        }
+        bytes
+    }
 }
 
 #[cfg(test)]
@@ -379,6 +564,71 @@ mod tests {
         assert_eq!((rgb.width, rgb.height), (3, 2));
         assert_eq!(rgb.pixels[0], [200, 100, 50]);
         assert_eq!(rgb.pixels.len(), 6);
+    }
+
+    #[test]
+    fn a_png_declaring_a_dimension_over_the_signed_16_bit_limit_is_refused_by_name() {
+        let png = tests_support::png_header_declaring(40_000, 1);
+        let err = decode(&png).unwrap_err();
+        let text = format!("{err}");
+        assert!(
+            text.contains(&i16::MAX.to_string()),
+            "the refusal must name the signed 16-bit limit core::ilbm::encode enforces, got: \
+             {text}"
+        );
+    }
+
+    #[test]
+    fn a_png_declaring_more_pixels_than_arts_decoded_image_budget_is_refused_by_name() {
+        // 30000x30000 is within the i16::MAX-per-axis bound checked above,
+        // so this exercises the decoded-byte-count refusal on its own:
+        // 30000 * 30000 * 3 = 2.7 GB, far past MAX_DECODED_BYTES, from a
+        // header a few dozen bytes long.
+        let png = tests_support::png_header_declaring(30_000, 30_000);
+        let err = decode(&png).unwrap_err();
+        let text = format!("{err}");
+        assert!(
+            text.contains(&MAX_DECODED_BYTES.to_string()),
+            "the refusal must name ART's decoded-image budget, got: {text}"
+        );
+    }
+
+    #[test]
+    fn a_jpeg_declaring_a_dimension_over_the_signed_16_bit_limit_is_refused_by_name() {
+        let jpeg = tests_support::jpeg_header_declaring(40_000, 1, 1);
+        let err = decode(&jpeg).unwrap_err();
+        let text = format!("{err}");
+        assert!(
+            text.contains(&i16::MAX.to_string()),
+            "the refusal must name the signed 16-bit limit core::ilbm::encode enforces, got: \
+             {text}"
+        );
+    }
+
+    #[test]
+    fn a_jpeg_declaring_more_pixels_than_arts_decoded_image_budget_is_refused_by_name() {
+        let jpeg = tests_support::jpeg_header_declaring(30_000, 30_000, 1);
+        let err = decode(&jpeg).unwrap_err();
+        let text = format!("{err}");
+        assert!(
+            text.contains(&MAX_DECODED_BYTES.to_string()),
+            "the refusal must name ART's decoded-image budget, got: {text}"
+        );
+    }
+
+    #[test]
+    fn a_cmyk_jpeg_is_refused_by_name_rather_than_guessed_at() {
+        // Four components is exactly what makes `jpeg-decoder` report
+        // `PixelFormat::CMYK32` (see `Decoder::info`'s own mapping from
+        // component count to pixel format) — a real, ordinary way for a
+        // JPEG to declare itself, not a contrived one.
+        let jpeg = tests_support::jpeg_header_declaring(4, 4, 4);
+        let err = decode(&jpeg).unwrap_err();
+        let text = format!("{err}");
+        assert!(
+            text.contains("CMYK"),
+            "the refusal must name the unsupported pixel format: {text}"
+        );
     }
 
     #[test]
