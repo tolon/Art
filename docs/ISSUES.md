@@ -348,81 +348,30 @@ trains a reader to skim past the next real finding. Either teach the sweep the
 thread-id shape or convert that one helper to the counter — the first is
 better, because the thread-id keying is the *stronger* of the two here.
 
-**ART-236** 🟡 **A component's `removes` deletes the file and leaves its
-`.uaem` sidecar behind** — *found 2026-09-05 by the whole-branch review of the
-layered-release round*
-`core/osinstall/apply.rs::perform_removal`
+**ART-241** 🔵 **Field hints, errors and outcome text sit beside a control, not
+associated with it** — *found 2026-09-05 by the bounded accessibility sweep
+ART-237 itself called for*
+`src/components/osbuilder/Field.tsx` (the `hint` prop), `src/components/osbuilder/OsInstall.tsx`
+(the layer wrong-hint, ROM error/identified and media-scan-outcome paragraphs)
 
-`Component.removes` (ART's answer to the AmigaOS 3.2.2 update deleting
-`Tools/TextEditFileTypes/Default4Types`) removes the file and its manifest
-`FileRecord`, and does not touch the `.uaem` sidecar beside it. The tree is
-then carrying Amiga metadata for a file that is gone.
+Every `<Field>` that carries a `hint`, and every ad-hoc status paragraph the
+media step renders beside one (`layer-wrong-hint-*`, `osinstall.rom.unreadable`,
+`osinstall.rom.identified`, the `mediaScan` outcome lines), sits as a plain
+sibling `<p>` after the row — never wired to the row's own button through
+`aria-describedby`. A sighted user reads the two side by side; a screen reader
+user who reaches the Browse button by Tab hears only its own name and has to
+go hunting forward in the page to find out whether there is a warning or a
+confirmation attached to it at all.
 
-The same question was asked and answered for **icon merges** in the same round
-and the answer there was "leave it": a merge changes a file's bytes and its
-protection bits carry forward unchanged, so `settle_sidecar`'s
-manifest/sidecar-agreement invariant still holds. A removal is the opposite
-case and nobody has worked out what the invariant should say — which is why
-this is filed rather than patched. Deciding it inside a final fix wave would
-have been designing at the end of a round.
-
-Blast radius is small and bounded: a stale sidecar in a tree ART built, for a
-file no component claims. Nothing reads it back; `perform_removal` drops its
-manifest record by exact key and never consults the sidecar.
-
-**ART-237** 🔵 **An `aria-label` sits on a bare `div` in the OS Builder's media
-step** — *found 2026-09-05 by the whole-branch review of the layered-release
-round*
-`src/components/osbuilder/OsInstall.tsx`
-
-The per-layer media fields carry an `aria-label` on an element with no
-interactive role, where a screen reader will not announce it as a label.
-
-Filed rather than fixed in place, deliberately: it is the only accessibility
-finding the layered-release branch turned up, and fixing exactly the one that
-happened to be noticed is worth less than the sweep it implies. That sweep
-matters more here than the single line suggests — the Application Size setting
-(`src/lib/appZoom.ts`, Ctrl +/-/0) exists because most of the people using ART
-are over fifty, and nothing has ever audited this application against a screen
-reader.
-
-**ART-238** 🔵 **Nothing guards the 3.2.2 recipe's `overrides: ["modules-a1200"]`**
-— *found 2026-09-05 by the re-review of the layered-release round's final fix
-wave*
-`core/osinstall/recipes/amigaos-3.2.2.json`, `core/osinstall/recipe.rs`
-
-The fix that let `AmigaOS 3.2.2` plan against a pre-47 Kickstart has two
-halves: `detect_exclusive_group_conflicts` scoped by `(group, layer)`, and the
-update component declaring `overrides: ["modules-a1200"]` so its `LIBS/A1200`
-subtree lands **over** the base's rather than beside it. **The first half has a
-test; the second does not.** Delete that `overrides` entry today and the suite
-stays green — the static collision test reads `File` rules only, and the new
-pre-47 planning test resolves no media, so neither reaches the subtree
-collision the entry exists to declare.
-
-The recipe is correct as shipped. What is missing is the guard, which is
-exactly the shape that let the same round ship a `DiskDoctor` component
-placing `C/FixROMLibs` and omitting `Devs/trackfile.device` with 2 676 tests
-green. A test that plans the 3.2.2 recipe against media carrying both Modules
-disks would close it.
-
-**ART-239** 🔵 **A cross-layer exclusive-group conflict is now never refused**
-— *found 2026-09-05 by the re-review of the layered-release round's final fix
-wave*
-`core/osinstall/plan.rs::detect_exclusive_group_conflicts`
-
-Scoping the exclusive-group check by `(group, layer)` is right for the case it
-was changed for — a base component and an update component **for the same
-machine** are two halves of one release's answer, not competing choices — but
-it also means two components in the same group in *different* layers can never
-conflict, even when they genuinely are competing choices, such as a future
-update-layer Modules component for a different machine than the base layer's.
-
-No shipped recipe can express it: the 3.2.2 update layer carries only A1200
-Modules components. Recorded so that whoever adds a second machine's update
-components knows the check will not catch them, and can decide then whether
-the right rule is per-layer, per-`(group, machine)`, or something the format
-does not have yet.
+Filed rather than fixed here, for the same reason ART-237 itself was: `hint`
+is a prop on the **shared** `Field` component (`CardBuilder`, `VolumePreload`,
+`PackagePanel` and others all pass one), so a correct fix needs a real `id`
+threaded from each hint's own text through to the control it describes —
+`Field` cannot invent a stable id from a prop that is just a string — and
+deserves its own scoped pass rather than a hurried `aria-describedby` bolted
+on to whichever call sites this sweep happened to look at. Bounded to what the
+media step actually renders; a wider sweep of every other `Field` caller is
+still owed.
 
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
@@ -442,6 +391,154 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-236** 🟡 ✅ **A component's `removes` deletes the file and leaves its
+`.uaem` sidecar behind** — *found 2026-09-05 by the whole-branch review of the
+layered-release round*
+`core/osinstall/apply.rs::perform_removal`
+
+`Component.removes` (ART's answer to the AmigaOS 3.2.2 update deleting
+`Tools/TextEditFileTypes/Default4Types`) removed the file and its manifest
+`FileRecord`, and did not touch the `.uaem` sidecar beside it. The tree then
+carried Amiga metadata for a file that was gone.
+
+The same question was asked and answered for **icon merges** in the same round
+and the answer there was "leave it": a merge changes a file's bytes and its
+protection bits carry forward unchanged, so `settle_sidecar`'s
+manifest/sidecar-agreement invariant still holds. A removal is the opposite
+case, and the ruling for it: **the sidecar goes with the file, as part of the
+same removal verdict** — a user does not think of a sidecar as a thing they
+separately removed.
+
+**Fixed** by folding the sidecar's own removal into `perform_removal`, through
+`core::safety::guarded_remove` (`BackupPolicy::CONFIG`, the same gate
+`settle_sidecar` already uses for a stale sidecar). The three `RemovalState`
+values stay exactly three: a target with no sidecar still reports `Removed`
+(`guarded_remove` answers `Ok(None)` for a path that is not a file, so there is
+nothing more to decide); a sidecar that will not go reports the whole removal
+`Failed`, naming the sidecar, even though the file itself is already gone and
+staying gone — a half-removed pair is not the same fact as a clean removal,
+and the file's own disappearance from the manifest and this run's counters is
+not undone by that later failure, because they describe the file ART tracks,
+not the sidecar.
+
+**Guarded** by three tests in `core/osinstall/apply.rs`:
+`a_removal_also_takes_its_uaem_sidecar` (a file with a sidecar loses both),
+`a_removal_of_a_file_with_no_sidecar_still_reports_removed` (the ordinary
+case is not mistaken for a failure) and
+`a_removal_reports_failed_when_its_sidecar_will_not_go` (the file stays gone,
+the sidecar stays put, and the refusal names it). Mutation-verified: disabling
+the sidecar-removal branch fails the first and third by name; occupying the
+`.art-backup` directory name with a plain file — forcing `guarded_remove`'s own
+backup step to fail — fails the third alone, exactly as it should.
+
+**ART-237** 🔵 ✅ **An `aria-label` sits on a bare `div` in the OS Builder's media
+step** — *found 2026-09-05 by the whole-branch review of the layered-release
+round*
+`src/components/osbuilder/Field.tsx`, `src/components/osbuilder/OsInstall.tsx`
+
+The per-layer media fields carried an `aria-label` on an element with no
+interactive role — a bare `<div>` — where the HTML-ARIA mapping strips the
+accessible name of a role-less element, so nothing was ever announced to a
+screen reader.
+
+**Fixed** by moving the accessible name onto the row's own control: `Field`'s
+choose button (and clear button, when there is one) now carries
+`aria-label={\`${choose} ${ariaLabel}\`}` when the caller passes one, so a
+screen reader hears "Browse…, AmigaOS 3.2 media" rather than an unlabelled
+"Browse…" repeated once per layer. A row with no `ariaLabel` renders exactly
+as before, falling back to the button's own visible text as its accessible
+name — always real, just not specific. `Field` grew an optional `testId` prop
+so `OsInstall.test.tsx` can still find one field among several, now that the
+wrapping `<div>` carries no attribute of its own to query by.
+
+The same bounded sweep this entry itself called for found one more instance of
+the identical defect class two hundred lines below in the same file — every
+"Remove" button for an added media folder carried the same bare "Remove", with
+nothing to tell two rows apart — and fixed it too (see ART-240). It also found
+a related but distinct gap, filed separately rather than folded in here: see
+ART-241.
+
+**Guarded** by `src/components/osbuilder/Field.test.tsx` (new): the choose and
+clear buttons carry the combined accessible name and no `div[aria-label]`
+remains in the row; a row with no `ariaLabel` still has a real accessible name
+from its own visible text. Mutation-verified: reverting `Field` to the bare
+`div`-level `aria-label` fails the first two.
+
+**ART-238** 🔵 ✅ **Nothing guarded the 3.2.2 recipe's `overrides: ["modules-a1200"]`**
+— *found 2026-09-05 by the re-review of the layered-release round's final fix
+wave*
+`core/osinstall/recipes/amigaos-3.2.2.json`, `core/osinstall/plan.rs::detect_exclusive_group_conflicts`
+
+The fix that let `AmigaOS 3.2.2` plan against a pre-47 Kickstart had two
+halves: `detect_exclusive_group_conflicts` scoped by `(group, layer)`, and the
+update component declaring `overrides: ["modules-a1200"]` so its `LIBS/A1200`
+subtree lands **over** the base's rather than beside it. The first half had a
+test; the second did not — deleting the `overrides` entry left the suite
+green, because the static collision test reads `File` rules only and the
+pre-47 planning test resolves no media.
+
+**ART-239** 🔵 ✅ **A cross-layer exclusive-group conflict could never be
+refused** — *found 2026-09-05 by the re-review of the layered-release round's
+final fix wave*
+`core/osinstall/plan.rs::detect_exclusive_group_conflicts`
+
+Scoping the exclusive-group check by `(group, layer)` was right for the case
+it was changed for, but it also meant two components in the same group in
+*different* layers could never conflict, even when they genuinely were
+competing choices — a future update-layer Modules component for a different
+machine than the base layer's own, say. No shipped recipe could express it, so
+nothing caught it.
+
+**Fixed, both at once — they turned out to be one bug.** The ruling:
+a conflict is *"same exclusive group **and** no `overrides` relationship
+between them"*. `detect_exclusive_group_conflicts` no longer scopes by layer
+at all; it groups every on-resolved component by `exclusive_group` alone and
+resolves a group exactly when one member's own `overrides` names every other
+member directly — the same shape `detect_collisions` already uses to resolve
+two components claiming one file, and no chain beyond it (`A` overriding `B`
+says nothing about `C` unless some single member names `C` too). This closes
+ART-239 (different layers no longer excuse a real conflict) and gives ART-238
+its missing guard for free (the shipped recipe's own `overrides` entry is now
+load-bearing, not merely present).
+
+**Guarded** by `core/osinstall/plan.rs::plan_tests`:
+`the_shipped_322_recipe_plans_against_a_pre_47_rom_without_an_exclusive_group_refusal`
+(pre-existing, now also the ART-238 guard — **deleting `overrides:
+["modules-a1200"]` from the shipped 3.2.2 recipe fails it**, confirmed),
+`two_members_of_one_group_in_different_layers_without_overrides_still_conflict`
+(new, ART-239) and
+`two_members_of_one_group_in_different_layers_with_overrides_is_not_a_conflict`
+(new, the mirror case). Mutation-verified: restoring the old `(group, layer)`
+scoping fails the ART-239 test alone (the other two survive it, correctly —
+old code already tolerated cross-layer pairs, right or wrong); disabling the
+`overrides` resolution entirely fails both the pre-47-ROM test and the new
+with-overrides test.
+
+**ART-240** 🔵 ✅ **Every "Remove" button for an added media folder carried the
+same accessible name** — *found 2026-09-05 by the bounded accessibility sweep
+ART-237 itself called for, media step only*
+`src/components/osbuilder/OsInstall.tsx`
+
+With more than one extra media folder added, every row's "Remove" button had
+the identical visible text and accessible name "Remove" — a screen reader
+user tabbing through them heard the same word once per row with nothing to
+tell them apart, the exact defect class ART-237 fixed for the Browse buttons
+above, two hundred lines further down in the same file.
+
+**Fixed** by naming which folder each button removes:
+`aria-label={t("osinstall.media.removeFolderAriaLabel", { folder })}` (new key,
+both `en.json` and `tr.json`).
+
+**Guarded** by `src/components/osbuilder/OsInstall.test.tsx`'s
+`names which folder each Remove button removes, once there is more than one`
+(new): with two extra folders added, each Remove button's accessible name
+names its own folder, and removing the one named "Update" leaves "Hotfix"
+behind — proof the accessible name picked out the right row, not merely a
+button with the right visible text. Mutation-verified: dropping the
+`aria-label` fails it, and fails the pre-existing `takes one back out again`
+test too (its own name match had to widen from an exact `"Remove"` to a
+prefix, `/^remove /i`, for the same reason).
 
 **ART-226** 🟠 ✅ **Every tree ART builds has an empty `Devs/Keymaps`, so whatever
 language the user chose they can only type on an American keyboard — and for

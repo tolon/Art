@@ -448,9 +448,13 @@ pub enum RemovalState {
     Removed,
     /// The path was not there to begin with.
     NotPresent,
-    /// The path was there and could not be removed. Carries the OS error's
-    /// own sentence — reported, never claimed away (CLAUDE.md's "the screen
-    /// may not out-claim the core").
+    /// The path was there and could not be removed, **or** it was removed
+    /// but its `.uaem` sidecar (ART-236) would not go with it — the second
+    /// case names the sidecar rather than the file, because the file really
+    /// is gone by then and nothing can put it back, but a half-removed pair
+    /// is not success either. Carries the OS error's own sentence —
+    /// reported, never claimed away (CLAUDE.md's "the screen may not
+    /// out-claim the core").
     Failed(String),
 }
 
@@ -1481,6 +1485,19 @@ pub fn apply_staging_in(
 /// are no longer on disk (CLAUDE.md's "a manifest lying about the tree it
 /// describes").
 ///
+/// **ART-236: the `.uaem` sidecar goes with the file, as part of this same
+/// verdict.** A sidecar is one file's Amiga metadata, not a second thing the
+/// recipe named, so a user does not think of it as something they asked to
+/// remove; once the file is gone the sidecar is a disagreement with a file
+/// that no longer exists, which is exactly what `settle_sidecar`'s
+/// manifest/sidecar-agreement invariant forbids, and a real file the Amiga
+/// would still see on the volume besides. A file with no sidecar — the
+/// ordinary case — still reports `Removed`. A sidecar that will not go
+/// reports this removal `Failed`, naming the sidecar, even though the file
+/// itself is already gone and staying gone: a half-removed pair is not the
+/// same fact as a clean removal, and CLAUDE.md's "never claim what you did
+/// not do" rules out reporting it as one.
+///
 /// **A directory is refused, never removed (fix round 1, Finding 1).**
 /// `recipe::validate_removals` only accepts a `removes` entry whose placer is
 /// a `RuleKind::File` rule, so a **validated** recipe can never reach the
@@ -1572,6 +1589,43 @@ fn perform_removal(
     });
     outcome.files = outcome.files.saturating_sub(freed_files);
     outcome.bytes = outcome.bytes.saturating_sub(freed_bytes);
+
+    // ART-236. A `.uaem` sidecar is one file's Amiga metadata, not a second
+    // thing the recipe named — once `target` is gone, a sidecar left beside
+    // it is a disagreement with a file that no longer exists, exactly what
+    // `settle_sidecar`'s manifest/sidecar-agreement invariant forbids, and a
+    // real file the Amiga would still see on the volume besides. So the
+    // sidecar's fate is folded into this same verdict rather than reported
+    // as a second entry: a user does not think of a sidecar as a thing they
+    // asked to remove.
+    //
+    // Through `core::safety::guarded_remove`, like every other write in this
+    // module (`settle_sidecar`'s own comment makes the same point about a
+    // stale sidecar it drops): `CONFIG`'s five generations, because a
+    // sidecar is tiny, irreplaceable and easy to get wrong. `guarded_remove`
+    // already answers `Ok(None)` for a path that is not a file, so a target
+    // that never had a sidecar — the ordinary case, most files carry only
+    // the AmigaDOS default protection `sidecar_for` treats as nothing worth
+    // stating — removes cleanly here without a second disk check.
+    //
+    // A sidecar that will not go is reported as this removal's own failure,
+    // never as `Removed`: the file is already gone from disk by this point
+    // and nothing can put it back, but claiming success over a half-removed
+    // pair is exactly the confident-wrong sentence CLAUDE.md's "the failure
+    // that does not crash" forbids. The manifest and this run's own counters
+    // above are still corrected either way, because they describe the file
+    // ART tracks, not the sidecar, and the file really is gone.
+    let sidecar = sidecar_path(&target);
+    if let Err(err) =
+        crate::core::safety::guarded_remove(&sidecar, crate::core::safety::BackupPolicy::CONFIG)
+    {
+        return RemovalVerdict {
+            to: removal.to.clone(),
+            state: RemovalState::Failed(format!(
+                "the file was removed, but its .uaem sidecar could not be: {err}"
+            )),
+        };
+    }
 
     RemovalVerdict {
         to: removal.to.clone(),
@@ -7325,6 +7379,128 @@ mod tests {
             1,
             "one verdict for the one entry in plan.removals, never silently dropped"
         );
+    }
+
+    // ---- ART-236: a `removes` takes its `.uaem` sidecar with it ----
+
+    /// A bare [`FileRecord`] for `path`, enough for `perform_removal` to
+    /// have something to drop from `files` — the values that are not
+    /// `path` itself do not matter to any of the three tests below.
+    fn bare_file_record(path: &str) -> FileRecord {
+        FileRecord {
+            path: path.to_string(),
+            component: "base".to_string(),
+            media: "Base".to_string(),
+            sha256: String::new(),
+            bytes: 5,
+            protection: Some(0),
+            overwrote: None,
+            host_path: None,
+        }
+    }
+
+    #[test]
+    fn a_removal_also_takes_its_uaem_sidecar() {
+        let dir = fixtures::scratch("apply-removal-sidecar");
+        std::fs::create_dir_all(dir.join("Tools")).unwrap();
+        let target = dir.join("Tools").join("X");
+        std::fs::write(&target, b"the file").unwrap();
+        let sidecar = crate::core::volume::write::uaem::sidecar_path(&target);
+        std::fs::write(&sidecar, b"PROT --p-rwed").unwrap();
+
+        let removal = crate::core::osinstall::plan::PlanRemoval {
+            component: "update".to_string(),
+            to: "Tools/X".to_string(),
+        };
+        let mut outcome = ApplyOutcome::default();
+        let mut files = vec![bare_file_record("Tools/X")];
+        let verdict = perform_removal(&dir, &removal, &mut outcome, &mut files);
+
+        assert!(
+            matches!(verdict.state, RemovalState::Removed),
+            "a file whose sidecar also went is a clean removal: {:?}",
+            verdict.state
+        );
+        assert!(!target.exists(), "the file itself is gone");
+        assert!(
+            !sidecar.exists(),
+            "an orphaned .uaem sidecar is exactly what ART-236 filed"
+        );
+        assert!(files.is_empty(), "the manifest must stop claiming it too");
+    }
+
+    #[test]
+    fn a_removal_of_a_file_with_no_sidecar_still_reports_removed() {
+        let dir = fixtures::scratch("apply-removal-no-sidecar");
+        std::fs::create_dir_all(dir.join("Tools")).unwrap();
+        let target = dir.join("Tools").join("X");
+        std::fs::write(&target, b"the file").unwrap();
+        // Deliberately no `.uaem` written beside it — the ordinary case for
+        // a file whose protection never differed from AmigaDOS's own
+        // default (`sidecar_for`'s own doc comment).
+
+        let removal = crate::core::osinstall::plan::PlanRemoval {
+            component: "update".to_string(),
+            to: "Tools/X".to_string(),
+        };
+        let mut outcome = ApplyOutcome::default();
+        let mut files = vec![bare_file_record("Tools/X")];
+        let verdict = perform_removal(&dir, &removal, &mut outcome, &mut files);
+
+        assert!(
+            matches!(verdict.state, RemovalState::Removed),
+            "a missing sidecar is not a failure, exactly like a missing file \
+             the component switched off is `NotPresent` rather than `Failed`: {:?}",
+            verdict.state
+        );
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn a_removal_reports_failed_when_its_sidecar_will_not_go() {
+        let dir = fixtures::scratch("apply-removal-sidecar-stuck");
+        std::fs::create_dir_all(dir.join("Tools")).unwrap();
+        let target = dir.join("Tools").join("X");
+        std::fs::write(&target, b"the file").unwrap();
+        let sidecar = crate::core::volume::write::uaem::sidecar_path(&target);
+        std::fs::write(&sidecar, b"PROT --p-rwed").unwrap();
+
+        // `guarded_remove` backs the sidecar up before deleting it
+        // (`BackupPolicy::CONFIG`), into a `.art-backup` directory beside
+        // it. Occupying that exact name with a plain file makes
+        // `fs::create_dir_all` fail, so the backup step — and with it
+        // `guarded_remove` — fails before `remove_file` is ever reached.
+        // A read-only attribute on the sidecar itself was tried first and
+        // did not force a failure here (Windows removed it anyway), which
+        // is why this test forces the failure a level up instead.
+        std::fs::write(dir.join("Tools").join(".art-backup"), b"not a directory").unwrap();
+
+        let removal = crate::core::osinstall::plan::PlanRemoval {
+            component: "update".to_string(),
+            to: "Tools/X".to_string(),
+        };
+        let mut outcome = ApplyOutcome::default();
+        let mut files = vec![bare_file_record("Tools/X")];
+        let verdict = perform_removal(&dir, &removal, &mut outcome, &mut files);
+
+        assert!(
+            !target.exists(),
+            "the file itself is gone and staying gone, even though the whole \
+             removal is reported Failed"
+        );
+        assert!(
+            sidecar.exists(),
+            "the sidecar that could not be backed up must not have been \
+             deleted either"
+        );
+        match &verdict.state {
+            RemovalState::Failed(reason) => assert!(
+                reason.to_lowercase().contains("sidecar"),
+                "the refusal must name what could not go, not just that \
+                 something didn't: {reason}"
+            ),
+            other => panic!("expected Failed naming the sidecar, got {other:?}"),
+        }
     }
 
     // ---- Task 6: the `icon-tooltypes` rule kind ----

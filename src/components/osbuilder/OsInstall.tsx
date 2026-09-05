@@ -1398,6 +1398,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
                   empty={t("osinstall.media.none")}
                   onChoose={() => void chooseLayerFolder(layer)}
                   choose={t("common.browse")}
+                  testId={`layer-field-${layer.id}`}
                 />
                 {hint && (
                   <p
@@ -1420,6 +1421,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
               empty={t("osinstall.media.none")}
               onChoose={() => void chooseMediaFolder()}
               choose={t("common.browse")}
+              testId="osinstall-media-field"
             />
             {extraMediaFolders.map((folder) => (
               <div
@@ -1436,6 +1438,13 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
                   onClick={() =>
                     setExtraMediaFolders(extraMediaFolders.filter((kept) => kept !== folder))
                   }
+                  // ART-240's own sweep: with more than one extra folder, every
+                  // one of these buttons carries the identical visible text
+                  // "Remove" — a screen reader tabbing through hears the same
+                  // word once per row with nothing to tell them apart, the
+                  // same defect class ART-237 fixed for the Browse buttons
+                  // above. `aria-label` names which folder this one removes.
+                  aria-label={t("osinstall.media.removeFolderAriaLabel", { folder })}
                 >
                   {t("osinstall.media.removeFolder")}
                 </button>

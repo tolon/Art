@@ -2202,6 +2202,7 @@
       "rescannedNone": "Nothing was being remembered. The discs are read again anyway.",
       "addFolder": "Add another folder",
       "removeFolder": "Remove",
+      "removeFolderAriaLabel": "Remove {{folder}}",
       "addTitle": "Choose another folder holding this release's disks",
       "addHint": "AmigaOS 3.2.2.1 is your 3.2 disks plus the Update and Hotfix folders — add each one."
     },
