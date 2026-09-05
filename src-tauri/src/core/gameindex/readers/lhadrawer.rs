@@ -115,14 +115,28 @@ pub fn read_archive_drawers(path: &Path) -> CoreResult<Vec<GameRecord>> {
 
     let mut found = Vec::new();
     for (inner, candidates) in by_inner {
-        let [(index, slave_name)] = candidates.as_slice() else {
-            continue;
+        let (index, slave_name) = match candidates.as_slice() {
+            [(index, slave_name)] => (*index, *slave_name),
+            many => {
+                // Nothing here can ask an icon's `SLAVE=` ToolType without
+                // decompressing it, so unlike `readers::drawer::resolve_ambiguous`
+                // this has no way to settle it — the drawer is refused by
+                // omission, and this is the only trace that it was ever seen.
+                let names: Vec<&str> = many.iter().map(|(_, name)| *name).collect();
+                log::debug!(
+                    "gameindex: skipping {inner}: {} candidate slaves ({}) and nothing states \
+                     which is the title",
+                    many.len(),
+                    names.join(", ")
+                );
+                continue;
+            }
         };
         let slave_name = slave_name.to_string();
 
         // Bounded: a slave header is small and this archive is a file ART
         // did not write.
-        let bytes = backend.read(*index, MAX_SLAVE_BYTES)?;
+        let bytes = backend.read(index, MAX_SLAVE_BYTES)?;
         let facts = slave::read_slave(&bytes)?;
 
         let title = match facts.name.clone().filter(|name| !name.is_empty()) {
@@ -169,6 +183,17 @@ pub fn read_archive_drawers(path: &Path) -> CoreResult<Vec<GameRecord>> {
             source,
         });
     }
+
+    // `by_inner` is a `HashMap`, so the order above is not deterministic —
+    // sorted here the same way `scan::scan_titles_with`'s own final sort is,
+    // so a rescan of an untouched archive lists the same 893 titles in the
+    // same order rather than a diff nobody can read.
+    found.sort_by(|a, b| {
+        a.title
+            .value
+            .to_lowercase()
+            .cmp(&b.title.value.to_lowercase())
+    });
 
     Ok(found)
 }
@@ -320,6 +345,34 @@ mod tests {
             Media::WhdloadArchive { inner, .. } => assert_eq!(inner, "D/Clean"),
             other => panic!("got {other:?}"),
         }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The grouping is a `HashMap`, whose own iteration order is not the
+    /// point of anything here — but the result handed back **is** a list a
+    /// user reads, so it must come back in the same order every time rather
+    /// than shuffling with every rescan of an untouched archive. Titles
+    /// chosen so their names sort differently than the archive's own entry
+    /// order or a hash of their drawer paths would.
+    #[test]
+    fn the_result_is_sorted_by_title_not_left_to_hash_order() {
+        let root = scratch("sorted");
+        let archive = synthetic_lha(
+            &root,
+            &[
+                ("Z/Zorro/Zorro.slave", slave_bytes("Zorro")),
+                ("A/Alpha/Alpha.slave", slave_bytes("Alpha")),
+                ("M/Mid/Mid.slave", slave_bytes("Mid")),
+            ],
+        );
+        let found = read_archive_drawers(&archive).unwrap();
+        let titles: Vec<&str> = found.iter().map(|r| r.title.value.as_str()).collect();
+        assert_eq!(
+            titles,
+            vec!["Alpha", "Mid", "Zorro"],
+            "a catalogue that lists the same titles in a different order each \
+             scan is a diff nobody can read"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 }
