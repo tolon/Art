@@ -7,7 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **AmigaOS 3.2.2 is an installable release.** A recipe can now say that a
+  release arrives as a **base plus an update**: it declares ordered media
+  *layers* and inherits another release's components, so the OS Builder asks
+  for your AmigaOS 3.2 media and your 3.2.2 update media as two labelled
+  questions and builds one tree from both. Which disk a component takes is
+  stated by the recipe, never decided by the order you added folders in —
+  which matters because both sets ship a floppy called `DiskDoctor`, the same
+  size, with different contents.
+- **The finished tree tells you what it is.** ART reads back
+  `Prefs/Env-Archive/Versions/Release`, the file the release itself writes,
+  and reports it as its own line: the tree says `Release 3.2.2`; the tree says
+  something else and both are named; the tree states no release; or ART could
+  not read the marker. Four different answers, four different sentences.
+- **A component can remove a file**, so the 3.2.2 update deletes
+  `Tools/TextEditFileTypes/Default4Types` the way the release does. Every
+  removal is reported by name and by result — removed, not present, or failed.
+- **Icons are amended, not replaced.** A new rule kind merges an Amiga
+  `.info`'s tooltypes and stack size into the icon already in your tree,
+  keeping its artwork and its position. The 3.2.2 update doubles IconEdit's
+  stack from 4 096 to 8 192 for a program it also replaces, so skipping the
+  merge would run the new binary on half the stack its release allocates —
+  and copying the update's icon over yours instead would lose the GlowIcons
+  artwork.
+- **ART reads a Kickstart's module table.** The 3.2.2 installer decides
+  whether your machine needs softkicked modules by asking the running system
+  for `exec.library`'s revision and `strap`'s version. ART now asks the ROM
+  file the same question instead of guessing from its header — which was
+  measured to be wrong: a 3.2.1 ROM would have been given three library
+  modules and `Shell-Seg` that the release deliberately withholds from it.
+- `scripts/icon-oracle-check.py` — every `.info` on a folder of real install
+  media, round-tripped against ART's own reader. Not run in CI; it needs
+  media ART does not ship.
+
+### Fixed
+
+- A 3.2 + 3.2.2 media pair is no longer refused outright. The refusal was
+  correct and useless: one shared floppy name, out of sixty.
 
 ## [0.9.0] - 2026-09-04
 

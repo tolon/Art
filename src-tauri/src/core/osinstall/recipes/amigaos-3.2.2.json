@@ -1,0 +1,358 @@
+{
+  "_why_this_recipe_exists": [
+    "AmigaOS 3.2.2's own `HowToInstall` requires 'a successful installation of",
+    "AmigaOS 3.2 or 3.2.1', so this is an update layered on top of the 3.2",
+    "recipe rather than a second copy of it — `base` inherits the whole 3.2",
+    "component list onto the `base` layer, and every component below is the",
+    "update's own, on the `update-3.2.2` layer.",
+    "",
+    "Measured off the owner's own media with `xdftool list`",
+    "(`E:\\amiga\\ProjeART\\layer-research\\census.json`), never retyped from",
+    "memory — see `.superpowers/sdd/2026-09-04-layered-release/locale-rules.md`",
+    "for the seventeen locale disks, which do not share one shape."
+  ],
+  "release": "AmigaOS 3.2.2",
+  "base": "AmigaOS 3.2",
+  "layers": [
+    { "id": "base", "label_key": "osinstall.layer.base32" },
+    { "id": "update-3.2.2", "label_key": "osinstall.layer.update322" }
+  ],
+  "components": [
+    {
+      "id": "update-322-system",
+      "media": "Update3.2.2",
+      "layer": "update-3.2.2",
+      "required": true,
+      "label_key": "osinstall.components.name.os322.system",
+      "overrides": [
+        "workbench-base",
+        "install-libs",
+        "extras",
+        "storage",
+        "glowicons",
+        "locale-base",
+        "classes"
+      ],
+      "removes": ["Tools/TextEditFileTypes/Default4Types"],
+      "rules": [
+        { "from": "C/AssignWedge.Z", "to": "C/AssignWedge", "kind": "file" },
+        { "from": "C/ConClip.Z", "to": "C/ConClip", "kind": "file" },
+        { "from": "C/DefIcons.Z", "to": "C/DefIcons", "kind": "file" },
+        { "from": "C/Eval.Z", "to": "C/Eval", "kind": "file" },
+        { "from": "C/Execute.Z", "to": "C/Execute", "kind": "file" },
+        { "from": "C/IPrefs.Z", "to": "C/IPrefs", "kind": "file" },
+        { "from": "C/MD5Sum.Z", "to": "C/MD5Sum", "kind": "file" },
+        { "from": "C/SetPatch.Z", "to": "C/SetPatch", "kind": "file" },
+        { "from": "C/Type.Z", "to": "C/Type", "kind": "file" },
+        { "from": "C/WBInfo.Z", "to": "C/WBInfo", "kind": "file" },
+        { "from": "DEVS", "to": "Devs", "kind": "subtree" },
+        { "from": "L", "to": "L", "kind": "subtree" },
+        { "from": "LIBS", "to": "Libs", "kind": "subtree" },
+        { "from": "Locale/Countries", "to": "Locale/Countries", "kind": "subtree" },
+        { "from": "Prefs", "to": "Prefs", "kind": "subtree" },
+        { "from": "System", "to": "System", "kind": "subtree" },
+        { "from": "Tools", "to": "Tools", "kind": "subtree" },
+        { "from": "Utilities", "to": "Utilities", "kind": "subtree" },
+        { "from": "WBStartup", "to": "WBStartup", "kind": "subtree" },
+        { "from": "Update/Release", "to": "Prefs/Env-Archive/Versions/Release", "kind": "file" },
+        { "from": "Update/Startup-HardDrive", "to": "S/Startup-Sequence", "kind": "file" },
+        { "from": "Update/IconEdit.info", "to": "Tools/IconEdit.info", "kind": "icon-tooltypes" }
+      ]
+    },
+    {
+      "_why_required": [
+        "Fix round 1, coordinator ruling. `Update3.2.2.adf:Install/Install`'s",
+        "Classes step is `COPYDISKCONTENT classesPath` sitting in the main",
+        "flow, no `askbool`, no condition — the release copies this disk every",
+        "time, exactly like `Update3.2.2` itself. An optional component would",
+        "let a user decline it and still get a tree stamped `Release 3.2.2`",
+        "missing 31 files the release always places — the same shape as the",
+        "`Devs/trackfile.device` defect, one level up."
+      ],
+      "id": "update-322-classes",
+      "media": "Classes3.2.2",
+      "layer": "update-3.2.2",
+      "required": true,
+      "label_key": "osinstall.components.name.os322.classes",
+      "overrides": ["classes", "workbench-base"],
+      "rules": [
+        { "from": "Classes", "to": "Classes", "kind": "subtree" }
+      ]
+    },
+    {
+      "_why_these_three_and_not_the_base_diskdoctors_three": [
+        "Fix round 1, Finding 1. This component's rules were copied from the",
+        "base AmigaOS 3.2 recipe's own `diskdoctor` instead of being measured —",
+        "that component's `C/FixROMLibs` is right for *that* disk and wrong for",
+        "this one. Measured off `Update3.2.2.adf:Install/Install` itself (the",
+        "DiskDoctor block, design note ss2 / research note ss4 item 5): the",
+        "installer copies `c/DAControl` and `c/DiskDoctor` into `C`, and",
+        "`Devs/trackfile.device` into `Devs` — three files, never `FixROMLibs`.",
+        "`recipe.rs`'s `update_322_diskdoctor_places_exactly_the_three_files_the_installer_does`",
+        "is the test that reads this component's rules; there was none before."
+      ],
+      "id": "update-322-diskdoctor",
+      "media": "DiskDoctor",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.diskdoctor",
+      "overrides": ["diskdoctor"],
+      "rules": [
+        { "from": "C/DAControl", "to": "C/DAControl", "kind": "file" },
+        { "from": "C/DiskDoctor", "to": "C/DiskDoctor", "kind": "file" },
+        { "from": "Devs/trackfile.device", "to": "Devs/trackfile.device", "kind": "file" }
+      ]
+    },
+    {
+      "id": "update-322-locale-cz",
+      "media": "Locale3.2.2-CZ",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.localeCz",
+      "rules": [
+        { "from": "Catalogs", "to": "Locale/Catalogs", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" },
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Support/Fonts", "to": "Fonts", "kind": "subtree" },
+        { "from": "Support/Prefs/Presets", "to": "Prefs/Presets", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "update-322-locale-de",
+      "media": "Locale3.2.2-DE",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.localeDe",
+      "rules": [
+        { "from": "Catalogs", "to": "Locale/Catalogs", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "update-322-locale-dk",
+      "media": "Locale3.2.2-DK",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.localeDk",
+      "rules": [
+        { "from": "Catalogs", "to": "Locale/Catalogs", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "update-322-locale-en",
+      "media": "Locale3.2.2-EN",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.localeEn",
+      "rules": [
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "update-322-locale-es",
+      "media": "Locale3.2.2-ES",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.localeEs",
+      "rules": [
+        { "from": "Catalogs", "to": "Locale/Catalogs", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "update-322-locale-fr",
+      "media": "Locale3.2.2-FR",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.localeFr",
+      "rules": [
+        { "from": "Catalogs", "to": "Locale/Catalogs", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "update-322-locale-gr",
+      "media": "Locale3.2.2-GR",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.localeGr",
+      "rules": [
+        { "from": "Catalogs", "to": "Locale/Catalogs", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "update-322-locale-it",
+      "media": "Locale3.2.2-IT",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.localeIt",
+      "rules": [
+        { "from": "Catalogs", "to": "Locale/Catalogs", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "update-322-locale-nl",
+      "media": "Locale3.2.2-NL",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.localeNl",
+      "rules": [
+        { "from": "Catalogs", "to": "Locale/Catalogs", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "update-322-locale-no",
+      "media": "Locale3.2.2-NO",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.localeNo",
+      "rules": [
+        { "from": "Catalogs", "to": "Locale/Catalogs", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "update-322-locale-pl",
+      "media": "Locale3.2.2-PL",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.localePl",
+      "rules": [
+        { "from": "Catalogs", "to": "Locale/Catalogs", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" },
+        { "from": "Support/Fonts", "to": "Fonts", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "update-322-locale-pt",
+      "media": "Locale3.2.2-PT",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.localePt",
+      "rules": [
+        { "from": "Catalogs", "to": "Locale/Catalogs", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "update-322-locale-rs",
+      "media": "Locale3.2.2-RS",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.localeRs",
+      "rules": [
+        { "from": "Catalogs", "to": "Locale/Catalogs", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" },
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "update-322-locale-ru",
+      "media": "Locale3.2.2-RU",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.localeRu",
+      "rules": [
+        { "from": "Catalogs", "to": "Locale/Catalogs", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" },
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Support/Prefs/Presets", "to": "Prefs/Presets", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "update-322-locale-se",
+      "media": "Locale3.2.2-SE",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.localeSe",
+      "rules": [
+        { "from": "Catalogs", "to": "Locale/Catalogs", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "update-322-locale-tr",
+      "media": "Locale3.2.2-TR",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.localeTr",
+      "rules": [
+        { "from": "Catalogs", "to": "Locale/Catalogs", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" },
+        { "from": "Support/Fonts", "to": "Fonts", "kind": "subtree" },
+        { "from": "Support/Prefs/Presets", "to": "Prefs/Presets", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "update-322-locale-uk",
+      "media": "Locale3.2.2-UK",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.localeUk",
+      "rules": [
+        { "from": "Catalogs", "to": "Locale/Catalogs", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "_why_two_modules_components": [
+        "The design's §5, measured off the owner's own three A1200 Kickstarts:",
+        "a 3.2 ROM (header 47.96, exec 47.7, strap 45.1) gets modules on with the",
+        "larger set, a 3.2.1 ROM (47.102, exec 47.8, strap 47.2) gets modules on",
+        "with the smaller set, and a 3.2.2 ROM (47.111, exec 47.10, strap 47.2)",
+        "gets modules off. `exec_rev < 10` alone tells 3.2.2 apart from the other",
+        "two; `strap < 47` alone tells 3.2 apart from 3.2.1 — no `and`/`or` needed.",
+        "",
+        "Measured with `xdftool ModulesA1200_3.2.2.adf list`: the disk carries",
+        "exactly one machine drawer, `LIBS/A1200/exec.library`; `LIBS/intuition.library`,",
+        "`L/{Ram-Handler,Shell-Seg,System-startup}` and",
+        "`LIBS/{dos,gadtools,graphics}.library` are all present too.",
+        "`DEVS/A1200/scsi.device`, `L/FastFileSystem`, `LIBS/Modules/` and",
+        "`LIBS/Resources/` are on the disk and the 3.2.2 installer never copies",
+        "them — a rule for any of them would be ART installing something the",
+        "release does not."
+      ],
+      "_why_overrides_modules_a1200": [
+        "Final whole-branch review, Finding B. `exclusive_group: \"modules\"`",
+        "was copied onto this component from the base `modules-a1200`'s shape",
+        "without asking whether the group still meant the same thing once both",
+        "could be on at once — a pre-47 Kickstart satisfies both this",
+        "component's own condition (`exec < 47.10`) and the base layer's",
+        "(`rom-older-than 47`) at the same time, which is the ordinary case for",
+        "the real Amigas this project exists for, not an edge case. They are",
+        "not a user's choice between two machines (what the group exists to",
+        "police); they are two halves of one release's answer for one",
+        "machine, so `plan::detect_exclusive_group_conflicts` now scopes the",
+        "group per layer and does not refuse this pair. What is still real:",
+        "both components' rules name `LIBS/A1200` as a `Subtree`, so declaring",
+        "the override here is what lets this update's own newer files in that",
+        "drawer win over the base's, the same shape `update-322-diskdoctor`",
+        "and `workbench-39` already use for a genuine two-layer overlap."
+      ],
+      "id": "update-322-modules-a1200",
+      "media": "ModulesA1200_3.2.2",
+      "layer": "update-3.2.2",
+      "exclusive_group": "modules",
+      "label_key": "osinstall.components.name.os322.modulesA1200",
+      "condition": {
+        "condition": "resident-older-than",
+        "resident": "exec",
+        "major": 47,
+        "minor": 10
+      },
+      "overrides": ["modules-a1200", "storage", "workbench-base"],
+      "rules": [
+        { "from": "LIBS/A1200", "to": "Libs/A1200", "kind": "subtree" },
+        { "from": "LIBS/intuition.library", "to": "Libs/intuition.library", "kind": "file" },
+        { "from": "L/Ram-Handler", "to": "L/Ram-Handler", "kind": "file" },
+        { "from": "L/System-startup", "to": "L/System-startup", "kind": "file" }
+      ]
+    },
+    {
+      "id": "update-322-modules-a1200-strap",
+      "media": "ModulesA1200_3.2.2",
+      "layer": "update-3.2.2",
+      "label_key": "osinstall.components.name.os322.modulesA1200Strap",
+      "condition": {
+        "condition": "resident-older-than",
+        "resident": "strap",
+        "major": 47
+      },
+      "overrides": ["update-322-modules-a1200", "workbench-base"],
+      "rules": [
+        { "from": "L/Shell-Seg", "to": "L/Shell-Seg", "kind": "file" },
+        { "from": "L/Ram-Handler", "to": "L/Ram-Handler", "kind": "file" },
+        { "from": "L/System-startup", "to": "L/System-startup", "kind": "file" },
+        { "from": "LIBS/dos.library", "to": "Libs/dos.library", "kind": "file" },
+        { "from": "LIBS/gadtools.library", "to": "Libs/gadtools.library", "kind": "file" },
+        { "from": "LIBS/graphics.library", "to": "Libs/graphics.library", "kind": "file" }
+      ]
+    }
+  ]
+}

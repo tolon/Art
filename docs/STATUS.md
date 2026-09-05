@@ -18,11 +18,11 @@ Update it at the end of any session that changes what works.
 
 | | |
 |---|---|
-| **Last updated** | 2026-09-04 — **[v0.9.0 released](https://github.com/tolon/Art/releases/tag/v0.9.0)** with both installers attached, and taken to the community for testing. Cutting it found `main` had been **red** on the current toolchain and that there was no way to publish an installer at all; both fixed. Earlier the same day, a documentation sweep re-measured every number in this table and removed the copies that had decayed. Per-round detail is the [session log](session-log.md) |
+| **Last updated** | 2026-09-05 — **AmigaOS 3.2.2 is an installable release.** A recipe can now say that a release arrives as a base plus an update: ordered media **layers**, recipe inheritance, and media resolved inside the layer its recipe names, so nothing is decided by the order folders were added in. Proved against the owner's own media — a real layered build of **4 052 files** whose tree states `Release 3.2.2`, and **485** real `.info` icons round-tripped with 0 failures. Eleven tasks, each reviewed; the reviews caught three things 2 700 tests did not. Per-round detail is the [session log](session-log.md) |
 | **Version** | **0.9.0** (2026-09-04) — the first version cut as a GitHub release with installers attached, built by `.github/workflows/release.yml` from the tagged commit. 0.8.5 was the first published for other people to use. Deliberately not 1.0: of 233 marked rows in [FEATURES.md](FEATURES.md), 162 are green — **32 amber, 33 not started, 6 stubs** (counted 2026-09-04, after G14's network half was found marked "not started" three rounds after it shipped; the previous figure, "30 amber", predates several rounds), and as the row above says, what is left in SD-1 is not code: a card flashed and an A500 booted. That is the bar for 1.0, not a bigger number |
 | **Current stage** | **SD-0, SD-1, SD-2 and SD-4 built; SD-3 mostly, SD-5 part-built.** The per-gap detail is the stage table further down this file, which is maintained gap by gap — this cell no longer retells it. Three sentences that have not changed and are the ones to read first: **what is left in SD-1 is not code — a card flashed and an A500 booted**; what emulation has settled is the **filesystem** side (a PFS3 volume ART formatted, and an AmigaOS 3.2 tree ART built, each boot a licensed Kickstart to a clean Workbench — so `expansion.library` and the real `pfs3aio` binary have accepted ART's disk, which is not provisional), and it does **not** touch the card path, where an MBR, an Amiga disk starting 1.1 GB in and Emu68's `brcm-sdhc.device` are the untested rung ([ART-095](ISSUES.md)); and **no card ART built has been flashed or booted** |
 | **Build** | PASS |
-| **Tests** | **2626 Rust passed, 0 failed, 42 ignored; 1004 frontend passed across 79 files** (re-measured 2026-09-04; the previous figures, 2624/41, were 2026-08-25). Both run twice, per the standing rule. **Quote the `test result:` line, never the exit code** — on 2026-09-04 an antivirus interfering with `rustup.exe` killed the harness after about seventy tests and the shell still saw exit 0, four runs in a row, with no summary line and no failure (recorded in CLAUDE.md, "Before you commit"). The ignored ones are the real-material hooks, env-gated and run by hand - real install media, a real card, `hst.imager.exe`, Microsoft's `Get-VHD`, the owner's own 1.2 GB `AmiKit.hdf` ([ART-146](ISSUES.md#fixed)), and since 2026-08-24 the three that leave the machine for the real Aminet (`net/live_aminet.rs`). Outside the two suites: **113 contrast pairs** (`scripts/contrast-check.py`, blocking in CI, and since [ART-232](ISSUES.md#fixed) it covers the colours three screens hard-code outside the token system as well as `theme.css`). **The scratch-directory class is closed rather than reduced**: [ART-164](ISSUES.md) fixed `core::iso`, [ART-173](ISSUES.md) fixed `core::cbm` and `core::detect` (4 failures in 40 runs, two different tests, one failing with the *other* test's 1000-byte fixture), and a sweep then took every remaining test scratch helper in the crate - 70 keyed on the process id, then 26 more keyed on `as_nanos()` **alone**, which is the worse shape since two threads can share a nanosecond but not a pid. The first sweep script reported a clean zero while blind to those 26; the widened one (`scripts/scratch-counter-sweep.py`) is the reason that number means anything. As of 2026-09-04 it reports **one** site "needing a counter" and that one is a **false positive**: the helper in `commands/osinstall.rs::staging_is_removed_however_the_preview_ends` keys on the thread id rather than a counter ([ART-182](ISSUES.md#fixed)'s own fix), which is unique within the process and which the sweep does not recognise ([ART-235](ISSUES.md)) |
+| **Tests** | **2707 Rust passed, 0 failed, 45 ignored; 1016 frontend passed across 79 files** (re-measured 2026-09-05 after the layered-release round; the previous figures, 2626/1004, were 2026-09-04). The three new ignored ones are that round's real-material hooks — the icon oracle's `ART_ICON_DIR` walk, and the AmigaOS 3.2.2 build against the owner's own 3.2 and 3.2.2 media. Both run twice, per the standing rule. **Quote the `test result:` line, never the exit code** — on 2026-09-04 an antivirus interfering with `rustup.exe` killed the harness after about seventy tests and the shell still saw exit 0, four runs in a row, with no summary line and no failure (recorded in CLAUDE.md, "Before you commit"). The ignored ones are the real-material hooks, env-gated and run by hand - real install media, a real card, `hst.imager.exe`, Microsoft's `Get-VHD`, the owner's own 1.2 GB `AmiKit.hdf` ([ART-146](ISSUES.md#fixed)), and since 2026-08-24 the three that leave the machine for the real Aminet (`net/live_aminet.rs`). Outside the two suites: **113 contrast pairs** (`scripts/contrast-check.py`, blocking in CI, and since [ART-232](ISSUES.md#fixed) it covers the colours three screens hard-code outside the token system as well as `theme.css`). **The scratch-directory class is closed rather than reduced**: [ART-164](ISSUES.md) fixed `core::iso`, [ART-173](ISSUES.md) fixed `core::cbm` and `core::detect` (4 failures in 40 runs, two different tests, one failing with the *other* test's 1000-byte fixture), and a sweep then took every remaining test scratch helper in the crate - 70 keyed on the process id, then 26 more keyed on `as_nanos()` **alone**, which is the worse shape since two threads can share a nanosecond but not a pid. The first sweep script reported a clean zero while blind to those 26; the widened one (`scripts/scratch-counter-sweep.py`) is the reason that number means anything. As of 2026-09-04 it reports **one** site "needing a counter" and that one is a **false positive**: the helper in `commands/osinstall.rs::staging_is_removed_however_the_preview_ends` keys on the thread id rather than a counter ([ART-182](ISSUES.md#fixed)'s own fix), which is unique within the process and which the sweep does not recognise ([ART-235](ISSUES.md)) |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **Kickstart table** | 154 dumps, generated from amitools' Remus split database and verified against it on every CI run (`scripts/rom-table-check.py`, ART-104). 24 of the user's own collection now named *with their machine*, including the two 40.68 builds told apart; ART's previous ten hand-listed hashes matched none of them. **Licensed Amiga Forever ROMs are first-class input** (ART-128): decoded with the `rom.key` beside them and then identified like any dump, and refused for a card build when the key is absent — they used to reach the boot partition still encrypted, which no Amiga could start |
@@ -32,7 +32,7 @@ Update it at the end of any session that changes what works.
 | **hst-imager PFS3 oracle** | both directions, local only (`scripts/pfs3-oracle-check.py`, no `hst.imager.exe` in CI): ART writes a volume through `NativeFormatter` and `hst-imager fs dir -r` reads it back — names, sizes, and every protection-bit string, `hsparwed` cased as `hst-imager` spells it; `hst-imager` formats and fills a volume and ART reads it back through `libpfs3`, SHA-256 per file rather than a length (ART-079's exact shape) plus the same protection strings |
 | **cargo-deny** | advisories, bans, licences, sources — all ok |
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
-| **i18n** | `en.json` and `tr.json`, **1916** leaf keys each (counted 2026-09-04; this row said 1834 while the files had grown past it — count them, do not quote this), parity enforced by `pnpm test` |
+| **i18n** | `en.json` and `tr.json`, **1958** leaf keys each (counted 2026-09-05; this row said 1916 before the layered-release round — count them, do not quote this), parity enforced by `pnpm test` |
 | **Release bundle** | rebuilt 2026-09-04 for 0.9.0 — `Amiga Retro Toolkit_0.9.0_x64_en-US.msi` and `_x64-setup.exe`, both produced by `pnpm tauri build` in 5m 47s. **Not code-signed**, which the README now says rather than leaving to SmartScreen |
 | **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later**. **[v0.9.0](https://github.com/tolon/Art/releases/tag/v0.9.0) is released, 2026-09-04**, with both installers attached (NSIS 5.1 MB, MSI 6.3 MB) — built by `release.yml` from the tagged commit, after CI went green on that same commit. The built `.exe` was launched and answered before the draft was published. Work lands on `sd-1` and merges to `main` at the phase's
 end; the licence *inventory* still said MIT until 2026-08-13, months after the
@@ -108,6 +108,31 @@ cd src-tauri && ART_OSINSTALL_DEST="E:\amiga\ProjeART\dist-3.2" \
 cd src-tauri && ART_159_ISO="E:\amiga\Amigatolon\iso\AmigaOS39.iso" \
   ART_159_DEST="E:\amiga\ProjeART\art159-tree" \
   cargo test --release build_the_real_39_language_components_when_asked -- --nocapture --ignored
+
+# The layered-release round's two hooks (2026-09-05). The first builds
+# AmigaOS 3.2.2 from the owner's own base and update media and then **asks the
+# tree what it is**: `Prefs/Env-Archive/Versions/Release` is written by the
+# release itself, so the claim comes from a file Hyperion wrote rather than
+# from ART's own dropdown. Measured on that run: 4 052 files, 295 drawers,
+# 20 667 671 bytes, and the tree says `Release 3.2.2`. The ROM matters --
+# `kicka1200.rom` is 47.96, whose exec is 47.7 and whose strap is 45.1, so
+# both update Modules components switch on and the base's own stays off.
+# Delete the destination first; SAFE_CREATE refuses one that exists. The
+# update folder is whatever you extracted `Update3.2.2.lha`'s ADFs into --
+# ART reads that archive nowhere, so unpack it yourself.
+cd src-tauri && ART_322_BASE="E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF" \
+  ART_322_UPDATE="E:\amiga\ProjeART\layer-research\Update3.2.2\ADFs" \
+  ART_322_ROM="E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ROM\kicka1200.rom" \
+  ART_322_DEST="E:\amiga\ProjeART\dist-3.2.2" \
+  cargo test build_the_real_322_tree_when_asked -- --nocapture --ignored
+
+# The icon oracle's Rust half. `scripts/icon-oracle-check.py` extracts the
+# `.info` files and drives this; run it directly only when debugging that
+# script. 485 icons off the owner's own 35 AmigaOS 3.2 ADFs, 0 failures --
+# 183 exercise the byte-identical merge, and the 302 that carry no ToolTypes
+# block are counted separately rather than as passes.
+cd src-tauri && ART_ICON_DIR="<a folder of extracted .info files>" \
+  cargo test round_trip_every_icon_in_a_folder_when_asked -- --nocapture --ignored
 
 cd src-tauri && cargo deny check                       # licences and advisories
 pnpm tauri build                                       # full bundle (slow)
@@ -968,39 +993,48 @@ into this one, because the oldest of them still contradicted the newest.
 narrative is one line in the [session log](session-log.md), its reasoning is in
 `docs/superpowers/`, and the defect register is [ISSUES.md](ISSUES.md).*
 
-### Where the work stands (end of 2026-09-04)
+### Where the work stands (end of 2026-09-05)
 
-- **[v0.9.0 is released](https://github.com/tolon/Art/releases/tag/v0.9.0)**,
-  with both installers attached, and the owner has taken it to the community
-  for testing. **The next session starts by reading what came back** — issues
-  on the repository, and whatever the owner was told directly. A report that
-  went *well* counts: the nine gaps in the README are unverified in both
-  directions, so a green result closes one as surely as a defect opens one.
-- **`main` is clean, CI is green on it, and there is no live phase branch.**
-  Last merge: *"Merge release-recorded: 0.9.0 is out"*. CI went green for the
-  first time that day only after the clippy fix — the 2026-09-01 toolchain
-  rejects `chunks_exact` with a constant size, and `main` had been red without
-  anybody noticing.
-- **Five open entries**, and none of them is unstarted code:
-  [ART-166](ISSUES.md) and [ART-117](ISSUES.md) are standing decisions
-  (re-checked 2026-08-25 and 2026-08-16 respectively),
-  [ART-118](ISSUES.md) and [ART-062](ISSUES.md) need a person at a screen, and
-  [ART-235](ISSUES.md) is a guard reporting a false positive.
-  **[ART-226](ISSUES.md#fixed) closed on 2026-09-04** — not by new work but by
-  checking it against the tree: all three of its questions had been answered
-  by rounds on 2026-08-24 and 08-25, and two of its own sentences had gone
-  stale in the meantime.
-- **The list to walk, top to bottom**, is
-  [superpowers/specs/2026-09-04-work-list.md](superpowers/specs/2026-09-04-work-list.md)
-  — seven items, ordered by importance rather than by size, and **the first
-  two are the two below**: they used to sit outside the sequence because they
-  run in parallel, which was true and made them invisible. Items 3, 5 and 7
-  are the build queue in that order; 1, 2, 4 and 6 are the owner's.
-- **The build round to open, when there is one to open, is item 3** — a
-  release update is layered and ART cannot say so, which is why a 3.2.2
-  install is refused today with the media already in hand. It needs a design
-  decision before code: "the base, then the update" is an order the release
-  states, not one the user clicked.
+- **Work-list item 3 is done: a release update is layered, and ART can say
+  so.** `AmigaOS 3.2.2` ships as a recipe declaring `base: "AmigaOS 3.2"` and
+  two ordered media layers; a component's media is resolved inside the layer
+  its recipe names. The OS Builder's media step asks one labelled folder
+  question per layer. Proved on the owner's own media: **4 052 files**, and
+  the tree states `Release 3.2.2`. Merged from `art-layered-release`.
+- **[v0.9.0 is released](https://github.com/tolon/Art/releases/tag/v0.9.0)**
+  and the owner has taken it to the community. **Reading what came back is
+  still the first thing a session does** — issues on the repository, and
+  whatever the owner was told directly. A report that went *well* counts: the
+  nine gaps in the README are unverified in both directions, so a green result
+  closes one as surely as a defect opens one. Nothing had come back as of
+  2026-09-05: no issues, three release downloads.
+- **`main` is clean and there is no live phase branch.**
+- **Nine open entries.** [ART-166](ISSUES.md) and [ART-117](ISSUES.md) are
+  standing decisions; [ART-118](ISSUES.md) and [ART-062](ISSUES.md) need a
+  person at a screen; [ART-235](ISSUES.md) is a guard reporting a false
+  positive; and the layered-release round filed four it chose not to patch at
+  the end of a round — [ART-236](ISSUES.md) (a removal leaves its `.uaem`
+  sidecar), [ART-237](ISSUES.md) (an `aria-label` on a bare `div`, and the
+  accessibility sweep nobody has run), [ART-238](ISSUES.md) (the 3.2.2
+  recipe's `overrides` has no guard) and [ART-239](ISSUES.md) (a cross-layer
+  exclusive-group conflict is never refused).
+- **The list to walk** is
+  [superpowers/specs/2026-09-04-work-list.md](superpowers/specs/2026-09-04-work-list.md).
+  Item 3 is closed. Items 1, 2, 4 and 6 are the owner's and can run in
+  parallel; **the next build round is item 5** — SD-2 G10 wave 2, where
+  `igame.data` goes, which needs one choice between two routes before code.
+- **Two things the layered round learnt that outlive it**, both worth reading
+  before the next round designs anything:
+  - **One real run is a data point, not coverage.** The 3.2.2 build against
+    the owner's media passed and still hid a defect that would have stopped
+    most real Amigas: with a pre-47 Kickstart both the inherited and the
+    update Modules component switch on into one exclusive group, and the plan
+    refused. The run used a 47.96 ROM, where the base component is off.
+  - **A component's rules must be read off the medium, never across from a
+    neighbouring recipe.** One that was read across placed a file 3.2.2 never
+    copies and omitted one it does, with both files present so nothing
+    refused — a tree stamped `Release 3.2.2` and quietly wrong, invisible to
+    2 676 green tests because nothing read that component's rules.
 - Per-gap state is the stage table above; per-feature state is
   [FEATURES.md](FEATURES.md). Neither is retold here.
 

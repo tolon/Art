@@ -348,6 +348,16 @@ pub struct DistributionManifest {
     /// of it.
     #[serde(default)]
     pub amiga_installed: Vec<AmigaInstallRecord>,
+    /// Which folder each of the recipe's own [`super::MediaLayer`]s was read
+    /// from (Task 9) — see [`super::LayerRecord`] for why this exists
+    /// alongside `built_from` rather than folded into it.
+    ///
+    /// `#[serde(default)]` for the reason every field added to this struct
+    /// after it first shipped carries one: a tree ART built before this
+    /// existed still has to read back, and "no layer folders were recorded"
+    /// is the truth for it.
+    #[serde(default)]
+    pub layers: Vec<super::LayerRecord>,
 }
 
 /// One package's Amiga-side install, as [`DistributionManifest`] records it.
@@ -387,6 +397,112 @@ pub struct ApplyOutcome {
     pub files: u64,
     pub directories: u64,
     pub bytes: u64,
+    /// One verdict per [`super::plan::InstallPlan::removals`] entry, by
+    /// name — never collapsed into `files`/`directories`/`bytes`, which
+    /// describe what was *placed*. See [`RemovalVerdict`].
+    pub removed: Vec<RemovalVerdict>,
+    /// One verdict per [`super::plan::PlanItem::merge_icon`] item, by
+    /// destination — never folded into `files`/`bytes`, which already
+    /// account for the icon through whichever `File` item placed it first;
+    /// the merge amends bytes already counted, it does not add a file. See
+    /// [`IconMergeVerdict`].
+    pub icons: Vec<IconMergeVerdict>,
+    /// How many entries in [`ApplyOutcome::icons`] came back
+    /// [`IconMergeState::Failed`] — `DestinationAbsent` does **not** count
+    /// (CLAUDE.md: a skip is not a failure).
+    ///
+    /// **Named for exactly what it counts, and nothing wider.** It does
+    /// **not** include a [`RemovalState::Failed`] in [`ApplyOutcome::removed`]
+    /// — there is deliberately no single outcome-wide failure tally. Fix
+    /// round 1 (Task 6) is why: an earlier version of this field was called
+    /// `failed` and its own doc comment called it "the quick 'did anything
+    /// fail' a progress summary wants", which is an instruction to widen it
+    /// the first time somebody reads that sentence rather than the field's
+    /// actual contents — and a `failed: 0` shown for a run where a removal
+    /// genuinely failed is exactly CLAUDE.md's "the failure that does not
+    /// crash" (the badge that once asserted a copy was discarded over the
+    /// core's own "could not be removed"). The per-entry verdict lists
+    /// (`icons`, `removed`) are the truth; a screen that wants a combined
+    /// "did anything fail" computes it from both lists rather than from a
+    /// single number that could quietly disagree with them — and a future
+    /// failure kind does not have to remember to feed a shared counter to
+    /// stay honest.
+    pub icon_merge_failures: u64,
+}
+
+/// What happened when [`apply`] tried to remove one destination — see
+/// [`super::plan::PlanRemoval`].
+///
+/// **Three states, never collapsed to two.** [`RemovalState::NotPresent`] is
+/// its own outcome, not folded into either of the others: the component that
+/// would have placed the path may simply have been switched off, which is a
+/// legitimate build, not a failed removal and not a no-op success either.
+/// Conflating it with [`RemovalState::Removed`] would claim ART deleted a
+/// file that was never there; conflating it with [`RemovalState::Failed`]
+/// would tell a user to go investigate a problem that does not exist
+/// (CLAUDE.md's "the failure that does not crash").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RemovalState {
+    /// The path was there, and now it is not.
+    Removed,
+    /// The path was not there to begin with.
+    NotPresent,
+    /// The path was there and could not be removed. Carries the OS error's
+    /// own sentence — reported, never claimed away (CLAUDE.md's "the screen
+    /// may not out-claim the core").
+    Failed(String),
+}
+
+/// One [`super::plan::PlanRemoval`] entry, resolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovalVerdict {
+    /// The destination that was asked to go — matches
+    /// [`super::plan::PlanRemoval::to`] exactly, so a screen can find its own
+    /// row by the same key it showed in the plan.
+    pub to: String,
+    pub state: RemovalState,
+}
+
+/// What happened when `apply` tried to amend an icon already in the tree
+/// with a [`super::plan::PlanItem::merge_icon`] item — see
+/// `core::amigaicon::merge_tooltypes`.
+///
+/// **Three states, never collapsed to two — modeled on [`RemovalState`] for
+/// the identical reason.** [`IconMergeState::DestinationAbsent`] is its own
+/// outcome, not folded into [`IconMergeState::Failed`]: the component that
+/// would have placed the icon may simply be switched off (AmigaOS 3.2.2's
+/// own recipe amends `Tools/IconEdit.info` only when a base component placed
+/// it first), which is a legitimate build, not a failed merge — this is the
+/// release's own `if exists` guard, made real. Conflating it with
+/// [`IconMergeState::Merged`] would claim ART amended a file that was never
+/// there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IconMergeState {
+    /// `to` existed and now carries `from`'s tool types and stack size, with
+    /// every other byte — including a trailing ColorIcon/NewIcon — untouched.
+    Merged,
+    /// `to` did not exist in the tree at the point this item ran. Skipped,
+    /// never a failure — see this type's own doc comment.
+    DestinationAbsent,
+    /// `to` existed and `core::amigaicon::merge_tooltypes` refused it — a
+    /// destination or source that does not parse as an icon, or one with no
+    /// `ToolTypes` block to splice. Carries the core's own sentence, never
+    /// claimed away (CLAUDE.md: "the screen may not out-claim the core").
+    Failed(String),
+}
+
+/// One [`super::plan::PlanItem::merge_icon`] item, resolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IconMergeVerdict {
+    /// The destination that was amended — matches
+    /// [`super::plan::PlanItem::to`] exactly, so a screen can find its own
+    /// row by the same key it showed in the plan.
+    pub to: String,
+    pub state: IconMergeState,
 }
 
 /// Decode raw bytes as Latin-1 — see the module doc comment's "Latin-1, not
@@ -588,6 +704,14 @@ impl<'a> TreeWriter<'a> {
     ///
     /// A sidecar ART cannot parse is removed rather than kept: it no longer
     /// describes the file that is there, and ART cannot say what it claims.
+    ///
+    /// **Never called for a `merge_icon` item.** An icon-tooltypes rule
+    /// changes only the icon's own bytes, never the AmigaDOS
+    /// protection/date/comment a sidecar records, so `merge_icon` leaves the
+    /// sidecar exactly as whichever placement wrote it and carries the same
+    /// `protection` value into its own [`FileRecord`] — see `merge_icon`'s
+    /// own comment. The manifest/sidecar agreement this function exists to
+    /// keep still holds: neither side changed.
     fn settle_sidecar(
         &self,
         target: &Path,
@@ -635,6 +759,100 @@ impl<'a> TreeWriter<'a> {
         }
     }
 
+    /// One [`super::plan::PlanItem::merge_icon`] item: amend the icon
+    /// already at `target` with `item.from`'s tool types and stack size,
+    /// through `core::amigaicon::merge_tooltypes`, rather than copying
+    /// `item.from` over it — see `super::RuleKind::IconTooltypes`'s own doc
+    /// comment for why.
+    ///
+    /// Never a hard error for an absent destination or a malformed icon —
+    /// exactly the discipline [`perform_removal`] already follows for a
+    /// removal, and for the identical reason: a per-entry fact, pushed onto
+    /// [`ApplyOutcome::icons`], never one that stops the whole run.
+    fn merge_icon(
+        &mut self,
+        item: &PlanItem,
+        target: &Path,
+        sources: &mut BTreeMap<String, Box<dyn MediaSource>>,
+    ) -> CoreResult<()> {
+        let dest_bytes = match std::fs::read(target) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                // The release's own `if exists` guard, made real: the
+                // component that would have placed this icon may simply be
+                // switched off. A legitimate build, not a failed merge — see
+                // `IconMergeState`'s own doc comment.
+                self.outcome.icons.push(IconMergeVerdict {
+                    to: item.to.clone(),
+                    state: IconMergeState::DestinationAbsent,
+                });
+                return Ok(());
+            }
+            Err(err) => return Err(CoreError::Io(err)),
+        };
+
+        let source = sources.get_mut(&item.media).ok_or_else(|| {
+            CoreError::InvalidInput(format!(
+                "'{}' names media '{}', which this plan never opened",
+                item.to, item.media
+            ))
+        })?;
+        let source_bytes = source.read(&item.from)?;
+
+        match crate::core::amigaicon::merge_tooltypes(&dest_bytes, &source_bytes) {
+            Ok(merged) => {
+                // `atomic_write`, not `guarded_write` — the same reason
+                // every other write in `place` uses it: this module keeps
+                // its own account of what a previous run left
+                // (`FileRecord::overwrote`), not a `.art-backup/` beside the
+                // tree.
+                crate::core::safety::atomic::atomic_write(target, &merged)?;
+
+                // The sidecar beside `target` is left exactly as the
+                // component that placed the icon wrote it — see
+                // `settle_sidecar`'s own doc comment, "never called for a
+                // `merge_icon` item" — because this merge changes only the
+                // icon's own bytes (tool types and stack size), never the
+                // AmigaDOS protection/date/comment a sidecar records, so
+                // nothing here has anything new to say about them. The
+                // manifest record's own `protection` field carries the same
+                // value forward for the same reason, which is what keeps the
+                // manifest and the untouched sidecar still agreeing.
+                let key = super::destination_key(&item.to);
+                let protection = self
+                    .record_index
+                    .get(&key)
+                    .and_then(|&at| self.files[at].protection);
+
+                self.record(
+                    &item.to,
+                    FileRecord {
+                        path: item.to.clone(),
+                        host_path: host_path_of(&item.to),
+                        component: item.component.clone(),
+                        media: item.media.clone(),
+                        sha256: sha256_bytes(&merged),
+                        bytes: merged.len() as u64,
+                        protection,
+                        overwrote: None,
+                    },
+                );
+                self.outcome.icons.push(IconMergeVerdict {
+                    to: item.to.clone(),
+                    state: IconMergeState::Merged,
+                });
+            }
+            Err(err) => {
+                self.outcome.icon_merge_failures += 1;
+                self.outcome.icons.push(IconMergeVerdict {
+                    to: item.to.clone(),
+                    state: IconMergeState::Failed(err.to_string()),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Place `items` under the root, in order, reading each one's bytes out
     /// of `sources`.
     ///
@@ -677,6 +895,11 @@ impl<'a> TreeWriter<'a> {
                 if self.made_dirs.insert(super::destination_key(&item.to)) && !existed {
                     self.outcome.directories += 1;
                 }
+                continue;
+            }
+
+            if item.merge_icon {
+                self.merge_icon(item, &target, sources)?;
                 continue;
             }
 
@@ -1196,6 +1419,34 @@ pub fn apply_staging_in(
         }
     }
 
+    // Removals — always **after** every placement above, including
+    // `S:User-Startup`'s own composition, and in `plan.removals`'s own
+    // order, which is the merged recipe's own component order (`plan()`
+    // walks `components_on`, which walks `recipe.components`). Running
+    // these any earlier would mean a base component's own rule simply puts
+    // the file back, which is precisely the bug an update's `removes` exists
+    // to fix — see `Component::removes` and `PlanRemoval`.
+    if !plan.removals.is_empty() {
+        let mut removed = Vec::with_capacity(plan.removals.len());
+        for removal in &plan.removals {
+            // Per entry, like `switch_on`'s own activation loop — each
+            // removal is a whole unit of work (CLAUDE.md: "between whole
+            // units of work, never mid-write"), so cancelling here leaves
+            // some removals unperformed but never one half-done.
+            if sink.is_cancelled() {
+                return Err(if outcome.files > 0 {
+                    CoreError::CancelledPartway {
+                        files: outcome.files,
+                    }
+                } else {
+                    CoreError::Cancelled
+                });
+            }
+            removed.push(perform_removal(root, removal, &mut outcome, &mut files));
+        }
+        outcome.removed = removed;
+    }
+
     sink.report(total, Some(total), "done");
 
     // Last, deliberately — see the module doc comment. Everything above this
@@ -1207,10 +1458,125 @@ pub fn apply_staging_in(
         files,
         paired_rom: plan.paired_rom.clone(),
         amiga_installed: Vec::new(),
+        layers: plan.layers.clone(),
     };
     write_manifest(root, &manifest)?;
 
     Ok(outcome)
+}
+
+/// Perform one [`super::plan::PlanRemoval`], after every placement has
+/// already run.
+///
+/// **Never a hard error.** A removal's own failure is a fact about *that
+/// entry*, exactly like a host recycle failure in `core::hostfs` is about
+/// *that file* — the run as a whole has already placed everything else
+/// successfully, and one path this component could not delete must not turn
+/// a finished install into a reported failure that discards the tree
+/// (`apply_staging_in`'s caller only sees `Err` as "nothing was built").
+///
+/// `outcome` and `files` are mutated in place on a genuine removal: the
+/// manifest must stop claiming a file `verify_volume` can never find again,
+/// and this run's own `files`/`bytes` counts must stop counting bytes that
+/// are no longer on disk (CLAUDE.md's "a manifest lying about the tree it
+/// describes").
+///
+/// **A directory is refused, never removed (fix round 1, Finding 1).**
+/// `recipe::validate_removals` only accepts a `removes` entry whose placer is
+/// a `RuleKind::File` rule, so a **validated** recipe can never reach the
+/// `meta.is_dir()` arm below — but `InstallPlan` round-trips over the wire
+/// (`osinstall_apply` takes back whatever plan it is given, the same trust
+/// `apply()` already extends to `plan.items` without re-checking them
+/// against the recipe that produced them), so a forged or hand-built plan
+/// can still name a directory here. The first version of this function
+/// removed it anyway and decremented `outcome.directories` by exactly one
+/// however many nested drawers actually went away — an approximation this
+/// fix round's review named directly (spec §89's "don't claim support that
+/// isn't implemented and tested", in the shape of a count nobody checked).
+/// Refusing it cleanly, as a named [`RemovalState::Failed`], is the honest
+/// answer once the recipe format itself can no longer ask for it.
+fn perform_removal(
+    root: &Path,
+    removal: &super::plan::PlanRemoval,
+    outcome: &mut ApplyOutcome,
+    files: &mut Vec<FileRecord>,
+) -> RemovalVerdict {
+    let target = match super::host_destination(root, &removal.to) {
+        Ok(target) => target,
+        Err(err) => {
+            return RemovalVerdict {
+                to: removal.to.clone(),
+                state: RemovalState::Failed(err.to_string()),
+            }
+        }
+    };
+
+    // `symlink_metadata`, not `metadata`: a broken symlink left on the tree
+    // by something outside ART would make `metadata` itself return
+    // `NotFound`, silently reporting `NotPresent` for a path that plainly
+    // exists and needs removing.
+    let meta = match std::fs::symlink_metadata(&target) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            // Its own outcome, not a failure — see `RemovalState`'s doc
+            // comment: the component that would have placed this path may
+            // simply have been switched off.
+            return RemovalVerdict {
+                to: removal.to.clone(),
+                state: RemovalState::NotPresent,
+            };
+        }
+        Err(err) => {
+            return RemovalVerdict {
+                to: removal.to.clone(),
+                state: RemovalState::Failed(err.to_string()),
+            };
+        }
+    };
+
+    if meta.is_dir() {
+        // Unreachable from a validated recipe — see this function's own doc
+        // comment for why a directory can still arrive here from a forged
+        // plan, and why the answer is a named failure rather than an
+        // approximate drawer removal.
+        return RemovalVerdict {
+            to: removal.to.clone(),
+            state: RemovalState::Failed(
+                "this names a drawer, not a file — ART removes files, never drawers".to_string(),
+            ),
+        };
+    }
+
+    if let Err(err) = std::fs::remove_file(&target) {
+        return RemovalVerdict {
+            to: removal.to.clone(),
+            state: RemovalState::Failed(err.to_string()),
+        };
+    }
+
+    // The manifest and this run's own counters must stop claiming what is no
+    // longer there — see this function's own doc comment. Exact match only:
+    // a `File` rule's own destination is never a prefix another record sits
+    // under (only a `Subtree` rule's `to` is, and the directory arm above
+    // already refused before reaching here).
+    let key = super::destination_key(&removal.to);
+    let mut freed_bytes = 0u64;
+    let mut freed_files = 0u64;
+    files.retain(|record| {
+        let matches = super::destination_key(&record.path) == key;
+        if matches {
+            freed_bytes += record.bytes;
+            freed_files += 1;
+        }
+        !matches
+    });
+    outcome.files = outcome.files.saturating_sub(freed_files);
+    outcome.bytes = outcome.bytes.saturating_sub(freed_bytes);
+
+    RemovalVerdict {
+        to: removal.to.clone(),
+        state: RemovalState::Removed,
+    }
 }
 
 /// Serialise `manifest` to the tree's own `distribution.json`.
@@ -1611,6 +1977,7 @@ mod tests {
                 is_dir: false,
                 bytes: 3,
                 decompress: false,
+                merge_icon: false,
             },
             PlanItem {
                 component: "modules-a1200".into(),
@@ -1620,6 +1987,7 @@ mod tests {
                 is_dir: false,
                 bytes: 4,
                 decompress: false,
+                merge_icon: false,
             },
         ];
         let total_bytes = items.iter().map(|i| i.bytes).sum();
@@ -1639,6 +2007,8 @@ mod tests {
             user_startup: Vec::new(),
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
+            removals: Vec::new(),
+            layers: Vec::new(),
         };
         (plan, dir)
     }
@@ -1682,6 +2052,7 @@ mod tests {
                 is_dir: false,
                 bytes: 10,
                 decompress: false,
+                merge_icon: false,
             },
             PlanItem {
                 component: "workbench-base".into(),
@@ -1691,6 +2062,7 @@ mod tests {
                 is_dir: false,
                 bytes: 7,
                 decompress: false,
+                merge_icon: false,
             },
         ];
         let total_bytes = items.iter().map(|i| i.bytes).sum();
@@ -1710,6 +2082,8 @@ mod tests {
             user_startup: Vec::new(),
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
+            removals: Vec::new(),
+            layers: Vec::new(),
         };
         (plan, dir)
     }
@@ -1748,6 +2122,7 @@ mod tests {
                 is_dir: false,
                 bytes: 5,
                 decompress: false,
+                merge_icon: false,
             },
             PlanItem {
                 component: "workbench-base".into(),
@@ -1757,6 +2132,7 @@ mod tests {
                 is_dir: false,
                 bytes: 6,
                 decompress: false,
+                merge_icon: false,
             },
         ];
         let plan = InstallPlan {
@@ -1776,6 +2152,8 @@ mod tests {
             user_startup: Vec::new(),
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
+            removals: Vec::new(),
+            layers: Vec::new(),
         };
 
         let root = dir.join("dist");
@@ -1865,6 +2243,7 @@ mod tests {
                 is_dir: false,
                 bytes: 5,
                 decompress: false,
+                merge_icon: false,
             },
             PlanItem {
                 component: "workbench-base".into(),
@@ -1874,6 +2253,7 @@ mod tests {
                 is_dir: false,
                 bytes: 6,
                 decompress: false,
+                merge_icon: false,
             },
         ];
         let plan = InstallPlan {
@@ -1893,6 +2273,8 @@ mod tests {
             user_startup: Vec::new(),
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
+            removals: Vec::new(),
+            layers: Vec::new(),
         };
 
         let root = dir.join("dist");
@@ -2292,6 +2674,7 @@ mod tests {
             files: 0,
             directories: 0,
             bytes: 0,
+            ..Default::default()
         };
         let mut files = Vec::new();
 
@@ -2351,6 +2734,7 @@ mod tests {
             files: 0,
             directories: 0,
             bytes: 0,
+            ..Default::default()
         };
         let mut files = Vec::new();
 
@@ -2394,6 +2778,7 @@ mod tests {
             files: 0,
             directories: 0,
             bytes: 0,
+            ..Default::default()
         };
         let mut files = Vec::new();
 
@@ -2430,6 +2815,7 @@ mod tests {
             files: 0,
             directories: 0,
             bytes: 0,
+            ..Default::default()
         };
         let mut files = Vec::new();
         let switches = [activation(
@@ -2691,6 +3077,7 @@ mod tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(fixtures::fake_rom(&dir, 40)), // pre-V47: the condition holds
             chosen: vec!["workbench-base".to_string()],
@@ -2751,6 +3138,198 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------
+    // Final whole-branch review, Finding C: design §10 promised that the
+    // unlayered AmigaOS 3.2 and 3.9 recipes plan byte-identically before and
+    // after this branch, "asserted by planning both against a fixture before
+    // and after, not by inspection" — and that assertion was never written.
+    // -----------------------------------------------------------------
+
+    /// The AmigaOS 3.2 recipe's `extras` component, with the explicit
+    /// `Tools/TextEditFileTypes/Default4Types` `File` rule Task 8 added
+    /// removed again — reconstructing the component's shape from *before*
+    /// this branch, so the two can be planned and applied against the same
+    /// media and compared. The rule was added purely so a later
+    /// `update-322-system.removes` entry could name the file (`recipe.rs`'s
+    /// `validate_removals` refuses naming a `Subtree`'s destination, which is
+    /// what the `Tools` rule already below it is), not because the AmigaOS
+    /// 3.2 tree was ever meant to change.
+    fn amigaos_32_before_the_default4types_file_rule() -> crate::core::osinstall::Recipe {
+        let mut recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
+        for component in &mut recipe.components {
+            if component.id == "extras" {
+                component.rules.retain(|r| {
+                    !(r.kind == crate::core::osinstall::RuleKind::File
+                        && r.to == "Tools/TextEditFileTypes/Default4Types")
+                });
+            }
+        }
+        recipe
+    }
+
+    /// **Final review, Finding C.** With the file the new rule names actually
+    /// present on the media — exactly as a real `Extras3.2` disk carries it,
+    /// per the recipe's own comment that "the `Tools` subtree below already
+    /// carries it" — the AmigaOS 3.2 recipe must plan with no refusal and
+    /// build the identical tree whether `extras` carries the explicit
+    /// `Default4Types` `File` rule or not. This is the design §10 promise,
+    /// written as a test rather than left to inspection: before this fix
+    /// existed only as an inline recipe comment asserting "it changes
+    /// nothing about the AmigaOS 3.2 tree", true of the tree and never
+    /// checked against the refusal surface.
+    #[test]
+    fn amigaos_32_plans_and_applies_the_same_tree_before_and_after_the_default4types_file_rule() {
+        let dir = fixtures::scratch("apply-322-before-after-extras-rule");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+
+        let recipe_after = crate::core::osinstall::recipe::amigaos_32().unwrap();
+        let recipe_before = amigaos_32_before_the_default4types_file_rule();
+        assert!(
+            recipe_before.component("extras").unwrap().rules.len()
+                < recipe_after.component("extras").unwrap().rules.len(),
+            "sanity: the reconstructed 'before' recipe must actually differ from the shipped one"
+        );
+
+        // Built from the shipped (`_after`) recipe — a strict superset of
+        // what `_before` needs for `extras`, so the same media satisfies
+        // both without building it twice.
+        let wb = fixtures::entries_for(&recipe_after, "Workbench3.2");
+        let wb_refs: Vec<(&str, &[u8], u32)> = wb
+            .iter()
+            .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
+            .collect();
+        fixtures::media(&folder, "Workbench3.2", "wb.adf", &wb_refs);
+        fixtures::required_media(&folder, &recipe_after, &["Workbench3.2"]);
+
+        let extras = fixtures::entries_for(&recipe_after, "Extras3.2");
+        let extras_refs: Vec<(&str, &[u8], u32)> = extras
+            .iter()
+            .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
+            .collect();
+        fixtures::media(&folder, "Extras3.2", "extras.adf", &extras_refs);
+
+        let rom = fixtures::fake_rom(&dir, 47);
+        let request_for = |destination: &str| crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2".to_string(),
+            media_folder: folder.clone(),
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: Some(rom.clone()),
+            chosen: vec!["extras".to_string()],
+            excluded: Vec::new(),
+            destination: dir.join(destination),
+            scan_cache: Default::default(),
+        };
+
+        let plan_before =
+            crate::core::osinstall::plan::plan(&request_for("dist-before"), &recipe_before)
+                .unwrap();
+        let plan_after =
+            crate::core::osinstall::plan::plan(&request_for("dist-after"), &recipe_after).unwrap();
+
+        assert!(
+            plan_before.refusals.is_empty(),
+            "before: {:?}",
+            plan_before.refusals
+        );
+        assert!(
+            plan_after.refusals.is_empty(),
+            "design §10: with the named file present on the media, the recipe gaining an \
+             explicit rule for a file its own Tools subtree already carries must not turn \
+             into a refusal: {:?}",
+            plan_after.refusals
+        );
+
+        let root_before = dir.join("dist-before");
+        let root_after = dir.join("dist-after");
+        apply(&plan_before, &root_before, &NoProgress).unwrap();
+        apply(&plan_after, &root_after, &NoProgress).unwrap();
+
+        // Every real byte, every drawer, manifest excluded — must be
+        // identical. `assert_trees_agree`'s own generic form goes one field
+        // further and compares `overwrote` too, which is *not* the design
+        // §10 promise here: `extras` genuinely places
+        // `Tools/TextEditFileTypes/Default4Types` twice after this branch
+        // (once through its `Tools` subtree, once through the new explicit
+        // rule), so `_after`'s manifest honestly records the second write as
+        // `extras` overwriting its own first — a true fact about how many
+        // rules touched the file, never about what lands on the tree or who
+        // placed it. Measured, not assumed: this is exactly where the two
+        // manifests differ, confirming the recipe's own comment that "the
+        // same byte arrives either way".
+        assert_eq!(
+            tree_contents(&root_before),
+            tree_contents(&root_after),
+            "design §10: the AmigaOS 3.2 tree's own bytes and drawers must be identical \
+             whether `extras` carries its new explicit Default4Types rule or not"
+        );
+
+        fn sources_ignoring_self_overwrite(
+            manifest: &DistributionManifest,
+        ) -> std::collections::BTreeMap<String, Vec<(String, String)>> {
+            let mut out: std::collections::BTreeMap<String, Vec<(String, String)>> =
+                Default::default();
+            for file in &manifest.files {
+                out.entry(file.path.clone())
+                    .or_default()
+                    .push((file.component.clone(), file.media.clone()));
+            }
+            for records in out.values_mut() {
+                records.sort();
+            }
+            out
+        }
+        assert_eq!(
+            sources_ignoring_self_overwrite(&read_manifest(&root_before)),
+            sources_ignoring_self_overwrite(&read_manifest(&root_after)),
+            "every file's final component and medium must agree, whichever of `extras`'s \
+             two rules for the same path the manifest's own `overwrote` bookkeeping credits"
+        );
+    }
+
+    /// **Final review, Finding C, the 3.9 half.** `amigaos-3.9.json` was not
+    /// touched anywhere in this branch (`git log` on the file over the
+    /// branch's own range is empty), so there is no earlier shape to
+    /// reconstruct and diff against — this pins that the recipe still plans
+    /// cleanly against a complete, synthetic fixture, the same assertion
+    /// §10 asked for, for the recipe that had nothing to diff.
+    #[test]
+    fn amigaos_39_plans_cleanly_against_a_full_synthetic_fixture() {
+        let dir = fixtures::scratch("plan-39-full-fixture");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        let recipe = crate::core::osinstall::recipe::amigaos_39().unwrap();
+
+        let disc = fixtures::entries_for(&recipe, "AmigaOS3.9");
+        let disc_refs: Vec<(&str, &[u8], u32)> = disc
+            .iter()
+            .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
+            .collect();
+        fixtures::media(&folder, "AmigaOS3.9", "os39.adf", &disc_refs);
+
+        let chosen: Vec<String> = recipe.components.iter().map(|c| c.id.clone()).collect();
+        let request = crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.9".to_string(),
+            media_folder: folder,
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: Some(fixtures::fake_rom(&dir, 40)),
+            chosen,
+            excluded: Vec::new(),
+            destination: dir.join("dist"),
+            scan_cache: Default::default(),
+        };
+        let planned = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
+        assert!(planned.refusals.is_empty(), "{:?}", planned.refusals);
+    }
+
     /// The negative half of "only when there is something worth recording":
     /// `fixtures::media` always stamps a file with the current wall-clock
     /// time (`write_entries` passes `date: None`, and `add_file` falls back
@@ -2803,6 +3382,7 @@ mod tests {
             is_dir: false,
             bytes: 16,
             decompress: false,
+            merge_icon: false,
         }];
         let plan = InstallPlan {
             release: "Test".into(),
@@ -2818,6 +3398,8 @@ mod tests {
             user_startup: Vec::new(),
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
+            removals: Vec::new(),
+            layers: Vec::new(),
         };
 
         let root = dir.join("dist");
@@ -3170,6 +3752,7 @@ mod tests {
             is_dir: false,
             bytes: starter.len() as u64,
             decompress: false,
+            merge_icon: false,
         });
         plan.user_startup = vec![UserStartupContribution {
             component: "amissl".into(),
@@ -3294,6 +3877,7 @@ mod tests {
             is_dir: false,
             bytes: starter.len() as u64,
             decompress: false,
+            merge_icon: false,
         });
         plan.user_startup = vec![UserStartupContribution {
             component: "amissl".into(),
@@ -3369,13 +3953,12 @@ mod tests {
     /// deliberately left **out** of `chosen` — the point of this run is to
     /// prove the condition switches it on by itself against the user's real
     /// V40 Kickstart, not to force it on the way `chosen` would.
-    /// `update-3.2.1` is left out because it is `available: false` in the
-    /// recipe (registered, not implemented — see `CLAUDE.md`'s "don't claim
-    /// support that isn't implemented and tested"), so a real screen would
-    /// never offer it. `backdrops` **is** chosen now: it stopped being a
-    /// guess when the running system named its own path (ART-127), and a
-    /// tree without it boots to a Preferences error about a missing
-    /// wallpaper.
+    /// The `update-3.2.1` placeholder this comment used to name is gone
+    /// (Task 8): AmigaOS 3.2.2 is its own recipe now, layered on this one,
+    /// rather than a not-yet-built component of it.
+    /// `backdrops` **is** chosen now: it stopped being a guess when the
+    /// running system named its own path (ART-127), and a tree without it
+    /// boots to a Preferences error about a missing wallpaper.
     #[test]
     #[ignore = "touches the user's real media and E:\\amiga\\ProjeART; run explicitly, see the doc comment"]
     fn run_the_real_engine_against_the_users_own_media_when_asked() {
@@ -3425,6 +4008,7 @@ mod tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: PathBuf::from(&media),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(PathBuf::from(&rom)),
             chosen,
@@ -3576,6 +4160,204 @@ mod tests {
         );
         assert_eq!(manifest.files.len(), want_files as usize);
         assert_eq!(manifest.built_from.len(), want_media);
+    }
+
+    /// **Task 11's real 3.2.2 build hook.** Everything else that exercises a
+    /// layered recipe does it against a synthetic two-file fixture
+    /// (`layered_recipe`/`apply_a_layered_build` below) or the shipped
+    /// `amigaos-3.2.2.json` parsed in isolation (`recipe.rs`'s own tests).
+    /// Neither one plans and applies the **shipped** recipe against real
+    /// media. This does: the owner's own 3.2 ADFs on the `base` layer, the
+    /// 3.2.2 update ADFs on `update-3.2.2`, paired with a real Kickstart —
+    /// and then reads the finished tree's own
+    /// `Prefs/Env-Archive/Versions/Release` back out of it, the way a real
+    /// system would answer `version full`. A green `cargo test` is a claim
+    /// about the code; this is the claim about the tree (the design's §10,
+    /// carried forward by this task's own self-review notes as "the one
+    /// thing this plan cannot promise").
+    ///
+    /// `ART_322_BASE` names the folder of 3.2 ADFs, `ART_322_UPDATE` the
+    /// folder of 3.2.2 update ADFs, `ART_322_ROM` the paired Kickstart, and
+    /// `ART_322_DEST` an empty destination folder — `apply` is
+    /// `SAFE_CREATE` and refuses an existing one, so this test does not
+    /// delete anything on the caller's behalf; the destination has to
+    /// already be empty (or absent) before this is run.
+    ///
+    /// **What the paired Kickstart is expected to state, measured rather
+    /// than assumed.** `core::rom`'s own
+    /// `read_the_real_roms_residents_when_asked` hook, pointed at the
+    /// owner's real `ROM\kicka1200.rom`, printed
+    /// `header=(47, 96) exec=(47, 7) strap=(45, 1)` — exactly the "3.2 ROM"
+    /// worked example the shipped recipe's own `update-322-modules-a1200`
+    /// and `-strap` components cite in their own `_why_two_modules_components`
+    /// note. So both should switch on (`exec 47.7 < 47.10`, `strap 45.1 <
+    /// 47.0`), unchosen — same shape as `modules-a1200` in the plain 3.2
+    /// hook above — while the *base* layer's own `modules-a1200`
+    /// (`rom-older-than 47`) should stay off, because the header's own
+    /// major is 47, not older than it. The assertions below ask the ROM
+    /// itself rather than hard-coding that answer, so a different Kickstart
+    /// pointed at this same hook is still checked against the rule its
+    /// condition actually encodes.
+    #[test]
+    #[ignore = "touches the owner's real 3.2 and 3.2.2 media and E:\\amiga\\ProjeART; run explicitly, see the doc comment"]
+    fn build_the_real_322_tree_when_asked() {
+        let (Ok(base), Ok(update), Ok(rom), Ok(dest)) = (
+            std::env::var("ART_322_BASE"),
+            std::env::var("ART_322_UPDATE"),
+            std::env::var("ART_322_ROM"),
+            std::env::var("ART_322_DEST"),
+        ) else {
+            return;
+        };
+
+        // The same base-layer choices `run_the_real_engine_against_the_users_own_media_when_asked`
+        // makes above, plus `update-322-diskdoctor` so the update layer's
+        // own DiskDoctor (measured off `Update3.2.2.adf:Install/Install`
+        // itself, per the recipe's own `_why_these_three_and_not_the_base_diskdoctors_three`
+        // note) overrides the base's.
+        let chosen: Vec<String> = [
+            "extras",
+            "locale-base",
+            "locale-de",
+            "locale-dk",
+            "locale-en",
+            "locale-es",
+            "locale-fr",
+            "locale-gr",
+            "locale-it",
+            "locale-nl",
+            "locale-no",
+            "locale-pl",
+            "locale-pt",
+            "locale-ru",
+            "locale-se",
+            "locale-tr",
+            "locale-uk",
+            "fonts",
+            "classes",
+            "glowicons",
+            "diskdoctor",
+            "mmulibs",
+            "hdtools",
+            "storage",
+            "keymaps",
+            "backdrops",
+            "update-322-diskdoctor",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+        let request = crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2.2".to_string(),
+            // Unused: `plan()` only reads `media_folder` for an unlayered
+            // recipe, and `amigaos-3.2.2` is layered — every real folder is
+            // named through `media_folders` below instead.
+            media_folder: PathBuf::from(&base),
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::from([
+                ("base".to_string(), PathBuf::from(&base)),
+                ("update-3.2.2".to_string(), PathBuf::from(&update)),
+            ]),
+            keymap: None,
+            rom: Some(PathBuf::from(&rom)),
+            chosen,
+            excluded: Vec::new(),
+            destination: PathBuf::from(&dest),
+            scan_cache: Default::default(),
+        };
+
+        let recipe = crate::core::osinstall::recipe::by_release("AmigaOS 3.2.2")
+            .expect("the shipped 3.2.2 recipe must load");
+        let planned = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
+
+        println!("release={}", planned.release);
+        println!("components_on={:?}", planned.components_on);
+        println!("refusals={:?}", planned.refusals);
+        println!("total_bytes={}", planned.total_bytes);
+        println!("items={}", planned.items.len());
+
+        assert!(
+            planned.refusals.is_empty(),
+            "the real layered plan refused: {:?}",
+            planned.refusals
+        );
+
+        let update_modules_on = planned
+            .components_on
+            .iter()
+            .any(|id| id == "update-322-modules-a1200");
+        let update_strap_on = planned
+            .components_on
+            .iter()
+            .any(|id| id == "update-322-modules-a1200-strap");
+        let base_modules_on = planned.components_on.iter().any(|id| id == "modules-a1200");
+        println!(
+            "update-322-modules-a1200={update_modules_on} \
+             update-322-modules-a1200-strap={update_strap_on} \
+             base modules-a1200={base_modules_on}"
+        );
+
+        let rom_bytes = crate::core::rom::decoded_image(std::path::Path::new(&rom)).unwrap();
+        let header_major = crate::core::rom::stated_version(&rom_bytes)
+            .map(|(major, _)| major)
+            .expect("the paired Kickstart states its own version");
+        let exec_version = crate::core::rom::resident_version(&rom_bytes, "exec");
+        let strap_version = crate::core::rom::resident_version(&rom_bytes, "strap");
+        println!("rom header major={header_major} exec={exec_version:?} strap={strap_version:?}");
+
+        assert_eq!(
+            base_modules_on,
+            header_major < 47,
+            "the base layer's own modules-a1200 (condition rom-older-than 47) \
+             must switch on exactly when the paired ROM's stated header \
+             major is below 47"
+        );
+        assert_eq!(
+            update_modules_on,
+            exec_version.is_some_and(|(major, minor)| (major, minor) < (47, 10)),
+            "update-322-modules-a1200 (condition resident-older-than exec \
+             47.10) must switch on exactly when the ROM's own exec.library \
+             is older than that"
+        );
+        assert_eq!(
+            update_strap_on,
+            strap_version.is_some_and(|(major, _)| major < 47),
+            "update-322-modules-a1200-strap (condition resident-older-than \
+             strap 47) must switch on exactly when the ROM's own strap is \
+             older than that"
+        );
+
+        let root = PathBuf::from(&dest);
+        let outcome = apply(&planned, &root, &NoProgress).unwrap();
+        println!(
+            "apply: files={} directories={} bytes={}",
+            outcome.files, outcome.directories, outcome.bytes
+        );
+
+        let manifest_text = std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap();
+        let manifest: DistributionManifest = serde_json::from_str(&manifest_text).unwrap();
+        println!(
+            "manifest: {} file(s) recorded from {} medium/media, {} layer(s)",
+            manifest.files.len(),
+            manifest.built_from.len(),
+            manifest.layers.len()
+        );
+
+        // **The tree has to say what it is.** A passing test up to this
+        // point is a claim about the code; this is the claim about the
+        // tree, and the brief is explicit that a failure here is a finding
+        // to report, never a reason to soften the assertion.
+        let stated = crate::core::osinstall::identify::release_of_tree(&root).unwrap();
+        println!("stated release={stated:?}");
+        assert_eq!(
+            stated.as_deref(),
+            Some("Release 3.2.2"),
+            "the tree has to say what it is; a passing test is a claim about \
+             the code, this file is the claim about the tree"
+        );
     }
 
     /// Throwaway diagnostic, not part of the suite's real coverage — lists
@@ -3869,6 +4651,7 @@ mod tests {
             release: "AmigaOS 3.9".to_string(),
             media_folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: Vec::new(),
@@ -4007,6 +4790,7 @@ mod tests {
             release: "AmigaOS 3.9".to_string(),
             media_folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: Vec::new(),
@@ -4207,6 +4991,7 @@ mod tests {
             release: "AmigaOS 3.9".to_string(),
             media_folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             // All three optional components at once, on purpose: the euro
@@ -4536,6 +5321,7 @@ mod tests {
             release: "AmigaOS 3.9".to_string(),
             media_folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["locale-base".to_string(), "keymaps".to_string()],
@@ -4705,6 +5491,7 @@ mod tests {
             release: "Test OS".to_string(),
             media_folder: media.to_path_buf(),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: Vec::new(),
@@ -5635,6 +6422,7 @@ mod tests {
             is_dir: false,
             bytes: 8,
             decompress: false,
+            merge_icon: false,
         }];
         let mut writer = TreeWriter::new(&root, read_manifest(&root).files);
         writer.place(&items, &mut sources, &NoProgress).unwrap();
@@ -5877,6 +6665,7 @@ mod tests {
             release: "AmigaOS 3.9".to_string(),
             media_folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["locale-base".to_string()],
@@ -6152,6 +6941,7 @@ mod tests {
             release: "AmigaOS 3.9".to_string(),
             media_folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["locale-base".to_string()],
@@ -6334,5 +7124,518 @@ mod tests {
             full.files as usize,
             "one record per file in the tree (ART-124)"
         );
+    }
+
+    // ---- Task 4: a component may remove a path an overridden one placed ----
+
+    /// A minimal recipe with the real shape: `base` places `Tools/X`,
+    /// `update` removes it and declares an override over `base` (without
+    /// which `recipe.rs`'s own `validate_removals` would refuse this
+    /// recipe outright). `base` is **not** required, so a test can build
+    /// against it either on or off; `update` is required, so its own
+    /// removal always runs.
+    ///
+    /// Reduced from AmigaOS 3.2.2's real case
+    /// (`Tools/TextEditFileTypes/Default4Types`, reaching the tree from
+    /// `Extras3.2`) to one file, so the fixture states only what this task
+    /// is about.
+    fn recipe_with_removal() -> crate::core::osinstall::Recipe {
+        use crate::core::osinstall::{Component, PathRule, Recipe, RuleKind};
+
+        Recipe {
+            release: "Test OS".to_string(),
+            base: None,
+            layers: vec![],
+            components: vec![
+                Component {
+                    id: "base".to_string(),
+                    media: "Base".to_string(),
+                    rules: vec![PathRule {
+                        from: "TESTFILE".to_string(),
+                        to: "Tools/X".to_string(),
+                        kind: RuleKind::File,
+                    }],
+                    required: false,
+                    condition: None,
+                    overrides: Vec::new(),
+                    user_startup: Vec::new(),
+                    activate: Vec::new(),
+                    exclusive_group: None,
+                    label_key: None,
+                    available: true,
+                    layer: None,
+                    removes: Vec::new(),
+                },
+                Component {
+                    id: "update".to_string(),
+                    media: "Update".to_string(),
+                    rules: Vec::new(),
+                    required: true,
+                    condition: None,
+                    overrides: vec!["base".to_string()],
+                    user_startup: Vec::new(),
+                    activate: Vec::new(),
+                    exclusive_group: None,
+                    label_key: None,
+                    available: true,
+                    layer: None,
+                    removes: vec!["Tools/X".to_string()],
+                },
+            ],
+        }
+    }
+
+    /// The media folder [`recipe_with_removal`] needs: `Base` carries the
+    /// file `update` will remove, and `Update` is a plain, empty disk —
+    /// `update` places nothing of its own, but its own volume still has to
+    /// resolve, or `plan()` refuses the whole thing with `MediaMissing`
+    /// before removals ever enter the picture.
+    fn media_for_removal_recipe(folder: &Path, with_base: bool) {
+        if with_base {
+            fixtures::media(
+                folder,
+                "Base",
+                "base.adf",
+                &[("TESTFILE", b"unsupported", 0x00)],
+            );
+        }
+        fixtures::media(folder, "Update", "update.adf", &[]);
+    }
+
+    /// `apply_with(&dir, &tree)`: `base` is chosen, so `Tools/X` really is
+    /// placed before `update`'s own removal has anything to act on.
+    fn request_for_scratch(
+        dir: &Path,
+        tree: &Path,
+    ) -> crate::core::osinstall::plan::InstallRequest {
+        let folder = dir.join("media");
+        std::fs::create_dir_all(&folder).unwrap();
+        media_for_removal_recipe(&folder, true);
+        crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "Test OS".to_string(),
+            media_folder: folder,
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: vec!["base".to_string()],
+            excluded: Vec::new(),
+            destination: tree.to_path_buf(),
+            scan_cache: Default::default(),
+        }
+    }
+
+    /// The other half of the same fixture: `base` is never chosen, so
+    /// nothing ever placed `Tools/X` — a legitimate build, not a failed one
+    /// (see the test this exists for).
+    fn request_without_the_base_component() -> crate::core::osinstall::plan::InstallRequest {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = fixtures::scratch(&format!("apply-removes-no-base-{n}"));
+        let folder = dir.join("media");
+        std::fs::create_dir_all(&folder).unwrap();
+        media_for_removal_recipe(&folder, false);
+        crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "Test OS".to_string(),
+            media_folder: folder,
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: Vec::new(),
+            excluded: Vec::new(),
+            destination: dir.join("tree"),
+            scan_cache: Default::default(),
+        }
+    }
+
+    /// `plan()` then `apply()`, in one call — every test in this section
+    /// wants exactly that pair and nothing more.
+    fn apply_with(
+        recipe: &crate::core::osinstall::Recipe,
+        request: &crate::core::osinstall::plan::InstallRequest,
+    ) -> CoreResult<ApplyOutcome> {
+        let plan = crate::core::osinstall::plan::plan(request, recipe)?;
+        apply(&plan, &request.destination, &NoProgress)
+    }
+
+    #[test]
+    fn a_component_removes_a_path_an_overridden_component_placed() {
+        let dir = fixtures::scratch("apply-removes");
+        let tree = dir.join("tree");
+        let report = apply_with(&recipe_with_removal(), &request_for_scratch(&dir, &tree)).unwrap();
+
+        assert!(
+            !tree.join("Tools/X").exists(),
+            "the removal actually removed it"
+        );
+        let verdict = report
+            .removed
+            .iter()
+            .find(|r| r.to == "Tools/X")
+            .expect("the removal is reported by name");
+        assert!(matches!(verdict.state, RemovalState::Removed));
+
+        // The manifest and the run's own counts must agree with the tree
+        // that is actually there — see `perform_removal`'s own doc comment.
+        let manifest = read_manifest(&tree);
+        assert!(
+            !manifest.files.iter().any(|f| f.path == "Tools/X"),
+            "a removed file must not go on being claimed by distribution.json"
+        );
+        assert_eq!(manifest.files.len(), report.files as usize);
+    }
+
+    #[test]
+    fn a_removal_of_something_that_is_not_there_is_an_outcome_not_a_failure() {
+        // The base component is off, so nothing placed Tools/X. That is a
+        // legitimate build, not a failed one.
+        let report = apply_with(
+            &recipe_with_removal(),
+            &request_without_the_base_component(),
+        );
+        let report = report.unwrap();
+        let verdict = report.removed.iter().find(|r| r.to == "Tools/X").unwrap();
+        assert!(
+            matches!(verdict.state, RemovalState::NotPresent),
+            "not present is its own verdict, distinct from Removed and from Failed"
+        );
+    }
+
+    /// The mutation table's own third row (recipe.rs's guard is
+    /// `a_removal_may_only_name_a_path_an_overridden_component_places`) has
+    /// no counterpart at the `apply()` level to mutate against — dropping
+    /// the check lives entirely in `recipe.rs::validate`. This test instead
+    /// pins the fourth row: a removal that ran but was never reported would
+    /// leave `report.removed` unable to answer either assertion above, so
+    /// both existing tests already guard silence as a side effect. Recorded
+    /// here so a reviewer does not go looking for a fifth test that was
+    /// never meant to exist.
+    #[test]
+    fn every_planned_removal_gets_its_own_verdict() {
+        let dir = fixtures::scratch("apply-removes-verdict-count");
+        let tree = dir.join("tree");
+        let report = apply_with(&recipe_with_removal(), &request_for_scratch(&dir, &tree)).unwrap();
+        assert_eq!(
+            report.removed.len(),
+            1,
+            "one verdict for the one entry in plan.removals, never silently dropped"
+        );
+    }
+
+    // ---- Task 6: the `icon-tooltypes` rule kind ----
+
+    /// The ColorIcon artwork appended after `Tools/IconEdit.info`'s classic
+    /// fields in an ART-built tree — the GlowIcons icon carries 1 486 real
+    /// bytes of it (`core::amigaicon`'s own module doc comment). Stands in
+    /// for "whatever a real appended IFF FORM would be"; the point of the
+    /// test is that it survives the merge byte for byte, not what it says.
+    const TRAILING: &[u8] = b"FORM....ICONFACE....pretend glowicons artwork";
+
+    /// A minimal, valid Amiga `.info`, built by hand exactly the way
+    /// `core::amigaicon`'s own module doc comment describes the classic
+    /// layout — a second, independent encoding of the same format, not a
+    /// re-export of Task 5's own private test helper, so a wiring mistake in
+    /// either module's offsets cannot hide behind the other's agreeing with
+    /// itself.
+    fn synthetic_icon(tooltypes: &[&str], stack: u32, trailing: &[u8]) -> Vec<u8> {
+        const MAGIC: u16 = 0xE310;
+        const HEADER_LEN: usize = 78;
+        const OFF_TOOL_TYPES: usize = 54;
+        const OFF_STACK_SIZE: usize = 74;
+
+        let mut buf = vec![0u8; HEADER_LEN];
+        buf[0..2].copy_from_slice(&MAGIC.to_be_bytes());
+        buf[OFF_TOOL_TYPES..OFF_TOOL_TYPES + 4].copy_from_slice(&1u32.to_be_bytes());
+        buf[OFF_STACK_SIZE..OFF_STACK_SIZE + 4].copy_from_slice(&stack.to_be_bytes());
+
+        let size = ((tooltypes.len() + 1) * 4) as u32;
+        buf.extend_from_slice(&size.to_be_bytes());
+        for tt in tooltypes {
+            let bytes = tt.as_bytes();
+            buf.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+            buf.extend_from_slice(bytes);
+        }
+        buf.extend_from_slice(trailing);
+        buf
+    }
+
+    /// `base` places `Tools/IconEdit.info` with a 4096 stack, one tool type
+    /// and [`TRAILING`] appended after it — standing in for the GlowIcons
+    /// icon an ART-built tree already carries. `update` amends it with an
+    /// `IconTooltypes` rule from a media icon carrying 8192 and one more
+    /// tool type and no trailing block of its own — AmigaOS 3.2.2's own
+    /// change to `Tools/IconEdit.info` (`core::amigaicon`'s module doc
+    /// comment). `update` is `required` and declares `overrides` over
+    /// `base`, the same shape [`recipe_with_removal`] already uses for an
+    /// update component that amends what a base component placed.
+    fn recipe_with_icon_rule() -> crate::core::osinstall::Recipe {
+        use crate::core::osinstall::{Component, PathRule, Recipe, RuleKind};
+
+        Recipe {
+            release: "Test OS".to_string(),
+            base: None,
+            layers: vec![],
+            components: vec![
+                Component {
+                    id: "base".to_string(),
+                    media: "Base".to_string(),
+                    rules: vec![PathRule {
+                        from: "Tools/IconEdit.info".to_string(),
+                        to: "Tools/IconEdit.info".to_string(),
+                        kind: RuleKind::File,
+                    }],
+                    required: false,
+                    condition: None,
+                    overrides: Vec::new(),
+                    user_startup: Vec::new(),
+                    activate: Vec::new(),
+                    exclusive_group: None,
+                    label_key: None,
+                    available: true,
+                    layer: None,
+                    removes: Vec::new(),
+                },
+                Component {
+                    id: "update".to_string(),
+                    media: "Update".to_string(),
+                    rules: vec![PathRule {
+                        from: "Tools/IconEdit.info".to_string(),
+                        to: "Tools/IconEdit.info".to_string(),
+                        kind: RuleKind::IconTooltypes,
+                    }],
+                    required: true,
+                    condition: None,
+                    overrides: vec!["base".to_string()],
+                    user_startup: Vec::new(),
+                    activate: Vec::new(),
+                    exclusive_group: None,
+                    label_key: None,
+                    available: true,
+                    layer: None,
+                    removes: Vec::new(),
+                },
+            ],
+        }
+    }
+
+    /// The media folder [`recipe_with_icon_rule`] needs: `Base` carries the
+    /// icon `update` amends, and `Update` carries the source icon to merge
+    /// from — `update` is `required`, so its own media always has to
+    /// resolve, or `plan()` refuses the whole thing with `MediaMissing`
+    /// before the merge ever enters the picture. Same shape as
+    /// [`media_for_removal_recipe`], one component's media earlier.
+    fn media_for_icon_recipe(folder: &Path, with_base: bool) {
+        if with_base {
+            fixtures::media(
+                folder,
+                "Base",
+                "base.adf",
+                &[(
+                    "Tools/IconEdit.info",
+                    synthetic_icon(&["A=1"], 4096, TRAILING).as_slice(),
+                    0x00,
+                )],
+            );
+        }
+        fixtures::media(
+            folder,
+            "Update",
+            "update.adf",
+            &[(
+                "Tools/IconEdit.info",
+                synthetic_icon(&["A=1", "(STACK=8192)"], 8192, b"").as_slice(),
+                0x00,
+            )],
+        );
+    }
+
+    /// `base` is chosen, so `Tools/IconEdit.info` really is placed before
+    /// `update`'s own merge has anything to act on.
+    fn request_for_icon_scratch(
+        dir: &Path,
+        tree: &Path,
+    ) -> crate::core::osinstall::plan::InstallRequest {
+        let folder = dir.join("media");
+        std::fs::create_dir_all(&folder).unwrap();
+        media_for_icon_recipe(&folder, true);
+        crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "Test OS".to_string(),
+            media_folder: folder,
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: vec!["base".to_string()],
+            excluded: Vec::new(),
+            destination: tree.to_path_buf(),
+            scan_cache: Default::default(),
+        }
+    }
+
+    /// The other half of the same fixture: `base` is never chosen, so
+    /// nothing ever placed `Tools/IconEdit.info` — a legitimate build, not a
+    /// failed one (see the test this exists for).
+    fn request_without_the_component_that_places_the_icon(
+    ) -> crate::core::osinstall::plan::InstallRequest {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = fixtures::scratch(&format!("apply-icon-no-base-{n}"));
+        let folder = dir.join("media");
+        std::fs::create_dir_all(&folder).unwrap();
+        media_for_icon_recipe(&folder, false);
+        crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "Test OS".to_string(),
+            media_folder: folder,
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: Vec::new(),
+            excluded: Vec::new(),
+            destination: dir.join("tree"),
+            scan_cache: Default::default(),
+        }
+    }
+
+    #[test]
+    fn an_icon_rule_merges_into_the_icon_already_in_the_tree() {
+        let dir = fixtures::scratch("apply-icon-rule");
+        let tree = dir.join("tree");
+        apply_with(
+            &recipe_with_icon_rule(),
+            &request_for_icon_scratch(&dir, &tree),
+        )
+        .unwrap();
+
+        let merged = std::fs::read(tree.join("Tools/IconEdit.info")).unwrap();
+        assert_eq!(crate::core::amigaicon::stack_size(&merged).unwrap(), 8192);
+        let l = crate::core::amigaicon::layout(&merged).unwrap();
+        assert_eq!(
+            &merged[l.trailing], TRAILING,
+            "the tree's own ColorIcon survived"
+        );
+    }
+
+    #[test]
+    fn an_icon_rule_whose_destination_is_absent_is_skipped_and_says_so() {
+        let report = apply_with(
+            &recipe_with_icon_rule(),
+            &request_without_the_component_that_places_the_icon(),
+        )
+        .unwrap();
+        let verdict = report
+            .icons
+            .iter()
+            .find(|v| v.to == "Tools/IconEdit.info")
+            .expect("the skip is reported by name");
+        assert!(
+            matches!(verdict.state, IconMergeState::DestinationAbsent),
+            "the release's own `if exists` guard — skipped, never failed"
+        );
+        assert_eq!(report.icon_merge_failures, 0);
+    }
+
+    // ---- Task 9: the manifest's own `layers` ------------------------------
+
+    /// A minimal two-layer recipe with the real shape — layer ids `base` and
+    /// `update-3.2.2`, one required component each — built with
+    /// `recipe::parse` rather than the `Recipe` struct literal so this test
+    /// exercises the same JSON path a shipped recipe goes through, the way
+    /// `plan.rs`'s own `two_layer_recipe` does for the layer mechanism
+    /// itself.
+    fn layered_recipe() -> crate::core::osinstall::Recipe {
+        crate::core::osinstall::recipe::parse(
+            r#"{"release":"Test OS","layers":[{"id":"base"},{"id":"update-3.2.2"}],
+                "components":[
+                  {"id":"base-component","media":"Base","layer":"base","required":true,
+                   "rules":[{"from":"TESTFILE","to":"Tools/X","kind":"file"}]},
+                  {"id":"update-component","media":"Update","layer":"update-3.2.2","required":true,
+                   "rules":[{"from":"UPDATEFILE","to":"Tools/Y","kind":"file"}]}
+                ]}"#,
+        )
+        .unwrap()
+    }
+
+    /// `plan()` then `apply()` against [`layered_recipe`], reading the
+    /// finished tree's own `distribution.json` back — the round trip
+    /// `the_manifest_records_which_folder_each_layer_came_from` needs.
+    fn apply_a_layered_build() -> DistributionManifest {
+        let dir = fixtures::scratch("apply-layers");
+        let base_folder = dir.join("base-media");
+        let update_folder = dir.join("update-media");
+        std::fs::create_dir_all(&base_folder).unwrap();
+        std::fs::create_dir_all(&update_folder).unwrap();
+        fixtures::media(
+            &base_folder,
+            "Base",
+            "base.adf",
+            &[("TESTFILE", b"x", 0x00)],
+        );
+        fixtures::media(
+            &update_folder,
+            "Update",
+            "update.adf",
+            &[("UPDATEFILE", b"y", 0x00)],
+        );
+
+        let request = crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "Test OS".to_string(),
+            media_folder: dir.join("unused"),
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::from([
+                ("base".to_string(), base_folder),
+                ("update-3.2.2".to_string(), update_folder),
+            ]),
+            keymap: None,
+            rom: None,
+            chosen: vec!["base-component".to_string(), "update-component".to_string()],
+            excluded: Vec::new(),
+            destination: dir.join("tree"),
+            scan_cache: Default::default(),
+        };
+
+        let plan = crate::core::osinstall::plan::plan(&request, &layered_recipe()).unwrap();
+        assert!(
+            plan.refusals.is_empty(),
+            "the layered fixture must resolve cleanly: {:?}",
+            plan.refusals
+        );
+        apply(&plan, &request.destination, &NoProgress)
+            .unwrap_or_else(|err| panic!("the layered fixture failed to build: {err}"));
+        read_manifest(&request.destination)
+    }
+
+    /// **The point of Task 9's manifest half.** `distribution.json` names
+    /// which folder each layer's media actually came from — `built_from`
+    /// already names the media itself, but not the folder a layered install
+    /// read it out of, and AmigaOS 3.2.2 always reads from more than one.
+    #[test]
+    fn the_manifest_records_which_folder_each_layer_came_from() {
+        let manifest = apply_a_layered_build();
+        let ids: Vec<&str> = manifest.layers.iter().map(|l| l.id.as_str()).collect();
+        assert_eq!(ids, vec!["base", "update-3.2.2"]);
+        assert!(manifest.layers.iter().all(|l| l.folder.is_absolute()));
+    }
+
+    /// **Mutation table row 2.** A `distribution.json` ART wrote before this
+    /// task existed carries no `layers` key at all, and it has to keep
+    /// reading back rather than refuse to load — the same rule every other
+    /// field added to this struct after it first shipped follows.
+    #[test]
+    fn an_older_manifest_with_no_layers_still_reads_back() {
+        let json = r#"{"release":"AmigaOS 3.2","builtFrom":[],"files":[]}"#;
+        let m: DistributionManifest = serde_json::from_str(json).unwrap();
+        assert!(m.layers.is_empty());
     }
 }

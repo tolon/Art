@@ -89,7 +89,7 @@ use crate::core::jobs::ProgressSink;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::osinstall::apply::{
     add_package_staging_in, apply_staging_in, refuse_unless_free, ApplyOutcome,
-    DistributionManifest, FileRecord, MANIFEST_FILE_NAME,
+    DistributionManifest, FileRecord, RemovalState, RemovalVerdict, MANIFEST_FILE_NAME,
 };
 use crate::core::osinstall::chain::{self, FoundTree, TreeSummary};
 use crate::core::osinstall::collide::{self, CollisionReport, Incoming};
@@ -224,6 +224,42 @@ pub fn osinstall_release_for_media(volume_names: Vec<String>) -> AppResult<Optio
     )?)
 }
 
+/// Which of `release`'s own layers these volume names look like — never
+/// which release, that is [`osinstall_release_for_media`]'s job. Asked when a
+/// layer's own field holds media, so a screen can say "this folder holds
+/// your update disks, not the base set" against the field itself, instead of
+/// the plan's own `MediaMissing` refusals naming disks the user does own
+/// (Task 10 fix round, Finding 1).
+///
+/// `None` for an unlayered release (nothing to tell apart) and for a folder
+/// whose names do not distinguish one layer from another — see
+/// `identify::layer_holding`'s own doc comment.
+#[tauri::command]
+pub fn osinstall_layer_for_media(
+    release: String,
+    volume_names: Vec<String>,
+) -> AppResult<Option<String>> {
+    let recipe = recipe::by_release(&release)?;
+    Ok(crate::core::osinstall::identify::layer_holding(
+        &recipe,
+        &volume_names,
+    ))
+}
+
+/// The media layers `release`'s own shipped recipe declares, in the recipe's
+/// own order.
+///
+/// Read-only: parses shipped JSON, opens no media. An unlayered release
+/// (AmigaOS 3.2, AmigaOS 3.9) answers with an empty list — the media step
+/// reads that as "render the single folder field this screen has always
+/// rendered", not as an error.
+#[tauri::command]
+pub async fn osinstall_layers(
+    release: String,
+) -> AppResult<Vec<crate::core::osinstall::MediaLayer>> {
+    Ok(recipe::by_release(&release)?.layers)
+}
+
 // ---------------------------------------------------------------------------
 // osinstall_plan
 // ---------------------------------------------------------------------------
@@ -269,7 +305,20 @@ pub fn osinstall_plan(request: InstallRequest) -> AppResult<PlanResult> {
     // A 3.2.2.1 install reads from three, and a plan that checked one of them
     // would refuse on the button with `find_media`'s own English sentence
     // instead of naming the folder that went away.
-    for folder in std::iter::once(&request.media_folder).chain(request.extra_media_folders.iter()) {
+    //
+    // A layered recipe's folders are `media_folders`'s values, one per layer;
+    // an unlayered one keeps the flat `media_folder` + `extra_media_folders`
+    // pair it always had. Checked by presence of `media_folders`, not by
+    // asking the recipe, because this loop runs before `recipe::by_release`
+    // below and has no recipe to ask yet.
+    let folders_to_check: Vec<PathBuf> = if request.media_folders.is_empty() {
+        std::iter::once(request.media_folder.clone())
+            .chain(request.extra_media_folders.iter().cloned())
+            .collect()
+    } else {
+        request.media_folders.values().cloned().collect()
+    };
+    for folder in &folders_to_check {
         if let Err(CoreError::Io(_)) = find_media(folder) {
             return Ok(PlanResult::FolderUnreadable {
                 folder: folder.display().to_string(),
@@ -407,14 +456,25 @@ impl From<&crate::core::osinstall::Component> for ComponentSummary {
             label_key: component.label_key.clone(),
             required: component.required,
             available: component.available,
-            condition_major: component.condition.and_then(|condition| match condition {
-                Condition::RomOlderThan { major } => Some(major),
-                Condition::RomAtLeast { .. } => None,
-            }),
-            requires_rom_major: component.condition.and_then(|condition| match condition {
-                Condition::RomAtLeast { major } => Some(major),
-                Condition::RomOlderThan { .. } => None,
-            }),
+            condition_major: component
+                .condition
+                .clone()
+                .and_then(|condition| match condition {
+                    Condition::RomOlderThan { major } => Some(major),
+                    Condition::RomAtLeast { .. } => None,
+                    // A resident's own version, not the ROM header's — a
+                    // different number that this field must not be dressed up
+                    // as (see the field's own doc comment).
+                    Condition::ResidentOlderThan { .. } => None,
+                }),
+            requires_rom_major: component
+                .condition
+                .clone()
+                .and_then(|condition| match condition {
+                    Condition::RomAtLeast { major } => Some(major),
+                    Condition::RomOlderThan { .. } => None,
+                    Condition::ResidentOlderThan { .. } => None,
+                }),
             exclusive_group: component.exclusive_group.clone(),
             overrides: component.overrides.clone(),
         }
@@ -1323,6 +1383,7 @@ fn preview_component_collisions(
         files: manifest_files,
         paired_rom: None,
         amiga_installed: Vec::new(),
+        layers: Vec::new(),
     };
     std::fs::write(
         scratch.join(MANIFEST_FILE_NAME),
@@ -1665,6 +1726,7 @@ pub fn osinstall_add_package(
                 files: 0,
                 directories: 0,
                 bytes: 0,
+                ..Default::default()
             };
             let mut failure: Option<CoreError> = None;
             for (package, archive) in &resolved {
@@ -1739,6 +1801,37 @@ pub struct OsInstallResult {
     pub job_id: u64,
     pub destination: String,
     pub outcome: ApplyOutcome,
+    /// What the finished tree's own `Prefs/Env-Archive/Versions/Release`
+    /// states, compared with the release this build was for — Task 9, and
+    /// CLAUDE.md's answer to the round that shipped AmigaOS 3.5 labelled
+    /// 3.9. The OS Builder's result panel reports this as its own line,
+    /// never folded into "the build succeeded": a confirmed marker, a
+    /// mismatched one naming both sides, none at all, or a marker ART could
+    /// not even read (fix round 1, Finding 1 — never the same sentence as
+    /// "none at all") are four different next steps, not one pass/fail bit.
+    pub stated_release: crate::core::osinstall::identify::StatedRelease,
+}
+
+/// One line per [`RemovalVerdict`], for [`osinstall_apply`]'s own oplog
+/// record — never a raw `{:?}`, so the log reads the way every other detail
+/// in this file does: a name, then a plain-English state.
+///
+/// `RemovalState::Failed`'s own sentence is carried too, because a removal
+/// that failed is exactly the kind of thing an operator reading the log
+/// later needs the reason for, not only the fact.
+fn removed_detail(removed: &[RemovalVerdict]) -> String {
+    removed
+        .iter()
+        .map(|verdict| {
+            let state = match &verdict.state {
+                RemovalState::Removed => "removed".to_string(),
+                RemovalState::NotPresent => "not present".to_string(),
+                RemovalState::Failed(detail) => format!("failed: {detail}"),
+            };
+            format!("{}: {state}", verdict.to)
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// Build the distribution tree. Returns a job id (§54) — an install copies an
@@ -1793,25 +1886,55 @@ pub fn osinstall_apply(
             .detail("Release", plan.release.clone())
             .detail("Components", plan.components_on.join(", "));
         let record = match &outcome {
-            Ok(done) => record
-                .detail("Files", done.files.to_string())
-                .detail("Directories", done.directories.to_string())
-                .detail("Bytes", done.bytes.to_string())
-                // Verification is its own step (`osinstall_verify`), run
-                // against the volume this tree is later copied onto — not
-                // here, where nothing has been read back yet.
-                .outcome(OperationOutcome::verified(false)),
+            Ok(done) => {
+                let record = record
+                    .detail("Files", done.files.to_string())
+                    .detail("Directories", done.directories.to_string())
+                    .detail("Bytes", done.bytes.to_string());
+                // Removals go through the log the same way placements do —
+                // one record for the whole run, with a detail naming every
+                // entry, never one log line per file (CLAUDE.md; the same
+                // shape `commands/adf.rs` already uses for every other
+                // operation this module logs). Omitted entirely when nothing
+                // was asked to be removed, which is every shipped recipe
+                // until AmigaOS 3.2.2's own recipe uses the field.
+                let record = if done.removed.is_empty() {
+                    record
+                } else {
+                    record.detail("Removed", removed_detail(&done.removed))
+                };
+                record
+                    // Verification is its own step (`osinstall_verify`), run
+                    // against the volume this tree is later copied onto — not
+                    // here, where nothing has been read back yet.
+                    .outcome(OperationOutcome::verified(false))
+            }
             Err(err) => record.failure(err.code(), err.to_string()),
         };
         write_to_path(&log_path, &record);
 
         let outcome = outcome?;
+
+        // Ask the tree itself, never `plan.release` — CLAUDE.md's own
+        // retelling of the AmigaOS-3.5-shipped-as-3.9 defect is exactly what
+        // this reads back rather than repeats (see
+        // `core::osinstall::identify::release_of_tree`'s own doc comment). A
+        // read failure here (an oversized or unreadable marker file) does not
+        // undo a build that already succeeded, and — fix round 1, Finding 1
+        // — it must not be folded into the same `Unstated` a tree that
+        // honestly carries no marker produces either: `stated_release` is
+        // infallible and already carries that distinction as its own
+        // `Unreadable` variant, so there is nothing left for this call site
+        // to get wrong.
+        let stated_release = crate::core::osinstall::identify::stated_release(&root, &plan.release);
+
         let _ = emit_app.emit(
             OSINSTALL_EVENT,
             OsInstallResult {
                 job_id,
                 destination: for_log,
                 outcome,
+                stated_release,
             },
         );
         Ok(())
@@ -2128,6 +2251,7 @@ mod tests {
             files,
             paired_rom: None,
             amiga_installed: Vec::new(),
+            layers: Vec::new(),
         };
         std::fs::write(
             tree.join(MANIFEST_FILE_NAME),
@@ -2401,6 +2525,7 @@ mod tests {
             is_dir: false,
             bytes,
             decompress: false,
+            merge_icon: false,
         };
 
         let plan = InstallPlan {
@@ -2438,6 +2563,8 @@ mod tests {
             user_startup: Vec::new(),
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
+            removals: Vec::new(),
+            layers: Vec::new(),
         };
         (dir, plan)
     }
@@ -2838,6 +2965,8 @@ mod tests {
             user_startup: Vec::new(),
             activations: Vec::new(),
             media_stamps: BTreeMap::new(),
+            removals: Vec::new(),
+            layers: Vec::new(),
         };
 
         let preview =
@@ -3067,6 +3196,7 @@ mod tests {
             release: "AmigaOS 3.9".to_string(),
             media_folder: PathBuf::from(&media),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: Vec::new(),
@@ -3218,6 +3348,7 @@ mod tests {
             release: "AmigaOS 3.9".to_string(),
             media_folder: PathBuf::from(&media),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["locale-base".to_string()],
@@ -3353,6 +3484,7 @@ mod tests {
             release: release.clone(),
             media_folder: PathBuf::from(&media),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(PathBuf::from(&rom)),
             chosen,
@@ -3840,6 +3972,7 @@ mod tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: missing.clone(),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["workbench-base".to_string()],
@@ -3868,6 +4001,7 @@ mod tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: dir.clone(),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["workbench-base".to_string()],
@@ -4012,6 +4146,7 @@ mod tests {
             }],
             paired_rom: None,
             amiga_installed: Vec::new(),
+            layers: Vec::new(),
         };
         std::fs::write(
             dist_root.join(MANIFEST_FILE_NAME),
@@ -4075,8 +4210,11 @@ mod tests {
                 path: PathBuf::from("E:\\wb.adf"),
                 volume_name: "Workbench3.2".into(),
                 kind: MediaKind::Floppy,
+                layer: None,
             };
             let value = serde_json::to_value(&media).unwrap();
+            // `layer` is absent, not `null`, when the scan was unlayered —
+            // see `FoundMedia::layer`'s own doc comment.
             expect_keys(&value, &["path", "volumeName", "kind"]);
             assert_eq!(value["kind"], "floppy");
         }
@@ -4178,6 +4316,77 @@ mod tests {
             assert_eq!(verdict["state"], "not-checked");
         }
 
+        /// `MediaLayer::label_key` is spelled snake_case in every shipped
+        /// recipe's own JSON, so a struct-wide `rename_all` on the type would
+        /// fix the outbound wire and break `Deserialize` in the same commit
+        /// (see the field's own doc comment). Pinned here the same way
+        /// `verify_report_serializes_not_checked_as_camelcase` pins
+        /// `notChecked`: without the field-level `rename(serialize = ..)`,
+        /// this key would be `label_key` and `src/lib/osinstall.ts`'s
+        /// `InstallLayer.labelKey` would always read `undefined`.
+        #[test]
+        fn media_layer_serializes_label_key_as_camelcase() {
+            use crate::core::osinstall::MediaLayer;
+
+            let layer = MediaLayer {
+                id: "update-3.2.2".into(),
+                label_key: Some("osinstall.layer.update322".into()),
+            };
+            let value = serde_json::to_value(&layer).unwrap();
+            expect_keys(&value, &["id", "labelKey"]);
+            assert_eq!(value["labelKey"], "osinstall.layer.update322");
+            assert!(
+                value.get("label_key").is_none(),
+                "the un-camelCased name must not leak onto the wire: {value}"
+            );
+        }
+
+        /// `osinstall_layers`' own outbound shape, off the real shipped
+        /// recipes rather than a hand-built value — the layered one answers
+        /// in the recipe's own declared order, the unlayered ones answer
+        /// empty (which is what makes "an unlayered release renders exactly
+        /// what it renders today" on the frontend meaningful rather than
+        /// accidental).
+        #[test]
+        fn osinstall_layers_answers_in_recipe_order_and_empty_when_unlayered() {
+            let layers = recipe::by_release("AmigaOS 3.2.2").unwrap().layers;
+            assert_eq!(
+                layers.iter().map(|l| l.id.as_str()).collect::<Vec<_>>(),
+                vec!["base", "update-3.2.2"]
+            );
+
+            for unlayered in ["AmigaOS 3.2", "AmigaOS 3.9"] {
+                assert!(
+                    recipe::by_release(unlayered).unwrap().layers.is_empty(),
+                    "{unlayered} declares no layers"
+                );
+            }
+        }
+
+        /// `osinstall_layer_for_media`'s own adapter — three lines, and the
+        /// question it answers is genuinely different from
+        /// `osinstall_release_for_media`'s: which of *this* release's own
+        /// layers, never which release (Task 10 fix round, Finding 1).
+        #[test]
+        fn osinstall_layer_for_media_answers_the_layer_not_the_release() {
+            assert_eq!(
+                osinstall_layer_for_media("AmigaOS 3.2.2".into(), vec!["Update3.2.2".into()])
+                    .unwrap(),
+                Some("update-3.2.2".to_string())
+            );
+            assert_eq!(
+                osinstall_layer_for_media("AmigaOS 3.2.2".into(), vec!["Workbench3.2".into()])
+                    .unwrap(),
+                Some("base".to_string())
+            );
+            // An unlayered release has nothing for this question to answer.
+            assert_eq!(
+                osinstall_layer_for_media("AmigaOS 3.2".into(), vec!["Workbench3.2".into()])
+                    .unwrap(),
+                None
+            );
+        }
+
         #[test]
         fn apply_outcome_serializes_with_the_keys_the_frontend_declares() {
             let outcome = ApplyOutcome {
@@ -4185,9 +4394,26 @@ mod tests {
                 files: 3,
                 directories: 1,
                 bytes: 42,
+                ..Default::default()
             };
             let value = serde_json::to_value(&outcome).unwrap();
-            expect_keys(&value, &["root", "files", "directories", "bytes"]);
+            expect_keys(
+                &value,
+                &[
+                    "root",
+                    "files",
+                    "directories",
+                    "bytes",
+                    "removed",
+                    // Task 6: one verdict per `merge_icon` item, and how many
+                    // of those came back `Failed` — see `ApplyOutcome::icons`
+                    // and `ApplyOutcome::icon_merge_failures` (fix round 1:
+                    // named for exactly what it counts, not an outcome-wide
+                    // tally).
+                    "icons",
+                    "iconMergeFailures",
+                ],
+            );
         }
 
         /// Deliberately **not** camelCased — `job_id` matches `LayoutResult`
@@ -4200,9 +4426,61 @@ mod tests {
                 job_id: 7,
                 destination: "E:\\dist".into(),
                 outcome: ApplyOutcome::default(),
+                stated_release: crate::core::osinstall::identify::StatedRelease::Unstated,
             };
             let value = serde_json::to_value(&result).unwrap();
-            expect_keys(&value, &["job_id", "destination", "outcome"]);
+            expect_keys(
+                &value,
+                &["job_id", "destination", "outcome", "stated_release"],
+            );
+        }
+
+        /// The five states `src/lib/osinstall.ts`'s `StatedRelease` union
+        /// keys on — an internally tagged enum, so each variant's own fields
+        /// sit alongside `verdict` rather than nested under it.
+        #[test]
+        fn stated_release_serialises_as_the_five_tagged_variants_the_frontend_reads() {
+            use crate::core::osinstall::identify::StatedRelease;
+
+            let confirmed = serde_json::to_value(StatedRelease::Confirmed {
+                stated: "Release 3.2.2".into(),
+            })
+            .unwrap();
+            assert_eq!(confirmed["verdict"], "confirmed");
+            assert_eq!(confirmed["stated"], "Release 3.2.2");
+
+            let mismatch = serde_json::to_value(StatedRelease::Mismatch {
+                expected: "Release 3.2.2".into(),
+                stated: "Release 3.2".into(),
+            })
+            .unwrap();
+            assert_eq!(mismatch["verdict"], "mismatch");
+            assert_eq!(mismatch["expected"], "Release 3.2.2");
+            assert_eq!(mismatch["stated"], "Release 3.2");
+
+            let unstated = serde_json::to_value(StatedRelease::Unstated).unwrap();
+            assert_eq!(unstated["verdict"], "unstated");
+
+            // Fix round 1, Finding 1 — the fourth ending, pinned on the wire
+            // the same way the other three are.
+            let unreadable = serde_json::to_value(StatedRelease::Unreadable {
+                detail: "malformed release marker: too many bytes".into(),
+            })
+            .unwrap();
+            assert_eq!(unreadable["verdict"], "unreadable");
+            assert_eq!(
+                unreadable["detail"],
+                "malformed release marker: too many bytes"
+            );
+
+            // Final whole-branch review, Finding E — the fifth ending,
+            // pinned on the wire the same way the other four are.
+            let expected_unknown = serde_json::to_value(StatedRelease::ExpectedUnknown {
+                stated: "Release 3.5".into(),
+            })
+            .unwrap();
+            assert_eq!(expected_unknown["verdict"], "expected-unknown");
+            assert_eq!(expected_unknown["stated"], "Release 3.5");
         }
 
         #[test]
@@ -4229,6 +4507,8 @@ mod tests {
                     "packages",
                     "packageMedia",
                     "userStartup",
+                    "removals",
+                    "layers",
                 ],
             );
         }
@@ -4245,6 +4525,7 @@ mod tests {
                 is_dir: true,
                 bytes: 0,
                 decompress: false,
+                merge_icon: false,
             };
             let value = serde_json::to_value(&item).unwrap();
             expect_keys(
@@ -4261,6 +4542,9 @@ mod tests {
                     // place a person can see that `dos.catalog.Z` on the
                     // medium becomes `dos.catalog` in the tree.
                     "decompress",
+                    // Whether this is a `RuleKind::IconTooltypes` item — see
+                    // `PlanItem::merge_icon`'s own doc comment.
+                    "mergeIcon",
                 ],
             );
             assert_eq!(value["isDir"], true);
@@ -4356,6 +4640,7 @@ mod tests {
                 files: Vec::new(),
                 paired_rom: Some(paired),
                 amiga_installed: Vec::new(),
+                layers: Vec::new(),
             };
             let manifest_value = serde_json::to_value(&manifest).unwrap();
             expect_keys(
@@ -4446,8 +4731,10 @@ mod tests {
                     | RefusalReason::MediaPathMissing { .. }
                     | RefusalReason::MediaUnreadable { .. }
                     | RefusalReason::RomUnknown
+                    | RefusalReason::ResidentTableUnreadable { .. }
                     | RefusalReason::DestinationCollision { .. }
                     | RefusalReason::MediaAmbiguous { .. }
+                    | RefusalReason::LayersShareFolder { .. }
                     | RefusalReason::ExclusiveGroupConflict { .. }
                     | RefusalReason::RuleKindMismatch { .. }
                     | RefusalReason::PackageUnknown { .. }
@@ -4500,6 +4787,14 @@ mod tests {
                 ),
                 (RefusalReason::RomUnknown, "rom-unknown", &["refusal"]),
                 (
+                    RefusalReason::ResidentTableUnreadable {
+                        component: "modules-a1200".into(),
+                        resident: "exec".into(),
+                    },
+                    "resident-table-unreadable",
+                    &["refusal", "component", "resident"],
+                ),
+                (
                     RefusalReason::DestinationCollision {
                         path: "C/Assign".into(),
                         components: vec!["a".into(), "b".into()],
@@ -4515,6 +4810,14 @@ mod tests {
                     },
                     "media-ambiguous",
                     &["refusal", "component", "volume_name", "paths"],
+                ),
+                (
+                    RefusalReason::LayersShareFolder {
+                        layers: vec!["base".into(), "up".into()],
+                        folder: r"D:\media\everything".into(),
+                    },
+                    "layers-share-folder",
+                    &["refusal", "layers", "folder"],
                 ),
                 (
                     RefusalReason::ExclusiveGroupConflict {

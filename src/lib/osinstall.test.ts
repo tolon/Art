@@ -61,13 +61,18 @@ interface RecipeComponent {
 
 interface Recipe {
   release: string;
+  /** Another recipe's `release` this one is layered onto (Task 8). Its own
+   *  file carries only its own components — the base's are merged in only
+   *  on the Rust side — so a based recipe here does not (yet) carry an id
+   *  like `workbench-base` at all. */
+  base?: string;
   components: RecipeComponent[];
 }
 
 /** Every recipe file ART ships, by the filename `recipe.rs` includes it
  *  under. Listed rather than globbed so a file added without being wired
  *  into `by_release` does not quietly join the suite. */
-const RECIPE_FILES = ["amigaos-3.2.json", "amigaos-3.9.json"];
+const RECIPE_FILES = ["amigaos-3.2.json", "amigaos-3.2.2.json", "amigaos-3.9.json"];
 
 function recipes(): Recipe[] {
   return RECIPE_FILES.map(
@@ -144,6 +149,13 @@ describe("every shipped recipe", () => {
     // `Prefs/Presets/Font-XX.prefs` into a drawer it owns, and they sit after
     // it in recipe order, which is what makes the declaration mean anything
     // (ART-224: an override declared *above* what it overrides is inert).
+    //
+    // **AmigaOS 3.2.2's five entries (Task 8) are read off its own file, not
+    // the merged tree** — `recipes()` here parses each JSON file raw, so a
+    // based recipe's `overrides` naming a *base-layer* id (`extras`,
+    // `workbench-base`, `diskdoctor`, …) shows up exactly as declared, in
+    // this file's own component order, and lands between the two releases
+    // whose file names bracket it in `RECIPE_FILES`.
     expect(declaring).toEqual([
       "AmigaOS 3.2/extras",
       "AmigaOS 3.2/locale-gr",
@@ -153,6 +165,11 @@ describe("every shipped recipe", () => {
       "AmigaOS 3.2/classes",
       "AmigaOS 3.2/modules-a1200",
       "AmigaOS 3.2/glowicons",
+      "AmigaOS 3.2.2/update-322-system",
+      "AmigaOS 3.2.2/update-322-classes",
+      "AmigaOS 3.2.2/update-322-diskdoctor",
+      "AmigaOS 3.2.2/update-322-modules-a1200",
+      "AmigaOS 3.2.2/update-322-modules-a1200-strap",
       "AmigaOS 3.9/workbench-39",
       "AmigaOS 3.9/locale-euro",
     ]);
@@ -167,7 +184,14 @@ describe("every shipped recipe", () => {
     // `major` would otherwise be projected as one of these two and render a
     // sentence that means something else — "below Kickstart V47" over a
     // requirement that is a floor, or the reverse.
-    const KNOWN = ["rom-older-than", "rom-at-least"];
+    //
+    // `resident-older-than` (Task 8) is a fourth kind, and it is *known*
+    // without being *explained*: `ComponentSummary::from` maps it to neither
+    // field on purpose (a resident's own version is a different number from
+    // either Kickstart bound this screen already renders a sentence for),
+    // so the two AmigaOS 3.2.2 Modules components carrying it are listed
+    // here rather than flagged as an unrecognised kind.
+    const KNOWN = ["rom-older-than", "rom-at-least", "resident-older-than"];
     const offenders: string[] = [];
     for (const recipe of recipes()) {
       for (const component of recipe.components) {
@@ -187,9 +211,10 @@ describe("every shipped recipe", () => {
     // into `conditionMajor` would put the switching vocabulary on screen
     // over a fact that switches nothing.
     //
-    // Both kinds are present in shipped data — 3.2's `modules-a1200` is
-    // `rom-older-than 47`, 3.9's `workbench-base` is `rom-at-least 40` —
-    // so neither half of this is vacuous.
+    // All three kinds are present in shipped data — 3.2's `modules-a1200` is
+    // `rom-older-than 47`, 3.9's `workbench-base` is `rom-at-least 40`, and
+    // AmigaOS 3.2.2's two Modules components are `resident-older-than` —
+    // so no branch below is vacuous.
     const seen: string[] = [];
     for (const recipe of recipes()) {
       for (const def of catalogueOf(recipe)) {
@@ -203,13 +228,22 @@ describe("every shipped recipe", () => {
         if (raw.condition === "rom-older-than") {
           expect(def.conditionMajor, def.id).toBe(raw.major);
           expect(def.requiresRomMajor, def.id).toBeNull();
-        } else {
+        } else if (raw.condition === "rom-at-least") {
           expect(def.requiresRomMajor, def.id).toBe(raw.major);
           expect(def.conditionMajor, def.id).toBeNull();
+        } else {
+          // `resident-older-than` — deliberately neither field (see this
+          // test's own doc comment above and `ComponentSummary::from`).
+          expect(def.conditionMajor, def.id).toBeNull();
+          expect(def.requiresRomMajor, def.id).toBeNull();
         }
       }
     }
-    expect([...new Set(seen)].sort()).toEqual(["rom-at-least", "rom-older-than"]);
+    expect([...new Set(seen)].sort()).toEqual([
+      "resident-older-than",
+      "rom-at-least",
+      "rom-older-than",
+    ]);
   });
 
   it("names each component id at most once, so a label can resolve", () => {
@@ -221,10 +255,18 @@ describe("every shipped recipe", () => {
 
   it("uses one component id for different media in different releases — which is why the list must be loaded", () => {
     // The concrete reason a hardcoded catalogue was wrong rather than merely
-    // redundant: both shipped recipes carry `workbench-base`, and it is not
-    // the same volume in each, so a label resolved against the wrong recipe
-    // names media that has nothing to do with what is being installed.
-    const media = recipes().map((r) => r.components.find((c) => c.id === "workbench-base")?.media);
+    // redundant: both shipped *unbased* recipes carry `workbench-base`, and
+    // it is not the same volume in each, so a label resolved against the
+    // wrong recipe names media that has nothing to do with what is being
+    // installed.
+    //
+    // Filtered to `!r.base` (Task 8): AmigaOS 3.2.2's own file inherits
+    // `workbench-base` only once merged on the Rust side, so it does not
+    // carry the id at all here — which would read as `undefined`, not as a
+    // third distinct volume, and is a different fact than this test checks.
+    const media = recipes()
+      .filter((r) => !r.base)
+      .map((r) => r.components.find((c) => c.id === "workbench-base")?.media);
     expect(media.every((m) => m !== undefined)).toBe(true);
     expect(new Set(media).size).toBe(media.length);
   });
@@ -243,7 +285,15 @@ describe("componentLabel", () => {
 
 describe("componentDef", () => {
   it("resolves against the list it is given, not a module constant", () => {
-    const [threeTwo, threeNine] = recipes().map(catalogueOf);
+    // Found by `release`, not by array position (Task 8): three recipe files
+    // now ship, and a positional `[a, b] = recipes().map(...)` destructure
+    // would silently pair `threeNine` with AmigaOS 3.2.2's own catalogue
+    // instead — which happens to still pass both assertions below (neither
+    // `workbench-base` nor `extras` is in 3.2.2's own unmerged file either),
+    // so a name lookup is what actually exercises the real 3.9 recipe.
+    const all = recipes();
+    const threeTwo = catalogueOf(all.find((r) => r.release === "AmigaOS 3.2")!);
+    const threeNine = catalogueOf(all.find((r) => r.release === "AmigaOS 3.9")!);
     expect(componentDef(threeTwo, "workbench-base")?.media).not.toBe(
       componentDef(threeNine, "workbench-base")?.media
     );
@@ -254,16 +304,32 @@ describe("componentDef", () => {
 describe("sanitizeChosen", () => {
   it("drops unknown and unavailable ids, keeps real available ones", () => {
     // `backdrops` used to belong in this list; it became available when the
-    // running system named its own wallpaper path (ART-127), so the
-    // unavailable example is `update-3.2.1`, which is still registered and
-    // still not implemented.
-    const catalogue = catalogueOf(recipes()[0]);
+    // running system named its own wallpaper path (ART-127). The unavailable
+    // example used to be the shipped `update-3.2.1` placeholder — removed in
+    // Task 8, since AmigaOS 3.2.2 is now its own recipe rather than a
+    // not-yet-built component of 3.2 — so this constructs its own §96
+    // "Coming Later" fixture instead of depending on any one shipped
+    // component staying unbuilt forever.
+    const catalogue: ComponentDef[] = [
+      ...catalogueOf(recipes()[0]),
+      {
+        id: "not-yet-built",
+        media: "SomeFutureDisk",
+        labelKey: null,
+        required: false,
+        available: false,
+        conditionMajor: null,
+        requiresRomMajor: null,
+        exclusiveGroup: null,
+        overrides: [],
+      },
+    ];
     expect(
       sanitizeChosen(catalogue, [
         "workbench-base",
         "extras",
         "not-a-real-id",
-        "update-3.2.1",
+        "not-yet-built",
         "backdrops",
       ])
     ).toEqual(["workbench-base", "extras", "backdrops"]);
@@ -317,6 +383,8 @@ function planWith(componentsOn: string[]): InstallPlan {
     userStartup: [],
     activations: [],
     mediaStamps: {},
+    removals: [],
+    layers: [],
   };
 }
 
@@ -539,6 +607,8 @@ describe("osinstallBlocker", () => {
         userStartup: [],
         activations: [],
         mediaStamps: {},
+        removals: [],
+        layers: [],
       },
     };
   }
@@ -555,8 +625,20 @@ describe("osinstallBlocker", () => {
     expect(
       osinstallBlocker({
         ...READY,
-        plan: planned({ items: [{ component: "workbench-base", media: "Workbench3.2", from: "DF0:C/Format", to: "C/Format", isDir: false,
-    decompress: false, bytes: 10 }] }),
+        plan: planned({
+          items: [
+            {
+              component: "workbench-base",
+              media: "Workbench3.2",
+              from: "DF0:C/Format",
+              to: "C/Format",
+              isDir: false,
+              decompress: false,
+              bytes: 10,
+              mergeIcon: false,
+            },
+          ],
+        }),
       })
     ).toBeNull();
   });
@@ -603,8 +685,18 @@ describe("osinstallBlocker", () => {
       found: ["Workbench3.2", "Locale-TR"],
       plan: planned({
         refusals: [MEDIA_MISSING("storage", "Storage3.2")],
-        items: [{ component: "workbench-base", media: "Workbench3.2", from: "DF0:C/Format", to: "C/Format", isDir: false,
-    decompress: false, bytes: 10 }],
+        items: [
+          {
+            component: "workbench-base",
+            media: "Workbench3.2",
+            from: "DF0:C/Format",
+            to: "C/Format",
+            isDir: false,
+            decompress: false,
+            bytes: 10,
+            mergeIcon: false,
+          },
+        ],
       }),
     });
     expect(blocker?.key).toBe("osinstall.blocked.refusals");

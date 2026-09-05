@@ -427,6 +427,16 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // both arms of the split - "your Kickstart is too old" and "you have not
     // chosen one" are different sentences that send somebody to different
     // places, which is [ART-232]'s neighbouring lesson.
-    expect(dynamicCalls).toBe(138);
+    // 138 -> 139 (layered release Task 10, one field per media layer):
+    // `OsInstall.tsx`'s `layerLabel()` renders `t(layer.labelKey)` for a
+    // media layer's own field, the same shape as "130 -> 131" one field
+    // above — a recipe's `MediaLayer.label_key` is data in the Rust tree, so
+    // there is no exhaustive TypeScript union to enumerate here either. The
+    // same three checks stand in for it: `dead-keys.test.ts` reads the
+    // recipe files themselves (already in its `DATA_FILES`), the shipped
+    // `amigaos-3.2.2.json` recipe is the only producer of an
+    // `osinstall.layer.*` key, and an unlayered recipe's empty `layers` means
+    // this call site is simply never reached for AmigaOS 3.2 or 3.9.
+    expect(dynamicCalls).toBe(139);
   });
 });

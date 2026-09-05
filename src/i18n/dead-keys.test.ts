@@ -77,6 +77,7 @@ const DATA_FILES = [
   // after a round nearly deleted five live labels — which is the whole lesson
   // of the paragraph above.
   resolve(SRC, "..", "src-tauri", "src", "core", "osinstall", "recipes", "amigaos-3.2.json"),
+  resolve(SRC, "..", "src-tauri", "src", "core", "osinstall", "recipes", "amigaos-3.2.2.json"),
   resolve(SRC, "..", "src-tauri", "src", "core", "osinstall", "recipes", "amigaos-3.9.json"),
 ];
 

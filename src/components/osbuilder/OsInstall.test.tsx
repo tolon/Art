@@ -43,7 +43,7 @@
 // still owed. See the narrowed ART-118 entry in `docs/ISSUES.md`.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import i18n from "i18next";
 
@@ -51,7 +51,9 @@ import { changeLanguage } from "@/i18n";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type {
   ComponentDef,
+  InstallLayer,
   InstallPlan,
+  InstallRelease,
   InstallRequest,
   MediaScanResult,
   OsInstallResult,
@@ -63,6 +65,8 @@ import type { RomInfo } from "@/lib/pistorm";
 
 const scanMediaMock = vi.hoisted(() => vi.fn());
 const componentsMock = vi.hoisted(() => vi.fn());
+const layersForMock = vi.hoisted(() => vi.fn());
+const layerForMediaMock = vi.hoisted(() => vi.fn());
 const planMock = vi.hoisted(() => vi.fn());
 const componentCollisionsMock = vi.hoisted(() => vi.fn());
 const applyMock = vi.hoisted(() => vi.fn());
@@ -79,6 +83,8 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
   osinstallScanMedia: scanMediaMock,
   osinstallComponents: componentsMock,
+  layersFor: layersForMock,
+  layerForMedia: layerForMediaMock,
   osinstallPlan: planMock,
   osinstallRescanMedia: rescanMock,
   osinstallReleaseForMedia: releaseForMediaMock,
@@ -264,6 +270,29 @@ function componentsFor(release: string): ComponentDef[] {
   return release === "AmigaOS 3.9" ? COMPONENTS_39 : COMPONENTS_32;
 }
 
+/**
+ * The layers `osinstall_layers` answers for AmigaOS 3.2.2 — Task 10's own
+ * subject. Every other shipped release answers empty, which is what makes
+ * "an unlayered release renders exactly what it renders today" a real test
+ * rather than an assumption (`layersFor` below).
+ */
+const LAYERS_322: InstallLayer[] = [
+  { id: "base", labelKey: "osinstall.layer.base32" },
+  { id: "update-3.2.2", labelKey: "osinstall.layer.update322" },
+];
+
+function layersForRelease(release: string): InstallLayer[] {
+  return release === "AmigaOS 3.2.2" ? LAYERS_322 : [];
+}
+
+/** A layer's own field label, resolved the same way `OsInstall.tsx` resolves
+ *  it — `t(labelKey)`, exact text, so `findByLabelText` finds the field this
+ *  layer's own "Browse" button lives beside. */
+function layerFieldLabel(layerId: string): string {
+  const layer = LAYERS_322.find((l) => l.id === layerId);
+  return layer?.labelKey ? i18n.t(layer.labelKey) : layerId;
+}
+
 const ITEM_WORKBENCH: PlanItem = {
   component: "workbench-base",
   media: "Workbench3.2",
@@ -272,6 +301,7 @@ const ITEM_WORKBENCH: PlanItem = {
   isDir: false,
   decompress: false,
   bytes: 2 * 1024 * 1024,
+  mergeIcon: false,
 };
 
 const ITEM_EXTRAS: PlanItem = {
@@ -282,6 +312,7 @@ const ITEM_EXTRAS: PlanItem = {
   isDir: false,
   decompress: false,
   bytes: 3 * 1024 * 1024,
+  mergeIcon: false,
 };
 
 /** The plan `osinstallPlan` would answer for a given request — items follow
@@ -322,6 +353,8 @@ function planResultFor(req: InstallRequest): PlanResult {
       userStartup: [],
       activations: [],
       mediaStamps: {},
+      removals: [],
+      layers: [],
     },
   };
 }
@@ -369,6 +402,14 @@ beforeEach(() => {
   componentsMock
     .mockReset()
     .mockImplementation((release: string) => Promise.resolve(componentsFor(release)));
+  layersForMock
+    .mockReset()
+    .mockImplementation((release: string) => Promise.resolve(layersForRelease(release)));
+  // The honest default: nothing found in a layer's own folder identifies as
+  // a *different* layer of the same release, so no test gets a wrong-layer
+  // hint it did not ask for. Tests for the hint itself (Task 10 fix round,
+  // Finding 1) override this per test.
+  layerForMediaMock.mockReset().mockResolvedValue(null);
   planMock.mockReset().mockImplementation((req: InstallRequest) => Promise.resolve(planResultFor(req)));
   // Nothing layering is switched on for AmigaOS 3.2, so this is never called
   // in most tests; an empty preview is the honest default for the ones where
@@ -397,6 +438,41 @@ async function renderFull() {
   // trip — wait for it rather than racing it.
   await screen.findByRole("checkbox", { name: "Extras3.2" });
   return utils;
+}
+
+/**
+ * Render, optionally starting on a chosen release — seeded directly into the
+ * build session's own remembered key, the way `FULL_FIELDS` already seeds
+ * AmigaOS 3.9's fields, rather than a picker click every caller would
+ * otherwise repeat. `"AmigaOS 3.2"` is the session's own default, so it is
+ * seeded like every other test that never mentions a release.
+ */
+function renderOsInstall(options: { release?: InstallRelease } = {}) {
+  seedRemembered(
+    options.release && options.release !== "AmigaOS 3.2"
+      ? { "buildSession.release": options.release }
+      : {}
+  );
+  return render(<OsInstall />);
+}
+
+/** One layer's own "Browse" button, clicked through the field its label
+ *  names — the same control a user reaches for. */
+async function browseLayerFolder(layerId: string, path: string) {
+  dialogOpenMock.mockResolvedValueOnce(path);
+  const field = await screen.findByLabelText(layerFieldLabel(layerId));
+  await userEvent.click(within(field).getByRole("button", { name: i18n.t("common.browse") }));
+}
+
+/** Renders on AmigaOS 3.2.2, browses every named layer's own folder in turn,
+ *  and answers the request `osinstallPlan` was actually sent. */
+async function planWithFolders(folders: Record<string, string>): Promise<InstallRequest> {
+  renderOsInstall({ release: "AmigaOS 3.2.2" });
+  for (const [layerId, path] of Object.entries(folders)) {
+    await browseLayerFolder(layerId, path);
+  }
+  await waitFor(() => expect(planMock).toHaveBeenCalled());
+  return planMock.mock.calls.at(-1)![0] as InstallRequest;
 }
 
 describe("OsInstall renders past its headings", () => {
@@ -913,6 +989,8 @@ describe("a folder that is simply the wrong one (ART-208)", () => {
           userStartup: [],
           activations: [],
           mediaStamps: {},
+          removals: [],
+          layers: [],
         },
       } satisfies PlanResult)
     );
@@ -990,6 +1068,8 @@ describe("a folder that is simply the wrong one (ART-208)", () => {
         userStartup: [],
         activations: [],
         mediaStamps: {},
+        removals: [],
+        layers: [],
       },
     } satisfies PlanResult);
     releaseForMediaMock.mockReset().mockResolvedValue(null);
@@ -1089,6 +1169,8 @@ describe("a refusal renders as a sentence, not a blank", () => {
       userStartup: [],
       activations: [],
       mediaStamps: {},
+      removals: [],
+      layers: [],
     };
     planMock.mockReset().mockResolvedValue({ outcome: "planned", plan: refusedPlan } satisfies PlanResult);
 
@@ -1107,6 +1189,53 @@ describe("a refusal renders as a sentence, not a blank", () => {
 
     expect(rendered.textContent?.trim().length).toBeGreaterThan(0);
     expect(KEY_SHAPE.test(rendered.textContent ?? "")).toBe(false);
+  });
+
+  // **Final whole-branch review, Finding F.** This is the one refusal that
+  // tells the user to go and tick the named component themselves — and a
+  // raw recipe id ("modules-a1200") is not a checkbox a person can find on
+  // screen; the checklist shows it by its label ("ModulesA1200_3.2", this
+  // fixture's `COMPONENTS_32` entry, since it declares no `labelKey`).
+  it("names the component to tick by its own label, never the raw recipe id", async () => {
+    const refusal: RefusalReason = {
+      refusal: "resident-table-unreadable",
+      component: "modules-a1200",
+      resident: "exec",
+    };
+    const refusedPlan: InstallPlan = {
+      release: "3.2",
+      items: [],
+      refusals: [refusal],
+      totalBytes: 0,
+      totalFiles: 0,
+      componentsOn: ["workbench-base", "install-libs"],
+      mediaPaths: {},
+      packages: [],
+      packageMedia: {},
+      userStartup: [],
+      activations: [],
+      mediaStamps: {},
+      removals: [],
+      layers: [],
+    };
+    planMock
+      .mockReset()
+      .mockResolvedValue({ outcome: "planned", plan: refusedPlan } satisfies PlanResult);
+
+    seedRemembered({
+      "osinstall.mediaFolder": "E:\\media",
+      "osinstall.destination": "E:\\dist",
+    });
+    render(<OsInstall />);
+
+    // Computed the way the screen itself computes it (Finding F's own fix):
+    // the raw id resolved to `COMPONENTS_32`'s `modules-a1200` entry's own
+    // label, "ModulesA1200_3.2" (it declares no `labelKey`, so `label()`
+    // falls back to the component's `media`).
+    const phrase = refusalPhrase(refusal);
+    const expectedSentence = i18n.t(phrase.key, { ...phrase.params, component: "ModulesA1200_3.2" });
+    const rendered = await screen.findByText(expectedSentence);
+    expect(rendered.textContent).not.toContain("modules-a1200");
   });
 });
 
@@ -1243,7 +1372,16 @@ describe("a release switch does not leave the other release's answers on screen 
   const FINISHED_39: OsInstallResult = {
     job_id: 1,
     destination: "E:\\amiga\\dist-3.9",
-    outcome: { root: "E:\\amiga\\dist-3.9", files: 1915, directories: 75, bytes: 1024 },
+    outcome: {
+      root: "E:\\amiga\\dist-3.9",
+      files: 1915,
+      directories: 75,
+      bytes: 1024,
+      removed: [],
+      icons: [],
+      iconMergeFailures: 0,
+    },
+    stated_release: { verdict: "unstated" },
   };
 
   it("takes a finished install's report down when the release changes", async () => {
@@ -1309,7 +1447,16 @@ describe("the tree it builds is the tree the next steps get (ART-197)", () => {
   const FINISHED: OsInstallResult = {
     job_id: 1,
     destination: "E:\\amiga\\dist-3.9",
-    outcome: { root: "E:\\amiga\\dist-3.9", files: 1915, directories: 75, bytes: 1024 },
+    outcome: {
+      root: "E:\\amiga\\dist-3.9",
+      files: 1915,
+      directories: 75,
+      bytes: 1024,
+      removed: [],
+      icons: [],
+      iconMergeFailures: 0,
+    },
+    stated_release: { verdict: "unstated" },
   };
 
   it("hands a finished install's destination to the session", async () => {
@@ -1374,6 +1521,173 @@ describe("the tree it builds is the tree the next steps get (ART-197)", () => {
     // - which is what makes the move cost nothing.
     const shown = await screen.findAllByText("E:\\amiga\\picked-by-hand");
     expect(shown.length).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 9: what the tree's own release marker says, on its own line
+// ---------------------------------------------------------------------------
+//
+// Three distinct sentences, never folded into one — CLAUDE.md's answer to
+// the round that shipped AmigaOS 3.5 labelled 3.9. Each test below sends a
+// different `stated_release` verdict and asserts the one sentence it names,
+// never the other two: collapsing "confirmed" and "mismatch" into a shared
+// wording would still pass a test that only checked *a* sentence appeared.
+
+describe("Task 9: the tree's own release marker gets its own line", () => {
+  function captureAnnounce(): { current: ((r: OsInstallResult) => void) | null } {
+    const held: { current: ((r: OsInstallResult) => void) | null } = { current: null };
+    onResultMock.mockImplementation((fn: (r: OsInstallResult) => void) => {
+      held.current = fn;
+      return Promise.resolve(() => {});
+    });
+    return held;
+  }
+
+  const BASE_OUTCOME = {
+    root: "E:\\amiga\\dist",
+    files: 10,
+    directories: 2,
+    bytes: 1024,
+    removed: [],
+    icons: [],
+    iconMergeFailures: 0,
+  };
+
+  it("reports a confirmed marker by its own text", async () => {
+    const announce = captureAnnounce();
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(announce.current).not.toBeNull());
+
+    act(() =>
+      announce.current!({
+        job_id: 1,
+        destination: "E:\\amiga\\dist",
+        outcome: BASE_OUTCOME,
+        stated_release: { verdict: "confirmed", stated: "Release 3.2.2" },
+      })
+    );
+
+    await screen.findByText(
+      i18n.t("osinstall.result.statedRelease.confirmed", { stated: "Release 3.2.2" })
+    );
+    expect(
+      screen.queryByText(i18n.t("osinstall.result.statedRelease.unstated"))
+    ).toBeNull();
+  });
+
+  // **The mutation table's third row.** Naming both sides is the point of
+  // this sentence — the frontend key this pins is exactly what collapsing
+  // the three sentences into one would break.
+  it("names both sides of a mismatch", async () => {
+    const announce = captureAnnounce();
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(announce.current).not.toBeNull());
+
+    act(() =>
+      announce.current!({
+        job_id: 1,
+        destination: "E:\\amiga\\dist",
+        outcome: BASE_OUTCOME,
+        stated_release: {
+          verdict: "mismatch",
+          expected: "Release 3.2.2",
+          stated: "Release 3.2",
+        },
+      })
+    );
+
+    await screen.findByText(
+      i18n.t("osinstall.result.statedRelease.mismatch", {
+        expected: "Release 3.2.2",
+        stated: "Release 3.2",
+      })
+    );
+    expect(screen.queryByText(/\{\{/)).toBeNull();
+  });
+
+  it("says a tree with no marker states none, not a guess", async () => {
+    const announce = captureAnnounce();
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(announce.current).not.toBeNull());
+
+    act(() =>
+      announce.current!({
+        job_id: 1,
+        destination: "E:\\amiga\\dist",
+        outcome: BASE_OUTCOME,
+        stated_release: { verdict: "unstated" },
+      })
+    );
+
+    await screen.findByText(i18n.t("osinstall.result.statedRelease.unstated"));
+  });
+
+  // **Fix round 1, Finding 1.** An unreadable marker must never render the
+  // same sentence as "states none" — the two are different facts with
+  // different next steps, and folding them is the exact defect this task
+  // exists to catch.
+  it("says the marker could not be read, never the same sentence as unstated", async () => {
+    const announce = captureAnnounce();
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(announce.current).not.toBeNull());
+
+    act(() =>
+      announce.current!({
+        job_id: 1,
+        destination: "E:\\amiga\\dist",
+        outcome: BASE_OUTCOME,
+        stated_release: {
+          verdict: "unreadable",
+          detail: "malformed release marker: too many bytes",
+        },
+      })
+    );
+
+    await screen.findByText(
+      i18n.t("osinstall.result.statedRelease.unreadable", {
+        detail: "malformed release marker: too many bytes",
+      })
+    );
+    expect(
+      screen.queryByText(i18n.t("osinstall.result.statedRelease.unstated"))
+    ).toBeNull();
+  });
+
+  // **Final whole-branch review, Finding E.** A differing marker for a
+  // release ART has never measured (AmigaOS 3.9 today) must render its own
+  // sentence, and never the "mismatch" wording — that would tell the user
+  // their correct tree is wrong for a formula nobody has checked.
+  it("reports a differing marker for an unmeasured release plainly, never as a mismatch", async () => {
+    const announce = captureAnnounce();
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(announce.current).not.toBeNull());
+
+    act(() =>
+      announce.current!({
+        job_id: 1,
+        destination: "E:\\amiga\\dist",
+        outcome: BASE_OUTCOME,
+        stated_release: { verdict: "expected-unknown", stated: "Release 3.5" },
+      })
+    );
+
+    await screen.findByText(
+      i18n.t("osinstall.result.statedRelease.expectedUnknown", { stated: "Release 3.5" })
+    );
+    expect(
+      screen.queryByText(
+        i18n.t("osinstall.result.statedRelease.mismatch", {
+          expected: "Release 3.9",
+          stated: "Release 3.5",
+        })
+      )
+    ).toBeNull();
   });
 });
 
@@ -1550,5 +1864,122 @@ describe("choosing the keyboard the system boots with", () => {
         (screen.getByRole("combobox", { name: /keyboard layout/i }) as HTMLSelectElement).value
       ).toBe("")
     );
+  });
+});
+
+// ART-207's own rule taken one level finer: instead of one media folder plus
+// a bag of extra ones, a layered recipe (AmigaOS 3.2.2's own `base` and
+// `update-3.2.2`) is asked one **labelled** question per layer it declares.
+// `layersFor` carries that shape from the recipe (Task 8's own `label_key`s)
+// to the screen; an unlayered release answers empty, and the screen must
+// render exactly what it always has for one.
+describe("one folder field per media layer the release declares (Task 10)", () => {
+  it("shows one labelled folder field per layer, in the recipe's own order", async () => {
+    renderOsInstall({ release: "AmigaOS 3.2.2" });
+
+    const base = await screen.findByLabelText(i18n.t("osinstall.layer.base32"));
+    const update = await screen.findByLabelText(i18n.t("osinstall.layer.update322"));
+    expect(base).toBeTruthy();
+    expect(update).toBeTruthy();
+
+    // Declaration order, not merely presence — a screen rendering the
+    // recipe's own layers in reverse would still pass the two lines above.
+    expect(
+      Boolean(base.compareDocumentPosition(update) & Node.DOCUMENT_POSITION_FOLLOWING)
+    ).toBe(true);
+  });
+
+  it("sends one folder per layer", async () => {
+    const sent = await planWithFolders({
+      base: "E:\\media\\3.2",
+      "update-3.2.2": "E:\\media\\Update3.2.2",
+    });
+    expect(sent.mediaFolders).toEqual({
+      base: "E:\\media\\3.2",
+      "update-3.2.2": "E:\\media\\Update3.2.2",
+    });
+  });
+
+  it("keeps the single folder field for an unlayered release", async () => {
+    renderOsInstall({ release: "AmigaOS 3.2" });
+
+    expect(await screen.findByLabelText(/media/i)).toBeTruthy();
+    // The layered screen's own add-folder list must not appear at all — see
+    // the module doc comment on `layers` in `OsInstall.tsx`.
+    expect(screen.queryByTestId("extra-media-folder")).toBeNull();
+  });
+
+  it("remembers each layer's folder separately across a remount", async () => {
+    // ART's standing rule: nothing changes unless the user changes it — and
+    // per layer, since a single shared key would hand the update field the
+    // base folder the first time somebody switched releases.
+    const { unmount } = renderOsInstall({ release: "AmigaOS 3.2.2" });
+    await browseLayerFolder("base", "E:\\a");
+    await browseLayerFolder("update-3.2.2", "E:\\b");
+    expect((await screen.findByLabelText(layerFieldLabel("base"))).textContent).toContain("E:\\a");
+    expect((await screen.findByLabelText(layerFieldLabel("update-3.2.2"))).textContent).toContain(
+      "E:\\b"
+    );
+
+    // Remount **without re-seeding**: `renderOsInstall`'s own `seedRemembered`
+    // replaces the whole remembered bag, which would defeat the point of this
+    // test by wiping the very writes it is asking about. A real remount reads
+    // back whatever `settings.json` actually holds — here, the live Zustand
+    // store the two browses above just wrote into, release included.
+    unmount();
+    render(<OsInstall />);
+
+    expect((await screen.findByLabelText(layerFieldLabel("base"))).textContent).toContain("E:\\a");
+    expect((await screen.findByLabelText(layerFieldLabel("update-3.2.2"))).textContent).toContain(
+      "E:\\b"
+    );
+  });
+
+  // Fix round 1, Finding 1: the mistake a two-field screen invites most —
+  // the update disks pointed at the base field, or the reverse — is still
+  // "AmigaOS 3.2.2 media" at the release level, so `wrongMediaFolder` and
+  // `osinstallReleaseForMedia` cannot see it. `layerForMedia` is the
+  // per-layer question that can.
+  it("warns a layer's own field when its folder holds a different layer's own disks", async () => {
+    const UPDATE_FOLDER = "E:\\media\\Update3.2.2";
+    scanMediaMock.mockReset().mockImplementation((folder: string) =>
+      Promise.resolve(
+        folder === UPDATE_FOLDER
+          ? ({
+              outcome: "found",
+              media: [{ path: "E:\\x", volumeName: "Update3.2.2", kind: "floppy" }],
+            } satisfies MediaScanResult)
+          : ({ outcome: "found", media: [] } satisfies MediaScanResult)
+      )
+    );
+    layerForMediaMock
+      .mockReset()
+      .mockImplementation((_release: string, names: string[]) =>
+        Promise.resolve(names.includes("Update3.2.2") ? "update-3.2.2" : null)
+      );
+
+    renderOsInstall({ release: "AmigaOS 3.2.2" });
+    // The mistake itself: the update disks, in the base field.
+    await browseLayerFolder("base", UPDATE_FOLDER);
+
+    const hint = await screen.findByTestId("layer-wrong-hint-base");
+    expect(hint.textContent).toContain("Update3.2.2");
+    // Named by what the media actually is, not a bare id.
+    expect(hint.textContent).toContain(layerFieldLabel("update-3.2.2"));
+    // The field that is actually right must carry no hint of its own.
+    expect(screen.queryByTestId("layer-wrong-hint-update-3.2.2")).toBeNull();
+  });
+
+  it("carries no hint once every field's own folder holds what it expects", async () => {
+    // The default `beforeEach` wiring already answers this way; asserted
+    // explicitly so a change to that default cannot silently start every
+    // other test in this file with a hint nobody wrote.
+    renderOsInstall({ release: "AmigaOS 3.2.2" });
+    await browseLayerFolder("base", "E:\\media\\3.2");
+    await browseLayerFolder("update-3.2.2", "E:\\media\\Update3.2.2");
+
+    await screen.findByLabelText(layerFieldLabel("base"));
+    expect(screen.queryByTestId("layer-wrong-hint-base")).toBeNull();
+    expect(screen.queryByTestId("layer-wrong-hint-update-3.2.2")).toBeNull();
   });
 });

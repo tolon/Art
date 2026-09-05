@@ -77,12 +77,32 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::error::{CoreError, CoreResult};
 
-/// Whether a rule takes one file or a whole subtree.
+/// Whether a rule takes one file, a whole subtree, or amends an icon already
+/// in the tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RuleKind {
     File,
     Subtree,
+    /// Merge `from`'s tool types and stack size into the file already at
+    /// `to` — `core::amigaicon::merge_tooltypes`. Exists because AmigaOS
+    /// 3.2.2's update ships `Tools/IconEdit.info` with `do_StackSize`
+    /// **doubled**, from 4 096 to 8 192, for a binary the same update
+    /// replaces, while the icon an ART-built tree already carries is not the
+    /// update's own icon at all — it is the GlowIcons one, 1 486 bytes of
+    /// appended ColorIcon artwork heavier and sitting at a different desktop
+    /// position. A plain `File` rule would drop that artwork; skipping the
+    /// icon update entirely would run the replaced binary on the old,
+    /// undersized stack. So this rule amends rather than replaces, the same
+    /// way the release's own installer does.
+    ///
+    /// Resolves against a media **file**, exactly like [`RuleKind::File`] —
+    /// a directory at `from` is a [`RefusalReason::RuleKindMismatch`], the
+    /// same as its siblings — and participates in the destination-collision
+    /// check exactly like a `File` rule: it amends a file some other
+    /// component placed, so the component using it must declare `overrides`
+    /// naming that component.
+    IconTooltypes,
 }
 
 /// One path taken out of a component's media.
@@ -96,7 +116,12 @@ pub struct PathRule {
 }
 
 /// When a component applies without the user being asked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// No longer [`Copy`] as of [`ResidentOlderThan`](Self::ResidentOlderThan):
+/// that variant carries an owned `String`, so callers that used to read a
+/// `Condition` out of a `&Component` by value now match on a reference (see
+/// `plan::rom_requirement`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "condition", rename_all = "kebab-case")]
 pub enum Condition {
     /// On when the paired Kickstart's own stated major is below this.
@@ -128,6 +153,42 @@ pub enum Condition {
     /// Same evidence rule as its sibling: the ROM's own header answers it
     /// (`core::rom::stated_version`), never `KNOWN_ROMS` (ART-104).
     RomAtLeast { major: u16 },
+    /// The named resident **inside the paired Kickstart** is older than this.
+    ///
+    /// `exec` and `strap` are the two names AmigaOS 3.2.2's own Modules step
+    /// asks about — but it does not ask a ROM file at all, it asks the
+    /// **running machine** for `exec.library`'s revision and for `strap`'s
+    /// version. ART has no running machine, so this reads the same two
+    /// numbers out of the paired ROM's own resident table
+    /// (`core::rom::resident_version`) instead.
+    ///
+    /// Deliberately distinct from [`Condition::RomOlderThan`], which asks
+    /// the ROM's own *header* version — a different number that tracks
+    /// neither `exec.library` nor `strap`, measured against the owner's own
+    /// three A1200 Kickstarts (the design's §5, reproduced on
+    /// `core::rom::residents`'s own doc comment):
+    ///
+    /// | Paired Kickstart | header | `exec.library` | `strap` | release does |
+    /// |---|---|---|---|---|
+    /// | 3.2 `kicka1200.rom`      | 47.96  | 47.7  | **45.1** | modules on, larger set  |
+    /// | 3.2.1 `A1200.47.102.rom` | 47.102 | 47.8  | 47.2     | modules on, smaller set |
+    /// | 3.2.2 `A1200.47.111.rom` | 47.111 | 47.10 | 47.2     | modules off             |
+    ///
+    /// A header proxy collapses the first two rows into one outcome and
+    /// would place `Shell-Seg` and three library modules onto a 47.102
+    /// machine the release deliberately withholds them from — which is why
+    /// this condition exists rather than a `minor` field on `RomOlderThan`.
+    ///
+    /// The comparison is lexicographic on `(major, minor)`, and the major
+    /// alone when `minor` is `None`. **A resident the ROM does not carry
+    /// never satisfies this** — absent is not "older"; defaulting the other
+    /// way would switch the component on for every ROM ART cannot read.
+    ResidentOlderThan {
+        resident: String,
+        major: u16,
+        #[serde(default)]
+        minor: Option<u16>,
+    },
 }
 
 /// The Kickstart a distribution tree was planned against, and what it needs
@@ -291,22 +352,107 @@ pub struct Component {
     /// Registered but not built (CLAUDE.md, §96): shown as Coming Later.
     #[serde(default = "yes")]
     pub available: bool,
+    /// Which [`MediaLayer`] this component's `media` lives in. `None` is the
+    /// only legal value in an unlayered recipe and is refused in a layered
+    /// one — a component that searched every layer would be resolving by
+    /// order, which is the thing this design exists to avoid.
+    #[serde(default)]
+    pub layer: Option<String>,
+    /// Destinations this component **deletes from the distribution tree**.
+    ///
+    /// AmigaOS 3.2.2's Installer deletes `Tools/TextEditFileTypes/Default4Types`
+    /// as unsupported, and that file reaches an ART tree from `Extras3.2`. A
+    /// `from`/`to` rule cannot say it.
+    ///
+    /// **Only inside the tree ART is building.** This never names a path on
+    /// the user's own disks; `core/hostfs`'s recycler is a different thing for
+    /// a different threat and this does not become it.
+    #[serde(default)]
+    pub removes: Vec<String>,
 }
 
 fn yes() -> bool {
     true
 }
 
+/// One set of install media a recipe reads from, named so a component can
+/// say which set its `media` lives in.
+///
+/// **A layer is stated by the recipe, never inferred from the order folders
+/// were added.** Two AmigaOS releases can ship a disk under one volume name —
+/// the owner's 3.2 and 3.2.2 sets each carry a `DiskDoctor`, 901 120 bytes
+/// apiece with different SHA-256s — and which of them a component wants is a
+/// fact about the release, not about which folder somebody picked first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaLayer {
+    pub id: String,
+    /// An **i18n key** for this layer's own folder field on the media step,
+    /// for the reason `Component::label_key` is a key: the recipe is data in
+    /// the Rust tree with no compiler between it and the screen.
+    ///
+    /// `rename(serialize = "labelKey")` rather than a struct-wide
+    /// `rename_all` (`ComponentSummary`'s own shape, which this cannot
+    /// share): the shipped recipe JSON spells this field `label_key`
+    /// (`recipes/amigaos-3.2.2.json`), so a blanket camelCase rename would
+    /// fix `osinstall_layers`'s outbound wire and break every recipe's own
+    /// `Deserialize` in the same commit. Serialize only.
+    #[serde(default, rename(serialize = "labelKey"))]
+    pub label_key: Option<String>,
+}
+
+/// Which folder [`plan::plan`] actually read one [`MediaLayer`]'s media from,
+/// recorded in [`apply::DistributionManifest::layers`] (Task 9).
+///
+/// **Why the manifest needs this at all.** `built_from` already names every
+/// *medium* (a volume name and its SHA-256) the tree was built from, but not
+/// which folder the user pointed each layer at — and a layered install reads
+/// from more than one folder (AmigaOS 3.2.2 is the user's own 3.2 set plus a
+/// separate update folder). `id` matches [`MediaLayer::id`] exactly, so a
+/// screen or a future "rebuild this layer" flow can join the two without
+/// guessing at order.
+///
+/// `folder` is always the path [`plan::InstallRequest::media_folders`] (or,
+/// for an unlayered recipe, `media_folder`/`extra_media_folders`) actually
+/// carried — never re-derived, for the same reason `built_from`'s SHA-256 is
+/// read off the real file rather than assumed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayerRecord {
+    pub id: String,
+    pub folder: std::path::PathBuf,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Recipe {
     /// `"AmigaOS 3.2"`.
     pub release: String,
+    /// Another recipe's `release` string, whose components this one inherits.
+    ///
+    /// **A release update is layered, and the release says so itself**:
+    /// AmigaOS 3.2.2's own `HowToInstall` requires "a successful installation
+    /// of AmigaOS 3.2 or 3.2.1". Expressing that as `base` keeps the base's
+    /// thirty-odd components in one file instead of two copies that drift.
+    #[serde(default)]
+    pub base: Option<String>,
+    /// The media sets this recipe reads from, in the order a release states.
+    /// Empty means one implicit layer, which is every recipe that shipped
+    /// before this existed.
+    #[serde(default)]
+    pub layers: Vec<MediaLayer>,
     pub components: Vec<Component>,
 }
 
 impl Recipe {
     pub fn component(&self, id: &str) -> Option<&Component> {
         self.components.iter().find(|c| c.id == id)
+    }
+
+    pub fn is_layered(&self) -> bool {
+        !self.layers.is_empty()
+    }
+
+    pub fn layer_ids(&self) -> Vec<&str> {
+        self.layers.iter().map(|l| l.id.as_str()).collect()
     }
 }
 
@@ -672,6 +818,30 @@ pub enum RefusalReason {
     },
     /// The ROM was not identified, so a `Condition` cannot be decided.
     RomUnknown,
+    /// The paired Kickstart **was** identified — its header states a version
+    /// fine — but its resident module table could not be read, so a
+    /// [`Condition::ResidentOlderThan`] naming `resident` cannot be decided
+    /// for `component`.
+    ///
+    /// **A different fact than [`RomUnknown`](Self::RomUnknown).** That
+    /// variant means the ROM itself could not be identified at all, and is
+    /// reported once for the whole plan because it is a fact about the ROM,
+    /// not about any one component. This one is a fact about *this*
+    /// component's own question — the ROM is fine, only the scan
+    /// [`core::rom::residents`] runs over it failed — so a plan with two
+    /// components each asking about a different resident gets two of these,
+    /// named separately, while every unrelated component still plans
+    /// exactly as if nothing happened.
+    ///
+    /// Exists because folding an unreadable scan into an empty resident
+    /// table (which `ResidentOlderThan`'s own "absent is not older" rule
+    /// requires for a resident the ROM genuinely does not carry) would make
+    /// "this Kickstart does not need the modules" and "ART could not tell"
+    /// look identical — a confident wrong sentence on screen, and the
+    /// scenario the whole "endings stay distinct" rule exists to rule out.
+    ///
+    /// [`core::rom::residents`]: crate::core::rom::residents
+    ResidentTableUnreadable { component: String, resident: String },
     /// A component asks to switch something on that no rule puts on the tree
     /// — see [`Activation`]. Refused rather than skipped: a `Devs/Monitors`
     /// entry copied from a file that is not on the disk is either a silent
@@ -708,6 +878,21 @@ pub enum RefusalReason {
         volume_name: String,
         paths: Vec<String>,
     },
+    /// Two or more of a layered recipe's [`MediaLayer`]s were pointed at the
+    /// **same folder**.
+    ///
+    /// A layer is how a layered recipe tells the base release's own
+    /// `DiskDoctor` apart from an update's `DiskDoctor` sharing its name —
+    /// which one a component wants is a fact about the recipe, never about
+    /// which folder happened to answer first. Pointing two layers at one
+    /// folder cannot be resolved by looking harder at that folder; it means
+    /// the folders that would keep the two disks apart were never given.
+    /// `layers` carries every layer id sharing the folder, for the reason
+    /// `MediaAmbiguous::paths` already gives: the user's next question is
+    /// always "which ones?". Named by the fields, not by the disks it would
+    /// otherwise fail to tell apart — the layer step is where this is caught,
+    /// before any component's media is even looked for.
+    LayersShareFolder { layers: Vec<String>, folder: String },
     /// Two or more components sharing an `exclusive_group` are both
     /// switched on at once — `plan()` checks this against the **resolved**
     /// set (`InstallPlan::components_on`), not the request, because a
@@ -1121,7 +1306,9 @@ pub(crate) mod fixtures {
         for component in recipe.components.iter().filter(|c| c.media == volume) {
             for rule in &component.rules {
                 match rule.kind {
-                    super::RuleKind::File => entries.push((rule.from.clone(), b"data".to_vec(), 0)),
+                    super::RuleKind::File | super::RuleKind::IconTooltypes => {
+                        entries.push((rule.from.clone(), b"data".to_vec(), 0))
+                    }
                     super::RuleKind::Subtree if !rule.from.is_empty() => {
                         entries.push((format!("{}/placeholder", rule.from), b"data".to_vec(), 0));
                     }
@@ -1205,6 +1392,7 @@ pub(crate) mod fixtures {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: std::collections::BTreeMap::new(),
             keymap: None,
             rom,
             chosen: chosen.iter().map(|s| s.to_string()).collect(),
@@ -1246,6 +1434,8 @@ pub(crate) mod fixtures {
     pub fn package_test_recipe() -> super::Recipe {
         super::Recipe {
             release: "Test OS".to_string(),
+            base: None,
+            layers: vec![],
             components: vec![super::Component {
                 activate: vec![],
                 id: "base-c".to_string(),
@@ -1261,7 +1451,9 @@ pub(crate) mod fixtures {
                 user_startup: Vec::new(),
                 exclusive_group: None,
                 label_key: None,
+                layer: None,
                 available: true,
+                removes: Vec::new(),
             }],
         }
     }
@@ -1287,7 +1479,9 @@ pub(crate) mod fixtures {
             user_startup: Vec::new(),
             exclusive_group: None,
             label_key: None,
+            layer: None,
             available: true,
+            removes: Vec::new(),
         };
         super::package::Package {
             id: "test-package".to_string(),
@@ -1369,7 +1563,9 @@ pub(crate) mod fixtures {
             user_startup: Vec::new(),
             exclusive_group: None,
             label_key: None,
+            layer: None,
             available: true,
+            removes: Vec::new(),
         };
         super::package::Package {
             id: "test-package-two".to_string(),

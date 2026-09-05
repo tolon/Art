@@ -114,8 +114,8 @@ use serde::{Deserialize, Serialize};
 
 use super::package::Package;
 use super::scan::{
-    find_media_across, find_packages, media_for, open_media_cached, open_package_staging_in,
-    package_for, MediaMatch, PackageMedium,
+    find_media_across, find_media_in_layers, find_packages, media_for_layer, open_media_cached,
+    open_package_staging_in, package_for, MediaMatch, PackageMedium,
 };
 use super::scan_cache::ScanCache;
 use super::source::MediaSource;
@@ -138,6 +138,29 @@ pub struct RomFacts {
     /// Kept whole so `plan()` can record the pairing without reading the file
     /// twice — and so a future condition can ask about the machine.
     pub info: crate::core::rom::RomInfo,
+    /// The paired Kickstart's own resident modules — what
+    /// [`Condition::ResidentOlderThan`] reads. Not folded into `major`: the
+    /// header version and a resident's own version answer two different
+    /// questions (the design's §5, reproduced on
+    /// `core::rom::residents`'s own doc comment), and this task exists
+    /// precisely because they were found to disagree.
+    ///
+    /// **Empty means two different things, and `residents_readable` is what
+    /// tells them apart.** `core::rom::residents` failing on a dump this
+    /// module's header already identified (an unrecognised image size) also
+    /// produces an empty `Vec` here — the same shape a ROM that genuinely
+    /// carries no such resident produces. Reading `residents` alone cannot
+    /// distinguish "this Kickstart does not need the modules" from "ART
+    /// could not tell", which is exactly the confident-wrong sentence
+    /// fix round 1 of this task found: `condition_holds` checks
+    /// `residents_readable` first and refuses
+    /// ([`RefusalReason::ResidentTableUnreadable`]) rather than silently
+    /// reading "unreadable" as "absent".
+    pub residents: Vec<crate::core::rom::RomResident>,
+    /// Whether `core::rom::residents` actually succeeded reading the table
+    /// above — see that field's own doc comment for why this cannot be
+    /// inferred from an empty `Vec`.
+    pub residents_readable: bool,
 }
 
 /// Read the paired Kickstart's own stated major.
@@ -152,13 +175,37 @@ pub fn rom_facts(rom: &Path) -> CoreResult<RomFacts> {
     let (major, _minor) = crate::core::rom::stated_version(&bytes).ok_or_else(|| {
         CoreError::InvalidInput("this file does not state a Kickstart version".into())
     })?;
-    Ok(RomFacts { major, info })
+    // A dump whose size `core::rom::residents` does not recognise (never a
+    // plain 512 KiB or 256 KiB image) fails the *resident* scan without
+    // failing `rom_facts` itself — the header above already answered the
+    // question `rom_facts` exists to answer. But the failure is not
+    // discarded: `residents_readable` carries it forward so
+    // `condition_holds` can tell "this ROM does not carry the resident"
+    // apart from "ART could not read this ROM's table at all" rather than
+    // treating both as the same empty `Vec` (fix round 1, F1).
+    let (residents, residents_readable) = match crate::core::rom::residents(&bytes) {
+        Ok(table) => (table, true),
+        Err(_) => (Vec::new(), false),
+    };
+    Ok(RomFacts {
+        major,
+        info,
+        residents,
+        residents_readable,
+    })
 }
 
 /// Whether a conditional component switches on, given the facts already
 /// read about the paired ROM — `None` when the ROM could not be identified
 /// at all, which refuses rather than guessing (see the module doc comment).
+///
+/// `component` names the caller's own component id and is used for exactly
+/// one thing: building [`RefusalReason::ResidentTableUnreadable`], which —
+/// unlike [`RefusalReason::RomUnknown`] — is a fact about *this* component's
+/// own question rather than about the ROM as a whole, so it has to say which
+/// component asked (fix round 1, F1).
 pub fn condition_holds(
+    component: &str,
     condition: &Condition,
     rom: Option<&RomFacts>,
 ) -> Result<bool, RefusalReason> {
@@ -166,6 +213,61 @@ pub fn condition_holds(
     match condition {
         Condition::RomOlderThan { major } => Ok(rom.major < *major),
         Condition::RomAtLeast { major } => Ok(rom.major >= *major),
+        Condition::ResidentOlderThan {
+            resident,
+            major,
+            minor,
+        } => {
+            // The ROM is identified fine — only its own module table could
+            // not be read. That is a different, actionable fact from "the
+            // ROM does not carry this resident", and folding the two
+            // together is exactly what fix round 1 found: it would switch
+            // the softkick modules component quietly off for a user whose
+            // dump ART simply could not scan, with no refusal and nothing on
+            // screen (see `RomFacts::residents`'s own doc comment).
+            if !rom.residents_readable {
+                return Err(RefusalReason::ResidentTableUnreadable {
+                    component: component.to_string(),
+                    resident: resident.clone(),
+                });
+            }
+            Ok(resident_older_than(
+                &rom.residents,
+                resident,
+                *major,
+                *minor,
+            ))
+        }
+    }
+}
+
+/// [`Condition::ResidentOlderThan`]'s own comparison, split out so it can be
+/// exercised directly against hand-built facts (`resident_condition_holds`
+/// in the tests below) without a real ROM file.
+///
+/// The comparison is lexicographic on `(major, minor)` — the major alone
+/// when `minor` is `None`, which is how `strap`'s condition in the shipped
+/// recipe is meant to be written: the design's §5 measured `strap` at 45.1
+/// for 3.2 and 47.2 for both 3.2.1 and 3.2.2, so only the major actually
+/// needs comparing there. **A resident the ROM does not carry never
+/// satisfies this** — `find_map` below yields `None` for an absent name, and
+/// `unwrap_or(false)` turns "unknown" into "does not hold", never into
+/// "older".
+fn resident_older_than(
+    residents: &[crate::core::rom::RomResident],
+    name: &str,
+    major: u16,
+    minor: Option<u16>,
+) -> bool {
+    let Some((found_major, found_minor)) = crate::core::rom::resident_revision(residents, name)
+    else {
+        // The ROM does not carry this resident at all — absent is not
+        // "older" (see the module doc comment and this variant's own).
+        return false;
+    };
+    match minor {
+        Some(wanted_minor) => (found_major, found_minor) < (major, wanted_minor),
+        None => found_major < major,
     }
 }
 
@@ -245,6 +347,13 @@ pub struct PlanItem {
     /// recorded here rather than papered over, because the alternative was to
     /// make the preview slow enough that nobody uses it.
     pub decompress: bool,
+    /// Whether this item is a [`RuleKind::IconTooltypes`] rule — `apply`
+    /// amends the icon already at `to` with `core::amigaicon::merge_tooltypes`
+    /// rather than copying `from` over it. `false` for every `File` and
+    /// `Subtree` item, which is every item a recipe produced before this
+    /// rule kind existed.
+    #[serde(default)]
+    pub merge_icon: bool,
 }
 
 /// What a medium looked like when the plan was made.
@@ -304,6 +413,25 @@ pub struct PlannedActivation {
     /// Where the media leaves it, `/`-separated.
     pub from: String,
     /// Where AmigaOS will look for it.
+    pub to: String,
+}
+
+/// One destination [`apply`](super::apply::apply) will delete from the tree
+/// after every placement has run — see [`super::Component::removes`].
+///
+/// Resolved at plan time, from the same `components_on` set every other
+/// per-component contribution (`user_startup`, `activations`) is, so `apply`
+/// never has to consult the recipe again — the same reason those two travel
+/// on the plan rather than being looked up a second time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanRemoval {
+    /// The component that asked — named so a screen can group this with
+    /// everything else that component does, the same way [`PlannedActivation::component`]
+    /// is.
+    pub component: String,
+    /// The destination to remove, `/`-separated, exactly as
+    /// [`super::Component::removes`] states it.
     pub to: String,
 }
 
@@ -419,6 +547,20 @@ pub struct InstallPlan {
     /// before this field existed must still deserialise.
     #[serde(default)]
     pub packages: Vec<String>,
+    /// Which folder each layer this build actually used its media from —
+    /// carried straight into [`super::apply::DistributionManifest::layers`]
+    /// (Task 9), so the manifest can say where each layer's media came from
+    /// without `apply` having to re-derive it from `media_paths`, which
+    /// names media, not folders.
+    ///
+    /// **Emptied on a refusal**, the same rule [`InstallPlan::media_paths`]
+    /// follows: a folder nothing was built from is not a fact about the tree
+    /// this plan describes, because this plan describes no tree.
+    ///
+    /// `#[serde(default)]` for the same reason every field added to this
+    /// struct after it first shipped carries one.
+    #[serde(default)]
+    pub layers: Vec<super::LayerRecord>,
     /// Package media name -> the archive it was found in, and the member
     /// inside it that holds the payload. The package half of
     /// [`InstallPlan::media_paths`], kept separate rather than folded into
@@ -453,6 +595,24 @@ pub struct InstallPlan {
     /// nothing to check rather than as everything having changed.
     #[serde(default)]
     pub media_stamps: BTreeMap<String, MediaStamp>,
+    /// Every destination a switched-on component removes — see
+    /// [`super::Component::removes`] and [`PlanRemoval`]. Populated alongside
+    /// `components_on`, the same rule [`InstallPlan::user_startup`] follows
+    /// and for the same reason: every shipped component today removes
+    /// nothing, so this is empty in practice until AmigaOS 3.2.2's own
+    /// recipe uses the field.
+    ///
+    /// **Not emptied on a refusal**, unlike [`InstallPlan::activations`]:
+    /// an activation is checked against the plan's own `items` and is
+    /// meaningless once those are empty, but a removal names a destination
+    /// declaratively — the same way a `user_startup` line does — so stating
+    /// it costs nothing even when the plan as a whole cannot proceed.
+    ///
+    /// `#[serde(default)]` for the reason every other field added after
+    /// `InstallPlan` first shipped carries one: a plan serialised before this
+    /// field existed must still deserialise.
+    #[serde(default)]
+    pub removals: Vec<PlanRemoval>,
 }
 
 /// What the user asked for.
@@ -475,12 +635,24 @@ pub struct InstallRequest {
     /// about, so widening it would have rewritten every caller to say "the
     /// first one" — which is a precedence rule, and there is none here.
     /// Duplicated volume names across folders are **refused by name**
-    /// (`scan::media_for`), never resolved by order.
+    /// (`scan::media_for_layer`, asked with `layer: None` here — this field
+    /// only exists for the unlayered case; a layered recipe asks the same
+    /// question once per layer instead, against `media_folders` below),
+    /// never resolved by order.
     ///
     /// `#[serde(default)]` for the reason the fields below carry one: a
     /// request serialised before this existed must still deserialise.
     #[serde(default)]
     pub extra_media_folders: Vec<PathBuf>,
+    /// One media folder per layer the recipe declares, keyed by
+    /// [`super::MediaLayer::id`].
+    ///
+    /// `media_folder` and `extra_media_folders` above stay for the reason
+    /// they were given a `#[serde(default)]` in the first place: a request
+    /// serialised before this field existed must still deserialise. When this
+    /// map is empty they are read exactly as before, onto the single layer.
+    #[serde(default)]
+    pub media_folders: BTreeMap<String, PathBuf>,
     /// The keyboard layout the finished system should boot with — a name in
     /// `Devs/Keymaps`, e.g. `türkçe`.
     ///
@@ -687,15 +859,24 @@ fn resolve_components_on(
             continue;
         }
         if let Some(condition) = &component.condition {
-            match condition_holds(condition, rom_facts) {
+            match condition_holds(&component.id, condition, rom_facts) {
                 Ok(true) => is_on = true,
                 Ok(false) => {}
-                Err(reason) => {
+                // `RomUnknown` is one fact about the whole plan's ROM and is
+                // deduped so it is not repeated once per conditional
+                // component sharing it. `ResidentTableUnreadable` (and any
+                // future per-component refusal) is a fact about *this*
+                // component's own question — pushed every time, never
+                // suppressed by an unrelated component's `RomUnknown`, and
+                // never deduped against itself, since a component can carry
+                // at most one `Condition` and so can raise this at most once.
+                Err(RefusalReason::RomUnknown) => {
                     if !rom_unknown_reported {
-                        refusals.push(reason);
+                        refusals.push(RefusalReason::RomUnknown);
                         rom_unknown_reported = true;
                     }
                 }
+                Err(reason) => refusals.push(reason),
             }
         }
         if is_on {
@@ -706,38 +887,96 @@ fn resolve_components_on(
 }
 
 /// Every `exclusive_group` with more than one of its members in the
-/// **resolved** `components_on` set. Checked against what actually
-/// resolved on, never against `InstallRequest::chosen` directly — a
-/// condition-satisfied component can be switched on without being chosen
-/// at all (that is the entire point of
-/// `a_conditional_component_is_on_without_being_chosen`), so a check
-/// against the request alone would miss exactly the case a condition
-/// exists to create. One member of a group is the ordinary case and needs
-/// no mention here; a group is inert until a second member exists to
-/// conflict with the first (Task 1's review parked this for the same
-/// reason — with one Modules disk shipped, the field could not be
-/// violated).
+/// **resolved** `components_on` set, **within the same layer**. Checked
+/// against what actually resolved on, never against `InstallRequest::chosen`
+/// directly — a condition-satisfied component can be switched on without
+/// being chosen at all (that is the entire point of
+/// `a_conditional_component_is_on_without_being_chosen`), so a check against
+/// the request alone would miss exactly the case a condition exists to
+/// create. One member of a group is the ordinary case and needs no mention
+/// here; a group is inert until a second member exists to conflict with the
+/// first (Task 1's review parked this for the same reason — with one Modules
+/// disk shipped, the field could not be violated. **That stopped being true
+/// the moment a layered recipe could inherit a base component into the same
+/// group a derived one declares** — see below.)
+///
+/// **Scoped per layer, and that is a decision, not an oversight (final
+/// review, Finding B).** `exclusive_group` exists so a user cannot pick two
+/// Modules disks for two different *machines* at once — `modules-a1200`
+/// (`rom-older-than 47`) and a hypothetical sibling for a different model
+/// would genuinely conflict, because a plan is for one machine. But
+/// AmigaOS 3.2.2 inherits `modules-a1200` as its `base` layer's component and
+/// declares its own `update-322-modules-a1200` in the `update-3.2.2` layer,
+/// **same group, same machine** — a pre-47 Kickstart 3.1 (or a 3.2 ROM, per
+/// the design's own measured table) satisfies both components' conditions at
+/// once, and they are not a user's competing choice between two machines: they
+/// are two halves of one release's answer for one machine, exactly the way
+/// `update-322-modules-a1200` declaring `overrides` over the base component
+/// resolves any file the two genuinely share. Comparing across layers here
+/// would refuse the ordinary, correct case — a pre-47 machine building
+/// AmigaOS 3.2.2 — with a sentence that names no fix, because neither
+/// component is something the user chose. Two members of one group **within
+/// one layer** is still refused: that is the case the group exists to catch.
 fn detect_exclusive_group_conflicts(
     recipe: &Recipe,
     components_on: &[String],
 ) -> Vec<RefusalReason> {
-    let mut by_group: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    let mut by_group: BTreeMap<(&str, Option<&str>), Vec<String>> = BTreeMap::new();
     for id in components_on {
         let Some(component) = recipe.component(id) else {
             continue;
         };
         if let Some(group) = &component.exclusive_group {
-            by_group.entry(group.as_str()).or_default().push(id.clone());
+            by_group
+                .entry((group.as_str(), component.layer.as_deref()))
+                .or_default()
+                .push(id.clone());
         }
     }
 
     let mut refusals = Vec::new();
-    for (group, mut components) in by_group {
+    for ((group, _layer), mut components) in by_group {
         if components.len() > 1 {
             components.sort();
             refusals.push(RefusalReason::ExclusiveGroupConflict {
                 group: group.to_string(),
                 components,
+            });
+        }
+    }
+    refusals
+}
+
+/// Every group of two or more layers the caller pointed at **the same
+/// folder**.
+///
+/// A layer changes which question `media_for_layer` asks, never how the
+/// answer is treated — and pointing `base` and `up` at one folder is not "two
+/// layers agreeing on a folder", it is one folder unable to answer two
+/// different questions at once. Left unchecked, a component in `base` and one
+/// in `up` naming the same volume would both resolve to the identical file,
+/// silently discarding the whole reason layers exist: telling the 3.2 disk
+/// apart from the 3.2.2 disk that shares its name.
+///
+/// Compared by canonical path, the same normalisation
+/// [`find_media_across`](super::scan::find_media_across) already applies to
+/// tell "the same folder twice" from "two different folders" — a user who
+/// reaches the same directory through two different-looking paths (a drive
+/// letter and a UNC path, say) has still pointed both layers at one place.
+fn layers_sharing_a_folder(layers: &[(String, PathBuf)]) -> Vec<RefusalReason> {
+    let mut by_folder: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
+    for (layer, folder) in layers {
+        let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.clone());
+        by_folder.entry(canonical).or_default().push(layer.clone());
+    }
+
+    let mut refusals = Vec::new();
+    for (folder, mut sharing) in by_folder {
+        if sharing.len() > 1 {
+            sharing.sort();
+            refusals.push(RefusalReason::LayersShareFolder {
+                layers: sharing,
+                folder: folder.display().to_string(),
             });
         }
     }
@@ -930,6 +1169,40 @@ pub(crate) fn expand_rules(
                     is_dir: false,
                     bytes: entry.size,
                     decompress: compressed,
+                    merge_icon: false,
+                });
+            }
+            RuleKind::IconTooltypes if entry.is_dir => {
+                // Same shape as the `File` mismatch just above, for the same
+                // reason: emitting it anyway would carry `is_dir: true` and
+                // escape `detect_collisions`, which only looks at files.
+                refusals.push(RefusalReason::RuleKindMismatch {
+                    component: component.id.clone(),
+                    from: rule.from.clone(),
+                    expected: RuleKind::IconTooltypes,
+                    found: RuleKind::Subtree,
+                });
+            }
+            RuleKind::IconTooltypes => {
+                // Unlike a `File` rule, `to` is never renamed for a `.Z`
+                // suffix — an icon is never `compress`-format — and `apply`
+                // reads `from`'s bytes as the *source* of a splice into
+                // whatever is already at `to`, never writes them there
+                // directly. See `PlanItem::merge_icon`.
+                items.push(PlanItem {
+                    component: component.id.clone(),
+                    media: component.media.clone(),
+                    from: rule.from.clone(),
+                    to: rule.to.clone(),
+                    is_dir: false,
+                    // The source icon's own on-media size, not the merged
+                    // result's — `apply` cannot know the spliced length
+                    // without doing the splice, the same pre-existing
+                    // estimate-vs-actual gap `total_bytes`'s own doc comment
+                    // already documents for a `.Z` stream (ART-156).
+                    bytes: entry.size,
+                    decompress: false,
+                    merge_icon: true,
                 });
             }
             RuleKind::Subtree if !entry.is_dir => {
@@ -958,6 +1231,7 @@ pub(crate) fn expand_rules(
                     is_dir: true,
                     bytes: 0,
                     decompress: false,
+                    merge_icon: false,
                 });
                 for walked in source.walk(&rule.from)? {
                     let relative = relative_to(&walked.path, &rule.from);
@@ -981,6 +1255,7 @@ pub(crate) fn expand_rules(
                         is_dir: walked.is_dir,
                         bytes: walked.size,
                         decompress: compressed,
+                        merge_icon: false,
                     });
                 }
             }
@@ -1197,10 +1472,46 @@ fn plan_over_with_cache(
     );
     refusals.extend(detect_exclusive_group_conflicts(recipe, &components_on));
 
-    // Every folder the user named, not only the first (work-list item 8).
-    let mut folders = vec![request.media_folder.clone()];
-    folders.extend(request.extra_media_folders.iter().cloned());
-    let found = find_media_across(&folders)?;
+    // A layered recipe reads each component's media from the layer the
+    // recipe names it under; an unlayered one keeps the flat, ordered list
+    // work-list item 8 added — `media_folder` plus every
+    // `extra_media_folders` entry, one implicit layer with no name.
+    let layers: Vec<(String, PathBuf)> = if recipe.is_layered() {
+        recipe
+            .layers
+            .iter()
+            .filter_map(|l| {
+                request
+                    .media_folders
+                    .get(&l.id)
+                    .map(|f| (l.id.clone(), f.clone()))
+            })
+            .collect()
+    } else {
+        let mut folders = vec![request.media_folder.clone()];
+        folders.extend(request.extra_media_folders.iter().cloned());
+        folders.into_iter().map(|f| (String::new(), f)).collect()
+    };
+    // Only a layered recipe's ids are real `MediaLayer::id`s a user could be
+    // told apart — an unlayered recipe hands every folder the same `""`
+    // sentinel (see `layers` above), and running this check over it produces
+    // a refusal naming no layer at all for a release that declares none. The
+    // manifest side of this same sentinel was closed in Task 9's fix round;
+    // this is the same boundary one call site along.
+    // Only a layered recipe's ids are real `MediaLayer::id`s a user could be
+    // told apart — an unlayered recipe hands every folder the same `""`
+    // sentinel (see `layers` above), and running this check over it produces
+    // a refusal naming no layer at all for a release that declares none. The
+    // manifest side of this same sentinel was closed in Task 9's fix round;
+    // this is the same boundary one call site along.
+    if recipe.is_layered() {
+        refusals.extend(layers_sharing_a_folder(&layers));
+    }
+    let found = if recipe.is_layered() {
+        find_media_in_layers(&layers)?
+    } else {
+        find_media_across(&layers.iter().map(|(_, f)| f.clone()).collect::<Vec<_>>())?
+    };
     let mut media_paths: BTreeMap<String, PathBuf> = BTreeMap::new();
     let mut items: Vec<PlanItem> = Vec::new();
 
@@ -1216,27 +1527,31 @@ fn plan_over_with_cache(
         };
 
         // Never `if let MediaMatch::Found(..)` — see the module doc comment.
-        let found_media = match media_for(&found, &component.media) {
-            MediaMatch::Missing => {
-                refusals.push(RefusalReason::MediaMissing {
-                    component: component.id.clone(),
-                    volume_name: component.media.clone(),
-                });
-                continue;
-            }
-            MediaMatch::Ambiguous(matches) => {
-                refusals.push(RefusalReason::MediaAmbiguous {
-                    component: component.id.clone(),
-                    volume_name: component.media.clone(),
-                    paths: matches
-                        .iter()
-                        .map(|m| m.path.display().to_string())
-                        .collect(),
-                });
-                continue;
-            }
-            MediaMatch::Found(found_media) => found_media,
-        };
+        // Resolved inside the component's own layer (`Component::layer`) —
+        // `None` for an unlayered recipe, which asks across the whole flat
+        // list exactly as before layers existed.
+        let found_media =
+            match media_for_layer(&found, component.layer.as_deref(), &component.media) {
+                MediaMatch::Missing => {
+                    refusals.push(RefusalReason::MediaMissing {
+                        component: component.id.clone(),
+                        volume_name: component.media.clone(),
+                    });
+                    continue;
+                }
+                MediaMatch::Ambiguous(matches) => {
+                    refusals.push(RefusalReason::MediaAmbiguous {
+                        component: component.id.clone(),
+                        volume_name: component.media.clone(),
+                        paths: matches
+                            .iter()
+                            .map(|m| m.path.display().to_string())
+                            .collect(),
+                    });
+                    continue;
+                }
+                MediaMatch::Found(found_media) => found_media,
+            };
         let media_path = found_media.path.clone();
 
         // Never `?` on either of these — ART-119 (#5). A disk that is
@@ -1437,6 +1752,21 @@ fn plan_over_with_cache(
         .collect();
     refusals.extend(detect_missing_activations(&items, &activations));
 
+    // Same source as `user_startup` above (`recipe.component`, over
+    // `components_on`, in recipe order) and for the same reason: `apply`
+    // only ever consumes an `InstallPlan`, never the `Recipe` itself, so
+    // whatever it needs to perform a removal has to travel on the plan.
+    let removals: Vec<PlanRemoval> = components_on
+        .iter()
+        .filter_map(|id| recipe.component(id))
+        .flat_map(|component| {
+            component.removes.iter().map(|to| PlanRemoval {
+                component: component.id.clone(),
+                to: to.clone(),
+            })
+        })
+        .collect();
+
     // Stamped from the paths the plan resolved, before anything empties them.
     // A medium that cannot be stat-ed is simply not stamped: `apply` reads a
     // missing stamp as "nothing was recorded", never as "it changed".
@@ -1471,6 +1801,28 @@ fn plan_over_with_cache(
     } else {
         Vec::new()
     };
+    // `layers` follows `media_paths`'s own rule (immediately above): a folder
+    // nothing was built from is not a fact about the tree this plan
+    // describes, because a refused plan describes no tree.
+    //
+    // **Only for a layered recipe** (fix round 1, Finding 2). An unlayered
+    // build's own `layers` local above is a flat list of folders paired with
+    // an empty-string id — real internally, so `layers_sharing_a_folder` and
+    // `find_media_in_layers` have something to iterate — but `""` is not a
+    // real `MediaLayer::id`, and writing it into `distribution.json` would
+    // give a manifest reader two different spellings of "this tree carries
+    // no layers": an absent key on an older tree, and a list of empty-id
+    // records on a new one. A reader that ever matched on an id would match
+    // `""`. So an unlayered build reports no layers at all, the same as a
+    // tree built before this field existed.
+    let layers: Vec<super::LayerRecord> = if refusals.is_empty() && recipe.is_layered() {
+        layers
+            .into_iter()
+            .map(|(id, folder)| super::LayerRecord { id, folder })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let (total_bytes, total_files) = tree_totals(&items);
 
     let paired_rom = rom_facts.map(|facts| super::PairedRom {
@@ -1495,6 +1847,8 @@ fn plan_over_with_cache(
         user_startup,
         activations,
         media_stamps,
+        removals,
+        layers,
     })
 }
 
@@ -1527,10 +1881,17 @@ pub(crate) fn rom_requirement(recipe: &Recipe, components_on: &[String]) -> Opti
         .iter()
         .filter_map(|component| {
             let is_on = components_on.iter().any(|on| on == &component.id);
-            match component.condition? {
-                Condition::RomOlderThan { major } if !is_on => Some(major),
-                Condition::RomAtLeast { major } if is_on => Some(major),
-                _ => None,
+            match &component.condition {
+                Some(Condition::RomOlderThan { major }) if !is_on => Some(*major),
+                Some(Condition::RomOlderThan { .. }) => None,
+                Some(Condition::RomAtLeast { major }) if is_on => Some(*major),
+                Some(Condition::RomAtLeast { .. }) => None,
+                // A resident's own version does not state a Kickstart floor
+                // for the whole tree the way `RomOlderThan`/`RomAtLeast` do
+                // — it is answered from the paired ROM's resident table, not
+                // the header `rom_requirement` reasons about here.
+                Some(Condition::ResidentOlderThan { .. }) => None,
+                None => None,
             }
         })
         .max()
@@ -1563,7 +1924,41 @@ mod condition_tests {
                 major: Some(major),
                 whdload_crc16: None,
             },
+            residents: Vec::new(),
+            residents_readable: true,
         }
+    }
+
+    /// Facts carrying only the two residents AmigaOS 3.2.2's Modules step
+    /// asks about, built from plain numbers — never a real ROM file, which
+    /// ART neither ships nor needs to read for this.
+    fn residents_of(exec: (u16, u16), strap: (u16, u16)) -> RomFacts {
+        let mut facts = fake_rom_facts(47);
+        facts.residents = vec![
+            crate::core::rom::RomResident {
+                name: "exec.library".into(),
+                version: exec.0 as u8,
+                id: format!("exec {}.{} (test)", exec.0, exec.1),
+            },
+            crate::core::rom::RomResident {
+                name: "strap".into(),
+                version: strap.0 as u8,
+                id: format!("strap {}.{} (test)", strap.0, strap.1),
+            },
+        ];
+        facts
+    }
+
+    /// `condition_holds` wrapped for a `Condition` known to be a
+    /// `ResidentOlderThan` against facts known to identify a ROM **and**
+    /// carry a readable resident table — both true of every call these tests
+    /// make, so the `Result`'s other cases (an unrelated condition kind, an
+    /// unidentified ROM, an unreadable resident table) never arise here. The
+    /// component name is irrelevant to every assertion built on this helper,
+    /// so a fixed placeholder stands in for it.
+    fn resident_condition_holds(condition: &Condition, facts: &RomFacts) -> bool {
+        condition_holds("modules-a1200", condition, Some(facts))
+            .expect("a resident condition against known, readable facts")
     }
 
     /// `Workbench3.2.adf:S/Startup-sequence` opens with
@@ -1572,14 +1967,22 @@ mod condition_tests {
     #[test]
     fn a_pre_v47_rom_turns_the_modules_component_on() {
         let facts = fake_rom_facts(40);
-        let holds = condition_holds(&Condition::RomOlderThan { major: 47 }, Some(&facts));
+        let holds = condition_holds(
+            "modules-a1200",
+            &Condition::RomOlderThan { major: 47 },
+            Some(&facts),
+        );
         assert_eq!(holds, Ok(true));
     }
 
     #[test]
     fn a_v47_rom_leaves_it_off() {
         let facts = fake_rom_facts(47);
-        let holds = condition_holds(&Condition::RomOlderThan { major: 47 }, Some(&facts));
+        let holds = condition_holds(
+            "modules-a1200",
+            &Condition::RomOlderThan { major: 47 },
+            Some(&facts),
+        );
         assert_eq!(holds, Ok(false));
     }
 
@@ -1596,7 +1999,11 @@ mod condition_tests {
         for (major, expected) in [(37u16, false), (39, false), (40, true), (47, true)] {
             let facts = fake_rom_facts(major);
             assert_eq!(
-                condition_holds(&Condition::RomAtLeast { major: 40 }, Some(&facts)),
+                condition_holds(
+                    "workbench-base",
+                    &Condition::RomAtLeast { major: 40 },
+                    Some(&facts)
+                ),
                 Ok(expected),
                 "a V{major} ROM against a V40 floor"
             );
@@ -1709,7 +2116,11 @@ mod condition_tests {
     /// to choose.
     #[test]
     fn an_unidentified_rom_refuses_rather_than_guessing() {
-        let holds = condition_holds(&Condition::RomOlderThan { major: 47 }, None);
+        let holds = condition_holds(
+            "modules-a1200",
+            &Condition::RomOlderThan { major: 47 },
+            None,
+        );
         assert_eq!(holds, Err(RefusalReason::RomUnknown));
     }
 
@@ -1775,6 +2186,160 @@ mod condition_tests {
 
         assert!(matches!(rom_facts(&path), Err(CoreError::InvalidInput(_))));
     }
+
+    /// The evidence for [`Condition::ResidentOlderThan`] existing at all
+    /// (design §5): the release's own Modules step asks a running machine
+    /// for `exec.library`'s revision and for `strap`'s version, and a header
+    /// proxy collapses the 3.2 and 3.2.1 rows into one outcome.
+    ///
+    /// **The 3.2.1 row lives in its own test**
+    /// ([`a_3_2_1_rom_gets_the_smaller_module_set`]) rather than as a third
+    /// assertion here (review fix round 1, F2). It is the row that actually
+    /// tells a real `(major, minor)` comparison apart from a major-only one
+    /// — 3.2 and 3.2.2 both happen to come out right under a major-only
+    /// comparison too, so a mutation that drops the minor entirely still
+    /// passed this test's *first* assertion and never reached the row the
+    /// distinction is about. Named on its own, that mutation has nowhere
+    /// else to hide.
+    #[test]
+    fn the_modules_condition_answers_what_the_release_answers_for_3_2_and_3_2_2() {
+        let exec_older = Condition::ResidentOlderThan {
+            resident: "exec".into(),
+            major: 47,
+            minor: Some(10),
+        };
+        let strap_older = Condition::ResidentOlderThan {
+            resident: "strap".into(),
+            major: 47,
+            minor: None,
+        };
+        // (exec, strap), measured out of the owner's own A1200 Kickstarts.
+        let kick_32 = residents_of((47, 7), (45, 1));
+        let kick_322 = residents_of((47, 10), (47, 2));
+
+        assert!(resident_condition_holds(&exec_older, &kick_32));
+        assert!(
+            resident_condition_holds(&strap_older, &kick_32),
+            "3.2's ROM gets the larger file set"
+        );
+
+        assert!(!resident_condition_holds(&exec_older, &kick_322));
+        assert!(
+            !resident_condition_holds(&strap_older, &kick_322),
+            "3.2.2's own ROM needs no softkicked modules at all"
+        );
+    }
+
+    /// **The row a header proxy — and a major-only comparison — gets wrong**
+    /// (review fix round 1, F2; this is the entire reason this task was
+    /// rewritten away from `RomOlderThan`'s header version). Split out of
+    /// `the_modules_condition_answers_what_the_release_answers_for_3_2_and_3_2_2`
+    /// so this specific row fails on its own rather than being reachable
+    /// only after two earlier assertions that a weaker guard can satisfy by
+    /// accident.
+    #[test]
+    fn a_3_2_1_rom_gets_the_smaller_module_set() {
+        let exec_older = Condition::ResidentOlderThan {
+            resident: "exec".into(),
+            major: 47,
+            minor: Some(10),
+        };
+        let strap_older = Condition::ResidentOlderThan {
+            resident: "strap".into(),
+            major: 47,
+            minor: None,
+        };
+        let kick_321 = residents_of((47, 8), (47, 2));
+
+        assert!(resident_condition_holds(&exec_older, &kick_321));
+        assert!(
+            !resident_condition_holds(&strap_older, &kick_321),
+            "3.2.1's ROM gets the smaller set - Shell-Seg and the three libraries are \
+             withheld, which is exactly what the header proxy got wrong"
+        );
+    }
+
+    #[test]
+    fn a_condition_naming_a_resident_the_rom_does_not_carry_does_not_hold() {
+        let c = Condition::ResidentOlderThan {
+            resident: "nosuchthing".into(),
+            major: 47,
+            minor: None,
+        };
+        assert!(
+            !resident_condition_holds(&c, &residents_of((47, 7), (45, 1))),
+            "an absent resident switches nothing on - never a default of `older`"
+        );
+    }
+
+    /// Facts identifying a ROM whose header parsed fine but whose resident
+    /// table could not be read — the case `core::rom::residents` returning
+    /// `Err` on an image `rom_facts` already identified produces.
+    fn unreadable_resident_facts() -> RomFacts {
+        let mut facts = fake_rom_facts(47);
+        facts.residents_readable = false;
+        facts
+    }
+
+    /// **Review fix round 1, F1.** Before this fix, `rom_facts` folded a
+    /// failed resident scan into the same empty `Vec` a ROM that genuinely
+    /// carries no such resident produces — so a component conditioned on
+    /// `ResidentOlderThan` was silently switched off, with no refusal and
+    /// nothing on screen, exactly the "endings stay distinct" rule this
+    /// project keeps re-learning the cost of breaking.
+    ///
+    /// **Absence from `components_on` has more than one cause here, so this
+    /// does not assert that alone** — a legitimately-unsatisfied condition
+    /// also leaves the component off `components_on`, and a test that
+    /// stopped there would pass against both the fix and the defect it
+    /// fixes. This asserts the specific refusal by value: which component,
+    /// which resident.
+    #[test]
+    fn an_unreadable_resident_table_refuses_the_component_by_name_rather_than_silently_switching_it_off(
+    ) {
+        let recipe = Recipe {
+            layers: vec![],
+            base: None,
+            release: "Test".to_string(),
+            components: vec![Component {
+                layer: None,
+                id: "modules-a1200".to_string(),
+                media: "ModulesA1200".to_string(),
+                rules: vec![],
+                required: false,
+                condition: Some(Condition::ResidentOlderThan {
+                    resident: "exec".into(),
+                    major: 47,
+                    minor: Some(10),
+                }),
+                overrides: vec![],
+                user_startup: vec![],
+                activate: vec![],
+                exclusive_group: None,
+                label_key: None,
+                available: true,
+                removes: Vec::new(),
+            }],
+        };
+        let facts = unreadable_resident_facts();
+        let mut refusals = Vec::new();
+        let on = resolve_components_on(&recipe, &[], &[], Some(&facts), &mut refusals);
+
+        assert!(
+            !on.contains(&"modules-a1200".to_string()),
+            "an undecidable condition must not switch the component on"
+        );
+        assert_eq!(
+            refusals,
+            vec![RefusalReason::ResidentTableUnreadable {
+                component: "modules-a1200".to_string(),
+                resident: "exec".to_string(),
+            }],
+            "the component must be refused by this specific, named sentence - not merely \
+             absent from components_on, which a legitimately-unsatisfied condition would also \
+             produce"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1835,6 +2400,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec!["extras".to_string()],
@@ -1872,9 +2438,12 @@ mod plan_tests {
         );
 
         let recipe = Recipe {
+            layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![
                 Component {
+                    layer: None,
                     id: "subtree-owner".to_string(),
                     media: "Owner".to_string(),
                     rules: vec![PathRule {
@@ -1890,8 +2459,10 @@ mod plan_tests {
                     exclusive_group: None,
                     label_key: None,
                     available: true,
+                    removes: Vec::new(),
                 },
                 Component {
+                    layer: None,
                     id: "file-writer".to_string(),
                     media: "Writer".to_string(),
                     rules: vec![PathRule {
@@ -1907,6 +2478,7 @@ mod plan_tests {
                     exclusive_group: None,
                     label_key: None,
                     available: true,
+                    removes: Vec::new(),
                 },
             ],
         };
@@ -1917,6 +2489,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["subtree-owner".to_string(), "file-writer".to_string()],
@@ -1944,8 +2517,11 @@ mod plan_tests {
             &[("Keymaps/türkçe", b"tr", 0), ("Keymaps/usa", b"us", 0)],
         );
         let recipe = Recipe {
+            layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![Component {
+                layer: None,
                 id: "keymaps".to_string(),
                 media: "Shelf".to_string(),
                 rules: vec![PathRule {
@@ -1961,6 +2537,7 @@ mod plan_tests {
                 exclusive_group: None,
                 label_key: None,
                 available: true,
+                removes: Vec::new(),
             }],
         };
         (dir, recipe, folder)
@@ -1973,6 +2550,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder.to_path_buf(),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: keymap.map(str::to_string),
             rom: None,
             chosen: vec!["keymaps".to_string()],
@@ -2126,9 +2704,13 @@ mod plan_tests {
             activate: vec![],
             exclusive_group: None,
             label_key: None,
+            layer: None,
             available: true,
+            removes: Vec::new(),
         };
         let recipe = Recipe {
+            layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![
                 component("from-base", "Base", "C/One"),
@@ -2142,6 +2724,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: base.clone(),
             extra_media_folders: vec![update.clone()],
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["from-base".to_string(), "from-update".to_string()],
@@ -2163,6 +2746,7 @@ mod plan_tests {
         // has to refuse the component that is in the second.
         let one_folder = InstallRequest {
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             ..request
         };
@@ -2191,8 +2775,11 @@ mod plan_tests {
         crate::core::osinstall::fixtures::media(&folder, "M", "m.adf", &[("C/inner", b"x", 0)]);
 
         let recipe = Recipe {
+            layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![Component {
+                layer: None,
                 id: "a".to_string(),
                 media: "M".to_string(),
                 rules: vec![PathRule {
@@ -2208,6 +2795,7 @@ mod plan_tests {
                 exclusive_group: None,
                 label_key: None,
                 available: true,
+                removes: Vec::new(),
             }],
         };
 
@@ -2217,6 +2805,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["a".to_string()],
@@ -2236,8 +2825,11 @@ mod plan_tests {
         crate::core::osinstall::fixtures::media(&folder, "M", "m.adf", &[("readme", b"x", 0)]);
 
         let recipe = Recipe {
+            layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![Component {
+                layer: None,
                 id: "a".to_string(),
                 media: "M".to_string(),
                 rules: vec![PathRule {
@@ -2253,6 +2845,7 @@ mod plan_tests {
                 exclusive_group: None,
                 label_key: None,
                 available: true,
+                removes: Vec::new(),
             }],
         };
 
@@ -2262,6 +2855,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["a".to_string()],
@@ -2285,6 +2879,7 @@ mod plan_tests {
         crate::core::osinstall::fixtures::media(&folder, "B", "b.adf", &[("C/Assign", b"two", 0)]);
 
         let make = |id: &str, media: &str| Component {
+            layer: None,
             id: id.to_string(),
             media: media.to_string(),
             rules: vec![PathRule {
@@ -2300,8 +2895,11 @@ mod plan_tests {
             exclusive_group: None,
             label_key: None,
             available: true,
+            removes: Vec::new(),
         };
         let recipe = Recipe {
+            layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![make("a", "A"), make("b", "B")],
         };
@@ -2312,6 +2910,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["a".to_string(), "b".to_string()],
@@ -2347,6 +2946,7 @@ mod plan_tests {
         );
 
         let make = |id: &str, media: &str, to: &str, condition: Option<Condition>| Component {
+            layer: None,
             id: id.to_string(),
             media: media.to_string(),
             rules: vec![PathRule {
@@ -2362,8 +2962,11 @@ mod plan_tests {
             exclusive_group: Some("modules".to_string()),
             label_key: None,
             available: true,
+            removes: Vec::new(),
         };
         let recipe = Recipe {
+            layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![
                 make("modules-a", "ModulesA", "C/ModuleA", None),
@@ -2382,6 +2985,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             // major 40 < 47, so `modules-b` switches on by its own
             // condition — never named in `chosen`.
@@ -2420,8 +3024,11 @@ mod plan_tests {
         std::fs::write(folder.join("os39.iso"), bytes).unwrap();
 
         let recipe = Recipe {
+            layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![Component {
+                layer: None,
                 id: "a".to_string(),
                 media: "AmigaOS3.9".to_string(),
                 rules: vec![PathRule {
@@ -2437,6 +3044,7 @@ mod plan_tests {
                 exclusive_group: None,
                 label_key: None,
                 available: true,
+                removes: Vec::new(),
             }],
         };
 
@@ -2446,6 +3054,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["a".to_string()],
@@ -2505,8 +3114,11 @@ mod plan_tests {
         std::fs::write(folder.join("os39.iso"), bytes).unwrap();
 
         let recipe = Recipe {
+            layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![Component {
+                layer: None,
                 id: "a".to_string(),
                 media: "AmigaOS3.9".to_string(),
                 rules: vec![PathRule {
@@ -2522,6 +3134,7 @@ mod plan_tests {
                 exclusive_group: None,
                 label_key: None,
                 available: true,
+                removes: Vec::new(),
             }],
         };
 
@@ -2531,6 +3144,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["a".to_string()],
@@ -2586,6 +3200,107 @@ mod plan_tests {
         assert!(plan.items.is_empty());
     }
 
+    /// One claimant a `File` rule, one an `IconTooltypes` rule, over the
+    /// same destination, with no `overrides` declared — `RuleKind::IconTooltypes`'s
+    /// own doc comment promises it "participates in the destination-collision
+    /// check exactly like a `File` rule", and this is that promise, exercised
+    /// against `detect_collisions` itself rather than only asserted in a
+    /// comment. Task 8's own AmigaOS 3.2.2 recipe does not exist yet, so this
+    /// is a synthetic two-component recipe built for exactly this test —
+    /// Task 8 runs the identical mutation (a `merge_icon` item quietly exempt
+    /// from the collision check) against its own shipped recipe.
+    fn plan_with_icon_rule_and_file_rule_colliding() -> InstallPlan {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-icon-collision");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        crate::core::osinstall::fixtures::media(
+            &folder,
+            "A",
+            "a.adf",
+            &[("Tools/IconEdit.info", b"one", 0)],
+        );
+        crate::core::osinstall::fixtures::media(
+            &folder,
+            "B",
+            "b.adf",
+            &[("Tools/IconEdit.info", b"two", 0)],
+        );
+
+        let recipe = Recipe {
+            layers: vec![],
+            base: None,
+            release: "Test".to_string(),
+            components: vec![
+                Component {
+                    layer: None,
+                    id: "a".to_string(),
+                    media: "A".to_string(),
+                    rules: vec![PathRule {
+                        from: "Tools/IconEdit.info".to_string(),
+                        to: "Tools/IconEdit.info".to_string(),
+                        kind: RuleKind::File,
+                    }],
+                    required: false,
+                    condition: None,
+                    overrides: vec![],
+                    user_startup: vec![],
+                    activate: vec![],
+                    exclusive_group: None,
+                    label_key: None,
+                    available: true,
+                    removes: Vec::new(),
+                },
+                Component {
+                    layer: None,
+                    id: "b".to_string(),
+                    media: "B".to_string(),
+                    rules: vec![PathRule {
+                        from: "Tools/IconEdit.info".to_string(),
+                        to: "Tools/IconEdit.info".to_string(),
+                        kind: RuleKind::IconTooltypes,
+                    }],
+                    required: false,
+                    condition: None,
+                    // Deliberately undeclared — the point of the test.
+                    overrides: vec![],
+                    user_startup: vec![],
+                    activate: vec![],
+                    exclusive_group: None,
+                    label_key: None,
+                    available: true,
+                    removes: Vec::new(),
+                },
+            ],
+        };
+
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2".to_string(),
+            media_folder: folder,
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: vec!["a".to_string(), "b".to_string()],
+            destination: dir.join("dist"),
+            excluded: Vec::new(),
+            scan_cache: Default::default(),
+        };
+        plan(&request, &recipe).unwrap()
+    }
+
+    #[test]
+    fn an_icon_rule_and_a_file_rule_over_one_path_without_an_override_is_a_collision() {
+        let plan = plan_with_icon_rule_and_file_rule_colliding();
+        assert!(matches!(
+            plan.refusals.as_slice(),
+            [RefusalReason::DestinationCollision { path, components }]
+                if path == "Tools/IconEdit.info" && components.len() == 2
+        ));
+        assert!(plan.items.is_empty());
+    }
+
     /// Carried item 4, closed: the shape above is `File` vs `File`, which
     /// `recipe.rs`'s own static check already covers, so it does not prove
     /// `detect_collisions` looks at *walked* items at all. This is the test
@@ -2623,6 +3338,72 @@ mod plan_tests {
                 if component == "a"
                     && from == "C"
                     && *expected == RuleKind::File
+                    && *found == RuleKind::Subtree
+        ));
+        assert!(plan.items.is_empty());
+    }
+
+    /// The same shape as [`a_file_rule_over_a_directory_is_a_kind_mismatch`],
+    /// for `IconTooltypes`: it resolves against a media file exactly like a
+    /// `File` rule, so a directory at `from` is refused by name rather than
+    /// silently emitted as a `merge_icon` item nothing can actually merge.
+    fn plan_with_an_icon_rule_over_a_directory() -> InstallPlan {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-kind-icon-over-dir");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        crate::core::osinstall::fixtures::media(&folder, "M", "m.adf", &[("C/inner", b"x", 0)]);
+
+        let recipe = Recipe {
+            layers: vec![],
+            base: None,
+            release: "Test".to_string(),
+            components: vec![Component {
+                layer: None,
+                id: "a".to_string(),
+                media: "M".to_string(),
+                rules: vec![PathRule {
+                    from: "C".to_string(),
+                    to: "C".to_string(),
+                    kind: RuleKind::IconTooltypes,
+                }],
+                required: false,
+                condition: None,
+                overrides: vec![],
+                user_startup: vec![],
+                activate: vec![],
+                exclusive_group: None,
+                label_key: None,
+                available: true,
+                removes: Vec::new(),
+            }],
+        };
+
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2".to_string(),
+            media_folder: folder,
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: vec!["a".to_string()],
+            destination: dir.join("dist"),
+            excluded: Vec::new(),
+            scan_cache: Default::default(),
+        };
+        plan(&request, &recipe).unwrap()
+    }
+
+    #[test]
+    fn an_icon_rule_over_a_directory_is_a_kind_mismatch() {
+        let plan = plan_with_an_icon_rule_over_a_directory();
+        assert!(matches!(
+            plan.refusals.as_slice(),
+            [RefusalReason::RuleKindMismatch { component, from, expected, found }]
+                if component == "a"
+                    && from == "C"
+                    && *expected == RuleKind::IconTooltypes
                     && *found == RuleKind::Subtree
         ));
         assert!(plan.items.is_empty());
@@ -2682,6 +3463,7 @@ mod plan_tests {
             is_dir,
             bytes: 4,
             decompress: false,
+            merge_icon: false,
         }
     }
 
@@ -2766,8 +3548,11 @@ mod plan_tests {
         );
 
         let recipe = Recipe {
+            layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![Component {
+                layer: None,
                 id: "storage".to_string(),
                 media: "Shelf".to_string(),
                 rules: vec![PathRule {
@@ -2785,6 +3570,7 @@ mod plan_tests {
                 exclusive_group: None,
                 label_key: None,
                 available: true,
+                removes: Vec::new(),
             }],
         };
 
@@ -2794,6 +3580,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: vec!["storage".to_string()],
@@ -2966,6 +3753,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder.clone(),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&scratch, 47)),
             chosen: vec!["extras".to_string()],
@@ -3083,6 +3871,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 40)),
             chosen: vec!["workbench-base".to_string()],
@@ -3135,6 +3924,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec!["workbench-base".to_string(), "extras".to_string()],
@@ -3170,6 +3960,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec![],
@@ -3280,6 +4071,7 @@ mod plan_tests {
                 // real, sector-rounded number.
                 bytes: 2048,
                 decompress: false,
+                merge_icon: false,
             },
             PlanItem {
                 component: "workbench-base".into(),
@@ -3289,6 +4081,7 @@ mod plan_tests {
                 is_dir: false,
                 bytes: 100,
                 decompress: false,
+                merge_icon: false,
             },
         ];
         assert_eq!(
@@ -3317,6 +4110,7 @@ mod plan_tests {
             is_dir: false,
             bytes,
             decompress: false,
+            merge_icon: false,
         };
         let items = vec![
             item("workbench-base", "C/Format", 100),
@@ -3345,6 +4139,7 @@ mod plan_tests {
             is_dir: false,
             bytes,
             decompress: false,
+            merge_icon: false,
         };
         let items = vec![
             item("workbench-base", "C/ASSIGN", 100),
@@ -3395,6 +4190,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(bad_rom),
             chosen: vec!["workbench-base".to_string()],
@@ -3448,6 +4244,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec!["workbench-base".to_string()],
@@ -3497,6 +4294,7 @@ mod plan_tests {
         crate::core::osinstall::fixtures::media(&folder, "C", "c.adf", &[("z", b"three", 0)]);
 
         let make = |id: &str, media: &str, from: &str, lines: &[&str]| Component {
+            layer: None,
             activate: vec![],
             id: id.to_string(),
             media: media.to_string(),
@@ -3512,8 +4310,11 @@ mod plan_tests {
             exclusive_group: None,
             label_key: None,
             available: true,
+            removes: Vec::new(),
         };
         let recipe = Recipe {
+            layers: vec![],
+            base: None,
             release: "Test".to_string(),
             components: vec![
                 make("alpha", "A", "x", &["Assign Alpha: SYS:"]),
@@ -3528,6 +4329,7 @@ mod plan_tests {
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             // Reverse of the recipe's own declaration order — see the doc
@@ -3722,6 +4524,7 @@ mod plan_tests {
             release: "Test OS".to_string(),
             media_folder: media.to_path_buf(),
             extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
             keymap: None,
             rom: None,
             chosen: Vec::new(),
@@ -3737,6 +4540,7 @@ mod plan_tests {
     /// be exercised without three more fixtures.
     fn extra_package(id: &str, media: &str, requires: &[&str]) -> Package {
         let component = Component {
+            layer: None,
             id: id.to_string(),
             media: media.to_string(),
             rules: vec![PathRule {
@@ -3752,6 +4556,7 @@ mod plan_tests {
             exclusive_group: None,
             label_key: None,
             available: true,
+            removes: Vec::new(),
         };
         Package {
             id: id.to_string(),
@@ -4134,5 +4939,251 @@ mod plan_tests {
         .unwrap();
 
         assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+    }
+
+    // -----------------------------------------------------------------
+    // Layered media (Task 3): resolution inside `plan()` itself.
+    // -----------------------------------------------------------------
+
+    /// A minimal layered recipe: one component per layer, both naming a
+    /// volume the fixture writes into both folders.
+    ///
+    /// Built by hand rather than reaching for `AmigaOS 3.2.2` — that recipe
+    /// does not exist until Task 8, and the behaviour under test is the
+    /// layer mechanism itself, not the shipped recipe.
+    fn two_layer_recipe() -> Recipe {
+        crate::core::osinstall::recipe::parse(
+            r#"{"release":"T","layers":[{"id":"base"},{"id":"up"}],
+                "components":[
+                  {"id":"a","media":"DiskDoctor","layer":"base","required":true,
+                   "rules":[{"from":"C/DiskDoctor","to":"C/DiskDoctor","kind":"file"}]},
+                  {"id":"b","media":"DiskDoctor","layer":"up","required":true,
+                   "overrides":["a"],
+                   "rules":[{"from":"C/DiskDoctor","to":"C/DiskDoctor","kind":"file"}]}
+                ]}"#,
+        )
+        .unwrap()
+    }
+
+    /// A bare-minimum request, so a test that only cares about
+    /// `media_folders` does not have to restate every other field.
+    fn request_for_scratch(dir: &Path) -> InstallRequest {
+        InstallRequest {
+            release: "T".to_string(),
+            media_folder: dir.join("unused"),
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: Vec::new(),
+            excluded: Vec::new(),
+            packages: Vec::new(),
+            package_folder: None,
+            destination: dir.join("dist"),
+            scan_cache: Default::default(),
+        }
+    }
+
+    #[test]
+    fn two_layers_on_one_folder_refuse_by_naming_the_fields() {
+        let dir = fixtures::scratch("plan-same-folder");
+        let one = dir.join("everything");
+        std::fs::create_dir_all(&one).unwrap();
+        fixtures::media(&one, "DiskDoctor", "dd.adf", &[("C/DiskDoctor", b"x", 0)]);
+
+        let request = InstallRequest {
+            media_folders: BTreeMap::from([
+                ("base".to_string(), one.clone()),
+                ("up".to_string(), one.clone()),
+            ]),
+            ..request_for_scratch(&dir)
+        };
+        let plan = plan(&request, &two_layer_recipe()).unwrap();
+
+        let same_folder = plan
+            .refusals
+            .iter()
+            .find(|r| matches!(r, RefusalReason::LayersShareFolder { .. }))
+            .expect("the refusal names the fields, not the disks");
+        let RefusalReason::LayersShareFolder { layers, .. } = same_folder else {
+            unreachable!()
+        };
+        assert_eq!(layers.len(), 2);
+    }
+
+    /// **Final review, Finding A.** `layers_sharing_a_folder` used to run
+    /// unconditionally, over a list whose ids are the empty-string sentinel
+    /// for every unlayered request (see `plan_over_with_cache`) — so naming
+    /// one real folder twice (`media_folder` and an `extra_media_folders`
+    /// entry pointed at the same place) refused with `LayersShareFolder {
+    /// layers: ["", ""], .. }` for a release that declares no layers at all.
+    /// That regressed the documented, shipped guarantee at
+    /// `docs/FEATURES.md:197` — "one folder named twice is one folder" —
+    /// which `find_media_across`'s canonical-path dedupe already gives an
+    /// unlayered plan silently. Gating the check on `recipe.is_layered()`
+    /// closes it; this pins the unlayered arm.
+    #[test]
+    fn an_unlayered_plan_naming_one_folder_twice_still_plans() {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-unlayered-duplicate-folder");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
+        crate::core::osinstall::fixtures::required_media(&folder, &recipe, &[]);
+
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2".to_string(),
+            media_folder: folder.clone(),
+            extra_media_folders: vec![folder.clone()],
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: Vec::new(),
+            excluded: Vec::new(),
+            destination: dir.join("dist"),
+            scan_cache: Default::default(),
+        };
+
+        let planned = plan(&request, &recipe).unwrap();
+        assert!(
+            !planned
+                .refusals
+                .iter()
+                .any(|r| matches!(r, RefusalReason::LayersShareFolder { .. })),
+            "one folder named twice on an unlayered release is one folder, not two \
+             layers sharing it: {:?}",
+            planned.refusals
+        );
+    }
+
+    /// **Fix round 1, Finding 2.** An unlayered recipe (every shipped
+    /// recipe until Task 8) has no real `MediaLayer::id` to report, and
+    /// `""` is not one — writing a `LayerRecord { id: "", .. }` per media
+    /// folder would give `distribution.json` two different spellings of
+    /// "this tree carries no layers" (an absent key on an older tree, a
+    /// list of empty-id records on a new one). An unlayered plan's own
+    /// `layers` must be empty, matching how an older manifest reads back.
+    #[test]
+    fn an_unlayered_plan_reports_no_layers_at_all() {
+        let plan = plan_with(&["workbench-base"], &["Workbench3.2"]);
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+        assert!(
+            plan.layers.is_empty(),
+            "an unlayered recipe has no real layer ids to report: {:?}",
+            plan.layers
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Final whole-branch review, Finding B: the shipped 3.2.2 recipe
+    // against a pre-47 Kickstart.
+    // -----------------------------------------------------------------
+
+    /// A synthetic Kickstart image carrying **both** facts a pre-3.2
+    /// Kickstart states: a header major below 47 (what the base layer's own
+    /// `modules-a1200` — `rom-older-than 47` — reads) and a readable
+    /// `exec.library` resident older than 47.10 (what
+    /// `update-322-modules-a1200` — `resident-older-than exec 47.10` —
+    /// reads). A real Kickstart 3.1 (V40) satisfies both at once, which is
+    /// the ordinary case for the real Amigas this project exists for — never
+    /// a real dump, ART ships none.
+    ///
+    /// Built the same way `core::rom::mod::tests::rom_with_resident` builds
+    /// its own fixture (a 512 KiB image, a `Resident` at a known offset,
+    /// `rt_MatchTag` pointing at its own match word) — that helper is private
+    /// to `core::rom`'s own test module, so this is a second, small copy
+    /// rather than a visibility change to a module this one does not
+    /// otherwise depend on.
+    fn fake_pre_47_rom_with_old_exec(dir: &Path) -> PathBuf {
+        const BASE: u32 = 0xF8_0000;
+        let mut bytes = vec![0u8; 512 * 1024];
+        // Header: major 40 (a Kickstart 3.1 / V40 header), minor arbitrary.
+        bytes[12..14].copy_from_slice(&40u16.to_be_bytes());
+        bytes[14..16].copy_from_slice(&68u16.to_be_bytes());
+
+        // One `Resident`, naming `exec.library` at revision 40.10 — older
+        // than the update's own `exec 47.10` floor.
+        let offset = 0x400usize;
+        let name = "exec.library";
+        let id = "exec 40.10 (test)";
+        let name_at = offset + 64;
+        let id_at = offset + 128;
+        bytes[offset..offset + 2].copy_from_slice(&0x4AFCu16.to_be_bytes());
+        bytes[offset + 2..offset + 6].copy_from_slice(&(BASE + offset as u32).to_be_bytes());
+        bytes[offset + 11] = 40;
+        bytes[offset + 14..offset + 18].copy_from_slice(&(BASE + name_at as u32).to_be_bytes());
+        bytes[offset + 18..offset + 22].copy_from_slice(&(BASE + id_at as u32).to_be_bytes());
+        bytes[name_at..name_at + name.len()].copy_from_slice(name.as_bytes());
+        bytes[id_at..id_at + id.len()].copy_from_slice(id.as_bytes());
+
+        let path = dir.join("kick-pre47-with-old-exec.rom");
+        std::fs::write(&path, &bytes).unwrap();
+        path
+    }
+
+    /// **Final review, Finding B.** Before the fix,
+    /// `detect_exclusive_group_conflicts` compared `exclusive_group` across
+    /// the whole merged recipe, so a pre-47 Kickstart — which switches on
+    /// *both* the inherited base `modules-a1200` (`rom-older-than 47`) and
+    /// the update's own `update-322-modules-a1200`
+    /// (`resident-older-than exec 47.10`), since both conditions are true of
+    /// the same ROM — refused the whole plan with an `ExclusiveGroupConflict`
+    /// naming two components the user never chose and cannot un-choose. That
+    /// is not a hypothetical ROM: it is a real Kickstart 3.1, the ordinary
+    /// case for the Amigas this project targets. Scoping the group per layer
+    /// closes it; this pins the shipped recipe against a synthetic one.
+    #[test]
+    fn the_shipped_322_recipe_plans_against_a_pre_47_rom_without_an_exclusive_group_refusal() {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-322-pre47-rom");
+        let rom = fake_pre_47_rom_with_old_exec(&dir);
+        let recipe = crate::core::osinstall::recipe::by_release("AmigaOS 3.2.2")
+            .expect("the shipped 3.2.2 recipe must load");
+
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2.2".to_string(),
+            media_folder: dir.join("unused"),
+            extra_media_folders: Vec::new(),
+            // No real media named: this test is about which components
+            // *resolve on* for this ROM, not about whether their media can
+            // be found — asserted below by checking the refusal list for
+            // the one specific variant under test, never emptiness.
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: Some(rom),
+            chosen: Vec::new(),
+            excluded: Vec::new(),
+            destination: dir.join("dist"),
+            scan_cache: Default::default(),
+        };
+
+        let planned = plan(&request, &recipe).unwrap();
+
+        assert!(
+            planned.components_on.iter().any(|id| id == "modules-a1200"),
+            "the base layer's own modules-a1200 (rom-older-than 47) must be on for a \
+             pre-47 header: {:?}",
+            planned.components_on
+        );
+        assert!(
+            planned
+                .components_on
+                .iter()
+                .any(|id| id == "update-322-modules-a1200"),
+            "update-322-modules-a1200 (resident-older-than exec 47.10) must be on for \
+             this ROM's own exec.library: {:?}",
+            planned.components_on
+        );
+        assert!(
+            !planned
+                .refusals
+                .iter()
+                .any(|r| matches!(r, RefusalReason::ExclusiveGroupConflict { .. })),
+            "a base component and an update component for the same machine are two \
+             halves of one release's answer, not a user's competing choice: {:?}",
+            planned.refusals
+        );
     }
 }

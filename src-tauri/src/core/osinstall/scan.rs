@@ -113,6 +113,15 @@ pub struct FoundMedia {
     /// to re-probe the file to answer the same question `find_media` already
     /// answered once.
     pub kind: MediaKind,
+    /// Which [`super::MediaLayer`] this disk was found in. `None` for an
+    /// unlayered scan, which is every caller that existed before layers did.
+    ///
+    /// `skip_serializing_if`, not merely `Option`: an unlayered scan is still
+    /// by far the common case, and every caller of `osinstallScanMedia` that
+    /// existed before this field did keeps reading exactly the wire shape it
+    /// always got rather than a new `"layer": null` on every entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layer: Option<String>,
 }
 
 /// Open whichever kind of media `found` was identified as, without a caller
@@ -220,6 +229,7 @@ pub fn identify(path: &Path) -> Option<FoundMedia> {
             path: path.to_path_buf(),
             volume_name: source.volume_name().to_string(),
             kind: MediaKind::Floppy,
+            layer: None,
         });
     }
     let image = crate::core::iso::IsoImage::open(path).ok()?;
@@ -227,6 +237,7 @@ pub fn identify(path: &Path) -> Option<FoundMedia> {
         path: path.to_path_buf(),
         volume_name: image.volume_name().to_string(),
         kind: MediaKind::Disc,
+        layer: None,
     })
 }
 
@@ -316,6 +327,66 @@ pub fn find_media_across(folders: &[PathBuf]) -> CoreResult<Vec<FoundMedia>> {
         found.extend(find_media(folder)?);
     }
     Ok(dedupe_identical_disks(found))
+}
+
+/// Every install disk in each named layer, as one list that remembers which
+/// layer each disk came from.
+///
+/// **Deduplication is per layer, and that is the point rather than an
+/// implementation detail.** Identity of content answers "is this one disk or
+/// two?" *within* a layer — a user keeping a spare copy of `Workbench3.2`
+/// beside the original has one disk. Across layers the same bytes in two
+/// roles are two answers, and folding them would leave whichever layer lost
+/// the coin toss unable to resolve a component that names the disk. The
+/// owner's own AmigaOS 3.2 folder and its `Update3.2.2/ADFs` folder each
+/// carry a `DiskDoctor.adf` of exactly 901 120 bytes — different SHA-256s in
+/// that real case, so today's cross-folder dedupe never merges them, but a
+/// user who copies the *update's* `DiskDoctor.adf` back into the base folder
+/// as a backup would make the two byte-identical, and folding across layers
+/// would then silently answer the `up` layer's own lookup out of the `base`
+/// layer's copy — the wrong disk, under the right name, for a component that
+/// explicitly asked for the update's version.
+pub fn find_media_in_layers(layers: &[(String, PathBuf)]) -> CoreResult<Vec<FoundMedia>> {
+    let mut all = Vec::new();
+    for (layer, folder) in layers {
+        let mut found = find_media(folder)?;
+        for entry in &mut found {
+            entry.layer = Some(layer.clone());
+        }
+        all.extend(dedupe_identical_disks(found));
+    }
+    Ok(all)
+}
+
+/// [`media_for`], asked inside one layer.
+///
+/// `layer: None` asks across everything, which is what an unlayered recipe
+/// means and what every caller before layers was doing.
+///
+/// Written as one filter rather than as a wrapper that narrows a `Vec` first:
+/// `MediaMatch<'a>` borrows from `found`, so a filtered copy would have to be
+/// cloned and the borrows would not survive it.
+///
+/// **A layer changes which question is asked, never how an ambiguous answer
+/// is treated.** Two disks claiming one name *inside* the same layer are
+/// still [`MediaMatch::Ambiguous`] — narrowing to a layer answers "which
+/// folder", not "which of several candidates in it", and nothing here may
+/// start resolving that by list order.
+pub fn media_for_layer<'a>(
+    found: &'a [FoundMedia],
+    layer: Option<&str>,
+    volume_name: &str,
+) -> MediaMatch<'a> {
+    let matches: Vec<&FoundMedia> = found
+        .iter()
+        .filter(|f| layer.is_none() || f.layer.as_deref() == layer)
+        .filter(|f| same_identity(&f.volume_name, volume_name))
+        .collect();
+    match matches.len() {
+        0 => MediaMatch::Missing,
+        1 => MediaMatch::Found(matches[0]),
+        _ => MediaMatch::Ambiguous(matches),
+    }
 }
 
 /// Drop a disk that a folder already contributed **byte for byte**.
@@ -545,15 +616,7 @@ fn same_identity(found: &str, wanted: &str) -> bool {
 }
 
 pub fn media_for<'a>(found: &'a [FoundMedia], volume_name: &str) -> MediaMatch<'a> {
-    let matches: Vec<&FoundMedia> = found
-        .iter()
-        .filter(|f| same_identity(&f.volume_name, volume_name))
-        .collect();
-    match matches.len() {
-        0 => MediaMatch::Missing,
-        1 => MediaMatch::Found(matches[0]),
-        _ => MediaMatch::Ambiguous(matches),
-    }
+    media_for_layer(found, None, volume_name)
 }
 
 /// Does `archive` carry `inner` — a path below its own top-level directory?
@@ -963,6 +1026,118 @@ mod tests {
 
         let found = find_media(&dir).unwrap();
         assert_eq!(media_for(&found, "Extras3.2"), MediaMatch::Missing);
+    }
+
+    // -----------------------------------------------------------------
+    // Layered media (Task 3): a component's disk is looked for inside the
+    // layer its recipe names, so two releases sharing a volume name each
+    // resolve against their own folder rather than one flattened list.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn one_volume_name_in_two_layers_resolves_per_layer() {
+        let dir = scratch("scan-layers");
+        let base = dir.join("base");
+        let update = dir.join("update");
+        for folder in [&base, &update] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        media(
+            &base,
+            "DiskDoctor",
+            "dd.adf",
+            &[("C/DiskDoctor", b"base", 0)],
+        );
+        media(
+            &update,
+            "DiskDoctor",
+            "dd.adf",
+            &[("C/DiskDoctor", b"update", 0)],
+        );
+
+        let found = find_media_in_layers(&[
+            ("base".to_string(), base.clone()),
+            ("update".to_string(), update.clone()),
+        ])
+        .unwrap();
+
+        let MediaMatch::Found(from_update) = media_for_layer(&found, Some("update"), "DiskDoctor")
+        else {
+            panic!("the update layer has exactly one DiskDoctor");
+        };
+        assert!(from_update.path.starts_with(&update));
+
+        let MediaMatch::Found(from_base) = media_for_layer(&found, Some("base"), "DiskDoctor")
+        else {
+            panic!("the base layer has exactly one DiskDoctor");
+        };
+        assert!(from_base.path.starts_with(&base));
+    }
+
+    #[test]
+    fn two_of_one_name_inside_one_layer_are_still_ambiguous() {
+        let dir = scratch("scan-layer-ambiguous");
+        let base = dir.join("base");
+        std::fs::create_dir_all(&base).unwrap();
+        media(&base, "DiskDoctor", "a.adf", &[("C/DiskDoctor", b"one", 0)]);
+        media(&base, "DiskDoctor", "b.adf", &[("C/DiskDoctor", b"two", 0)]);
+
+        let found = find_media_in_layers(&[("base".to_string(), base)]).unwrap();
+        let MediaMatch::Ambiguous(both) = media_for_layer(&found, Some("base"), "DiskDoctor")
+        else {
+            panic!("a layer holding two disks of one name is ambiguous, as it always was");
+        };
+        assert_eq!(both.len(), 2);
+    }
+
+    #[test]
+    fn a_byte_identical_disk_in_two_layers_survives_in_both() {
+        // The defect this guards: `dedupe_identical_disks` run across layers
+        // drops the update folder's copy and leaves that layer unable to
+        // resolve a component that names it.
+        let dir = scratch("scan-layer-dedupe");
+        let base = dir.join("base");
+        let update = dir.join("update");
+        for folder in [&base, &update] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        let one = media(&base, "Workbench3.2", "wb.adf", &[("C/Assign", b"same", 0)]);
+        let other = update.join("wb.adf");
+        std::fs::copy(&one, &other).unwrap(); // byte for byte, on purpose
+
+        let found =
+            find_media_in_layers(&[("base".to_string(), base), ("update".to_string(), update)])
+                .unwrap();
+
+        assert!(
+            matches!(
+                media_for_layer(&found, Some("base"), "Workbench3.2"),
+                MediaMatch::Found(_)
+            ),
+            "the base layer keeps its copy"
+        );
+        assert!(
+            matches!(
+                media_for_layer(&found, Some("update"), "Workbench3.2"),
+                MediaMatch::Found(_)
+            ),
+            "and so does the update layer — same bytes in two roles are two answers"
+        );
+    }
+
+    #[test]
+    fn a_byte_identical_disk_twice_inside_one_layer_is_still_one_disk() {
+        let dir = scratch("scan-layer-dedupe-within");
+        let base = dir.join("base");
+        std::fs::create_dir_all(&base).unwrap();
+        let one = media(&base, "Workbench3.2", "wb.adf", &[("C/Assign", b"same", 0)]);
+        std::fs::copy(&one, base.join("wb-copy.adf")).unwrap();
+
+        let found = find_media_in_layers(&[("base".to_string(), base)]).unwrap();
+        assert!(matches!(
+            media_for_layer(&found, Some("base"), "Workbench3.2"),
+            MediaMatch::Found(_)
+        ));
     }
 
     // ---- Task 2: a disc is media too ----

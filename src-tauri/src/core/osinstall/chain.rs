@@ -508,6 +508,7 @@ mod tests {
             files: components.iter().map(|c| file_from(c)).collect(),
             paired_rom: None,
             amiga_installed: Vec::new(),
+            layers: Vec::new(),
         };
         std::fs::write(
             tree.join(MANIFEST_FILE_NAME),
@@ -528,6 +529,7 @@ mod tests {
             files: components.iter().map(|c| file_from(c)).collect(),
             paired_rom: None,
             amiga_installed: Vec::new(),
+            layers: Vec::new(),
         };
         std::fs::write(
             tree.join(MANIFEST_FILE_NAME),

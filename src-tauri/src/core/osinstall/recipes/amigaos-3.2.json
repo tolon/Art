@@ -71,6 +71,20 @@
       ]
     },
     {
+      "_why_a_file_rule_beside_the_tools_subtree": [
+        "AmigaOS 3.2.2's own Installer deletes `Tools/TextEditFileTypes/Default4Types`",
+        "as unsupported (Task 8's `update-322-system.removes`). The file reaches an",
+        "ART tree from here — the `Tools` subtree below already carries it — but a",
+        "`removes` entry may only name a destination some component places with a",
+        "`RuleKind::File` rule (never a `Subtree`, since ART removes files, never",
+        "drawers): see `recipe::validate_removals`'s own doc comment. So this one",
+        "file is named explicitly, beside the subtree that already places it, purely",
+        "so a future component can declare an `overrides` over `extras` and remove",
+        "it by name. It changes nothing about the AmigaOS 3.2 tree — the same byte",
+        "arrives either way — and duplicates within one component are not a",
+        "collision (`no_two_components_claim_one_destination_without_declaring_it`",
+        "only compares *different* components)."
+      ],
       "id": "extras",
       "media": "Extras3.2",
       "rules": [
@@ -98,6 +112,11 @@
           "from": "Tools",
           "to": "Tools",
           "kind": "subtree"
+        },
+        {
+          "from": "Tools/TextEditFileTypes/Default4Types",
+          "to": "Tools/TextEditFileTypes/Default4Types",
+          "kind": "file"
         }
       ],
       "overrides": [
@@ -418,12 +437,6 @@
       ]
     },
     {
-      "id": "update-3.2.1",
-      "media": "Update3.2.1",
-      "available": false,
-      "rules": []
-    },
-    {
       "id": "fonts",
       "media": "Fonts",
       "rules": [
@@ -465,8 +478,16 @@
       ]
     },
     {
+      "_why_this_one_needs_a_label": [
+        "AmigaOS 3.2.2's own update ships a second `DiskDoctor` volume (Task 8's",
+        "`update-322-diskdoctor`) — same volume name, different disk, different",
+        "SHA-256 — so once that recipe's `base` inherits this component onto its",
+        "own tree, two rows would both read `DiskDoctor` with nothing to tell them",
+        "apart (`a_component_sharing_its_medium_labels_its_own_row`)."
+      ],
       "id": "diskdoctor",
       "media": "DiskDoctor",
+      "label_key": "osinstall.components.name.os32.diskdoctor",
       "rules": [
         {
           "from": "C/DAControl",

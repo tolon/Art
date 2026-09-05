@@ -5,11 +5,12 @@
 
 use std::collections::HashMap;
 
-use super::{Component, Recipe};
+use super::{Component, Recipe, RuleKind};
 use crate::core::error::{CoreError, CoreResult};
 
 const AMIGAOS_32_JSON: &str = include_str!("recipes/amigaos-3.2.json");
 const AMIGAOS_39_JSON: &str = include_str!("recipes/amigaos-3.9.json");
+const AMIGAOS_322_JSON: &str = include_str!("recipes/amigaos-3.2.2.json");
 
 /// Every key a recipe may carry, by the level it sits at.
 ///
@@ -30,7 +31,7 @@ const AMIGAOS_39_JSON: &str = include_str!("recipes/amigaos-3.9.json");
 /// `Component` and `PathRule` derive `Eq` and a `serde_json::Value` is not
 /// `Eq` — putting a catch-all on the real types would change types the whole
 /// crate compares, to check a file.
-const RECIPE_KEYS: &[&str] = &["release", "components"];
+const RECIPE_KEYS: &[&str] = &["release", "components", "layers", "base"];
 const COMPONENT_KEYS: &[&str] = &[
     "id",
     "media",
@@ -43,10 +44,13 @@ const COMPONENT_KEYS: &[&str] = &[
     "exclusive_group",
     "available",
     "label_key",
+    "layer",
+    "removes",
 ];
 const RULE_KEYS: &[&str] = &["from", "to", "kind"];
-const CONDITION_KEYS: &[&str] = &["condition", "major"];
+const CONDITION_KEYS: &[&str] = &["condition", "major", "resident", "minor"];
 const ACTIVATION_KEYS: &[&str] = &["kind", "name"];
+const LAYER_KEYS: &[&str] = &["id", "label_key"];
 
 /// Refuse the first key that is neither known at its level nor a `_…` note.
 ///
@@ -92,6 +96,16 @@ fn check_unknown_keys(json: &str) -> CoreResult<()> {
 
     check_keys(&value, RECIPE_KEYS, "the recipe")?;
 
+    if let Some(layers) = value.get("layers").and_then(|l| l.as_array()) {
+        for layer in layers {
+            let id = layer
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("a layer with no id");
+            check_keys(layer, LAYER_KEYS, &format!("layer '{id}'"))?;
+        }
+    }
+
     let Some(components) = value.get("components").and_then(|c| c.as_array()) else {
         return Ok(());
     };
@@ -129,8 +143,15 @@ fn check_unknown_keys(json: &str) -> CoreResult<()> {
     Ok(())
 }
 
-/// Parse and validate a recipe.
-pub fn parse(json: &str) -> CoreResult<Recipe> {
+/// Parse and validate a recipe, exactly as its file says — no `base` is
+/// resolved, so a recipe that names one still carries only its own
+/// components afterwards.
+///
+/// Used directly by tests that police the file's own data (`raw_recipe`,
+/// `raw_shipped_recipes`) and by [`resolve_base`], which needs the base
+/// recipe's components before anything is merged onto them. [`parse`] is
+/// what every other caller wants.
+pub fn parse_unresolved(json: &str) -> CoreResult<Recipe> {
     // Before deserialising, so a misspelling is named rather than dropped
     // (ART-183) — a component missing the thing it plainly asked for is the
     // confident-and-wrong shape, not a parse error anybody would notice.
@@ -141,6 +162,96 @@ pub fn parse(json: &str) -> CoreResult<Recipe> {
     })?;
     validate(&recipe)?;
     Ok(recipe)
+}
+
+/// Parse, validate, and resolve `base` if the recipe declares one.
+///
+/// This is the parse every caller outside this module wants: a resolved
+/// recipe behaves as if its base's components had been typed into the file
+/// by hand, so nothing downstream — `plan()`, the install screen — has to
+/// know inheritance exists.
+pub fn parse(json: &str) -> CoreResult<Recipe> {
+    resolve_base(parse_unresolved(json)?)
+}
+
+/// Replace `recipe.base` with its components, stamped onto the **first**
+/// declared layer, in front of this recipe's own.
+///
+/// Depth is one on purpose. Nothing ART ships needs a chain, and a chain
+/// would need a cycle guard whose failure mode is a stack overflow in a
+/// binary built with `panic = "abort"`. A base that itself declares a `base`
+/// is refused by name.
+fn resolve_base(recipe: Recipe) -> CoreResult<Recipe> {
+    let Some(base_release) = recipe.base.clone() else {
+        return Ok(recipe);
+    };
+    let base = by_release_unresolved(&base_release)?;
+    merge_base(base, recipe)
+}
+
+/// [`resolve_base`]'s merge, with the base recipe already in hand — split
+/// out so a test can exercise the collision refusal below against two
+/// inline recipes (`merge_for_test`) rather than needing a shipped release
+/// to look up. `resolve_base` is the only production caller.
+fn merge_base(base: Recipe, recipe: Recipe) -> CoreResult<Recipe> {
+    if base.base.is_some() {
+        return Err(CoreError::Malformed {
+            format: "recipe".into(),
+            detail: format!(
+                "'{}' is based on '{}', which is itself based on another recipe; \
+                 ART resolves one level only",
+                recipe.release, base.release
+            ),
+        });
+    }
+    let Some(first) = recipe.layers.first().map(|l| l.id.clone()) else {
+        return Err(CoreError::Malformed {
+            format: "recipe".into(),
+            detail: format!(
+                "'{}' is based on '{}' but declares no layers, \
+                 so there is nowhere to put the inherited components",
+                recipe.release, base.release
+            ),
+        });
+    };
+    let mut components: Vec<Component> = base
+        .components
+        .into_iter()
+        .map(|mut c| {
+            c.layer = Some(first.clone());
+            c
+        })
+        .collect();
+    for own in &recipe.components {
+        if components.iter().any(|c| c.id == own.id) {
+            return Err(CoreError::Malformed {
+                format: "recipe".into(),
+                detail: format!(
+                    "'{}' declares a component '{}' that '{}' already declares; \
+                     an update amends a component through `overrides`, never by reusing its id",
+                    recipe.release, own.id, base.release
+                ),
+            });
+        }
+    }
+    components.extend(recipe.components.iter().cloned());
+    let resolved = Recipe {
+        components,
+        ..recipe
+    };
+    validate(&resolved)?;
+    // `validate()` skips `validate_removals` whenever `base` is set, because
+    // an *unresolved* based recipe's own `removes` may legitimately name a
+    // destination the base places (AmigaOS 3.2.2's `update-322-system`
+    // removes a file `extras`, a base-layer component, places) — a check
+    // `parse_unresolved`'s standalone `validate()` call cannot answer, since
+    // the base's own components are not there yet. `resolved.base` is still
+    // `Some(_)` (carried through by `..recipe`), so that same skip would
+    // apply here too if left to `validate()` alone — which would mean no
+    // based recipe's removals were ever checked at all. Run it explicitly,
+    // once, against the component list that actually has everything.
+    validate_removals(&resolved)?;
+    Ok(resolved)
 }
 
 /// Check one `/`-separated path field (`from` or `to`) against the same
@@ -217,12 +328,40 @@ pub(super) fn validate_component(format: &str, component: &Component) -> CoreRes
         validate_path(format, &component.id, "from", &rule.from, true)?;
         validate_path(format, &component.id, "to", &rule.to, false)?;
     }
+    // A removal names a destination in the tree, exactly like a rule's own
+    // `to` — the same AmigaDOS name rules apply, and `removes: [""]` is
+    // exactly as meaningless as a `to` of `""` would be.
+    for removed in &component.removes {
+        validate_path(format, &component.id, "removes", removed, false)?;
+    }
     Ok(())
 }
 
-/// Everything a recipe must get right before ART trusts it: no two
-/// components sharing an id, plus [`validate_component`] for each one.
+/// Everything a recipe must get right before ART trusts it: no two layers
+/// sharing an id, no two components sharing an id, every component naming a
+/// layer exactly when the recipe is layered and one it actually declares,
+/// plus [`validate_component`] for each one.
+///
+/// **[`validate_removals`] is skipped whenever `recipe.base` is set.** A
+/// based recipe's own `removes` may legitimately name a destination the
+/// *base* places — AmigaOS 3.2.2's `update-322-system` removes a file
+/// `extras`, a base-layer component, places — and this function is called on
+/// the recipe standalone, before [`merge_base`] has brought the base's
+/// components in. Checking removals here would refuse every based recipe
+/// that removes anything the base placed, on the grounds that nothing in
+/// *this file alone* places it. [`merge_base`] calls [`validate_removals`]
+/// itself, explicitly, once the component list actually has everything.
 fn validate(recipe: &Recipe) -> CoreResult<()> {
+    let mut seen_layers = std::collections::HashSet::new();
+    for layer in &recipe.layers {
+        if !seen_layers.insert(layer.id.as_str()) {
+            return Err(CoreError::Malformed {
+                format: "recipe".into(),
+                detail: format!("two layers share the id '{}'", layer.id),
+            });
+        }
+    }
+
     let mut seen_ids = std::collections::HashSet::new();
     for component in &recipe.components {
         if !seen_ids.insert(component.id.as_str()) {
@@ -231,7 +370,146 @@ fn validate(recipe: &Recipe) -> CoreResult<()> {
                 detail: format!("two components share the id '{}'", component.id),
             });
         }
+
+        match (recipe.is_layered(), component.layer.as_deref()) {
+            (true, None) => {
+                return Err(CoreError::Malformed {
+                    format: "recipe".into(),
+                    detail: format!(
+                        "component '{}' names no layer, and this recipe declares {}",
+                        component.id,
+                        recipe.layer_ids().join(", ")
+                    ),
+                })
+            }
+            (true, Some(named)) if !seen_layers.contains(named) => {
+                return Err(CoreError::Malformed {
+                    format: "recipe".into(),
+                    detail: format!(
+                        "component '{}' names the layer '{named}', which this recipe does not \
+                         declare",
+                        component.id
+                    ),
+                })
+            }
+            (false, Some(named)) => {
+                return Err(CoreError::Malformed {
+                    format: "recipe".into(),
+                    detail: format!(
+                        "component '{}' names the layer '{named}', but this recipe declares none",
+                        component.id
+                    ),
+                })
+            }
+            _ => {}
+        }
+
         validate_component("recipe", component)?;
+    }
+    if recipe.base.is_none() {
+        validate_removals(recipe)?;
+    }
+    Ok(())
+}
+
+/// Every `Component::removes` entry names a destination some **other**
+/// component in this recipe places with a **`RuleKind::File`** rule, and
+/// that component's id is one this component declares an `overrides` over.
+///
+/// **Why this and not `validate_component`.** A single component's own data
+/// cannot answer any of this — "does anything place this path", "does it
+/// place it as a file or as a whole drawer" and "is the placer named in my
+/// own `overrides`" all need the *rest* of the recipe, which is exactly why
+/// this runs once over the whole component list rather than per component
+/// like [`validate_component`]'s path checks.
+///
+/// **Why refuse rather than skip.** A `removes` entry naming nobody's
+/// destination is either a typo (the recipe author meant a path that is
+/// spelled differently) or a claim about a tree this recipe cannot see —
+/// there is no other component in ART's own binary to have placed it, since
+/// recipes are `include_str!`-ed and closed. And a `removes` entry naming a
+/// real destination without declaring the override is the undeclared-claim
+/// shape `no_two_components_claim_one_destination_without_declaring_it`
+/// already refuses for a `from`/`to` rule — a component that can make a file
+/// disappear without saying whose file it is taking is a stronger claim than
+/// one that merely overwrites it, not a weaker one.
+///
+/// **A `Subtree` placer is refused, never accepted as "close enough"
+/// (fix round 1).** The first version of this check matched a rule's `to`
+/// regardless of `kind`, on the reasoning that a `Subtree` rule's own
+/// destination is a merge point rather than a claim (true for collisions,
+/// `recipe.rs`'s own module doc comment) — but a *removal* of that path is
+/// not a merge question, it is "delete this drawer", and ART removes files,
+/// never drawers: `apply::perform_removal` cannot honestly report how many
+/// nested files a drawer removal took with it, which is exactly the
+/// "don't claim support that isn't implemented and tested" shape (spec
+/// §89) in its quietest form — a JSON key whose validator accepts a shape
+/// the engine can only approximate. So this is checked and refused *here*,
+/// at the point the recipe format could otherwise say something ART cannot
+/// honestly do, rather than left for `apply()` to discover.
+fn validate_removals(recipe: &Recipe) -> CoreResult<()> {
+    for component in &recipe.components {
+        for removed in &component.removes {
+            let mut file_placers: Vec<&str> = Vec::new();
+            let mut subtree_placers: Vec<&str> = Vec::new();
+            for other in recipe.components.iter().filter(|o| o.id != component.id) {
+                for rule in &other.rules {
+                    if rule.to != *removed {
+                        continue;
+                    }
+                    match rule.kind {
+                        // An icon-tooltypes rule amends one file at `to`,
+                        // exactly like a `File` rule places one — see
+                        // `RuleKind::IconTooltypes`'s own doc comment on why
+                        // it participates in every file-level check a `File`
+                        // rule does.
+                        RuleKind::File | RuleKind::IconTooltypes => {
+                            file_placers.push(other.id.as_str())
+                        }
+                        RuleKind::Subtree => subtree_placers.push(other.id.as_str()),
+                    }
+                }
+            }
+
+            if file_placers.is_empty() && subtree_placers.is_empty() {
+                return Err(CoreError::Malformed {
+                    format: "recipe".into(),
+                    detail: format!(
+                        "'{}' removes '{removed}', which no component in this recipe places",
+                        component.id
+                    ),
+                });
+            }
+
+            if file_placers.is_empty() {
+                // Only `Subtree` placers exist — see this function's own doc
+                // comment on why that is refused rather than accepted.
+                return Err(CoreError::Malformed {
+                    format: "recipe".into(),
+                    detail: format!(
+                        "'{}' removes '{removed}', which '{}' places as a whole drawer (a \
+                         Subtree rule), not a file — ART removes files, never drawers, because \
+                         it cannot honestly report how many nested files a drawer removal took \
+                         with it",
+                        component.id, subtree_placers[0]
+                    ),
+                });
+            }
+
+            let declared = file_placers
+                .iter()
+                .any(|placer| component.overrides.iter().any(|o| o == placer));
+            if !declared {
+                return Err(CoreError::Malformed {
+                    format: "recipe".into(),
+                    detail: format!(
+                        "'{}' removes '{removed}', which '{}' places, but '{}' does not declare \
+                         an override over '{}'",
+                        component.id, file_placers[0], component.id, file_placers[0]
+                    ),
+                });
+            }
+        }
     }
     Ok(())
 }
@@ -277,6 +555,14 @@ pub fn amigaos_39() -> CoreResult<Recipe> {
     parse(AMIGAOS_39_JSON)
 }
 
+/// The shipped AmigaOS 3.2.2 recipe — a `base` of `"AmigaOS 3.2"` plus one
+/// `update-3.2.2` layer, per AmigaOS 3.2.2's own `HowToInstall` ("a successful
+/// installation of AmigaOS 3.2 or 3.2.1"). See the recipe file's own
+/// `_why_this_recipe_exists` note for what was measured and where.
+pub fn amigaos_322() -> CoreResult<Recipe> {
+    parse(AMIGAOS_322_JSON)
+}
+
 /// Every release ART ships a recipe for, in the order a picker should list
 /// them.
 ///
@@ -285,7 +571,7 @@ pub fn amigaos_39() -> CoreResult<Recipe> {
 /// recipe files are two halves of one fact, and a release in only one of them
 /// is a release the user either cannot reach or cannot install.
 pub fn releases() -> &'static [&'static str] {
-    &["AmigaOS 3.2", "AmigaOS 3.9"]
+    &["AmigaOS 3.2", "AmigaOS 3.2.2", "AmigaOS 3.9"]
 }
 
 /// The shipped recipe for `release`.
@@ -297,7 +583,24 @@ pub fn releases() -> &'static [&'static str] {
 pub fn by_release(release: &str) -> CoreResult<Recipe> {
     match release {
         "AmigaOS 3.2" => amigaos_32(),
+        "AmigaOS 3.2.2" => amigaos_322(),
         "AmigaOS 3.9" => amigaos_39(),
+        other => Err(CoreError::InvalidInput(format!(
+            "ART ships no install recipe for {other}"
+        ))),
+    }
+}
+
+/// [`by_release`]'s own match arm set, parsed with [`parse_unresolved`]
+/// instead of [`parse`] — what [`resolve_base`] needs when a recipe names
+/// this release as its `base`, so that a base's own `base` (refused at depth
+/// one) is seen before anything is merged, and so that resolving 3.2.2 does
+/// not first resolve 3.2 against itself.
+fn by_release_unresolved(release: &str) -> CoreResult<Recipe> {
+    match release {
+        "AmigaOS 3.2" => parse_unresolved(AMIGAOS_32_JSON),
+        "AmigaOS 3.2.2" => parse_unresolved(AMIGAOS_322_JSON),
+        "AmigaOS 3.9" => parse_unresolved(AMIGAOS_39_JSON),
         other => Err(CoreError::InvalidInput(format!(
             "ART ships no install recipe for {other}"
         ))),
@@ -461,6 +764,8 @@ mod tests {
                 package.id.clone(),
                 Recipe {
                     release: package.id.clone(),
+                    base: None,
+                    layers: vec![],
                     components: vec![package.component],
                 },
             ));
@@ -492,6 +797,7 @@ mod tests {
         fn raw_json(release: &str) -> &'static str {
             match release {
                 "AmigaOS 3.2" => AMIGAOS_32_JSON,
+                "AmigaOS 3.2.2" => AMIGAOS_322_JSON,
                 "AmigaOS 3.9" => AMIGAOS_39_JSON,
                 other => panic!(
                     "'{other}' is offered by releases() but raw_shipped_recipes() has no raw \
@@ -517,6 +823,8 @@ mod tests {
                 package.id.clone(),
                 Recipe {
                     release: package.id.clone(),
+                    base: None,
+                    layers: vec![],
                     components: vec![package.component],
                 },
             ));
@@ -721,8 +1029,10 @@ mod tests {
     /// alternative makes the check depend on the components' array
     /// position, and reordering a *set* — which carries no meaning of its
     /// own — must never be able to flip a test from green to red.
-    /// **This sees `RuleKind::File` rules only, and every rule in the
-    /// shipped AmigaOS 3.9 recipe is a `Subtree`** — so for that recipe it
+    /// **This sees `RuleKind::File` and `RuleKind::IconTooltypes` rules
+    /// only — the two kinds that claim one file rather than merge into a
+    /// drawer — and every rule in the shipped AmigaOS 3.9 recipe is a
+    /// `Subtree`** — so for that recipe it
     /// passes *vacuously*, and would pass just as happily with every
     /// `overrides` array emptied. That is deliberate rather than an
     /// oversight (a `Subtree` destination is a merge point, not a claim, and
@@ -736,7 +1046,11 @@ mod tests {
         for (release, recipe) in shipped_recipes() {
             let mut claimants: HashMap<&str, Vec<&Component>> = HashMap::new();
             for component in &recipe.components {
-                for rule in component.rules.iter().filter(|r| r.kind == RuleKind::File) {
+                for rule in component
+                    .rules
+                    .iter()
+                    .filter(|r| matches!(r.kind, RuleKind::File | RuleKind::IconTooltypes))
+                {
                     claimants
                         .entry(rule.to.as_str())
                         .or_default()
@@ -1228,14 +1542,26 @@ mod tests {
         );
     }
 
-    /// `backdrops` stays off on purpose — the brief is explicit that where
-    /// the real installer places these wallpapers has not been established,
-    /// and this project does not guess at destinations. A flipped
-    /// `available` would ship that guess silently.
+    /// `available: false` is §96's "Coming Later" box: a component that is
+    /// registered but not yet built, kept visible rather than hidden.
+    ///
+    /// Used to be checked against the shipped `update-3.2.1` placeholder —
+    /// `available: false` with no rules — until Task 8 removed it: AmigaOS
+    /// 3.2.2's own `HowToInstall` wants "3.2 **or** 3.2.1", so installing
+    /// cumulatively needs one recipe (3.2.2, layered on 3.2), not a second
+    /// placeholder recipe for the update in between. Constructs its own
+    /// example now, so this test does not depend on any one shipped
+    /// component staying unbuilt forever.
     #[test]
-    fn backdrops_and_update_3_2_1_are_not_yet_available() {
-        let recipe = recipe();
-        assert!(!recipe.component("update-3.2.1").unwrap().available);
+    fn a_component_declared_unavailable_says_so() {
+        let json = r#"{
+            "release": "X",
+            "components": [
+                { "id": "a", "media": "M", "rules": [], "available": false }
+            ]
+        }"#;
+        let recipe = parse(json).expect("an unavailable component is still a valid recipe");
+        assert!(!recipe.component("a").unwrap().available);
     }
 
     /// **The destination was measured, so `backdrops` is on (ART-127).**
@@ -1979,5 +2305,521 @@ mod tests {
         let offered = super::releases();
         assert!(offered.contains(&"AmigaOS 3.2"), "got {offered:?}");
         assert!(offered.contains(&"AmigaOS 3.9"), "got {offered:?}");
+    }
+
+    // ---- Layered media (Task 1): a component says which layer it lives in ----
+
+    #[test]
+    fn a_recipe_with_no_layers_is_unlayered_and_components_need_no_layer() {
+        let recipe = parse(r#"{"release":"X","components":[{"id":"a","media":"M","rules":[]}]}"#)
+            .expect("an unlayered recipe still parses");
+        assert!(!recipe.is_layered());
+        assert!(recipe.layers.is_empty());
+        assert_eq!(recipe.component("a").unwrap().layer, None);
+    }
+
+    #[test]
+    fn a_component_in_a_layered_recipe_must_name_its_layer() {
+        let err = parse(
+            r#"{"release":"X",
+                "layers":[{"id":"base"},{"id":"update"}],
+                "components":[{"id":"a","media":"M","rules":[]}]}"#,
+        )
+        .expect_err("a component with no layer is a recipe error");
+        let text = err.to_string();
+        assert!(
+            text.contains("'a'") && text.contains("layer"),
+            "the refusal has to name the component and the missing field, got: {text}"
+        );
+    }
+
+    #[test]
+    fn a_component_may_not_name_a_layer_the_recipe_does_not_declare() {
+        let err = parse(
+            r#"{"release":"X",
+                "layers":[{"id":"base"}],
+                "components":[{"id":"a","media":"M","layer":"update","rules":[]}]}"#,
+        )
+        .expect_err("an undeclared layer is a recipe error");
+        let text = err.to_string();
+        assert!(
+            text.contains("'a'") && text.contains("update"),
+            "the refusal has to name the component and the layer it asked for, got: {text}"
+        );
+    }
+
+    #[test]
+    fn two_layers_may_not_share_an_id() {
+        let err = parse(
+            r#"{"release":"X",
+                "layers":[{"id":"base"},{"id":"base"}],
+                "components":[]}"#,
+        )
+        .expect_err("duplicate layer ids are a recipe error");
+        assert!(err.to_string().contains("base"));
+    }
+
+    #[test]
+    fn a_layer_carries_its_label_key() {
+        let recipe = parse(
+            r#"{"release":"X",
+                "layers":[{"id":"base","label_key":"osinstall.layer.base32"}],
+                "components":[{"id":"a","media":"M","layer":"base","rules":[]}]}"#,
+        )
+        .expect("a labelled layer parses");
+        assert_eq!(
+            recipe.layers[0].label_key.as_deref(),
+            Some("osinstall.layer.base32")
+        );
+    }
+
+    // ---- base: a recipe may inherit another release's components ----
+
+    /// The raw JSON text behind one of ART's own shipped releases —
+    /// [`an_unlayered_recipe_is_byte_for_byte_what_its_file_says`] compares
+    /// the resolved recipe against this rather than against `parse`'s own
+    /// output, so a merge step that quietly changed something would have to
+    /// change it away from the file itself, not just away from a second call
+    /// to the function under test.
+    fn json_for(release: &str) -> &'static str {
+        match release {
+            "AmigaOS 3.2" => AMIGAOS_32_JSON,
+            "AmigaOS 3.9" => AMIGAOS_39_JSON,
+            other => {
+                panic!("'{other}' is offered by releases() but json_for() has no raw JSON for it")
+            }
+        }
+    }
+
+    /// [`resolve_base`] minus its shipped-release lookup: parses `base_json`
+    /// and `derived_json` and merges the second onto the first exactly as
+    /// `resolve_base` would once it had found the base recipe by name. Lets
+    /// the collision refusal be tested against an inline base rather than
+    /// one of the two releases ART actually ships, so the test does not have
+    /// to wait on a real update recipe existing.
+    fn merge_for_test(base_json: &str, derived_json: &str) -> CoreResult<Recipe> {
+        let base = parse_unresolved(base_json)?;
+        let derived = parse_unresolved(derived_json)?;
+        merge_base(base, derived)
+    }
+
+    #[test]
+    fn a_based_recipe_inherits_its_bases_components_on_the_first_layer() {
+        let recipe = by_release("AmigaOS 3.2.2").expect("the 3.2.2 recipe resolves");
+        let inherited = recipe
+            .component("workbench-base")
+            .expect("the base recipe's components are inherited");
+        assert_eq!(inherited.layer.as_deref(), Some("base"));
+        assert_eq!(
+            recipe
+                .component("update-322-system")
+                .unwrap()
+                .layer
+                .as_deref(),
+            Some("update-3.2.2"),
+            "the recipe's own components keep the layer they declared"
+        );
+    }
+
+    #[test]
+    fn an_unlayered_recipe_is_byte_for_byte_what_its_file_says() {
+        // The 3.2 and 3.9 recipes declare no `base` and no `layers`, so
+        // resolution must be a no-op for them. Compared field by field rather
+        // than by count, because a merge that dropped a rule would keep the
+        // count if it also added one.
+        for release in ["AmigaOS 3.2", "AmigaOS 3.9"] {
+            let resolved = by_release(release).unwrap();
+            let raw = parse_unresolved(json_for(release)).unwrap();
+            assert_eq!(resolved, raw, "{release} must not change under resolution");
+        }
+    }
+
+    #[test]
+    fn a_base_that_names_an_unknown_release_is_refused() {
+        let err = resolve_base(
+            parse_unresolved(
+                r#"{"release":"X","base":"AmigaOS 9.9",
+                    "layers":[{"id":"base"}],
+                    "components":[]}"#,
+            )
+            .unwrap(),
+        )
+        .expect_err("an unknown base is a recipe error");
+        assert!(err.to_string().contains("AmigaOS 9.9"));
+    }
+
+    #[test]
+    fn a_based_recipe_may_not_redeclare_one_of_its_bases_component_ids() {
+        let err = merge_for_test(
+            /* base   */
+            r#"{"release":"B","components":[{"id":"a","media":"M","rules":[]}]}"#,
+            /* derived*/
+            r#"{"release":"D","base":"B",
+                "layers":[{"id":"base"},{"id":"up"}],
+                "components":[{"id":"a","media":"M2","layer":"up","rules":[]}]}"#,
+        )
+        .expect_err("a redeclared id is a recipe error, not a silent replacement");
+        assert!(
+            err.to_string().contains("'a'"),
+            "the refusal names the id that collides"
+        );
+    }
+
+    /// **Depth is one on purpose.** A base that itself declares a `base`
+    /// would need a cycle guard whose failure mode, in a binary built with
+    /// `panic = "abort"`, is the whole application dying rather than a
+    /// caught error. Refusing by name at depth one avoids needing that
+    /// guard at all. Not one of the brief's four written tests — the fifth
+    /// mutation row asks for a two-level fixture instead of a named test —
+    /// but recorded here rather than only in the mutation table, so the
+    /// property survives a future edit to this file even if nobody re-reads
+    /// the plan that produced it.
+    #[test]
+    fn a_base_that_is_itself_based_on_something_is_refused() {
+        let err = merge_for_test(
+            /* base   */
+            r#"{"release":"B","base":"Grandparent","layers":[{"id":"base"}],
+                "components":[{"id":"a","media":"M","layer":"base","rules":[]}]}"#,
+            /* derived*/
+            r#"{"release":"D","base":"B","layers":[{"id":"base"}],"components":[]}"#,
+        )
+        .expect_err("a base that is itself based on something is refused rather than chained");
+        let text = err.to_string();
+        assert!(
+            text.contains("'D'") && text.contains("'B'"),
+            "the refusal names both the recipe and the base it points at: {text}"
+        );
+    }
+
+    /// **A standing guard for the direction the ignored 3.2.2 test cannot
+    /// cover until Task 8.** `merge_base` stamps every inherited component
+    /// with the derived recipe's *first* declared layer — this fixture
+    /// declares two, `alpha` and `beta`, specifically so that stamping the
+    /// wrong one is a different, nameable string rather than a coincidence.
+    /// The assertion checks that string, not merely `Some(_)`: a mutation
+    /// that stamped `beta` (the last layer) must produce a message showing
+    /// `Some("beta")`, not a green test that never looked.
+    #[test]
+    fn a_based_recipes_inherited_components_are_stamped_with_the_first_layer_not_any_other() {
+        let merged = merge_for_test(
+            /* base   */
+            r#"{"release":"B","components":[{"id":"inherited","media":"M","rules":[]}]}"#,
+            /* derived*/
+            r#"{"release":"D","base":"B",
+                "layers":[{"id":"alpha"},{"id":"beta"}],
+                "components":[{"id":"own","media":"M2","layer":"beta","rules":[]}]}"#,
+        )
+        .expect("a two-layer derived recipe resolves against its base");
+        assert_eq!(
+            merged.component("inherited").unwrap().layer.as_deref(),
+            Some("alpha"),
+            "the inherited component must be stamped with the recipe's first declared layer \
+             ('alpha'), not 'beta' or any other"
+        );
+    }
+
+    /// **Fix round 1, Finding 2.** `validate()` skips `validate_removals`
+    /// whenever `recipe.base` is set (so a based recipe's own `removes` can
+    /// legitimately name a destination the *base* places), and `merge_base`
+    /// is what is supposed to run that check once, explicitly, against the
+    /// fully merged component list. Nothing else calls `validate_removals`
+    /// on a based recipe — so if that one line in `merge_base` is ever
+    /// deleted, a based recipe's `removes` stops being checked at all, and
+    /// this is the test that would notice: `a` (the base's own component)
+    /// places `Tools/X` as a `File`, `b` (the derived recipe's own, on the
+    /// `up` layer) removes it without declaring an `overrides` over `a` —
+    /// the same undeclared-claim shape
+    /// `a_removal_may_only_name_a_path_an_overridden_component_places`
+    /// already refuses for an unbased recipe, asserted here across the
+    /// `base` boundary instead.
+    #[test]
+    fn a_based_recipes_removal_is_still_checked_against_the_merged_component_list() {
+        let err = merge_for_test(
+            /* base   */
+            r#"{"release":"B","components":[
+                  {"id":"a","media":"M","rules":[{"from":"P","to":"Tools/X","kind":"file"}]}
+                ]}"#,
+            /* derived*/
+            r#"{"release":"D","base":"B",
+                "layers":[{"id":"base"},{"id":"up"}],
+                "components":[
+                  {"id":"b","media":"N","layer":"up","rules":[],"removes":["Tools/X"]}
+                ]}"#,
+        )
+        .expect_err("b removes a's file across the base boundary without declaring it overrides a");
+        let text = err.to_string();
+        assert!(
+            text.contains("'b'") && text.contains("Tools/X") && text.contains("'a'"),
+            "names the remover, the path and the placer, even though the placer came from the \
+             base rather than from this recipe's own file: {text}"
+        );
+    }
+
+    // ---- Task 4: a component may remove a path an overridden one placed ----
+
+    /// The brief's own written test: `b` removes `a`'s file without
+    /// declaring an override over `a`.
+    #[test]
+    fn a_removal_may_only_name_a_path_an_overridden_component_places() {
+        let err = parse(
+            r#"{"release":"X",
+                "components":[
+                  {"id":"a","media":"M","rules":[{"from":"P","to":"Tools/X","kind":"file"}]},
+                  {"id":"b","media":"N","rules":[],"removes":["Tools/X"]}
+                ]}"#,
+        )
+        .expect_err("b removes a's file without declaring it overrides a");
+        let text = err.to_string();
+        assert!(text.contains("'b'") && text.contains("Tools/X") && text.contains("'a'"));
+    }
+
+    /// The other half of the same rule: declaring the override makes the
+    /// identical recipe parse.
+    #[test]
+    fn a_removal_of_a_path_an_overridden_component_places_is_allowed() {
+        let recipe = parse(
+            r#"{"release":"X",
+                "components":[
+                  {"id":"a","media":"M","rules":[{"from":"P","to":"Tools/X","kind":"file"}]},
+                  {"id":"b","media":"N","rules":[],"overrides":["a"],"removes":["Tools/X"]}
+                ]}"#,
+        )
+        .expect("declaring the override is exactly what makes the removal legitimate");
+        assert_eq!(recipe.component("b").unwrap().removes, vec!["Tools/X"]);
+    }
+
+    /// A `removes` entry naming a path **nobody** in the recipe places is a
+    /// typo or a claim about a tree this recipe cannot see — either way, not
+    /// something to build silently.
+    #[test]
+    fn a_removal_naming_a_path_nobody_places_is_refused() {
+        let err = parse(
+            r#"{"release":"X",
+                "components":[
+                  {"id":"a","media":"M","rules":[],"removes":["Tools/Nowhere"]}
+                ]}"#,
+        )
+        .expect_err("nothing in this recipe places 'Tools/Nowhere'");
+        let text = err.to_string();
+        assert!(
+            text.contains("'a'") && text.contains("Tools/Nowhere"),
+            "{text}"
+        );
+    }
+
+    /// `removes` is a `to`-shaped path like any other — an empty entry is
+    /// exactly as meaningless as an empty `to`, and [`validate_path`] already
+    /// refuses that for rules; `removes` must get the identical check.
+    #[test]
+    fn an_empty_removal_path_is_refused() {
+        let err = parse(
+            r#"{"release":"X",
+                "components":[
+                  {"id":"a","media":"M","rules":[],"removes":[""]}
+                ]}"#,
+        )
+        .expect_err("an empty removal path is as meaningless as an empty destination");
+        assert!(err.to_string().contains("'a'"));
+    }
+
+    /// **Fix round 1, Finding 1.** A `removes` entry naming a destination
+    /// only a `Subtree` rule places is refused, even when the override is
+    /// properly declared — `b` overrides `a` here, so the *only* thing
+    /// wrong is that `a` places `Tools` as a whole drawer rather than as a
+    /// file. `apply::perform_removal` cannot honestly report how many
+    /// nested files a drawer removal took with it, so the format must not
+    /// be able to say it at all.
+    #[test]
+    fn a_removal_of_a_path_a_subtree_rule_places_is_refused() {
+        let err = parse(
+            r#"{"release":"X",
+                "components":[
+                  {"id":"a","media":"M","rules":[{"from":"X","to":"Tools","kind":"subtree"}]},
+                  {"id":"b","media":"N","rules":[],"overrides":["a"],"removes":["Tools"]}
+                ]}"#,
+        )
+        .expect_err("a's placer for 'Tools' is a Subtree rule, not a File rule");
+        let text = err.to_string();
+        assert!(
+            text.contains("'b'")
+                && text.contains("Tools")
+                && text.contains("'a'")
+                && text.contains("drawer"),
+            "names the remover, the path, the placer, and why: {text}"
+        );
+    }
+
+    // ---- Task 8: the AmigaOS 3.2.2 recipe ----
+
+    #[test]
+    fn the_322_recipe_resolves_and_declares_two_layers() {
+        let r = by_release("AmigaOS 3.2.2").unwrap();
+        assert_eq!(r.layer_ids(), vec!["base", "update-3.2.2"]);
+        assert_eq!(r.base.as_deref(), Some("AmigaOS 3.2"));
+    }
+
+    #[test]
+    fn the_two_diskdoctors_are_two_components_in_two_layers() {
+        let r = by_release("AmigaOS 3.2.2").unwrap();
+        assert_eq!(
+            r.component("diskdoctor").unwrap().layer.as_deref(),
+            Some("base")
+        );
+        let update = r.component("update-322-diskdoctor").unwrap();
+        assert_eq!(update.layer.as_deref(), Some("update-3.2.2"));
+        assert_eq!(update.media, "DiskDoctor");
+        assert!(update.overrides.iter().any(|o| o == "diskdoctor"));
+    }
+
+    /// **Fix round 1, Finding 1.** `update-322-diskdoctor`'s rules were
+    /// copied from the base AmigaOS 3.2 recipe's own `diskdoctor` component
+    /// rather than measured, and they were wrong in both directions: it
+    /// placed `C/FixROMLibs`, which `Update3.2.2.adf`'s own installer
+    /// (`Install/Install`) never copies, and it omitted
+    /// `Devs/trackfile.device`, which the installer does copy. Both files
+    /// are really on the `DiskDoctor` disk, so nothing refused and nothing
+    /// failed — exactly the confident-wrong shape this project pays most
+    /// for. Nothing read this component's rules before this test; now
+    /// something does.
+    #[test]
+    fn update_322_diskdoctor_places_exactly_the_three_files_the_installer_does() {
+        let r = by_release("AmigaOS 3.2.2").unwrap();
+        let update = r.component("update-322-diskdoctor").unwrap();
+        let pairs: Vec<(&str, &str)> = update
+            .rules
+            .iter()
+            .map(|rule| (rule.from.as_str(), rule.to.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                ("C/DAControl", "C/DAControl"),
+                ("C/DiskDoctor", "C/DiskDoctor"),
+                ("Devs/trackfile.device", "Devs/trackfile.device"),
+            ],
+            "exactly what Update3.2.2.adf's own Install/Install script copies from DiskDoctor \
+             — never C/FixROMLibs, which is the base 3.2 diskdoctor's own rule for a different \
+             disk"
+        );
+        assert!(
+            update.rules.iter().all(|rule| rule.kind == RuleKind::File),
+            "all three are single files, never a Subtree"
+        );
+    }
+
+    /// **Fix round 1, coordinator ruling.** `Update3.2.2.adf:Install/Install`
+    /// copies both `Update3.2.2` and `Classes3.2.2` unconditionally — no
+    /// `askbool`, no condition in front of either step — so both must be
+    /// `required: true`: an optional Classes update would let a user decline
+    /// it and still get a tree ART stamps `Release 3.2.2`, missing 31 files
+    /// the release always places. The same shape as Finding 1's
+    /// `Devs/trackfile.device` defect, one level up — and, like that one,
+    /// invisible without a test that actually reads the field. A future edit
+    /// flipping either one back to optional now has something to fail.
+    #[test]
+    fn update_322_system_and_update_322_classes_are_both_required() {
+        let r = by_release("AmigaOS 3.2.2").unwrap();
+        assert!(
+            r.component("update-322-system").unwrap().required,
+            "the release copies Update3.2.2 unconditionally"
+        );
+        assert!(
+            r.component("update-322-classes").unwrap().required,
+            "the release copies Classes3.2.2 unconditionally, in the same main flow, with no \
+             askbool in front of it"
+        );
+    }
+
+    #[test]
+    fn every_locale_component_names_only_drawers_its_own_disk_carries() {
+        // -EN carries Help alone; only -CZ, -RS and -RU carry Languages.
+        let r = by_release("AmigaOS 3.2.2").unwrap();
+        let en = r.component("update-322-locale-en").unwrap();
+        assert!(en.rules.iter().all(|rule| rule.from.starts_with("Help")));
+        for id in [
+            "update-322-locale-cz",
+            "update-322-locale-rs",
+            "update-322-locale-ru",
+        ] {
+            assert!(
+                r.component(id)
+                    .unwrap()
+                    .rules
+                    .iter()
+                    .any(|rule| rule.from == "Languages"),
+                "{id} carries Languages"
+            );
+        }
+        for id in ["update-322-locale-tr", "update-322-locale-de"] {
+            assert!(
+                !r.component(id)
+                    .unwrap()
+                    .rules
+                    .iter()
+                    .any(|rule| rule.from == "Languages"),
+                // Fix round 1, Finding 4: this used to say "a rule for it
+                // would refuse MediaMissing", which overstates it — every
+                // locale disk carries a `Languages` drawer, empty on
+                // fourteen of them (measured: `-TR` and `-DE` both have it,
+                // with zero files inside), so a rule here would resolve and
+                // place nothing, not refuse. Still wrong to write, because
+                // it is not what the release's own `UPDATELOCALE` procedure
+                // does for these two languages.
+                "{id} does not carry a non-empty Languages drawer, and a rule for it would \
+                 place an empty subtree rather than match what the release's own installer \
+                 does"
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_places_the_drawers_the_release_leaves_alone() {
+        let r = by_release("AmigaOS 3.2.2").unwrap();
+        for component in &r.components {
+            for rule in &component.rules {
+                assert!(
+                    !rule.from.starts_with("Other") && rule.from != "ReadMe",
+                    "'{}' places '{}', which the release's own installer does not",
+                    component.id,
+                    rule.from
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_ten_c_tools_the_release_does_not_place_are_not_placed() {
+        let r = by_release("AmigaOS 3.2.2").unwrap();
+        let system = r.component("update-322-system").unwrap();
+        for tool in ["C/AmigaModel", "C/CopyTooltypes", "C/GuessBootDev"] {
+            assert!(
+                !system.rules.iter().any(|rule| rule.from == tool),
+                "{tool} is an install-time helper, not a file the release places"
+            );
+        }
+        assert_eq!(
+            system
+                .rules
+                .iter()
+                .filter(|r| r.from.starts_with("C/"))
+                .count(),
+            10
+        );
+    }
+
+    #[test]
+    fn the_update_removes_the_file_the_release_removes() {
+        let r = by_release("AmigaOS 3.2.2").unwrap();
+        let system = r.component("update-322-system").unwrap();
+        assert!(system
+            .removes
+            .iter()
+            .any(|p| p == "Tools/TextEditFileTypes/Default4Types"));
+        assert!(system.overrides.iter().any(|o| o == "extras"));
+    }
+
+    #[test]
+    fn the_empty_3_2_1_placeholder_is_gone() {
+        assert!(amigaos_32().unwrap().component("update-3.2.1").is_none());
     }
 }

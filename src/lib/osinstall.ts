@@ -39,6 +39,17 @@ export interface FoundMedia {
   /** Read from **inside** the image — never derived from `path`. */
   volumeName: string;
   kind: MediaKind;
+  /**
+   * Which media layer this disk was found in, by the layer's own id.
+   *
+   * Absent, not `null` — an **unlayered** scan has no layer to name, which is
+   * every scan before layered recipes existed and still every scan
+   * `osinstallScanMedia` runs today. The Rust side skips the field entirely
+   * rather than serialising it as `null` (`#[serde(skip_serializing_if)]`),
+   * so an old-shaped result and a layered one are told apart by whether the
+   * key is there at all.
+   */
+  layer?: string;
 }
 
 /** What scanning a media folder found, or why it could not be looked at. */
@@ -74,6 +85,17 @@ export interface InstallRequest {
    * built before this existed still deserialises.
    */
   extraMediaFolders?: string[];
+  /**
+   * One media folder per layer a layered recipe declares, keyed by the
+   * layer's own id (`core::osinstall::MediaLayer::id`).
+   *
+   * `mediaFolder` and `extraMediaFolders` above stay for the reason they
+   * were given `#[serde(default)]` in the first place: a request built
+   * before this field existed must still work. When this map is empty they
+   * are read exactly as before, onto the single implicit layer — an
+   * unlayered recipe never reads this field at all.
+   */
+  mediaFolders?: Record<string, string>;
   /**
    * The keyboard layout the finished system boots with — a name in
    * `Devs/Keymaps` (ART-226's other half).
@@ -131,7 +153,7 @@ export interface InstallRequest {
  * entry here surfaces as a refusal on screen and never as the wrong
  * operating system being written.
  */
-export const INSTALL_RELEASES = ["AmigaOS 3.2", "AmigaOS 3.9"] as const;
+export const INSTALL_RELEASES = ["AmigaOS 3.2", "AmigaOS 3.2.2", "AmigaOS 3.9"] as const;
 
 export type InstallRelease = (typeof INSTALL_RELEASES)[number];
 
@@ -146,8 +168,11 @@ export function isInstallRelease(value: unknown): value is InstallRelease {
   return typeof value === "string" && (INSTALL_RELEASES as readonly string[]).includes(value);
 }
 
-/** Whether a rule takes one file or a whole subtree. */
-export type RuleKind = "file" | "subtree";
+/** Whether a rule takes one file, a whole subtree, or amends an icon already
+ *  in the tree. `"icon-tooltypes"` merges an icon's tool types and stack
+ *  size into the file already at `to`, rather than copying `from` over it —
+ *  see `PlanItem.mergeIcon`. */
+export type RuleKind = "file" | "subtree" | "icon-tooltypes";
 
 /** Why an install cannot proceed. A value, never a sentence (ART-060) — the
  *  screen translates it. */
@@ -186,6 +211,15 @@ export type RefusalReason =
       reason: string;
     }
   | { refusal: "rom-unknown" }
+  // The paired Kickstart WAS identified — only its own resident module
+  // table could not be read, so a `resident-older-than` condition naming
+  // `resident` cannot be decided for `component`. A different fact from
+  // `rom-unknown` (review fix round 1, F1): that one is undecidable because
+  // ART cannot tell what ROM this is at all; this one names a ROM that is
+  // fine and a specific question about it ART could not answer, and it is
+  // named per component rather than deduplicated across the whole plan,
+  // because two components can ask about two different residents.
+  | { refusal: "resident-table-unreadable"; component: string; resident: string }
   | { refusal: "destination-collision"; path: string; components: string[] }
   | {
       refusal: "media-ambiguous";
@@ -193,6 +227,11 @@ export type RefusalReason =
       volume_name: string;
       paths: string[];
     }
+  // Two of a layered recipe's own layers were pointed at one folder — caught
+  // before any component's media is even looked for, because the folder
+  // that would tell the base release's disk apart from the update's disk
+  // sharing its name was never given.
+  | { refusal: "layers-share-folder"; layers: string[]; folder: string }
   | { refusal: "exclusive-group-conflict"; group: string; components: string[] }
   | {
       refusal: "rule-kind-mismatch";
@@ -248,6 +287,12 @@ export interface PlanItem {
    *  same bytes. */
   decompress: boolean;
   bytes: number;
+  /** Whether this is a `"icon-tooltypes"` rule's item — `osinstallApply`
+   *  amends the icon already at `to` with the source's tool types and stack
+   *  size rather than copying `from` over it. `false` for every `"file"` and
+   *  `"subtree"` item, which is every item a recipe produced before this
+   *  rule kind existed. */
+  mergeIcon: boolean;
 }
 
 /** One switched-on component's own contribution to `S:User-Startup`. */
@@ -280,6 +325,15 @@ export interface PlannedActivation {
   /** Where the media leaves it — `Storage/Monitors/NTSC`. */
   from: string;
   /** Where AmigaOS will look — `Devs/Monitors/NTSC`. */
+  to: string;
+}
+
+/** One destination `osinstallApply` will delete from the tree after every
+ *  placement has run — an update deleting a file its own base release
+ *  placed, `Tools/TextEditFileTypes/Default4Types` in AmigaOS 3.2.2 being
+ *  the real case. */
+export interface PlanRemoval {
+  component: string;
   to: string;
 }
 
@@ -324,6 +378,29 @@ export interface InstallPlan {
    *  folders. */
   packageMedia: Record<string, { path: string; member: string | null }>;
   userStartup: UserStartupContribution[];
+  /** Every destination a switched-on component removes. Not emptied on a
+   *  refusal, unlike `activations` — a removal names a destination
+   *  declaratively, the same way a `userStartup` line does. Empty for every
+   *  shipped recipe until AmigaOS 3.2.2's own recipe uses the field. */
+  removals: PlanRemoval[];
+  /** Which folder each of the recipe's own layers was actually read from —
+   *  empty for an unlayered recipe (every shipped recipe until AmigaOS
+   *  3.2.2's own two-layer one) and emptied on a refusal, the same rule
+   *  `mediaPaths` follows. Not optional: the Rust side has no
+   *  `skip_serializing_if` on this field, so it is always present on the
+   *  wire — a plan from an older ART build is never what this type
+   *  describes, since the frontend only ever receives a plan the running
+   *  backend just serialized. */
+  layers: LayerRecord[];
+}
+
+/** One entry in [`InstallPlan.layers`] — which folder a layer's media
+ *  actually came from. `id` matches a recipe's own `MediaLayer.id`
+ *  (`"base"`, `"update-3.2.2"`), never the empty string an unlayered
+ *  recipe's own internal bookkeeping uses. */
+export interface LayerRecord {
+  id: string;
+  folder: string;
 }
 
 /** What planning found, or why the media folder itself could not be looked
@@ -332,20 +409,88 @@ export type PlanResult =
   | { outcome: "planned"; plan: InstallPlan }
   | { outcome: "folder-unreadable"; folder: string };
 
+/** What happened when `osinstallApply` tried to remove one destination —
+ *  see `PlanRemoval`. `"not-present"` is its own outcome, not a failure: the
+ *  component that would have placed the path may simply have been switched
+ *  off. `failed` carries the core's own sentence — the screen must never
+ *  claim a removal succeeded when the core said it could not. */
+export type RemovalState = "removed" | "not-present" | { failed: string };
+
+export interface RemovalVerdict {
+  to: string;
+  state: RemovalState;
+}
+
+/** What happened when `osinstallApply` tried to amend an icon already in the
+ *  tree with a `mergeIcon` item. `"destination-absent"` is its own outcome,
+ *  not a failure — modeled on `RemovalState` for the identical reason: the
+ *  component that would have placed the icon may simply be switched off.
+ *  `failed` carries the core's own sentence. */
+export type IconMergeState = "merged" | "destination-absent" | { failed: string };
+
+export interface IconMergeVerdict {
+  to: string;
+  state: IconMergeState;
+}
+
 /** What `osinstallApply` actually did. */
 export interface ApplyOutcome {
   root: string;
   files: number;
   directories: number;
   bytes: number;
+  /** One verdict per `InstallPlan.removals` entry, by name — never
+   *  collapsed, and never silent (CLAUDE.md's "reported per entry, by name
+   *  and by result"). */
+  removed: RemovalVerdict[];
+  /** One verdict per `mergeIcon` item, by destination — never folded into
+   *  `files`/`bytes`, which already account for the icon through whichever
+   *  item placed it first. */
+  icons: IconMergeVerdict[];
+  /** How many entries in `icons` came back `failed` — `"destination-absent"`
+   *  does not count (a skip is not a failure).
+   *
+   *  Named for exactly what it counts: it does **not** include a `removed`
+   *  entry whose state is `failed`. There is deliberately no single
+   *  outcome-wide failure tally (fix round 1) — the per-entry verdict lists
+   *  (`icons`, `removed`) are the truth, and a screen wanting a combined
+   *  "did anything fail" computes it from both rather than trusting one
+   *  number that could quietly disagree with them. */
+  iconMergeFailures: number;
 }
 
 export const OSINSTALL_EVENT = "osinstall-result";
+
+/** What the finished tree's own `Prefs/Env-Archive/Versions/Release` states,
+ *  compared with the release this build was for (Task 9) — CLAUDE.md's
+ *  answer to the round that shipped AmigaOS 3.5 labelled 3.9. Five states,
+ *  never one pass/fail bit: a confirmed marker, a mismatched one naming both
+ *  sides, one that differs for a release nobody has measured, none at all,
+ *  or one ART could not even read — five different sentences with five
+ *  different next steps. `"unstated"` is not a failure — most releases ART
+ *  ships have never had an `Update/Release` to write one. `"unreadable"`
+ *  (fix round 1, Finding 1) is never the same sentence as `"unstated"`: the
+ *  tree may well state a release, ART simply could not read it — an
+ *  oversized or otherwise unreadable marker file, the same defect shape
+ *  Task 7's `"resident-table-unreadable"` refusal exists to keep apart from
+ *  a genuine absence. `"expected-unknown"` (final whole-branch review,
+ *  Finding E) is never `"mismatch"` either: the Rust side only reports
+ *  `"mismatch"` for a release it has actually measured a correct tree's own
+ *  marker for (AmigaOS 3.2 and 3.2.2 today) — for any other release, a
+ *  differing marker comes back here instead, so a correct AmigaOS 3.9 tree
+ *  is never told it disagrees with a formula nobody has checked. */
+export type StatedRelease =
+  | { verdict: "confirmed"; stated: string }
+  | { verdict: "mismatch"; expected: string; stated: string }
+  | { verdict: "unstated" }
+  | { verdict: "unreadable"; detail: string }
+  | { verdict: "expected-unknown"; stated: string };
 
 export interface OsInstallResult {
   job_id: number;
   destination: string;
   outcome: ApplyOutcome;
+  stated_release: StatedRelease;
 }
 
 /** Whether one claim about a file was confirmed, contradicted, or never
@@ -419,6 +564,54 @@ export async function osinstallScanMedia(mediaFolder: string): Promise<MediaScan
  */
 export async function osinstallReleaseForMedia(volumeNames: string[]): Promise<string | null> {
   return invoke<string | null>("osinstall_release_for_media", { volumeNames });
+}
+
+/**
+ * One media folder the chosen release asks for, in the recipe's own order.
+ *
+ * Mirrors `core::osinstall::MediaLayer` — `labelKey` is an **i18n key**, not
+ * a sentence, resolved the same way `ComponentDef.labelKey` already is (see
+ * `OsInstall.tsx`'s own `label()`): a recipe is data with no compiler between
+ * it and the screen, so the key travels and the translation happens at the
+ * place that draws it.
+ */
+export interface InstallLayer {
+  id: string;
+  labelKey: string | null;
+}
+
+/**
+ * The media layers `release`'s own shipped recipe declares, in the recipe's
+ * own order.
+ *
+ * **An empty array means unlayered** (every shipped recipe except AmigaOS
+ * 3.2.2) — the media step reads that as "render the single folder field this
+ * screen has always rendered", never as an error. Read-only: parses shipped
+ * JSON, opens no media.
+ */
+export async function layersFor(release: InstallRelease): Promise<InstallLayer[]> {
+  return invoke<InstallLayer[]>("osinstall_layers", { release });
+}
+
+/**
+ * Which of `release`'s own layers `volumeNames` look like — **never** which
+ * release, that is `osinstallReleaseForMedia`'s own job. Asked once a
+ * layer's own field holds media, so the screen can say "this folder holds
+ * your update disks, not the base set" against that field itself, instead of
+ * letting the plan's own `MediaMissing` refusals name disks the user does own
+ * (Task 10 fix round, Finding 1 — `wrongMediaFolder` and `osinstallScanMedia`
+ * both answer for the flat, unlayered field only, and cannot see the mistake
+ * a two-field screen invites: the update disks pointed at the base field, or
+ * the reverse, which is still "AmigaOS 3.2.2 media" at the release level).
+ *
+ * `null` for an unlayered release (nothing to tell apart) and for a folder
+ * whose names do not distinguish one layer from another.
+ */
+export async function layerForMedia(
+  release: InstallRelease,
+  volumeNames: string[]
+): Promise<string | null> {
+  return invoke<string | null>("osinstall_layer_for_media", { release, volumeNames });
 }
 
 /** What installing the chosen components would do — or every reason it
@@ -1065,6 +1258,11 @@ export function refusalPhrase(reason: RefusalReason): Phrase {
       };
     case "rom-unknown":
       return { key: "osinstall.refusal.romUnknown" };
+    case "resident-table-unreadable":
+      return {
+        key: "osinstall.refusal.residentTableUnreadable",
+        params: { component: reason.component, resident: reason.resident },
+      };
     case "destination-collision":
       return {
         key: "osinstall.refusal.destinationCollision",
@@ -1078,6 +1276,11 @@ export function refusalPhrase(reason: RefusalReason): Phrase {
           volume: reason.volume_name,
           paths: reason.paths.join(", "),
         },
+      };
+    case "layers-share-folder":
+      return {
+        key: "osinstall.refusal.layersShareFolder",
+        params: { layers: reason.layers.join(", "), folder: reason.folder },
       };
     case "exclusive-group-conflict":
       return {

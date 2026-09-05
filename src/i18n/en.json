@@ -2163,8 +2163,10 @@
       "mediaPathMissing": "{{component}}'s own {{path}} is missing from {{media}} — this looks like a different revision of that disk.",
       "mediaUnreadable": "{{volume}} was found for {{component}} at {{path}}, but ART could not read it: {{reason}}",
       "romUnknown": "The Kickstart could not be identified, so ART cannot decide what depends on its version.",
+      "residentTableUnreadable": "\"{{component}}\" needs to know whether the paired Kickstart's own {{resident}} module is old enough, but ART could not read this ROM's module table to check. Tick \"{{component}}\" in the component list yourself if you know your machine needs it.",
       "destinationCollision": "{{path}} is wanted by more than one component ({{components}}), and neither declares it may override the other.",
       "mediaAmbiguous": "More than one file in the media folder carries the volume name {{volume}} that {{component}} needs: {{paths}}.",
+      "layersShareFolder": "{{layers}} are pointed at the same folder ({{folder}}), so ART cannot tell them apart — give each layer its own folder.",
       "exclusiveGroupConflict": "{{components}} cannot both be on — only one of {{group}} may be chosen.",
       "ruleKindMismatch": "{{component}}'s rule for {{from}} expected a {{expected}}, but the media holds a {{found}}.",
       "packageUnknown": "\"{{package}}\" is not a package ART ships a recipe for — it cannot be applied. Untick it; this is usually a choice saved by an older version of ART.",
@@ -2185,6 +2187,7 @@
     },
     "media": {
       "label": "Install disks folder",
+      "ariaLabel": "AmigaOS install media folder",
       "none": "No folder chosen.",
       "chooseTitle": "Choose the folder holding your AmigaOS install disk or disc images",
       "unreadable": "ART could not read that folder — check the path.",
@@ -2216,6 +2219,11 @@
       "chooseTitle": "Choose where to build the distribution tree",
       "hint": "A new or empty folder. In the picker you can make one with New folder and choose it — ART refuses only a folder that already has something in it."
     },
+    "layer": {
+      "base32": "AmigaOS 3.2 base media",
+      "update322": "AmigaOS 3.2.2 update media",
+      "wrongLayer": "This folder holds {{actual}} disks ({{found}}), not what this field asks for. Move it to the {{actual}} field, or choose the folder holding what this field wants."
+    },
     "components": {
       "heading": "Components",
       "intro": "The components of the release chosen above. Some are always installed; the rest are optional, or switch on by themselves when the paired Kickstart needs them.",
@@ -2225,7 +2233,8 @@
       "name": {
         "os32": {
           "keymaps": "Keyboard layouts",
-          "storage": "Storage shelf — drivers, monitors, presets"
+          "storage": "Storage shelf — drivers, monitors, presets",
+          "diskdoctor": "DiskDoctor (AmigaOS 3.2)"
         },
         "os39": {
           "base": "Workbench 3.5 base layer",
@@ -2234,6 +2243,30 @@
           "locale": "Locale — catalogs, languages, countries",
           "overlay": "Workbench 3.9 overlay",
           "turkishFonts": "Turkish fonts (ISO-8859-9)"
+        },
+        "os322": {
+          "system": "AmigaOS 3.2.2 system update",
+          "classes": "AmigaOS 3.2.2 classes update",
+          "diskdoctor": "DiskDoctor (AmigaOS 3.2.2)",
+          "localeCz": "AmigaOS 3.2.2 locale update — Czech",
+          "localeDe": "AmigaOS 3.2.2 locale update — German",
+          "localeDk": "AmigaOS 3.2.2 locale update — Danish",
+          "localeEn": "AmigaOS 3.2.2 locale update — English",
+          "localeEs": "AmigaOS 3.2.2 locale update — Spanish",
+          "localeFr": "AmigaOS 3.2.2 locale update — French",
+          "localeGr": "AmigaOS 3.2.2 locale update — Greek",
+          "localeIt": "AmigaOS 3.2.2 locale update — Italian",
+          "localeNl": "AmigaOS 3.2.2 locale update — Dutch",
+          "localeNo": "AmigaOS 3.2.2 locale update — Norwegian",
+          "localePl": "AmigaOS 3.2.2 locale update — Polish",
+          "localePt": "AmigaOS 3.2.2 locale update — Portuguese",
+          "localeRs": "AmigaOS 3.2.2 locale update — Serbian",
+          "localeRu": "AmigaOS 3.2.2 locale update — Russian",
+          "localeSe": "AmigaOS 3.2.2 locale update — Swedish",
+          "localeTr": "AmigaOS 3.2.2 locale update — Turkish",
+          "localeUk": "AmigaOS 3.2.2 locale update — British English",
+          "modulesA1200": "AmigaOS 3.2.2 A1200 modules",
+          "modulesA1200Strap": "AmigaOS 3.2.2 A1200 modules (strap)"
         }
       },
       "reason": {
@@ -2275,7 +2308,30 @@
       "summary": "{{files}} files, {{directories}} directories, {{bytes}} total.",
       "root": "Distribution tree: {{root}}",
       "carried": "The update and Amiga-side install steps will act on this folder: {{root}}",
-      "nextStep": "Point the card preparation screen (OS Builder → Prepare Amiga volumes) at this folder to copy it onto a card."
+      "nextStep": "Point the card preparation screen (OS Builder → Prepare Amiga volumes) at this folder to copy it onto a card.",
+      "statedRelease": {
+        "confirmed": "The tree itself states \"{{stated}}\" — its own Prefs/Env-Archive/Versions/Release marker agrees with what was built.",
+        "mismatch": "The tree itself states \"{{stated}}\", not the \"{{expected}}\" this build was for — trust the tree's own marker over this screen, and say so if you report a problem.",
+        "unstated": "The tree carries no release marker of its own (Prefs/Env-Archive/Versions/Release) — that is expected unless an update layer wrote one.",
+        "unreadable": "ART could not read this tree's own release marker to check it ({{detail}}) — this is not the same as the tree stating no release; something about the marker file itself is unusual.",
+        "expectedUnknown": "The tree itself states \"{{stated}}\" — ART has not yet measured what a correct tree for this release should state, so this is reported as-is, not as a mismatch."
+      },
+      "removed": {
+        "heading": "Removed",
+        "state": {
+          "removed": "Removed",
+          "notPresent": "Not present — nothing needed removing",
+          "failed": "Could not be removed: {{detail}}"
+        }
+      },
+      "icons": {
+        "heading": "Icons amended",
+        "state": {
+          "merged": "Amended — tool types and stack size updated",
+          "destinationAbsent": "Not present — nothing to amend",
+          "failed": "Could not be amended: {{detail}}"
+        }
+      }
     },
     "verify": {
       "heading": "Verify against a card",

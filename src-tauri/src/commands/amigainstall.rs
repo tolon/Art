@@ -1361,6 +1361,7 @@ mod tests {
                 .collect(),
             paired_rom: None,
             amiga_installed: Vec::new(),
+            layers: Vec::new(),
         };
         std::fs::write(
             tree.join("distribution.json"),
