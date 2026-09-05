@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::core::error::CoreResult;
-use crate::core::gameindex::readers::{rp9, slave, tosec, whdhdf};
+use crate::core::gameindex::readers::{self, rp9, slave, tosec, whdhdf};
 use crate::core::gameindex::record::{
     derive_id, ChipsetRequirement, Fact, GameRecord, KickstartNeed, Media, Provenance, SourceRef,
     GAMEINDEX_SCHEMA,
@@ -146,6 +146,57 @@ pub(crate) fn collect_indexable(dir: &Path) -> Vec<PathBuf> {
     files.retain(|path| is_indexable(path));
     files.sort();
     files
+}
+
+/// Every directory under `root` that [`readers::drawer::is_drawer`] accepts —
+/// a directory holding exactly the shape a WHDLoad drawer holds, walked with
+/// the same depth limit and symlink rule [`collect_indexable`] uses.
+///
+/// A directory component named `data`/`Data`, compared case-insensitively, is
+/// never visited. `Demos/T/Tag`'s payload is `data/01` … `data/82` — iGame's
+/// own `examineFolder` skips the same names, and a walk that descended into
+/// one would invent a title per payload file where there is one drawer.
+///
+/// **A file scan and a directory scan are two questions.** [`collect_indexable`]
+/// answers the first and is left exactly as it is; folding the two together
+/// is how one of them starts guessing.
+pub fn collect_drawers(root: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    collect_drawer_dirs(root, &mut dirs, 0);
+    dirs.sort();
+    dirs
+}
+
+fn is_payload_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .is_some_and(|n| n.eq_ignore_ascii_case("data"))
+}
+
+fn collect_drawer_dirs(dir: &Path, acc: &mut Vec<PathBuf>, depth: usize) {
+    if depth >= MAX_SCAN_DEPTH {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // Same symlink rule as `collect`: a directory symlink pointing back
+        // up the tree is skipped rather than followed.
+        let is_symlink = std::fs::symlink_metadata(&path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        if is_symlink || !path.is_dir() {
+            continue;
+        }
+        if path.file_name().is_some_and(is_payload_name) {
+            continue;
+        }
+        if readers::drawer::is_drawer(&path) {
+            acc.push(path.clone());
+        }
+        collect_drawer_dirs(&path, acc, depth + 1);
+    }
 }
 
 /// Read one file, or `Ok(None)` when it is not something the index describes.
