@@ -449,6 +449,15 @@ pub fn release_of_tree(root: &Path) -> CoreResult<Option<String>> {
         Err(err) => return Err(CoreError::Io(err)),
     };
 
+    // Not `collide.rs`'s own `read_bounded(path, bound)` (fix round 1,
+    // Finding 4): that helper opens the file and lets `Read::take(bound)`
+    // silently hand back a truncated prefix, which is exactly right for a
+    // version-search window that only ever wants "the first N bytes,
+    // whatever they are" — but wrong here, where the whole point is to
+    // refuse rather than guess at a release from a fragment (see this
+    // function's own "Bounded, and refused rather than truncated" section
+    // above). Checked against `metadata.len()` *before* any read, so an
+    // oversized file is never opened at all.
     if metadata.len() > MAX_RELEASE_MARKER_BYTES {
         return Err(CoreError::Malformed {
             format: "release marker".into(),
@@ -476,10 +485,28 @@ pub fn release_of_tree(root: &Path) -> CoreResult<Option<String>> {
     })
 }
 
-/// The three sentences a finished build's own marker can produce, compared
+/// The four sentences a finished build's own marker can produce, compared
 /// with the release ART built the tree as — see [`stated_release`] and
-/// [`release_of_tree`]'s own doc comment for why there are three and why
+/// [`release_of_tree`]'s own doc comment for why there are this many and why
 /// they may never collapse into a pass/fail.
+///
+/// **`Unreadable` is its own variant, not folded into [`Unstated`](Self::Unstated)**
+/// — fix round 1, Finding 1. `commands::osinstall::osinstall_apply` used to
+/// map any error out of [`release_of_tree`] (an oversized or otherwise
+/// unreadable marker) onto the same `Unstated` a tree that honestly carries
+/// no marker produces, which is the identical defect shape Task 7's own
+/// review fixed one task earlier in this round: `core::osinstall::plan`
+/// used to fold "the resident table could not be read" into the same empty
+/// `Vec` as "this Kickstart has no such resident", and `RefusalReason` grew
+/// its own `ResidentTableUnreadable` variant rather than let a read failure
+/// impersonate a genuine absence. "This tree states no release" and "ART
+/// could not find out what this tree states" are two different facts and
+/// send a user to two different places — the first is ordinary for most
+/// releases, the second means something is wrong with the tree or the read
+/// itself and is worth a bug report. Collapsing them here would let a
+/// corrupted or oversized marker read back exactly like an unremarkable
+/// AmigaOS 3.2 tree, which is the same "endings stay distinct" rule this
+/// whole task exists to enforce, broken inside the task itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "verdict", rename_all = "kebab-case")]
 pub enum StatedRelease {
@@ -492,6 +519,13 @@ pub enum StatedRelease {
     /// ships have never had an `Update/Release` to overwrite the base's own
     /// copy with; only a layered update does.
     Unstated,
+    /// [`release_of_tree`] could not answer at all — the marker is larger
+    /// than ART will read, or some other I/O error stopped the read. Never
+    /// the same sentence as [`Unstated`](Self::Unstated): the tree may well
+    /// state a release, ART simply could not read it. `detail` carries the
+    /// core's own sentence, never claimed away (CLAUDE.md: "the screen may
+    /// not out-claim the core").
+    Unreadable { detail: String },
 }
 
 /// Compare [`release_of_tree`] against the release a build was made for.
@@ -501,7 +535,14 @@ pub enum StatedRelease {
 /// (`"Release 3.2.2"`), so the comparison strips the expected release's own
 /// first word rather than growing a second hand-maintained table for a
 /// spelling rule that is really just "the part after the space".
-pub fn stated_release(root: &Path, expected_release: &str) -> CoreResult<StatedRelease> {
+///
+/// **Infallible on purpose** (fix round 1, Finding 1). A `CoreResult` return
+/// here would leave every caller to decide for itself what an `Err` means,
+/// which is exactly how the fold into `Unstated` happened the first time —
+/// this function is the single place that decision gets made, once, into
+/// [`StatedRelease::Unreadable`], so a caller cannot quietly re-fold the two
+/// apart ever again.
+pub fn stated_release(root: &Path, expected_release: &str) -> StatedRelease {
     let expected_marker = format!(
         "Release {}",
         expected_release
@@ -509,14 +550,17 @@ pub fn stated_release(root: &Path, expected_release: &str) -> CoreResult<StatedR
             .map_or(expected_release, |(_, version)| version)
     );
 
-    Ok(match release_of_tree(root)? {
-        None => StatedRelease::Unstated,
-        Some(stated) if stated == expected_marker => StatedRelease::Confirmed { stated },
-        Some(stated) => StatedRelease::Mismatch {
+    match release_of_tree(root) {
+        Ok(None) => StatedRelease::Unstated,
+        Ok(Some(stated)) if stated == expected_marker => StatedRelease::Confirmed { stated },
+        Ok(Some(stated)) => StatedRelease::Mismatch {
             expected: expected_marker,
             stated,
         },
-    })
+        Err(err) => StatedRelease::Unreadable {
+            detail: err.to_string(),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -939,7 +983,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            stated_release(&root, "AmigaOS 3.2.2").unwrap(),
+            stated_release(&root, "AmigaOS 3.2.2"),
             StatedRelease::Confirmed {
                 stated: "Release 3.2.2".to_string()
             }
@@ -958,7 +1002,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            stated_release(&root, "AmigaOS 3.2.2").unwrap(),
+            stated_release(&root, "AmigaOS 3.2.2"),
             StatedRelease::Mismatch {
                 expected: "Release 3.2.2".to_string(),
                 stated: "Release 3.2".to_string()
@@ -972,8 +1016,44 @@ mod tests {
         let root = dir.join("tree");
         std::fs::create_dir_all(&root).unwrap();
         assert_eq!(
-            stated_release(&root, "AmigaOS 3.2").unwrap(),
+            stated_release(&root, "AmigaOS 3.2"),
             StatedRelease::Unstated
         );
+    }
+
+    /// **Fix round 1, Finding 1 — the covering test the first report
+    /// admitted it was missing.** An oversized marker forces
+    /// `release_of_tree` to return `Err`, and this is the exact call
+    /// `osinstall_apply`'s job closure makes (`stated_release` is the whole
+    /// of what runs there now — there is no separate folding logic left in
+    /// `commands::osinstall` for the two to disagree about). The assertion
+    /// is the specific fourth variant, never merely "this is not
+    /// `Confirmed`": before this fix, this tree's honestly-unreadable
+    /// marker and a tree that truly states nothing both answered
+    /// `Unstated`, and a test that only checked "not confirmed" would have
+    /// passed against that defect exactly as happily as against the fix.
+    #[test]
+    fn stated_release_is_unreadable_not_unstated_when_the_marker_cannot_be_read() {
+        let dir = crate::core::osinstall::fixtures::scratch("stated-release-unreadable");
+        let root = dir.join("tree");
+        std::fs::create_dir_all(root.join("Prefs/Env-Archive/Versions")).unwrap();
+        std::fs::write(
+            root.join("Prefs/Env-Archive/Versions/Release"),
+            vec![b'X'; (MAX_RELEASE_MARKER_BYTES + 1) as usize],
+        )
+        .unwrap();
+
+        match stated_release(&root, "AmigaOS 3.2") {
+            StatedRelease::Unreadable { detail } => {
+                assert!(
+                    detail.contains("release marker"),
+                    "the core's own sentence must be carried, not swallowed: {detail}"
+                );
+            }
+            other => panic!(
+                "an unreadable marker must never answer the same as a tree that honestly \
+                 states nothing: {other:?}"
+            ),
+        }
     }
 }

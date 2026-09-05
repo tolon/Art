@@ -383,6 +383,24 @@ export interface InstallPlan {
    *  declaratively, the same way a `userStartup` line does. Empty for every
    *  shipped recipe until AmigaOS 3.2.2's own recipe uses the field. */
   removals: PlanRemoval[];
+  /** Which folder each of the recipe's own layers was actually read from —
+   *  empty for an unlayered recipe (every shipped recipe until AmigaOS
+   *  3.2.2's own two-layer one) and emptied on a refusal, the same rule
+   *  `mediaPaths` follows. Not optional: the Rust side has no
+   *  `skip_serializing_if` on this field, so it is always present on the
+   *  wire — a plan from an older ART build is never what this type
+   *  describes, since the frontend only ever receives a plan the running
+   *  backend just serialized. */
+  layers: LayerRecord[];
+}
+
+/** One entry in [`InstallPlan.layers`] — which folder a layer's media
+ *  actually came from. `id` matches a recipe's own `MediaLayer.id`
+ *  (`"base"`, `"update-3.2.2"`), never the empty string an unlayered
+ *  recipe's own internal bookkeeping uses. */
+export interface LayerRecord {
+  id: string;
+  folder: string;
 }
 
 /** What planning found, or why the media folder itself could not be looked
@@ -445,15 +463,21 @@ export const OSINSTALL_EVENT = "osinstall-result";
 
 /** What the finished tree's own `Prefs/Env-Archive/Versions/Release` states,
  *  compared with the release this build was for (Task 9) — CLAUDE.md's
- *  answer to the round that shipped AmigaOS 3.5 labelled 3.9. Three states,
+ *  answer to the round that shipped AmigaOS 3.5 labelled 3.9. Four states,
  *  never one pass/fail bit: a confirmed marker, a mismatched one naming both
- *  sides, or none at all are three different sentences with three different
- *  next steps. `"unstated"` is not a failure — most releases ART ships have
- *  never had an `Update/Release` to write one. */
+ *  sides, none at all, or one ART could not even read are four different
+ *  sentences with four different next steps. `"unstated"` is not a failure —
+ *  most releases ART ships have never had an `Update/Release` to write one.
+ *  `"unreadable"` (fix round 1, Finding 1) is never the same sentence as
+ *  `"unstated"`: the tree may well state a release, ART simply could not
+ *  read it — an oversized or otherwise unreadable marker file, the same
+ *  defect shape Task 7's `"resident-table-unreadable"` refusal exists to
+ *  keep apart from a genuine absence. */
 export type StatedRelease =
   | { verdict: "confirmed"; stated: string }
   | { verdict: "mismatch"; expected: string; stated: string }
-  | { verdict: "unstated" };
+  | { verdict: "unstated" }
+  | { verdict: "unreadable"; detail: string };
 
 export interface OsInstallResult {
   job_id: number;

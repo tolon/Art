@@ -1038,6 +1038,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         activations: [],
         mediaStamps: {},
         removals: [],
+        layers: [],
       },
     };
     const ready = {

@@ -2310,7 +2310,8 @@
       "statedRelease": {
         "confirmed": "The tree itself states \"{{stated}}\" — its own Prefs/Env-Archive/Versions/Release marker agrees with what was built.",
         "mismatch": "The tree itself states \"{{stated}}\", not the \"{{expected}}\" this build was for — trust the tree's own marker over this screen, and say so if you report a problem.",
-        "unstated": "The tree carries no release marker of its own (Prefs/Env-Archive/Versions/Release) — that is expected unless an update layer wrote one."
+        "unstated": "The tree carries no release marker of its own (Prefs/Env-Archive/Versions/Release) — that is expected unless an update layer wrote one.",
+        "unreadable": "ART could not read this tree's own release marker to check it ({{detail}}) — this is not the same as the tree stating no release; something about the marker file itself is unusual."
       },
       "removed": {
         "heading": "Removed",

@@ -1673,10 +1673,12 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
             {t("osinstall.result.nextStep")}
           </p>
           {/* Task 9: what the tree's own release marker says, compared with
-              what this build was for — three distinct sentences, never
+              what this build was for — four distinct sentences, never
               folded into a pass/fail (CLAUDE.md's answer to the round that
               shipped AmigaOS 3.5 labelled 3.9: ask the artefact, never
-              assert). */}
+              assert). "unreadable" (fix round 1, Finding 1) is never
+              rendered as "unstated" — the tree may state a release just
+              fine, ART simply could not read it. */}
           <p className="muted" style={{ fontSize: 12, margin: 0 }}>
             {result.stated_release.verdict === "confirmed"
               ? t("osinstall.result.statedRelease.confirmed", {
@@ -1687,7 +1689,11 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
                     expected: result.stated_release.expected,
                     stated: result.stated_release.stated,
                   })
-                : t("osinstall.result.statedRelease.unstated")}
+                : result.stated_release.verdict === "unreadable"
+                  ? t("osinstall.result.statedRelease.unreadable", {
+                      detail: result.stated_release.detail,
+                    })
+                  : t("osinstall.result.statedRelease.unstated")}
           </p>
           {/* An update's own `removes` (Component.removes) — reported per
               entry, by name and by result, so the screen never claims a file

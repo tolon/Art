@@ -1770,8 +1770,9 @@ pub struct OsInstallResult {
     /// CLAUDE.md's answer to the round that shipped AmigaOS 3.5 labelled
     /// 3.9. The OS Builder's result panel reports this as its own line,
     /// never folded into "the build succeeded": a confirmed marker, a
-    /// mismatched one naming both sides, or none at all are three different
-    /// next steps, not one pass/fail bit.
+    /// mismatched one naming both sides, none at all, or a marker ART could
+    /// not even read (fix round 1, Finding 1 — never the same sentence as
+    /// "none at all") are four different next steps, not one pass/fail bit.
     pub stated_release: crate::core::osinstall::identify::StatedRelease,
 }
 
@@ -1881,16 +1882,15 @@ pub fn osinstall_apply(
         // Ask the tree itself, never `plan.release` — CLAUDE.md's own
         // retelling of the AmigaOS-3.5-shipped-as-3.9 defect is exactly what
         // this reads back rather than repeats (see
-        // `core::osinstall::identify::release_of_tree`'s own doc comment).
-        // A read failure here (an oversized or unreadable marker file) does
-        // not undo a build that already succeeded — best-effort, logged, and
-        // reported as "no release stated" rather than turning a finished
-        // install into a failed job over a report-only step.
-        let stated_release = crate::core::osinstall::identify::stated_release(&root, &plan.release)
-            .unwrap_or_else(|err| {
-                log::warn!("could not read this tree's own release marker: {err}");
-                crate::core::osinstall::identify::StatedRelease::Unstated
-            });
+        // `core::osinstall::identify::release_of_tree`'s own doc comment). A
+        // read failure here (an oversized or unreadable marker file) does not
+        // undo a build that already succeeded, and — fix round 1, Finding 1
+        // — it must not be folded into the same `Unstated` a tree that
+        // honestly carries no marker produces either: `stated_release` is
+        // infallible and already carries that distinction as its own
+        // `Unreadable` variant, so there is nothing left for this call site
+        // to get wrong.
+        let stated_release = crate::core::osinstall::identify::stated_release(&root, &plan.release);
 
         let _ = emit_app.emit(
             OSINSTALL_EVENT,
@@ -4332,7 +4332,7 @@ mod tests {
         /// keys on — an internally tagged enum, so each variant's own fields
         /// sit alongside `verdict` rather than nested under it.
         #[test]
-        fn stated_release_serialises_as_the_three_tagged_variants_the_frontend_reads() {
+        fn stated_release_serialises_as_the_four_tagged_variants_the_frontend_reads() {
             use crate::core::osinstall::identify::StatedRelease;
 
             let confirmed = serde_json::to_value(StatedRelease::Confirmed {
@@ -4353,6 +4353,18 @@ mod tests {
 
             let unstated = serde_json::to_value(StatedRelease::Unstated).unwrap();
             assert_eq!(unstated["verdict"], "unstated");
+
+            // Fix round 1, Finding 1 — the fourth ending, pinned on the wire
+            // the same way the other three are.
+            let unreadable = serde_json::to_value(StatedRelease::Unreadable {
+                detail: "malformed release marker: too many bytes".into(),
+            })
+            .unwrap();
+            assert_eq!(unreadable["verdict"], "unreadable");
+            assert_eq!(
+                unreadable["detail"],
+                "malformed release marker: too many bytes"
+            );
         }
 
         #[test]

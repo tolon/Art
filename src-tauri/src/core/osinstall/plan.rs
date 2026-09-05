@@ -1768,7 +1768,18 @@ fn plan_over_with_cache(
     // `layers` follows `media_paths`'s own rule (immediately above): a folder
     // nothing was built from is not a fact about the tree this plan
     // describes, because a refused plan describes no tree.
-    let layers: Vec<super::LayerRecord> = if refusals.is_empty() {
+    //
+    // **Only for a layered recipe** (fix round 1, Finding 2). An unlayered
+    // build's own `layers` local above is a flat list of folders paired with
+    // an empty-string id — real internally, so `layers_sharing_a_folder` and
+    // `find_media_in_layers` have something to iterate — but `""` is not a
+    // real `MediaLayer::id`, and writing it into `distribution.json` would
+    // give a manifest reader two different spellings of "this tree carries
+    // no layers": an absent key on an older tree, and a list of empty-id
+    // records on a new one. A reader that ever matched on an id would match
+    // `""`. So an unlayered build reports no layers at all, the same as a
+    // tree built before this field existed.
+    let layers: Vec<super::LayerRecord> = if refusals.is_empty() && recipe.is_layered() {
         layers
             .into_iter()
             .map(|(id, folder)| super::LayerRecord { id, folder })
@@ -4962,5 +4973,23 @@ mod plan_tests {
             unreachable!()
         };
         assert_eq!(layers.len(), 2);
+    }
+
+    /// **Fix round 1, Finding 2.** An unlayered recipe (every shipped
+    /// recipe until Task 8) has no real `MediaLayer::id` to report, and
+    /// `""` is not one — writing a `LayerRecord { id: "", .. }` per media
+    /// folder would give `distribution.json` two different spellings of
+    /// "this tree carries no layers" (an absent key on an older tree, a
+    /// list of empty-id records on a new one). An unlayered plan's own
+    /// `layers` must be empty, matching how an older manifest reads back.
+    #[test]
+    fn an_unlayered_plan_reports_no_layers_at_all() {
+        let plan = plan_with(&["workbench-base"], &["Workbench3.2"]);
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+        assert!(
+            plan.layers.is_empty(),
+            "an unlayered recipe has no real layer ids to report: {:?}",
+            plan.layers
+        );
     }
 }

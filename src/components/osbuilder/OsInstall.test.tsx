@@ -325,6 +325,7 @@ function planResultFor(req: InstallRequest): PlanResult {
       activations: [],
       mediaStamps: {},
       removals: [],
+      layers: [],
     },
   };
 }
@@ -917,6 +918,7 @@ describe("a folder that is simply the wrong one (ART-208)", () => {
           activations: [],
           mediaStamps: {},
           removals: [],
+          layers: [],
         },
       } satisfies PlanResult)
     );
@@ -995,6 +997,7 @@ describe("a folder that is simply the wrong one (ART-208)", () => {
         activations: [],
         mediaStamps: {},
         removals: [],
+        layers: [],
       },
     } satisfies PlanResult);
     releaseForMediaMock.mockReset().mockResolvedValue(null);
@@ -1095,6 +1098,7 @@ describe("a refusal renders as a sentence, not a blank", () => {
       activations: [],
       mediaStamps: {},
       removals: [],
+      layers: [],
     };
     planMock.mockReset().mockResolvedValue({ outcome: "planned", plan: refusedPlan } satisfies PlanResult);
 
@@ -1501,6 +1505,38 @@ describe("Task 9: the tree's own release marker gets its own line", () => {
     );
 
     await screen.findByText(i18n.t("osinstall.result.statedRelease.unstated"));
+  });
+
+  // **Fix round 1, Finding 1.** An unreadable marker must never render the
+  // same sentence as "states none" — the two are different facts with
+  // different next steps, and folding them is the exact defect this task
+  // exists to catch.
+  it("says the marker could not be read, never the same sentence as unstated", async () => {
+    const announce = captureAnnounce();
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(announce.current).not.toBeNull());
+
+    act(() =>
+      announce.current!({
+        job_id: 1,
+        destination: "E:\\amiga\\dist",
+        outcome: BASE_OUTCOME,
+        stated_release: {
+          verdict: "unreadable",
+          detail: "malformed release marker: too many bytes",
+        },
+      })
+    );
+
+    await screen.findByText(
+      i18n.t("osinstall.result.statedRelease.unreadable", {
+        detail: "malformed release marker: too many bytes",
+      })
+    );
+    expect(
+      screen.queryByText(i18n.t("osinstall.result.statedRelease.unstated"))
+    ).toBeNull();
   });
 });
 

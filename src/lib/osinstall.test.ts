@@ -384,6 +384,7 @@ function planWith(componentsOn: string[]): InstallPlan {
     activations: [],
     mediaStamps: {},
     removals: [],
+    layers: [],
   };
 }
 
@@ -607,6 +608,7 @@ describe("osinstallBlocker", () => {
         activations: [],
         mediaStamps: {},
         removals: [],
+        layers: [],
       },
     };
   }

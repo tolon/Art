@@ -2310,7 +2310,8 @@
       "statedRelease": {
         "confirmed": "Ağacın kendisi \"{{stated}}\" diyor — kendi Prefs/Env-Archive/Versions/Release imi, yapılan kurulumla uyuşuyor.",
         "mismatch": "Ağacın kendisi bu kurulumun hedeflediği \"{{expected}}\" değil, \"{{stated}}\" diyor — bir sorun bildirirken bu ekrana değil ağacın kendi imine güven.",
-        "unstated": "Ağaç kendi sürüm imini taşımıyor (Prefs/Env-Archive/Versions/Release) — bir güncelleme katmanı yazmadıysa bu beklenen bir durumdur."
+        "unstated": "Ağaç kendi sürüm imini taşımıyor (Prefs/Env-Archive/Versions/Release) — bir güncelleme katmanı yazmadıysa bu beklenen bir durumdur.",
+        "unreadable": "ART, ağacın kendi sürüm imini kontrol etmek için okuyamadı ({{detail}}) — bu, ağacın sürüm belirtmediği anlamına gelmez; im dosyasının kendisiyle ilgili sıra dışı bir durum var."
       },
       "removed": {
         "heading": "Kaldırılan",
