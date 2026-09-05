@@ -13,6 +13,7 @@ pub mod amiganet;
 pub mod amigaprefs;
 pub mod amigaver;
 pub mod analysis;
+pub mod appearance;
 pub mod archive;
 pub mod artwork;
 pub mod binary;
