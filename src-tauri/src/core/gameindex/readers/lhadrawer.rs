@@ -174,7 +174,10 @@ pub fn read_archive_drawers(path: &Path) -> CoreResult<Vec<GameRecord>> {
         by_inner.entry(inner).or_default().push((index, slave_name));
     }
 
-    let mut found = Vec::new();
+    // Settle which slave wins for every drawer first, without reading any of
+    // them yet. `by_inner` is a `HashMap`, so this order says nothing about
+    // where each winner actually sits in the archive.
+    let mut winners: Vec<(usize, &str, String)> = Vec::new();
     for (inner, candidates) in by_inner {
         let (index, slave_name) = match candidates.as_slice() {
             [(index, slave_name)] => (*index, *slave_name),
@@ -192,8 +195,17 @@ pub fn read_archive_drawers(path: &Path) -> CoreResult<Vec<GameRecord>> {
                 }
             },
         };
-        let slave_name = slave_name.to_string();
+        winners.push((index, inner, slave_name.to_string()));
+    }
 
+    // `LhaBackend::seek_to` only avoids reopening and re-walking the archive
+    // from the start when reads come in ascending entry index — its own doc
+    // comment says so. `by_inner`'s hash order does not honour that, so the
+    // actual slave reads are sorted by index here, before a single one runs.
+    winners.sort_by_key(|(index, _, _)| *index);
+
+    let mut found = Vec::new();
+    for (index, inner, slave_name) in winners {
         // Bounded: a slave header is small and this archive is a file ART
         // did not write.
         let bytes = backend.read(index, MAX_SLAVE_BYTES)?;
