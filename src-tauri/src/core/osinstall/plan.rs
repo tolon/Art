@@ -887,10 +887,10 @@ fn resolve_components_on(
 }
 
 /// Every `exclusive_group` with more than one of its members in the
-/// **resolved** `components_on` set, **within the same layer**. Checked
-/// against what actually resolved on, never against `InstallRequest::chosen`
-/// directly — a condition-satisfied component can be switched on without
-/// being chosen at all (that is the entire point of
+/// **resolved** `components_on` set, and no `overrides` relationship between
+/// them. Checked against what actually resolved on, never against
+/// `InstallRequest::chosen` directly — a condition-satisfied component can be
+/// switched on without being chosen at all (that is the entire point of
 /// `a_conditional_component_is_on_without_being_chosen`), so a check against
 /// the request alone would miss exactly the case a condition exists to
 /// create. One member of a group is the ordinary case and needs no mention
@@ -900,44 +900,69 @@ fn resolve_components_on(
 /// the moment a layered recipe could inherit a base component into the same
 /// group a derived one declares** — see below.)
 ///
-/// **Scoped per layer, and that is a decision, not an oversight (final
-/// review, Finding B).** `exclusive_group` exists so a user cannot pick two
-/// Modules disks for two different *machines* at once — `modules-a1200`
-/// (`rom-older-than 47`) and a hypothetical sibling for a different model
-/// would genuinely conflict, because a plan is for one machine. But
-/// AmigaOS 3.2.2 inherits `modules-a1200` as its `base` layer's component and
-/// declares its own `update-322-modules-a1200` in the `update-3.2.2` layer,
-/// **same group, same machine** — a pre-47 Kickstart 3.1 (or a 3.2 ROM, per
-/// the design's own measured table) satisfies both components' conditions at
-/// once, and they are not a user's competing choice between two machines: they
-/// are two halves of one release's answer for one machine, exactly the way
-/// `update-322-modules-a1200` declaring `overrides` over the base component
-/// resolves any file the two genuinely share. Comparing across layers here
-/// would refuse the ordinary, correct case — a pre-47 machine building
-/// AmigaOS 3.2.2 — with a sentence that names no fix, because neither
-/// component is something the user chose. Two members of one group **within
-/// one layer** is still refused: that is the case the group exists to catch.
+/// **The rule is `overrides`, not `layer` (ART-238/ART-239).** A first fix
+/// scoped this check by `(group, layer)`, which closed the case it was
+/// written for — `modules-a1200` (`base` layer, `rom-older-than 47`) and
+/// `update-322-modules-a1200` (`update-3.2.2` layer,
+/// `resident-older-than exec 47.10`) both switching on for the same pre-47
+/// machine, two halves of one release's answer rather than a user's
+/// competing choice — but it was wrong in both directions at once. Too
+/// blunt: nothing then read the update component's own `overrides:
+/// ["modules-a1200"]` at all, so deleting that entry left the suite green
+/// with no guard noticing (ART-238). Too weak: two components in the same
+/// group but *different* layers could then never conflict, even a future
+/// update-layer Modules component for a **different machine** than the base
+/// layer's own (ART-239) — layer was never the fact that distinguished the
+/// two cases.
+///
+/// `overrides` already means "these two are not competing — one writes over
+/// the other", which is exactly the fact that separates "two halves of one
+/// answer" from "two competing choices", independent of which layer either
+/// component's own `layer` field names. So a group resolves, whichever
+/// layers its members are declared in, exactly when one member's own
+/// `overrides` covers every other member directly — the same shape
+/// `detect_collisions` already uses to resolve two components claiming one
+/// file, and no transitivity beyond that: `A` overriding `B` says nothing
+/// about `C` unless `A` (or some other single member) names `C` too. A group
+/// with no `overrides` relationship among any of its on-resolved members is
+/// still refused, in one layer or across several: that is the case the group
+/// exists to catch, and dropping the layer scope gives ART-239's missing
+/// cross-layer, different-machine case the same refusal a same-layer one
+/// always got.
 fn detect_exclusive_group_conflicts(
     recipe: &Recipe,
     components_on: &[String],
 ) -> Vec<RefusalReason> {
-    let mut by_group: BTreeMap<(&str, Option<&str>), Vec<String>> = BTreeMap::new();
+    let mut by_group: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     for id in components_on {
         let Some(component) = recipe.component(id) else {
             continue;
         };
         if let Some(group) = &component.exclusive_group {
-            by_group
-                .entry((group.as_str(), component.layer.as_deref()))
-                .or_default()
-                .push(id.clone());
+            by_group.entry(group.as_str()).or_default().push(id.clone());
         }
     }
 
     let mut refusals = Vec::new();
-    for ((group, _layer), mut components) in by_group {
-        if components.len() > 1 {
-            components.sort();
+    for (group, mut components) in by_group {
+        if components.len() < 2 {
+            continue;
+        }
+        components.sort();
+
+        // Resolved exactly when one member's own `overrides` names every
+        // other member of the group directly — see this function's own doc
+        // comment for why that is the right rule and not a chain.
+        let resolved = components.iter().any(|winner| {
+            let Some(winner_component) = recipe.component(winner) else {
+                return false;
+            };
+            components
+                .iter()
+                .filter(|other| *other != winner)
+                .all(|other| winner_component.overrides.contains(other))
+        });
+        if !resolved {
             refusals.push(RefusalReason::ExclusiveGroupConflict {
                 group: group.to_string(),
                 components,
@@ -2996,6 +3021,221 @@ mod plan_tests {
             scan_cache: Default::default(),
         };
         plan(&request, &recipe).unwrap()
+    }
+
+    /// Two members of one `exclusive_group`, each given its own `layer` and
+    /// each `chosen` outright (no `Condition` involved — media resolution
+    /// does not matter to this check either, so `media_folders` is left
+    /// empty exactly like `the_shipped_322_recipe_plans_against_a_pre_47_rom_…`
+    /// does: a **layered** recipe with no folder named for either layer
+    /// resolves `layers` to an empty list and never touches the filesystem,
+    /// same as that test). ART-238/ART-239: whether they conflict must
+    /// depend on `overrides`, never on which layer either one names.
+    fn plan_with_group_members_in_layers(
+        layer_a: Option<&str>,
+        layer_b: Option<&str>,
+        b_overrides_a: bool,
+    ) -> InstallPlan {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-exclusive-group-layers");
+        let make = |id: &str, to: &str, layer: Option<&str>, overrides: Vec<String>| Component {
+            layer: layer.map(str::to_string),
+            id: id.to_string(),
+            media: "Unused".to_string(),
+            rules: vec![PathRule {
+                from: "C/LoadModule".to_string(),
+                to: to.to_string(),
+                kind: RuleKind::File,
+            }],
+            required: false,
+            condition: None,
+            overrides,
+            user_startup: vec![],
+            activate: vec![],
+            exclusive_group: Some("modules".to_string()),
+            label_key: None,
+            available: true,
+            removes: Vec::new(),
+        };
+        let recipe = Recipe {
+            // Non-empty so `Recipe::is_layered()` is true and `plan()` reads
+            // `layer` at all — see this function's own doc comment.
+            layers: vec![
+                crate::core::osinstall::MediaLayer {
+                    id: "base".to_string(),
+                    label_key: None,
+                },
+                crate::core::osinstall::MediaLayer {
+                    id: "update".to_string(),
+                    label_key: None,
+                },
+            ],
+            base: None,
+            release: "Test".to_string(),
+            components: vec![
+                make("modules-a", "C/ModuleA", layer_a, Vec::new()),
+                make(
+                    "modules-b",
+                    "C/ModuleB",
+                    layer_b,
+                    if b_overrides_a {
+                        vec!["modules-a".to_string()]
+                    } else {
+                        Vec::new()
+                    },
+                ),
+            ],
+        };
+
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "Test".to_string(),
+            media_folder: dir.join("unused"),
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: vec!["modules-a".to_string(), "modules-b".to_string()],
+            destination: dir.join("dist"),
+            excluded: Vec::new(),
+            scan_cache: Default::default(),
+        };
+        plan(&request, &recipe).unwrap()
+    }
+
+    /// **ART-239.** The bug the layer-scoped check could never catch: two
+    /// members of one group, in two *different* layers, with no `overrides`
+    /// relationship between them — a future update-layer Modules component
+    /// for a different machine than the base layer's own, per the issue's
+    /// own example. The old `(group, layer)` scoping put these two keys
+    /// apart and never compared them at all.
+    #[test]
+    fn two_members_of_one_group_in_different_layers_without_overrides_still_conflict() {
+        let plan = plan_with_group_members_in_layers(Some("base"), Some("update"), false);
+        assert!(
+            plan.refusals
+                .iter()
+                .any(|r| matches!(r, RefusalReason::ExclusiveGroupConflict { group, .. } if group == "modules")),
+            "different layers must not excuse a genuine conflict when nothing \
+             declares one component overrides the other: {:?}",
+            plan.refusals
+        );
+    }
+
+    /// The mirror image: two members of one group in different layers, but
+    /// this time the second declares `overrides` over the first — the
+    /// shipped 3.2.2 recipe's own shape for `modules-a1200` /
+    /// `update-322-modules-a1200`, reduced to a synthetic recipe so this
+    /// test does not depend on real media resolving. `overrides`, not the
+    /// layer split, is what must excuse this pair.
+    #[test]
+    fn two_members_of_one_group_in_different_layers_with_overrides_is_not_a_conflict() {
+        let plan = plan_with_group_members_in_layers(Some("base"), Some("update"), true);
+        assert!(
+            !plan
+                .refusals
+                .iter()
+                .any(|r| matches!(r, RefusalReason::ExclusiveGroupConflict { .. })),
+            "an overrides relationship must resolve the group regardless of \
+             which layers the two members are declared in: {:?}",
+            plan.refusals
+        );
+    }
+
+    /// **Review Finding 3, fix round 1.** A group of *three* members where
+    /// one member's own `overrides` names only *some* of the others —
+    /// `modules-c` overrides `modules-a` but not `modules-b`. No single
+    /// member's `overrides` covers every other member, so
+    /// `detect_exclusive_group_conflicts`'s own `resolved` check (see its
+    /// doc comment) must stay `false` and the whole group must still
+    /// conflict, naming all three. The reviewer hand-traced this boundary
+    /// case against the code; this pins it as a standing test.
+    fn plan_with_three_group_members_one_partial_override() -> InstallPlan {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-exclusive-group-partial");
+        let make = |id: &str, to: &str, overrides: Vec<String>| Component {
+            layer: None,
+            id: id.to_string(),
+            media: "Unused".to_string(),
+            rules: vec![PathRule {
+                from: "C/LoadModule".to_string(),
+                to: to.to_string(),
+                kind: RuleKind::File,
+            }],
+            required: false,
+            condition: None,
+            overrides,
+            user_startup: vec![],
+            activate: vec![],
+            exclusive_group: Some("modules".to_string()),
+            label_key: None,
+            available: true,
+            removes: Vec::new(),
+        };
+        let recipe = Recipe {
+            // Non-empty for the same reason `plan_with_group_members_in_layers`
+            // needs it: `Recipe::is_layered()` must be true so `layers`
+            // resolves to an empty list against an empty `media_folders`
+            // rather than touching the filesystem at all.
+            layers: vec![crate::core::osinstall::MediaLayer {
+                id: "only".to_string(),
+                label_key: None,
+            }],
+            base: None,
+            release: "Test".to_string(),
+            components: vec![
+                make("modules-a", "C/ModuleA", Vec::new()),
+                make("modules-b", "C/ModuleB", Vec::new()),
+                make("modules-c", "C/ModuleC", vec!["modules-a".to_string()]),
+            ],
+        };
+
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "Test".to_string(),
+            media_folder: dir.join("unused"),
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: vec![
+                "modules-a".to_string(),
+                "modules-b".to_string(),
+                "modules-c".to_string(),
+            ],
+            destination: dir.join("dist"),
+            excluded: Vec::new(),
+            scan_cache: Default::default(),
+        };
+        plan(&request, &recipe).unwrap()
+    }
+
+    #[test]
+    fn a_partial_override_in_a_three_member_group_does_not_resolve_it() {
+        let plan = plan_with_three_group_members_one_partial_override();
+        let conflict = plan.refusals.iter().find_map(|r| match r {
+            RefusalReason::ExclusiveGroupConflict { group, components } if group == "modules" => {
+                Some(components.clone())
+            }
+            _ => None,
+        });
+        let mut components = conflict.unwrap_or_else(|| {
+            panic!(
+                "a partial override must not resolve the group: {:?}",
+                plan.refusals
+            )
+        });
+        components.sort();
+        assert_eq!(
+            components,
+            vec![
+                "modules-a".to_string(),
+                "modules-b".to_string(),
+                "modules-c".to_string(),
+            ],
+            "the refusal must name every member of the still-conflicting group, \
+             not only the two `modules-c` failed to cover"
+        );
     }
 
     /// The planner must open a disc as a disc. Before this, `plan()`
@@ -5122,17 +5362,22 @@ mod plan_tests {
         path
     }
 
-    /// **Final review, Finding B.** Before the fix,
+    /// **Final review, Finding B; the rule since ART-238/ART-239 is
+    /// `overrides`, not layer.** Before the first fix,
     /// `detect_exclusive_group_conflicts` compared `exclusive_group` across
-    /// the whole merged recipe, so a pre-47 Kickstart — which switches on
-    /// *both* the inherited base `modules-a1200` (`rom-older-than 47`) and
-    /// the update's own `update-322-modules-a1200`
-    /// (`resident-older-than exec 47.10`), since both conditions are true of
-    /// the same ROM — refused the whole plan with an `ExclusiveGroupConflict`
-    /// naming two components the user never chose and cannot un-choose. That
-    /// is not a hypothetical ROM: it is a real Kickstart 3.1, the ordinary
-    /// case for the Amigas this project targets. Scoping the group per layer
-    /// closes it; this pins the shipped recipe against a synthetic one.
+    /// the whole merged recipe with no `overrides` check at all, so a
+    /// pre-47 Kickstart — which switches on *both* the inherited base
+    /// `modules-a1200` (`rom-older-than 47`) and the update's own
+    /// `update-322-modules-a1200` (`resident-older-than exec 47.10`), since
+    /// both conditions are true of the same ROM — refused the whole plan
+    /// with an `ExclusiveGroupConflict` naming two components the user
+    /// never chose and cannot un-choose. That is not a hypothetical ROM: it
+    /// is a real Kickstart 3.1, the ordinary case for the Amigas this
+    /// project targets. What actually closes it is
+    /// `update-322-modules-a1200`'s own `overrides: ["modules-a1200"]`
+    /// (`recipes/amigaos-3.2.2.json`) — this pins the shipped recipe against
+    /// a synthetic ROM that switches both components on, so deleting that
+    /// `overrides` entry fails this test (ART-238's own missing guard).
     #[test]
     fn the_shipped_322_recipe_plans_against_a_pre_47_rom_without_an_exclusive_group_refusal() {
         let dir = crate::core::osinstall::fixtures::scratch("plan-322-pre47-rom");

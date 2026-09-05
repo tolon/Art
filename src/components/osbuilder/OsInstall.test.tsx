@@ -286,8 +286,9 @@ function layersForRelease(release: string): InstallLayer[] {
 }
 
 /** A layer's own field label, resolved the same way `OsInstall.tsx` resolves
- *  it — `t(labelKey)`, exact text, so `findByLabelText` finds the field this
- *  layer's own "Browse" button lives beside. */
+ *  it — `t(labelKey)`, exact text, for asserting a wrong-layer hint names the
+ *  right field (`layer-field-${id}` is how a test finds the field itself,
+ *  since ART-237 moved its accessible name off the wrapping div). */
 function layerFieldLabel(layerId: string): string {
   const layer = LAYERS_322.find((l) => l.id === layerId);
   return layer?.labelKey ? i18n.t(layer.labelKey) : layerId;
@@ -456,12 +457,14 @@ function renderOsInstall(options: { release?: InstallRelease } = {}) {
   return render(<OsInstall />);
 }
 
-/** One layer's own "Browse" button, clicked through the field its label
- *  names — the same control a user reaches for. */
+/** One layer's own "Browse" button, clicked through its own field — found by
+ *  `data-testid` (ART-237: the field's accessible name moved onto the
+ *  button itself, so a bare `aria-label` on the wrapping div is no longer
+ *  there for a test to query by). */
 async function browseLayerFolder(layerId: string, path: string) {
   dialogOpenMock.mockResolvedValueOnce(path);
-  const field = await screen.findByLabelText(layerFieldLabel(layerId));
-  await userEvent.click(within(field).getByRole("button", { name: i18n.t("common.browse") }));
+  const field = await screen.findByTestId(`layer-field-${layerId}`);
+  await userEvent.click(within(field).getByRole("button"));
 }
 
 /** Renders on AmigaOS 3.2.2, browses every named layer's own folder in turn,
@@ -900,11 +903,14 @@ describe("a media folder belongs to the release it holds (ART-207)", () => {
     await userEvent.selectOptions(picker, "AmigaOS 3.9");
     await waitFor(() => expect(componentsMock).toHaveBeenCalledWith("AmigaOS 3.9"));
 
-    // The media row is the first of the three `Field`s on this screen —
-    // media, ROM, destination, in that order.
+    // The media field, found by its own `data-testid` (ART-237: its Browse
+    // button's accessible name is no longer the bare, generic "Browse…"
+    // every `Field` on this screen used to share, so a plain role/name
+    // lookup can no longer tell it apart from the ROM or destination one by
+    // position alone).
     dialogOpenMock.mockResolvedValue("E:\\os39");
     await userEvent.click(
-      screen.getAllByRole("button", { name: i18n.t("common.browse") })[0]
+      within(await screen.findByTestId("osinstall-media-field")).getByRole("button")
     );
     expect(await screen.findByText("E:\\os39")).toBeTruthy();
 
@@ -1732,12 +1738,43 @@ describe("media in more than one folder", () => {
     await screen.findAllByTestId("extra-media-folder");
 
     planMock.mockClear();
-    await userEvent.click(screen.getByRole("button", { name: /^remove$/i }));
+    // ART-240: the accessible name now names which folder ("Remove
+    // E:\media\Update"), not just "Remove" — see `Field`'s own sibling fix
+    // (ART-237) for the same reason on the Browse buttons.
+    await userEvent.click(screen.getByRole("button", { name: /^remove /i }));
 
     await waitFor(() => expect(screen.queryAllByTestId("extra-media-folder")).toHaveLength(0));
     await waitFor(() => expect(planMock).toHaveBeenCalled());
     const sent = planMock.mock.calls.at(-1)![0] as InstallRequest;
     expect(sent.extraMediaFolders).toEqual([]);
+  });
+
+  // ART-240 (found by the media-step accessibility sweep filed alongside
+  // ART-237): with more than one extra folder, every "Remove" button used
+  // to carry the identical accessible name "Remove" — a screen reader user
+  // tabbing through them could not tell which row any one of them belonged
+  // to. Each button's own folder is now part of its accessible name.
+  it("names which folder each Remove button removes, once there is more than one", async () => {
+    await renderFull();
+    dialogOpenMock.mockResolvedValueOnce("E:\\media\\Update");
+    await userEvent.click(screen.getByRole("button", { name: /add another folder/i }));
+    dialogOpenMock.mockResolvedValueOnce("E:\\media\\Hotfix");
+    await userEvent.click(screen.getByRole("button", { name: /add another folder/i }));
+    await waitFor(() => expect(screen.queryAllByTestId("extra-media-folder")).toHaveLength(2));
+
+    const removeUpdate = screen.getByRole("button", { name: /remove.*update/i });
+    const removeHotfix = screen.getByRole("button", { name: /remove.*hotfix/i });
+    expect(removeUpdate).not.toBe(removeHotfix);
+
+    planMock.mockClear();
+    await userEvent.click(removeUpdate);
+
+    await waitFor(() => expect(planMock).toHaveBeenCalled());
+    const sent = planMock.mock.calls.at(-1)![0] as InstallRequest;
+    // Removing the row named "Update" left "Hotfix" behind — proof the
+    // accessible name actually picked out the right row, not just any one
+    // with visible text "Remove".
+    expect(sent.extraMediaFolders).toEqual(["E:\\media\\Hotfix"]);
   });
 
   it("does not add the same folder twice, nor the one already chosen above", async () => {
@@ -1877,8 +1914,16 @@ describe("one folder field per media layer the release declares (Task 10)", () =
   it("shows one labelled folder field per layer, in the recipe's own order", async () => {
     renderOsInstall({ release: "AmigaOS 3.2.2" });
 
-    const base = await screen.findByLabelText(i18n.t("osinstall.layer.base32"));
-    const update = await screen.findByLabelText(i18n.t("osinstall.layer.update322"));
+    // The real accessible name lives on each field's own Browse button
+    // (ART-237) — asserted here by role and name, not merely by presence of
+    // a `data-testid`, since this test's whole point is that the field is
+    // genuinely *labelled*, not just that it renders.
+    const base = await screen.findByRole("button", {
+      name: (name) => name.includes(i18n.t("osinstall.layer.base32")),
+    });
+    const update = await screen.findByRole("button", {
+      name: (name) => name.includes(i18n.t("osinstall.layer.update322")),
+    });
     expect(base).toBeTruthy();
     expect(update).toBeTruthy();
 
@@ -1903,7 +1948,15 @@ describe("one folder field per media layer the release declares (Task 10)", () =
   it("keeps the single folder field for an unlayered release", async () => {
     renderOsInstall({ release: "AmigaOS 3.2" });
 
-    expect(await screen.findByLabelText(/media/i)).toBeTruthy();
+    // A real accessible-name assertion, not merely a `data-testid` presence
+    // check (review Finding 1) — this is the very control ART-237 fixed, so
+    // a test that only proves *something* rendered would pass again with
+    // the `aria-label` back on the wrapping, role-less `<div>`.
+    expect(
+      await screen.findByRole("button", {
+        name: (name) => name.includes(i18n.t("osinstall.media.ariaLabel")),
+      })
+    ).toBeTruthy();
     // The layered screen's own add-folder list must not appear at all — see
     // the module doc comment on `layers` in `OsInstall.tsx`.
     expect(screen.queryByTestId("extra-media-folder")).toBeNull();
@@ -1916,10 +1969,8 @@ describe("one folder field per media layer the release declares (Task 10)", () =
     const { unmount } = renderOsInstall({ release: "AmigaOS 3.2.2" });
     await browseLayerFolder("base", "E:\\a");
     await browseLayerFolder("update-3.2.2", "E:\\b");
-    expect((await screen.findByLabelText(layerFieldLabel("base"))).textContent).toContain("E:\\a");
-    expect((await screen.findByLabelText(layerFieldLabel("update-3.2.2"))).textContent).toContain(
-      "E:\\b"
-    );
+    expect((await screen.findByTestId("layer-field-base")).textContent).toContain("E:\\a");
+    expect((await screen.findByTestId("layer-field-update-3.2.2")).textContent).toContain("E:\\b");
 
     // Remount **without re-seeding**: `renderOsInstall`'s own `seedRemembered`
     // replaces the whole remembered bag, which would defeat the point of this
@@ -1929,10 +1980,8 @@ describe("one folder field per media layer the release declares (Task 10)", () =
     unmount();
     render(<OsInstall />);
 
-    expect((await screen.findByLabelText(layerFieldLabel("base"))).textContent).toContain("E:\\a");
-    expect((await screen.findByLabelText(layerFieldLabel("update-3.2.2"))).textContent).toContain(
-      "E:\\b"
-    );
+    expect((await screen.findByTestId("layer-field-base")).textContent).toContain("E:\\a");
+    expect((await screen.findByTestId("layer-field-update-3.2.2")).textContent).toContain("E:\\b");
   });
 
   // Fix round 1, Finding 1: the mistake a two-field screen invites most —
@@ -1978,7 +2027,7 @@ describe("one folder field per media layer the release declares (Task 10)", () =
     await browseLayerFolder("base", "E:\\media\\3.2");
     await browseLayerFolder("update-3.2.2", "E:\\media\\Update3.2.2");
 
-    await screen.findByLabelText(layerFieldLabel("base"));
+    await screen.findByTestId("layer-field-base");
     expect(screen.queryByTestId("layer-wrong-hint-base")).toBeNull();
     expect(screen.queryByTestId("layer-wrong-hint-update-3.2.2")).toBeNull();
   });
