@@ -379,6 +379,53 @@ A correct fix is an id-threading pass over all of these — inside `Field` and
 out — not a change confined to one component. Bounded to what the media step
 actually renders; a wider sweep of every other `Field` caller is still owed.
 
+**ART-242** 🔵 **WHDLoad's one-click install writes and joins directly in
+`commands/whdload.rs`, with no `core`-level "install a pack" function to call
+instead** — *found 2026-09-05 by the whdload-drawers Task 5 fix-round review*
+`src-tauri/src/commands/whdload.rs::run_install` (and its new
+`igame_data_for_pack` helper)
+
+CLAUDE.md's rule for `commands/*.rs`: "thin adapters only: deserialize args,
+call core, serialize back." `run_install` is not that — it unpacks the
+archive, works out the pack layout, looks the pack up in the game catalogue
+by its content-derived identity, builds the `IGameData` to write, calls
+`core::gameindex::igame::write_beside`, and drives the Stage W volume writer,
+all inline in the command layer. Task 5 (write `igame.data` beside a slave in
+a tree ART built) added to that rather than fixing it: `igame_data_for_pack`'s
+catalogue join is exactly the technical complexity CLAUDE.md says belongs in
+`core/`, and it now sits in `commands/` beside everything else that already
+did.
+
+The architecturally correct fix is a `core`-level "install a WHDLoad pack"
+function — trait-shaped the way `VolumeFormatter`/`MirrorClient`/`HostRecycler`
+are, since the actual disk write already goes through `core::volume::write`
+and the actual archive unpack through `core::sources::install`, both already
+core-level — with `commands/whdload.rs` reduced to the thin adapter the rule
+asks for. That is a round of its own, not a fix inside Task 5's two-file scope
+(`core/gameindex/igame.rs` and "wherever the install lays a pack down").
+
+Two homes were tried and measured before filing this rather than fixing it:
+
+- **`core::layout::apply.rs`** — the OS Builder's own staging-tree
+  materialiser, and the only other place that consumes
+  `core::whdload::analyse`/`PackLayout`. Writing `igame.data` into a placed
+  drawer there was tried and measured to break
+  `core::layout::presence::presence_of`'s byte-for-byte comparison against the
+  archive (ART-177's resume machinery): a re-plan saw `Different` instead of
+  `IconMissing` for a drawer identical to the archive except for the one file
+  `igame.data` added, and
+  `a_resumed_apply_restores_an_icon_the_first_run_never_wrote` failed under
+  the attempt. Teaching that invariant to ignore `igame.data` specifically is
+  a second module's worth of change on its own.
+- **`core::whdload` itself** — has no install function of any kind; `analyse`
+  and `launch_options` are its only two exports, both pure and read-only.
+  There is nowhere in it to add this without turning it into the very engine
+  this entry says does not exist yet.
+
+Nothing here is broken today: `run_install` works, is tested, and its
+catalogue join is itself tested and mutation-verified. What is missing is the
+layer that should hold this logic.
+
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 

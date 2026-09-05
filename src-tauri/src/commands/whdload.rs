@@ -467,6 +467,10 @@ pub fn whdload_install(
     // gone away is the user's to fix, and they should hear it from the
     // button they pressed (ART-196).
     let scratch_root = crate::scratch::root()?;
+    // Same reasoning as `scratch_root`: `AppHandle` does not survive the
+    // `move` into the job closure below, so the one path this install needs
+    // out of it is resolved here, on the command thread, once.
+    let catalogue_dir = super::gameindex::catalogue_dir(&app);
 
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
         let outcome = run_install(
@@ -475,6 +479,7 @@ pub fn whdload_install(
             volume_index,
             parent,
             &scratch_root,
+            &catalogue_dir,
             progress,
         );
 
@@ -521,6 +526,7 @@ fn run_install(
     volume_index: usize,
     parent: u32,
     scratch_root: &Path,
+    catalogue_dir: &Path,
     sink: &dyn ProgressSink,
 ) -> CoreResult<WhdloadOutcome> {
     sink.report(0, None, "Checking the package");
@@ -555,17 +561,17 @@ fn run_install(
     // places into the drawer, the same way any other file the archive shipped
     // would.
     //
-    // Best-effort and disclosed rather than tested: only the pack's own name
-    // is known here — no catalogue join reaches this command — and a failure
-    // to write it must not turn an otherwise-successful install into a
-    // reported failure over a file WHDLoad itself never reads.
-    if let Err(err) = crate::core::gameindex::igame::write_beside(
-        &pack_root,
-        &crate::core::gameindex::igame::IGameData {
-            title: Some(layout.name.clone()),
-            ..Default::default()
-        },
-    ) {
+    // `igame_data_for_pack` looks the pack up in the user's own catalogue by
+    // its content-derived identity and returns the fuller record when there
+    // is one — a pack ART has never catalogued yields a title-only file
+    // instead, and that is not a defect (see the function's own doc).
+    //
+    // Best-effort and disclosed rather than tested: a failure anywhere in
+    // that lookup, or in the write itself, must not turn an
+    // otherwise-successful install into a reported failure over a file
+    // WHDLoad itself never reads.
+    let igame_data = igame_data_for_pack(&pack_root, catalogue_dir, &layout.name);
+    if let Err(err) = crate::core::gameindex::igame::write_beside(&pack_root, &igame_data) {
         log::debug!(
             "whdload: could not write igame.data beside '{}': {err}",
             layout.name
@@ -633,6 +639,73 @@ fn run_install(
         skipped: report.skipped,
         backup: committed.backup,
     })
+}
+
+/// The `igame.data` a freshly-unpacked pack should carry — "the catalogue
+/// record that named it," in the plan's own words.
+///
+/// **Why this is a real join and not a guess.** A `GameRecord`'s identity is
+/// content-derived (`record::derive_id(title, sha256-of-slave-bytes)`), never
+/// path-derived, so it does not matter *how* this exact pack was catalogued
+/// before today — as an unpacked drawer (`readers::drawer`) or still sitting
+/// inside an archive (`readers::lhadrawer`) — both hash the slave's own bytes
+/// (`lhadrawer` bounds its read to 2 MB; a real WHDLoad slave is kilobytes,
+/// so the bound is never the difference) and derive the same id from the same
+/// title. Calling `readers::drawer::read_drawer` on the pack this install
+/// just unpacked, rather than re-deriving that id by hand a second time,
+/// means this join breaks on the same day the identity rule does — not a day
+/// later, from a second copy of it going quietly out of step.
+///
+/// **No match is not a defect.** A pack ART has never catalogued — most
+/// WHDLoad archives on a first install — yields a title-only file, because
+/// that is exactly what ART knows about it. The same fallback covers any
+/// failure along the way (the pack cannot be read back as a drawer, the
+/// catalogue cannot be loaded): a metadata lookup must never turn an
+/// otherwise-successful install into a reported failure.
+///
+/// **`players` is always `None`.** Not a gap in the join: `GameRecord` has no
+/// player-count field anywhere in ART's catalogue today, so there is nothing
+/// for any lookup to find.
+fn igame_data_for_pack(
+    pack_root: &Path,
+    catalogue_dir: &Path,
+    fallback_title: &str,
+) -> crate::core::gameindex::igame::IGameData {
+    use crate::core::gameindex::igame::IGameData;
+    use crate::core::gameindex::readers::drawer::read_drawer;
+    use crate::core::gameindex::store;
+
+    let fallback = || IGameData {
+        title: Some(fallback_title.to_string()),
+        ..Default::default()
+    };
+
+    let Ok(Some(fresh)) = read_drawer(pack_root) else {
+        return fallback();
+    };
+    let Ok(roots) = store::load(catalogue_dir) else {
+        return fallback();
+    };
+    let Some(catalogued) = roots
+        .iter()
+        .flat_map(|root| root.entries.iter())
+        .map(|entry| &entry.record)
+        .find(|record| record.id == fresh.id)
+    else {
+        return fallback();
+    };
+
+    IGameData {
+        title: Some(catalogued.title.value.clone()),
+        chipset: catalogued
+            .chipset
+            .as_ref()
+            .map(|fact| fact.value.display_name().to_string()),
+        genre: catalogued.genre.as_ref().map(|fact| fact.value.clone()),
+        year: catalogued.year.as_ref().map(|fact| fact.value),
+        players: None,
+        exe: None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -846,8 +919,16 @@ mod tests {
         assert!(plan.drawer.ends_with(":Turrican"), "{}", plan.drawer);
 
         // ---- the install ----
-        let outcome =
-            run_install(&archive, &image, 0, 0, &std::env::temp_dir(), &NoProgress).unwrap();
+        let outcome = run_install(
+            &archive,
+            &image,
+            0,
+            0,
+            &std::env::temp_dir(),
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
 
         assert_eq!(
             outcome.files, 4,
@@ -931,7 +1012,9 @@ mod tests {
 
         // The no-ceremony default path: iGame's own file, beside the slave in
         // the drawer that landed on the disk — not a copy left behind in the
-        // scratch unpack.
+        // scratch unpack. This archive was never catalogued (no catalogue_dir
+        // seeded for this test), so this doubles as half of the "no match"
+        // case: `igame_data_for_pack`'s fallback, exercised end to end.
         let igame = inside
             .iter()
             .find(|found| found.name == crate::core::gameindex::igame::FILE_NAME)
@@ -942,6 +1025,197 @@ mod tests {
             b"title=Turrican\n",
             "ART's own drawer name, for iGame's own launcher to read"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other half of the "no match" case, standing on its own: a pack ART
+    /// has never catalogued still installs cleanly and still gets an
+    /// `igame.data`, carrying only what ART actually knows about it. Not a
+    /// defect — `igame_data_for_pack`'s own doc says so.
+    #[test]
+    fn an_uncatalogued_pack_still_gets_a_title_only_igame_data() {
+        let dir = scratch("igame-no-catalogue");
+        let archive = dir.join("Tag.lha");
+        let slave = crate::core::gameindex::readers::slave::tests_support::build_slave(
+            "Tag",
+            "1993 Someone",
+            16,
+        );
+        std::fs::write(
+            &archive,
+            crate::core::lha::tests::make_lha_with(&[("Tag/Tag.slave", &slave)]),
+        )
+        .unwrap();
+
+        let image = dir.join("Games.hdf");
+        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
+        std::fs::write(&image, &bytes).unwrap();
+
+        // A catalogue directory that has never seen this pack — the ordinary
+        // first-install case.
+        let catalogue_dir = dir.join("catalogue");
+
+        let outcome = run_install(
+            &archive,
+            &image,
+            0,
+            0,
+            &std::env::temp_dir(),
+            &catalogue_dir,
+            &NoProgress,
+        )
+        .unwrap();
+        assert_eq!(outcome.files, 2, "slave and igame.data");
+
+        let entry = super::super::volume_write::pick_volume(&image, 0).unwrap();
+        let (device, geometry) = mount(&image, &entry).unwrap();
+        let set = crate::core::volume::write::layout::BlockSet::new(geometry.block_size);
+        let drawer = crate::core::volume::write::dir::entries_in(
+            &device,
+            &set,
+            &geometry,
+            geometry.root_block,
+        )
+        .unwrap()
+        .into_iter()
+        .find(|found| found.name == "Tag")
+        .expect("the drawer must be on the disk");
+        let igame =
+            crate::core::volume::write::dir::entries_in(&device, &set, &geometry, drawer.block)
+                .unwrap()
+                .into_iter()
+                .find(|found| found.name == crate::core::gameindex::igame::FILE_NAME)
+                .expect("igame.data must still be written when nothing catalogued this pack");
+        assert_eq!(
+            crate::core::volume::write::file::read_file(&device, &set, &geometry, igame.block)
+                .unwrap(),
+            b"title=Tag\n",
+            "ART wrote exactly what it had — the drawer's own name — and nothing more"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The catalogue-hit half: a pack whose slave bytes and title already
+    /// match a record in the user's own catalogue gets that record's fuller
+    /// facts, not just the drawer's own name.
+    ///
+    /// `read_drawer` is called on a stand-in directory carrying the exact
+    /// same slave bytes to get the exact content-derived id production code
+    /// will compute — the same function, not a hand-rederived hash, so the
+    /// test cannot drift from what `igame_data_for_pack` actually does. The
+    /// catalogue is then seeded with a record sharing that id but carrying a
+    /// genre, a year and a chipset no WHDLoad slave header ever states, plus
+    /// a title a user typed by hand — proving the join is what supplied
+    /// them, not a second read of the slave.
+    #[test]
+    fn a_catalogued_pack_gets_its_igame_data_from_the_catalogue_record() {
+        use crate::core::gameindex::readers::drawer::read_drawer;
+        use crate::core::gameindex::record::{ChipsetRequirement, Fact, Provenance};
+        use crate::core::gameindex::store::{CachedEntry, CatalogueRoot, CATALOGUE_SCHEMA};
+
+        let dir = scratch("igame-catalogue-hit");
+        let slave = crate::core::gameindex::readers::slave::tests_support::build_slave(
+            "Turrican",
+            "1992 Someone",
+            16,
+        );
+
+        let archive = dir.join("Turrican.lha");
+        std::fs::write(
+            &archive,
+            crate::core::lha::tests::make_lha_with(&[("Turrican/Turrican.slave", &slave)]),
+        )
+        .unwrap();
+
+        // The same content, read the same way production code will read it,
+        // to get the real id — never hand-derived.
+        let probe_dir = dir.join("probe").join("Turrican");
+        std::fs::create_dir_all(&probe_dir).unwrap();
+        std::fs::write(probe_dir.join("Turrican.slave"), &slave).unwrap();
+        let fresh = read_drawer(&probe_dir).unwrap().expect("this is a title");
+
+        let catalogue_dir = dir.join("catalogue");
+        let collection_root = dir.join("collection");
+        std::fs::create_dir_all(&collection_root).unwrap();
+        let root_key = collection_root.to_string_lossy().into_owned();
+        crate::core::gameindex::store::add_root(&catalogue_dir, Path::new(&root_key)).unwrap();
+        let mut record = fresh.clone();
+        record.title = Fact::new(
+            "Turrican II: Definitive Edition".into(),
+            Provenance::UserEdit,
+        );
+        record.genre = Some(Fact::new("Shoot'em up".into(), Provenance::UserEdit));
+        record.year = Some(Fact::new(1991, Provenance::UserEdit));
+        record.chipset = Some(Fact::new(ChipsetRequirement::Aga, Provenance::UserEdit));
+        crate::core::gameindex::store::write_root(
+            &catalogue_dir,
+            &CatalogueRoot {
+                schema: CATALOGUE_SCHEMA,
+                root: root_key,
+                scanned_at: None,
+                index_schema: crate::core::gameindex::record::GAMEINDEX_SCHEMA,
+                entries: vec![CachedEntry {
+                    path: probe_dir
+                        .join("Turrican.slave")
+                        .to_string_lossy()
+                        .into_owned(),
+                    size: 0,
+                    mtime_ms: 0,
+                    record,
+                }],
+            },
+        )
+        .unwrap();
+
+        let image = dir.join("Games.hdf");
+        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
+        std::fs::write(&image, &bytes).unwrap();
+
+        run_install(
+            &archive,
+            &image,
+            0,
+            0,
+            &std::env::temp_dir(),
+            &catalogue_dir,
+            &NoProgress,
+        )
+        .unwrap();
+
+        let entry = super::super::volume_write::pick_volume(&image, 0).unwrap();
+        let (device, geometry) = mount(&image, &entry).unwrap();
+        let set = crate::core::volume::write::layout::BlockSet::new(geometry.block_size);
+        let drawer = crate::core::volume::write::dir::entries_in(
+            &device,
+            &set,
+            &geometry,
+            geometry.root_block,
+        )
+        .unwrap()
+        .into_iter()
+        .find(|found| found.name == "Turrican")
+        .expect("the drawer must be on the disk");
+        let igame =
+            crate::core::volume::write::dir::entries_in(&device, &set, &geometry, drawer.block)
+                .unwrap()
+                .into_iter()
+                .find(|found| found.name == crate::core::gameindex::igame::FILE_NAME)
+                .expect("igame.data must be beside the slave");
+        let text = String::from_utf8(
+            crate::core::volume::write::file::read_file(&device, &set, &geometry, igame.block)
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            text.contains("title=Turrican II: Definitive Edition"),
+            "the catalogue's own title, not the slave's or the drawer's: {text}"
+        );
+        assert!(text.contains("genre=Shoot'em up"), "{text}");
+        assert!(text.contains("year=1991"), "{text}");
+        assert!(text.contains("chipset=AGA"), "{text}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -958,11 +1232,28 @@ mod tests {
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         std::fs::write(&image, &bytes).unwrap();
 
-        run_install(&archive, &image, 0, 0, &std::env::temp_dir(), &NoProgress).unwrap();
+        run_install(
+            &archive,
+            &image,
+            0,
+            0,
+            &std::env::temp_dir(),
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
         let after_first = std::fs::read(&image).unwrap();
 
-        let err =
-            run_install(&archive, &image, 0, 0, &std::env::temp_dir(), &NoProgress).unwrap_err();
+        let err = run_install(
+            &archive,
+            &image,
+            0,
+            0,
+            &std::env::temp_dir(),
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("already on that volume"), "{err}");
         assert_eq!(
             std::fs::read(&image).unwrap(),
@@ -1042,8 +1333,16 @@ mod tests {
         let before = std::fs::read(&image).unwrap();
 
         let sink = StopDuringCopy(AtomicBool::new(false));
-        let err = run_install(&archive, &image, 0, 0, &std::env::temp_dir(), &sink)
-            .expect_err("a cancelled install must not come back as a successful one");
+        let err = run_install(
+            &archive,
+            &image,
+            0,
+            0,
+            &std::env::temp_dir(),
+            &std::env::temp_dir(),
+            &sink,
+        )
+        .expect_err("a cancelled install must not come back as a successful one");
 
         assert_eq!(
             err.code(),
@@ -1087,7 +1386,16 @@ mod tests {
             plan.refusal.is_some(),
             "an archive with no slave must be refused, not errored"
         );
-        assert!(run_install(&archive, &image, 0, 0, &std::env::temp_dir(), &NoProgress).is_err());
+        assert!(run_install(
+            &archive,
+            &image,
+            0,
+            0,
+            &std::env::temp_dir(),
+            &std::env::temp_dir(),
+            &NoProgress
+        )
+        .is_err());
         assert_eq!(std::fs::read(&image).unwrap(), before);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1179,7 +1487,16 @@ mod tests {
         assert!(refusal.reason.contains("blocks"), "{refusal:?}");
         assert!(refusal.reason.contains("are free"), "{refusal:?}");
 
-        assert!(run_install(&archive, &image, 0, 0, &std::env::temp_dir(), &NoProgress).is_err());
+        assert!(run_install(
+            &archive,
+            &image,
+            0,
+            0,
+            &std::env::temp_dir(),
+            &std::env::temp_dir(),
+            &NoProgress
+        )
+        .is_err());
         assert_eq!(std::fs::read(&image).unwrap(), before);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1208,7 +1525,16 @@ mod tests {
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         std::fs::write(&dest, &bytes).unwrap();
 
-        run_install(&archive, &dest, 0, 0, &std::env::temp_dir(), &NoProgress).unwrap();
+        run_install(
+            &archive,
+            &dest,
+            0,
+            0,
+            &std::env::temp_dir(),
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
         let _ = std::fs::remove_file(&archive);
     }
 
