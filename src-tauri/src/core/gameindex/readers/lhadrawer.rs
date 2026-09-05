@@ -475,4 +475,43 @@ mod tests {
         );
         std::fs::remove_dir_all(&root).ok();
     }
+
+    /// The claim this file's own doc comment makes — that the scan seeks
+    /// header to header and decompresses only slave candidates, never the
+    /// whole archive — is only provable by timing it against the real
+    /// archive. Every other test in this module packs a handful of entries;
+    /// this is the one against the owner's own 663 MB, 8 858-entry `.lha`,
+    /// never committed and never touched by the ordinary suite.
+    ///
+    /// ```text
+    /// ART_LHA_ARCHIVE="E:\amiga\Amigatolon\paketler\WHDLoadDemos100.lha" \
+    ///   cargo test --lib real_archive_scan_is_fast -- --ignored --nocapture
+    /// ```
+    ///
+    /// Prints the count and the wall-clock time rather than asserting either:
+    /// the count is a property of somebody's archive, not of this code, and a
+    /// mismatch against the 893 measured elsewhere is a finding to report,
+    /// not a regression to chase. The timing is the point — if this takes
+    /// minutes rather than seconds, something is decompressing far more than
+    /// the slave candidates it needs to, and a synthetic fixture could never
+    /// surface that.
+    #[test]
+    #[ignore = "needs the owner's own archive; set ART_LHA_ARCHIVE"]
+    fn real_archive_scan_is_fast() {
+        use std::time::Instant;
+
+        let Ok(path) = std::env::var("ART_LHA_ARCHIVE") else {
+            eprintln!("ART_LHA_ARCHIVE is not set");
+            return;
+        };
+
+        let started = Instant::now();
+        let found = read_archive_drawers(Path::new(&path)).unwrap();
+        let elapsed = started.elapsed();
+        println!(
+            "ART_LHA_RESULT drawers={} elapsed_ms={}",
+            found.len(),
+            elapsed.as_millis()
+        );
+    }
 }

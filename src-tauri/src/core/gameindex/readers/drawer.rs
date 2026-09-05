@@ -307,4 +307,43 @@ mod tests {
         assert!(read_drawer(&root.join("Docs")).unwrap().is_none());
         std::fs::remove_dir_all(&root).ok();
     }
+
+    /// The real-material bar: walk an actually-unpacked WHDLoad drawer
+    /// collection and require every drawer `collect_drawers` finds to read
+    /// back through `read_drawer`. Every other test in this module is against
+    /// a fixture ART generated; this is the one that runs against material
+    /// nobody here made.
+    ///
+    /// ```text
+    /// ART_DRAWERS="E:\amiga\ProjeART\whdload-drawers\Demos" \
+    ///   cargo test --lib catalogue_a_real_drawer_collection_when_asked -- --ignored --nocapture
+    /// ```
+    ///
+    /// The doc comment atop this file states 893 as the measured shape of the
+    /// owner's own collection. This test does not assert that number — a
+    /// mismatch is a finding to report, not a regression to chase — it only
+    /// asserts the one invariant that must hold regardless of the count:
+    /// whatever the walk finds, the reader must read back.
+    #[test]
+    #[ignore = "needs an unpacked WHDLoad drawer collection"]
+    fn catalogue_a_real_drawer_collection_when_asked() {
+        let Ok(root) = std::env::var("ART_DRAWERS") else {
+            eprintln!("ART_DRAWERS is not set");
+            return;
+        };
+        let found = collect_drawers(Path::new(&root));
+        println!("ART_DRAWERS_RESULT drawers={}", found.len());
+        let mut read = 0usize;
+        for dir in &found {
+            if read_drawer(dir).unwrap().is_some() {
+                read += 1;
+            }
+        }
+        println!("ART_DRAWERS_READ read={read}");
+        assert_eq!(
+            read,
+            found.len(),
+            "every drawer the scan found must read back"
+        );
+    }
 }
