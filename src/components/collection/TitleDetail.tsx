@@ -13,9 +13,14 @@ import {
   type ArtKind,
 } from "@/lib/artwork";
 import {
+  igameVerdictPhrase,
+  igamewriteApply,
+  igamewritePlan,
   kickstartOffersFor,
   placeKickstart,
   type CatalogueEntry,
+  type IGameOutcome,
+  type IGamePlan,
   type KickstartOffer,
   type PlaceOutcome,
 } from "@/lib/gameindex";
@@ -185,6 +190,57 @@ export function TitleDetail({
       cancelled = true;
     };
   }, [need, romDir]);
+
+  /**
+   * **igame.data for this title (Task 6).** Unlike `write_beside`'s other
+   * caller — the OS Builder, writing into a tree it just built — this reaches
+   * a drawer on the user's own disk, so it goes through PREVIEW before APPLY:
+   * `igamePlan` says whether this title has a real route in (only an
+   * unpacked `whdload-drawer` does; an archived or self-booting title comes
+   * back with a named refusal instead), and the button is the APPLY step.
+   *
+   * Re-asked whenever the selected title changes, and cleared for a title
+   * that plainly has no route — asking the core for every kind would just
+   * collect refusals nobody can act on differently than the media kind
+   * already tells them.
+   */
+  const [igamePlan, setIgamePlan] = useState<IGamePlan | null>(null);
+  const [igameBusy, setIgameBusy] = useState(false);
+  const [igameOutcome, setIgameOutcome] = useState<IGameOutcome | null>(null);
+  const [igameError, setIgameError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setIgameOutcome(null);
+    setIgameError(null);
+    if (record.media.kind !== "whdload-drawer") {
+      setIgamePlan(null);
+      return;
+    }
+    let cancelled = false;
+    igamewritePlan([record.id])
+      .then((found) => {
+        if (!cancelled) setIgamePlan(found);
+      })
+      .catch(() => {
+        if (!cancelled) setIgamePlan(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [record.id, record.media.kind]);
+
+  async function writeIgameData() {
+    setIgameBusy(true);
+    setIgameError(null);
+    setIgameOutcome(null);
+    try {
+      setIgameOutcome(await igamewriteApply([record.id]));
+    } catch (e) {
+      setIgameError(errorText(t, e));
+    } finally {
+      setIgameBusy(false);
+    }
+  }
 
   async function placeOne(from: string, asName: string) {
     // **A second lock on a door with one key, and disclosed as such**: the
@@ -521,6 +577,57 @@ export function TitleDetail({
         <div className="faint" style={{ fontSize: 12 }}>
           {t("gameindex.kickstartNeeded", { image: record.kickstart.value.image })}
         </div>
+      )}
+
+      {/* **Task 6: writing into the user's own collection.** Only an
+          unpacked `whdload-drawer` has a folder on the host `write_beside`
+          can put a file into — an archived or self-booting title comes back
+          from `igamewritePlan` with a named refusal instead of an item, and
+          this section shows that refusal rather than a button that would
+          fail. The write itself is a job (`igamewriteApply`), reported one
+          drawer at a time even though this screen only ever asks for one. */}
+      {igamePlan && (
+        <section data-testid="igamewrite" style={{ marginTop: 12 }}>
+          {igamePlan.items.length > 0 && (
+            <button
+              className="btn btn-sm"
+              disabled={igameBusy}
+              onClick={() => void writeIgameData()}
+            >
+              {t("collection.detail.igamewrite.action")}
+            </button>
+          )}
+          {igamePlan.items.length === 0 && igamePlan.refusals[0] && (
+            <p className="faint" style={{ fontSize: 12 }}>
+              {t("collection.detail.igamewrite.refused", { reason: igamePlan.refusals[0] })}
+            </p>
+          )}
+          {igameError && (
+            <p
+              data-testid="igamewrite-error"
+              className="badge badge-err"
+              style={{ display: "block", fontSize: 11, padding: "4px 8px", marginTop: 6 }}
+            >
+              {igameError}
+            </p>
+          )}
+          {igameOutcome?.verdicts[0] && (
+            <p
+              data-testid="igamewrite-result"
+              className={
+                igameOutcome.verdicts[0].state.state === "failed" ? "badge badge-err" : "badge badge-ok"
+              }
+              style={{ display: "block", fontSize: 11, padding: "4px 8px", marginTop: 6 }}
+            >
+              {t(igameVerdictPhrase(igameOutcome.verdicts[0].state).key)}
+              {(igameOutcome.verdicts[0].state.state === "skipped" ||
+                igameOutcome.verdicts[0].state.state === "failed") &&
+                ` ${igameOutcome.verdicts[0].state.detail}`}
+              {igameOutcome.verdicts[0].backup &&
+                ` ${t("collection.detail.igamewrite.backup", { path: igameOutcome.verdicts[0].backup })}`}
+            </p>
+          )}
+        </section>
       )}
 
       {/* **ART-130: the loop's other end.** The title says what it needs; this

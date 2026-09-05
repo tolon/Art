@@ -17,6 +17,7 @@
 
 pub mod cleanup;
 pub mod igame;
+pub mod igamewrite;
 pub mod readers;
 pub mod record;
 pub mod scan;

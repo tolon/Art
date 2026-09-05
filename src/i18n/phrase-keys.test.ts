@@ -8,10 +8,10 @@
 import { describe, expect, it } from "vitest";
 import en from "./en.json";
 
-import { ALL_PROVENANCES, provenancePhrase } from "@/lib/gameindex";
+import { ALL_PROVENANCES, provenancePhrase, igameVerdictPhrase } from "@/lib/gameindex";
 import { kindPhrase as artworkKindPhrase, mediaPhrase } from "@/lib/collectionDetail";
 import { networkBlocker } from "@/components/osbuilder/NetworkPanel";
-import type { Media } from "@/lib/gameindex";
+import type { Media, IGameState } from "@/lib/gameindex";
 import {
   outcomePhrase,
   rebindProblemPhrase,
@@ -1320,6 +1320,23 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
     }
   });
+  it("igameVerdictPhrase: every IGameState variant resolves", () => {
+    // Mirrors `core::gameindex::igamewrite::IGameState` — Written and Merged
+    // carry no data, Skipped and Failed carry an English detail (ART-060)
+    // that the component shows beside the translated sentence rather than
+    // inside it, so the detail plays no part in which key is picked.
+    const states: IGameState[] = [
+      { state: "written" },
+      { state: "merged" },
+      { state: "skipped", detail: "igame.data already says this; nothing was changed" },
+      { state: "failed", detail: "permission denied" },
+    ];
+    for (const state of states) {
+      const phrase = igameVerdictPhrase(state);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
   it("sourcePhrase: every shipped source, and an unknown one, resolve", () => {
     // The ids are the strings `core::artwork::config::source_for` matches on.
     // The default arm matters as much as the named ones: a settings file

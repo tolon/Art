@@ -1677,6 +1677,17 @@
           "occupied": "Refused: a different ROM is already at {{to}}. Nothing was written.",
           "alreadyThere": "Already there, unchanged — {{to}}."
         }
+      },
+      "igamewrite": {
+        "action": "Write igame.data",
+        "refused": "ART cannot write igame.data for this title yet: {{reason}}",
+        "backup": "The previous version was kept at {{path}}.",
+        "result": {
+          "written": "A new igame.data was written beside the slave.",
+          "merged": "The existing igame.data was updated with what ART knows; anything else in it was kept.",
+          "skipped": "igame.data already said this — nothing was changed.",
+          "failed": "Could not write igame.data."
+        }
       }
     },
     "rebind": {

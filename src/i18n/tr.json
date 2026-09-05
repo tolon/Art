@@ -1677,6 +1677,17 @@
           "occupied": "Reddedildi: {{to}} konumunda başka bir ROM var. Hiçbir şey yazılmadı.",
           "alreadyThere": "Zaten orada, değiştirilmedi — {{to}}."
         }
+      },
+      "igamewrite": {
+        "action": "igame.data yaz",
+        "refused": "ART bu başlık için henüz igame.data yazamaz: {{reason}}",
+        "backup": "Önceki sürüm {{path}} konumunda saklandı.",
+        "result": {
+          "written": "Slave'in yanına yeni bir igame.data yazıldı.",
+          "merged": "Var olan igame.data, ART'ın bildikleriyle güncellendi; içindeki başka her şey korundu.",
+          "skipped": "igame.data zaten bunu söylüyordu — hiçbir şey değişmedi.",
+          "failed": "igame.data yazılamadı."
+        }
       }
     },
     "rebind": {

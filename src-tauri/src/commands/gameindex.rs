@@ -11,9 +11,11 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use super::jobs::{spawn_job, JobRegistry};
-use super::oplog::{user_operation, write_result};
+use super::oplog::{user_operation, write_result, write_to_path};
 use crate::core::error::CoreError;
 use crate::core::gameindex::cleanup;
+use crate::core::gameindex::igamewrite::{self, IGameOutcome, IGamePlan, IGameState};
+use crate::core::gameindex::record::GameRecord;
 use crate::core::gameindex::scan::{scan_titles_with, CatalogueEntry};
 use crate::core::gameindex::store;
 use crate::core::jobs::JobId;
@@ -524,6 +526,139 @@ pub fn gameindex_scan(
             Ok(())
         },
     );
+
+    Ok(id)
+}
+
+// ---------------------------------------------------------------------------
+// Writing igame.data into the user's own collection (Task 6)
+//
+// The explicit half of `core::gameindex::igame`: `write_beside` (Task 5) has
+// no ceremony because it writes into a tree ART built moments ago, but this
+// command reaches the user's own drawers, on their own disk — CLAUDE.md's
+// mandatory pipeline applies, and `igamewrite_plan` / `igamewrite_apply` are
+// its PREVIEW and APPLY halves.
+// ---------------------------------------------------------------------------
+
+/// Resolve catalogued ids into the records they name.
+///
+/// An id the catalogue no longer carries — stale screen state, a root
+/// removed since the selection was made — is left out rather than refused:
+/// the plan then simply has fewer items than ids, which is a fact `plan`'s
+/// own refusals do not need to restate.
+fn records_for_ids(app: &AppHandle, ids: &[String]) -> AppResult<Vec<GameRecord>> {
+    let roots = store::load(&catalogue_dir(app))?;
+    let by_id: std::collections::HashMap<&str, &GameRecord> = roots
+        .iter()
+        .flat_map(|root| root.entries.iter())
+        .map(|entry| (entry.record.id.as_str(), &entry.record))
+        .collect();
+
+    Ok(ids
+        .iter()
+        .filter_map(|id| by_id.get(id.as_str()).map(|record| (*record).clone()))
+        .collect())
+}
+
+/// PREVIEW: what writing `igame.data` for these titles would do, before a
+/// single byte moves.
+///
+/// Read-only and free to call as often as a selection changes.
+#[tauri::command]
+pub fn igamewrite_plan(ids: Vec<String>, app: AppHandle) -> AppResult<IGamePlan> {
+    let records = records_for_ids(&app, &ids)?;
+    Ok(igamewrite::plan(&records))
+}
+
+/// Emitted when an `igamewrite_apply` job finishes.
+#[derive(Debug, Clone, Serialize)]
+pub struct IGamewriteResult {
+    pub job_id: JobId,
+    pub outcome: IGameOutcome,
+}
+
+pub const IGAMEWRITE_RESULT_EVENT: &str = "igamewrite-result";
+
+/// APPLY: write `igame.data` for these titles, one verdict per drawer.
+///
+/// A job (§54/§55): the collection this was measured against has 893
+/// drawers, each its own file read, backup and write. Cancelling stops
+/// between whole drawers, never mid-write (`core::gameindex::igamewrite::apply`'s
+/// own rule) — a stopped run reports `cancelled: true` on the outcome rather
+/// than failing the job, the same shape `panel_delete_many` already uses for
+/// a host-side operation with no journal.
+///
+/// Re-resolves and re-plans the ids on the job thread rather than trusting a
+/// plan built earlier on the command thread: the catalogue can change between
+/// the preview the user looked at and the button press that follows it, and
+/// planning again is cheap next to writing into 893 real files on the wrong
+/// premise.
+#[tauri::command]
+pub fn igamewrite_apply(
+    ids: Vec<String>,
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
+    oplog: State<'_, JsonlOperationLog>,
+) -> AppResult<JobId> {
+    let records = records_for_ids(&app, &ids)?;
+    let plan = igamewrite::plan(&records);
+    if plan.items.is_empty() {
+        return Err(CoreError::InvalidInput(
+            "nothing in this selection can receive igame.data".to_string(),
+        )
+        .into());
+    }
+
+    let log_path = oplog.path().to_path_buf();
+    let registry = Arc::clone(&registry);
+    let emit_app = app.clone();
+    let title = format!("Writing igame.data for {} title(s)", plan.items.len());
+    let asked = plan.items.len();
+
+    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+        let outcome = igamewrite::apply(&plan, progress);
+
+        // Every ending gets its own count in the log too — a partial result
+        // is exactly what somebody comes back to the log to check (the same
+        // reasoning `panel_delete_many`'s own record follows).
+        let written = outcome
+            .verdicts
+            .iter()
+            .filter(|v| matches!(v.state, IGameState::Written))
+            .count();
+        let merged = outcome
+            .verdicts
+            .iter()
+            .filter(|v| matches!(v.state, IGameState::Merged))
+            .count();
+        let skipped = outcome
+            .verdicts
+            .iter()
+            .filter(|v| matches!(v.state, IGameState::Skipped(_)))
+            .count();
+        let failed = outcome
+            .verdicts
+            .iter()
+            .filter(|v| matches!(v.state, IGameState::Failed(_)))
+            .count();
+        let complete = !outcome.cancelled && failed == 0 && outcome.verdicts.len() == asked;
+
+        let record = user_operation("Write igame.data into the collection")
+            .detail("Asked", asked.to_string())
+            .detail("Written", written.to_string())
+            .detail("Merged", merged.to_string())
+            .detail("Skipped", skipped.to_string())
+            .detail("Failed", failed.to_string())
+            .detail("Cancelled", outcome.cancelled.to_string())
+            .outcome(OperationOutcome::verified(complete));
+        write_to_path(&log_path, &record);
+
+        let _ = emit_app.emit(
+            IGAMEWRITE_RESULT_EVENT,
+            IGamewriteResult { job_id, outcome },
+        );
+        Ok(())
+    });
 
     Ok(id)
 }

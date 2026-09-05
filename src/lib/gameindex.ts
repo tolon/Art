@@ -8,6 +8,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+import { awaitJobResult } from "./jobs";
 import type { Phrase } from "./phrase";
 
 /** Where a fact came from. Mirrors `core::gameindex::record::Provenance`. */
@@ -397,4 +398,120 @@ export async function placeKickstart(
   tree: string
 ): Promise<PlaceOutcome> {
   return invoke<PlaceOutcome>("place_kickstart", { from, asName, tree });
+}
+
+// ---------------------------------------------------------------------------
+// Writing igame.data into the user's own collection (Task 6)
+//
+// The explicit half of `core::gameindex::igame`: `write_beside` (used by the
+// OS Builder and the WHDLoad install path) writes into a tree ART just built,
+// with no ceremony. This is the other one — the user's own drawers, on their
+// own disk — so it goes through a preview before anything is touched, and
+// every drawer comes back with its own verdict rather than a count.
+// ---------------------------------------------------------------------------
+
+/** What ART knows about one title, in iGame's own vocabulary. Mirrors
+ *  `core::gameindex::igame::IGameData`. */
+export interface IGameWriteData {
+  title: string | null;
+  chipset: string | null;
+  genre: string | null;
+  year: number | null;
+  players: number | null;
+  exe: string | null;
+}
+
+/** One title `igamewritePlan` found a real route for. */
+export interface IGamePlanItem {
+  dir: string;
+  title: string;
+  data: IGameWriteData;
+}
+
+/**
+ * What `igamewritePlan` found, before anything is touched.
+ *
+ * `refusals` is English (ART-060), the same as a `CoreError` message — it is
+ * Rust's own sentence naming a title with no route in (still inside an
+ * archive, or not an unpacked drawer at all) and what to do about it, not a
+ * sentence this screen translates.
+ */
+export interface IGamePlan {
+  items: IGamePlanItem[];
+  refusals: string[];
+}
+
+/** What one drawer's write settled on. Mirrors
+ *  `core::gameindex::igamewrite::IGameState`. `detail` is English (ART-060),
+ *  shown after the translated sentence rather than instead of it — the same
+ *  rule `HostDeleteRow.problem` follows. */
+export type IGameState =
+  | { state: "written" }
+  | { state: "merged" }
+  | { state: "skipped"; detail: string }
+  | { state: "failed"; detail: string };
+
+/** What happened to one drawer. */
+export interface IGameVerdict {
+  dir: string;
+  state: IGameState;
+  /** Where the previous `igame.data` went, when one existed and changed.
+   *  `null` for `written` (nothing to back up) and `skipped` (nothing
+   *  changed). */
+  backup: string | null;
+}
+
+/** What a whole run did. */
+export interface IGameOutcome {
+  verdicts: IGameVerdict[];
+  /** Whether the user stopped it before every planned item was reached. */
+  cancelled: boolean;
+}
+
+/**
+ * PREVIEW: what writing `igame.data` for these titles would do, before a
+ * single byte moves. Read-only — safe to call every time a selection changes.
+ */
+export async function igamewritePlan(ids: string[]): Promise<IGamePlan> {
+  return invoke<IGamePlan>("igamewrite_plan", { ids });
+}
+
+export const IGAMEWRITE_RESULT_EVENT = "igamewrite-result";
+
+/**
+ * APPLY: write `igame.data` for these titles. Not all-or-nothing — a host
+ * filesystem has no journal, so the outcome carries one verdict per drawer,
+ * never a single count (the same rule `panelDeleteMany` follows for the same
+ * reason).
+ */
+export async function igamewriteApply(ids: string[]): Promise<IGameOutcome> {
+  return awaitJobResult<{ job_id: number; outcome: IGameOutcome }, IGameOutcome>(
+    IGAMEWRITE_RESULT_EVENT,
+    () => invoke<number>("igamewrite_apply", { ids }),
+    (payload) => payload.outcome
+  );
+}
+
+/**
+ * The sentence for one drawer's verdict.
+ *
+ * Exhaustive `switch` with a `never` fallthrough, the same shape
+ * `recycleTargetPhrase` uses: a fifth `IGameState` must be a compile error
+ * here, not a verdict the screen silently shows nothing for.
+ */
+export function igameVerdictPhrase(state: IGameState): Phrase {
+  switch (state.state) {
+    case "written":
+      return { key: "collection.detail.igamewrite.result.written" };
+    case "merged":
+      return { key: "collection.detail.igamewrite.result.merged" };
+    case "skipped":
+      return { key: "collection.detail.igamewrite.result.skipped" };
+    case "failed":
+      return { key: "collection.detail.igamewrite.result.failed" };
+    default: {
+      const unreachable: never = state;
+      return unreachable;
+    }
+  }
 }
