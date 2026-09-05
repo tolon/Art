@@ -403,9 +403,16 @@ fn plan_shell_defaults(tree: &Path) -> CoreResult<Vec<ShellDefaultPlan>> {
     let mut plans = Vec::with_capacity(env::SHELL_DEFAULTS.len());
     for (name, value) in env::SHELL_DEFAULTS {
         let components: Vec<&str> = name.split('/').collect();
-        let (dir_components, file_component) = components
-            .split_at_checked(components.len() - 1)
-            .ok_or_else(|| CoreError::InvalidInput(format!("'{name}' has no file component")))?;
+        // `str::split` always yields at least one substring — even `"".split('/')`
+        // produces `[""]` — so `components` is never empty and `components.len() - 1`
+        // never underflows. Not a runtime guard (by this round's own rule: unreachable
+        // by ART's own arithmetic, not by a third party's behaviour) — a `debug_assert!`
+        // records the invariant instead of a `CoreError` branch nothing can reach.
+        debug_assert!(
+            !components.is_empty(),
+            "str::split always yields at least one element"
+        );
+        let (dir_components, file_component) = components.split_at(components.len() - 1);
         let dir = resolve_dir_ci_or_default(&archive, dir_components)?;
         let file_name = file_component[0];
         let path = match find_child_ci(&dir, file_name)? {
@@ -445,49 +452,103 @@ pub fn apply_appearance(tree: &Path, req: &AppearanceRequest) -> CoreResult<Appe
     };
 
     // ---- Commit: nothing above touched disk. ----
-    let mut outcome = AppearanceOutcome::default();
+    //
+    // A host filesystem has no journal (`core/hostfs.rs` answers the same
+    // question the same way for a removal): if a later write in this call
+    // fails after an earlier one already landed, that is not "the operation
+    // failed" — one or more files really did change. `committed` tracks
+    // every write that has already succeeded in this call so a failure can
+    // name them (CLAUDE.md: "never claim what you did not do").
+    let mut committed: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
+    let mut picture_placed = None;
+    let mut amiga_path = None;
 
     if let Some(plan) = wallpaper_plan {
         if let Some((picture_path, bytes)) = plan.picture {
             if let Some(parent) = picture_path.parent() {
-                std::fs::create_dir_all(parent)?;
+                commit_mkdir(parent, &committed)?;
             }
-            let backup = guarded_write(&picture_path, &bytes, BackupPolicy::CONFIG)?;
-            outcome.written.push(picture_path.clone());
-            if let Some(b) = backup {
-                outcome.backups.push(b);
-            }
-            outcome.picture_placed = Some(picture_path);
+            commit_write(picture_path.clone(), &bytes, &mut committed)?;
+            picture_placed = Some(picture_path);
         }
 
-        let backup = guarded_write(&plan.prefs_path, &plan.prefs_bytes, BackupPolicy::CONFIG)?;
-        outcome.written.push(plan.prefs_path);
-        if let Some(b) = backup {
-            outcome.backups.push(b);
-        }
-        outcome.amiga_path = Some(plan.amiga_path);
+        commit_write(plan.prefs_path, &plan.prefs_bytes, &mut committed)?;
+        amiga_path = Some(plan.amiga_path);
     }
 
     if let Some(plan) = screen_plan {
-        let backup = guarded_write(&plan.path, &plan.bytes, BackupPolicy::CONFIG)?;
-        outcome.written.push(plan.path);
-        if let Some(b) = backup {
-            outcome.backups.push(b);
-        }
+        commit_write(plan.path, &plan.bytes, &mut committed)?;
     }
 
     for plan in shell_plans {
         if let Some(parent) = plan.path.parent() {
-            std::fs::create_dir_all(parent)?;
+            commit_mkdir(parent, &committed)?;
         }
-        let backup = guarded_write(&plan.path, &plan.bytes, BackupPolicy::CONFIG)?;
-        outcome.written.push(plan.path);
+        commit_write(plan.path, &plan.bytes, &mut committed)?;
+    }
+
+    let mut written = Vec::with_capacity(committed.len());
+    let mut backups = Vec::new();
+    for (path, backup) in committed {
+        written.push(path);
         if let Some(b) = backup {
-            outcome.backups.push(b);
+            backups.push(b);
         }
     }
 
-    Ok(outcome)
+    Ok(AppearanceOutcome {
+        written,
+        backups,
+        picture_placed,
+        amiga_path,
+    })
+}
+
+/// Write one file through [`guarded_write`] and record it in `committed`.
+/// See [`apply_appearance`]'s own comment on `committed` for why a failure
+/// here is wrapped with what already succeeded rather than reported bare.
+fn commit_write(
+    path: PathBuf,
+    bytes: &[u8],
+    committed: &mut Vec<(PathBuf, Option<PathBuf>)>,
+) -> CoreResult<()> {
+    match guarded_write(&path, bytes, BackupPolicy::CONFIG) {
+        Ok(backup) => {
+            committed.push((path, backup));
+            Ok(())
+        }
+        Err(err) => Err(partial_commit_error(err, committed)),
+    }
+}
+
+/// Create a directory during the commit phase, wrapping a failure the same
+/// way [`commit_write`] does — creating a drawer to hold a new backdrop is
+/// as much a commit-phase step as writing the file into it.
+fn commit_mkdir(parent: &Path, committed: &[(PathBuf, Option<PathBuf>)]) -> CoreResult<()> {
+    std::fs::create_dir_all(parent)
+        .map_err(|err| partial_commit_error(CoreError::Io(err), committed))
+}
+
+/// Wrap a commit-phase failure with what has already been written in this
+/// same call to [`apply_appearance`], so a caller told "this failed" is also
+/// told what did not. A failure before anything in this call has landed yet
+/// is returned unchanged — there is nothing yet to report.
+fn partial_commit_error(err: CoreError, committed: &[(PathBuf, Option<PathBuf>)]) -> CoreError {
+    if committed.is_empty() {
+        return err;
+    }
+    let already: Vec<String> = committed
+        .iter()
+        .map(|(path, backup)| match backup {
+            Some(b) => format!(
+                "'{}' was already changed (backup at '{}')",
+                path.display(),
+                b.display()
+            ),
+            None => format!("'{}' was already written", path.display()),
+        })
+        .collect();
+    CoreError::InvalidInput(format!("{err}, but {}", already.join("; ")))
 }
 
 /// List the backdrops a distribution tree actually holds — the file names
@@ -533,15 +594,23 @@ mod tests {
         }
     }
 
-    /// The three-`PTRN` `WBPattern.prefs` every real release ships. The
+    /// The three-`PTRN` `WBPattern.prefs` every real release ships, with the
+    /// root entry's `wbp_Revision`/unknown flag bits given explicitly. The
     /// drawer and screen entries carry a nonzero `wbp_Revision` and an
     /// unknown flag bit **on purpose** — `setting_the_root_backdrop_…` below
-    /// exists to prove those survive an edit to the *root* entry untouched.
-    fn wbpattern_bytes(root_amiga_path: &str) -> Vec<u8> {
+    /// exists to prove those survive an edit to the *root* entry untouched,
+    /// and `the_edited_chunk_keeps_its_revision_and_unknown_flag_bits` gives
+    /// the *root* entry the same treatment to prove the chunk being edited
+    /// keeps them too.
+    fn wbpattern_bytes_full(
+        root_revision: i8,
+        root_other_flags: u16,
+        root_amiga_path: &str,
+    ) -> Vec<u8> {
         let root = backdrop(
             wbpattern::Which::Root,
-            0,
-            0,
+            root_revision,
+            root_other_flags,
             wbpattern::Content::Picture(root_amiga_path.to_string()),
         );
         let drawer = backdrop(
@@ -566,9 +635,20 @@ mod tests {
         ])
     }
 
+    fn wbpattern_bytes(root_amiga_path: &str) -> Vec<u8> {
+        wbpattern_bytes_full(0, 0, root_amiga_path)
+    }
+
+    /// `reserved` deliberately non-zero (unlike a bare `[0u8; 16]`) so a test
+    /// asserting the reserved bytes survive an edit actually distinguishes
+    /// "carried forward" from "coincidentally still zero" — the same reason
+    /// `screenmode::tests::the_reserved_bytes_are_carried_not_zeroed` does not
+    /// use an all-zero fixture either.
+    const RESERVED_PATTERN: [u8; 16] = [0x5A, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xA5];
+
     fn screenmode_bytes(depth: u16) -> Vec<u8> {
         let mode = screenmode::ScreenMode {
-            reserved: [0u8; 16],
+            reserved: RESERVED_PATTERN,
             display_id: 0x0002_9000,
             width: screenmode::USE_MODE_DEFAULT,
             height: screenmode::USE_MODE_DEFAULT,
@@ -939,6 +1019,11 @@ mod tests {
             mode.display_id, 0x0002_9000,
             "everything else in the chunk must survive"
         );
+        assert_eq!(
+            mode.reserved, RESERVED_PATTERN,
+            "the 16 reserved bytes must be carried, not zeroed — a fixture that started at \
+             all-zero could not tell 'carried' from 'coincidentally still zero'"
+        );
     }
 
     #[test]
@@ -959,5 +1044,124 @@ mod tests {
                 std::fs::read(&path).unwrap_or_else(|e| panic!("{name} was not written: {e}"));
             assert_eq!(env::decode_value(&bytes), value);
         }
+    }
+
+    /// **The round's central guard, on the chunk that is actually edited.**
+    /// `setting_the_root_backdrop_leaves_the_other_two_chunks_byte_for_byte`
+    /// proves the untouched chunks survive, but its root `PTRN` fixture has
+    /// `revision = 0, other_flags = 0` — a regression that reset those two
+    /// fields to zero on the *edited* chunk would still pass every other
+    /// test. This one gives the root entry a nonzero revision and an unknown
+    /// flag bit too, and proves both survive the edit, while the field the
+    /// request actually named (`placement`) really did change.
+    #[test]
+    fn the_edited_chunk_keeps_its_revision_and_unknown_flag_bits() {
+        let (_scratch, tree) = build_tree("edited-chunk-keeps-fields");
+        std::fs::write(
+            wbpattern_path(&tree),
+            wbpattern_bytes_full(7, 0x0040, "Sys:Prefs/Presets/Backdrops/default_pal.iff"),
+        )
+        .unwrap();
+        let picture_path = write_picture(&tree, "wallpaper.png");
+
+        let req = AppearanceRequest {
+            wallpaper: Some((
+                wbpattern::Which::Root,
+                WallpaperSource::HostPicture {
+                    path: picture_path,
+                    colours: 8,
+                },
+                wbpattern::Placement::Center,
+            )),
+            screen_depth: None,
+            shell_defaults: false,
+        };
+        apply_appearance(&tree, &req).unwrap();
+
+        let prefs_bytes = std::fs::read(wbpattern_path(&tree)).unwrap();
+        let prefs = iff::parse(&prefs_bytes).unwrap();
+        let after = wbpattern::read_backdrop(prefs.body(1).unwrap()).unwrap();
+
+        assert_eq!(after.revision, 7, "the edited chunk keeps its revision");
+        assert_eq!(
+            after.other_flags, 0x0040,
+            "the edited chunk keeps unknown flag bits"
+        );
+        assert_eq!(
+            after.placement,
+            wbpattern::Placement::Center,
+            "the field the request DID name must actually have changed"
+        );
+    }
+
+    /// **The coordinator's ruling.** A host filesystem has no journal: a
+    /// call that writes the wallpaper prefs successfully and then fails
+    /// writing the screen mode must not be reported as if nothing happened.
+    /// Provoked cheaply, as suggested: `ScreenMode.prefs` is made read-only
+    /// before the call, so its own write fails in the commit phase, after
+    /// the wallpaper's own writes (picture + `WBPattern.prefs`) already
+    /// landed.
+    #[test]
+    fn a_write_that_fails_after_an_earlier_one_succeeded_names_what_was_already_written() {
+        let (_scratch, tree) = build_tree("partial-commit");
+        let screenmode_file = screenmode_path(&tree);
+        let mut perms = std::fs::metadata(&screenmode_file).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&screenmode_file, perms).unwrap();
+
+        let picture_path = write_picture(&tree, "wallpaper.png");
+        let req = AppearanceRequest {
+            wallpaper: Some((
+                wbpattern::Which::Root,
+                WallpaperSource::HostPicture {
+                    path: picture_path,
+                    colours: 8,
+                },
+                wbpattern::Placement::Center,
+            )),
+            screen_depth: Some(8),
+            shell_defaults: false,
+        };
+
+        let result = apply_appearance(&tree, &req);
+
+        // Clear the read-only bit before any assertion can panic, or the
+        // ScratchDir's own cleanup on Drop would fail to remove the tree.
+        // `set_readonly(false)` is exactly the right call on this Windows-only
+        // test suite (clippy's warning is about the Unix world-writable
+        // consequence, which does not apply here).
+        let mut perms = std::fs::metadata(&screenmode_file).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&screenmode_file, perms).unwrap();
+
+        let err = result.expect_err(
+            "writing to a read-only ScreenMode.prefs must fail — if it did not, this test \
+             provoked nothing and proves nothing",
+        );
+        let text = format!("{err}");
+        assert!(
+            text.contains("WBPattern.prefs"),
+            "must name the file already changed before the failure: {text}"
+        );
+        assert!(
+            text.contains("backup at"),
+            "must say where its backup went: {text}"
+        );
+
+        // And the wallpaper's own writes really did land — the error is
+        // honest about what already happened, not merely worded as if it
+        // did.
+        assert_eq!(
+            wbpattern::read_backdrop(
+                iff::parse(&std::fs::read(wbpattern_path(&tree)).unwrap())
+                    .unwrap()
+                    .body(1)
+                    .unwrap()
+            )
+            .unwrap()
+            .placement,
+            wbpattern::Placement::Center
+        );
     }
 }
