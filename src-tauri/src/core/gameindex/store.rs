@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::gameindex::record::{ChipsetRequirement, GameRecord};
+use crate::core::gameindex::record::{ChipsetRequirement, GameRecord, Media};
 use crate::core::hashing::sha256_bytes;
 use crate::core::safety::backup::BackupPolicy;
 use crate::core::safety::{atomic_write, guarded_write};
@@ -519,6 +519,13 @@ pub fn file_key(path: &Path) -> Option<(u64, i64)> {
 ///
 /// Never deletes an entry whose file has gone: a catalogue is a library, not a
 /// mirror of the disk, and an unplugged drive must not empty it.
+///
+/// **This is the path a user's catalogue actually goes through** — the
+/// `commands::gameindex::catalogue_refresh` command calls nothing else. A
+/// scan that only reached `scan::scan_titles_with` (reachable solely through
+/// the `gameindex_scan` command, which has no caller anywhere in `src/`)
+/// would never put a `WhdloadDrawer` or `WhdloadArchive` title in front of a
+/// user at all — this is the round-2 fix for exactly that.
 pub fn refresh_root(
     dir: &Path,
     root: &Path,
@@ -526,8 +533,11 @@ pub fn refresh_root(
     scanned_at: Option<String>,
     progress: &dyn crate::core::jobs::ProgressSink,
 ) -> CoreResult<CatalogueRoot> {
+    use crate::core::gameindex::readers;
     use crate::core::gameindex::record::GAMEINDEX_SCHEMA;
-    use crate::core::gameindex::scan::{collect_indexable, read_one};
+    use crate::core::gameindex::scan::{
+        collect_archive_candidates, collect_drawers, collect_indexable, read_one,
+    };
 
     if !root.is_dir() {
         return Err(CoreError::InvalidInput(format!(
@@ -542,17 +552,35 @@ pub fn refresh_root(
     // on a `stale`-from-`Unreadable` root self-heal: this is the one place a
     // rebuild actually happens, and it must not itself fail on the very file
     // it exists to replace.
-    let cached: BTreeMap<String, CachedEntry> = match read_root(dir, root)? {
-        StoredRoot::Found(value) => value
-            .entries
-            .into_iter()
-            .map(|entry| (entry.path.clone(), entry))
-            .collect(),
-        StoredRoot::Absent | StoredRoot::Unreadable => BTreeMap::new(),
+    //
+    // **Kept as a `Vec`, not folded straight into a map.** Every entry from
+    // an archive shares that archive's own path — there is nothing else to
+    // key it by — so collecting directly into a `BTreeMap<String, _>` would
+    // silently keep only the last of several drawers with the same path.
+    // `cached` below is the map built *from* this list for the file walk's
+    // own by-path lookup, where one path really does mean one entry; the
+    // "missing" reconciliation further down reads `previous` itself so an
+    // archive's other drawers are never lost to that collapse.
+    let previous: Vec<CachedEntry> = match read_root(dir, root)? {
+        StoredRoot::Found(value) => value.entries,
+        StoredRoot::Absent | StoredRoot::Unreadable => Vec::new(),
     };
+    let cached: BTreeMap<String, CachedEntry> = previous
+        .iter()
+        .cloned()
+        .map(|entry| (entry.path.clone(), entry))
+        .collect();
 
     progress.report(0, None, "Looking for titles…");
     let files = collect_indexable(root);
+    // Two more questions than the file walk answers: which directories are
+    // themselves a WHDLoad drawer, and which archives might hold drawers ART
+    // has not unpacked. Neither can share a path with the file walk (one
+    // matches files by extension, the other directories, the third archives
+    // by a disjoint extension set) or with each other, so nothing here can
+    // double-count.
+    let drawers = collect_drawers(root);
+    let archives = collect_archive_candidates(root);
 
     // Decide what needs reading *before* reading anything, so the total the user
     // sees is the work that is actually left.
@@ -577,19 +605,28 @@ pub fn refresh_root(
         }
     }
 
-    let total = to_read.len() as u64;
+    // Drawers and archives are never cache-hits, in either mode: a drawer's
+    // slave is kilobytes and `read_archive_drawers` seeks header to header
+    // rather than decompressing (its own doc), so the cache machinery above —
+    // built to skip re-hashing multi-megabyte hardfiles — buys nothing here.
+    // An archive holding several drawers also does not fit that machinery's
+    // one-cached-entry-per-path model: several `CachedEntry` rows share one
+    // archive path (see the reconciliation below, which knows this).
+    let total = (to_read.len() + drawers.len() + archives.len()) as u64;
     let mut fresh: Vec<CachedEntry> = Vec::new();
-    for (index, (path, size, mtime_ms)) in to_read.into_iter().enumerate() {
+    let mut done: u64 = 0;
+    for (path, size, mtime_ms) in to_read {
         // Between whole files is the only safe place to stop, and nothing has
         // been written yet in any case.
         if progress.is_cancelled() {
             return Err(crate::core::jobs::cancelled_error());
         }
+        done += 1;
         let short = path
             .file_name()
             .map(|name| name.to_string_lossy().to_string())
             .unwrap_or_default();
-        progress.report(index as u64 + 1, Some(total), &short);
+        progress.report(done, Some(total), &short);
 
         match read_one(&path) {
             Ok(Some(record)) => fresh.push(CachedEntry {
@@ -601,6 +638,71 @@ pub fn refresh_root(
             Ok(None) => {}
             Err(err) if matches!(err, CoreError::Cancelled) => return Err(err),
             Err(err) => log::debug!("catalogue: skipping {}: {err}", path.display()),
+        }
+    }
+
+    for dir_path in &drawers {
+        if progress.is_cancelled() {
+            return Err(crate::core::jobs::cancelled_error());
+        }
+        done += 1;
+        let short = dir_path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        progress.report(done, Some(total), &short);
+
+        // Same shape as the file loop: one unreadable or ambiguous drawer
+        // must not lose the other 892.
+        match readers::drawer::read_drawer(dir_path) {
+            Ok(Some(record)) => {
+                let (size, mtime_ms) = file_key(dir_path).unwrap_or((0, 0));
+                fresh.push(CachedEntry {
+                    path: dir_path.to_string_lossy().into(),
+                    size,
+                    mtime_ms,
+                    record,
+                });
+            }
+            Ok(None) => {}
+            Err(err) => log::debug!("catalogue: skipping drawer {}: {err}", dir_path.display()),
+        }
+    }
+
+    for archive_path in &archives {
+        if progress.is_cancelled() {
+            return Err(crate::core::jobs::cancelled_error());
+        }
+        done += 1;
+        let short = archive_path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        progress.report(done, Some(total), &short);
+
+        // `read_archive_drawers` is itself log-and-continue per drawer
+        // inside the archive; this arm is for the archive as a whole being
+        // unreadable, and for its own cancellation (N-3) propagating rather
+        // than being logged and swallowed as if it were a bad archive.
+        match readers::lhadrawer::read_archive_drawers(archive_path, progress) {
+            Ok(records) => {
+                let (size, mtime_ms) = file_key(archive_path).unwrap_or((0, 0));
+                for record in records {
+                    fresh.push(CachedEntry {
+                        path: archive_path.to_string_lossy().into(),
+                        size,
+                        mtime_ms,
+                        record,
+                    });
+                }
+            }
+            Err(err) if matches!(err, CoreError::Cancelled) => return Err(err),
+            Err(err) => {
+                log::debug!(
+                    "catalogue: skipping archive {}: {err}",
+                    archive_path.display()
+                )
+            }
         }
     }
 
@@ -627,9 +729,27 @@ pub fn refresh_root(
         .chain(fresh.iter())
         .map(|entry| entry.record.id.clone())
         .collect();
-    let missing: Vec<CachedEntry> = cached
-        .into_values()
-        .filter(|entry| !present.contains(&entry.path) && !found_ids.contains(&entry.record.id))
+    let missing: Vec<CachedEntry> = previous
+        .into_iter()
+        .filter(|entry| {
+            // An id found under any path this run is not missing, whatever
+            // path it used to sit at.
+            if found_ids.contains(&entry.record.id) {
+                return false;
+            }
+            // `WhdloadArchive` is the one shape where several `CachedEntry`
+            // rows share a single path — the archive's own. "This path is
+            // present" says nothing about *this particular* drawer inside
+            // it: a sibling drawer answering fine this run must not paper
+            // over one that failed to read, or a transient failure on one
+            // drawer in a 893-drawer archive would silently delete it
+            // instead of keeping it the way every other unreadable-this-run
+            // title is kept.
+            if matches!(entry.record.media, Media::WhdloadArchive { .. }) {
+                return true;
+            }
+            !present.contains(&entry.path)
+        })
         .collect();
 
     let mut entries: Vec<CachedEntry> = reuse.into_iter().chain(fresh).chain(missing).collect();
@@ -649,7 +769,7 @@ pub fn refresh_root(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::gameindex::record::{Fact, Media, Provenance, SourceRef, GAMEINDEX_SCHEMA};
+    use crate::core::gameindex::record::{Fact, Provenance, SourceRef, GAMEINDEX_SCHEMA};
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -857,6 +977,157 @@ mod tests {
 
         let after = refresh_root(&dir, &root, Refresh::Rescan, None, &NoProgress).unwrap();
         assert_eq!(after.entries[0].record.title.value, "Zool");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **A (round 2 of the final review).** `scan_titles_with` pinned the
+    /// same claim against a function nothing calls: `gameindex_scan`'s own
+    /// TypeScript wrapper has no caller anywhere in `src/`, and the real
+    /// catalogue a user gets is built by `refresh_root`. This is the test
+    /// that reads the **stored** catalogue back off disk after a refresh,
+    /// which is the only thing that actually proves the feature is
+    /// reachable — a test against a scan function's return value proves
+    /// nothing about whether any command ever calls it.
+    ///
+    /// One of each of the three shapes a WHDLoad title can take in a
+    /// collection folder, plus one ordinary loose ADF, scanned through
+    /// `refresh_root` and then read back with `read_root` — a full round
+    /// trip through the JSON file on disk, not just the in-memory return
+    /// value `refresh_root` also happens to give back.
+    #[test]
+    fn refresh_root_stores_drawer_and_archive_titles_not_just_loose_files() {
+        use crate::core::gameindex::readers::slave::tests_support::build_slave;
+
+        let dir = scratch("refresh-all-shapes");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+
+        a_real_file(&root, "Zool (1992)(Gremlin).adf");
+
+        let drawer = root.join("Turrican");
+        std::fs::create_dir_all(&drawer).unwrap();
+        std::fs::write(
+            drawer.join("Turrican.slave"),
+            build_slave("Turrican", "1990 Rainbow Arts", 16),
+        )
+        .unwrap();
+
+        std::fs::write(
+            root.join("Demos.lha"),
+            crate::core::lha::tests::make_lha_with(&[(
+                "Demos/Tag/Tag.Slave",
+                &build_slave("Tag", "1992 Someone", 16),
+            )]),
+        )
+        .unwrap();
+
+        refresh_root(&dir, &root, Refresh::Rescan, None, &NoProgress).unwrap();
+
+        // Read back what actually landed on disk — not the value
+        // `refresh_root` returned in memory.
+        let stored = match read_root(&dir, &root).unwrap() {
+            StoredRoot::Found(value) => value,
+            other => panic!("expected a stored catalogue, got {other:?}"),
+        };
+
+        assert_eq!(
+            stored.entries.len(),
+            3,
+            "the loose ADF, the unpacked drawer and the archived drawer: {:?}",
+            stored
+                .entries
+                .iter()
+                .map(|e| &e.record.title.value)
+                .collect::<Vec<_>>()
+        );
+
+        let by_title: BTreeMap<String, Media> = stored
+            .entries
+            .iter()
+            .map(|e| (e.record.title.value.clone(), e.record.media.clone()))
+            .collect();
+        assert!(
+            matches!(by_title.get("Zool"), Some(Media::Floppies { .. })),
+            "{by_title:?}"
+        );
+        assert!(
+            matches!(by_title.get("Turrican"), Some(Media::WhdloadDrawer { .. })),
+            "{by_title:?}"
+        );
+        assert!(
+            matches!(by_title.get("Tag"), Some(Media::WhdloadArchive { .. })),
+            "{by_title:?}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The reconciliation edge case archive-sharing-a-path creates.** Two
+    /// `CachedEntry` rows for two drawers inside one archive share that
+    /// archive's own path (there is no other filesystem object to key them
+    /// by). If a later refresh finds one drawer's slave has gone bad while
+    /// the other still reads fine, "this path is present" is true either
+    /// way — it must not be read as "this drawer is present", or a
+    /// transient failure on one drawer of an 893-drawer archive would
+    /// silently delete it instead of being kept the way every other
+    /// unreadable-this-run title already is (`an_entry_whose_file_has_gone_is_kept_by_both_modes`,
+    /// above).
+    #[test]
+    fn one_bad_drawer_in_an_archive_is_kept_not_deleted_when_its_sibling_still_reads() {
+        use crate::core::gameindex::readers::slave::tests_support::build_slave;
+
+        let dir = scratch("archive-sibling-failure");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let archive = root.join("Demos.lha");
+
+        std::fs::write(
+            &archive,
+            crate::core::lha::tests::make_lha_with(&[
+                (
+                    "Demos/Good/Good.Slave",
+                    build_slave("Good", "1992 Someone", 16).as_slice(),
+                ),
+                (
+                    "Demos/Bad/Bad.Slave",
+                    build_slave("Bad", "1992 Someone", 16).as_slice(),
+                ),
+            ]),
+        )
+        .unwrap();
+
+        let first = refresh_root(&dir, &root, Refresh::Rescan, None, &NoProgress).unwrap();
+        assert_eq!(first.entries.len(), 2, "{:?}", first.entries);
+
+        // Rewrite the archive: "Good" is unchanged, "Bad" is now junk — the
+        // shape a genuinely damaged member of a large archive takes.
+        std::fs::write(
+            &archive,
+            crate::core::lha::tests::make_lha_with(&[
+                (
+                    "Demos/Good/Good.Slave",
+                    build_slave("Good", "1992 Someone", 16).as_slice(),
+                ),
+                ("Demos/Bad/Bad.Slave", b"not a slave header at all"),
+            ]),
+        )
+        .unwrap();
+
+        let after = refresh_root(&dir, &root, Refresh::Rescan, None, &NoProgress).unwrap();
+        let titles: Vec<&str> = after
+            .entries
+            .iter()
+            .map(|e| e.record.title.value.as_str())
+            .collect();
+        assert_eq!(
+            titles.len(),
+            2,
+            "Bad must be kept (its old record), not deleted just because its \
+             sibling Good is still present at the same archive path: {titles:?}"
+        );
+        assert!(titles.contains(&"Good"), "{titles:?}");
+        assert!(titles.contains(&"Bad"), "{titles:?}");
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -88,7 +88,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::error::CoreResult;
+use crate::core::error::{CoreError, CoreResult};
 
 /// What the file is called, in the game's own drawer beside its `.slave`.
 pub const FILE_NAME: &str = "igame.data";
@@ -370,6 +370,37 @@ pub struct Written {
     pub omitted: Vec<Omitted>,
 }
 
+/// A write that could not finish, and how much of it happened before it
+/// couldn't.
+///
+/// **Never just a `CoreError`.** A write that fails *after* a successful
+/// backup must still say where the backup went — a user told "it failed" and
+/// nothing else has been given nothing, and this project's own rule is that
+/// the screen must say where the evidence is (N-1: this was true before
+/// `write_beside` collapsed the two writers into one, and silently dropping
+/// it in that collapse is exactly the regression this type exists to close).
+#[derive(Debug)]
+pub struct WriteFailure {
+    pub error: CoreError,
+    /// Where the previous file went, if a backup was taken before the part
+    /// that failed. `None` when nothing was backed up yet — a fresh file has
+    /// nothing to preserve, and a failure before the backup step never took
+    /// one either.
+    pub backup: Option<String>,
+}
+
+impl From<CoreError> for WriteFailure {
+    /// A failure with no backup to report — `?` on anything before the
+    /// backup step (or when the caller's policy takes none at all) reaches
+    /// this by construction rather than by every call site spelling it out.
+    fn from(error: CoreError) -> Self {
+        WriteFailure {
+            error,
+            backup: None,
+        }
+    }
+}
+
 /// Put an `igame.data` beside a slave, editing one already there.
 ///
 /// Reads the file **once** and decides everything from that one read:
@@ -394,7 +425,7 @@ pub fn write_beside(
     drawer: &Path,
     data: &IGameData,
     backup_policy: crate::core::safety::BackupPolicy,
-) -> CoreResult<Written> {
+) -> Result<Written, WriteFailure> {
     let path = drawer.join(FILE_NAME);
     let existing = std::fs::read_to_string(&path).ok();
     let rendered = match &existing {
@@ -419,13 +450,22 @@ pub fn write_beside(
         });
     }
 
+    // Nothing has been backed up yet, so a failure here carries no path —
+    // `?` reaches `WriteFailure::from`, which says exactly that.
     let backup = if existing.is_some() {
         crate::core::safety::backup_file(&path, backup_policy)?
     } else {
         None
     };
+    let backup = backup.map(|p| p.display().to_string());
 
-    crate::core::safety::atomic_write(&path, rendered.text.as_bytes())?;
+    // N-1: from here on, a failure must carry `backup` forward rather than
+    // reaching `?` and losing it — the one thing this function is not
+    // allowed to do is take a backup and then forget it happened.
+    if let Err(error) = crate::core::safety::atomic_write(&path, rendered.text.as_bytes()) {
+        return Err(WriteFailure { error, backup });
+    }
+
     Ok(Written {
         path: path.display().to_string(),
         outcome: if existing.is_some() {
@@ -433,7 +473,7 @@ pub fn write_beside(
         } else {
             WriteOutcome::Written
         },
-        backup: backup.map(|p| p.display().to_string()),
+        backup,
         omitted: rendered.omitted,
     })
 }
@@ -996,6 +1036,56 @@ mod tests {
             "the file itself is untouched"
         );
 
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// **N-1.** A write that fails *after* a successful backup must still
+    /// say where the backup went — a user told "it failed" and nothing else
+    /// has been given nothing.
+    ///
+    /// The file is made read-only *after* it is planted, so `existing` still
+    /// reads it as `Some(text)` (read-only does not block reading) and
+    /// `backup_file` still succeeds — but `atomic_write`'s final rename onto
+    /// a read-only destination fails with `PermissionDenied`, which is
+    /// exactly the shape "backup succeeded, the write after it did not"
+    /// takes in the real world (a file someone else has locked, a directory
+    /// whose permissions changed between the two steps).
+    #[test]
+    fn a_failed_write_after_a_successful_backup_still_reports_the_backup() {
+        let root = scratch("igame-failed-after-backup");
+        let dir = root.join("Games/Kept");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(FILE_NAME);
+        std::fs::write(&path, "title=Old\n").unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&path, perms).unwrap();
+
+        let failure = write_beside(&dir, &data(), crate::core::safety::BackupPolicy::CONFIG)
+            .expect_err("the read-only destination must make the write itself fail");
+        assert!(
+            failure.backup.is_some(),
+            "a backup was taken before the write failed, and it must be reported: {failure:?}"
+        );
+        let backup_path = failure.backup.clone().unwrap();
+        assert!(
+            std::path::Path::new(&backup_path).is_file(),
+            "the reported backup path must actually exist: {backup_path}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&backup_path).unwrap(),
+            "title=Old\n",
+            "the backup must hold what was there before the failed write"
+        );
+
+        // Clean up: clear read-only so the scratch dir can be removed. Test
+        // cleanup on Windows only (CI is Windows x64) — `set_readonly(false)`
+        // there only clears the DOS read-only attribute this test itself
+        // set, not Unix's `S_IWOTH` the clippy lint warns about.
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&path, perms).unwrap();
         std::fs::remove_dir_all(&root).ok();
     }
 }

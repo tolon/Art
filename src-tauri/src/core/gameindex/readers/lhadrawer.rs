@@ -63,6 +63,7 @@ use crate::core::gameindex::record::{
     derive_id, Fact, GameRecord, Media, Provenance, SourceRef, GAMEINDEX_SCHEMA,
 };
 use crate::core::hashing::sha256_bytes;
+use crate::core::jobs::{cancelled_error, ProgressSink};
 use crate::core::whdload;
 
 /// The largest a slave member may decompress to before ART gives up on it.
@@ -167,7 +168,18 @@ fn settle_by_icon<'e>(
 /// when the drawer's icon names one of them; otherwise it is refused by
 /// omission — no title is catalogued for it, and a debug line names the
 /// drawer and its candidates.
-pub fn read_archive_drawers(path: &Path) -> CoreResult<Vec<GameRecord>> {
+///
+/// **N-3.** Checks `progress.is_cancelled()` between whole units — one
+/// drawer while settling which slave wins it, one slave while reading the
+/// winners — never mid-read: a real archive here is up to 663 MB and 8858
+/// entries, and without this a Stop press during that scan had nothing to
+/// check until the whole function returned. Returns [`crate::core::error::CoreError::Cancelled`]
+/// the same way the rest of the codebase reports a stop, never a plain
+/// error.
+pub fn read_archive_drawers(
+    path: &Path,
+    progress: &dyn ProgressSink,
+) -> CoreResult<Vec<GameRecord>> {
     let mut backend = archive::open(path)?;
     let entries = backend.entries()?;
     let file_name = path
@@ -196,6 +208,12 @@ pub fn read_archive_drawers(path: &Path) -> CoreResult<Vec<GameRecord>> {
     // where each winner actually sits in the archive.
     let mut winners: Vec<(usize, &str, String)> = Vec::new();
     for (inner, candidates) in by_inner {
+        // One drawer is the unit here — settling which of its candidates
+        // wins never touches another drawer's bytes, so stopping between
+        // them is always safe.
+        if progress.is_cancelled() {
+            return Err(cancelled_error());
+        }
         let (index, slave_name) = match candidates.as_slice() {
             [(index, slave_name)] => (*index, *slave_name),
             many => match settle_by_icon(backend.as_mut(), &entries, inner, many) {
@@ -236,6 +254,11 @@ pub fn read_archive_drawers(path: &Path) -> CoreResult<Vec<GameRecord>> {
 
     let mut found = Vec::new();
     for (index, inner, slave_name) in winners {
+        // One slave is the unit here, never mid-read (N-3): nothing below
+        // this point has written anything, so stopping here is always safe.
+        if progress.is_cancelled() {
+            return Err(cancelled_error());
+        }
         // Bounded: a slave header is small and this archive is a file ART
         // did not write.
         //
@@ -325,6 +348,7 @@ mod tests {
     use super::*;
     use crate::core::amigaicon::tests_support::synthetic_icon;
     use crate::core::gameindex::readers::slave::tests_support::build_slave;
+    use crate::core::jobs::NoProgress;
     use std::path::PathBuf;
 
     fn scratch(tag: &str) -> PathBuf {
@@ -353,6 +377,47 @@ mod tests {
         archive
     }
 
+    /// N-2: `zip` stays in `scan::is_archive_candidate` only because this
+    /// fixture exists — `read_archive_drawers` never assumed a format, so
+    /// the same code path is what a `.zip` goes through too, and this is the
+    /// test that actually runs it rather than support ART only claims.
+    fn synthetic_zip(root: &Path, files: &[(&str, Vec<u8>)]) -> PathBuf {
+        let raw: Vec<(&str, &[u8])> = files.iter().map(|(n, c)| (*n, c.as_slice())).collect();
+        let archive = root.join("test.zip");
+        std::fs::write(
+            &archive,
+            crate::core::archive::zip::tests::make_zip_with(&raw),
+        )
+        .unwrap();
+        archive
+    }
+
+    /// N-2: the same reader, run against a `.zip` instead of an `.lha` — the
+    /// fixture the ruling required before `zip` could stay in
+    /// `scan::is_archive_candidate` at all.
+    #[test]
+    fn a_drawer_inside_a_zip_is_found_too() {
+        let root = scratch("zip");
+        let archive = synthetic_zip(
+            &root,
+            &[
+                ("Demos/T/Tag/Tag.Slave", slave_bytes("Tag")),
+                ("Demos/T/Tag/ReadMe", b"notes".to_vec()),
+            ],
+        );
+        let found = read_archive_drawers(&archive, &NoProgress).unwrap();
+        assert_eq!(found.len(), 1, "{found:?}");
+        match &found[0].media {
+            Media::WhdloadArchive { file, inner, slave } => {
+                assert!(file.ends_with(".zip"));
+                assert_eq!(inner, "Demos/T/Tag");
+                assert_eq!(slave, "Tag.Slave");
+            }
+            other => panic!("got {other:?}"),
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn every_drawer_in_an_archive_becomes_a_title() {
         let root = scratch("every-drawer");
@@ -365,7 +430,7 @@ mod tests {
                 ("Demos/T/Tag/ReadMe", b"notes".to_vec()),
             ],
         );
-        let found = read_archive_drawers(&archive).unwrap();
+        let found = read_archive_drawers(&archive, &NoProgress).unwrap();
         assert_eq!(found.len(), 2);
         let inners: Vec<String> = found
             .iter()
@@ -383,7 +448,7 @@ mod tests {
     fn an_archived_title_records_the_archive_it_came_from() {
         let root = scratch("names");
         let archive = synthetic_lha(&root, &[("D/Tag/Tag.Slave", slave_bytes("Tag"))]);
-        let found = read_archive_drawers(&archive).unwrap();
+        let found = read_archive_drawers(&archive, &NoProgress).unwrap();
         match &found[0].media {
             Media::WhdloadArchive { file, inner, slave } => {
                 assert!(file.ends_with(".lha"));
@@ -406,7 +471,10 @@ mod tests {
                 ("D/Tag/data/02", b"payload".to_vec()),
             ],
         );
-        assert_eq!(read_archive_drawers(&archive).unwrap().len(), 1);
+        assert_eq!(
+            read_archive_drawers(&archive, &NoProgress).unwrap().len(),
+            1
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -414,7 +482,9 @@ mod tests {
     fn an_archive_with_no_slave_yields_no_titles() {
         let root = scratch("empty");
         let archive = synthetic_lha(&root, &[("Docs/ReadMe", b"x".to_vec())]);
-        assert!(read_archive_drawers(&archive).unwrap().is_empty());
+        assert!(read_archive_drawers(&archive, &NoProgress)
+            .unwrap()
+            .is_empty());
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -434,7 +504,7 @@ mod tests {
                 ("D/Tag/data/Extra/Extra.slave", slave_bytes("Extra")),
             ],
         );
-        let found = read_archive_drawers(&archive).unwrap();
+        let found = read_archive_drawers(&archive, &NoProgress).unwrap();
         assert_eq!(
             found.len(),
             1,
@@ -463,7 +533,7 @@ mod tests {
                 ("D/AlsoGood/AlsoGood.slave", slave_bytes("AlsoGood")),
             ],
         );
-        let found = read_archive_drawers(&archive).unwrap();
+        let found = read_archive_drawers(&archive, &NoProgress).unwrap();
         let titles: Vec<&str> = found.iter().map(|r| r.title.value.as_str()).collect();
         assert_eq!(
             titles,
@@ -489,7 +559,7 @@ mod tests {
                 ),
             ],
         );
-        let found = read_archive_drawers(&archive).unwrap();
+        let found = read_archive_drawers(&archive, &NoProgress).unwrap();
         let titles: Vec<&str> = found.iter().map(|r| r.title.value.as_str()).collect();
         assert_eq!(
             titles,
@@ -514,7 +584,7 @@ mod tests {
                 ("D/Clean/Clean.slave", slave_bytes("Clean")),
             ],
         );
-        let found = read_archive_drawers(&archive).unwrap();
+        let found = read_archive_drawers(&archive, &NoProgress).unwrap();
         assert_eq!(found.len(), 1, "the ambiguous drawer yields no title");
         match &found[0].media {
             Media::WhdloadArchive { inner, .. } => assert_eq!(inner, "D/Clean"),
@@ -544,7 +614,7 @@ mod tests {
                 ("D/Clean/Clean.slave", slave_bytes("Clean")),
             ],
         );
-        let found = read_archive_drawers(&archive).unwrap();
+        let found = read_archive_drawers(&archive, &NoProgress).unwrap();
         assert_eq!(
             found.len(),
             2,
@@ -559,6 +629,40 @@ mod tests {
             .collect();
         assert_eq!(by_inner.get("D/Ambiguous"), Some(&"Two.slave"));
         assert_eq!(by_inner.get("D/Clean"), Some(&"Clean.slave"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// `settle_by_icon`'s own `Err` arm, closed rather than left disclosed:
+    /// an icon too large for `MAX_SLAVE_BYTES` makes `backend.read` fail
+    /// (the same bound the oversized-slave tests already exercise), and
+    /// that must skip only the drawer it belongs to — never the archive's
+    /// other, unrelated drawer.
+    #[test]
+    fn an_icon_too_large_to_read_settles_nothing_but_the_clean_drawer_still_stands() {
+        let root = scratch("icon-oversized");
+        let archive = synthetic_lha(
+            &root,
+            &[
+                ("D/Ambiguous/One.slave", slave_bytes("One")),
+                ("D/Ambiguous/Two.slave", slave_bytes("Two")),
+                (
+                    "D/Ambiguous/Ambiguous.info",
+                    vec![0u8; (MAX_SLAVE_BYTES + 1) as usize],
+                ),
+                ("D/Clean/Clean.slave", slave_bytes("Clean")),
+            ],
+        );
+        let found = read_archive_drawers(&archive, &NoProgress).unwrap();
+        assert_eq!(
+            found.len(),
+            1,
+            "the ambiguous drawer's icon could not be read, so it settles nothing; \
+             the clean drawer must still stand: {found:?}"
+        );
+        match &found[0].media {
+            Media::WhdloadArchive { inner, .. } => assert_eq!(inner, "D/Clean"),
+            other => panic!("got {other:?}"),
+        }
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -579,7 +683,7 @@ mod tests {
                 ("M/Mid/Mid.slave", slave_bytes("Mid")),
             ],
         );
-        let found = read_archive_drawers(&archive).unwrap();
+        let found = read_archive_drawers(&archive, &NoProgress).unwrap();
         let titles: Vec<&str> = found.iter().map(|r| r.title.value.as_str()).collect();
         assert_eq!(
             titles,
@@ -620,7 +724,7 @@ mod tests {
         };
 
         let started = Instant::now();
-        let found = read_archive_drawers(Path::new(&path)).unwrap();
+        let found = read_archive_drawers(Path::new(&path), &NoProgress).unwrap();
         let elapsed = started.elapsed();
         println!(
             "ART_LHA_RESULT drawers={} elapsed_ms={}",

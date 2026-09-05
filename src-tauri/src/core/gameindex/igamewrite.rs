@@ -227,10 +227,13 @@ fn apply_one(item: &IGamePlanItem) -> IGameVerdict {
                 omitted: igame::notable_omissions(&written.omitted),
             }
         }
-        Err(err) => IGameVerdict {
+        // N-1: a write that fails after a successful backup must still say
+        // where the backup went — `failure.backup` carries that forward
+        // rather than the `None` this arm used to hard-code regardless.
+        Err(failure) => IGameVerdict {
             dir: item.dir.clone(),
-            state: IGameState::Failed(err.to_string()),
-            backup: None,
+            state: IGameState::Failed(failure.error.to_string()),
+            backup: failure.backup,
             omitted: Vec::new(),
         },
     }
@@ -397,6 +400,45 @@ mod tests {
             verdict.backup.is_some(),
             "the user is told where their previous version went"
         );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// **N-1.** A `Failed` verdict must still say where the backup went when
+    /// one was taken before the failure — the code did this before
+    /// `write_beside` was collapsed into one writer, and losing it in that
+    /// collapse is exactly the "given nothing" shape CLAUDE.md warns about.
+    /// A read-only `igame.data` is readable (so the merge and the backup
+    /// both succeed) but not renameable-over, which is what makes
+    /// `atomic_write`'s own final step fail.
+    #[test]
+    fn a_failed_write_after_a_successful_backup_still_reports_it() {
+        let root = scratch("failed-after-backup");
+        let dir = synthetic_drawer(&root, "Kept", "Kept.slave");
+        let igame_path = dir.join(igame::FILE_NAME);
+        std::fs::write(&igame_path, "title=Old\n").unwrap();
+        let mut perms = std::fs::metadata(&igame_path).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&igame_path, perms).unwrap();
+
+        let outcome = apply(&plan(&[drawer_record(&dir)]), &NoProgress);
+        let verdict = &outcome.verdicts[0];
+        assert!(
+            matches!(verdict.state, IGameState::Failed(_)),
+            "{:?}",
+            verdict.state
+        );
+        assert!(
+            verdict.backup.is_some(),
+            "a backup was taken before the write failed; it must still be reported: {verdict:?}"
+        );
+
+        // Test cleanup on Windows only (CI is Windows x64) —
+        // `set_readonly(false)` there only clears the DOS read-only
+        // attribute this test itself set, not Unix's `S_IWOTH`.
+        let mut perms = std::fs::metadata(&igame_path).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&igame_path, perms).unwrap();
         std::fs::remove_dir_all(&root).ok();
     }
 

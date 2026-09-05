@@ -366,6 +366,48 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// The same bound, on the icon `resolve_ambiguous` consults rather than
+    /// the slave itself — the gap the round-2 re-review named as untested.
+    ///
+    /// The icon is a **real, otherwise-valid** one — the same builder
+    /// `the_icons_slave_tooltype_settles_a_drawer_that_has_two` uses,
+    /// stating `SLAVE=Two.slave` — padded past `MAX_SLAVE_BYTES` with
+    /// trailing zero bytes after its real structure. `amigaicon::tooltypes`
+    /// reads only the fixed offsets its own header describes and never
+    /// checks the file's total length, so an unbounded read would still
+    /// parse this correctly and settle the ambiguity — which is exactly why
+    /// a fixture that is simply too big and *not* otherwise valid would not
+    /// have caught the bound going missing: it would refuse either way, for
+    /// a different reason. This one only refuses because of the bound.
+    #[test]
+    fn an_oversized_icon_settles_nothing_and_the_drawer_is_refused() {
+        let root = scratch("oversized-icon");
+        let dir = synthetic_drawer(&root, "Ambiguous", "One.slave");
+        std::fs::write(
+            dir.join("Two.slave"),
+            build_slave("Two", "1992 Someone", 16),
+        )
+        .unwrap();
+
+        // Replace the icon `synthetic_drawer` planted (which correctly names
+        // "One.slave") with a real, valid one naming "Two.slave" — but
+        // padded well past the bound with trailing bytes a real parser would
+        // otherwise happily ignore.
+        let mut icon = icon_naming("Two.slave");
+        icon.resize((MAX_SLAVE_BYTES + 1) as usize, 0);
+        std::fs::write(dir.join("Ambiguous.info"), &icon).unwrap();
+
+        let err = read_drawer(&dir)
+            .expect_err("an icon too large to read must settle nothing, same as no icon at all");
+        let text = err.to_string();
+        assert!(
+            text.contains("Ambiguous") && text.contains("One.slave") && text.contains("Two.slave"),
+            "the refusal names the drawer and both candidates, got: {text}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn a_directory_with_no_slave_is_not_a_title() {
         let root = scratch("none");

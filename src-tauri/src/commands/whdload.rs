@@ -607,10 +607,15 @@ fn run_install(
         crate::core::safety::BackupPolicy::NONE,
     ) {
         Ok(written) => crate::core::gameindex::igame::notable_omissions(&written.omitted),
-        Err(err) => {
+        // `BackupPolicy::NONE` above means `failure.backup` is always `None`
+        // on this path — nothing of the user's is being touched, so there is
+        // never anything to preserve — but the field still flows through
+        // rather than being silently dropped, the same as every other caller.
+        Err(failure) => {
             log::debug!(
-                "whdload: could not write igame.data beside '{}': {err}",
-                layout.name
+                "whdload: could not write igame.data beside '{}': {}",
+                layout.name,
+                failure.error
             );
             Vec::new()
         }

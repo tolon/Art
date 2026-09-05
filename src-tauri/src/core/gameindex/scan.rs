@@ -161,8 +161,11 @@ pub fn scan_titles_with(
         // the archive (one junk `.slave` must not lose the other 892); this
         // arm is for the archive as a whole being unreadable — a `.zip` that
         // is really something else, a truncated download — which must not
-        // lose every other archive in the folder either.
-        match readers::lhadrawer::read_archive_drawers(archive_path) {
+        // lose every other archive in the folder either. A cancellation is
+        // the one exception (N-3): `read_archive_drawers` now checks between
+        // its own whole units too, and its own stop must propagate rather
+        // than being logged and swallowed as if it were a bad archive.
+        match readers::lhadrawer::read_archive_drawers(archive_path, progress) {
             Ok(records) => {
                 for record in records {
                     by_id.entry(record.id.clone()).or_insert(CatalogueEntry {
@@ -171,6 +174,7 @@ pub fn scan_titles_with(
                     });
                 }
             }
+            Err(err) if is_cancelled_error(&err) => return Err(err),
             Err(err) => {
                 log::debug!(
                     "gameindex: skipping archive {}: {err}",
@@ -252,13 +256,21 @@ pub fn collect_drawers(root: &Path) -> Vec<PathBuf> {
 
 /// Whether `path`'s extension is one [`readers::lhadrawer::read_archive_drawers`]
 /// might find a drawer inside — matched to what [`crate::core::archive::open`]
-/// can actually open (`lha`/`lzh`, `zip`, `7z`) rather than a second, looser
-/// list: a format "supported" here and not there would look supported and
-/// read nothing.
+/// can actually open. **Not `7z`**, on purpose (N-2, round 2 of this review):
+/// `SevenZBackend::read` reopens and forward-decodes the archive on every
+/// call — its own doc names this the quadratic case — and `read_archive_drawers`
+/// calls `read` once per candidate slave. On a large `.7z` that is the same
+/// class of defect as the 140-second one this project has already paid for,
+/// with a worse constant. `lha`/`lzh` is the design's own scope and is
+/// measured against a real 663 MB archive (`readers::lhadrawer`'s own doc).
+/// `zip` is included because the fixture proving it actually works
+/// (`readers::lhadrawer::tests::a_drawer_inside_a_zip_is_found_too`) turned
+/// out to be a few lines, not a new format's worth of work — widening this
+/// list again in the future should cost the same test, not skip it.
 fn is_archive_candidate(path: &Path) -> bool {
     path.extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
-        .is_some_and(|e| matches!(e.as_str(), "lha" | "lzh" | "zip" | "7z"))
+        .is_some_and(|e| matches!(e.as_str(), "lha" | "lzh" | "zip"))
 }
 
 /// Every archive under `dir` worth asking [`readers::lhadrawer::read_archive_drawers`]
