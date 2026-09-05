@@ -30,6 +30,17 @@
 //! Some archives have no wrapper and the slave sits at the root. Then the
 //! archive itself is the pack and its name has to come from somewhere else.
 //!
+//! ## Launch configuration from an icon's ToolTypes
+//!
+//! WHDLoad games installed as drawers carry an icon whose ToolTypes name the
+//! slave and options. The manual calls the key `Slave`; real icons say `SLAVE=`
+//! — upper case — so the comparison is case-insensitive.
+//!
+//! A real WHDLoad drawer icon holds 98 ToolTypes, and 94 of them are `IM1=`/`IM2=`
+//! NewIcon image data, following a line reading `*** DON'T EDIT THE FOLLOWING
+//! LINES!! ***`. Read naively, a "launch configuration" is mostly a picture.
+//! Both the marker and the image keys are filtered.
+//!
 //! ## What this module will not do
 //!
 //! It does not run the pack's `Install` script. A script is an Amiga executable
@@ -253,6 +264,48 @@ pub fn has_extension(path: &str, extension: &str) -> bool {
         .next()
         .is_some_and(|found| found.eq_ignore_ascii_case(extension))
         && last_component(path).contains('.')
+}
+
+// ---------------------------------------------------------------------------
+
+/// The marker WHDLoad's own installer writes before a NewIcon's image data.
+const DONT_EDIT: &str = "DON'T EDIT";
+
+/// What an install's icon says about how it expects to start.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LaunchOptions {
+    /// The `Slave` ToolType's value, verbatim. `None` when the icon does not
+    /// name one — WHDLoad then defaults to `WHDLoad.Slave`, and `Slave=*`
+    /// searches the drawer, but choosing between those is the caller's.
+    pub slave: Option<String>,
+    /// Every other real setting, in the icon's own order: `PRELOAD`, `NTSC`,
+    /// `QuitKey=…` and the rest.
+    pub options: Vec<String>,
+}
+
+pub fn launch_options(tooltypes: &[String]) -> LaunchOptions {
+    let mut out = LaunchOptions::default();
+    for entry in tooltypes {
+        if entry.contains(DONT_EDIT) {
+            break;
+        }
+        let trimmed = entry.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let key = trimmed.split('=').next().unwrap_or("").trim();
+        if key.eq_ignore_ascii_case("IM1") || key.eq_ignore_ascii_case("IM2") {
+            continue;
+        }
+        if key.eq_ignore_ascii_case("SLAVE") {
+            if let Some((_, value)) = trimmed.split_once('=') {
+                out.slave = Some(value.trim().to_string());
+            }
+            continue;
+        }
+        out.options.push(trimmed.to_string());
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -488,5 +541,63 @@ mod tests {
 
         let layout = analyse(&entries).unwrap();
         assert_eq!(layout.outside, vec!["GameData/extra.bin"]);
+    }
+
+    // launch_options tests
+
+    #[test]
+    fn the_slave_comes_from_the_tooltype_whatever_its_case() {
+        let tt = vec![
+            "SLAVE=1001StolenIdeas.Slave".to_string(),
+            "PRELOAD".to_string(),
+        ];
+        let got = launch_options(&tt);
+        assert_eq!(got.slave.as_deref(), Some("1001StolenIdeas.Slave"));
+        assert_eq!(got.options, vec!["PRELOAD".to_string()]);
+
+        let lower = vec!["Slave=Turrican.slave".to_string()];
+        assert_eq!(
+            launch_options(&lower).slave.as_deref(),
+            Some("Turrican.slave")
+        );
+    }
+
+    #[test]
+    fn a_newicon_picture_is_not_a_launch_configuration() {
+        // The real icon's shape: two real settings, the marker, then 94 image
+        // lines. Reading past the marker turns a configuration into a picture.
+        let mut tt = vec![
+            "SLAVE=Tag.Slave".to_string(),
+            "PRELOAD".to_string(),
+            " ".to_string(),
+            "*** DON'T EDIT THE FOLLOWING LINES!! ***".to_string(),
+        ];
+        for _ in 0..94 {
+            tt.push("IM1=a\"$(0@a\"$(0@a\"$(0@".to_string());
+        }
+        let got = launch_options(&tt);
+        assert_eq!(got.slave.as_deref(), Some("Tag.Slave"));
+        assert_eq!(
+            got.options,
+            vec!["PRELOAD".to_string()],
+            "everything from the marker on is image data, and the blank line is not a setting"
+        );
+    }
+
+    #[test]
+    fn image_keys_are_dropped_even_without_the_marker() {
+        // Belt and braces: an icon written by a different tool may carry the
+        // image keys without the sentence in front of them.
+        let tt = vec!["IM2=abc".to_string(), "SLAVE=X.slave".to_string()];
+        let got = launch_options(&tt);
+        assert_eq!(got.slave.as_deref(), Some("X.slave"));
+        assert!(got.options.is_empty());
+    }
+
+    #[test]
+    fn an_icon_with_no_slave_tooltype_states_none() {
+        // WHDLoad's own default is `WHDLoad.Slave` and `Slave=*` searches the
+        // drawer - both are decisions for the caller, not guesses to make here.
+        assert_eq!(launch_options(&["PRELOAD".to_string()]).slave, None);
     }
 }
