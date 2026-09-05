@@ -109,6 +109,31 @@ cd src-tauri && ART_159_ISO="E:\amiga\Amigatolon\iso\AmigaOS39.iso" \
   ART_159_DEST="E:\amiga\ProjeART\art159-tree" \
   cargo test --release build_the_real_39_language_components_when_asked -- --nocapture --ignored
 
+# The layered-release round's two hooks (2026-09-05). The first builds
+# AmigaOS 3.2.2 from the owner's own base and update media and then **asks the
+# tree what it is**: `Prefs/Env-Archive/Versions/Release` is written by the
+# release itself, so the claim comes from a file Hyperion wrote rather than
+# from ART's own dropdown. Measured on that run: 4 052 files, 295 drawers,
+# 20 667 671 bytes, and the tree says `Release 3.2.2`. The ROM matters --
+# `kicka1200.rom` is 47.96, whose exec is 47.7 and whose strap is 45.1, so
+# both update Modules components switch on and the base's own stays off.
+# Delete the destination first; SAFE_CREATE refuses one that exists. The
+# update folder is whatever you extracted `Update3.2.2.lha`'s ADFs into --
+# ART reads that archive nowhere, so unpack it yourself.
+cd src-tauri && ART_322_BASE="E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF" \
+  ART_322_UPDATE="E:\amiga\ProjeART\layer-research\Update3.2.2\ADFs" \
+  ART_322_ROM="E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ROM\kicka1200.rom" \
+  ART_322_DEST="E:\amiga\ProjeART\dist-3.2.2" \
+  cargo test build_the_real_322_tree_when_asked -- --nocapture --ignored
+
+# The icon oracle's Rust half. `scripts/icon-oracle-check.py` extracts the
+# `.info` files and drives this; run it directly only when debugging that
+# script. 485 icons off the owner's own 35 AmigaOS 3.2 ADFs, 0 failures --
+# 183 exercise the byte-identical merge, and the 302 that carry no ToolTypes
+# block are counted separately rather than as passes.
+cd src-tauri && ART_ICON_DIR="<a folder of extracted .info files>" \
+  cargo test round_trip_every_icon_in_a_folder_when_asked -- --nocapture --ignored
+
 cd src-tauri && cargo deny check                       # licences and advisories
 pnpm tauri build                                       # full bundle (slow)
 ```
