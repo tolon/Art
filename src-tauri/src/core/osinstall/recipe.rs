@@ -2707,6 +2707,29 @@ mod tests {
         );
     }
 
+    /// **Fix round 1, coordinator ruling.** `Update3.2.2.adf:Install/Install`
+    /// copies both `Update3.2.2` and `Classes3.2.2` unconditionally — no
+    /// `askbool`, no condition in front of either step — so both must be
+    /// `required: true`: an optional Classes update would let a user decline
+    /// it and still get a tree ART stamps `Release 3.2.2`, missing 31 files
+    /// the release always places. The same shape as Finding 1's
+    /// `Devs/trackfile.device` defect, one level up — and, like that one,
+    /// invisible without a test that actually reads the field. A future edit
+    /// flipping either one back to optional now has something to fail.
+    #[test]
+    fn update_322_system_and_update_322_classes_are_both_required() {
+        let r = by_release("AmigaOS 3.2.2").unwrap();
+        assert!(
+            r.component("update-322-system").unwrap().required,
+            "the release copies Update3.2.2 unconditionally"
+        );
+        assert!(
+            r.component("update-322-classes").unwrap().required,
+            "the release copies Classes3.2.2 unconditionally, in the same main flow, with no \
+             askbool in front of it"
+        );
+    }
+
     #[test]
     fn every_locale_component_names_only_drawers_its_own_disk_carries() {
         // -EN carries Help alone; only -CZ, -RS and -RU carry Languages.

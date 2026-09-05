@@ -60,9 +60,19 @@
       ]
     },
     {
+      "_why_required": [
+        "Fix round 1, coordinator ruling. `Update3.2.2.adf:Install/Install`'s",
+        "Classes step is `COPYDISKCONTENT classesPath` sitting in the main",
+        "flow, no `askbool`, no condition — the release copies this disk every",
+        "time, exactly like `Update3.2.2` itself. An optional component would",
+        "let a user decline it and still get a tree stamped `Release 3.2.2`",
+        "missing 31 files the release always places — the same shape as the",
+        "`Devs/trackfile.device` defect, one level up."
+      ],
       "id": "update-322-classes",
       "media": "Classes3.2.2",
       "layer": "update-3.2.2",
+      "required": true,
       "label_key": "osinstall.components.name.os322.classes",
       "overrides": ["classes", "workbench-base"],
       "rules": [
