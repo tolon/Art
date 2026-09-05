@@ -1948,7 +1948,15 @@ describe("one folder field per media layer the release declares (Task 10)", () =
   it("keeps the single folder field for an unlayered release", async () => {
     renderOsInstall({ release: "AmigaOS 3.2" });
 
-    expect(await screen.findByTestId("osinstall-media-field")).toBeTruthy();
+    // A real accessible-name assertion, not merely a `data-testid` presence
+    // check (review Finding 1) — this is the very control ART-237 fixed, so
+    // a test that only proves *something* rendered would pass again with
+    // the `aria-label` back on the wrapping, role-less `<div>`.
+    expect(
+      await screen.findByRole("button", {
+        name: (name) => name.includes(i18n.t("osinstall.media.ariaLabel")),
+      })
+    ).toBeTruthy();
     // The layered screen's own add-folder list must not appear at all — see
     // the module doc comment on `layers` in `OsInstall.tsx`.
     expect(screen.queryByTestId("extra-media-folder")).toBeNull();

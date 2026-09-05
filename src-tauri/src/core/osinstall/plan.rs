@@ -3142,6 +3142,102 @@ mod plan_tests {
         );
     }
 
+    /// **Review Finding 3, fix round 1.** A group of *three* members where
+    /// one member's own `overrides` names only *some* of the others —
+    /// `modules-c` overrides `modules-a` but not `modules-b`. No single
+    /// member's `overrides` covers every other member, so
+    /// `detect_exclusive_group_conflicts`'s own `resolved` check (see its
+    /// doc comment) must stay `false` and the whole group must still
+    /// conflict, naming all three. The reviewer hand-traced this boundary
+    /// case against the code; this pins it as a standing test.
+    fn plan_with_three_group_members_one_partial_override() -> InstallPlan {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-exclusive-group-partial");
+        let make = |id: &str, to: &str, overrides: Vec<String>| Component {
+            layer: None,
+            id: id.to_string(),
+            media: "Unused".to_string(),
+            rules: vec![PathRule {
+                from: "C/LoadModule".to_string(),
+                to: to.to_string(),
+                kind: RuleKind::File,
+            }],
+            required: false,
+            condition: None,
+            overrides,
+            user_startup: vec![],
+            activate: vec![],
+            exclusive_group: Some("modules".to_string()),
+            label_key: None,
+            available: true,
+            removes: Vec::new(),
+        };
+        let recipe = Recipe {
+            // Non-empty for the same reason `plan_with_group_members_in_layers`
+            // needs it: `Recipe::is_layered()` must be true so `layers`
+            // resolves to an empty list against an empty `media_folders`
+            // rather than touching the filesystem at all.
+            layers: vec![crate::core::osinstall::MediaLayer {
+                id: "only".to_string(),
+                label_key: None,
+            }],
+            base: None,
+            release: "Test".to_string(),
+            components: vec![
+                make("modules-a", "C/ModuleA", Vec::new()),
+                make("modules-b", "C/ModuleB", Vec::new()),
+                make("modules-c", "C/ModuleC", vec!["modules-a".to_string()]),
+            ],
+        };
+
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "Test".to_string(),
+            media_folder: dir.join("unused"),
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: vec![
+                "modules-a".to_string(),
+                "modules-b".to_string(),
+                "modules-c".to_string(),
+            ],
+            destination: dir.join("dist"),
+            excluded: Vec::new(),
+            scan_cache: Default::default(),
+        };
+        plan(&request, &recipe).unwrap()
+    }
+
+    #[test]
+    fn a_partial_override_in_a_three_member_group_does_not_resolve_it() {
+        let plan = plan_with_three_group_members_one_partial_override();
+        let conflict = plan.refusals.iter().find_map(|r| match r {
+            RefusalReason::ExclusiveGroupConflict { group, components } if group == "modules" => {
+                Some(components.clone())
+            }
+            _ => None,
+        });
+        let mut components = conflict.unwrap_or_else(|| {
+            panic!(
+                "a partial override must not resolve the group: {:?}",
+                plan.refusals
+            )
+        });
+        components.sort();
+        assert_eq!(
+            components,
+            vec![
+                "modules-a".to_string(),
+                "modules-b".to_string(),
+                "modules-c".to_string(),
+            ],
+            "the refusal must name every member of the still-conflicting group, \
+             not only the two `modules-c` failed to cover"
+        );
+    }
+
     /// The planner must open a disc as a disc. Before this, `plan()`
     /// hardcoded `AdfSource::open` and a found ISO produced a hard error
     /// rather than a plan — discovery could see media the planner could not

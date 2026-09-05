@@ -363,15 +363,21 @@ user who reaches the Browse button by Tab hears only its own name and has to
 go hunting forward in the page to find out whether there is a warning or a
 confirmation attached to it at all.
 
-Filed rather than fixed here, for the same reason ART-237 itself was: `hint`
-is a prop on the **shared** `Field` component (`CardBuilder`, `VolumePreload`,
-`PackagePanel` and others all pass one), so a correct fix needs a real `id`
-threaded from each hint's own text through to the control it describes —
-`Field` cannot invent a stable id from a prop that is just a string — and
-deserves its own scoped pass rather than a hurried `aria-describedby` bolted
-on to whichever call sites this sweep happened to look at. Bounded to what the
-media step actually renders; a wider sweep of every other `Field` caller is
-still owed.
+Filed rather than fixed here, for the same reason ART-237 itself was — but not
+because a stable id is hard to make: `React.useId()` answers that inside
+`Field` with no prop change at all, and any entry that argued otherwise would
+send the next reader looking for a harder fix than the one actually needed.
+The real reason is scope. `hint` is a prop on the **shared** `Field` component,
+passed at call sites this sweep never audited (`CardBuilder`, `VolumePreload`,
+`PackagePanel` and others) — wiring `Field`'s own `hint` up correctly and
+stopping there would still leave every one of those callers unexamined. And
+the media step's own worst instances are not `Field`'s `hint` at all: the
+layer wrong-hint, the ROM error/identified lines and the `mediaScan` outcome
+paragraphs are ad-hoc `<p>` elements rendered **outside** `Field` entirely, so
+`Field`'s own fix would not reach them regardless of how it wired `hint` up.
+A correct fix is an id-threading pass over all of these — inside `Field` and
+out — not a change confined to one component. Bounded to what the media step
+actually renders; a wider sweep of every other `Field` caller is still owed.
 
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
