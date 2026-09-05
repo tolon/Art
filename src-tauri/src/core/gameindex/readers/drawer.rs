@@ -171,6 +171,7 @@ pub fn read_drawer(dir: &Path) -> CoreResult<Option<GameRecord>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::amigaicon::tests_support::synthetic_icon;
     use crate::core::gameindex::readers::slave::tests_support::build_slave;
     use crate::core::gameindex::scan::collect_drawers;
     use std::path::PathBuf;
@@ -185,32 +186,13 @@ mod tests {
     }
 
     /// A minimal Amiga icon whose ToolTypes are `["SLAVE=<slave>",
-    /// "PRELOAD"]` — the same `DiskObject` shape `core::amigaicon`'s own
-    /// tests build by hand (that helper is private to its module, so this is
-    /// a second, smaller instance of the same layout rather than a second
-    /// format): `do_Magic` at offset 0, a fixed 78-byte header, then a
-    /// `ToolTypes` block whose `u32` size is `(count + 1) * 4` followed by
-    /// that many length-prefixed strings.
+    /// "PRELOAD"]`, built through `core::amigaicon`'s own shared fixture
+    /// builder — the same `DiskObject` byte layout this reader's own
+    /// `icon_named_slave` parses, kept in exactly one place rather than
+    /// re-derived here a second time.
     fn icon_naming(slave: &str) -> Vec<u8> {
-        const MAGIC: u16 = 0xE310;
-        const HEADER_LEN: usize = 78;
-        const OFF_TOOL_TYPES: usize = 54;
-
-        let tooltypes = [format!("SLAVE={slave}"), "PRELOAD".to_string()];
-
-        let mut buf = vec![0u8; HEADER_LEN];
-        buf[0..2].copy_from_slice(&MAGIC.to_be_bytes());
-        buf[2..4].copy_from_slice(&1u16.to_be_bytes()); // do_Version
-        buf[OFF_TOOL_TYPES..OFF_TOOL_TYPES + 4].copy_from_slice(&1u32.to_be_bytes());
-
-        let size = ((tooltypes.len() + 1) * 4) as u32;
-        buf.extend_from_slice(&size.to_be_bytes());
-        for tt in &tooltypes {
-            let bytes = tt.as_bytes();
-            buf.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
-            buf.extend_from_slice(bytes);
-        }
-        buf
+        let slave_tooltype = format!("SLAVE={slave}");
+        synthetic_icon(&[&slave_tooltype, "PRELOAD"], 0, b"")
     }
 
     /// A synthetic drawer: one slave, an icon naming it, a ReadMe, a payload.

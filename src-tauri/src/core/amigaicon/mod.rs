@@ -365,18 +365,26 @@ pub fn merge_tooltypes(dest: &[u8], source: &[u8]) -> CoreResult<Vec<u8>> {
     Ok(merged)
 }
 
+/// Fixture building, shared with anything outside this module that needs a
+/// valid `.info` to hand to [`tooltypes`] or [`launch_options`](crate::core::whdload::launch_options).
+///
+/// `core/gameindex/readers/drawer` builds icons naming a WHDLoad slave for
+/// its own tests; a second hand-rolled copy of this `DiskObject` byte layout
+/// there would be a second place for the offsets to drift out of step with
+/// this module — the same shape `readers::slave::tests_support` follows for
+/// the same reason.
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod tests_support {
+    use super::{HEADER_LEN, MAGIC, OFF_STACK_SIZE, OFF_TOOL_TYPES};
 
     /// Build a minimal, valid `.info` by hand: header, an optional
     /// `ToolTypes` block, then arbitrary trailing bytes (standing in for an
     /// appended ColorIcon/NewIcon `FORM`). No `DrawerData`, no images, no
     /// `DefaultTool`, no `ToolWindow` — this module does not need to
     /// exercise those to prove it skips them correctly; that is covered by
-    /// [`synthetic_icon_with_image`] for the one block that does matter for
-    /// the overflow guard.
-    fn synthetic_icon(tooltypes: &[&str], stack: u32, trailing: &[u8]) -> Vec<u8> {
+    /// `synthetic_icon_with_image` (private to this module's own tests) for
+    /// the one block that does matter for the overflow guard.
+    pub(crate) fn synthetic_icon(tooltypes: &[&str], stack: u32, trailing: &[u8]) -> Vec<u8> {
         let mut buf = vec![0u8; HEADER_LEN];
         buf[0..2].copy_from_slice(&MAGIC.to_be_bytes());
         buf[2..4].copy_from_slice(&1u16.to_be_bytes()); // do_Version
@@ -393,6 +401,12 @@ mod tests {
         buf.extend_from_slice(trailing);
         buf
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tests_support::synthetic_icon;
 
     /// A minimal icon with a `GadgetRender` `Image` whose claimed
     /// dimensions vastly exceed the buffer actually behind them — the shape
