@@ -43,7 +43,7 @@
 // still owed. See the narrowed ART-118 entry in `docs/ISSUES.md`.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import i18n from "i18next";
 
@@ -51,7 +51,9 @@ import { changeLanguage } from "@/i18n";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type {
   ComponentDef,
+  InstallLayer,
   InstallPlan,
+  InstallRelease,
   InstallRequest,
   MediaScanResult,
   OsInstallResult,
@@ -63,6 +65,7 @@ import type { RomInfo } from "@/lib/pistorm";
 
 const scanMediaMock = vi.hoisted(() => vi.fn());
 const componentsMock = vi.hoisted(() => vi.fn());
+const layersForMock = vi.hoisted(() => vi.fn());
 const planMock = vi.hoisted(() => vi.fn());
 const componentCollisionsMock = vi.hoisted(() => vi.fn());
 const applyMock = vi.hoisted(() => vi.fn());
@@ -79,6 +82,7 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
   osinstallScanMedia: scanMediaMock,
   osinstallComponents: componentsMock,
+  layersFor: layersForMock,
   osinstallPlan: planMock,
   osinstallRescanMedia: rescanMock,
   osinstallReleaseForMedia: releaseForMediaMock,
@@ -264,6 +268,29 @@ function componentsFor(release: string): ComponentDef[] {
   return release === "AmigaOS 3.9" ? COMPONENTS_39 : COMPONENTS_32;
 }
 
+/**
+ * The layers `osinstall_layers` answers for AmigaOS 3.2.2 — Task 10's own
+ * subject. Every other shipped release answers empty, which is what makes
+ * "an unlayered release renders exactly what it renders today" a real test
+ * rather than an assumption (`layersFor` below).
+ */
+const LAYERS_322: InstallLayer[] = [
+  { id: "base", labelKey: "osinstall.layer.base32" },
+  { id: "update-3.2.2", labelKey: "osinstall.layer.update322" },
+];
+
+function layersForRelease(release: string): InstallLayer[] {
+  return release === "AmigaOS 3.2.2" ? LAYERS_322 : [];
+}
+
+/** A layer's own field label, resolved the same way `OsInstall.tsx` resolves
+ *  it — `t(labelKey)`, exact text, so `findByLabelText` finds the field this
+ *  layer's own "Browse" button lives beside. */
+function layerFieldLabel(layerId: string): string {
+  const layer = LAYERS_322.find((l) => l.id === layerId);
+  return layer?.labelKey ? i18n.t(layer.labelKey) : layerId;
+}
+
 const ITEM_WORKBENCH: PlanItem = {
   component: "workbench-base",
   media: "Workbench3.2",
@@ -373,6 +400,9 @@ beforeEach(() => {
   componentsMock
     .mockReset()
     .mockImplementation((release: string) => Promise.resolve(componentsFor(release)));
+  layersForMock
+    .mockReset()
+    .mockImplementation((release: string) => Promise.resolve(layersForRelease(release)));
   planMock.mockReset().mockImplementation((req: InstallRequest) => Promise.resolve(planResultFor(req)));
   // Nothing layering is switched on for AmigaOS 3.2, so this is never called
   // in most tests; an empty preview is the honest default for the ones where
@@ -401,6 +431,41 @@ async function renderFull() {
   // trip — wait for it rather than racing it.
   await screen.findByRole("checkbox", { name: "Extras3.2" });
   return utils;
+}
+
+/**
+ * Render, optionally starting on a chosen release — seeded directly into the
+ * build session's own remembered key, the way `FULL_FIELDS` already seeds
+ * AmigaOS 3.9's fields, rather than a picker click every caller would
+ * otherwise repeat. `"AmigaOS 3.2"` is the session's own default, so it is
+ * seeded like every other test that never mentions a release.
+ */
+function renderOsInstall(options: { release?: InstallRelease } = {}) {
+  seedRemembered(
+    options.release && options.release !== "AmigaOS 3.2"
+      ? { "buildSession.release": options.release }
+      : {}
+  );
+  return render(<OsInstall />);
+}
+
+/** One layer's own "Browse" button, clicked through the field its label
+ *  names — the same control a user reaches for. */
+async function browseLayerFolder(layerId: string, path: string) {
+  dialogOpenMock.mockResolvedValueOnce(path);
+  const field = await screen.findByLabelText(layerFieldLabel(layerId));
+  await userEvent.click(within(field).getByRole("button", { name: i18n.t("common.browse") }));
+}
+
+/** Renders on AmigaOS 3.2.2, browses every named layer's own folder in turn,
+ *  and answers the request `osinstallPlan` was actually sent. */
+async function planWithFolders(folders: Record<string, string>): Promise<InstallRequest> {
+  renderOsInstall({ release: "AmigaOS 3.2.2" });
+  for (const [layerId, path] of Object.entries(folders)) {
+    await browseLayerFolder(layerId, path);
+  }
+  await waitFor(() => expect(planMock).toHaveBeenCalled());
+  return planMock.mock.calls.at(-1)![0] as InstallRequest;
 }
 
 describe("OsInstall renders past its headings", () => {
@@ -1712,6 +1777,75 @@ describe("choosing the keyboard the system boots with", () => {
       expect(
         (screen.getByRole("combobox", { name: /keyboard layout/i }) as HTMLSelectElement).value
       ).toBe("")
+    );
+  });
+});
+
+// ART-207's own rule taken one level finer: instead of one media folder plus
+// a bag of extra ones, a layered recipe (AmigaOS 3.2.2's own `base` and
+// `update-3.2.2`) is asked one **labelled** question per layer it declares.
+// `layersFor` carries that shape from the recipe (Task 8's own `label_key`s)
+// to the screen; an unlayered release answers empty, and the screen must
+// render exactly what it always has for one.
+describe("one folder field per media layer the release declares (Task 10)", () => {
+  it("shows one labelled folder field per layer, in the recipe's own order", async () => {
+    renderOsInstall({ release: "AmigaOS 3.2.2" });
+
+    const base = await screen.findByLabelText(i18n.t("osinstall.layer.base32"));
+    const update = await screen.findByLabelText(i18n.t("osinstall.layer.update322"));
+    expect(base).toBeTruthy();
+    expect(update).toBeTruthy();
+
+    // Declaration order, not merely presence — a screen rendering the
+    // recipe's own layers in reverse would still pass the two lines above.
+    expect(
+      Boolean(base.compareDocumentPosition(update) & Node.DOCUMENT_POSITION_FOLLOWING)
+    ).toBe(true);
+  });
+
+  it("sends one folder per layer", async () => {
+    const sent = await planWithFolders({
+      base: "E:\\media\\3.2",
+      "update-3.2.2": "E:\\media\\Update3.2.2",
+    });
+    expect(sent.mediaFolders).toEqual({
+      base: "E:\\media\\3.2",
+      "update-3.2.2": "E:\\media\\Update3.2.2",
+    });
+  });
+
+  it("keeps the single folder field for an unlayered release", async () => {
+    renderOsInstall({ release: "AmigaOS 3.2" });
+
+    expect(await screen.findByLabelText(/media/i)).toBeTruthy();
+    // The layered screen's own add-folder list must not appear at all — see
+    // the module doc comment on `layers` in `OsInstall.tsx`.
+    expect(screen.queryByTestId("extra-media-folder")).toBeNull();
+  });
+
+  it("remembers each layer's folder separately across a remount", async () => {
+    // ART's standing rule: nothing changes unless the user changes it — and
+    // per layer, since a single shared key would hand the update field the
+    // base folder the first time somebody switched releases.
+    const { unmount } = renderOsInstall({ release: "AmigaOS 3.2.2" });
+    await browseLayerFolder("base", "E:\\a");
+    await browseLayerFolder("update-3.2.2", "E:\\b");
+    expect((await screen.findByLabelText(layerFieldLabel("base"))).textContent).toContain("E:\\a");
+    expect((await screen.findByLabelText(layerFieldLabel("update-3.2.2"))).textContent).toContain(
+      "E:\\b"
+    );
+
+    // Remount **without re-seeding**: `renderOsInstall`'s own `seedRemembered`
+    // replaces the whole remembered bag, which would defeat the point of this
+    // test by wiping the very writes it is asking about. A real remount reads
+    // back whatever `settings.json` actually holds — here, the live Zustand
+    // store the two browses above just wrote into, release included.
+    unmount();
+    render(<OsInstall />);
+
+    expect((await screen.findByLabelText(layerFieldLabel("base"))).textContent).toContain("E:\\a");
+    expect((await screen.findByLabelText(layerFieldLabel("update-3.2.2"))).textContent).toContain(
+      "E:\\b"
     );
   });
 });

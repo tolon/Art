@@ -389,7 +389,14 @@ pub struct MediaLayer {
     /// An **i18n key** for this layer's own folder field on the media step,
     /// for the reason `Component::label_key` is a key: the recipe is data in
     /// the Rust tree with no compiler between it and the screen.
-    #[serde(default)]
+    ///
+    /// `rename(serialize = "labelKey")` rather than a struct-wide
+    /// `rename_all` (`ComponentSummary`'s own shape, which this cannot
+    /// share): the shipped recipe JSON spells this field `label_key`
+    /// (`recipes/amigaos-3.2.2.json`), so a blanket camelCase rename would
+    /// fix `osinstall_layers`'s outbound wire and break every recipe's own
+    /// `Deserialize` in the same commit. Serialize only.
+    #[serde(default, rename(serialize = "labelKey"))]
     pub label_key: Option<String>,
 }
 

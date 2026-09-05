@@ -559,6 +559,33 @@ export async function osinstallReleaseForMedia(volumeNames: string[]): Promise<s
   return invoke<string | null>("osinstall_release_for_media", { volumeNames });
 }
 
+/**
+ * One media folder the chosen release asks for, in the recipe's own order.
+ *
+ * Mirrors `core::osinstall::MediaLayer` — `labelKey` is an **i18n key**, not
+ * a sentence, resolved the same way `ComponentDef.labelKey` already is (see
+ * `OsInstall.tsx`'s own `label()`): a recipe is data with no compiler between
+ * it and the screen, so the key travels and the translation happens at the
+ * place that draws it.
+ */
+export interface InstallLayer {
+  id: string;
+  labelKey: string | null;
+}
+
+/**
+ * The media layers `release`'s own shipped recipe declares, in the recipe's
+ * own order.
+ *
+ * **An empty array means unlayered** (every shipped recipe except AmigaOS
+ * 3.2.2) — the media step reads that as "render the single folder field this
+ * screen has always rendered", never as an error. Read-only: parses shipped
+ * JSON, opens no media.
+ */
+export async function layersFor(release: InstallRelease): Promise<InstallLayer[]> {
+  return invoke<InstallLayer[]>("osinstall_layers", { release });
+}
+
 /** What installing the chosen components would do — or every reason it
  *  cannot. Writes nothing (§92's PREVIEW). */
 export async function osinstallPlan(request: InstallRequest): Promise<PlanResult> {

@@ -224,6 +224,20 @@ pub fn osinstall_release_for_media(volume_names: Vec<String>) -> AppResult<Optio
     )?)
 }
 
+/// The media layers `release`'s own shipped recipe declares, in the recipe's
+/// own order.
+///
+/// Read-only: parses shipped JSON, opens no media. An unlayered release
+/// (AmigaOS 3.2, AmigaOS 3.9) answers with an empty list — the media step
+/// reads that as "render the single folder field this screen has always
+/// rendered", not as an error.
+#[tauri::command]
+pub async fn osinstall_layers(
+    release: String,
+) -> AppResult<Vec<crate::core::osinstall::MediaLayer>> {
+    Ok(recipe::by_release(&release)?.layers)
+}
+
 // ---------------------------------------------------------------------------
 // osinstall_plan
 // ---------------------------------------------------------------------------
@@ -4278,6 +4292,53 @@ mod tests {
             let verdict = &value["files"][0];
             expect_keys(verdict, &["path", "state", "detail"]);
             assert_eq!(verdict["state"], "not-checked");
+        }
+
+        /// `MediaLayer::label_key` is spelled snake_case in every shipped
+        /// recipe's own JSON, so a struct-wide `rename_all` on the type would
+        /// fix the outbound wire and break `Deserialize` in the same commit
+        /// (see the field's own doc comment). Pinned here the same way
+        /// `verify_report_serializes_not_checked_as_camelcase` pins
+        /// `notChecked`: without the field-level `rename(serialize = ..)`,
+        /// this key would be `label_key` and `src/lib/osinstall.ts`'s
+        /// `InstallLayer.labelKey` would always read `undefined`.
+        #[test]
+        fn media_layer_serializes_label_key_as_camelcase() {
+            use crate::core::osinstall::MediaLayer;
+
+            let layer = MediaLayer {
+                id: "update-3.2.2".into(),
+                label_key: Some("osinstall.layer.update322".into()),
+            };
+            let value = serde_json::to_value(&layer).unwrap();
+            expect_keys(&value, &["id", "labelKey"]);
+            assert_eq!(value["labelKey"], "osinstall.layer.update322");
+            assert!(
+                value.get("label_key").is_none(),
+                "the un-camelCased name must not leak onto the wire: {value}"
+            );
+        }
+
+        /// `osinstall_layers`' own outbound shape, off the real shipped
+        /// recipes rather than a hand-built value — the layered one answers
+        /// in the recipe's own declared order, the unlayered ones answer
+        /// empty (which is what makes "an unlayered release renders exactly
+        /// what it renders today" on the frontend meaningful rather than
+        /// accidental).
+        #[test]
+        fn osinstall_layers_answers_in_recipe_order_and_empty_when_unlayered() {
+            let layers = recipe::by_release("AmigaOS 3.2.2").unwrap().layers;
+            assert_eq!(
+                layers.iter().map(|l| l.id.as_str()).collect::<Vec<_>>(),
+                vec!["base", "update-3.2.2"]
+            );
+
+            for unlayered in ["AmigaOS 3.2", "AmigaOS 3.9"] {
+                assert!(
+                    recipe::by_release(unlayered).unwrap().layers.is_empty(),
+                    "{unlayered} declares no layers"
+                );
+            }
         }
 
         #[test]

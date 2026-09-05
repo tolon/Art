@@ -8,6 +8,7 @@
 
 export function Field({
   label,
+  ariaLabel,
   value,
   empty,
   choose,
@@ -17,6 +18,15 @@ export function Field({
   onClear,
 }: {
   label: string;
+  /**
+   * The row's own accessible name, when it needs to be found as a whole
+   * (`getByLabelText`) rather than merely read (`getByText`). Optional: a row
+   * with no `ariaLabel` is exactly what this component has always rendered —
+   * a visible label with no accessible name of its own — since there is
+   * nothing here to label the way a `<label htmlFor>` labels an `<input>`,
+   * only a button and a span.
+   */
+  ariaLabel?: string;
   value: string | null;
   empty: string;
   choose: string;
@@ -26,7 +36,7 @@ export function Field({
   onClear?: () => void;
 }) {
   return (
-    <div style={{ marginBottom: 12 }}>
+    <div style={{ marginBottom: 12 }} {...(ariaLabel ? { "aria-label": ariaLabel } : {})}>
       <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
         {label}
       </div>

@@ -2187,6 +2187,7 @@
     },
     "media": {
       "label": "Kurulum diskleri klasörü",
+      "ariaLabel": "AmigaOS kurulum medyası klasörü",
       "none": "Klasör seçilmedi.",
       "chooseTitle": "AmigaOS kurulum disk ya da CD imgelerinin bulunduğu klasörü seç",
       "unreadable": "ART bu klasörü okuyamadı — yolu kontrol et.",

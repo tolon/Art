@@ -2187,6 +2187,7 @@
     },
     "media": {
       "label": "Install disks folder",
+      "ariaLabel": "AmigaOS install media folder",
       "none": "No folder chosen.",
       "chooseTitle": "Choose the folder holding your AmigaOS install disk or disc images",
       "unreadable": "ART could not read that folder — check the path.",
