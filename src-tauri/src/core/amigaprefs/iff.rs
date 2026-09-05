@@ -91,7 +91,9 @@ pub fn parse(bytes: &[u8]) -> CoreResult<PrefsFile> {
         });
         // IFF pads an odd-sized body with one byte that the size field
         // does not count.
-        at = body_end + (size & 1);
+        at = body_end
+            .checked_add(size & 1)
+            .ok_or_else(|| malformed("chunk padding overflows"))?;
     }
 
     Ok(PrefsFile {
@@ -105,10 +107,16 @@ impl PrefsFile {
         &self.chunks
     }
 
-    /// The body of chunk `index`. Panics only on an index this file never
-    /// produced, which is a programming error rather than bad input.
-    pub fn body(&self, index: usize) -> &[u8] {
-        &self.bytes[self.chunks[index].body.clone()]
+    /// The body of chunk `index`. Refuses rather than panics on an index
+    /// this file never produced — a caller-computed index is not trusted
+    /// input, and the release profile aborts the whole process on an
+    /// out-of-range slice.
+    pub fn body(&self, index: usize) -> CoreResult<&[u8]> {
+        let span = self
+            .chunks
+            .get(index)
+            .ok_or_else(|| malformed("chunk index is not one this file produced"))?;
+        Ok(&self.bytes[span.body.clone()])
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -195,7 +203,7 @@ mod tests {
         let parsed = parse(&bytes).unwrap();
         let ids: Vec<[u8; 4]> = parsed.chunks().iter().map(|c| c.id).collect();
         assert_eq!(ids, vec![*b"PRHD", *b"PTRN"]);
-        assert_eq!(parsed.body(1), &[7u8; 24]);
+        assert_eq!(parsed.body(1).unwrap(), &[7u8; 24]);
     }
 
     #[test]
@@ -210,18 +218,22 @@ mod tests {
         let parsed = parse(&bytes).unwrap();
         let out = parsed.replace_bodies(&[(3, vec![5; 40])]).unwrap();
         let after = parse(&out).unwrap();
-        assert_eq!(after.body(0), &[0u8; 6], "PRHD must survive verbatim");
         assert_eq!(
-            after.body(1),
+            after.body(0).unwrap(),
+            &[0u8; 6],
+            "PRHD must survive verbatim"
+        );
+        assert_eq!(
+            after.body(1).unwrap(),
             &[1u8; 24],
             "the first PTRN must survive verbatim"
         );
         assert_eq!(
-            after.body(2),
+            after.body(2).unwrap(),
             &[0xABu8; 10],
             "the unknown chunk must survive verbatim"
         );
-        assert_eq!(after.body(3), &[5u8; 40]);
+        assert_eq!(after.body(3).unwrap(), &[5u8; 40]);
     }
 
     #[test]
@@ -231,7 +243,7 @@ mod tests {
         let out = parsed.replace_bodies(&[(1, vec![3; 5])]).unwrap();
         let after = parse(&out).unwrap();
         assert_eq!(
-            after.body(1).len(),
+            after.body(1).unwrap().len(),
             5,
             "the size field states the real length"
         );
@@ -263,5 +275,17 @@ mod tests {
         let mut bytes = synthetic_prefs(&[(*b"PTRN", vec![1; 24])]);
         bytes[4..8].copy_from_slice(&0x7FFF_FFFFu32.to_be_bytes());
         assert!(parse(&bytes).is_err());
+    }
+
+    #[test]
+    fn a_body_index_this_file_never_produced_is_refused_not_panicked() {
+        // PRHD=0, PTRN=1 — index 2 does not exist.
+        let bytes = synthetic_prefs(&[(*b"PTRN", vec![1; 24])]);
+        let parsed = parse(&bytes).unwrap();
+        let err = parsed.body(2).unwrap_err();
+        assert!(
+            format!("{err}").contains("chunk"),
+            "the refusal must name the chunk, got: {err}"
+        );
     }
 }

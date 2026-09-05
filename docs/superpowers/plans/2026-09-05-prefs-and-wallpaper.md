@@ -61,7 +61,9 @@
   - `pub struct PrefsFile { bytes: Vec<u8>, chunks: Vec<ChunkSpan> }`
   - `pub struct ChunkSpan { pub id: [u8; 4], pub body: std::ops::Range<usize> }`
   - `pub fn parse(bytes: &[u8]) -> CoreResult<PrefsFile>`
-  - `impl PrefsFile { pub fn chunks(&self) -> &[ChunkSpan]; pub fn body(&self, i: usize) -> &[u8]; pub fn replace_bodies(&self, edits: &[(usize, Vec<u8>)]) -> CoreResult<Vec<u8>>; pub fn to_bytes(&self) -> Vec<u8> }`
+  - `impl PrefsFile { pub fn chunks(&self) -> &[ChunkSpan]; pub fn body(&self, i: usize) -> CoreResult<&[u8]>; pub fn replace_bodies(&self, edits: &[(usize, Vec<u8>)]) -> CoreResult<Vec<u8>>; pub fn to_bytes(&self) -> Vec<u8> }`
+
+  `body` returns a `CoreResult` rather than panicking on an out-of-range index — decided during Task 1's review, because `panic = "abort"` turns a caller's off-by-one into an application kill and Tasks 7 and 8 call it with computed indices. Callers use `?`.
 
 - [ ] **Step 1: Write the failing tests**
 
