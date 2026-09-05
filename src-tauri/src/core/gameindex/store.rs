@@ -752,7 +752,24 @@ pub fn refresh_root(
         })
         .collect();
 
-    let mut entries: Vec<CachedEntry> = reuse.into_iter().chain(fresh).chain(missing).collect();
+    // NB-1: the same content-derived fold `scan::scan_titles_with` already
+    // uses, applied here for the same reason. Both `readers::drawer` and
+    // `readers::lhadrawer` derive a title's id from the same slave bytes, so
+    // an unpacked drawer and the archive it was unpacked from — kept side by
+    // side, the ordinary thing to do — produce two `CachedEntry` rows
+    // sharing one id without this: duplicate React keys on the Collection
+    // screen and a selection that highlights twice. `.entry(id).or_insert`
+    // is first-wins, so the order entries are chained in *is* the ruling:
+    // `reuse` and the file half of `fresh` (both file-sourced) first, then
+    // the drawer half of `fresh`, then the archive half — an unpacked
+    // drawer beats its archived twin because it is the one route ART can
+    // actually launch and write `igame.data` into; the archived record's
+    // only value is being browsable before it is unpacked.
+    let mut by_id: BTreeMap<String, CachedEntry> = BTreeMap::new();
+    for entry in reuse.into_iter().chain(fresh).chain(missing) {
+        by_id.entry(entry.record.id.clone()).or_insert(entry);
+    }
+    let mut entries: Vec<CachedEntry> = by_id.into_values().collect();
     entries.sort_by(|a, b| a.path.cmp(&b.path));
 
     let value = CatalogueRoot {
@@ -1128,6 +1145,57 @@ mod tests {
         );
         assert!(titles.contains(&"Good"), "{titles:?}");
         assert!(titles.contains(&"Bad"), "{titles:?}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **NB-1.** An unpacked drawer kept beside the archive it came from —
+    /// the ordinary thing to do — must store **one** record, not two sharing
+    /// the same content-derived id: `readers::drawer` and `readers::lhadrawer`
+    /// both hash the same slave bytes and derive the same id from them, and
+    /// without the same `by_id` fold `scan::scan_titles_with` already uses,
+    /// `refresh_root` stored both — duplicate React keys on the Collection
+    /// screen and a selection that highlighted twice.
+    ///
+    /// The ruling: the **unpacked** drawer wins, because it is the one route
+    /// ART can actually launch and write `igame.data` into; the archived
+    /// record's only value is being browsable before it is unpacked.
+    #[test]
+    fn a_drawer_and_its_archived_twin_store_one_record_and_it_is_the_drawer() {
+        use crate::core::gameindex::readers::slave::tests_support::build_slave;
+
+        let dir = scratch("drawer-and-archive-twin");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let slave_bytes = build_slave("Turrican", "1990 Rainbow Arts", 16);
+
+        let drawer = root.join("Turrican");
+        std::fs::create_dir_all(&drawer).unwrap();
+        std::fs::write(drawer.join("Turrican.slave"), &slave_bytes).unwrap();
+
+        std::fs::write(
+            root.join("Turrican.lha"),
+            crate::core::lha::tests::make_lha_with(&[("Turrican/Turrican.slave", &slave_bytes)]),
+        )
+        .unwrap();
+
+        let after = refresh_root(&dir, &root, Refresh::Rescan, None, &NoProgress).unwrap();
+        assert_eq!(
+            after.entries.len(),
+            1,
+            "one id, one stored record: {:?}",
+            after
+                .entries
+                .iter()
+                .map(|e| &e.record.media)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            matches!(after.entries[0].record.media, Media::WhdloadDrawer { .. }),
+            "the unpacked drawer must win over its archived twin: {:?}",
+            after.entries[0].record.media
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

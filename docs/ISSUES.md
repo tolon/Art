@@ -426,6 +426,58 @@ Nothing here is broken today: `run_install` works, is tested, and its
 catalogue join is itself tested and mutation-verified. What is missing is the
 layer that should hold this logic.
 
+**ART-243** 🟡 **An archive updated in place accumulates ghost records no
+Rescan can clear** — *found 2026-09-05 by the whdload-drawers round-2
+re-review, filed rather than fixed in round 3*
+`src-tauri/src/core/gameindex/store.rs::refresh_root` (the `missing`
+reconciliation)
+
+Round 2 fixed the reverse problem: one drawer's slave going bad while its
+archive's sibling drawer still reads fine must not silently delete the bad
+one, because every `Media::WhdloadArchive` record shares one `CachedEntry.path`
+— the archive's own — and "this path is present" says nothing about *this
+particular* drawer inside it. The fix special-cases `WhdloadArchive` in the
+`missing` filter so it is kept whenever its own id was not found again this
+run, regardless of path. That same special case means path presence is now
+**never** consulted for an archived record, in either direction: if the user
+edits the archive itself — removes a drawer, or replaces
+`WHDLoadDemos100.lha` with a smaller, newer one — the removed drawer's old
+record is checked only against "was this id found again this run," never
+against "does the archive that named it still hold it," so it is kept
+forever, through every Rescan, until the whole root is removed and re-added.
+A catalogue is meant to be a library that self-heals under Rescan, and an
+archive edited in place is the one shape it will not.
+
+Not fixed in this round: closing it correctly is not "flip the priority
+back" — that reintroduces round 2's own bug. The right shape likely keys the
+reconciliation on **(archive path, id)** pairs recomputed for every archive
+still readable this run, rather than id alone across all archives at once,
+but that is a real design question and deserves its own look rather than a
+rushed fix inside a round already closing three other things.
+
+**ART-244** 🔵 **Update mode re-reads every archive candidate on every
+refresh, on an argued rather than measured basis** — *found 2026-09-05 during
+the whdload-drawers round-2 wiring*
+`src-tauri/src/core/gameindex/store.rs::refresh_root`,
+`core/gameindex/readers/lhadrawer.rs`
+
+`refresh_root` treats every archive candidate as always-fresh in both
+`Refresh::Update` and `Refresh::Rescan` — the doc comment's own reasoning is
+that `read_archive_drawers` "seeks header to header rather than
+decompressing" (`readers::lhadrawer`'s own module doc) and is therefore cheap
+enough that the cache-reuse machinery built to skip re-hashing multi-megabyte
+hardfiles buys nothing here. That reasoning was never measured against the
+one archive it is actually about:
+`readers::lhadrawer::tests::real_archive_scan_is_fast` is `#[ignore]`d,
+env-gated on `ART_LHA_ARCHIVE`, and prints its own timing rather than
+asserting it — exactly the hook that would turn "seeks header to header, so
+it's cheap" from an argument into a number. Until that is run against the
+owner's own 663 MB, 8858-entry archive on an `Update`-mode refresh, this is
+unverified: if it turns out to cost real time for a user with several such
+archives who refreshes often, the fix is a size/mtime-keyed skip for an
+archive that has not changed, the same as the file walk already has — not a
+redesign.
+
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 

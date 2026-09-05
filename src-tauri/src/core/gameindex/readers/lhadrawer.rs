@@ -517,6 +517,61 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// **N-3, closed properly this round.** The round-2 report claimed this
+    /// was "covered only at the caller level" — false: both tests meant use
+    /// only loose ADFs, which never reach `read_archive_drawers` at all. This
+    /// is the real thing: a cancellation raised partway through an archive
+    /// scan (several separate drawers, so both loops this function checks
+    /// between — settling and reading — get more than one iteration) must
+    /// return `CoreError::Cancelled`, not a partial `Ok` and not a plain
+    /// error. `is_cancelled` itself counts polls rather than `report` calls,
+    /// because this function deliberately never calls `report` (round 2:
+    /// a second, competing counter from inside one archive's scan would
+    /// make the caller's own combined progress bar move backwards).
+    #[test]
+    fn a_cancellation_partway_through_an_archive_scan_returns_cancelled() {
+        use crate::core::jobs::CancelToken;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        struct CancelAfterPolls {
+            seen: AtomicU64,
+            after: u64,
+            token: CancelToken,
+        }
+        impl ProgressSink for CancelAfterPolls {
+            fn report(&self, _done: u64, _total: Option<u64>, _message: &str) {}
+            fn is_cancelled(&self) -> bool {
+                if self.seen.fetch_add(1, Ordering::SeqCst) >= self.after {
+                    self.token.cancel();
+                }
+                self.token.is_cancelled()
+            }
+        }
+
+        let root = scratch("cancel-mid-scan");
+        let archive = synthetic_lha(
+            &root,
+            &[
+                ("D/One/One.slave", slave_bytes("One")),
+                ("D/Two/Two.slave", slave_bytes("Two")),
+                ("D/Three/Three.slave", slave_bytes("Three")),
+            ],
+        );
+        let sink = CancelAfterPolls {
+            seen: AtomicU64::new(0),
+            after: 1,
+            token: CancelToken::default(),
+        };
+        let err =
+            read_archive_drawers(&archive, &sink).expect_err("a cancellation must stop the scan");
+        assert!(
+            matches!(err, crate::core::error::CoreError::Cancelled),
+            "{err}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// **I1's own fix.** One drawer's `.slave` is junk — not a slave header at
     /// all — sitting beside a perfectly good one. Before this fix,
     /// `slave::read_slave`'s `?` took the whole function down with it: this
