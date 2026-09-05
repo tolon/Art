@@ -20,17 +20,25 @@
 //!   same rule `scan::collect_drawers`'s directory walk follows and iGame's
 //!   own `examineFolder` follows too.
 //!
-//! A third is new here rather than borrowed: a drawer inside the archive that
-//! holds two slaves takes the same answer the directory reader gives —
-//! refused rather than guessed — but there is no icon to consult without
-//! decompressing it, and decompressing an icon to settle a case the material
-//! does not contain is work for a case nobody has seen. So where the
-//! directory reader can still ask `<dir>.info`'s `SLAVE=` ToolType, this
-//! reader has nothing to ask and simply catalogues no title for that drawer.
+//! A third is carried over with a difference rather than borrowed unchanged:
+//! a drawer inside the archive that holds two slaves is settled the same way
+//! the directory reader settles it — its icon's `SLAVE=` ToolType, when the
+//! icon exists and names one of the candidates — because the collection this
+//! shape was measured against is evidence, never the specification, and a
+//! user who unpacks an archive must not watch titles appear that the
+//! archived scan silently dropped. The difference is *how* the icon is
+//! reached: the directory reader opens `<dir>.info` off the filesystem for
+//! every drawer it visits; this reader only ever decompresses one — the
+//! `.info` named for the drawer, inside it, same rule
+//! [`super::drawer::read_drawer`] applies — and only when a drawer is
+//! *already* ambiguous, which is rare. Nothing changes for the common path
+//! of one slave, one drawer. A drawer with no icon, or an icon naming
+//! neither candidate, still gets no title, the same as before.
 
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::core::amigaicon;
 use crate::core::archive;
 use crate::core::error::CoreResult;
 use crate::core::gameindex::readers::slave;
@@ -38,6 +46,7 @@ use crate::core::gameindex::record::{
     derive_id, Fact, GameRecord, Media, Provenance, SourceRef, GAMEINDEX_SCHEMA,
 };
 use crate::core::hashing::sha256_bytes;
+use crate::core::whdload;
 
 /// The largest a slave member may decompress to before ART gives up on it.
 ///
@@ -79,6 +88,57 @@ fn drawer_name_of(inner: &str) -> String {
     inner.rsplit('/').next().unwrap_or(inner).to_string()
 }
 
+/// `<drawer>.info`'s archive path, the same name [`super::drawer::read_drawer`]
+/// looks for on the filesystem (`dir.join(format!("{dir_name}.info"))`) —
+/// *inside* the drawer, named for the drawer, never a fixed `Icon.info` or
+/// similar.
+fn icon_entry_name(inner: &str, dir_name: &str) -> String {
+    if inner.is_empty() {
+        format!("{dir_name}.info")
+    } else {
+        format!("{inner}/{dir_name}.info")
+    }
+}
+
+/// Settle which of several slave candidates is the drawer's title, by
+/// consulting its icon — the one case that is answerable, the same as
+/// [`super::drawer::resolve_ambiguous`]'s own reasoning for an unpacked
+/// drawer. `Ok(None)` for every outcome that settles nothing: no icon in the
+/// archive, an icon ART cannot parse, or a `SLAVE=` naming neither candidate.
+/// Called only once a drawer is already known to hold more than one slave, so
+/// an icon is decompressed only for the rare ambiguous case — never on the
+/// 893-drawer common path.
+fn settle_by_icon<'e>(
+    backend: &mut dyn archive::ArchiveBackend,
+    entries: &[archive::ArchiveEntry],
+    inner: &str,
+    candidates: &[(usize, &'e str)],
+) -> CoreResult<Option<(usize, &'e str)>> {
+    let dir_name = drawer_name_of(inner);
+    let icon_name = icon_entry_name(inner, &dir_name);
+    let Some(icon_index) = entries
+        .iter()
+        .position(|entry| !entry.is_dir && entry.name == icon_name)
+    else {
+        return Ok(None);
+    };
+
+    // Bounded, the same as a slave's own read: an icon is small, and this
+    // archive is a file ART did not write.
+    let bytes = backend.read(icon_index, MAX_SLAVE_BYTES)?;
+    let Ok(tooltypes) = amigaicon::tooltypes(&bytes) else {
+        return Ok(None);
+    };
+    let Some(named) = whdload::launch_options(&tooltypes).slave else {
+        return Ok(None);
+    };
+
+    Ok(candidates
+        .iter()
+        .find(|(_, name)| name.eq_ignore_ascii_case(&named))
+        .copied())
+}
+
 /// Catalogue every WHDLoad drawer inside the archive at `path`, without
 /// unpacking anything.
 ///
@@ -86,9 +146,10 @@ fn drawer_name_of(inner: &str) -> String {
 /// whose parent path carries no `data`/`Data` component, and — for a parent
 /// path named by exactly one such member — reads that member's bytes (bounded
 /// by [`MAX_SLAVE_BYTES`]) and parses it with [`slave::read_slave`]. A parent
-/// path named by more than one candidate is refused by omission: no title is
-/// catalogued for it, the same answer the directory reader gives a drawer
-/// with two slaves and nothing to settle which is the real one.
+/// path named by more than one candidate is settled by [`settle_by_icon`]
+/// when the drawer's icon names one of them; otherwise it is refused by
+/// omission — no title is catalogued for it, and a debug line names the
+/// drawer and its candidates.
 pub fn read_archive_drawers(path: &Path) -> CoreResult<Vec<GameRecord>> {
     let mut backend = archive::open(path)?;
     let entries = backend.entries()?;
@@ -117,20 +178,19 @@ pub fn read_archive_drawers(path: &Path) -> CoreResult<Vec<GameRecord>> {
     for (inner, candidates) in by_inner {
         let (index, slave_name) = match candidates.as_slice() {
             [(index, slave_name)] => (*index, *slave_name),
-            many => {
-                // Nothing here can ask an icon's `SLAVE=` ToolType without
-                // decompressing it, so unlike `readers::drawer::resolve_ambiguous`
-                // this has no way to settle it — the drawer is refused by
-                // omission, and this is the only trace that it was ever seen.
-                let names: Vec<&str> = many.iter().map(|(_, name)| *name).collect();
-                log::debug!(
-                    "gameindex: skipping {inner}: {} candidate slaves ({}) and nothing states \
-                     which is the title",
-                    many.len(),
-                    names.join(", ")
-                );
-                continue;
-            }
+            many => match settle_by_icon(backend.as_mut(), &entries, inner, many)? {
+                Some(settled) => settled,
+                None => {
+                    let names: Vec<&str> = many.iter().map(|(_, name)| *name).collect();
+                    log::debug!(
+                        "gameindex: skipping {inner}: {} candidate slaves ({}) and nothing \
+                         states which is the title",
+                        many.len(),
+                        names.join(", ")
+                    );
+                    continue;
+                }
+            },
         };
         let slave_name = slave_name.to_string();
 
@@ -201,6 +261,7 @@ pub fn read_archive_drawers(path: &Path) -> CoreResult<Vec<GameRecord>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::amigaicon::tests_support::synthetic_icon;
     use crate::core::gameindex::readers::slave::tests_support::build_slave;
     use std::path::PathBuf;
 
@@ -324,12 +385,12 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// Two slaves in the same drawer is not this reader's to settle — there
-    /// is no icon to decompress and ask, unlike the directory reader. The
-    /// drawer is refused by omission: neither candidate becomes a title, but
-    /// every other drawer in the archive still does.
+    /// Two slaves and **no icon in the archive at all**: nothing can settle
+    /// which is the title, so the drawer is refused by omission — neither
+    /// candidate becomes a title, but every other drawer in the archive
+    /// still does.
     #[test]
-    fn a_drawer_with_two_slaves_yields_no_title_but_others_still_do() {
+    fn a_drawer_with_two_slaves_and_no_icon_yields_no_title_but_others_still_do() {
         let root = scratch("ambiguous");
         let archive = synthetic_lha(
             &root,
@@ -345,6 +406,45 @@ mod tests {
             Media::WhdloadArchive { inner, .. } => assert_eq!(inner, "D/Clean"),
             other => panic!("got {other:?}"),
         }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Two slaves, but the drawer's own icon states which — the one case
+    /// that is answerable, the same reasoning `readers::drawer::resolve_ambiguous`
+    /// already uses for an unpacked drawer. The icon is `Ambiguous.info`
+    /// *inside* `D/Ambiguous/` (named for the drawer, per `icon_entry_name`),
+    /// the same place `dir.join(format!("{dir_name}.info"))` looks on disk.
+    ///
+    /// A third, unrelated drawer with its own single slave proves the
+    /// resolution did not accidentally consume or disturb it.
+    #[test]
+    fn a_drawer_with_two_slaves_is_settled_by_its_icons_slave_tooltype() {
+        let root = scratch("icon-settles");
+        let icon = synthetic_icon(&["SLAVE=Two.slave", "PRELOAD"], 0, b"");
+        let archive = synthetic_lha(
+            &root,
+            &[
+                ("D/Ambiguous/One.slave", slave_bytes("One")),
+                ("D/Ambiguous/Two.slave", slave_bytes("Two")),
+                ("D/Ambiguous/Ambiguous.info", icon),
+                ("D/Clean/Clean.slave", slave_bytes("Clean")),
+            ],
+        );
+        let found = read_archive_drawers(&archive).unwrap();
+        assert_eq!(
+            found.len(),
+            2,
+            "the icon settles the ambiguous drawer, and the clean one still stands: {found:?}"
+        );
+        let by_inner: HashMap<&str, &str> = found
+            .iter()
+            .map(|r| match &r.media {
+                Media::WhdloadArchive { inner, slave, .. } => (inner.as_str(), slave.as_str()),
+                other => panic!("got {other:?}"),
+            })
+            .collect();
+        assert_eq!(by_inner.get("D/Ambiguous"), Some(&"Two.slave"));
+        assert_eq!(by_inner.get("D/Clean"), Some(&"Clean.slave"));
         std::fs::remove_dir_all(&root).ok();
     }
 
