@@ -191,22 +191,13 @@ pub struct Backdrop {
     pub content: Content,
 }
 
-/// Decode ISO-8859-1 bytes to a `String`. Every byte 0..=255 maps directly
-/// to the Unicode code point of the same value, so this never fails — an
-/// Amiga path is text on the Amiga's own encoding, not UTF-8.
-fn decode_latin1(bytes: &[u8]) -> String {
-    bytes.iter().map(|&b| char::from(b)).collect()
-}
-
-/// Encode a `String` back to ISO-8859-1 bytes. Refuses a character outside
-/// the encoding rather than lossily substituting one.
+/// Encode a path back to ISO-8859-1 bytes. Refuses a character outside the
+/// encoding rather than lossily substituting one. Decoding uses
+/// [`super::decode_latin1`] directly — it never fails, so there is nothing
+/// for a local wrapper to add.
 fn encode_latin1(s: &str) -> CoreResult<Vec<u8>> {
-    s.chars()
-        .map(|c| {
-            u8::try_from(c as u32)
-                .map_err(|_| malformed(format!("path character '{c}' is outside ISO-8859-1")))
-        })
-        .collect()
+    super::encode_latin1(s)
+        .map_err(|c| malformed(format!("path character '{c}' is outside ISO-8859-1")))
 }
 
 /// Parse one `PTRN` chunk body.
@@ -233,7 +224,7 @@ pub fn read_backdrop(body: &[u8]) -> CoreResult<Backdrop> {
             planes: data.to_vec(),
         }
     } else {
-        Content::Picture(decode_latin1(data))
+        Content::Picture(super::decode_latin1(data))
     };
 
     Ok(Backdrop {
