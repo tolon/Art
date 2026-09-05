@@ -140,50 +140,19 @@ fn malformed_or_missing(rel: &str, root: &Path) -> CoreError {
     ))
 }
 
-/// Find a direct child of `dir` whose name matches `name` under AmigaDOS's
-/// own case-folding rule (`core::osinstall::amiga_names_equal` — the same
-/// fold `AdfSource`/`CdSource` already use to resolve a recipe path against
-/// real media, extended here to a real host directory because nothing in
-/// this codebase yet resolves a *host* tree path that way). A missing `dir`
-/// is "not found", not an error — the caller decides whether that is fatal.
-fn find_child_ci(dir: &Path, name: &str) -> CoreResult<Option<PathBuf>> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(CoreError::Io(err)),
-    };
-    for entry in entries {
-        let entry = entry?;
-        let file_name = entry.file_name();
-        let file_name = file_name.to_string_lossy();
-        if crate::core::osinstall::amiga_names_equal(&file_name, name) {
-            return Ok(Some(entry.path()));
-        }
-    }
-    Ok(None)
-}
-
-/// Resolve a `/`-separated path under `root`, one component at a time,
-/// case-insensitively. `Ok(None)` means some component was not found; it is
-/// not itself an error, so a caller that treats "absent" as a legitimate
-/// state (an optional file, a drawer that may not exist yet) is not forced
-/// into matching on an `Err`.
-fn resolve_ci_optional(root: &Path, rel: &str) -> CoreResult<Option<PathBuf>> {
-    let mut current = root.to_path_buf();
-    for segment in rel.split('/') {
-        match find_child_ci(&current, segment)? {
-            Some(next) => current = next,
-            None => return Ok(None),
-        }
-    }
-    Ok(Some(current))
-}
-
-/// [`resolve_ci_optional`], refusing by name — naming the full relative path
-/// asked for, so a user missing `Prefs/Env-Archive/Sys/WBPattern.prefs` is
-/// told exactly that rather than a generic "not found".
+/// [`crate::core::osinstall::resolve_ci_optional`], refusing by name — naming
+/// the full relative path asked for, so a user missing
+/// `Prefs/Env-Archive/Sys/WBPattern.prefs` is told exactly that rather than a
+/// generic "not found". `find_child_ci`/`resolve_ci_optional` themselves live
+/// in `core::osinstall` — see that module's own doc comment on
+/// `find_child_ci` for why: this module is built *on top of* `osinstall`
+/// already (`amiga_names_equal` comes from there too), and the shared
+/// case-insensitive walk lives in the lower-level module both this module
+/// and `osinstall::verify::check_prefs_paths` (Task 8) import, rather than
+/// either holding its own copy.
 fn resolve_ci(root: &Path, rel: &str) -> CoreResult<PathBuf> {
-    resolve_ci_optional(root, rel)?.ok_or_else(|| malformed_or_missing(rel, root))
+    crate::core::osinstall::resolve_ci_optional(root, rel)?
+        .ok_or_else(|| malformed_or_missing(rel, root))
 }
 
 /// Resolve `components` under `root`, matching an existing directory
@@ -195,7 +164,7 @@ fn resolve_ci(root: &Path, rel: &str) -> CoreResult<PathBuf> {
 fn resolve_dir_ci_or_default(root: &Path, components: &[&str]) -> CoreResult<PathBuf> {
     let mut current = root.to_path_buf();
     for &segment in components {
-        current = match find_child_ci(&current, segment)? {
+        current = match crate::core::osinstall::find_child_ci(&current, segment)? {
             Some(next) => next,
             None => current.join(segment),
         };
@@ -231,7 +200,7 @@ fn resolve_amiga_path(tree: &Path, amiga_path: &str) -> CoreResult<PathBuf> {
 /// This is a scaling hint, not a fact ART asserts to the user, so a
 /// corruption unrelated to the wallpaper request must not block it.
 fn screen_size_for_scaling(tree: &Path) -> (u16, u16) {
-    resolve_ci_optional(tree, SCREENMODE_REL)
+    crate::core::osinstall::resolve_ci_optional(tree, SCREENMODE_REL)
         .ok()
         .flatten()
         .and_then(|path| std::fs::read(path).ok())
@@ -331,7 +300,7 @@ fn plan_wallpaper(
             // the drawer itself exists yet.
             let drawer = resolve_dir_ci_or_default(tree, &BACKDROPS_DRAWER);
             let drawer = drawer?;
-            if find_child_ci(&drawer, &file_name)?.is_some() {
+            if crate::core::osinstall::find_child_ci(&drawer, &file_name)?.is_some() {
                 return Err(CoreError::SafetyRefused(format!(
                     "'{file_name}' already exists in the backdrops drawer; ART does not \
                      overwrite an existing backdrop"
@@ -415,7 +384,7 @@ fn plan_shell_defaults(tree: &Path) -> CoreResult<Vec<ShellDefaultPlan>> {
         let (dir_components, file_component) = components.split_at(components.len() - 1);
         let dir = resolve_dir_ci_or_default(&archive, dir_components)?;
         let file_name = file_component[0];
-        let path = match find_child_ci(&dir, file_name)? {
+        let path = match crate::core::osinstall::find_child_ci(&dir, file_name)? {
             Some(existing) => existing,
             None => dir.join(file_name),
         };
@@ -557,7 +526,7 @@ fn partial_commit_error(err: CoreError, committed: &[(PathBuf, Option<PathBuf>)]
 /// listing what is there is not a claim that something ought to be.
 pub fn backdrops_in_tree(tree: &Path) -> CoreResult<Vec<String>> {
     let drawer_rel = BACKDROPS_DRAWER.join("/");
-    let Some(drawer) = resolve_ci_optional(tree, &drawer_rel)? else {
+    let Some(drawer) = crate::core::osinstall::resolve_ci_optional(tree, &drawer_rel)? else {
         return Ok(Vec::new());
     };
     let mut names: Vec<String> = std::fs::read_dir(&drawer)?

@@ -576,6 +576,63 @@ fn fold_amiga_char(c: char) -> char {
     }
 }
 
+/// Find a direct child of `dir` whose name matches `name` under AmigaDOS's
+/// own case-folding rule ([`amiga_names_equal`]). A missing `dir` is "not
+/// found", not an error — the caller decides whether that is fatal.
+///
+/// Lives here, `pub(crate)`, rather than in either of its two callers:
+/// `core::appearance::resolve_ci`/`resolve_dir_ci_or_default` (Task 7,
+/// resolving a wallpaper request against the distribution tree it edits) and
+/// `core::osinstall::verify::check_prefs_paths` (Task 8, resolving a `PTRN`
+/// chunk's own Amiga path the same way — a tree holding `Default_Pal.iff`
+/// must satisfy a chunk naming `default_pal.iff`). `core::appearance` is
+/// built *on top of* this module already (it reads [`amiga_names_equal`]
+/// from here), so a copy living there would put this module's own `verify`
+/// in the position CLAUDE.md's core-independence rule forbids: a
+/// lower-level `core/` module importing a higher-level one. Both callers
+/// import this one function instead of one of them holding a second copy of
+/// the same one-component-at-a-time walk over real directory entries.
+pub(crate) fn find_child_ci(
+    dir: &std::path::Path,
+    name: &str,
+) -> CoreResult<Option<std::path::PathBuf>> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(CoreError::Io(err)),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if amiga_names_equal(&file_name, name) {
+            return Ok(Some(entry.path()));
+        }
+    }
+    Ok(None)
+}
+
+/// Resolve a `/`-separated path under `root`, one component at a time,
+/// case-insensitively, using [`find_child_ci`]. `Ok(None)` means some
+/// component was not found; it is not itself an error, so a caller that
+/// treats "absent" as a legitimate state (an optional file, a drawer that
+/// may not exist yet) is not forced into matching on an `Err`. See
+/// [`find_child_ci`]'s own doc comment for why this lives here rather than
+/// in one of its two callers.
+pub(crate) fn resolve_ci_optional(
+    root: &std::path::Path,
+    rel: &str,
+) -> CoreResult<Option<std::path::PathBuf>> {
+    let mut current = root.to_path_buf();
+    for segment in rel.split('/') {
+        match find_child_ci(&current, segment)? {
+            Some(next) => current = next,
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(current))
+}
+
 /// The **host** path a distribution-tree destination is written at (ART-160).
 ///
 /// A distribution tree is an Amiga volume held in a host folder, so its file

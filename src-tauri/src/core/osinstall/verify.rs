@@ -172,14 +172,16 @@
 //! `an_extra_file_on_the_volume_that_is_not_in_the_manifest_is_simply_invisible_to_the_report`
 //! below, which plants one and shows the report is unaffected either way.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::amigaprefs::{iff, wbpattern};
 use crate::core::card::read_card;
-use crate::core::error::CoreResult;
+use crate::core::error::{CoreError, CoreResult};
 use crate::core::hashing::sha256_bytes;
 use crate::core::osinstall::apply::{DistributionManifest, FileRecord};
+use crate::core::osinstall::resolve_ci_optional;
 use crate::core::preload::native::{
     area_for_slot, family_of, from_pfs3, partition_by_index, partition_region, pfs3_protection,
     DosFamily,
@@ -221,7 +223,15 @@ pub struct FileVerdict {
 
 /// What reading the volume back found, one verdict per [`FileRecord`] in the
 /// manifest — never more (Decision 3) and never fewer: every record gets
-/// exactly one verdict, so `files.len() == manifest.files.len()` always.
+/// exactly one verdict. Since Task 8, `files` also carries one further
+/// verdict per checkable backdrop-path claim [`check_prefs_paths`] found in
+/// the distribution tree's own prefs files — a check on the tree ART built,
+/// independent of anything a manifest happens to record, so
+/// `files.len() >= manifest.files.len()` rather than `==`; the manifest-only
+/// invariant lives on as `files.len() - manifest.files.len()` equalling
+/// `check_prefs_paths`'s own result length, which
+/// `an_extra_file_on_the_volume_that_is_not_in_the_manifest_is_simply_invisible_to_the_report`
+/// (below) still pins directly.
 ///
 /// `rename_all = "camelCase"` (Task 12 fix round 1): without it, `not_checked`
 /// crossed the wire as `not_checked` while `src/lib/osinstall.ts` read
@@ -240,7 +250,12 @@ pub struct VerifyReport {
 
 /// Read `index`'s partition on `image` (see `core::card` for what `slot` and
 /// `index` mean — one MBR slot, one partition inside that disk's own RDB) and
-/// check every file `manifest` says `apply()` put there.
+/// check every file `manifest` says `apply()` put there, plus — Task 8 —
+/// whether every backdrop path `dist_root`'s own prefs files name actually
+/// resolves inside that same distribution tree. See [`check_prefs_paths`]'s
+/// own doc comment for what that check is and why it exists (the dist-3.2
+/// orphan: a released tree whose `WBPattern.prefs` named two files that were
+/// never in it, and nothing noticed for a month because nothing looked).
 ///
 /// Structural failures — the image will not open, the slot or index does not
 /// exist, the partition's own geometry cannot be computed — are a hard `Err`:
@@ -249,11 +264,20 @@ pub struct VerifyReport {
 /// than reporting a doomed attempt as a summary. Once the volume itself opens,
 /// every problem after that is a **verdict**, not an error: a missing file
 /// does not stop the run, it becomes that one file's `Fail`.
+///
+/// `dist_root` is a wholly separate resource from `image` — a host folder,
+/// not a card — so a problem reading *it* must not cost the caller the
+/// volume-based verdicts already computed: an unexpected error out of
+/// [`check_prefs_paths`] becomes one more `Fail` verdict appended to `files`,
+/// never a hard `Err` that discards everything already found. `NotFound` is
+/// not "unexpected" here — [`check_prefs_paths`] already turns "no prefs
+/// directory at all" into its own `NotChecked` verdict rather than an `Err`.
 pub fn verify_volume(
     image: &Path,
     slot: Option<usize>,
     index: usize,
     manifest: &DistributionManifest,
+    dist_root: &Path,
 ) -> CoreResult<VerifyReport> {
     let card = read_card(image)?;
     let area = area_for_slot(&card, slot)?;
@@ -261,7 +285,7 @@ pub fn verify_volume(
     let (offset, length, block_size) = partition_region(area, part)?;
     let dos = DosType::new(part.dostype.to_be_bytes());
 
-    let files = match family_of(dos) {
+    let mut files = match family_of(dos) {
         DosFamily::Ffs => verify_ffs_files(
             image,
             offset,
@@ -285,6 +309,14 @@ pub fn verify_volume(
             })
             .collect(),
     };
+
+    match check_prefs_paths(dist_root) {
+        Ok(prefs_verdicts) => files.extend(prefs_verdicts),
+        Err(err) => files.push(fail(
+            PREFS_SYS_DIR_REL,
+            format!("the distribution tree's own prefs paths could not be checked: {err}"),
+        )),
+    }
 
     Ok(summarize(files))
 }
@@ -572,6 +604,224 @@ fn fail(path: &str, detail: impl Into<String>) -> FileVerdict {
 }
 
 // ---------------------------------------------------------------------------
+// Task 8 — every prefs path resolves
+// ---------------------------------------------------------------------------
+//
+// A distribution tree can be a perfectly good FFS/PFS3 volume by every check
+// above and still boot to a Workbench with no explanation, because nothing
+// upstream ever asked whether a `PTRN` chunk's own claim is true. That is
+// not hypothetical: the AmigaOS 3.2 tree ART itself built in August named
+// `Sys:Prefs/Presets/Backdrops/default_pal.iff` and `.../pattern.iff` in its
+// own `WBPattern.prefs`, and `Prefs/Presets/` held `Backdrops.info` and no
+// `Backdrops` drawer at all. Nothing noticed for a month, because nothing
+// looked. This section is that look.
+
+/// Where AmigaOS's own `Env-Archive` prefs live inside a distribution tree,
+/// resolved case-insensitively — see [`crate::core::osinstall::resolve_ci_optional`],
+/// the same helper `core::appearance` resolves `WBPATTERN_REL`/`SCREENMODE_REL`
+/// against.
+const PREFS_SYS_DIR_REL: &str = "Prefs/Env-Archive/Sys";
+
+/// Every backdrop path a distribution tree's own prefs files claim, checked
+/// against the tree itself: for every `*.prefs` file under
+/// [`PREFS_SYS_DIR_REL`], every `PTRN` chunk whose content is a picture
+/// (never a pattern — see below), does the Amiga path it names actually
+/// resolve under `tree`?
+///
+/// One [`FileVerdict`] per **resolvable claim**, not one per prefs file and
+/// not one per chunk. A `PTRN` in [`wbpattern::Content::Pattern`] form names
+/// no path at all — the release's own screen backdrop ships that way, a
+/// `Depth=0`, 256-byte blank buffer — and is silently skipped: reporting a
+/// verdict for it would mean inventing a claim the chunk never made.
+///
+/// A tree with no `*.prefs` file under [`PREFS_SYS_DIR_REL`] at all produced
+/// nothing to check — not zero problems, *nothing looked at* — which is
+/// [`CheckState::NotChecked`], never rendered as a pass (module doc's G8
+/// section). Everything else this function finds is a **checked** claim, so
+/// it lands on `Pass` or `Fail`, matching this module's own convention that
+/// an error actually encountered while attempting a check (a prefs file that
+/// will not parse, a chunk that will not decode) is `Fail`, the same as
+/// `verify_ffs_one`'s "its path could not be read" — `NotChecked` is
+/// reserved for a check ART never attempted at all, by design (no prefs
+/// found, or a path naming an assign other than `Sys:`, which a
+/// distribution tree simply has no way to resolve).
+pub fn check_prefs_paths(tree: &Path) -> CoreResult<Vec<FileVerdict>> {
+    let sys_dir = match resolve_ci_optional(tree, PREFS_SYS_DIR_REL)? {
+        Some(dir) => dir,
+        None => return Ok(vec![no_prefs_checked()]),
+    };
+
+    let mut prefs_paths: Vec<PathBuf> = match std::fs::read_dir(&sys_dir) {
+        Ok(entries) => {
+            let mut out = Vec::new();
+            for entry in entries {
+                let entry = entry?;
+                let is_prefs_file = entry.file_type()?.is_file()
+                    && entry
+                        .path()
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|ext| ext.eq_ignore_ascii_case("prefs"))
+                        .unwrap_or(false);
+                if is_prefs_file {
+                    out.push(entry.path());
+                }
+            }
+            out
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(err) => return Err(CoreError::Io(err)),
+    };
+    // Deterministic order, so the report is stable and reproducible run to
+    // run — the same reason `backdrops_in_tree` sorts its own listing.
+    prefs_paths.sort();
+
+    if prefs_paths.is_empty() {
+        return Ok(vec![no_prefs_checked()]);
+    }
+
+    let mut verdicts = Vec::new();
+    for prefs_path in prefs_paths {
+        let file_name = prefs_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| prefs_path.display().to_string());
+        let prefs_rel = format!("{PREFS_SYS_DIR_REL}/{file_name}");
+
+        let bytes = match std::fs::read(&prefs_path) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                verdicts.push(fail(
+                    &prefs_rel,
+                    format!("'{prefs_rel}' could not be read: {err}"),
+                ));
+                continue;
+            }
+        };
+
+        let prefs = match iff::parse(&bytes) {
+            Ok(prefs) => prefs,
+            Err(err) => {
+                // A parse failure is a concrete, checked problem — ART
+                // actually tried to read this file and it is malformed —
+                // not an incapability decided in advance. See this
+                // function's own doc comment: that is `Fail`, matching
+                // `verify_ffs_one`, not a `NotChecked` shrug.
+                verdicts.push(fail(
+                    &prefs_rel,
+                    format!("'{prefs_rel}' does not parse as an IFF prefs file: {err}"),
+                ));
+                continue;
+            }
+        };
+
+        for (chunk_index, chunk) in prefs.chunks().iter().enumerate() {
+            if chunk.id != *b"PTRN" {
+                continue;
+            }
+            let body = match prefs.body(chunk_index) {
+                Ok(body) => body,
+                Err(_) => {
+                    // `chunk_index` was taken from this same `prefs.chunks()`
+                    // a line above, so `body()` cannot refuse it — its
+                    // fallible path exists only for a caller-computed index
+                    // (see `iff::PrefsFile::body`'s own doc comment).
+                    // Unreachable by ART's own arithmetic, not by a third
+                    // party's behaviour, so a `debug_assert!` records the
+                    // invariant rather than a runtime `Err` branch nothing
+                    // can reach.
+                    debug_assert!(
+                        false,
+                        "an index taken from this file's own chunks() cannot be out of range"
+                    );
+                    continue;
+                }
+            };
+            let backdrop = match wbpattern::read_backdrop(body) {
+                Ok(backdrop) => backdrop,
+                Err(err) => {
+                    verdicts.push(fail(
+                        &prefs_rel,
+                        format!("'{prefs_rel}' carries a PTRN chunk that does not parse: {err}"),
+                    ));
+                    continue;
+                }
+            };
+            let amiga_path = match backdrop.content {
+                // Names no path at all — see this function's own doc comment.
+                wbpattern::Content::Pattern { .. } => continue,
+                wbpattern::Content::Picture(path) => path,
+            };
+            verdicts.push(check_one_backdrop_path(tree, &prefs_rel, &amiga_path)?);
+        }
+    }
+    Ok(verdicts)
+}
+
+/// The one verdict for a tree with nothing under [`PREFS_SYS_DIR_REL`] to
+/// check at all — no such directory, or a directory with no `*.prefs` file
+/// in it. `NotChecked`, and the detail says exactly why, per G8: "ART did
+/// not look" must never be rendered as a tick.
+fn no_prefs_checked() -> FileVerdict {
+    FileVerdict {
+        path: PREFS_SYS_DIR_REL.to_string(),
+        state: CheckState::NotChecked,
+        detail: Some(format!(
+            "the tree carries no '{PREFS_SYS_DIR_REL}' directory (or no *.prefs file inside \
+             it), so no backdrop path could be checked"
+        )),
+    }
+}
+
+/// One `Content::Picture` claim: does `amiga_path` resolve inside `tree`?
+///
+/// The verdict names both ends, per the Task 8 brief's own rule: `path` is
+/// the Amiga path the chunk actually named (so the missing file is never
+/// left out), and `detail` opens with the prefs file that named it (so the
+/// verdict is never just "a backdrop is missing" with no way to find which
+/// prefs file said so) before saying why.
+fn check_one_backdrop_path(
+    tree: &Path,
+    prefs_rel: &str,
+    amiga_path: &str,
+) -> CoreResult<FileVerdict> {
+    let Some(rel) = amiga_path.strip_prefix("Sys:") else {
+        // A path naming a different assign (`Work:`, say) is not something a
+        // distribution tree can resolve — a tree has no notion of what
+        // `Work:` points at on the machine that eventually mounts it.
+        // Reporting it as missing would be exactly the confident-wrong
+        // sentence this module exists to avoid (CLAUDE.md, "the failure that
+        // does not crash"): ART cannot know the claim is false, so it must
+        // not say so. `NotChecked`, not `Fail`.
+        return Ok(FileVerdict {
+            path: amiga_path.to_string(),
+            state: CheckState::NotChecked,
+            detail: Some(format!(
+                "named by '{prefs_rel}'; '{amiga_path}' names an assign other than 'Sys:', \
+                 which a distribution tree has no way to resolve"
+            )),
+        });
+    };
+
+    match resolve_ci_optional(tree, rel)? {
+        Some(_) => Ok(FileVerdict {
+            path: amiga_path.to_string(),
+            state: CheckState::Pass,
+            detail: None,
+        }),
+        None => Ok(FileVerdict {
+            path: amiga_path.to_string(),
+            state: CheckState::Fail,
+            detail: Some(format!(
+                "named by '{prefs_rel}'; '{amiga_path}' was not found under this distribution \
+                 tree ('{}')",
+                tree.display()
+            )),
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -580,6 +830,7 @@ mod tests {
     use crate::core::osinstall::fixtures;
     use crate::core::preload::{native::NativeFormatter, VolumeFormatter};
     use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
+    use crate::core::ScratchDir;
     use std::path::PathBuf;
 
     /// A counter, not just `tag`: several tests below call helpers like
@@ -692,7 +943,12 @@ mod tests {
     /// legitimately expect every file to `Pass` — not a PFS3 fixture, whose
     /// content is never confirmed at all (Decision 2), which would make
     /// that same expectation false by this module's own design.
-    fn written_volume() -> (PathBuf, DistributionManifest) {
+    ///
+    /// Returns the source `tree` too (not just the volume built from it) —
+    /// every caller now also needs somewhere to pass as `verify_volume`'s
+    /// `dist_root`, and this is the same tree that was actually copied in,
+    /// rather than an unrelated stand-in.
+    fn written_volume() -> (PathBuf, DistributionManifest, PathBuf) {
         let dir = scratch("written-volume");
         let content = b"cmd";
         let image = formatted_ffs_image(&dir);
@@ -700,7 +956,7 @@ mod tests {
         NativeFormatter
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
-        (image, manifest_for_load_module(content))
+        (image, manifest_for_load_module(content), tree)
     }
 
     /// The same manifest as `written_volume` — it expects `--p-rwed` — but
@@ -708,7 +964,7 @@ mod tests {
     /// volume and the manifest genuinely disagree about `C/LoadModule`'s
     /// protection. `written_volume`'s own content and size stay correct, so
     /// this isolates the one field under test.
-    fn written_volume_with_the_pure_bit_dropped() -> (PathBuf, DistributionManifest) {
+    fn written_volume_with_the_pure_bit_dropped() -> (PathBuf, DistributionManifest, PathBuf) {
         let dir = scratch("pure-bit-dropped");
         let content = b"cmd";
         let image = formatted_ffs_image(&dir);
@@ -716,7 +972,7 @@ mod tests {
         NativeFormatter
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
-        (image, manifest_for_load_module(content))
+        (image, manifest_for_load_module(content), tree)
     }
 
     /// Fix round 2's own finding: `verify_ffs_files` used to open the image
@@ -736,13 +992,13 @@ mod tests {
     /// the same tag fail silently rather than actually clear it).
     #[test]
     fn a_read_only_image_file_still_produces_a_report() {
-        let (image, manifest) = written_volume();
+        let (image, manifest, tree) = written_volume();
 
         let mut perms = std::fs::metadata(&image).unwrap().permissions();
         perms.set_readonly(true);
         std::fs::set_permissions(&image, perms).unwrap();
 
-        let result = verify_volume(&image, None, 1, &manifest);
+        let result = verify_volume(&image, None, 1, &manifest, &tree);
 
         // Restore write access before asserting, so a failed assertion does
         // not also leave a read-only file behind in the scratch directory.
@@ -760,15 +1016,15 @@ mod tests {
 
     #[test]
     fn every_file_in_the_manifest_is_found_with_its_size_and_its_bits() {
-        let (image, manifest) = written_volume();
-        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+        let (image, manifest, tree) = written_volume();
+        let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
         assert_eq!(report.failed, 0, "{:?}", report.files);
         assert_eq!(report.passed, manifest.files.len());
     }
 
     #[test]
     fn a_missing_file_is_a_fail_and_says_which_one() {
-        let (image, mut manifest) = written_volume();
+        let (image, mut manifest, tree) = written_volume();
         manifest.files.push(FileRecord {
             path: "C/NeverWritten".into(),
             component: "workbench-base".into(),
@@ -779,7 +1035,7 @@ mod tests {
             overwrote: None,
             host_path: None,
         });
-        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+        let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
         assert_eq!(report.failed, 1);
         assert!(report
             .files
@@ -796,9 +1052,9 @@ mod tests {
     /// them corrupt *content* specifically.
     #[test]
     fn content_that_disagrees_with_the_manifests_sha256_is_a_fail() {
-        let (image, mut manifest) = written_volume();
+        let (image, mut manifest, tree) = written_volume();
         manifest.files[0].sha256 = "0".repeat(64); // not b"cmd"'s real hash
-        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+        let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
         assert_eq!(report.failed, 1);
         assert_eq!(report.files[0].state, CheckState::Fail);
         assert!(
@@ -819,8 +1075,8 @@ mod tests {
     /// still turn this test green.
     #[test]
     fn a_file_whose_protection_bits_are_wrong_is_a_fail_not_a_pass() {
-        let (image, manifest) = written_volume_with_the_pure_bit_dropped();
-        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+        let (image, manifest, tree) = written_volume_with_the_pure_bit_dropped();
+        let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
         let verdict = report
             .files
             .iter()
@@ -843,8 +1099,8 @@ mod tests {
     /// what it did not look at must never render as a tick.
     #[test]
     fn what_was_not_checked_is_its_own_state_and_never_a_pass() {
-        let (image, manifest) = written_volume();
-        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+        let (image, manifest, tree) = written_volume();
+        let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
         assert_eq!(
             report.passed + report.failed + report.not_checked,
             report.files.len(),
@@ -876,14 +1132,19 @@ mod tests {
             .unwrap();
         let manifest = manifest_for_load_module(content);
 
-        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+        let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
 
         assert_eq!(
             report.passed, 0,
             "PFS3 content is never independently confirmed here"
         );
         assert_eq!(report.failed, 0);
-        assert_eq!(report.not_checked, 1);
+        assert_eq!(
+            report.not_checked, 2,
+            "the PFS3 content itself, plus Task 8's own NotChecked for a tree with no prefs \
+             files at all: {:?}",
+            report.files
+        );
         let verdict = &report.files[0];
         assert_eq!(verdict.state, CheckState::NotChecked);
         assert!(
@@ -902,10 +1163,14 @@ mod tests {
         let image = formatted_pfs3_image(&dir);
         let manifest = manifest_for_load_module(b"cmd"); // never copied in
 
-        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+        let report = verify_volume(&image, None, 1, &manifest, &dir).unwrap();
 
         assert_eq!(report.failed, 1);
-        assert_eq!(report.not_checked, 0);
+        assert_eq!(
+            report.not_checked, 1,
+            "Task 8's own NotChecked for a tree with no prefs files at all: {:?}",
+            report.files
+        );
         assert_eq!(report.files[0].state, CheckState::Fail);
     }
 
@@ -924,10 +1189,14 @@ mod tests {
         let mut manifest = manifest_for_load_module(content);
         manifest.files[0].bytes = 999; // content is really 3 bytes
 
-        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+        let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
 
         assert_eq!(report.failed, 1);
-        assert_eq!(report.not_checked, 0);
+        assert_eq!(
+            report.not_checked, 1,
+            "Task 8's own NotChecked for a tree with no prefs files at all: {:?}",
+            report.files
+        );
         let verdict = &report.files[0];
         assert_eq!(verdict.state, CheckState::Fail);
         assert!(
@@ -954,10 +1223,14 @@ mod tests {
         let mut manifest = manifest_for_load_module(content);
         manifest.files[0].protection = Some(0x00);
 
-        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+        let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
 
         assert_eq!(report.failed, 1);
-        assert_eq!(report.not_checked, 0);
+        assert_eq!(
+            report.not_checked, 1,
+            "Task 8's own NotChecked for a tree with no prefs files at all: {:?}",
+            report.files
+        );
         let verdict = &report.files[0];
         assert_eq!(verdict.state, CheckState::Fail);
         assert!(
@@ -988,10 +1261,15 @@ mod tests {
         let mut manifest = manifest_for_load_module(content);
         manifest.files[0].protection = Some(0x1_0000); // does not fit a u8
 
-        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+        let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
 
         assert_eq!(report.failed, 0, "{:?}", report.files);
-        assert_eq!(report.not_checked, 1);
+        assert_eq!(
+            report.not_checked, 2,
+            "the unfittable protection itself, plus Task 8's own NotChecked for a tree with no \
+             prefs files at all: {:?}",
+            report.files
+        );
         let detail = report.files[0].detail.as_deref().unwrap_or("");
         assert!(detail.contains("not checked"), "{detail}");
         assert!(detail.contains("does not fit"), "{detail}");
@@ -1018,9 +1296,14 @@ mod tests {
         let mut manifest = manifest_for_load_module(content);
         manifest.files[0].protection = None;
 
-        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+        let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
 
-        assert_eq!(report.not_checked, 1);
+        assert_eq!(
+            report.not_checked, 2,
+            "no recorded protection, plus Task 8's own NotChecked for a tree with no prefs \
+             files at all: {:?}",
+            report.files
+        );
         let detail = report.files[0].detail.as_deref().unwrap_or("");
         assert!(detail.contains("no expected protection"), "{detail}");
         assert!(
@@ -1039,11 +1322,16 @@ mod tests {
         let image = card_with_partition(&dir, AmigaHardDiskFs::Sfs0, 8);
         let manifest = manifest_for_load_module(b"cmd");
 
-        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+        let report = verify_volume(&image, None, 1, &manifest, &dir).unwrap();
 
         assert_eq!(report.passed, 0);
         assert_eq!(report.failed, 0);
-        assert_eq!(report.not_checked, 1);
+        assert_eq!(
+            report.not_checked, 2,
+            "the unrecognised filesystem itself, plus Task 8's own NotChecked for a tree with \
+             no prefs files at all: {:?}",
+            report.files
+        );
         assert!(report.files[0].detail.is_some());
     }
 
@@ -1061,11 +1349,16 @@ mod tests {
         let image = card_with_partition(&dir, AmigaHardDiskFs::Custom(DOS5_FFS_DIRCACHE), 8);
         let manifest = manifest_for_load_module(b"cmd");
 
-        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+        let report = verify_volume(&image, None, 1, &manifest, &dir).unwrap();
 
         assert_eq!(report.passed, 0);
         assert_eq!(report.failed, 0);
-        assert_eq!(report.not_checked, 1);
+        assert_eq!(
+            report.not_checked, 2,
+            "the dircache refusal itself, plus Task 8's own NotChecked for a tree with no \
+             prefs files at all: {:?}",
+            report.files
+        );
         let detail = report.files[0].detail.as_deref().unwrap_or("");
         assert!(detail.contains("dircache"), "{detail}");
     }
@@ -1107,7 +1400,7 @@ mod tests {
             layers: Vec::new(),
         };
 
-        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+        let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
         assert_eq!(report.passed, 1, "{:?}", report.files);
     }
 
@@ -1132,12 +1425,21 @@ mod tests {
             .unwrap();
         let manifest = manifest_for_load_module(b"cmd");
 
-        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+        let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
 
         assert_eq!(
             report.files.len(),
-            manifest.files.len(),
-            "one verdict per manifest record, never one for a file the manifest never named"
+            // One verdict per manifest record, never one for a file the
+            // manifest never named — plus, since Task 8, one further
+            // verdict for `tree`'s own prefs check, which finds no prefs
+            // file at all here and so contributes exactly one `NotChecked`.
+            // That is `check_prefs_paths`'s own business, wholly unrelated
+            // to "Unlisted" — this assertion pins the count rather than
+            // silently drifting whenever `check_prefs_paths` finds
+            // something to report.
+            manifest.files.len() + 1,
+            "{:?}",
+            report.files
         );
         assert!(
             report.files.iter().all(|f| f.path != "Unlisted"),
@@ -1146,5 +1448,225 @@ mod tests {
         );
         assert_eq!(report.passed, 1);
         assert_eq!(report.failed, 0);
+    }
+
+    // ---- Task 8: every prefs path resolves ----
+    //
+    // These call `check_prefs_paths` directly rather than building a full
+    // card and volume — the claim under test is about the *tree*
+    // `apply()`'s own recipe produces, not about anything a volume write or
+    // read adds on top, and `verify_volumes_report_folds_in_the_trees_own_
+    // prefs_check` below proves the fold-in into `VerifyReport` separately.
+    //
+    // Fixtures use `core::ScratchDir`, not `fixtures::scratch` — self-
+    // removing on `Drop`, per this round's own convention (`core/appearance`
+    // already uses it and CLAUDE.md names it directly), rather than a
+    // trailing `remove_dir_all` that a panicking test would skip.
+
+    fn write_wbpattern_picture(tree: &Path, amiga_path: &str) {
+        let sys_dir = tree.join("Prefs").join("Env-Archive").join("Sys");
+        std::fs::create_dir_all(&sys_dir).unwrap();
+        let backdrop = wbpattern::Backdrop {
+            which: wbpattern::Which::Root,
+            placement: wbpattern::Placement::Scale,
+            precision: wbpattern::Precision::Image,
+            dither: wbpattern::Dither::Good,
+            no_remap: false,
+            other_flags: 0,
+            revision: 0,
+            content: wbpattern::Content::Picture(amiga_path.to_string()),
+        };
+        let body = wbpattern::write_backdrop(&backdrop).unwrap();
+        let bytes =
+            crate::core::amigaprefs::iff::tests_support::synthetic_prefs(&[(*b"PTRN", body)]);
+        std::fs::write(sys_dir.join("WBPattern.prefs"), bytes).unwrap();
+    }
+
+    /// The release's own screen `PTRN`: `WBPF_PATTERN` set, `Depth=0`, a
+    /// 256-byte blank buffer — measured in `wbpattern`'s own module doc.
+    /// Names no path at all.
+    fn write_wbpattern_pattern_only(tree: &Path) {
+        let sys_dir = tree.join("Prefs").join("Env-Archive").join("Sys");
+        std::fs::create_dir_all(&sys_dir).unwrap();
+        let backdrop = wbpattern::Backdrop {
+            which: wbpattern::Which::Screen,
+            placement: wbpattern::Placement::Tile,
+            precision: wbpattern::Precision::Default,
+            dither: wbpattern::Dither::Default,
+            no_remap: false,
+            other_flags: 0,
+            revision: 0,
+            content: wbpattern::Content::Pattern {
+                depth: 0,
+                planes: vec![0u8; 256],
+            },
+        };
+        let body = wbpattern::write_backdrop(&backdrop).unwrap();
+        let bytes =
+            crate::core::amigaprefs::iff::tests_support::synthetic_prefs(&[(*b"PTRN", body)]);
+        std::fs::write(sys_dir.join("WBPattern.prefs"), bytes).unwrap();
+    }
+
+    /// The dist-3.2 orphan, exactly: a `WBPattern.prefs` naming a backdrop
+    /// that was never placed in the tree. The verdict must name both the
+    /// prefs file and the missing Amiga path, so a user can act on it
+    /// without opening a hex editor (Task 8 brief, rule 2).
+    #[test]
+    fn a_backdrop_the_tree_does_not_have_is_reported_by_both_names() {
+        let scratch = ScratchDir::new("art-verify-prefs", "missing-backdrop");
+        let tree = scratch.path();
+        write_wbpattern_picture(tree, "Sys:Prefs/Presets/Backdrops/default_pal.iff");
+        // No Backdrops drawer at all — `Prefs/Presets/` held only
+        // `Backdrops.info` in the real tree this check exists to catch.
+
+        let verdicts = check_prefs_paths(tree).unwrap();
+
+        assert_eq!(verdicts.len(), 1, "{verdicts:?}");
+        let verdict = &verdicts[0];
+        assert_eq!(verdict.state, CheckState::Fail, "{verdict:?}");
+        assert!(
+            verdict.path.contains("default_pal.iff"),
+            "the verdict must name the missing Amiga path: {verdict:?}"
+        );
+        let detail = verdict.detail.as_deref().unwrap_or("");
+        assert!(
+            detail.contains("WBPattern.prefs"),
+            "the verdict must name the prefs file that claimed it: {detail}"
+        );
+    }
+
+    /// AmigaDOS is case-insensitive; the host is not. A tree holding
+    /// `Default_Pal.iff` must satisfy a `PTRN` naming `default_pal.iff`.
+    #[test]
+    fn a_backdrop_the_tree_does_have_passes_even_when_the_case_differs() {
+        let scratch = ScratchDir::new("art-verify-prefs", "case-insensitive");
+        let tree = scratch.path();
+        write_wbpattern_picture(tree, "Sys:Prefs/Presets/Backdrops/default_pal.iff");
+        let drawer = tree.join("Prefs").join("Presets").join("Backdrops");
+        std::fs::create_dir_all(&drawer).unwrap();
+        // Different case than the prefs file names.
+        std::fs::write(drawer.join("Default_Pal.iff"), b"FORM....ILBM").unwrap();
+
+        let verdicts = check_prefs_paths(tree).unwrap();
+
+        assert_eq!(verdicts.len(), 1, "{verdicts:?}");
+        assert_eq!(verdicts[0].state, CheckState::Pass, "{:?}", verdicts[0]);
+    }
+
+    /// A `PTRN` in `Content::Pattern` form names no path at all — the
+    /// release's own screen chunk ships exactly this way — and must not be
+    /// reported, positively or negatively: checking it would mean inventing
+    /// a claim the chunk never made.
+    #[test]
+    fn a_pattern_chunk_names_no_path_and_is_not_checked() {
+        let scratch = ScratchDir::new("art-verify-prefs", "pattern-only");
+        let tree = scratch.path();
+        write_wbpattern_pattern_only(tree);
+
+        let verdicts = check_prefs_paths(tree).unwrap();
+
+        assert!(
+            verdicts.is_empty(),
+            "a Content::Pattern PTRN names no path and must produce no verdict: {verdicts:?}"
+        );
+    }
+
+    /// G8's three states: a tree with no prefs at all was never looked at,
+    /// which is `CheckState::NotChecked` — never rendered as a tick, and
+    /// never silently absent either (a `NotChecked` verdict has to say why).
+    #[test]
+    fn a_tree_with_no_prefs_at_all_is_not_checked_and_does_not_fail() {
+        let scratch = ScratchDir::new("art-verify-prefs", "no-prefs");
+        let tree = scratch.path();
+        // Nothing written at all — not even a Prefs directory.
+
+        let verdicts = check_prefs_paths(tree).unwrap();
+
+        assert_eq!(verdicts.len(), 1, "{verdicts:?}");
+        assert_eq!(
+            verdicts[0].state,
+            CheckState::NotChecked,
+            "{:?}",
+            verdicts[0]
+        );
+        assert!(
+            verdicts[0].detail.is_some(),
+            "a NotChecked verdict has to say why"
+        );
+    }
+
+    /// The other decision the brief left to this task: a path naming an
+    /// assign other than `Sys:` (`Work:`, say) is not something a
+    /// distribution tree can resolve at all — ART has no idea what `Work:`
+    /// points at on the machine that eventually mounts this tree. Reporting
+    /// it as missing would be exactly the confident-wrong sentence
+    /// CLAUDE.md's "the failure that does not crash" warns against, so this
+    /// is `NotChecked`, never `Fail`.
+    #[test]
+    fn a_backdrop_naming_a_different_assign_is_not_checked_not_failed() {
+        let scratch = ScratchDir::new("art-verify-prefs", "foreign-assign");
+        let tree = scratch.path();
+        write_wbpattern_picture(tree, "Work:MyBackdrops/custom.iff");
+
+        let verdicts = check_prefs_paths(tree).unwrap();
+
+        assert_eq!(verdicts.len(), 1, "{verdicts:?}");
+        assert_eq!(
+            verdicts[0].state,
+            CheckState::NotChecked,
+            "{:?}",
+            verdicts[0]
+        );
+        let detail = verdicts[0].detail.as_deref().unwrap_or("");
+        assert!(detail.contains("Work:"), "{detail}");
+    }
+
+    /// The last decision the brief left open: a prefs file that does not
+    /// parse at all is a *different* thing from one whose paths do not
+    /// resolve. ART actually tried to read this file and it is malformed —
+    /// a concrete, checked problem, the same as `verify_ffs_one`'s own
+    /// "its path could not be read" — so this is `Fail`, not a `NotChecked`
+    /// shrug over an incapability nobody decided in advance.
+    #[test]
+    fn a_prefs_file_that_does_not_parse_at_all_is_a_fail_not_a_shrug() {
+        let scratch = ScratchDir::new("art-verify-prefs", "corrupt-prefs");
+        let tree = scratch.path();
+        let sys_dir = tree.join("Prefs").join("Env-Archive").join("Sys");
+        std::fs::create_dir_all(&sys_dir).unwrap();
+        std::fs::write(sys_dir.join("WBPattern.prefs"), b"not an iff file at all").unwrap();
+
+        let verdicts = check_prefs_paths(tree).unwrap();
+
+        assert_eq!(verdicts.len(), 1, "{verdicts:?}");
+        assert_eq!(verdicts[0].state, CheckState::Fail, "{:?}", verdicts[0]);
+        let detail = verdicts[0].detail.as_deref().unwrap_or("");
+        assert!(detail.contains("WBPattern.prefs"), "{detail}");
+    }
+
+    /// The integration the brief's own wording asks for: `verify_volume`'s
+    /// report actually carries `check_prefs_paths`'s verdicts, not just the
+    /// manifest's own file-by-file checks — the dist-3.2 orphan reproduced
+    /// end to end, through the same call a real `osinstall_verify` makes.
+    #[test]
+    fn verify_volumes_report_folds_in_the_trees_own_prefs_check() {
+        let (image, manifest, tree) = written_volume();
+        write_wbpattern_picture(&tree, "Sys:Prefs/Presets/Backdrops/default_pal.iff");
+        // Never actually placed in the tree — a real dist-3.2-shaped orphan.
+
+        let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
+
+        assert!(
+            report
+                .files
+                .iter()
+                .any(|f| f.path.contains("default_pal.iff") && f.state == CheckState::Fail),
+            "{:?}",
+            report.files
+        );
+        assert_eq!(
+            report.failed, 1,
+            "the manifest's own file still passes; only the tree's own prefs claim fails: {:?}",
+            report.files
+        );
     }
 }
