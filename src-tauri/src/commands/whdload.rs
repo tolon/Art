@@ -547,6 +547,31 @@ fn run_install(
         })?
     };
 
+    // iGame's own launcher reads a small file from the same directory as the
+    // slave, and this drawer is one ART made moments ago by unpacking the
+    // archive — the "no ceremony" default path, because nothing of the
+    // user's is being touched. Written into `pack_root` *before* the folder
+    // below is walked, so it rides along with everything else `copy_into_volume`
+    // places into the drawer, the same way any other file the archive shipped
+    // would.
+    //
+    // Best-effort and disclosed rather than tested: only the pack's own name
+    // is known here — no catalogue join reaches this command — and a failure
+    // to write it must not turn an otherwise-successful install into a
+    // reported failure over a file WHDLoad itself never reads.
+    if let Err(err) = crate::core::gameindex::igame::write_beside(
+        &pack_root,
+        &crate::core::gameindex::igame::IGameData {
+            title: Some(layout.name.clone()),
+            ..Default::default()
+        },
+    ) {
+        log::debug!(
+            "whdload: could not write igame.data beside '{}': {err}",
+            layout.name
+        );
+    }
+
     // Sidecars on: the archive may carry `.uaem` files, and a slave's bits are
     // the difference between a game that starts and one that does not (§7.2).
     let folder = HostFolder::new(&pack_root, true);
@@ -824,7 +849,10 @@ mod tests {
         let outcome =
             run_install(&archive, &image, 0, 0, &std::env::temp_dir(), &NoProgress).unwrap();
 
-        assert_eq!(outcome.files, 3, "slave, executable, one data file");
+        assert_eq!(
+            outcome.files, 4,
+            "slave, executable, one data file, and igame.data"
+        );
         assert_eq!(
             outcome.verified, outcome.files,
             "every file is read back out of the disk"
@@ -899,6 +927,20 @@ mod tests {
                 .len(),
             4000,
             "a nested data file must arrive whole"
+        );
+
+        // The no-ceremony default path: iGame's own file, beside the slave in
+        // the drawer that landed on the disk — not a copy left behind in the
+        // scratch unpack.
+        let igame = inside
+            .iter()
+            .find(|found| found.name == crate::core::gameindex::igame::FILE_NAME)
+            .expect("igame.data must be beside the slave in the installed drawer");
+        assert_eq!(
+            crate::core::volume::write::file::read_file(&device, &set, &geometry, igame.block)
+                .unwrap(),
+            b"title=Turrican\n",
+            "ART's own drawer name, for iGame's own launcher to read"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

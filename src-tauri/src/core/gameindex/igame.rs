@@ -140,6 +140,17 @@ pub enum Omitted {
     Empty { key: String },
 }
 
+impl Omitted {
+    /// The managed key this omission is about, whichever reason it carries.
+    pub fn key(&self) -> &str {
+        match self {
+            Omitted::TooLong { key, .. }
+            | Omitted::RefusedByIGame { key, .. }
+            | Omitted::Empty { key } => key,
+        }
+    }
+}
+
 /// The file's text, and what did not go into it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -303,6 +314,29 @@ pub fn write_into(drawer: &Path, data: &IGameData) -> CoreResult<Written> {
         merged,
         omitted: rendered.omitted,
     })
+}
+
+/// Put an `igame.data` beside a slave, in a tree ART itself just built.
+///
+/// **This is the default path and needs no ceremony**, unlike a write into
+/// the user's own, pre-existing collection: nothing of the user's is being
+/// touched, because ART made this drawer moments ago — a card it is laying a
+/// WHDLoad pack onto, or a distribution tree it is building. If iGame already
+/// reads a file there — a re-run of a build, say — it is edited rather than
+/// replaced ([`merge_into`]'s rule); otherwise a fresh one is written
+/// ([`render`]).
+///
+/// Goes through [`crate::core::safety::atomic_write`], the same as
+/// [`write_into`]: a truncated `igame.data` is one iGame reads half of, and a
+/// half-written line is worse than none.
+pub fn write_beside(slave_dir: &Path, data: &IGameData) -> CoreResult<Rendered> {
+    let path = slave_dir.join(FILE_NAME);
+    let rendered = match std::fs::read_to_string(&path) {
+        Ok(existing) => merge_into(&existing, data),
+        Err(_) => render(data),
+    };
+    crate::core::safety::atomic_write(&path, rendered.text.as_bytes())?;
+    Ok(rendered)
 }
 
 /// How much room a WHDLoad hardfile has left, so a route can be judged rather
@@ -681,5 +715,77 @@ mod tests {
                 "iGame would split this: {line}"
             );
         }
+    }
+
+    // -- the default path: a tree ART just built -------------------------
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "art-igame-beside-{tag}-{}",
+            crate::core::test_scratch_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn igame_data_lands_beside_the_slave() {
+        let root = scratch("igame-beside");
+        let dir = root.join("Games/Turrican");
+        std::fs::create_dir_all(&dir).unwrap();
+        let data = IGameData {
+            title: Some("Turrican".into()),
+            ..Default::default()
+        };
+        write_beside(&dir, &data).unwrap();
+        let text = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        assert!(text.contains("title=Turrican"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The FF.CFG rule: somebody may have curated theirs by hand, and iGame
+    /// silently ignores keys it does not know.
+    #[test]
+    fn an_existing_file_is_edited_and_its_own_keys_survive() {
+        let root = scratch("igame-merge");
+        let dir = root.join("Games/Tag");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE_NAME), "; mine\nfavourite=yes\ntitle=Old\n").unwrap();
+        let data = IGameData {
+            title: Some("Tag".into()),
+            ..Default::default()
+        };
+        write_beside(&dir, &data).unwrap();
+        let text = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        assert!(text.contains("; mine"), "a comment is not ART's to delete");
+        assert!(
+            text.contains("favourite=yes"),
+            "an unknown key is not ART's to delete"
+        );
+        assert!(text.contains("title=Tag"));
+        assert!(!text.contains("title=Old"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_value_that_will_not_fit_is_left_out_and_named() {
+        let root = scratch("igame-long");
+        let dir = root.join("Games/Long");
+        std::fs::create_dir_all(&dir).unwrap();
+        let data = IGameData {
+            title: Some("x".repeat(200)),
+            ..Default::default()
+        };
+        let rendered = write_beside(&dir, &data).unwrap();
+        assert!(
+            rendered.omitted.iter().any(|o| o.key() == "title"),
+            "a truncated title is a wrong title on the Amiga's screen"
+        );
+        let text = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        assert!(!text.contains("title="));
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }
