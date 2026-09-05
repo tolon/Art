@@ -198,6 +198,17 @@ pub enum LaunchRefusal {
     /// insert-disk hand the design (§4.2) says ART refuses to produce,
     /// rather than a black screen with no explanation.
     NothingToMount,
+    /// A WHDLoad drawer that is still inside an archive ART has not unpacked
+    /// (`Media::WhdloadArchive`). Never raised by `plan_for` itself, the same
+    /// as [`LaunchRefusal::FileMissing`] above: nothing in this module ever
+    /// builds a [`RequestKind`] for this shape, because doing exactly that —
+    /// letting an unlaunchable title reach a `RequestKind` that looks
+    /// launchable — is ART-147's mistake, for a different `Media` variant.
+    /// The command layer checks for this before `plan_for` is ever called
+    /// and raises it there; it lives on this type for the same reason
+    /// `FileMissing` does — one place for a caller to render either kind of
+    /// "cannot launch this".
+    ArchivedWhdload { file: String },
 }
 
 /// What a title asks for in the catalogue's own terms.
@@ -1018,6 +1029,13 @@ mod tests {
         assert_eq!(
             serde_json::to_value(LaunchRefusal::NothingToMount).unwrap(),
             serde_json::json!({ "kind": "nothing-to-mount" })
+        );
+        assert_eq!(
+            serde_json::to_value(LaunchRefusal::ArchivedWhdload {
+                file: "WHDLoadDemos100.lha".into()
+            })
+            .unwrap(),
+            serde_json::json!({ "kind": "archived-whdload", "file": "WHDLoadDemos100.lha" })
         );
 
         assert_eq!(

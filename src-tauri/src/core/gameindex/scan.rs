@@ -483,6 +483,27 @@ mod tests {
         path
     }
 
+    /// ART-147: `from_hardfile` recorded self-booting hardfiles as
+    /// `WhdloadDrawer`, which sent Play looking for a system volume the file
+    /// never needed. A hardfile is never a drawer, whatever is inside it —
+    /// `Media::WhdloadDrawer` and `Media::WhdloadArchive` each have exactly
+    /// one producer, and neither is the hardfile reader.
+    #[test]
+    fn the_hardfile_reader_produces_neither_drawer_variant() {
+        let dir = scratch("producer-discipline");
+        let image = write_hardfile_game(&dir, "1000MigliaHD", "1000Miglia", "1000 Miglia");
+
+        let record = read_one(&image).unwrap().expect("this is a title");
+
+        assert!(
+            matches!(record.media, Media::WhdloadHardfile { .. }),
+            "a self-booting hardfile is WhdloadHardfile and nothing else, got {:?}",
+            record.media
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A folder holding one of each kind comes back with one record each, and
     /// each record names the source that produced it.
     #[test]

@@ -1370,6 +1370,13 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       { kind: "floppies", ordered: ["a.adf"] },
       { kind: "hardfile", file: "a.hdf" },
       { kind: "whdload-hardfile", file: "a.hdf", slave: "a.slave" },
+      { kind: "whdload-drawer", dir: "Games/Turrican", slave: "Turrican.slave" },
+      {
+        kind: "whdload-archive",
+        file: "WHDLoadDemos100.lha",
+        inner: "Demos/T/Tag",
+        slave: "Tag.Slave",
+      },
     ];
     for (const one of media) {
       const phrase = mediaPhrase(one);
@@ -1408,6 +1415,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       { kind: "no-system-volume" },
       { kind: "file-missing", path: "D:\\g\\a.adf" },
       { kind: "nothing-to-mount" },
+      { kind: "archived-whdload", file: "WHDLoadDemos100.lha" },
     ];
     for (const refusal of refusals) {
       const phrase = launchRefusalPhrase(refusal);

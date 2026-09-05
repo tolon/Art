@@ -21,7 +21,17 @@ use crate::core::hashing::sha256_bytes;
 /// system volume, mounted the game as a plain directory and wrote a boot
 /// directory none of that needed. Records written before this carry the wrong
 /// [`Media`] shape, so an Update re-reads them the same way ART-137's bump did.
-pub const GAMEINDEX_SCHEMA: u32 = 3;
+/// 3 → 4: `Media::WhdloadDrawer` is back, and this time it is the name's own
+/// meaning — an *unpacked* drawer on the host, `{ dir, slave }` — alongside
+/// the new `Media::WhdloadArchive` for one still sitting inside an archive
+/// ART has not unpacked. ART-147 shipped its schema bump without covering
+/// this: a build that reused a removed wire name for a *different* shape,
+/// with no bump, is exactly what made the Collection screen come up saying
+/// `ART-FORMAT-MALFORMED: unknown variant 'whdload-drawer'` instead of any
+/// title at all. A record written under schema 3 has never carried this
+/// name, so nothing is lost by discarding it — an Update re-reads it, the
+/// same way every earlier bump has.
+pub const GAMEINDEX_SCHEMA: u32 = 4;
 
 /// Where a fact came from. The first two **state**; the last two **suggest**.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,6 +237,35 @@ pub enum Media {
     /// system volume, no boot directory, no Y1/Y2 — see
     /// `commands/launch.rs::request_kind_from`.
     WhdloadHardfile { file: String, slave: String },
+
+    /// An **unpacked** WHDLoad drawer on the host: a directory holding exactly
+    /// one slave, plus its icon, a ReadMe and a payload.
+    ///
+    /// Launches through [`RequestKind::Whdload`] — the drawer mounted as a
+    /// directory beside a **separate bootable system volume** with WHDLoad in
+    /// `C:`, which is where whdload.de's own installation page says it
+    /// belongs. That is the difference from [`Media::WhdloadHardfile`], which
+    /// boots itself and needs no system at all, and confusing the two is
+    /// exactly [ART-147](../../../../docs/ISSUES.md).
+    ///
+    /// **Produced only by the directory scan** (`readers::drawer`). The
+    /// hardfile reader must never construct it; a test says so.
+    WhdloadDrawer { dir: String, slave: String },
+
+    /// A WHDLoad drawer **inside an archive ART has not unpacked**.
+    ///
+    /// Catalogued so a collection can be browsed without unpacking 663 MB, and
+    /// **not launchable**: `RequestKind::Whdload` needs a directory on a
+    /// filesystem, and this is a path inside a compressed file. Play answers
+    /// with its own sentence — unpack it first, and here is the archive —
+    /// rather than a refusal that reads like a broken install.
+    ///
+    /// **Produced only by the archive scan** (`readers::lhadrawer`).
+    WhdloadArchive {
+        file: String,
+        inner: String,
+        slave: String,
+    },
 }
 
 /// Which file this record was read from.
@@ -423,5 +462,40 @@ mod tests {
         assert_ne!(stated.from, guessed.from);
         assert!(stated.from.is_stated());
         assert!(!guessed.from.is_stated());
+    }
+
+    /// Why two variants and not one `Media::WhdloadDrawer { location }` field:
+    /// ART-147 was exactly that shape once — one physical fact folded into
+    /// another's variant — and one missed `match` arm sent an archived title
+    /// down the launchable path. Two variants means the compiler, not a
+    /// reviewer, catches the next missed arm.
+    #[test]
+    fn the_two_drawer_shapes_are_two_variants() {
+        let dir = Media::WhdloadDrawer {
+            dir: "Games/Turrican".into(),
+            slave: "Turrican.slave".into(),
+        };
+        let archived = Media::WhdloadArchive {
+            file: "Demos.lha".into(),
+            inner: "Demos/T/Tag".into(),
+            slave: "Tag.Slave".into(),
+        };
+        assert_ne!(dir, archived);
+        // The wire names are what a stored catalogue carries, so they are pinned.
+        assert!(serde_json::to_string(&dir)
+            .unwrap()
+            .contains("\"whdload-drawer\""));
+        assert!(serde_json::to_string(&archived)
+            .unwrap()
+            .contains("\"whdload-archive\""));
+    }
+
+    #[test]
+    fn the_schema_moved_so_an_older_catalogue_is_re_read() {
+        // ART-147 shipped without this and the Collection screen came up saying
+        // `unknown variant 'whdload-drawer'` instead of any title at all. The
+        // name is back and an old catalogue's record of that name meant something
+        // else, so the bump is what discards it before anything reads it.
+        assert_eq!(GAMEINDEX_SCHEMA, 4);
     }
 }

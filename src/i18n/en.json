@@ -1595,7 +1595,9 @@
         "floppies_one": "{{count}} floppy disk",
         "floppies_other": "{{count}} floppy disks",
         "hardfile": "Hard disk image — {{file}}",
-        "whdload": "WHDLoad — {{slave}}"
+        "whdload": "WHDLoad — {{slave}}",
+        "whdloadDrawer": "WHDLoad drawer — {{slave}}",
+        "whdloadArchive": "WHDLoad drawer (not yet unpacked) — {{slave}}, in {{file}}"
       },
       "publisher": "Publisher",
       "year": "Year",
@@ -1657,7 +1659,8 @@
           "noWhdloadMachineRom": "WHDLoad titles run on ART's {{machine}} profile, so this launch needs an {{machine}} Kickstart 3.x. A Kickstart for another model — a 3.1 for the A500/A600/A2000, say — does not suit it however new it is. Add an {{machine}} Kickstart to your ROM folder.",
           "noSystemVolume": "This WHDLoad title needs a bootable system, and none is set.",
           "fileMissing": "'{{path}}' no longer exists.",
-          "nothingToMount": "This title names no disk to mount — there is nothing for WinUAE to load."
+          "nothingToMount": "This title names no disk to mount — there is nothing for WinUAE to load.",
+          "archivedWhdload": "This WHDLoad drawer is still inside '{{file}}', which has not been unpacked. Unpack the archive, then try again."
         }
       },
       "kickstart": {

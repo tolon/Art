@@ -171,11 +171,26 @@ fn resolved_machine(request: &LaunchArgs) -> Machine {
 /// (`core::gameindex::readers::whdhdf`'s own header), so there is no system
 /// volume to mount alongside it and no boot directory for ART to write; the
 /// slave's name is a fact carried on the record, not something a launch needs
-/// to act on. `RequestKind::Whdload` still exists in `core::launch` for the
-/// shape it was built for — an already-unpacked drawer that needs a separate
-/// bootable system, the same shape `core::whdload` installs onto a card — but
-/// no `Media` variant reaches it today: nothing in `core::gameindex` catalogues
-/// a loose drawer or an `.lha` archive as a title.
+/// to act on.
+///
+/// `Media::WhdloadDrawer` is the shape `RequestKind::Whdload` was actually
+/// built for: an already-unpacked drawer that needs a separate bootable
+/// system, the same shape `core::whdload` installs onto a card. `dir` maps
+/// straight onto `drawer` — the system volume and Y1/Y2 choice are not part
+/// of `Media` at all, they are `args.system_volume` / `args.one_click`, and
+/// `plan_for` folds them in.
+///
+/// `Media::WhdloadArchive` reaches **neither** `RequestKind::Whdload` nor
+/// `RequestKind::Hardfile`: `RequestKind::Whdload` needs a directory on a
+/// filesystem and this is a path inside a compressed file ART has not
+/// unpacked, so it is refused before this function is ever called
+/// (`archived_refusal`, checked by every caller of this function that can
+/// actually start a launch). The arm below exists only so this match stays
+/// exhaustive — it is unreachable in the real flow, and even if some future
+/// caller skipped the check, an empty `Floppies` set is `plan_for`'s own
+/// `NothingToMount` refusal rather than anything that could be mistaken for
+/// a launch. **Never give this arm a shape that could pass for real media** —
+/// that is ART-147, repeated for a different `Media` variant.
 ///
 /// **`whdload` on the request is not the same field it looks like.** It is
 /// `RequestKind::Hardfile::whdload` — whether `core::launch::plan_for` must
@@ -202,6 +217,32 @@ fn request_kind_from(args: &LaunchArgs) -> RequestKind {
             image: file.clone(),
             whdload: true,
         },
+        Media::WhdloadDrawer { dir, slave } => RequestKind::Whdload {
+            drawer: dir.clone(),
+            slave: slave.clone(),
+        },
+        Media::WhdloadArchive { .. } => RequestKind::Floppies { images: vec![] },
+    }
+}
+
+/// Whether this title can be launched at all before anything about ROMs or
+/// disks is even considered.
+///
+/// `Media::WhdloadArchive` is the one shape this catalogue can hold that has
+/// no `RequestKind` worth reaching: the drawer is real, but it is a path
+/// inside a compressed file, and `RequestKind::Whdload` needs a directory on
+/// a filesystem. Checked before [`request_kind_from`] / `plan_for` are ever
+/// reached, so an archived title never takes the launchable path — that
+/// wrong turn, for a different `Media` variant, is exactly ART-147.
+fn archived_refusal(media: &Media) -> Option<LaunchRefusal> {
+    match media {
+        Media::WhdloadArchive { file, .. } => {
+            Some(LaunchRefusal::ArchivedWhdload { file: file.clone() })
+        }
+        Media::Floppies { .. }
+        | Media::Hardfile { .. }
+        | Media::WhdloadHardfile { .. }
+        | Media::WhdloadDrawer { .. } => None,
     }
 }
 
@@ -256,6 +297,14 @@ pub struct LaunchPreview {
 /// the logic worth exercising directly in a test, without a running Tauri
 /// app to produce one.
 fn preview_for(request: &LaunchArgs, roms: &[LaunchRom]) -> LaunchPreview {
+    if let Some(refusal) = archived_refusal(&request.media) {
+        return LaunchPreview {
+            plan: None,
+            refusal: Some(refusal),
+            mounts: vec![],
+            memory: None,
+        };
+    }
     let machine = resolved_machine(request);
     let kind = request_kind_from(request);
     let plan = plan_for(&LaunchRequest {
@@ -333,6 +382,10 @@ fn refusal_error(refusal: LaunchRefusal) -> CoreError {
             "this title's media names no disk to mount — there is nothing for WinUAE to load"
                 .to_string()
         }
+        LaunchRefusal::ArchivedWhdload { file } => format!(
+            "'{file}' is a WHDLoad drawer inside an archive ART has not unpacked — \
+             unpack it first, then try again"
+        ),
     };
     CoreError::InvalidInput(message)
 }
@@ -686,6 +739,10 @@ fn launch_title_inner(
     scratch_root: &Path,
     app: &AppHandle,
 ) -> Result<u32, CoreError> {
+    if let Some(refusal) = archived_refusal(&request.media) {
+        return Err(refusal_error(refusal));
+    }
+
     let roms: Vec<LaunchRom> = scan_rom_directory(Path::new(&request.rom_dir))
         .unwrap_or_default()
         .iter()
@@ -1251,6 +1308,30 @@ mod tests {
         assert!(preview.memory.is_none());
     }
 
+    /// The real path a screen calling `launch_plan` takes for an archived
+    /// title: refused before `plan_for` ever runs, with a ROM folder that
+    /// would otherwise happily settle a plan — proving the refusal comes
+    /// from the media shape and not from a missing ROM.
+    #[test]
+    fn preview_for_refuses_an_archived_drawer_before_planning() {
+        let request = args(Media::WhdloadArchive {
+            file: "WHDLoadDemos100.lha".into(),
+            inner: "Demos/T/Tag".into(),
+            slave: "Tag.Slave".into(),
+        });
+
+        let preview = preview_for(&request, &[a1200_rom()]);
+
+        assert!(preview.plan.is_none());
+        assert!(preview.memory.is_none());
+        match preview.refusal {
+            Some(LaunchRefusal::ArchivedWhdload { file }) => {
+                assert_eq!(file, "WHDLoadDemos100.lha");
+            }
+            other => panic!("expected ArchivedWhdload, got {other:?}"),
+        }
+    }
+
     // ---- mount_notes_for: what the confirmation screen is told ------------
     //
     // Design §4.4: the read-only system image, the writable game drawer and
@@ -1481,6 +1562,51 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// `archived_refusal` as a plain sentence — the same conversion
+    /// `require_exists` already leans on for `FileMissing`.
+    fn launch_refusal_for(args: &LaunchArgs) -> Option<String> {
+        archived_refusal(&args.media).map(|refusal| refusal_error(refusal).to_string())
+    }
+
+    /// An unpacked drawer is the one shape `RequestKind::Whdload` exists for
+    /// — `dir` maps straight onto `drawer`.
+    #[test]
+    fn an_unpacked_drawer_launches_through_the_whdload_path() {
+        let a = args(Media::WhdloadDrawer {
+            dir: "Games/Turrican".into(),
+            slave: "Turrican.slave".into(),
+        });
+        match request_kind_from(&a) {
+            RequestKind::Whdload { drawer, slave } => {
+                assert_eq!(drawer, "Games/Turrican");
+                assert_eq!(slave, "Turrican.slave");
+            }
+            other => panic!("a drawer is the one shape that path exists for, got {other:?}"),
+        }
+    }
+
+    /// ART-147, for the shape this task adds: an archived drawer must never
+    /// take the launchable path, and must say why in a sentence that names
+    /// the archive.
+    #[test]
+    fn an_archived_drawer_is_not_launchable_and_says_which_archive() {
+        let a = args(Media::WhdloadArchive {
+            file: "WHDLoadDemos100.lha".into(),
+            inner: "Demos/T/Tag".into(),
+            slave: "Tag.Slave".into(),
+        });
+        let refusal =
+            launch_refusal_for(&a).expect("an archived title cannot be launched and must say so");
+        assert!(
+            refusal.contains("WHDLoadDemos100.lha"),
+            "the refusal names the archive the user has to unpack, got: {refusal}"
+        );
+        assert!(
+            !matches!(request_kind_from(&a), RequestKind::Whdload { .. }),
+            "an archived title must never reach the launchable path - that is ART-147"
+        );
     }
 
     #[test]

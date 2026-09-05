@@ -21,6 +21,16 @@ export function mediaPhrase(media: Media): Phrase {
       return { key: "collection.detail.media.hardfile", params: { file: media.file } };
     case "whdload-hardfile":
       return { key: "collection.detail.media.whdload", params: { slave: media.slave } };
+    case "whdload-drawer":
+      return {
+        key: "collection.detail.media.whdloadDrawer",
+        params: { slave: media.slave },
+      };
+    case "whdload-archive":
+      return {
+        key: "collection.detail.media.whdloadArchive",
+        params: { slave: media.slave, file: media.file },
+      };
   }
 }
 
@@ -34,11 +44,27 @@ export function diskList(media: Media): string[] {
   return media.kind === "floppies" ? media.ordered : [];
 }
 
-/** Whether Play can do anything with this medium at all. */
+/**
+ * Whether Play can do anything with this medium at all.
+ *
+ * `whdload-archive` is the one `Media` shape that is real and still cannot be
+ * launched: `RequestKind::Whdload` needs a directory on a filesystem, and an
+ * archive entry is a path inside a compressed file ART has not unpacked
+ * (ART-147, for a different `Media` shape — a `false` here is what stops it
+ * happening a second time). An exhaustive switch rather than a boolean chain
+ * so the next `Media` variant must be given an explicit answer, not fall
+ * through to whichever side of `||` came last.
+ */
 export function canLaunch(media: Media): boolean {
-  return (
-    media.kind === "floppies" || media.kind === "hardfile" || media.kind === "whdload-hardfile"
-  );
+  switch (media.kind) {
+    case "floppies":
+    case "hardfile":
+    case "whdload-hardfile":
+    case "whdload-drawer":
+      return true;
+    case "whdload-archive":
+      return false;
+  }
 }
 
 /** What to call one kind of picture on a button the user has to read. */

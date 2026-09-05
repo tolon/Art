@@ -83,11 +83,24 @@ export interface KickstartNeed {
  * whdhdf`'s own header). `file` is the image, mounted and booted directly:
  * no system volume, no boot directory, no Y1/Y2. `slave` is not the media's
  * kind but a fact carried alongside it — what named the title.
+ *
+ * `whdload-drawer` and `whdload-archive` mirror
+ * `core::gameindex::record::Media`'s own two-variant split — deliberately not
+ * one shape with a location field, because that is exactly ART-147's mistake
+ * reproduced: one missed `case` would let an archived title read as
+ * launchable. `whdload-drawer` is an **unpacked** drawer on the host and is
+ * the one shape `launchKindPhrase`'s `"whdload"` case exists for; a
+ * `whdload-archive` names a drawer still inside a compressed file ART has not
+ * unpacked and is never launchable (`canLaunch`, `@/lib/collectionDetail`) —
+ * see `LaunchRefusal`'s `"archived-whdload"` case for the sentence Play shows
+ * instead.
  */
 export type Media =
   | { kind: "floppies"; ordered: string[] }
   | { kind: "hardfile"; file: string }
-  | { kind: "whdload-hardfile"; file: string; slave: string };
+  | { kind: "whdload-hardfile"; file: string; slave: string }
+  | { kind: "whdload-drawer"; dir: string; slave: string }
+  | { kind: "whdload-archive"; file: string; inner: string; slave: string };
 
 export interface SourceRef {
   name: string;
@@ -296,7 +309,15 @@ export async function onCatalogueRefreshed(
   return listen<RefreshedRoot>(REFRESHED_EVENT, (e) => handler(e.payload));
 }
 
-/** What kind of media a record describes, for a filter or a badge. */
+/**
+ * What kind of media a record describes, for a filter or a badge.
+ *
+ * `whdload-drawer` and `whdload-archive` both fold into `"whdload"` here, the
+ * same as `whdload-hardfile` — this three-way split is for the Collection
+ * screen's filter, which groups every WHDLoad shape together whether or not
+ * it can actually be launched today. {@link canLaunch} in
+ * `@/lib/collectionDetail` is the one that must not blur that distinction.
+ */
 export function mediaKind(media: Media): "floppies" | "hardfile" | "whdload" {
   switch (media.kind) {
     case "floppies":
@@ -304,6 +325,8 @@ export function mediaKind(media: Media): "floppies" | "hardfile" | "whdload" {
     case "hardfile":
       return "hardfile";
     case "whdload-hardfile":
+    case "whdload-drawer":
+    case "whdload-archive":
       return "whdload";
   }
 }
