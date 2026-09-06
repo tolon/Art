@@ -118,6 +118,21 @@ const OFF_DRAWER_DATA: usize = 66;
 const OFF_TOOL_WINDOW: usize = 70;
 const OFF_STACK_SIZE: usize = 74;
 
+/// `dd_NewWindow.Flags` — block-relative offset 14 inside `DrawerData`
+/// (past `LeftEdge`/`TopEdge`/`Width`/`Height`, `DetailPen`/`BlockPen` and
+/// `IDCMPFlags`), so absolute offset `HEADER_LEN + 14`. Workbench overloads
+/// this field — otherwise an Intuition `NewWindow`'s flags, meaningless for a
+/// window that is closed and saved to disk — to carry its own display-mode
+/// bits instead.
+const OFF_DRAWER_FLAGS: usize = HEADER_LEN + 14;
+
+/// The bit inside `OFF_DRAWER_FLAGS` for "Show All Files" versus "Show Icons"
+/// — `DDFLAGS_SHOWALL` (`1 << 1`) in `workbench/workbench.h`. **This one bit
+/// is not independently measured against a real icon with the setting
+/// toggled**, unlike every other offset this module's doc comment lists —
+/// [`set_show_all_files`]'s own doc says what would close that gap.
+const DDFLAGS_SHOWALL: u32 = 1 << 1;
+
 /// `do_CurrentX`/`do_CurrentY`'s sentinel for "the release did not place
 /// this icon" — `0x80000000`, `i32::MIN`. Measured: 361 of 798 real icons
 /// carry it in both coordinates. `(0, 0)` is a real, distinct position (the
@@ -293,14 +308,17 @@ pub struct IconLayout {
     pub trailing: Range<usize>,
 }
 
-/// Walk a `.info` file's fixed header and optional blocks, in the order
-/// the format lays them out, and report where `ToolTypes` and the trailing
-/// region are.
+/// Walk the fixed header plus `DrawerData`, `GadgetRender`, `SelectRender`
+/// and `DefaultTool` — every block that comes *before* `ToolTypes` in file
+/// order — and return the position immediately after them: exactly where a
+/// `ToolTypes` block sits when one is present, and exactly where one would
+/// be inserted when it is not.
 ///
-/// Refuses (never reads past bounds, never guesses) when: the file is
-/// shorter than a `DiskObject` header, the magic does not match, or any
-/// length or pointer-derived size would run past the end of the buffer.
-pub fn layout(bytes: &[u8]) -> CoreResult<IconLayout> {
+/// Shared by [`layout`] (which then walks past `ToolTypes` and `ToolWindow`
+/// itself) and [`set_tooltypes`] (which needs this same position whether or
+/// not a `ToolTypes` block already exists) — deliberately one walk, so the
+/// two never drift out of step on where a `ToolTypes` block belongs.
+fn position_before_tooltypes(bytes: &[u8]) -> CoreResult<usize> {
     check_header(bytes)?;
 
     let mut pos = HEADER_LEN;
@@ -317,6 +335,19 @@ pub fn layout(bytes: &[u8]) -> CoreResult<IconLayout> {
     if be_u32(bytes, OFF_DEFAULT_TOOL)? != 0 {
         pos = skip_string(bytes, pos)?;
     }
+    Ok(pos)
+}
+
+/// Walk a `.info` file's fixed header and optional blocks, in the order
+/// the format lays them out, and report where `ToolTypes` and the trailing
+/// region are.
+///
+/// Refuses (never reads past bounds, never guesses) when: the file is
+/// shorter than a `DiskObject` header, the magic does not match, or any
+/// length or pointer-derived size would run past the end of the buffer.
+pub fn layout(bytes: &[u8]) -> CoreResult<IconLayout> {
+    let mut pos = position_before_tooltypes(bytes)?;
+
     let tooltypes = if be_u32(bytes, OFF_TOOL_TYPES)? != 0 {
         let start = pos;
         pos = skip_tooltypes(bytes, pos)?;
@@ -513,6 +544,154 @@ pub fn merge_tooltypes(dest: &[u8], source: &[u8]) -> CoreResult<Vec<u8>> {
     Ok(merged)
 }
 
+/// Replace the icon's tool types wholesale, keeping every other byte —
+/// header fields, `DrawerData`, images, `DefaultTool`, `ToolWindow`, the
+/// trailing appended ColorIcon/NewIcon blob — byte for byte identical.
+///
+/// This is the general-purpose sibling of [`merge_tooltypes`]: that function
+/// only splices one `ToolTypes` block into another that already has one;
+/// this one also grows a block where there was none (an empty `tooltypes`
+/// with no existing block is a no-op) and removes one — clearing
+/// `do_ToolTypes` at [`OFF_TOOL_TYPES`](OFF_TOOL_TYPES) rather than writing a
+/// zero-length block — when `tooltypes` is empty. When a block already
+/// existed and still does, `do_ToolTypes`'s own word is left exactly as it
+/// was: this module only ever treats it as a presence flag (non-zero), so
+/// there is nothing about *this* call that licenses changing whatever
+/// value it already held.
+///
+/// Refuses whenever the icon itself does not parse — the same bound-checked
+/// walk every other function in this module goes through — never a
+/// best-effort rewrite of a file it could not fully account for.
+pub fn set_tooltypes(bytes: &[u8], tooltypes: &[String]) -> CoreResult<Vec<u8>> {
+    let start = position_before_tooltypes(bytes)?;
+    let had_block = be_u32(bytes, OFF_TOOL_TYPES)? != 0;
+    let end = if had_block {
+        skip_tooltypes(bytes, start)?
+    } else {
+        start
+    };
+
+    let mut block = Vec::new();
+    if !tooltypes.is_empty() {
+        let count = u32::try_from(tooltypes.len())
+            .map_err(|_| malformed("too many tool types to encode"))?;
+        let size = count
+            .checked_add(1)
+            .and_then(|n| n.checked_mul(4))
+            .ok_or_else(|| malformed("ToolTypes size overflow"))?;
+        block.extend_from_slice(&size.to_be_bytes());
+        for tt in tooltypes {
+            let text = tt.as_bytes();
+            let len = u32::try_from(text.len())
+                .map_err(|_| malformed("a tool type is too long to encode"))?;
+            block.extend_from_slice(&len.to_be_bytes());
+            block.extend_from_slice(text);
+        }
+    }
+
+    let mut out = Vec::with_capacity(bytes.len() - (end - start) + block.len());
+    out.extend_from_slice(&bytes[..start]);
+    out.extend_from_slice(&block);
+    out.extend_from_slice(&bytes[end..]);
+
+    let want_block = !tooltypes.is_empty();
+    if had_block != want_block {
+        let flag: u32 = u32::from(want_block);
+        out[OFF_TOOL_TYPES..OFF_TOOL_TYPES + 4].copy_from_slice(&flag.to_be_bytes());
+    }
+
+    Ok(out)
+}
+
+/// Overwrite `do_CurrentX`/`do_CurrentY` (58/62), leaving every other byte —
+/// including the rest of the header — untouched.
+///
+/// `None` writes [`NO_POSITION`] into **both** coordinates. Writing only one
+/// half would leave the icon in a "half placed" state that [`position`]
+/// itself cannot even distinguish from a clean clear (either coordinate
+/// carrying the sentinel already reads back as `None`), so a caller relying
+/// on `position()` to confirm the clear would see nothing wrong while the
+/// other coordinate silently kept its old value.
+pub fn set_position(bytes: &[u8], at: Option<(i32, i32)>) -> CoreResult<Vec<u8>> {
+    check_header(bytes)?;
+    let (x, y) = at.unwrap_or((NO_POSITION, NO_POSITION));
+
+    let mut out = bytes.to_vec();
+    out[OFF_CURRENT_X..OFF_CURRENT_X + 4].copy_from_slice(&x.to_be_bytes());
+    out[OFF_CURRENT_Y..OFF_CURRENT_Y + 4].copy_from_slice(&y.to_be_bytes());
+    Ok(out)
+}
+
+/// Overwrite `DrawerData.NewWindow`'s left/top/width/height — the same four
+/// `i16` fields [`drawer_window`] reads, at absolute offset [`HEADER_LEN`] —
+/// leaving every other byte untouched.
+///
+/// Refuses when `do_DrawerData` is zero: the same case [`drawer_window`]
+/// reports as `None`, because there is no `DrawerData` block to write a
+/// window into. The refusal names `DrawerData` explicitly so it reads as
+/// "there is nothing here to set", not as an unexplained failure.
+pub fn set_window(bytes: &[u8], window: DrawerWindow) -> CoreResult<Vec<u8>> {
+    check_header(bytes)?;
+    if be_u32(bytes, OFF_DRAWER_DATA)? == 0 {
+        return Err(malformed(
+            "cannot set a window: this icon has no DrawerData block to hold one",
+        ));
+    }
+    // Same guarantee `drawer_window` relies on: a non-zero `do_DrawerData`
+    // means a full `DRAWER_DATA_LEN`-byte block is present at `HEADER_LEN`.
+    advance(bytes, HEADER_LEN, DRAWER_DATA_LEN)?;
+
+    let mut out = bytes.to_vec();
+    out[HEADER_LEN..HEADER_LEN + 2].copy_from_slice(&window.left.to_be_bytes());
+    out[HEADER_LEN + 2..HEADER_LEN + 4].copy_from_slice(&window.top.to_be_bytes());
+    out[HEADER_LEN + 4..HEADER_LEN + 6].copy_from_slice(&window.width.to_be_bytes());
+    out[HEADER_LEN + 6..HEADER_LEN + 8].copy_from_slice(&window.height.to_be_bytes());
+    Ok(out)
+}
+
+/// Set or clear Workbench's "Show All Files" bit for this drawer
+/// (`DDFLAGS_SHOWALL` inside `dd_NewWindow.Flags`, [`OFF_DRAWER_FLAGS`]),
+/// leaving every other bit of that field — and every other byte of the
+/// icon — untouched. A read-modify-write of one bit rather than an
+/// overwrite of the whole word, because the same field also carries
+/// `DDFLAGS_SHOWICONS` and the view-by mode, neither of which this call was
+/// asked to change.
+///
+/// Refuses when `do_DrawerData` is zero, the same case [`set_window`]
+/// refuses for the same reason: there is no `DrawerData` block, so there is
+/// no `Flags` word to set the bit in.
+///
+/// **What is not independently measured, unlike the rest of this module:**
+/// `DDFLAGS_SHOWALL`'s bit position is adopted from the community's
+/// documented reimplementation of `workbench/workbench.h`, not confirmed
+/// against a real icon saved with the setting toggled — a gap [`icon-oracle-check.py`](
+/// ../../../../scripts/icon-oracle-check.py)'s round-trip check (Task 7)
+/// does not close either, since it only proves this call preserves every
+/// *other* byte, not that this particular bit is the right one.
+pub fn set_show_all_files(bytes: &[u8], show_all: bool) -> CoreResult<Vec<u8>> {
+    check_header(bytes)?;
+    if be_u32(bytes, OFF_DRAWER_DATA)? == 0 {
+        return Err(malformed(
+            "cannot set Show All Files: this icon has no DrawerData block to hold it",
+        ));
+    }
+    // Same guarantee `set_window` relies on: a non-zero `do_DrawerData`
+    // means a full `DRAWER_DATA_LEN`-byte block is present at `HEADER_LEN`,
+    // so `OFF_DRAWER_FLAGS` (HEADER_LEN + 14, needing 4 bytes) is in bounds.
+    advance(bytes, HEADER_LEN, DRAWER_DATA_LEN)?;
+
+    let flags = be_u32(bytes, OFF_DRAWER_FLAGS)?;
+    let flags = if show_all {
+        flags | DDFLAGS_SHOWALL
+    } else {
+        flags & !DDFLAGS_SHOWALL
+    };
+
+    let mut out = bytes.to_vec();
+    out[OFF_DRAWER_FLAGS..OFF_DRAWER_FLAGS + 4].copy_from_slice(&flags.to_be_bytes());
+    Ok(out)
+}
+
 /// Fixture building, shared with anything outside this module that needs a
 /// valid `.info` to hand to [`tooltypes`] or [`launch_options`](crate::core::whdload::launch_options).
 ///
@@ -693,6 +872,223 @@ mod tests {
     fn merging_an_icon_with_itself_returns_it_unchanged() {
         let icon = synthetic_icon(&["A=1", "B=2"], 4096, b"FORM....trailing");
         assert_eq!(merge_tooltypes(&icon, &icon).unwrap(), icon);
+    }
+
+    #[test]
+    fn setting_a_position_changes_eight_bytes_and_nothing_else() {
+        let before = synthetic_icon(&["A=1", "B=2"], 8192, b"FORM....ICONtrailing");
+        let after = set_position(&before, Some((37, 11))).unwrap();
+        assert_eq!(position(&after).unwrap(), Some((37, 11)));
+        assert_eq!(after.len(), before.len(), "no length change");
+        for i in (0..before.len()).filter(|i| !(58..66).contains(i)) {
+            assert_eq!(after[i], before[i], "byte {i} changed and should not have");
+        }
+    }
+
+    #[test]
+    fn clearing_a_position_writes_the_sentinel_in_both_coordinates() {
+        let before = synthetic_icon_at(13, 4);
+        let after = set_position(&before, None).unwrap();
+        assert_eq!(position(&after).unwrap(), None);
+        assert_eq!(
+            i32::from_be_bytes([after[58], after[59], after[60], after[61]]),
+            NO_POSITION
+        );
+        assert_eq!(
+            i32::from_be_bytes([after[62], after[63], after[64], after[65]]),
+            NO_POSITION
+        );
+    }
+
+    #[test]
+    fn replacing_tooltypes_keeps_the_appended_blob_byte_for_byte() {
+        let trailing = b"FORM\x00\x00\x00\x08ICONabcd";
+        let before = synthetic_icon(&["OLD=1"], 4096, trailing);
+        let after = set_tooltypes(&before, &["NEW=2".to_string(), "MORE=3".to_string()]).unwrap();
+        assert_eq!(tooltypes(&after).unwrap(), vec!["NEW=2", "MORE=3"]);
+        assert!(
+            after.ends_with(trailing),
+            "the appended ColorIcon must survive"
+        );
+        assert_eq!(
+            stack_size(&after).unwrap(),
+            4096,
+            "the stack size is not ours to change"
+        );
+    }
+
+    #[test]
+    fn setting_no_tooltypes_clears_the_flag_and_still_keeps_the_blob() {
+        let trailing = b"FORM....ICONstill here";
+        let before = synthetic_icon(&["A=1", "B=2"], 4096, trailing);
+        let after = set_tooltypes(&before, &[]).unwrap();
+        assert_eq!(tooltypes(&after).unwrap(), Vec::<String>::new());
+        assert_eq!(
+            be_u32(&after, OFF_TOOL_TYPES).unwrap(),
+            0,
+            "the ToolTypes flag must be cleared, not merely left pointing at an empty block"
+        );
+        assert!(
+            after.ends_with(trailing),
+            "the appended blob must survive clearing the block entirely"
+        );
+    }
+
+    #[test]
+    fn setting_tooltypes_on_an_icon_with_none_grows_a_block() {
+        // The general case set_tooltypes must handle beyond what
+        // merge_tooltypes ever needed: no ToolTypes block existed at all.
+        let before = synthetic_icon(&[], 4096, b"trailing bytes");
+        assert_eq!(tooltypes(&before).unwrap(), Vec::<String>::new());
+        let after = set_tooltypes(&before, &["NEW=1".to_string()]).unwrap();
+        assert_eq!(tooltypes(&after).unwrap(), vec!["NEW=1"]);
+        assert!(after.ends_with(b"trailing bytes"));
+        assert_eq!(stack_size(&after).unwrap(), 4096);
+    }
+
+    #[test]
+    fn setting_a_window_on_an_icon_with_no_drawer_data_is_refused_by_name() {
+        let err = set_window(
+            &synthetic_icon(&[], 4096, &[]),
+            DrawerWindow {
+                left: 0,
+                top: 0,
+                width: 100,
+                height: 100,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("DrawerData"),
+            "the refusal must say why: {err}"
+        );
+    }
+
+    #[test]
+    fn setting_a_window_changes_only_the_eight_bytes_at_78() {
+        let before = synthetic_drawer_icon(1, 2, 3, 4);
+        let after = set_window(
+            &before,
+            DrawerWindow {
+                left: 393,
+                top: 126,
+                width: 342,
+                height: 163,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            drawer_window(&after).unwrap(),
+            Some(DrawerWindow {
+                left: 393,
+                top: 126,
+                width: 342,
+                height: 163
+            })
+        );
+        assert_eq!(after.len(), before.len(), "no length change");
+        for i in (0..before.len()).filter(|i| !(HEADER_LEN..HEADER_LEN + 8).contains(i)) {
+            assert_eq!(after[i], before[i], "byte {i} changed and should not have");
+        }
+    }
+
+    #[test]
+    fn show_all_files_round_trips_and_leaves_the_rest_alone() {
+        let before = synthetic_drawer_icon(10, 20, 300, 200);
+        let toggled_on = set_show_all_files(&before, true).unwrap();
+        assert_ne!(toggled_on, before, "turning it on must change something");
+        assert_eq!(toggled_on.len(), before.len(), "no length change");
+        for i in (0..before.len()).filter(|i| !(OFF_DRAWER_FLAGS..OFF_DRAWER_FLAGS + 4).contains(i))
+        {
+            assert_eq!(
+                toggled_on[i], before[i],
+                "byte {i} changed and should not have"
+            );
+        }
+        let back = set_show_all_files(&toggled_on, false).unwrap();
+        assert_eq!(
+            back, before,
+            "turning it back off restores the original bytes"
+        );
+    }
+
+    #[test]
+    fn setting_show_all_files_on_an_icon_with_no_drawer_data_is_refused_by_name() {
+        let err = set_show_all_files(&synthetic_icon(&[], 4096, &[]), true).unwrap_err();
+        assert!(
+            format!("{err}").contains("DrawerData"),
+            "the refusal must say why: {err}"
+        );
+    }
+
+    #[test]
+    fn setting_a_window_is_refused_by_the_drawer_data_guard_not_a_bounds_check() {
+        // `setting_a_window_on_an_icon_with_no_drawer_data_is_refused_by_name`
+        // above uses an 82-byte fixture — short enough that even a deleted
+        // `do_DrawerData` guard would still be caught by `set_window`'s own
+        // `advance()` bounds check, which needs `HEADER_LEN + DRAWER_DATA_LEN`
+        // (134) bytes. That is "refused for the wrong reason", the same trap
+        // named for `drawer_window`'s own guard test. This fixture is 162
+        // bytes — comfortably past 134 — with `do_DrawerData` still zero, so
+        // removing the guard here would actually write a window into bytes
+        // that are not a `DrawerData` block at all, rather than being caught
+        // first by a length check.
+        let icon = synthetic_icon(&[], 4096, &[0u8; 80]);
+        assert!(
+            icon.len() > HEADER_LEN + DRAWER_DATA_LEN,
+            "fixture too short to isolate the guard"
+        );
+        let err = set_window(
+            &icon,
+            DrawerWindow {
+                left: 1,
+                top: 2,
+                width: 3,
+                height: 4,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("DrawerData"),
+            "the refusal must say why: {err}"
+        );
+    }
+
+    #[test]
+    fn setting_show_all_files_is_refused_by_the_drawer_data_guard_not_a_bounds_check() {
+        // Same isolation as the window test above, for the same reason.
+        let icon = synthetic_icon(&[], 4096, &[0u8; 80]);
+        assert!(
+            icon.len() > HEADER_LEN + DRAWER_DATA_LEN,
+            "fixture too short to isolate the guard"
+        );
+        let err = set_show_all_files(&icon, true).unwrap_err();
+        assert!(
+            format!("{err}").contains("DrawerData"),
+            "the refusal must say why: {err}"
+        );
+    }
+
+    #[test]
+    fn every_write_leaves_a_refused_icon_untouched() {
+        let malformed = b"not an icon at all".to_vec();
+        let original = malformed.clone();
+
+        assert!(set_tooltypes(&malformed, &["A=1".to_string()]).is_err());
+        assert!(set_position(&malformed, Some((1, 2))).is_err());
+        assert!(set_window(
+            &malformed,
+            DrawerWindow {
+                left: 0,
+                top: 0,
+                width: 1,
+                height: 1
+            }
+        )
+        .is_err());
+        assert!(set_show_all_files(&malformed, true).is_err());
+
+        assert_eq!(malformed, original, "the input itself must not be mutated");
     }
 
     #[test]
