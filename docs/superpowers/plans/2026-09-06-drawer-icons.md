@@ -214,9 +214,22 @@ fn every_real_icon_measured_is_revision_one() {
 
 #[test]
 fn a_truncated_icon_is_refused_rather_than_read_past_its_end() {
-    for len in [0usize, 12, 47, 57, 65, 77] {
-        assert!(icon_type(&vec![0u8; len]).is_err() || len > 48);
-        assert!(position(&vec![0u8; len]).is_err() || len > 65);
+    // Truncate a VALID icon. A zero-filled buffer would be refused for its
+    // missing 0xE310 magic rather than for its length, so such a test passes
+    // with every bounds check deleted - a state with more than one cause,
+    // which is the defect this project names.
+    let whole = synthetic_icon_at(13, 4);
+    assert!(icon_type(&whole).is_ok(), "the fixture must be valid to start with");
+    for len in [12usize, 45, 48, 57, 62, 65] {
+        let cut = &whole[..len];
+        assert!(
+            icon_type(cut).is_err() || len > 48,
+            "icon_type read do_Type out of {len} bytes"
+        );
+        assert!(
+            position(cut).is_err() || len > 65,
+            "position read a coordinate out of {len} bytes"
+        );
     }
 }
 ```
@@ -261,11 +274,16 @@ In every case the result is `max(gadget, found)`, never smaller than the gadget.
 - [ ] **Step 1: Write the failing tests**
 
 ```rust
+Rust has no named arguments; the calls below are written with positional
+parameters in the order `(gadget_w, gadget_h, face_w, face_h, with_imag)` and
+`(gadget_w, gadget_h, im1_w, im1_h)`. Write the builders with those signatures.
+
+```rust
 #[test]
 fn a_colour_icon_uses_its_face_chunk_not_its_gadget_size() {
     // Measured: art1/Devs/DataTypes.info says 44x44 in the Gadget and 46x46
     // in FACE - which is why a layout cannot use the Gadget fields.
-    let icon = synthetic_colour_icon(gadget: (44, 44), face: (46, 46), with_imag: true);
+    let icon = synthetic_colour_icon(44, 44, 46, 46, true);
     let r = rendered_size(&icon).unwrap();
     assert_eq!((r.width, r.height), (46, 46));
 }
@@ -274,7 +292,7 @@ fn a_colour_icon_uses_its_face_chunk_not_its_gadget_size() {
 fn a_degenerate_face_with_no_imag_is_not_trusted() {
     // MagicWB-era icons claim 256x256 in FACE with no image behind it.
     // Believing that makes one icon eat a whole window.
-    let icon = synthetic_colour_icon(gadget: (32, 32), face: (256, 256), with_imag: false);
+    let icon = synthetic_colour_icon(32, 32, 256, 256, false);
     let r = rendered_size(&icon).unwrap();
     assert_eq!((r.width, r.height), (32, 32), "fall back to the planar size");
 }
@@ -284,20 +302,23 @@ fn a_newicon_uses_its_im1_tooltype_not_its_stub_gadget() {
     // Measured: art1/Prefs/Presets/Animated GIFs/Amiga.gif.info has a 3x3
     // Gadget and a 46x46 IM1= - fifteen times larger. This single case is why
     // the round exists.
-    let icon = synthetic_newicon(gadget: (3, 3), im1: (46, 46));
+    let icon = synthetic_newicon(3, 3, 46, 46);
     let r = rendered_size(&icon).unwrap();
     assert_eq!((r.width, r.height), (46, 46));
 }
 
 #[test]
 fn a_plain_planar_icon_uses_its_gadget_size() {
-    let r = rendered_size(&synthetic_icon(&[], 4096, &[])).unwrap();
-    assert!(r.width > 0 && r.height > 0);
+    // Assert the EXACT size the fixture was built with. "greater than zero"
+    // would pass for any wrong answer, including a hard-coded one.
+    let icon = synthetic_icon_sized(35, 18);
+    let r = rendered_size(&icon).unwrap();
+    assert_eq!((r.width, r.height), (35, 18));
 }
 
 #[test]
 fn the_result_is_never_smaller_than_the_gadget() {
-    let icon = synthetic_colour_icon(gadget: (64, 64), face: (16, 16), with_imag: true);
+    let icon = synthetic_colour_icon(64, 64, 16, 16, true);
     let r = rendered_size(&icon).unwrap();
     assert_eq!((r.width, r.height), (64, 64));
 }
@@ -460,7 +481,15 @@ fn rows_are_bottom_aligned_so_labels_share_a_baseline() {
 }
 
 #[test]
-fn a_single_cell_still_gets_a_sane_window() { /* ... */ }
+fn a_single_cell_lands_at_the_margin_and_the_window_contains_it() {
+    // "sane" cannot fail, so name the property: one placement, at the margin
+    // origin, and a window at least as large as the cell plus its margins.
+    let cells = vec![Cell { label: "One".into(), width: 46, height: 46, is_container: false }];
+    let g = arrange(&cells, DRAWER_INNER_WIDTH);
+    assert_eq!(g.placements.len(), 1);
+    assert_eq!((g.placements[0].x, g.placements[0].y), (10, 4));
+    assert!(g.window.0 as i32 >= 10 + 46 + 10, "the window contains the cell");
+}
 
 #[test]
 fn the_column_count_shrinks_until_the_row_fits() {
