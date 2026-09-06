@@ -1043,6 +1043,36 @@ into this one, because the oldest of them still contradicted the newest.
 narrative is one line in the [session log](session-log.md), its reasoning is in
 `docs/superpowers/`, and the defect register is [ISSUES.md](ISSUES.md).*
 
+### Start here (2026-09-06, end of session)
+
+**Three things are true right now that a fresh session would otherwise
+rediscover the hard way.**
+
+1. **`main` is 37 commits and TWO merges ahead of `origin`, and that is
+   deliberate.** Round 3 (`bd91942`, refusal evidence) and round 4 (`800fdc0`,
+   media identification by hash) were both merged **locally and not pushed** —
+   the owner was away and publishing is theirs to do. `git push origin main` is
+   the whole of it, and CI has never seen either round. **Do not assume
+   `origin/main` matches this tree.**
+2. **[ART-261](ISSUES.md) is open and it changes how you quote numbers.** The
+   owner's antivirus kills a full `cargo test --lib` — exit 0, no
+   `test result:` line, no `FAILED`. `cargo test --lib -- --skip artwork`
+   completes and is the only honest Rust number here until exclusions are added
+   for `src-tauri	arget\`, the test scratch root and `art_lib`'s build
+   output. **An exit code cannot tell a finished suite from a killed one.**
+3. **Next code work is round 5 of the Emu68 Hatcher intake: the first-boot
+   mechanism.** The teardown
+   (`docs/superpowers/notes/2026-09-05-emu68hatcher-teardown.md`) ranks it
+   second of its five and its own reasoning still stands — it unlocks
+   [ART-166](ISSUES.md) and a category of things that cannot be done host-side
+   at all. Rounds 1, 2, 3 and 4 of that intake are done and merged. **Re-check
+   that note against the tree before building from it**; it describes
+   2026-09-05 and three rounds have landed since.
+
+Standing numbers at that point: **83 frontend files / 1119 tests**; Rust
+**2878 passed, 0 failed, 50 ignored** (`--skip artwork`); i18n **2026** leaf
+keys each catalogue; **17 open** entries in [ISSUES.md](ISSUES.md).
+
 ### Where the work stands (as of 2026-09-06)
 
 - **ART can now say what an install disk is, by content hash, additively to
