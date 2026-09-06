@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ART can now say what an install disk actually is, by its content —
+  additively to the name it already reads off the disk, never in place of it.**
+  On the OS Builder's media step, each file is checked against a 186-row table
+  of known AmigaOS install media (adopted from the Emu68 Hatcher project,
+  MIT-licensed) and one of five things is said: it matches a known disk and
+  ART has checked that match against a real disk of its own; it matches a
+  known disk but nobody has checked that row against a real one yet; it is not
+  in the table at all — which says nothing about the disk, only that this
+  exact copy is not one the table happens to list; ART could not read the
+  file; or nothing has been checked yet. A miss never takes away what the
+  disk's own volume name already told you. Runs as a background job with
+  progress and a cancel button, and a file already hashed is not re-hashed
+  unless it changes.
 - **The OS Builder now shows what media was found when it cannot complete a
   build.** When you choose a media folder but ART still cannot build — because
   the folder does not hold a release ART knows, or it holds a different release
