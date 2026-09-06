@@ -177,6 +177,14 @@ pub enum Content {
 /// One `PTRN` chunk, fully decoded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Backdrop {
+    /// The 16 bytes AmigaOS reserves at the head of a `PTRN` body, carried
+    /// through verbatim — the same treatment `screenmode::ScreenMode::reserved`
+    /// already gets, and for the same reason: measured as all-zero in every
+    /// real chunk read (design doc §1.1), which is exactly why zeroing it on
+    /// every write went unnoticed until a whole-branch review compared this
+    /// struct against `ScreenMode`'s (finding I2). ART changes only what the
+    /// user set; a byte it cannot name is still the release's byte.
+    pub reserved: [u8; RESERVED_LEN],
     pub which: Which,
     pub placement: Placement,
     pub precision: Precision,
@@ -205,6 +213,8 @@ pub fn read_backdrop(body: &[u8]) -> CoreResult<Backdrop> {
     if body.len() < HEADER_LEN {
         return Err(malformed("shorter than the PTRN header"));
     }
+    let mut reserved = [0u8; RESERVED_LEN];
+    reserved.copy_from_slice(&body[0..RESERVED_LEN]);
     let which = Which::from_bits(u16::from_be_bytes([body[16], body[17]]))?;
     let flags = u16::from_be_bytes([body[18], body[19]]);
     let revision = body[20] as i8;
@@ -228,6 +238,7 @@ pub fn read_backdrop(body: &[u8]) -> CoreResult<Backdrop> {
     };
 
     Ok(Backdrop {
+        reserved,
         which,
         placement: Placement::from_bits((flags & PLACEMENT_MASK) >> 12),
         precision: Precision::from_bits((flags & PRECISION_MASK) >> 10),
@@ -260,7 +271,7 @@ pub fn write_backdrop(b: &Backdrop) -> CoreResult<Vec<u8>> {
         .map_err(|_| malformed("backdrop data is longer than a PTRN chunk can hold"))?;
 
     let mut out = Vec::with_capacity(HEADER_LEN + data.len());
-    out.extend_from_slice(&[0u8; RESERVED_LEN]);
+    out.extend_from_slice(&b.reserved);
     out.extend_from_slice(&b.which.to_bits().to_be_bytes());
     out.extend_from_slice(&flags.to_be_bytes());
     out.push(b.revision as u8);
@@ -383,6 +394,7 @@ mod tests {
     #[test]
     fn a_written_picture_backdrop_carries_the_sixteen_reserved_bytes() {
         let out = write_backdrop(&Backdrop {
+            reserved: [0u8; 16],
             which: Which::Root,
             placement: Placement::Scale,
             precision: Precision::Image,
@@ -476,5 +488,31 @@ mod tests {
         let b = read_backdrop(&body).unwrap();
         assert_eq!(b.revision, 7);
         assert_eq!(write_backdrop(&b).unwrap(), body);
+    }
+
+    /// **Finding I2 (whole-branch review).** `write_backdrop` used to emit
+    /// `&[0u8; RESERVED_LEN]` unconditionally, and `read_backdrop` never read
+    /// `body[0..16]` at all — `Backdrop` had no field for it, unlike
+    /// `screenmode::ScreenMode::reserved`, which got exactly this treatment
+    /// in an earlier fix round. Nothing built from ART's own `write_backdrop`
+    /// could ever have caught that: every fixture would be zero-reserved by
+    /// construction, the same "fixture cannot fail" shape this round rejected
+    /// twice already. This test builds the body by hand with a non-zero
+    /// pattern in both bytes AmigaOS actually varies (per the measured files,
+    /// `wbp_Reserved` is all-zero in every one read, but nothing states it
+    /// must be — the same reasoning `screenmode`'s own guard uses).
+    #[test]
+    fn the_reserved_bytes_are_carried_not_zeroed() {
+        let mut body = measured_picture_body();
+        body[0] = 0x5A;
+        body[15] = 0xA5;
+        let b = read_backdrop(&body).unwrap();
+        assert_eq!(b.reserved[0], 0x5A, "the first reserved byte must be read");
+        assert_eq!(b.reserved[15], 0xA5, "the last reserved byte must be read");
+        assert_eq!(
+            write_backdrop(&b).unwrap(),
+            body,
+            "the reserved bytes must be written back verbatim, not zeroed"
+        );
     }
 }

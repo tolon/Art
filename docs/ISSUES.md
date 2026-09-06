@@ -543,6 +543,35 @@ guarantee is already broken, which is precisely why one has not been forced.
 Low severity: the arm cannot be exercised without first finding the
 third-party defect it exists to catch.
 
+**ART-248** 🔵 **`appearance_apply` runs the whole wallpaper pipeline
+synchronously on the command thread, with no progress and no cancel** — *found
+2026-09-05/06 during the prefs-and-wallpaper round's whole-branch review,
+filed rather than fixed*
+`src-tauri/src/commands/appearance.rs::appearance_apply`,
+`src-tauri/src/core/appearance/mod.rs::plan_wallpaper`,
+`src-tauri/src/core/picture/quantise.rs`
+
+`commands/appearance.rs::appearance_apply` calls `apply_appearance` directly
+on the Tauri command thread rather than through `core::jobs::spawn_job`, and
+`apply_appearance`'s wallpaper path (`plan_wallpaper`) runs the whole decode →
+scale → quantise → ILBM-encode pipeline inline. `core/picture::quantise` is
+median-cut, O(target_colours × pixels): the scale target comes from the
+tree's own `ScreenMode.prefs` (`screen_size_for_scaling`), so a request
+against an RTG tree at 1920×1080 with 256 colours means on the order of 256
+passes over roughly 2.07 million pixels — with the application window frozen
+for the whole call, no progress shown, and no way to cancel it. §54/§55
+("Background work") already made this call for four other operations in this
+codebase — `commands/layout.rs`, `commands/archives.rs` and `commands/card.rs`
+all move comparably expensive work off the command thread through
+`core::jobs::spawn_job` for exactly this reason. `appearance_apply` was added
+this round without that wrapper. Not yet measured against a real 1920×1080
+picture (every fixture used so far is small), so the actual stall duration on
+real hardware is unknown; the shape of the fix is not — give `plan_wallpaper`
+a `&dyn ProgressSink` the way `core/gameindex::scan_titles_with` does, route
+`appearance_apply` through `spawn_job`, and keep a thin synchronous wrapper
+for callers (tests) that do not need a job, the same split
+`scan_titles`/`scan_titles_with` already uses.
+
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 

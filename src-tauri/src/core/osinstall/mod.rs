@@ -633,6 +633,33 @@ pub(crate) fn resolve_ci_optional(
     Ok(Some(current))
 }
 
+/// Strip a leading `Sys:` assign from an Amiga path, matching the assign
+/// itself case-insensitively — AmigaDOS assigns are case-insensitive the same
+/// way every other AmigaDOS name is, and real material disagrees with a
+/// literal `"Sys:"` match: the round's own pre-flight measurement recorded
+/// two real `WBPattern.prefs` chunks reading `SYS:Prefs/Presets/Patterns/…`
+/// in upper case (whole-branch review finding I3).
+///
+/// Lives here, `pub(crate)`, for the same reason [`find_child_ci`] does:
+/// `core::appearance::resolve_amiga_path` and
+/// `core::osinstall::verify::check_one_backdrop_path` both need exactly this
+/// one check, and a private copy in either is how the two silently drift —
+/// which is precisely what happened here: the rest of both paths already
+/// fold every *component* case-insensitively through [`resolve_ci_optional`],
+/// and only the assign name itself had been compared literally.
+///
+/// `"Sys:"` is pure ASCII, so slicing at byte offset 4 is always a valid
+/// `char` boundary regardless of what a Latin-1-decoded path carries after
+/// it — nothing here needs to look past the fourth byte to know that.
+pub(crate) fn strip_sys_prefix_ci(amiga_path: &str) -> Option<&str> {
+    let bytes = amiga_path.as_bytes();
+    if bytes.len() >= 4 && bytes[..4].eq_ignore_ascii_case(b"Sys:") {
+        Some(&amiga_path[4..])
+    } else {
+        None
+    }
+}
+
 /// The **host** path a distribution-tree destination is written at (ART-160).
 ///
 /// A distribution tree is an Amiga volume held in a host folder, so its file

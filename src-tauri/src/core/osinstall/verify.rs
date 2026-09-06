@@ -181,7 +181,7 @@ use crate::core::card::read_card;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::hashing::sha256_bytes;
 use crate::core::osinstall::apply::{DistributionManifest, FileRecord};
-use crate::core::osinstall::resolve_ci_optional;
+use crate::core::osinstall::{resolve_ci_optional, strip_sys_prefix_ci};
 use crate::core::preload::native::{
     area_for_slot, family_of, from_pfs3, partition_by_index, partition_region, pfs3_protection,
     DosFamily,
@@ -826,7 +826,10 @@ fn check_one_backdrop_path(
     prefs_rel: &str,
     amiga_path: &str,
 ) -> CoreResult<FileVerdict> {
-    let Some(rel) = amiga_path.strip_prefix("Sys:") else {
+    // The assign itself is folded case-insensitively, matching every other
+    // AmigaDOS name comparison in this function — real material carries
+    // `SYS:` as well as `Sys:` (whole-branch review finding I3).
+    let Some(rel) = strip_sys_prefix_ci(amiga_path) else {
         // A path naming a different assign (`Work:`, say) is not something a
         // distribution tree can resolve — a tree has no notion of what
         // `Work:` points at on the machine that eventually mounts it.
@@ -845,10 +848,21 @@ fn check_one_backdrop_path(
     };
 
     match resolve_ci_optional(tree, rel)? {
+        // The detail names what was actually examined rather than leaving it
+        // to a document to say (whole-branch review finding I4): this walks
+        // the **host distribution tree** `apply()` produced, not the
+        // partition a card or volume write later copies it onto, so a
+        // `Pass` here is not the same claim as a `Pass` this module derives
+        // by actually reading a PFS3 volume elsewhere in this file. Naming
+        // the tree makes that self-describing rather than something only
+        // `CLAUDE.md` or a changelog entry states.
         Some(_) => Ok(FileVerdict {
             path: amiga_path.to_string(),
             state: CheckState::Pass,
-            detail: None,
+            detail: Some(format!(
+                "named by '{prefs_rel}'; found under the distribution tree ('{}')",
+                tree.display()
+            )),
         }),
         None => Ok(FileVerdict {
             path: amiga_path.to_string(),
@@ -1508,6 +1522,7 @@ mod tests {
         let sys_dir = tree.join("Prefs").join("Env-Archive").join("Sys");
         std::fs::create_dir_all(&sys_dir).unwrap();
         let backdrop = wbpattern::Backdrop {
+            reserved: [0u8; 16],
             which: wbpattern::Which::Root,
             placement: wbpattern::Placement::Scale,
             precision: wbpattern::Precision::Image,
@@ -1530,6 +1545,7 @@ mod tests {
         let sys_dir = tree.join("Prefs").join("Env-Archive").join("Sys");
         std::fs::create_dir_all(&sys_dir).unwrap();
         let backdrop = wbpattern::Backdrop {
+            reserved: [0u8; 16],
             which: wbpattern::Which::Screen,
             placement: wbpattern::Placement::Tile,
             precision: wbpattern::Precision::Default,
@@ -1596,6 +1612,14 @@ mod tests {
 
     /// AmigaDOS is case-insensitive; the host is not. A tree holding
     /// `Default_Pal.iff` must satisfy a `PTRN` naming `default_pal.iff`.
+    ///
+    /// **Whole-branch review finding I4.** `check_prefs_paths` walks the
+    /// **host distribution tree**, not a volume — `verify_volume` calls it
+    /// with `dist_root`, never with the image it just wrote. A `Pass`
+    /// verdict's own detail must say so, rather than leaving the distinction
+    /// to a document (`CHANGELOG.md`/`docs/FEATURES.md` both used to say "on
+    /// the volume", which is a different and stronger claim than what this
+    /// function actually checked).
     #[test]
     fn a_backdrop_the_tree_does_have_passes_even_when_the_case_differs() {
         let scratch = ScratchDir::new("art-verify-prefs", "case-insensitive");
@@ -1610,6 +1634,12 @@ mod tests {
 
         assert_eq!(verdicts.len(), 1, "{verdicts:?}");
         assert_eq!(verdicts[0].state, CheckState::Pass, "{:?}", verdicts[0]);
+        let detail = verdicts[0].detail.as_deref().unwrap_or("");
+        assert!(
+            detail.contains("distribution tree"),
+            "a Pass verdict must name what was actually examined, not leave it to a document: \
+             {detail}"
+        );
     }
 
     /// A `PTRN` in `Content::Pattern` form names no path at all — the
@@ -1678,6 +1708,36 @@ mod tests {
         );
         let detail = verdicts[0].detail.as_deref().unwrap_or("");
         assert!(detail.contains("Work:"), "{detail}");
+    }
+
+    /// **Whole-branch review finding I3.** AmigaDOS assigns are
+    /// case-insensitive like every other AmigaDOS name, and real material
+    /// disagrees with a literal `"Sys:"` match: the round's own pre-flight
+    /// scan recorded real `WBPattern.prefs` chunks reading
+    /// `SYS:Prefs/Presets/Patterns/…` in upper case. Before the fix this
+    /// fell into the `Work:`-shaped branch above and was reported
+    /// `NotChecked` with a **false** sentence — `SYS:` names exactly the
+    /// same assign as `Sys:`, so it must resolve and land on `Pass`/`Fail`
+    /// like any other `Sys:` claim, not be waved off as unresolvable.
+    #[test]
+    fn an_uppercase_sys_assign_is_folded_the_same_as_the_measured_case() {
+        let scratch = ScratchDir::new("art-verify-prefs", "uppercase-sys");
+        let tree = scratch.path();
+        write_wbpattern_picture(tree, "SYS:Prefs/Presets/Backdrops/default_pal.iff");
+        let drawer = tree.join("Prefs").join("Presets").join("Backdrops");
+        std::fs::create_dir_all(&drawer).unwrap();
+        std::fs::write(drawer.join("default_pal.iff"), b"FORM....ILBM").unwrap();
+
+        let verdicts = check_prefs_paths(tree).unwrap();
+
+        assert_eq!(verdicts.len(), 1, "{verdicts:?}");
+        assert_eq!(
+            verdicts[0].state,
+            CheckState::Pass,
+            "an upper-case SYS: must resolve like Sys: does, not be waved off as a foreign \
+             assign: {:?}",
+            verdicts[0]
+        );
     }
 
     /// **Real-material follow-up (Task 11's prefs oracle over the owner's

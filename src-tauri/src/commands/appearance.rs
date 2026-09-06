@@ -354,6 +354,7 @@ mod tests {
     // -----------------------------------------------------------------
     fn wbpattern_bytes(amiga_path: &str) -> Vec<u8> {
         let backdrop = wbpattern::Backdrop {
+            reserved: [0u8; 16],
             which: wbpattern::Which::Root,
             placement: wbpattern::Placement::Scale,
             precision: wbpattern::Precision::Image,

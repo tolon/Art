@@ -184,7 +184,11 @@ fn backdrop_amiga_path(file_name: &str) -> String {
 /// Refuses by name rather than trusting the claim (module doc: "Refuse,
 /// never substitute").
 fn resolve_amiga_path(tree: &Path, amiga_path: &str) -> CoreResult<PathBuf> {
-    let rel = amiga_path.strip_prefix("Sys:").ok_or_else(|| {
+    // The assign itself is folded case-insensitively, the same as every
+    // other AmigaDOS name `resolve_ci` compares component by component below
+    // — real material carries `SYS:` as well as `Sys:` (whole-branch review
+    // finding I3; see `crate::core::osinstall::strip_sys_prefix_ci`).
+    let rel = crate::core::osinstall::strip_sys_prefix_ci(amiga_path).ok_or_else(|| {
         CoreError::InvalidInput(format!(
             "'{amiga_path}' does not start with 'Sys:' — ART only places a backdrop on the \
              system volume"
@@ -313,10 +317,11 @@ fn plan_wallpaper(
     };
 
     // Everything ART has no field for on the chunk being edited — the
-    // release's own unknown flag bits and `wbp_Revision` — is carried
-    // forward rather than reset; only the content and the requested
-    // placement are the user's own choice. See the module doc.
+    // release's own unknown flag bits, `wbp_Revision` and the 16 reserved
+    // bytes — is carried forward rather than reset; only the content and the
+    // requested placement are the user's own choice. See the module doc.
     let new_backdrop = wbpattern::Backdrop {
+        reserved: existing.reserved,
         which: existing.which,
         placement,
         precision: wbpattern::Precision::Image,
@@ -547,11 +552,13 @@ mod tests {
 
     fn backdrop(
         which: wbpattern::Which,
+        reserved: [u8; 16],
         revision: i8,
         other_flags: u16,
         content: wbpattern::Content,
     ) -> wbpattern::Backdrop {
         wbpattern::Backdrop {
+            reserved,
             which,
             placement: wbpattern::Placement::Scale,
             precision: wbpattern::Precision::Image,
@@ -570,7 +577,10 @@ mod tests {
     /// exists to prove those survive an edit to the *root* entry untouched,
     /// and `the_edited_chunk_keeps_its_revision_and_unknown_flag_bits` gives
     /// the *root* entry the same treatment to prove the chunk being edited
-    /// keeps them too.
+    /// keeps them too. The root entry's `reserved` is [`RESERVED_PATTERN`],
+    /// not `[0u8; 16]`, for the same reason: a fixture that started at
+    /// all-zero could not tell "carried forward" from "coincidentally still
+    /// zero" (finding I2).
     fn wbpattern_bytes_full(
         root_revision: i8,
         root_other_flags: u16,
@@ -578,18 +588,21 @@ mod tests {
     ) -> Vec<u8> {
         let root = backdrop(
             wbpattern::Which::Root,
+            RESERVED_PATTERN,
             root_revision,
             root_other_flags,
             wbpattern::Content::Picture(root_amiga_path.to_string()),
         );
         let drawer = backdrop(
             wbpattern::Which::Drawer,
+            [0u8; 16],
             7,
             0x0040,
             wbpattern::Content::Picture("Sys:Prefs/Presets/Backdrops/drawer.iff".to_string()),
         );
         let screen = backdrop(
             wbpattern::Which::Screen,
+            [0u8; 16],
             3,
             0x0080,
             wbpattern::Content::Pattern {
@@ -961,6 +974,36 @@ mod tests {
         );
     }
 
+    /// **Whole-branch review finding I3.** `resolve_amiga_path` used to
+    /// compare the `Sys:` assign literally while every path *component*
+    /// after it is already folded case-insensitively through `resolve_ci` —
+    /// so a request naming `SYS:…`, the exact case the round's own pre-flight
+    /// scan measured on real material, was refused as "does not start with
+    /// 'Sys:'" even though `SYS:` names the very same assign.
+    #[test]
+    fn an_already_in_tree_backdrop_is_resolved_with_an_uppercase_sys_assign() {
+        let (_scratch, tree) = build_tree("already-in-tree-uppercase-sys");
+        let drawer = tree.join("Prefs").join("Presets").join("Backdrops");
+        std::fs::create_dir_all(&drawer).unwrap();
+        std::fs::write(drawer.join("Christmas.iff"), b"FORM....ILBM").unwrap();
+
+        let req = AppearanceRequest {
+            wallpaper: Some((
+                wbpattern::Which::Root,
+                WallpaperSource::AlreadyInTree {
+                    amiga_path: "SYS:Prefs/Presets/Backdrops/Christmas.iff".to_string(),
+                },
+                wbpattern::Placement::ScaleGood,
+            )),
+            screen_depth: None,
+            shell_defaults: false,
+        };
+        let outcome = apply_appearance(&tree, &req).unwrap_or_else(|err| {
+            panic!("an upper-case SYS: assign must resolve like Sys: does: {err}")
+        });
+        assert!(outcome.picture_placed.is_none(), "nothing new was placed");
+    }
+
     #[test]
     fn setting_screen_depth_rewrites_only_the_scrm_body() {
         let (_scratch, tree) = build_tree("screen-depth");
@@ -1022,7 +1065,12 @@ mod tests {
     /// fields to zero on the *edited* chunk would still pass every other
     /// test. This one gives the root entry a nonzero revision and an unknown
     /// flag bit too, and proves both survive the edit, while the field the
-    /// request actually named (`placement`) really did change.
+    /// request actually named (`placement`) really did change. The root
+    /// fixture's `reserved` is [`RESERVED_PATTERN`] too, so this is also the
+    /// guard for finding I2: `write_backdrop` used to emit `[0u8; 16]`
+    /// unconditionally, and no fixture built by ART's own `write_backdrop`
+    /// could ever have caught that — every one of them was zero-reserved by
+    /// construction.
     #[test]
     fn the_edited_chunk_keeps_its_revision_and_unknown_flag_bits() {
         let (_scratch, tree) = build_tree("edited-chunk-keeps-fields");
@@ -1055,6 +1103,10 @@ mod tests {
         assert_eq!(
             after.other_flags, 0x0040,
             "the edited chunk keeps unknown flag bits"
+        );
+        assert_eq!(
+            after.reserved, RESERVED_PATTERN,
+            "the edited chunk keeps its 16 reserved bytes, not zeroed"
         );
         assert_eq!(
             after.placement,

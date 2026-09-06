@@ -23,9 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   else the release shipped in those files — including bytes ART has no field
   for — passes through untouched.
 - **A tree's own prefs are checked too.** Verify now confirms every backdrop
-  path a prefs file names actually exists on the volume, case-insensitively —
-  and tells you both the prefs file and the missing path when it does not. A
-  file that merely carries a `.prefs` name but is not one of AmigaOS's own IFF
+  path a prefs file names actually exists in the built distribution tree,
+  case-insensitively and matching the `Sys:` assign whichever case it is
+  written in — and tells you both the prefs file and the missing path when it
+  does not, and which folder it looked in when it is found. A file that
+  merely carries a `.prefs` name but is not one of AmigaOS's own IFF
   preference files (`amidock.prefs` and a few others are plain text) is
   reported as not checked, never as a false failure.
 - **A WHDLoad collection kept as drawers is catalogued.** If your WHDLoad

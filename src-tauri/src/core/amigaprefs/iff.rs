@@ -213,7 +213,12 @@ mod tests {
     fn a_prefs_file_round_trips_byte_for_byte() {
         let bytes = synthetic_prefs(&[(*b"PTRN", vec![1, 2, 3, 4]), (*b"SCRM", vec![9; 28])]);
         let parsed = parse(&bytes).unwrap();
-        assert_eq!(parsed.to_bytes(), bytes);
+        // `replace_bodies(&[])` is the function that actually produces the
+        // bytes written into a user's tree — `to_bytes()` is just the bytes
+        // `parse` was handed back verbatim, so comparing against it would be
+        // true by construction for anything `parse` accepts. This is the
+        // real serializer, asked to change nothing.
+        assert_eq!(parsed.replace_bodies(&[]).unwrap(), bytes);
     }
 
     #[test]
@@ -353,7 +358,12 @@ mod tests {
     /// each other and with nothing else — exactly the class of defect
     /// `CLAUDE.md` names ART-032 .. ART-035 for. This walks a directory of
     /// **real** AmigaOS preferences files, parses each with [`parse`], and
-    /// asserts `to_bytes()` reproduces the file's own bytes exactly.
+    /// asserts `replace_bodies(&[])` — the function that actually produces
+    /// the bytes written into a user's tree, asked to change nothing —
+    /// reproduces the file's own bytes exactly. `to_bytes()` would not do:
+    /// it is `self.bytes.clone()`, the exact bytes `parse` was handed, so it
+    /// is true by construction for every input `parse` accepts and never
+    /// exercises the rebuilder at all (whole-branch review finding I1).
     ///
     /// A no-op (not a failure) when `ART_PREFS_DIR` is unset, so the
     /// ordinary suite never touches the owner's own disks:
@@ -391,12 +401,12 @@ mod tests {
     /// `failed`.
     ///
     /// What **is** unconditional, for every file `looks_like_iff_pref` says
-    /// yes to: [`parse`] must succeed and `to_bytes()` must reproduce the
-    /// file's own bytes exactly. A file that claims the container this
-    /// module reads and does not round-trip is not a panic: it is recorded
-    /// by name in `failed`, and the whole test fails once at the end,
-    /// printing every one of them — plus every count, so the numbers that
-    /// land in `docs/STATUS.md` are measured, not guessed.
+    /// yes to: [`parse`] must succeed and `replace_bodies(&[])` must
+    /// reproduce the file's own bytes exactly. A file that claims the
+    /// container this module reads and does not round-trip is not a panic:
+    /// it is recorded by name in `failed`, and the whole test fails once at
+    /// the end, printing every one of them — plus every count, so the
+    /// numbers that land in `docs/STATUS.md` are measured, not guessed.
     #[test]
     #[ignore = "needs the owner's own material; set ART_PREFS_DIR"]
     fn every_real_prefs_file_round_trips_byte_for_byte() {
@@ -433,20 +443,20 @@ mod tests {
             }
 
             match parse(&bytes) {
-                Ok(parsed) => {
-                    let rebuilt = parsed.to_bytes();
-                    if rebuilt == bytes {
-                        ok += 1;
-                    } else {
-                        failed.push(format!(
-                            "{}: to_bytes() did not reproduce the file's own bytes \
-                             ({} vs {} bytes)",
-                            entry.display(),
-                            rebuilt.len(),
-                            bytes.len()
-                        ));
-                    }
-                }
+                Ok(parsed) => match parsed.replace_bodies(&[]) {
+                    Ok(rebuilt) if rebuilt == bytes => ok += 1,
+                    Ok(rebuilt) => failed.push(format!(
+                        "{}: replace_bodies(&[]) did not reproduce the file's own bytes \
+                         ({} vs {} bytes)",
+                        entry.display(),
+                        rebuilt.len(),
+                        bytes.len()
+                    )),
+                    Err(err) => failed.push(format!(
+                        "{}: parsed but replace_bodies(&[]) failed: {err}",
+                        entry.display()
+                    )),
+                },
                 Err(err) => failed.push(format!(
                     "{}: begins with FORM but parse failed: {err}",
                     entry.display()
