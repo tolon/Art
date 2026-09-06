@@ -59,6 +59,9 @@ beforeEach(() => {
     backups: [],
     picturePlaced: null,
     amigaPath: "Sys:Prefs/Presets/Backdrops/default_pal.iff",
+    iconsPlaced: 0,
+    drawersArranged: 0,
+    iconsSkipped: [],
   });
 });
 
@@ -177,6 +180,35 @@ describe("a choice survives a remount", () => {
       (screen.getByRole("combobox", { name: /placement/i }) as HTMLSelectElement).value
     ).toBe("tile");
   });
+
+  it("remembers the icon-arrangement choice", async () => {
+    // `isFlag` guard, the same as every other checkbox on this panel —
+    // ticking it and remounting without re-seeding must read back `true`
+    // from the live settings store rather than resetting to the default.
+    seedStore();
+    const { unmount } = render(<AppearancePanel />);
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /arrange the drawer icons/i })
+    );
+    expect(
+      (
+        screen.getByRole("checkbox", {
+          name: /arrange the drawer icons/i,
+        }) as HTMLInputElement
+      ).checked
+    ).toBe(true);
+
+    unmount();
+    render(<AppearancePanel />);
+
+    expect(
+      (
+        screen.getByRole("checkbox", {
+          name: /arrange the drawer icons/i,
+        }) as HTMLInputElement
+      ).checked
+    ).toBe(true);
+  });
 });
 
 describe("what a successful apply says", () => {
@@ -187,6 +219,9 @@ describe("what a successful apply says", () => {
       backups: ["Prefs/Env-Archive/Sys/WBPattern.prefs.bak.1"],
       picturePlaced: null,
       amigaPath: "Sys:Prefs/Presets/Backdrops/default_pal.iff",
+      iconsPlaced: 0,
+      drawersArranged: 0,
+      iconsSkipped: [],
     });
     seedStore();
     render(<AppearancePanel />);
@@ -207,6 +242,9 @@ describe("what a successful apply says", () => {
       backups: [],
       picturePlaced: null,
       amigaPath: "Sys:Prefs/Presets/Backdrops/default_pal.iff",
+      iconsPlaced: 0,
+      drawersArranged: 0,
+      iconsSkipped: [],
     });
     seedStore();
     render(<AppearancePanel />);
@@ -272,6 +310,105 @@ describe("what reaches the wire", () => {
     expect(request.wallpaper).toBeNull();
     expect(request.screenDepth).toBeNull();
   });
+
+  it("sends arrangeIcons when the box is ticked, and the other capabilities stay absent", async () => {
+    // Task 8 of the drawer-icons round, and the standard set above: a
+    // request that always sends everything would pass a weaker assertion —
+    // this one fails unless wallpaper/screenDepth/shellDefaults are actually
+    // absent while only arrangeIcons is true.
+    seedStore();
+    render(<AppearancePanel />);
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /arrange the drawer icons/i })
+    );
+    await userEvent.click(screen.getByRole("button", { name: /apply/i }));
+    await waitFor(() => expect(applyMock).toHaveBeenCalled());
+
+    const [tree, request] = applyMock.mock.calls.at(-1)!;
+    expect(tree).toBe(TREE);
+    expect(request.arrangeIcons).toBe(true);
+    expect(request.wallpaper).toBeNull();
+    expect(request.screenDepth).toBeNull();
+    expect(request.shellDefaults).toBe(false);
+  });
+});
+
+describe("what a successful icon arrangement says", () => {
+  it("says how many icons were placed after a successful run, by number", async () => {
+    applyMock.mockResolvedValue({
+      written: ["Utilities.info"],
+      backups: [],
+      picturePlaced: null,
+      amigaPath: null,
+      iconsPlaced: 7,
+      drawersArranged: 3,
+      iconsSkipped: [],
+    });
+    seedStore();
+    render(<AppearancePanel />);
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /arrange the drawer icons/i })
+    );
+    await userEvent.click(screen.getByRole("button", { name: /apply/i }));
+
+    const placed = await screen.findByTestId("appearance-icons-placed");
+    // The specific numbers, not "it worked" — a screen that shows a fixed
+    // success badge regardless of the outcome carries no information
+    // (CLAUDE.md's own rule for a progress bar applies just as much here).
+    expect(placed.textContent).toContain("7");
+    expect(placed.textContent).toContain("3");
+  });
+
+  it("names the icon that could not be read, rather than silently dropping it", async () => {
+    applyMock.mockResolvedValue({
+      written: [],
+      backups: [],
+      picturePlaced: null,
+      amigaPath: null,
+      iconsPlaced: 2,
+      drawersArranged: 1,
+      iconsSkipped: ["E:\\amiga\\dist-3.2\\Utilities\\Bad.info"],
+    });
+    seedStore();
+    render(<AppearancePanel />);
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /arrange the drawer icons/i })
+    );
+    await userEvent.click(screen.getByRole("button", { name: /apply/i }));
+
+    const skipped = await screen.findByTestId("appearance-icons-skipped");
+    expect(skipped.textContent).toContain("E:\\amiga\\dist-3.2\\Utilities\\Bad.info");
+  });
+
+  it("says nothing needed writing, rather than a bare written line, when every icon was already placed", async () => {
+    // C7 (final whole-branch review): ticking only "Arrange icons" on a tree
+    // whose icons are all already placed used to render `Written: ` with
+    // nothing after it — the same blank shape a real failure could produce,
+    // which is exactly the "must not be the same screen" defect CLAUDE.md
+    // names. A directory with nothing to place commits nothing at all
+    // (`core::appearance::plan_icon_arrangement`'s own doc), so `written`,
+    // `iconsPlaced` and `drawersArranged` are all zero here.
+    applyMock.mockResolvedValue({
+      written: [],
+      backups: [],
+      picturePlaced: null,
+      amigaPath: null,
+      iconsPlaced: 0,
+      drawersArranged: 0,
+      iconsSkipped: [],
+    });
+    seedStore();
+    render(<AppearancePanel />);
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /arrange the drawer icons/i })
+    );
+    await userEvent.click(screen.getByRole("button", { name: /apply/i }));
+
+    const nothing = await screen.findByTestId("appearance-nothing-written");
+    expect(nothing.textContent).toBeTruthy();
+    expect(screen.queryByTestId("appearance-icons-placed")).toBeNull();
+    expect(screen.queryByTestId("appearance-icons-skipped")).toBeNull();
+  });
 });
 
 describe("a stale or hand-edited settings file cannot put a bad value on screen", () => {
@@ -307,7 +444,8 @@ describe("what it refuses before ever calling core, and where the sentence is", 
     seedStore();
     render(<AppearancePanel />);
     expect(document.body.textContent).toContain(
-      "Tick the wallpaper, the screen depth, the shell defaults, or some of them."
+      "Tick the wallpaper, the screen depth, the shell defaults, the icon arrangement, or " +
+        "some of them."
     );
   });
 
@@ -327,6 +465,13 @@ describe("the panel in Turkish", () => {
 
     expect(
       screen.getByRole("checkbox", { name: /masaüstü duvar kağıdını değiştir/i })
+    ).toBeTruthy();
+    // Task 8's own checkbox, in Turkish — the round's addition is not an
+    // English afterthought bolted onto an otherwise-translated screen.
+    expect(
+      screen.getByRole("checkbox", {
+        name: /workbench'in hiç yerleştirmediği çekmece simgelerini düzenle/i,
+      })
     ).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/appearance\.[a-zA-Z.]+/);
     expect(document.body.textContent).not.toMatch(/\{\{[^}]+\}\}/);

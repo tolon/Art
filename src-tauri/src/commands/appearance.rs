@@ -28,9 +28,15 @@
 //! "done" without being told where the previous version went has been given
 //! nothing (CLAUDE.md, "the failure that does not crash"). So this goes
 //! through `oplog::write_result`, synchronously, the same shape
-//! `commands/adf.rs::adf_add_file` uses — not a background job, because the
-//! whole operation touches at most eight small text files and one image, not
-//! hundreds of megabytes off real media.
+//! `commands/adf.rs::adf_add_file` uses — not a background job, because even
+//! the largest real case (arranging icons across a 3.9-scale tree, hundreds
+//! of small `.info` writes) is nowhere near the hundreds of megabytes a real
+//! media copy moves. **Corrected 2026-09-06** (final whole-branch review of
+//! the drawer-icons round, C5): this used to say "at most eight small text
+//! files and one image", true before `arrange_icons` existed and false
+//! since — 361 of the owner's own 798 real icons are unplaced, so a single
+//! call can commit that many files. The oplog's own `Written`/`Backups`
+//! details are capped the same way — see `some_of` at the call site below.
 //!
 //! `appearance_backdrops` reads a directory listing and writes nothing, so it
 //! is not logged — the same rule `osinstall_components`/`osinstall_packages`
@@ -42,6 +48,8 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::core::amigaprefs::wbpattern;
+use crate::core::osinstall::apply::some_of;
+
 use crate::core::appearance::{
     apply_appearance, backdrops_in_tree, AppearanceOutcome, AppearanceRequest, WallpaperSource,
 };
@@ -141,6 +149,14 @@ pub struct AppearanceApplyRequest {
     pub wallpaper: Option<WireWallpaperAssignment>,
     pub screen_depth: Option<u16>,
     pub shell_defaults: bool,
+    /// [`AppearanceRequest::arrange_icons`] on the wire. `#[serde(default)]`
+    /// so an older frontend build that has never heard of this field still
+    /// deserialises — the same "nothing changes unless the user changes it"
+    /// rule CLAUDE.md states for settings applies to a request shape too: a
+    /// caller that never asked for icon arranging must not start getting it
+    /// for free just because this field exists now.
+    #[serde(default)]
+    pub arrange_icons: bool,
 }
 
 impl From<AppearanceApplyRequest> for AppearanceRequest {
@@ -151,6 +167,7 @@ impl From<AppearanceApplyRequest> for AppearanceRequest {
                 .map(|w| (w.which.into(), w.source.into(), w.placement.into())),
             screen_depth: value.screen_depth,
             shell_defaults: value.shell_defaults,
+            arrange_icons: value.arrange_icons,
         }
     }
 }
@@ -172,6 +189,14 @@ pub struct AppearanceOutcomeWire {
     pub backups: Vec<String>,
     pub picture_placed: Option<String>,
     pub amiga_path: Option<String>,
+    /// [`AppearanceOutcome::icons_placed`] on the wire.
+    pub icons_placed: usize,
+    /// [`AppearanceOutcome::drawers_arranged`] on the wire.
+    pub drawers_arranged: usize,
+    /// [`AppearanceOutcome::icons_skipped`] on the wire — named, not merely
+    /// counted, so a malformed icon is not silently dropped (CLAUDE.md: "never
+    /// claim what you did not do").
+    pub icons_skipped: Vec<String>,
 }
 
 impl From<AppearanceOutcome> for AppearanceOutcomeWire {
@@ -189,6 +214,13 @@ impl From<AppearanceOutcome> for AppearanceOutcomeWire {
                 .collect(),
             picture_placed: value.picture_placed.map(|p| p.display().to_string()),
             amiga_path: value.amiga_path,
+            icons_placed: value.icons_placed,
+            drawers_arranged: value.drawers_arranged,
+            icons_skipped: value
+                .icons_skipped
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect(),
         }
     }
 }
@@ -248,13 +280,19 @@ pub fn appearance_apply(
             .destination(tree.display().to_string()),
         &result,
         |record, outcome: &AppearanceOutcomeWire| {
-            let record = record.detail("Written", outcome.written.join(", "));
+            // C5 (final whole-branch review): capped the same way a package
+            // refusal naming up to 211 real files already is
+            // (`core::osinstall::apply::some_of`) — arranging icons across a
+            // 3.9-scale tree can commit hundreds of `.info` files in one
+            // call, and joining every one of them into a single log line is
+            // as unusable on disk as it is on screen.
+            let record = record.detail("Written", some_of(&outcome.written));
             let record = if outcome.backups.is_empty() {
                 record
             } else {
                 record
                     .backup(outcome.backups.first().cloned())
-                    .detail("Backups", outcome.backups.join(", "))
+                    .detail("Backups", some_of(&outcome.backups))
             };
             record.outcome(OperationOutcome::verified(true))
         },
@@ -311,6 +349,7 @@ mod tests {
             }),
             screen_depth: None,
             shell_defaults: false,
+            arrange_icons: false,
         };
 
         // The ground truth: `core::appearance::apply_appearance`'s own
@@ -399,6 +438,7 @@ mod tests {
             wallpaper: None,
             screen_depth: Some(8),
             shell_defaults: false,
+            arrange_icons: false,
         };
         let outcome = apply_appearance_request(&tree, request).unwrap();
 
@@ -423,15 +463,25 @@ mod tests {
             backups: vec!["b".to_string()],
             picture_placed: Some("c".to_string()),
             amiga_path: Some("Sys:Prefs/Presets/Backdrops/x.iff".to_string()),
+            icons_placed: 3,
+            drawers_arranged: 2,
+            icons_skipped: vec!["Sys:Broken/broken.info".to_string()],
         };
         let value = serde_json::to_value(&outcome).unwrap();
         let keys: std::collections::BTreeSet<String> =
             value.as_object().unwrap().keys().cloned().collect();
-        let expected: std::collections::BTreeSet<String> =
-            ["written", "backups", "picturePlaced", "amigaPath"]
-                .into_iter()
-                .map(str::to_string)
-                .collect();
+        let expected: std::collections::BTreeSet<String> = [
+            "written",
+            "backups",
+            "picturePlaced",
+            "amigaPath",
+            "iconsPlaced",
+            "drawersArranged",
+            "iconsSkipped",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
         assert_eq!(keys, expected);
     }
 

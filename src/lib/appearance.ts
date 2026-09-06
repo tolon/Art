@@ -33,6 +33,11 @@ export interface AppearanceApplyRequest {
   wallpaper: AppearanceWallpaperAssignment | null;
   screenDepth: number | null;
   shellDefaults: boolean;
+  /** `AppearanceRequest::arrange_icons` on the wire (Task 8 of the
+   * drawer-icons round) — lay out every icon the tree's drawers carry that
+   * has not already been positioned by the release itself
+   * (`core::icongrid::arrange`). */
+  arrangeIcons: boolean;
 }
 
 /**
@@ -40,12 +45,37 @@ export interface AppearanceApplyRequest {
  * with. `backups` names where every previous version of a rewritten file
  * went (spec §92: a user told "done" without being told where the previous
  * version went has been given nothing).
+ *
+ * `iconsPlaced`, `drawersArranged` and `iconsSkipped` are Task 8's own
+ * addition: a run that arranged icons but told the user only "done" would be
+ * the same failure CLAUDE.md names — a confident sentence that omits what
+ * did not work. `iconsSkipped` names the icons `core::amigaicon` could not
+ * read, not merely their count.
  */
 export interface AppearanceOutcome {
   written: string[];
   backups: string[];
   picturePlaced: string | null;
   amigaPath: string | null;
+  iconsPlaced: number;
+  drawersArranged: number;
+  iconsSkipped: string[];
+}
+
+/**
+ * At most this many paths joined, with a count for the rest — the same
+ * capping convention `core::osinstall::apply::some_of` uses for a package
+ * refusal naming up to 211 real files, reused here rather than a second
+ * style (C5, final whole-branch review of the drawer-icons round):
+ * arranging icons across a 3.9-scale tree can write hundreds of `.info`
+ * files in one call, and joining every one of them into a single paragraph
+ * is honest and unusable.
+ */
+export function someOf(paths: string[], max = 5): string {
+  if (paths.length <= max) {
+    return paths.join(", ");
+  }
+  return `${paths.slice(0, max).join(", ")}, and ${paths.length - max} more`;
 }
 
 /** Every backdrop `tree` already carries under `Prefs/Presets/Backdrops`. */

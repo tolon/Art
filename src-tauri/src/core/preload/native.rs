@@ -104,6 +104,7 @@ use crate::core::preload::amiga_names::AmigaNames;
 use crate::core::preload::pfs3dev::ArtBlockDevice;
 use crate::core::preload::{CopySummary, ToolVersion, VolumeFormatter};
 use crate::core::rdb::ParsedPartition;
+use crate::core::safety::backup::BACKUP_DIR;
 use crate::core::volume::device::FileRegionMut;
 use crate::core::volume::write::{dir, uaem, write_refusal, FileMeta, VolumeWriter};
 use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
@@ -760,6 +761,18 @@ fn collect_into(
             .to_str()
             .ok_or(CoreError::NonUtf8Path)?
             .to_string();
+
+        // C6 (final whole-branch review): `.art-backup` is ART's own
+        // host-side safety net (`core::safety::backup`), never Amiga
+        // content — it must not reach the card any more than a `.uaem`
+        // sidecar does. Icon writes no longer create these at all
+        // (`core::appearance` uses `BackupPolicy::NONE` for them, C6's other
+        // half), but a wallpaper or shell-defaults write still can, and
+        // excluding it here means neither route can leak one onto a real
+        // PiStorm card regardless of which produced it.
+        if host_name == BACKUP_DIR {
+            continue;
+        }
         let host_relative = if host_prefix.is_empty() {
             host_name.clone()
         } else {
@@ -1153,6 +1166,43 @@ mod tests {
                 .map(|e| e.relative.as_str())
                 .collect::<Vec<_>>(),
             vec!["_AUX"]
+        );
+    }
+
+    /// **C6 (final whole-branch review).** `.art-backup` — ART's own
+    /// host-side safety net, never Amiga content — must not reach the card
+    /// any more than a `.uaem` sidecar does. Built with a nested drawer's
+    /// own backup folder too, since `guarded_write` places one beside
+    /// whatever it just backed up, at any depth in the tree.
+    #[test]
+    fn an_art_backup_drawer_is_never_copied_onto_the_card() {
+        let dir = scratch("art-backup-excluded");
+        let tree = dir.join("dist");
+        std::fs::create_dir_all(tree.join(BACKUP_DIR)).unwrap();
+        std::fs::write(
+            tree.join(BACKUP_DIR).join("Prefs.info.12345-000000000.bak"),
+            b"old bytes",
+        )
+        .unwrap();
+        std::fs::create_dir_all(tree.join("Prefs").join(BACKUP_DIR)).unwrap();
+        std::fs::write(
+            tree.join("Prefs")
+                .join(BACKUP_DIR)
+                .join("Env-Archive.info.12345-000000001.bak"),
+            b"old bytes too",
+        )
+        .unwrap();
+        std::fs::write(tree.join("Prefs.info"), b"current").unwrap();
+
+        let entries = collect_entries(&tree).unwrap();
+        let relatives: Vec<&str> = entries.iter().map(|e| e.relative.as_str()).collect();
+        assert!(
+            !relatives.iter().any(|r| r.contains(BACKUP_DIR)),
+            "no .art-backup drawer, at any depth, may reach the card: {relatives:?}"
+        );
+        assert!(
+            relatives.contains(&"Prefs.info"),
+            "the real file beside it is still copied: {relatives:?}"
         );
     }
 

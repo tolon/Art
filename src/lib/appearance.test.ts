@@ -57,12 +57,16 @@ describe("appearanceApply", () => {
       },
       screenDepth: 8,
       shellDefaults: true,
+      arrangeIcons: true,
     };
     const outcome: AppearanceOutcome = {
       written: ["Prefs/Env-Archive/Sys/WBPattern.prefs"],
       backups: ["Prefs/Env-Archive/Sys/WBPattern.prefs.bak"],
       picturePlaced: "Prefs/Presets/Backdrops/wallpaper.iff",
       amigaPath: "Sys:Prefs/Presets/Backdrops/wallpaper.iff",
+      iconsPlaced: 5,
+      drawersArranged: 2,
+      iconsSkipped: [],
     };
     invokeMock.mockResolvedValueOnce(outcome);
 
@@ -90,12 +94,16 @@ describe("appearanceApply", () => {
       },
       screenDepth: null,
       shellDefaults: false,
+      arrangeIcons: false,
     };
     invokeMock.mockResolvedValueOnce({
       written: [],
       backups: [],
       picturePlaced: null,
       amigaPath: "Sys:Prefs/Presets/Backdrops/Christmas.iff",
+      iconsPlaced: 0,
+      drawersArranged: 0,
+      iconsSkipped: [],
     });
 
     await appearanceApply("E:\\builds\\amigaos32", request);
@@ -117,6 +125,7 @@ describe("appearanceApply", () => {
         wallpaper: null,
         screenDepth: 8,
         shellDefaults: false,
+        arrangeIcons: false,
       })
     ).rejects.toBe(message);
   });

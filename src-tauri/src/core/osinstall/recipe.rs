@@ -1041,6 +1041,33 @@ mod tests {
     /// `the_39_overlay_is_declared_last_required_and_over_both_layers`
     /// below is; a guard that passes vacuously is worse than no guard,
     /// because it reads like protection (Task 8 fix round 2, F1).
+    ///
+    /// **Deliberately still blind to the drawer-icons round's own feature
+    /// (C4, final whole-branch review), and that is correct rather than a
+    /// gap to close here.** A non-empty `Subtree` rule now claims
+    /// `<to>.info` as a *file* destination too, when the medium happens to
+    /// carry `<from>.info` beside it (`expand_rules`) — but whether it
+    /// carries one is a fact about the real medium, not the recipe, so this
+    /// **static** check (synthetic fixtures only, no real media, per this
+    /// file's own module doc) cannot see it and must not be made to try:
+    /// pretending to guard something it structurally cannot observe is
+    /// exactly this comment's own "worse than no guard" shape. The real
+    /// guard is `plan.rs::detect_collisions`, which already asks nothing
+    /// about `RuleKind` at all — it walks every non-directory `PlanItem`
+    /// regardless of which rule produced it, so two components whose media
+    /// each carry a sibling icon for the same merged drawer collide there
+    /// exactly like any other pair of files, `overrides` included. Measured
+    /// against the owner's own media rather than argued: 26 destination
+    /// groups across the shipped recipes now have two or more non-empty
+    /// `Subtree` rules (`amigaos-3.2.2.json`'s sixteen
+    /// `update-322-locale-*` all targeting `Locale/Catalogs` and
+    /// `Locale/Help`; `amigaos-3.2.json`'s fifteen `locale-*` all targeting
+    /// `Locale/Languages`), several with no declared `overrides` between the
+    /// claimants — and `build_the_real_322_tree_when_asked` and
+    /// `build_the_real_39_tree_when_asked` both still report
+    /// `refusals=[]` after this round, because none of those disks actually
+    /// carry a colliding sibling icon (`docs/STATUS.md`'s reproduce block
+    /// has both command lines).
     #[test]
     fn no_two_components_claim_one_destination_without_declaring_it() {
         for (release, recipe) in shipped_recipes() {

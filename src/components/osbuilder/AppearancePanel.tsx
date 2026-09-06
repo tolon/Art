@@ -40,6 +40,7 @@ import { useTranslation } from "react-i18next";
 import {
   appearanceApply,
   appearanceBackdrops,
+  someOf,
   type AppearanceOutcome,
   type AppearancePlacement,
   type AppearanceWallpaperSource,
@@ -91,9 +92,15 @@ export function appearanceBlocker(input: {
   hostPath: string | null;
   screenDepthOn: boolean;
   shellDefaultsOn: boolean;
+  arrangeIconsOn: boolean;
 }): { key: string; params?: Record<string, unknown> } | null {
   if (!input.tree) return { key: "appearance.blocked.noTree" };
-  if (!input.wallpaperOn && !input.screenDepthOn && !input.shellDefaultsOn) {
+  if (
+    !input.wallpaperOn &&
+    !input.screenDepthOn &&
+    !input.shellDefaultsOn &&
+    !input.arrangeIconsOn
+  ) {
     return { key: "appearance.blocked.nothingChosen" };
   }
   if (input.wallpaperOn) {
@@ -160,6 +167,20 @@ export function AppearancePanel() {
     false
   );
 
+  // Task 8 of the drawer-icons round: `core::appearance::apply_appearance`
+  // already plans and commits icon arrangement whenever
+  // `AppearanceRequest::arrange_icons` is set — this is the checkbox that
+  // sets it. Consumed by this same step (the value ART writes and the value
+  // the next thing reads — AmigaOS itself, not another wizard step — cannot
+  // drift apart, CLAUDE.md's own test), so it is a remembered key rather
+  // than a `buildSession` field, the same reasoning every other flag on this
+  // panel already follows.
+  const [arrangeIconsOn, setArrangeIconsOn] = useRemembered(
+    "appearance.arrangeIconsOn",
+    isFlag,
+    false
+  );
+
   const [backdrops, setBackdrops] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -194,6 +215,7 @@ export function AppearancePanel() {
     hostPath,
     screenDepthOn,
     shellDefaultsOn,
+    arrangeIconsOn,
   });
 
   async function choosePicture() {
@@ -222,6 +244,7 @@ export function AppearancePanel() {
         wallpaper: wallpaperOn && source ? { which, source, placement } : null,
         screenDepth: screenDepthOn ? screenDepth : null,
         shellDefaults: shellDefaultsOn,
+        arrangeIcons: arrangeIconsOn,
       });
       setDone(outcome);
     } catch (e) {
@@ -422,6 +445,15 @@ export function AppearancePanel() {
         <span style={{ fontSize: 13 }}>{t("appearance.shell.enable")}</span>
       </label>
 
+      <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <input
+          type="checkbox"
+          checked={arrangeIconsOn}
+          onChange={(e) => setArrangeIconsOn(e.target.checked)}
+        />
+        <span style={{ fontSize: 13 }}>{t("appearance.icons.enable")}</span>
+      </label>
+
       {error && (
         <p
           data-testid="appearance-error"
@@ -454,12 +486,55 @@ export function AppearancePanel() {
           className="badge badge-ok"
           style={{ display: "block", fontSize: 11, padding: "4px 8px", marginTop: 8 }}
         >
-          <p style={{ margin: 0 }}>{t("appearance.done.written", { files: done.written.join(", ") })}</p>
+          {/* C5/C7 (final whole-branch review): a run that arranges icons
+              across a 3.9-scale tree can write hundreds of files, and a run
+              that touches none (every icon already placed, nothing else
+              requested) writes zero. "Written: " with nothing after it and
+              a genuine failure must not read as the same screen, and a list
+              of 361 paths joined into one paragraph is honest and
+              unusable — capped with `someOf`, the same convention
+              `core::osinstall::apply::some_of` uses on the Rust side. */}
+          {done.written.length > 0 ? (
+            <p style={{ margin: 0 }}>
+              {t("appearance.done.written", {
+                count: done.written.length,
+                files: someOf(done.written),
+              })}
+            </p>
+          ) : (
+            <p data-testid="appearance-nothing-written" style={{ margin: 0 }}>
+              {t("appearance.done.nothingWritten")}
+            </p>
+          )}
           {/* spec §92 / CLAUDE.md: a user told "done" without being told
               where the previous version went has been given nothing. */}
           {done.backups.length > 0 && (
             <p data-testid="appearance-backup" style={{ margin: "4px 0 0" }}>
-              {t("appearance.done.backup", { files: done.backups.join(", ") })}
+              {t("appearance.done.backup", {
+                count: done.backups.length,
+                files: someOf(done.backups),
+              })}
+            </p>
+          )}
+          {/* Task 8 of the drawer-icons round: a run that arranged icons and
+              said only "done" would be the same failure CLAUDE.md names — a
+              confident sentence that omits what actually happened. Gated on
+              the counts rather than the checkbox: it is the outcome, not the
+              request, that says whether anything was actually placed. */}
+          {(done.iconsPlaced > 0 || done.drawersArranged > 0) && (
+            <p data-testid="appearance-icons-placed" style={{ margin: "4px 0 0" }}>
+              {t("appearance.done.iconsPlaced", {
+                count: done.iconsPlaced,
+                drawers: done.drawersArranged,
+              })}
+            </p>
+          )}
+          {done.iconsSkipped.length > 0 && (
+            <p data-testid="appearance-icons-skipped" style={{ margin: "4px 0 0" }}>
+              {t("appearance.done.iconsSkipped", {
+                count: done.iconsSkipped.length,
+                files: done.iconsSkipped.join(", "),
+              })}
             </p>
           )}
         </div>

@@ -572,6 +572,76 @@ a `&dyn ProgressSink` the way `core/gameindex::scan_titles_with` does, route
 for callers (tests) that do not need a job, the same split
 `scan_titles`/`scan_titles_with` already uses.
 
+**ART-250** 🟡 **`tooltypes()`'s lossy UTF-8 decode cannot byte-for-byte
+round-trip a NewIcon `IM1=`/`IM2=` tool type** — *found 2026-09-06 by the
+drawer-icons round's icon-oracle run against the owner's own AmigaOS 3.9
+material*
+`src-tauri/src/core/amigaicon/mod.rs::{tooltypes, set_tooltypes}`
+
+`tooltypes` decodes a `ToolTypes` entry with `String::from_utf8_lossy` rather
+than refusing on invalid UTF-8 — deliberately, because real AmigaDOS text is
+Latin-1, not UTF-8, and a non-ASCII tool type (a `PUBSCREEN` name, say) is
+exactly the case that choice is for. NewIcon's `IM1=`/`IM2=` tool types are a
+different case: their pixel-encoding bytes legitimately run past `0x7F` and
+are not accidental Latin-1 text at all, just bytes that happen not to be valid
+UTF-8 on their own. Decoding one replaces the offending byte(s) with
+`U+FFFD`, and re-encoding that back to UTF-8 does not reproduce the original
+bytes — the round-trip grows the file rather than reproducing it.
+
+**Measured, not theoretical**: 69 of the owner's own 798 real `.info` icons
+carry a NewIcon tool type that trips this. `scripts/icon-oracle-check.py`
+counts them in their own `lossy_tooltypes` bucket, never folded into
+`failed`, and holds them to a weaker but still real invariant — the *text*
+`tooltypes` reads back from a rewritten file must still equal the text that
+was written, even though the underlying bytes cannot be. Text identity holds
+for all 69; byte identity does not, and nothing here claims otherwise.
+
+Left open: fixing it means `tooltypes`/`set_tooltypes` carrying raw bytes
+instead of `String` for a NewIcon-shaped entry, which is a real change to a
+public shape three round's worth of code now depends on, not a one-line fix.
+No tree ART builds writes new NewIcon tool types today.
+
+**Corrected 2026-09-06, by the final whole-branch review**: an earlier version
+of this entry said the loss is felt when a NewIcon-carrying icon "is rewritten
+by `set_tooltypes`, `set_position`, `set_window` or `set_show_all_files`" —
+naming all four of this module's writers. Only one of them can trip it.
+`set_position`, `set_window` and `set_show_all_files` all `bytes.to_vec()` and
+overwrite a fixed, disjoint range of the file; none of them reads or rewrites
+the `ToolTypes` block at all, and the icon oracle proves this byte-for-byte
+across all 798 real icons, the 69 lossy ones included — `set_position` alone
+is what this round's `core/appearance::plan_icons_in_dir` actually calls on a
+NewIcon-carrying icon, and it changes eight bytes at offset 58, nowhere near
+`ToolTypes`. **Only `set_tooltypes` can lose bytes, and only when fed the
+output of `tooltypes()`** — the shape `merge_tooltypes`'s own callers use, not
+anything `plan_icons_in_dir` calls today. The warning now lives on
+`set_tooltypes`'s own doc comment (`core/amigaicon/mod.rs`) so a future caller
+reads it where it applies.
+
+**ART-251** 🟡 **The AmigaOS 3.2 recipe has no rule for `Utilities` or
+`WBStartup`, so a tree ART builds has neither** — *found 2026-09-06 during
+the drawer-icons round's Task 1, verified independently by the controller*
+`src-tauri/src/core/osinstall/recipes/amigaos-3.2.json`
+
+Measured directly on `Workbench3.2.adf`: its root `Utilities` drawer holds
+`Clock`, `More` and `MultiView`, and its `WBStartup` drawer holds
+`AssignWedge.info`. Neither drawer has a `PathRule` anywhere in the shipped
+3.2 recipe, and neither is present in a tree ART builds — confirmed against
+the same `dist-3.2` build Task 1 used to measure the drawer-icon fix. A tree
+built from this recipe therefore ships without **MultiView**, the datatypes
+viewer AmigaOS uses to open a picture or a text file from Workbench, and with
+no `WBStartup` drawer at all — nothing on such a tree can auto-start the way
+`WBStartup` icons are meant to. This is also why the drawer-icons round's own
+"19 root-level `.info` files across five disks" does not fully close at 7:
+two of the twelve accounted-for disks own icons never had a component to
+attach to in the first place.
+
+Ruled out of the drawer-icons round on purpose: this is a recipe-content
+question — what an AmigaOS 3.2 install should contain — not an icon-placement
+one, and mixing the two would have made that round's own measurements
+unreadable. Filed here as a real, measured gap rather than left to be
+rediscovered as a surprise the next time someone opens `Utilities` on a built
+tree and finds it missing.
+
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
@@ -590,6 +660,117 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-252** 🔴 ✅ **`rendered_size` tested `layout().trailing.start` for an
+appended ColorIcon's `FORM` tag, but a present `DrawerData2` sits there
+instead — every container icon with both fell back to the `Gadget` size this
+module exists to stop trusting** — *found 2026-09-06 by the final whole-branch
+review of the drawer-icons round, hand-verified by the controller on
+`art1/Devs/DataTypes.info`*
+`src-tauri/src/core/amigaicon/render.rs::rendered_size`
+
+`DrawerData2` (six bytes: `dd_Flags`, `dd_ViewModes`) is appended after every
+optional block, at the exact offset `layout()`'s own `trailing` range starts
+from — `drawer_data2_range` (added by Task 4/ART-249) already computes this.
+`rendered_size` was written assuming `trailing` begins with the appended IFF
+blob directly (Task 3), which Task 7 itself proved false for any icon
+carrying a real `DrawerData2`: the `FORM` tag sits six bytes later. Hand
+measurement on `art1/Devs/DataTypes.info` (3144 bytes): `trailing.start =
+1230`; the twelve bytes there are `00 00 00 01 00 01 46 4F 52 4D 00 00` —
+`dd_Flags = 1`, `dd_ViewModes = 1`, *then* `FORM`. `rendered_size` returned
+**44×44** where `FACE` says **46×46** — the exact measurement §1.3 of the
+design spec cites to justify this module's existence.
+
+Measured over the owner's whole corpus: **76 of 798 icons** have a
+`FORM…ICON` that is not at `trailing.start`, **100% of them containers** (46
+drawers, 27 disks, 3 garbage) — 560 seen + 76 missed = 636, exactly the
+design's own ColorIcon census. The failure this produces: a drawer icon with
+an 8×8 `Gadget` stub and a 46×46 real ColorIcon gets a `Cell { height: 8 }`,
+so `icongrid` spaces rows for 8px artwork drawn 46px tall — every row
+overlapping the one below by roughly 14px, labels drawn across the next
+row's artwork. The precise overlap the drawer-icons round exists to prevent,
+reintroduced by the module meant to prevent it.
+
+**Fixed** by asking `drawer_data2_range(bytes)` and starting the `FORM`
+search at its `end` when present, at `trailing.start` otherwise — reusing the
+computation rather than re-deriving it, which is exactly what caused
+ART-249.
+
+**Guarded** by
+`a_colour_icon_behind_a_real_drawer_data2_is_still_found` (a fixture with a
+real `DrawerData2` *and* an appended ColorIcon, asserting the `FACE` size —
+46×46, not merely "≥ 44×44" — is found), and by strengthening the icon
+oracle's own `rendered_size` check: its only existing assertion (never
+smaller than the `Gadget` size) is satisfied trivially by the very fallback
+this bug produces, so a second, independently written chunk walk
+(`find_form_icon_face_size`, deliberately not a call into
+`render::color_icon_face_size`) now scans an icon's trailing region for a
+`FORM…ICON` blob wherever it actually starts and requires `rendered_size` to
+report at least that size. **Mutated** (the `trailing.start`-only check put
+back): the unit test fails exactly as predicted (`left: (44, 44) right: (46,
+46)`), and the oracle over the same 798-icon corpus goes from `failed=0` to
+`failed=56` — every failure reading `rendered_size WxH is smaller than the
+ColorIcon FACE size W'xH' found in the trailing region — the FORM was
+missed`. Restoring the fix returns both to green:
+`checked=798 failed=0 no_drawer_data2=0 lossy_tooltypes=69`.
+
+**ART-249** 🔴 ✅ **`set_show_all_files` wrote `dd_Flags` at a fixed offset
+that lands inside `DrawerData`'s own `NewWindow` struct, overwriting drawer
+window geometry instead of the Show-mode flag** — *found 2026-09-06 by
+`scripts/icon-oracle-check.py`'s first real run, on the drawer-icons round*
+`src-tauri/src/core/amigaicon/mod.rs::{set_show_all_files, drawer_data2_range}`
+
+A first version of `set_show_all_files` read and wrote `dd_Flags` at a
+constant offset, `HEADER_LEN + 14` (92) — a real field, just the wrong one.
+`DrawerData2` is not a field inside `DrawerData` at all: it is a separate
+6-byte structure appended **after every optional block** (`GadgetRender`,
+`SelectRender`, `ToolTypes`, `DrawerData` itself), at the exact offset
+[`layout`]'s own `trailing` range already starts from. Offset 92 sits inside
+`DrawerData`'s `NewWindow`, so every one of the 96 real drawer-data icons in
+the 798-icon oracle corpus read back the identical value there (`0x0200127F`)
+— which is exactly what a shared `NewWindow` geometry template written by one
+Workbench editor looks like, not a per-drawer Show-mode setting. Left as
+written, `set_show_all_files` would have corrupted the drawer window geometry
+of all 96 of them the first time it ran on a real tree.
+
+**Unit tests could not see it**, and this is the exact shape `CLAUDE.md`'s
+oracle rule exists to catch: Task 4's reader and writer shared the identical
+wrong constant, so a test asserting `set_show_all_files` round-trips through
+`amigaicon`'s own reader passed every time — reader and writer agreeing with
+each other and with nothing else. Only pointing the write at real, independent
+material (798 of the owner's own AmigaOS 3.9 icons) exposed that the constant
+was wrong. The controller hand-measured `Prefs/Presets/Beeps/Boings.info`
+(2130 bytes) to settle it: header 78 + `DrawerData` 56 = 134, + `GadgetRender`
+50 = 184, + `SelectRender` 50 = 234, + `ToolTypes` (18 entries) 1890 = 2124,
+and `DrawerData2` sits at exactly 2124 (six bytes `00 00 00 02 00 01`,
+`dd_Flags = 2`, `dd_ViewModes = 1`) — 2124 + 6 = 2130, the file's own length.
+The `0x0200127F` every icon showed at offset 92 sits inside `NewWindow`,
+which is why all 96 carried it identically.
+
+**Fixed** by computing the offset from `layout()`'s own single walk
+(`drawer_data2_range`) instead of a constant, with three conditions checked
+in order before the block is treated as present: the revision bit is set
+(`has_drawer_data2`), at least six bytes remain after every optional block,
+and those six bytes are not the start of an appended `FORM` (a ColorIcon or
+NewIcon blob, which is why the census this round started from counted 59
+drawer-data icons where the corrected oracle counts 96 — the census's own
+`DrawerData` scan could not tell an icon with no room for a `DrawerData2`
+from one that genuinely has none). An icon without a real `DrawerData2` is
+refused **by name** rather than silently guessing an offset.
+
+**Guarded** by
+`dd_flags_is_read_from_after_the_optional_blocks_not_from_the_legacy_offset`
+(a fixture whose legacy offset 92 carries a plausible but different value
+than the real `DrawerData2` six bytes after it — one wrong answer masquerading
+as another would pass a weaker test),
+`setting_show_all_files_only_touches_the_computed_drawer_data2_offset`,
+`an_icon_whose_artwork_starts_right_after_drawerdata_has_no_drawer_data2` and
+`a_revision_zero_icon_has_no_drawer_data2_even_with_plausible_bytes_behind_it`
+(six bytes that would decode as a perfectly valid `DrawerData2` are refused
+because the revision bit says there is none). Re-run against the full 798-icon
+corpus: `checked=798 failed=0 no_drawer_data2=0`, so every one of the 96
+drawer-data icons carries a genuine `DrawerData2` and every one of them would
+have been corrupted by the original constant.
 
 **ART-236** 🟡 ✅ **A component's `removes` deletes the file and leaves its
 `.uaem` sidecar behind** — *found 2026-09-05 by the whole-branch review of the
@@ -2042,6 +2223,48 @@ on, renders Turkish.**
 The two-arm comparison stays because it is what identifies the *cause* rather
 than the outcome: same window title, same bytes, `600.4GB boþ` under
 `topaz.font` and `600.4GB boş` under `TOPAZ-ISO9`, one variable.
+
+**This hook stopped mid-run four times in the drawer-icons round
+(2026-09-06), and the cause is the machine, not the recipe.** Re-run against
+the same disc with the round's own two new sibling-icon components also on
+(`components_on=[...] items=2391 bytes=19138812`), all four attempts printed
+a clean plan — `refusals` never non-empty — and then the process ended
+partway through `apply()`: **exit code 0, no panic, no `test result:` line**,
+identically whether the pipe was removed and the exit code read directly.
+That is CLAUDE.md's own 2026-09-04 antivirus-interference shape, verbatim.
+The fix round's own report initially flagged this as unresolved and
+recommended "a dedicated look before anyone relies on that recipe path" —
+over-stated, because the one thing that had argued *against* the antivirus
+reading turned out to argue for a sharper version of it. All four runs
+stopped at **exactly** 561 of 2391 files, leaving the same leftover
+`Prefs/Presets/Patterns/Eyestrain/.HypnoGreen.jpg.art-tmp-<stamp>-560` —
+a complete `atomic_write` temp file never renamed into place. Random
+interference does not stop at the same file four times, which read as
+evidence against a scanner; but the owner then identified what the scanner
+actually reacts to — **`art_lib`, this crate's own library name**
+(`src-tauri/Cargo.toml`, `[lib] name = "art_lib"`, built as
+`staticlib`/`cdylib`/`rlib`) — and that explains the identical stopping point
+better than a hang in the recipe path does: the scanner kills the **test
+harness itself**, not any file the harness is writing, so a deterministic
+run dies after roughly the same elapsed time on every attempt and therefore
+at roughly the same file. "Always the same place" turned out to mean
+"always the same duration"; the stray `.art-tmp` is whatever `atomic_write`
+was mid-way through when the process died, not the trigger. The same
+session logged this twice more from the outside — one `cargo test`
+invocation reporting `0 passed`, and a full-suite run truncating at about
+eighty lines — both consistent with the same cause.
+
+**Explained, not proven — nobody has yet re-run this hook with the scanner
+excluded.** That re-run (with `src-tauri\target\` and the scratch root
+excluded, see STATUS.md) is what would close this properly; until it
+happens, "the antivirus did it" is the reading the evidence supports, not a
+settled fact. What *is* proven this round: the other two real-material hooks
+this round needed — the AmigaOS 3.2.2 layered build and the AmigaOS 3.9 base
+build — both ran to completion with `refusals=[]`, so the Subtree-icon
+collision risk this round's own feature could have introduced is measured
+clean on two of three releases; only this hook's own contribution stays
+unmeasured, and it stays unmeasured for an environment reason rather than a
+recipe one.
 
 
 **ART-224** 🟠 ✅ **Two AmigaOS 3.2 components declared an override over

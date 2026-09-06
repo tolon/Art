@@ -2743,15 +2743,21 @@
     "shell": {
       "enable": "Write the shell's own defaults (width, height, colours)"
     },
+    "icons": {
+      "enable": "Arrange the drawer icons Workbench never positioned"
+    },
     "apply": "Apply",
     "applying": "Applying…",
     "done": {
-      "written": "Written: {{files}}",
-      "backup": "Previous version backed up to: {{files}}"
+      "written": "Wrote {{count}} file(s): {{files}}",
+      "nothingWritten": "Nothing needed writing — every icon already had a position, and no wallpaper or shell setting was changed.",
+      "backup": "Backed up {{count}} previous version(s) to: {{files}}",
+      "iconsPlaced": "Placed {{count}} icon(s) across {{drawers}} drawer(s).",
+      "iconsSkipped": "Could not read {{count}} icon(s), left untouched: {{files}}"
     },
     "blocked": {
       "noTree": "Choose a system volume first.",
-      "nothingChosen": "Tick the wallpaper, the screen depth, the shell defaults, or some of them.",
+      "nothingChosen": "Tick the wallpaper, the screen depth, the shell defaults, the icon arrangement, or some of them.",
       "noBackdropChosen": "Choose a backdrop already in the tree.",
       "noPictureChosen": "Choose a picture on this PC."
     }
