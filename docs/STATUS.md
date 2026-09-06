@@ -1155,14 +1155,20 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
   Hatcher intake's round 2 `art-drawer-icons` (merged `722a8c5`) — each merged
   `--no-ff` and pushed. `art-refusal-evidence`, the intake's round 3, branched
   off `main` right after that last merge and is the one **live branch that is
-  not merged**: 82 frontend files / **1082** tests, **2926** Rust passed with 0
-  failed and 49 ignored (run twice, 28.55 s and 32.76 s), `pnpm lint` exit 0,
-  `cargo fmt --check` and `clippy --all-targets -- -D warnings` clean,
-  control-byte and scratch-root sweeps clean, contrast **113/113** both themes,
-  i18n **2012** leaf keys each catalogue — re-measured 2026-09-06 after the
-  review's fix wave 3 ([ART-257](ISSUES.md), [ART-258](ISSUES.md); wave 2 was
-  [ART-254](ISSUES.md), [ART-255](ISSUES.md) and [ART-256](ISSUES.md), wave 1
-  [ART-253](ISSUES.md)). Held there on purpose
+  not merged**: 82 frontend files / **1085** tests, **2926** Rust passed with 0
+  failed and 49 ignored, `pnpm lint` exit 0 (measured unpiped — a pipe reports
+  `tail`'s status, not `tsc`'s), control-byte, scratch-root and contrast
+  (**113/113**, both themes) sweeps clean, i18n **2012** leaf keys each
+  catalogue. **14 commits, 18 files, +3463 / −113.** Re-measured by the
+  controller 2026-09-06 after the review's **fourth** fix wave, not quoted from
+  a report. The whole-branch review found 1 Critical, 2 Important and 4 Minor,
+  and each wave's re-review found the next thing: wave 1
+  [ART-253](ISSUES.md#fixed), wave 2 [ART-254](ISSUES.md#fixed),
+  [ART-255](ISSUES.md#fixed), [ART-256](ISSUES.md#fixed), wave 3
+  [ART-257](ISSUES.md#fixed), [ART-258](ISSUES.md#fixed), wave 4
+  [ART-259](ISSUES.md#fixed) — which was **introduced by ART-257's own fix and
+  caught by its re-review**, the round's named failure class turning up inside
+  the round's own repair. Held there on purpose
   so the owner decides whether and when it joins `main`, rather than being
   merged by the round that built it.
 - **Fifteen open entries**, counted on this branch 2026-09-06. The
