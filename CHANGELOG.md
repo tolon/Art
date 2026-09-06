@@ -69,6 +69,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The OS Builder's "what is in this folder" line now counts the folders you
+  added, not just the first one.** If you add a second media folder, ART's plan
+  already reads both — but the line above the refusals list, and the "N install
+  disks found" count beside the folder fields, described only the first one. So
+  a build with `Workbench3.2` in one folder and `Extras3.2` in another could be
+  told the second disk was missing while ART had already found it. Every folder
+  the build reads is now described, with a disk held by two folders listed once
+  (ART-256).
+
+- **A folder holding disks from two different releases is no longer told its
+  disks carry no version.** When ART cannot say which release a folder is —
+  because it holds `Workbench3.2` *and* `AmigaOS3.9`, say, and picking one
+  would be a guess — the line used to explain that "some disks carry no version
+  of their own". That is true of a folder holding only `Fonts` and `Locale`;
+  it is false about disks that plainly do carry a version, and it sends you
+  looking for a version number that is already there. The line now says only
+  what is true in every case: the folder's contents do not settle which release
+  this is (ART-255).
+
+- **Switching to the release your folder actually holds no longer brings the
+  wrong-folder message back.** ART offers a one-click button to switch to the
+  release it detected in your media folder. For a moment after pressing it the
+  screen held the new release's plan beside the old release's evidence, and
+  could say *"None of the disks in this folder are ones this release asks for"*
+  about a folder holding exactly those disks — the same false sentence fixed
+  below, reached by a different route. ART now checks that the plan and the
+  evidence are about the release being built before saying anything about the
+  folder (ART-254).
+
 - **The OS Builder no longer tells you your media folder is the wrong one when
   it is the right one.** With a folder holding, say, `Workbench3.2`, `Fonts` and
   `Locale` but not `Extras3.2` — one disk short of a full set, which is how most

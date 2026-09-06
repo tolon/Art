@@ -1148,18 +1148,28 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
   Hatcher intake's round 2 `art-drawer-icons` (merged `722a8c5`) — each merged
   `--no-ff` and pushed. `art-refusal-evidence`, the intake's round 3, branched
   off `main` right after that last merge and is the one **live branch that is
-  not merged**: 82 frontend files / **1068** tests, **2925** Rust passed with 0
-  failed and 49 ignored, `pnpm lint` exit 0, `cargo fmt --check` and
-  `clippy --all-targets -- -D warnings` clean, control-byte and scratch-root
-  sweeps clean — re-measured 2026-09-06 after the review's fix wave 1
-  ([ART-253](ISSUES.md)). Held there on purpose so the owner decides whether
-  and when it joins `main`, rather than being merged by the round that built
-  it.
+  not merged**: 82 frontend files / **1076** tests, **2925** Rust passed with 0
+  failed and 49 ignored (run twice, 25.25 s and 28.15 s), `pnpm lint` exit 0,
+  `cargo fmt --check` and `clippy --all-targets -- -D warnings` clean,
+  control-byte and scratch-root sweeps clean, contrast **113/113** both themes,
+  i18n **2012** leaf keys each catalogue — re-measured 2026-09-06 after the
+  review's fix wave 2 ([ART-254](ISSUES.md), [ART-255](ISSUES.md),
+  [ART-256](ISSUES.md); wave 1 was [ART-253](ISSUES.md)). Held there on purpose
+  so the owner decides whether and when it joins `main`, rather than being
+  merged by the round that built it.
 - **Fifteen open entries**, counted on this branch 2026-09-06. The
   refusal-evidence round itself added none — but its **final whole-branch
-  review did**: [ART-253](ISSUES.md), a false sentence on the OS Builder's own
-  screen that was on `main` and older than the round, filed and fixed in the
-  same wave, so it is in Fixed rather than Open and the count is unchanged. [ART-166](ISSUES.md) and
+  review did**: [ART-253](ISSUES.md) in fix wave 1, and
+  [ART-254](ISSUES.md), [ART-255](ISSUES.md) and [ART-256](ISSUES.md) in fix
+  wave 2 — false or over-claiming sentences on the OS Builder's own screen,
+  each filed and fixed in the same wave, so all four are in Fixed rather than
+  Open and the count is unchanged. **ART-254 is ART-253's own sentence reached
+  through a different door**: the evidence that checks the claim was never
+  asked which release it was about, so a release switch could put the new
+  release's plan beside the old release's evidence. The review's four Minor
+  findings are a separate wave and are still open work, **M5 included** — the
+  wave-2 report establishes that it was never addressed (the wave-1 report's
+  own mutation trial happened to carry the same label). [ART-166](ISSUES.md) and
   [ART-117](ISSUES.md) are standing decisions; [ART-118](ISSUES.md) and
   [ART-062](ISSUES.md) need a person at a screen; [ART-235](ISSUES.md) is a
   guard reporting a false positive; [ART-241](ISSUES.md) is the accessibility

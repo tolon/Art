@@ -1237,6 +1237,27 @@ export async function osinstallTreesIn(folder: string): Promise<FoundTree[]> {
  *   is answered with silence. The sentence makes a specific claim and there
  *   is nothing to check it against; the per-disk refusal list shown instead
  *   is true either way.
+ *
+ * # ART-254: evidence about a *different* release is not evidence
+ *
+ * ART-253's guard checks the plan against the evidence, and that only means
+ * anything while the two are about the same release. On the screen they are
+ * fetched by two uncoordinated effects (`OsInstall.tsx`), so pressing the
+ * "switch to the release this folder holds" button leaves a window in which
+ * the plan is the new release's and the evidence is still the old one's —
+ * and 3.1 evidence is legitimately empty for a folder full of 3.2 disks,
+ * which is exactly the input that makes this sentence fire falsely again.
+ *
+ * Both artefacts state their own identity, so this is settled by an
+ * **invariant** rather than by a reset, an ordering or a loading flag
+ * (`CLAUDE.md`: *"anything timing-dependent gets an invariant, not a wait"*).
+ * `ReleaseEvidence.release` is the recipe's own `release` and `plan.release`
+ * is the same string from the same recipe (`plan.rs`: `recipe.release.clone()`),
+ * so they are compared exactly, the way `releaseHolding === release` and
+ * `isInstallRelease` compare release names everywhere else here — no folding,
+ * no trimming, because a release name is not user-entered text.
+ *
+ * Mismatched evidence is treated as `null`: not checked, so nothing claimed.
  */
 export function wrongMediaFolder(
   plan: InstallPlan,
@@ -1251,6 +1272,9 @@ export function wrongMediaFolder(
   );
   if (missing.length !== plan.refusals.length) return null;
   if (evidence === null) return null;
+  // ART-254 — see the doc comment above. Stale evidence cannot answer for
+  // this plan's release, so it answers for nothing.
+  if (evidence.release !== plan.release) return null;
   if (evidence.distinguishing.length + evidence.shared.length > 0) return null;
   return found.join(", ");
 }
@@ -1282,11 +1306,20 @@ export function wrongMediaFolder(
  *  - **Ambiguous or unknown** — `releaseHolding` is `null` for both
  *    (`recipe::release_holding` collapses them, ART-208's own type), and
  *    since this cannot tell them apart it says the weaker thing rather than
- *    guess: `unidentified`, naming only what is present. `Fonts` and
- *    `Locale` carry no version across 3.1, 3.1.4 and 3.2, so a folder
- *    holding only those genuinely identifies nothing — claiming a release
- *    from them would be exactly the confident-wrong sentence this project
- *    pays most for.
+ *    guess: `unidentified`, naming only what is present. Claiming a release
+ *    here would be exactly the confident-wrong sentence this project pays
+ *    most for.
+ *
+ *    **The sentence states no reason, and that is deliberate** (ART-255).
+ *    It used to end *"— some disks carry no version of their own"*, which is
+ *    true of the Unknown case a folder of `Fonts` and `Locale` produces and
+ *    false of the other three that reach this key: an **Ambiguous** folder
+ *    (`Workbench3.2` *and* `AmigaOS3.9` — disks that do carry versions, two
+ *    releases named, ART declining to choose), the render before the lookup
+ *    lands, and the catch path. Three of the four states got a reason that
+ *    was never checked, pointing the user at the wrong problem. `null` is
+ *    one value with four causes, so the honest sentence is the one true of
+ *    all of them: the contents do not settle which release this is.
  */
 export function mediaEvidence(input: {
   plan: InstallPlan;
@@ -1300,10 +1333,29 @@ export function mediaEvidence(input: {
   release: string;
   /** What that release's own recipe made of `found` — passed straight
    *  through to {@link wrongMediaFolder}, which is the only thing here that
-   *  reads it. `null` while the lookup is in flight. */
+   *  reads it, and which refuses it when it answers for a release other than
+   *  the plan's (ART-254). `null` while the lookup is in flight. */
   evidence: ReleaseEvidence | null;
 }): Phrase | null {
-  const { plan, found, releaseHolding, release, evidence } = input;
+  const { plan, found, releaseHolding, release } = input;
+  const evidence = input.evidence;
+  // ART-254. **The plan, the evidence and the release being built must all
+  // name the same release**, and the three-way agreement is stated as two
+  // comparisons, not three: this one, and `evidence` against `plan.release`
+  // inside {@link wrongMediaFolder} below (which is where it has to live —
+  // `osinstallBlocker` calls that function with no `release` of its own).
+  // The third pair follows from those two, and ART-253's own ruling was that
+  // a condition which cannot fire is decoration, so it is not written out: a
+  // mutation of it survives every test in the file, because it can.
+  //
+  // The plan is checked here rather than in the sibling because this is the
+  // only place that receives the release being built, and it withdraws the
+  // whole sentence rather than one clause: `missing` is read straight off the
+  // plan, so a plan the release switch has left behind would have this line
+  // naming *the previous release's* absent disks under the new release's
+  // name. Two stale artefacts agreeing with each other do not make one
+  // current sentence.
+  if (plan.release !== release) return null;
   // No folder chosen — `osinstall.blocked.noFolder` already owns this
   // sentence; a second one here would answer the same question twice.
   if (found.length === 0) return null;

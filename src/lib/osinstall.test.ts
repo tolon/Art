@@ -633,7 +633,7 @@ describe("osinstallBlocker", () => {
     return {
       outcome: "planned",
       plan: {
-        release: "3.2",
+        release: "AmigaOS 3.2",
         items: input.items ?? [],
         refusals: input.refusals ?? [],
         totalBytes: 0,
@@ -1105,6 +1105,132 @@ describe("mediaEvidence", () => {
 
     expect(keys.every((key) => typeof key === "string")).toBe(true);
     expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  // -------------------------------------------------------------------------
+  // ART-254 — evidence about another release brings ART-253's sentence back
+  // -------------------------------------------------------------------------
+  //
+  // The plan and the evidence are fetched by two uncoordinated effects on the
+  // screen, so a release switch leaves a window where the plan is the new
+  // release's and the evidence is still the old release's. Old evidence for a
+  // folder of *this* release's disks is legitimately empty — the folder holds
+  // none of AmigaOS 3.1's media — which is precisely the shape ART-253's
+  // check reads as "none of the disks in this folder are ones this release
+  // asks for".
+
+  /** AmigaOS 3.1's honest answer about a folder full of 3.2 disks: it holds
+   *  nothing of 3.1. True, and about a question nobody on screen is asking
+   *  any more. */
+  const STALE_31_EVIDENCE: ReleaseEvidence = {
+    release: "AmigaOS 3.1",
+    distinguishing: [],
+    shared: [],
+    missingRequired: ["Workbench3.1", "Install3.1"],
+  };
+
+  it("wrongMediaFolder withdraws when the evidence answers for a different release than the plan", () => {
+    const plan = planWith(["Extras3.2"]);
+    const found = ["Workbench3.2", "Fonts", "Locale"];
+
+    expect(wrongMediaFolder(plan, found, STALE_31_EVIDENCE)).toBeNull();
+
+    // The control, and the reason the assertion above has exactly one cause.
+    // The identical emptiness, relabelled with this plan's own release, does
+    // produce the sentence — so what withdrew it is the release check and
+    // not `found`, the refusals, or the emptiness itself.
+    expect(wrongMediaFolder(plan, found, { ...STALE_31_EVIDENCE, release: plan.release })).toBe(
+      "Workbench3.2, Fonts, Locale"
+    );
+  });
+
+  it("says the partial-media sentence, not the false one, while the evidence is a release behind", () => {
+    const plan = planWith(["Extras3.2"]);
+    const found = ["Workbench3.2", "Fonts", "Locale"];
+
+    // Not merely "something else was said": the whole phrase, key and both
+    // parameters. "Says nothing" would have been true here for several
+    // reasons; this state has one.
+    expect(
+      mediaEvidence({
+        plan,
+        found,
+        releaseHolding: RELEASE,
+        release: RELEASE,
+        evidence: STALE_31_EVIDENCE,
+      })
+    ).toEqual({
+      key: "osinstall.evidence.sameRelease",
+      params: { found: "Workbench3.2, Fonts, Locale", missing: "Extras3.2" },
+    });
+
+    // Control again: the same empty evidence, about the release being built,
+    // is the one state where the all-or-nothing sentence is true — and there
+    // this correctly says nothing, because the two never both speak.
+    expect(
+      mediaEvidence({
+        plan,
+        found,
+        releaseHolding: RELEASE,
+        release: RELEASE,
+        evidence: { ...STALE_31_EVIDENCE, release: RELEASE },
+      })
+    ).toBeNull();
+  });
+
+  // The other half of the same window, one render earlier: **both** the plan
+  // and the evidence are still the previous release's, because the two
+  // effects that fetch them are uncoordinated and neither is cleared when the
+  // release changes. They agree with each other, so `wrongMediaFolder`'s own
+  // check cannot see it — and it would then say "none of these disks are ones
+  // this release asks for" about the release the picker has already left.
+  //
+  // Withdrawn whole rather than partly: `missing` is read off the plan, so
+  // the alternative is a sentence naming AmigaOS 3.9's absent disks under
+  // AmigaOS 3.2's name. Two stale artefacts do not make one current sentence.
+  it("says nothing at all while the plan itself is still the previous release's", () => {
+    const stalePlan: InstallPlan = { ...planWith(["AmigaOS3.9"]), release: "AmigaOS 3.9" };
+    const found = ["Workbench3.2", "Fonts", "Locale"];
+    // Evidence held at `null` in **both** arms below, so the only difference
+    // between them is the plan's own release and the `null` has one cause.
+    // It is also the honest state here: on a release switch the evidence
+    // lookup is in flight while the previous plan is still on screen.
+    const args = { found, releaseHolding: RELEASE, release: RELEASE, evidence: null };
+
+    expect(mediaEvidence({ ...args, plan: stalePlan })).toBeNull();
+
+    // The control. Identical in every respect except that the plan is the
+    // release being built — and then there is a sentence, so what silenced
+    // the call above was the plan's release and not the folder or the refusal.
+    expect(mediaEvidence({ ...args, plan: { ...stalePlan, release: RELEASE } })).toEqual({
+      key: "osinstall.evidence.sameRelease",
+      params: { found: "Workbench3.2, Fonts, Locale", missing: "AmigaOS3.9" },
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ART-255 — the Ambiguous folder, which no test in the round constructed
+  // -------------------------------------------------------------------------
+  //
+  // `Workbench3.2` **and** `AmigaOS3.9` in one folder. Both disks carry a
+  // version of their own; two releases are named and `release_holding`
+  // declines to choose, so it answers `null` — the same `null` an unknown
+  // folder produces. The sentence must therefore be one that is true of
+  // both, which is why it no longer states a reason.
+  it("says the unidentified sentence for a folder naming two releases, not just an unknown one", () => {
+    const phrase = mediaEvidence({
+      plan: planWith(["Extras3.2"]),
+      found: ["Workbench3.2", "AmigaOS3.9"],
+      // Ambiguous, not Unknown — and indistinguishable from here.
+      releaseHolding: null,
+      release: RELEASE,
+      evidence: evidenceOf(["Workbench3.2"], [], ["Extras3.2"]),
+    });
+
+    expect(phrase).toEqual({
+      key: "osinstall.evidence.unidentified",
+      params: { found: "Workbench3.2, AmigaOS3.9" },
+    });
   });
 });
 

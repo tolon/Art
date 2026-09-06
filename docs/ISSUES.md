@@ -661,6 +661,168 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-256** 🟠 ✅ **The OS Builder's evidence line described one media folder
+while the plan had been built from several** — *found 2026-09-06 by the
+whole-branch review of the refusal-evidence round (I3), confirmed by the
+controller reading the tree*
+`src/components/osbuilder/OsInstall.tsx`
+
+The plan request carries `extraMediaFolders` beside `mediaFolder`, and
+`plan()` reads every one of them. The scan that feeds `foundVolumeNames` —
+and therefore `wrongMediaFolder`, `mediaEvidence` and
+`osinstall_media_evidence`'s own question — scanned `mediaFolder` alone. A
+user with `Workbench3.2` in the main folder and `Extras3.2` in an added one
+got an evidence line describing a strictly smaller pile of disks than the
+refusals list beside it had reasoned about: an incomplete listing, or a
+release reported as unidentified, about material ART had already identified
+and planned from. The screen out-claiming the core, from the direction where
+the screen knows *less*.
+
+**Fixed** by scanning every folder the request carries, in the shape the
+layered path already had (`layerScans`): one `osinstallScanMedia` per added
+folder, keyed by folder path, and `foundVolumeNames` the union — walked in
+the order the user added the folders, duplicates collapsed on an
+AmigaDOS-style case fold and the first spelling kept, because the core already
+refuses a name held by two folders (`media-ambiguous`, said disk by disk) and
+a listing naming it twice would be a second, worse account of it. The media
+section's own "N install disks found" line reads the same union, so the two
+sentences on that screen cannot count the same disks differently.
+
+**A second defect fell out of the guard**, and it was found by the test rather
+than by reading: `layers` is `[]` both when a release is unlayered *and*
+before `layersFor` has answered, so the new scan read AmigaOS 3.2.2 as
+unlayered for the first render and scanned a folder a layered request never
+sends. One value, two causes — this project's own named trap. Split by
+`layersRelease`, which records *which release* `layers` is the answer for;
+`layersKnown` is the comparison, and it is also what clears one release's
+added folders when the user switches to another.
+
+**Guarded** by `names a disk that is only in an added folder` (the whole
+sentence, plus the assertion that `osinstall_media_evidence` was asked about
+both disks — a screen cannot be right downstream of a lookup asked the smaller
+question) and `does not scan the added folders for a layered release, the way
+the request does not send them`, both `src/components/osbuilder/OsInstall.test.tsx`.
+
+**Mutated.** The union reverted to `take(mediaScan)` alone: `Unable to find an
+element with the text: This folder holds Workbench3.2, Extras3.2 — the right
+media for this release. Still missing: Install3.2.` The layered scope reverted
+to `layers.length > 0` alone: `expected "vi.fn()" to not be called with
+arguments: [ 'E:\media\extras' ]`.
+
+**ART-255** 🟡 ✅ **The unidentified-folder sentence stated a reason that is
+false in three of the four states that reach it** — *found 2026-09-06 by the
+whole-branch review of the refusal-evidence round (I2)*
+`src/i18n/en.json` · `src/i18n/tr.json`, `osinstall.evidence.unidentified`
+
+The string read *"This folder holds {{found}}, which does not identify a
+release on its own — some disks carry no version of their own."* The clause
+after the dash explains **why**, and `mediaEvidence` reaches this key with
+`releaseHolding === null`, which `recipe::release_holding` produces for four
+different situations. The clause is true of exactly one of them:
+
+- **Ambiguous** — `Workbench3.2` *and* `AmigaOS3.9` in one folder. Both disks
+  carry a version; two releases are named and ART declines to choose. Telling
+  that user their disks carry no version is false and sends them looking for a
+  version number that is already there.
+- **The pending render and the catch path** — ART has not looked yet, or the
+  lookup failed. A claim about the disks, made where no claim was checked.
+- **Unknown** — `Fonts` and `Locale` alone. The only state the clause fitted.
+
+**Fixed** by dropping the causal clause in both catalogues rather than
+guessing a fourth sentence: `release_holding` genuinely cannot tell Ambiguous
+from Unknown, and this project's rule is to say the weaker true thing rather
+than the stronger guess. English is now *"This folder holds {{found}}, which
+does not settle which release this is."*, Turkish *"Bu klasörde şunlar var:
+{{found}}; bunlar hangi sürüm olduğunu belirlemiyor."*
+
+**Guarded** by `says the unidentified sentence for a folder naming two
+releases, not just an unknown one` (`src/lib/osinstall.test.ts`, the whole
+phrase) and `does not tell a folder naming two releases that its disks carry
+no version` (`src/components/osbuilder/OsInstall.test.tsx`), which constructs
+the Ambiguous folder on screen — nothing in the round had — and asserts the
+rendered sentence makes no claim about the disks' versions.
+
+**Mutated.** The old English put back: `expected 'This folder holds
+Workbench3.2, Amiga…' not to match /carry no version/i`.
+
+**ART-254** 🔴 ✅ **A release switch could bring ART-253's false sentence back
+through a different door — the evidence was never asked which release it was
+about** — *found 2026-09-06 by the whole-branch review of the
+refusal-evidence round (S1), confirmed by the controller reading the tree.
+The same sentence as ART-253, reached by a different route.*
+`src/lib/osinstall.ts::wrongMediaFolder` · `::mediaEvidence`
+
+ART-253 made the "none of the disks in this folder are ones this release asks
+for" claim **checked** — `distinguishing + shared` non-empty withdraws it —
+and that check only means anything while the plan and the evidence are about
+the same release. On the screen they are fetched by **two uncoordinated
+effects**, and `mediaFacts` is not cleared when its own effect re-runs, so it
+holds the *previous* release's evidence until the new fetch resolves.
+
+The input is a first-class action on that screen, not an edge case. A folder
+of AmigaOS 3.2 disks with the build on another release renders
+`osinstall.blocked.wrongFolderIsRelease` and a button offering to switch to
+the release the folder actually holds (`setRelease(releaseHolding)`). Press
+it, and if the new plan lands before the new evidence, `wrongMediaFolder`
+compares the new release's plan against the old release's evidence — which is
+legitimately empty, because the folder holds none of the old release's media.
+That is exactly the shape ART-253's check reads as "none of these disks are
+wanted", and the screen says it about a folder holding precisely the disks the
+release asks for.
+
+**Fixed** with an invariant rather than a reset, an ordering or a loading flag
+(`CLAUDE.md`: *anything timing-dependent gets an invariant, not a wait*). Both
+artefacts already state their own identity — `ReleaseEvidence.release` is the
+recipe's own `release`, and `InstallPlan.release` is the same string from the
+same recipe (`plan.rs`: `recipe.release.clone()`). **The plan, the evidence
+and the release being built must all name the same release**, compared exactly
+the way `releaseHolding === release` and `isInstallRelease` compare release
+names elsewhere, and the three-way agreement is written as **two**
+comparisons: `wrongMediaFolder` treats evidence naming a release other than
+`plan.release` the way it already treats `null` evidence — not checked, so
+nothing claimed — and `mediaEvidence` refuses a `plan` naming a release other
+than the one being built. The third pair follows from those two and is
+deliberately **not** written out: ART-253's own ruling was that a condition
+which cannot fire is decoration, and a mutation of that third comparison
+survives every test in the file, because it can.
+
+`mediaEvidence` withdraws *whole* on a stale plan rather than nulling one
+clause: `missing` is read straight off the plan, so the alternative is a line
+naming the previous release's absent disks under the new release's name. Two
+stale artefacts agreeing with each other do not make one current sentence.
+
+Six plan fixtures across two test files carried `release: "3.2"`, which no
+recipe emits; they now carry the release name the recipe actually states, or
+the request's own.
+
+**Guarded** by `wrongMediaFolder withdraws when the evidence answers for a
+different release than the plan`, `says the partial-media sentence, not the
+false one, while the evidence is a release behind` and `says nothing at all
+while the plan itself is still the previous release's`
+(`src/lib/osinstall.test.ts` — each with a control differing in exactly the
+one field under test, because "says nothing" is true here for several
+reasons), and by `says what the folder really holds while the previous
+release's evidence is still the only one held`
+(`src/components/osbuilder/OsInstall.test.tsx`), which switches release with
+media present — the diff contained no such test, which is why this survived.
+The window is held open deterministically (the new release's evidence lookup
+simply never resolves) rather than raced.
+
+**Mutated.** `wrongMediaFolder`'s comparison removed: 3 failures, the first
+reporting `expected 'Workbench3.2, Fonts, Locale' to be null` — ART-253's own
+message, verbatim, which is the point. `mediaEvidence`'s plan comparison
+removed: `expected { …(2) } to be null`.
+
+**Not fixed, and stated rather than left implied.** One render earlier the
+plan, the evidence *and* the folder listing are all still the previous
+release's, agreeing with each other, and `osinstallBlocker` — which calls
+`wrongMediaFolder` with no `release` of its own — can then render a sentence
+that is true of the release the picker has already left. That is a stale
+screen rather than a mismatched claim, one tick long, and of the same family
+as the refusals list beside it lagging by one release; closing it needs
+`osinstallBlocker` to take the release being built, which is a wider change
+than this finding.
+
 **ART-253** 🔴 ✅ **`wrongMediaFolder` told a user with the *right*
 media folder that none of its disks were ones the release asks for — two of
 its five conditions could never fire** — *found 2026-09-06 by the final
