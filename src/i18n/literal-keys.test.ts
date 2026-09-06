@@ -463,6 +463,16 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // other entry on this list; `phrase-keys.test.ts` already enumerates all
     // three of its variants (added with the helper itself, before this call
     // site existed).
-    expect(dynamicCalls).toBe(146);
+    // 146 -> 148 (media identification by hash, Task 5: what a file's own
+    // bytes turn out to be): two, both the same `Phrase`-off-a-mapper shape
+    // as the entry above. `mediaIdentityLines` gives each file the one
+    // sentence that is true of it — matched and checked against a real disk,
+    // matched but never checked, not in Hatcher's table, or unreadable — and
+    // `mediaIdentitySummary` gives the pass itself its own line. The reason
+    // these are mappers rather than literals is the reason the round exists:
+    // four endings that must never collapse into one, decided in pure
+    // TypeScript where a test can enumerate them, not in JSX where it
+    // cannot. `phrase-keys.test.ts` enumerates every variant of both.
+    expect(dynamicCalls).toBe(148);
   });
 });

@@ -28,6 +28,13 @@ import {
   isForcedOnByCondition,
   keymapsIn,
   mediaEvidence,
+  mediaIdentityLines,
+  mediaIdentitySummary,
+  type MediaConfirmation,
+  type MediaIdentification,
+  type MediaIdentityState,
+  type MediaMatch,
+  type MediaRow,
   type ReleaseEvidence,
   osinstallBlocker,
   parseOptionalSlot,
@@ -1523,5 +1530,200 @@ describe("keymapsIn", () => {
       "i",
       "usa",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The five endings a content-hash result is allowed to produce (design §4.3)
+// ---------------------------------------------------------------------------
+
+describe("what a content-hash result is allowed to say", () => {
+  const ROW: MediaRow = {
+    md5: "5edf0b7a10409ef992ea351565ef8b6c",
+    version: "3.2",
+    // Hatcher's own identifier for the disk, which is measurably *not* the
+    // disk's own AmigaDOS volume name (0 of 12 matched, 2026-09-06).
+    volume: "Workbench3_2",
+    name: "Workbench 3.2",
+    source: "Hyperion (3.2 base)",
+    sequence: 1,
+  };
+  const CHECK: MediaConfirmation = {
+    checked: "2026-09-06",
+    against: "the ART author's own AmigaOS 3.2 install set, 35 ADFs",
+  };
+  function match(over: Partial<MediaMatch> = {}): MediaMatch {
+    return {
+      path: "E:\\media\\Disk1.adf",
+      volumeName: "Workbench3.2",
+      row: null,
+      md5: "0".repeat(32),
+      confirmed: null,
+      ...over,
+    };
+  }
+  function identified(over: Partial<MediaIdentification> = {}): MediaIdentityState {
+    return {
+      kind: "identified",
+      identification: { matches: [], unreadable: [], hashed: 0, remembered: 0, ...over },
+    };
+  }
+
+  /**
+   * **Four files, four endings, four different keys.** Asserted as a set
+   * rather than one at a time: the failure this guards against is two of
+   * them collapsing into one sentence, and a per-ending test would still
+   * pass while two endings shared a key.
+   */
+  it("gives a matched-and-checked, a matched-unchecked, a miss and an unreadable file four different sentences", () => {
+    const lines = mediaIdentityLines(
+      identified({
+        matches: [
+          match({ path: "a.adf", row: ROW, md5: ROW.md5, confirmed: CHECK }),
+          match({ path: "b.adf", row: ROW, md5: ROW.md5 }),
+          match({ path: "c.adf" }),
+        ],
+        unreadable: ["d.adf"],
+      })
+    );
+    expect(lines.map((l) => l.kind)).toEqual([
+      "confirmed",
+      "unconfirmed",
+      "not-in-table",
+      "unreadable",
+    ]);
+    const keys = lines.map((l) => l.phrase.key);
+    expect(new Set(keys).size).toBe(4);
+    expect(keys).toEqual([
+      "osinstall.mediaId.confirmed",
+      "osinstall.mediaId.unconfirmed",
+      "osinstall.mediaId.notInTable",
+      "osinstall.mediaId.unreadable",
+    ]);
+  });
+
+  /**
+   * **A confirmation is cited, not badged.** Both fields have to reach the
+   * sentence, or "confirmed" is an assertion with nothing behind it.
+   */
+  it("carries what confirmed the row and when, into the sentence", () => {
+    const [line] = mediaIdentityLines(
+      identified({ matches: [match({ row: ROW, md5: ROW.md5, confirmed: CHECK })] })
+    );
+    expect(line.phrase.params).toMatchObject({
+      name: "Workbench 3.2",
+      version: "3.2",
+      source: "Hyperion (3.2 base)",
+      checked: "2026-09-06",
+      against: CHECK.against,
+    });
+  });
+
+  /**
+   * **Additive, never subtractive — at the level where it is structural.**
+   * The component test proves the volume-name line survives a miss on
+   * screen; this proves the stronger property that makes it survive: no
+   * sentence built here reads `volumeName` at all, for *any* ending. The two
+   * facts come from two sources and are rendered from two places, so there
+   * is no code path along which a hash result could weaken a name result.
+   */
+  it("never puts the disk's own name into a sentence about the table", () => {
+    const lines = mediaIdentityLines(
+      identified({
+        matches: [
+          match({ path: "a.adf", row: ROW, md5: ROW.md5, confirmed: CHECK }),
+          match({ path: "b.adf", row: ROW, md5: ROW.md5 }),
+          match({ path: "c.adf" }),
+        ],
+        unreadable: ["d.adf"],
+      })
+    );
+    for (const line of lines) {
+      const values = Object.values(line.phrase.params ?? {}).map(String);
+      expect(values).not.toContain("Workbench3.2");
+      // And the row's `volume` is not smuggled in as a stand-in for it
+      // either — that field is Hatcher's internal identifier and belongs in
+      // no sentence at all.
+      expect(values).not.toContain("Workbench3_2");
+    }
+  });
+
+  /** A miss names the file and nothing else: there is no row to quote, and
+   *  inventing a claim about the disk is exactly what §4.3 forbids. */
+  it("says only which file when no row claims it", () => {
+    const [line] = mediaIdentityLines(identified({ matches: [match({ path: "E:\\m\\odd.adf" })] }));
+    expect(line.kind).toBe("not-in-table");
+    expect(line.phrase.params).toEqual({ file: "odd.adf" });
+  });
+
+  /** Sorted by path, so two folders' files interleave in one readable list
+   *  rather than in arrival order — and an unreadable file sits among them
+   *  rather than in a footnote a reader can miss. */
+  it("lists every file in one path-ordered list, unreadable ones included", () => {
+    const lines = mediaIdentityLines(
+      identified({
+        matches: [match({ path: "E:\\m\\c.adf" }), match({ path: "E:\\m\\a.adf" })],
+        unreadable: ["E:\\m\\b.adf"],
+      })
+    );
+    expect(lines.map((l) => l.file)).toEqual(["a.adf", "b.adf", "c.adf"]);
+  });
+
+  /**
+   * **"Not hashed yet", "running", "could not run" and a real result are
+   * four states with four next steps.** Collapsing any pair — most
+   * temptingly a failure into an empty result — is the §89 defect.
+   */
+  it("keeps not-asked, running, failed and done apart", () => {
+    expect(mediaIdentitySummary({ kind: "not-asked" })).toEqual({
+      key: "osinstall.mediaId.notHashedYet",
+    });
+    expect(mediaIdentitySummary({ kind: "identifying" })).toEqual({
+      key: "osinstall.mediaId.identifying",
+    });
+    expect(mediaIdentitySummary({ kind: "failed" })).toEqual({
+      key: "osinstall.mediaId.failed",
+    });
+    expect(mediaIdentitySummary(identified({ hashed: 2, remembered: 1 }))).toEqual({
+      key: "osinstall.mediaId.provenance",
+      params: { hashed: 2, remembered: 1 },
+    });
+  });
+
+  /** Where the answer came from is on screen, because a remembered hash can
+   *  be stale: the identity is `(path, size, mtime)`, and a restored backup
+   *  keeps all three. A wrong *name* for a disk is worse than a stale
+   *  listing, so the counts are stated rather than hidden. */
+  it("states how many answers were read now and how many were remembered", () => {
+    expect(mediaIdentitySummary(identified({ hashed: 0, remembered: 35 }))?.params).toEqual({
+      hashed: 0,
+      remembered: 35,
+    });
+  });
+
+  /** A folder with nothing hashable in it says nothing here —
+   *  `osinstall.media.empty` already owns that sentence, and two lines
+   *  counting the same zero would be the screen answering one question
+   *  twice. */
+  it("says nothing about a pass that had no files to look at", () => {
+    expect(mediaIdentitySummary(identified())).toBeNull();
+    expect(mediaIdentityLines(identified())).toEqual([]);
+  });
+
+  /** Nothing to show before an answer exists — including while one is in
+   *  flight, when a stale list from the previous folder would be the worst
+   *  of the options. */
+  it("shows no per-file line until there is a result", () => {
+    expect(mediaIdentityLines({ kind: "not-asked" })).toEqual([]);
+    expect(mediaIdentityLines({ kind: "identifying" })).toEqual([]);
+    expect(mediaIdentityLines({ kind: "failed" })).toEqual([]);
+  });
+
+  /** Both separators, because the folder is the user's and a future CLI
+   *  shell's fixtures are POSIX. */
+  it("names a file by its own name on either kind of path", () => {
+    expect(
+      mediaIdentityLines(identified({ matches: [match({ path: "/mnt/media/Fonts.adf" })] }))[0].file
+    ).toBe("Fonts.adf");
   });
 });

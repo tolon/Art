@@ -4555,9 +4555,14 @@ mod tests {
                 volume_name: Some("Backdrops3.2".into()),
                 row: Some(row),
                 md5,
+                confirmed: Some(mediahash::Confirmation {
+                    checked: "2026-09-06".into(),
+                    against: "the ART author's own AmigaOS 3.2 install set, 35 ADFs".into(),
+                }),
             };
             let value = serde_json::to_value(&found).unwrap();
-            expect_keys(&value, &["path", "volumeName", "row", "md5"]);
+            expect_keys(&value, &["path", "volumeName", "row", "md5", "confirmed"]);
+            expect_keys(&value["confirmed"], &["checked", "against"]);
             expect_keys(
                 &value["row"],
                 &["md5", "version", "volume", "name", "source", "sequence"],

@@ -102,12 +102,16 @@ import {
   conditionalReasonText,
   hostPlacementBlockKey,
   mediaEvidence,
+  mediaIdentityLines,
+  mediaIdentitySummary,
   osinstallBlocker,
   refusalPhrase as osinstallRefusalPhrase,
   type Collision,
   type ConditionalReason,
   type HostPlacementBlock,
   type InstallPlan as OsInstallPlan,
+  type MediaIdentification,
+  type MediaIdentityState,
   type PlanResult,
   type RefusalReason as OsInstallRefusalReason,
 } from "@/lib/osinstall";
@@ -1378,6 +1382,51 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       }),
     ];
     for (const phrase of phrases) {
+      expect(phrase).not.toBeNull();
+      expect(isLeafKey(phrase!.key), phrase!.key).toBe(true);
+    }
+  });
+
+  // Design §4.3. Five endings a hash result may produce — matched and
+  // checked against a real disk, matched but never checked, not in the
+  // table, could not be read, and not asked yet — plus the pass's own three
+  // states. Every one of them enumerated here, because a key nobody added
+  // renders as its own dotted name and the *whole point* of this group of
+  // sentences is that they read as five different things.
+  it("mediaIdentity: every ending and every pass state resolves", () => {
+    const row = {
+      md5: "5edf0b7a10409ef992ea351565ef8b6c",
+      version: "3.2",
+      volume: "Workbench3_2",
+      name: "Workbench 3.2",
+      source: "Hyperion (3.2 base)",
+      sequence: 1,
+    };
+    const base = { path: "a.adf", volumeName: "Workbench3.2", md5: "0".repeat(32) };
+    const identification: MediaIdentification = {
+      matches: [
+        { ...base, path: "a.adf", row, md5: row.md5, confirmed: { checked: "2026-09-06", against: "real disks" } },
+        { ...base, path: "b.adf", row, md5: row.md5, confirmed: null },
+        { ...base, path: "c.adf", row: null, confirmed: null },
+      ],
+      unreadable: ["d.adf"],
+      hashed: 3,
+      remembered: 1,
+    };
+    const lines = mediaIdentityLines({ kind: "identified", identification });
+    expect(lines).toHaveLength(4);
+    for (const line of lines) {
+      expect(isLeafKey(line.phrase.key), line.phrase.key).toBe(true);
+    }
+
+    const states: MediaIdentityState[] = [
+      { kind: "not-asked" },
+      { kind: "identifying" },
+      { kind: "failed" },
+      { kind: "identified", identification },
+    ];
+    for (const state of states) {
+      const phrase = mediaIdentitySummary(state);
       expect(phrase).not.toBeNull();
       expect(isLeafKey(phrase!.key), phrase!.key).toBe(true);
     }
