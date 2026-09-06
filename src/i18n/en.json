@@ -2177,7 +2177,7 @@
     },
     "evidence": {
       "sameRelease": "This folder holds {{found}} — the right media for this release. Still missing: {{missing}}.",
-      "otherRelease": "This folder's media is {{release}}'s, not this release's own. Still missing: {{missing}}.",
+      "otherRelease": "This folder holds {{found}} — that looks like {{release}} media, not this release's own. Still missing: {{missing}}.",
       "unidentified": "This folder holds {{found}}, which does not identify a release on its own — some disks carry no version of their own."
     },
     "refusal": {

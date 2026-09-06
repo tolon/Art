@@ -1251,7 +1251,7 @@ export function mediaEvidence(input: {
   }
   return {
     key: "osinstall.evidence.otherRelease",
-    params: { release: releaseHolding, missing: missingNames },
+    params: { found: foundNames, release: releaseHolding, missing: missingNames },
   };
 }
 

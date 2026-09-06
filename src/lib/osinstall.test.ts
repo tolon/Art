@@ -834,6 +834,9 @@ describe("mediaEvidence", () => {
     expect(phrase?.params?.release).toBe("AmigaOS 3.1");
     // and it still names the missing disk, because that is what the user acts on
     expect(phrase?.params?.missing).toBe("Extras3.2");
+    // and it names what the folder holds — "this is 3.1 media" is an
+    // assertion; naming the disks found is evidence the user can check.
+    expect(phrase?.params?.found).toBe("Workbench3.1, Fonts, Locale");
   });
 
   it("does not name a release it cannot identify", () => {

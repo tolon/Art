@@ -2177,7 +2177,7 @@
     },
     "evidence": {
       "sameRelease": "Bu klasörde şunlar var: {{found}} — bu, bu sürüm için doğru ortam. Eksik kalanlar: {{missing}}.",
-      "otherRelease": "Bu klasördeki ortam {{release}}'e ait, bu sürümün kendi ortamı değil. Eksik kalanlar: {{missing}}.",
+      "otherRelease": "Bu klasörde şunlar var: {{found}} — bu, {{release}} ortamına benziyor, bu sürümün kendi ortamı değil. Eksik kalanlar: {{missing}}.",
       "unidentified": "Bu klasörde şunlar var: {{found}} — bu, tek başına bir sürümü belirlemiyor; bazı diskler kendi başına sürüm taşımıyor."
     },
     "refusal": {
