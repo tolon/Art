@@ -118,18 +118,33 @@ const OFF_DRAWER_DATA: usize = 66;
 const OFF_TOOL_WINDOW: usize = 70;
 const OFF_STACK_SIZE: usize = 74;
 
-/// `dd_NewWindow.Flags` — block-relative offset 14 inside `DrawerData`
-/// (past `LeftEdge`/`TopEdge`/`Width`/`Height`, `DetailPen`/`BlockPen` and
-/// `IDCMPFlags`), so absolute offset `HEADER_LEN + 14`. Workbench overloads
-/// this field — otherwise an Intuition `NewWindow`'s flags, meaningless for a
-/// window that is closed and saved to disk — to carry its own display-mode
-/// value instead.
-const OFF_DRAWER_FLAGS: usize = HEADER_LEN + 14;
+/// Length of the `DrawerData2` extension — measured on
+/// `Prefs/Presets/Beeps/Boings.info` (2130 bytes): `dd_Flags` (`u32`) then
+/// `dd_ViewModes` (`u16`), 6 bytes total, ending exactly at end-of-file
+/// (`134 (DrawerData) + 50 (GadgetRender, 5x5x3) + 50 (SelectRender, 5x5x3) +
+/// 1890 (ToolTypes, 18 entries) + 6 = 2130`). **`DrawerData2` is not a field
+/// inside the classic `DrawerData` block** — it is a separate structure
+/// AmigaOS 2.0+ appends *after every optional block*, `ToolWindow` included,
+/// the same place [`layout`]'s own `trailing` range already starts. An
+/// earlier version of this module read `dd_Flags` from a constant offset
+/// (`HEADER_LEN + 14`) that instead lands inside `DrawerData`'s own
+/// `NewWindow.Flags` field — a real field, just the wrong one, which is why
+/// this module's own oracle test (`round_trip_every_icon_in_a_folder_when_asked`)
+/// found every one of 96 real drawer-data icons in that tree carrying the
+/// *identical* value there: it was reading the drawer window's own saved
+/// geometry flags, the same for every icon the same editor last saved, never
+/// a per-drawer setting at all. See [`drawer_data2_range`] for the
+/// corrected, computed offset.
+const DRAWER_DATA2_LEN: usize = 6;
 
-/// `OFF_DRAWER_FLAGS`'s three values, **measured** against 59 real drawer
-/// and garbage icons carrying a `DrawerData2` in the owner's own AmigaOS 3.9
-/// tree — the same register `core/ilbm`'s `BMHD` doc uses to separate
-/// measured fields from adopted ones:
+/// [`drawer_data2_range`]'s `dd_Flags` three values, **measured** against 59
+/// real drawer and garbage icons carrying a `DrawerData2` in the owner's own
+/// AmigaOS 3.9 tree — the same register `core/ilbm`'s `BMHD` doc uses to
+/// separate measured fields from adopted ones. That original census walked
+/// to the right place and read the right values; only the constant this
+/// module wired up afterwards pointed somewhere else (see
+/// [`DRAWER_DATA2_LEN`]'s own doc) — the values below were never in
+/// question, only where to find them:
 ///
 /// | Value | Count | Example |
 /// |---|---|---|
@@ -147,7 +162,8 @@ const OFF_DRAWER_FLAGS: usize = HEADER_LEN + 14;
 /// sound files with no icons of their own, so without "show all files" it
 /// opens as an **empty window** on a real Workbench — exactly the case this
 /// feature exists for. Finding the flag set on precisely that drawer is what
-/// turns this from a plausible constant into a confirmed one.
+/// turns this from a plausible constant into a confirmed one — once read
+/// from the right offset.
 const DDFLAGS_SHOWDEFAULT: u32 = 0;
 const DDFLAGS_SHOWICONS: u32 = 1;
 const DDFLAGS_SHOWALL: u32 = 2;
@@ -514,13 +530,55 @@ pub fn drawer_window(bytes: &[u8]) -> CoreResult<Option<DrawerWindow>> {
 }
 
 /// The revision bit inside `Gadget.UserData` (bit 0) — set on 798 of 798
-/// real icons measured, so `DrawerData2` is the normal shape, not a special
-/// one. This module does not yet read anything `DrawerData2` itself would
-/// carry; it only reports whether the bit is set.
+/// real icons measured, so a `DrawerData2` extension is the normal shape,
+/// not a special one. This alone does not prove one is actually present for
+/// a *given* icon, only that the icon was saved by an editor new enough to
+/// write one — see [`drawer_data2_range`], which checks this bit plus the
+/// two further conditions that decide presence for real.
 pub fn has_drawer_data2(bytes: &[u8]) -> CoreResult<bool> {
     check_header(bytes)?;
     let user_data = be_u32(bytes, OFF_USER_DATA)?;
     Ok(user_data & 1 != 0)
+}
+
+/// Where `DrawerData2` actually sits, or `None` when it is not present at
+/// all — computed, never a fixed offset, because it is not a field *inside*
+/// the classic `DrawerData` block: it is a separate 6-byte extension
+/// (`dd_Flags`, a `u32`, then `dd_ViewModes`, a `u16`) that AmigaOS 2.0+
+/// appends *after every optional block* — `DrawerData`, `GadgetRender`,
+/// `SelectRender`, `DefaultTool`, `ToolTypes`, `ToolWindow` — exactly where
+/// [`layout`]'s own `trailing` range already begins. See
+/// [`DRAWER_DATA2_LEN`]'s doc for the file this was measured against and the
+/// wrong-offset defect it replaces.
+///
+/// `None` when any of three things hold — the same three the census that
+/// first found the 0/1/2 values implicitly relied on, made explicit here
+/// rather than assumed:
+///
+/// - [`has_drawer_data2`] is `false` (the revision bit is clear: an icon
+///   old enough to predate the extension cannot carry one);
+/// - fewer than [`DRAWER_DATA2_LEN`] bytes remain after the walk; or
+/// - what follows immediately is the start of an appended `FORM` (a
+///   ColorIcon or NewIcon blob) rather than `DrawerData2` — an icon whose
+///   revision bit is set but that carries no `DrawerData2` bytes at all,
+///   because its extra artwork was appended straight after `ToolTypes`
+///   with nothing of `DrawerData2`'s own in between.
+fn drawer_data2_range(bytes: &[u8]) -> CoreResult<Option<Range<usize>>> {
+    if !has_drawer_data2(bytes)? {
+        return Ok(None);
+    }
+    let start = layout(bytes)?.trailing.start;
+    let Some(end) = start.checked_add(DRAWER_DATA2_LEN) else {
+        return Ok(None);
+    };
+    if end > bytes.len() {
+        return Ok(None);
+    }
+    // DRAWER_DATA2_LEN (6) is always >= 4, so this slice is in bounds.
+    if &bytes[start..start + 4] == b"FORM" {
+        return Ok(None);
+    }
+    Ok(Some(start..end))
 }
 
 /// Merge `source`'s tool types and stack size into `dest`, keeping every
@@ -669,11 +727,14 @@ pub fn set_window(bytes: &[u8], window: DrawerWindow) -> CoreResult<Vec<u8>> {
 }
 
 /// Set or clear Workbench's "Show All Files" mode for this drawer —
-/// `OFF_DRAWER_FLAGS`, measured (see its own doc comment) to be an **enum**
-/// of exactly three values, never a bitfield. `show_all: true` writes
-/// `DDFLAGS_SHOWALL` (2); `false` writes `DDFLAGS_SHOWDEFAULT` (0) — the
-/// measured default, not whatever bits happened to be clear before. Every
-/// other byte of the icon is untouched.
+/// `dd_Flags`, inside the computed [`drawer_data2_range`], measured (see
+/// [`DRAWER_DATA2_LEN`]'s own doc) to be an **enum** of exactly three
+/// values, never a bitfield. `show_all: true` writes `DDFLAGS_SHOWALL` (2);
+/// `false` writes `DDFLAGS_SHOWDEFAULT` (0) — the measured default, not
+/// whatever bits happened to be clear before. Every other byte of the icon
+/// is untouched, including `DrawerData`'s own `NewWindow.Flags` field
+/// (offset `HEADER_LEN + 14`) — a real, different field this function used
+/// to overwrite by mistake; see [`DRAWER_DATA2_LEN`]'s doc for that defect.
 ///
 /// This call always chooses between exactly two of the three measured
 /// values: it has no way to ask for `DDFLAGS_SHOWICONS` (1) explicitly, the
@@ -684,9 +745,17 @@ pub fn set_window(bytes: &[u8], window: DrawerWindow) -> CoreResult<Vec<u8>> {
 /// express, and `false` unambiguously means "off", not "whatever this was
 /// before `true`".
 ///
-/// Refuses when `do_DrawerData` is zero, the same case [`set_window`]
-/// refuses for the same reason: there is no `DrawerData` block, so there is
-/// no `Flags` word to write.
+/// Refuses by name in two distinct cases, both named so the caller knows
+/// which is missing:
+///
+/// - `do_DrawerData` is zero — the same case [`set_window`] refuses for the
+///   same reason: there is no `DrawerData` block at all.
+/// - `do_DrawerData` is non-zero but [`drawer_data2_range`] still returns
+///   `None` — a `DrawerData` block exists, but this particular icon carries
+///   no `DrawerData2` extension to hold the flag (an editor old enough to
+///   predate it, or one whose appended ColorIcon/NewIcon artwork left no
+///   room for one). Inventing a `DrawerData2` from nothing is not this
+///   function's job; it refuses rather than guessing where one would go.
 pub fn set_show_all_files(bytes: &[u8], show_all: bool) -> CoreResult<Vec<u8>> {
     check_header(bytes)?;
     if be_u32(bytes, OFF_DRAWER_DATA)? == 0 {
@@ -694,10 +763,11 @@ pub fn set_show_all_files(bytes: &[u8], show_all: bool) -> CoreResult<Vec<u8>> {
             "cannot set Show All Files: this icon has no DrawerData block to hold it",
         ));
     }
-    // Same guarantee `set_window` relies on: a non-zero `do_DrawerData`
-    // means a full `DRAWER_DATA_LEN`-byte block is present at `HEADER_LEN`,
-    // so `OFF_DRAWER_FLAGS` (HEADER_LEN + 14, needing 4 bytes) is in bounds.
-    advance(bytes, HEADER_LEN, DRAWER_DATA_LEN)?;
+    let Some(range) = drawer_data2_range(bytes)? else {
+        return Err(malformed(
+            "cannot set Show All Files: this icon has no DrawerData2 block to hold it",
+        ));
+    };
 
     let flags = if show_all {
         DDFLAGS_SHOWALL
@@ -706,7 +776,7 @@ pub fn set_show_all_files(bytes: &[u8], show_all: bool) -> CoreResult<Vec<u8>> {
     };
 
     let mut out = bytes.to_vec();
-    out[OFF_DRAWER_FLAGS..OFF_DRAWER_FLAGS + 4].copy_from_slice(&flags.to_be_bytes());
+    out[range.start..range.start + 4].copy_from_slice(&flags.to_be_bytes());
     Ok(out)
 }
 
@@ -799,6 +869,66 @@ pub(crate) mod tests_support {
         buf
     }
 
+    /// A drawer icon carrying a real `DrawerData2` extension (`dd_Flags`,
+    /// `dd_ViewModes`) immediately after `DrawerData` — **and** a
+    /// deliberately different, nonzero value written into
+    /// `DrawerData.NewWindow.Flags` itself (block-relative offset 14,
+    /// absolute `HEADER_LEN + 14`, the field an earlier version of this
+    /// module read `dd_Flags` from by mistake). The two values differ on
+    /// purpose: a test that reads the wrong offset must get a *wrong*
+    /// answer, never a coincidentally matching one.
+    pub(crate) fn synthetic_drawer_icon_with_drawer_data2(
+        legacy_window_flags: u32,
+        dd2_flags: u32,
+        dd2_view_modes: u16,
+    ) -> Vec<u8> {
+        let mut buf = vec![0u8; HEADER_LEN];
+        buf[0..2].copy_from_slice(&MAGIC.to_be_bytes());
+        buf[2..4].copy_from_slice(&1u16.to_be_bytes()); // do_Version
+        buf[OFF_USER_DATA..OFF_USER_DATA + 4].copy_from_slice(&1u32.to_be_bytes());
+        buf[OFF_DRAWER_DATA..OFF_DRAWER_DATA + 4].copy_from_slice(&1u32.to_be_bytes());
+
+        let mut drawer_data = vec![0u8; DRAWER_DATA_LEN];
+        // NewWindow.Flags: block-relative offset 14 (absolute HEADER_LEN + 14).
+        drawer_data[14..18].copy_from_slice(&legacy_window_flags.to_be_bytes());
+        buf.extend_from_slice(&drawer_data);
+
+        buf.extend_from_slice(&dd2_flags.to_be_bytes());
+        buf.extend_from_slice(&dd2_view_modes.to_be_bytes());
+        buf
+    }
+
+    /// The same shape as [`synthetic_drawer_icon_with_drawer_data2`], but
+    /// with an appended `FORM` blob immediately after `DrawerData` instead
+    /// of a real `DrawerData2` — the revision bit is set, but there is no
+    /// room left for one, because whatever artwork this icon carries starts
+    /// right where `DrawerData2` would.
+    pub(crate) fn synthetic_drawer_icon_with_form_instead_of_drawer_data2() -> Vec<u8> {
+        let mut buf = vec![0u8; HEADER_LEN];
+        buf[0..2].copy_from_slice(&MAGIC.to_be_bytes());
+        buf[2..4].copy_from_slice(&1u16.to_be_bytes());
+        buf[OFF_USER_DATA..OFF_USER_DATA + 4].copy_from_slice(&1u32.to_be_bytes());
+        buf[OFF_DRAWER_DATA..OFF_DRAWER_DATA + 4].copy_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&[0u8; DRAWER_DATA_LEN]);
+        buf.extend_from_slice(b"FORM....ICONtrailing");
+        buf
+    }
+
+    /// The same shape again, but with the revision bit clear — an icon old
+    /// enough to predate `DrawerData2` altogether, even though six bytes
+    /// that would otherwise look exactly like one follow `DrawerData`.
+    pub(crate) fn synthetic_drawer_icon_without_revision_bit() -> Vec<u8> {
+        let mut buf = vec![0u8; HEADER_LEN];
+        buf[0..2].copy_from_slice(&MAGIC.to_be_bytes());
+        buf[2..4].copy_from_slice(&1u16.to_be_bytes());
+        // OFF_USER_DATA is left at 0 - the revision bit is clear.
+        buf[OFF_DRAWER_DATA..OFF_DRAWER_DATA + 4].copy_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&[0u8; DRAWER_DATA_LEN]);
+        buf.extend_from_slice(&2u32.to_be_bytes()); // would-be dd_Flags = DDFLAGS_SHOWALL
+        buf.extend_from_slice(&0u16.to_be_bytes()); // would-be dd_ViewModes
+        buf
+    }
+
     /// A valid icon at least 86 bytes long, with plausible-looking
     /// `NewWindow` bytes sitting right where [`super::drawer_window`] would
     /// read them (offset 78, `HEADER_LEN`) — but `do_DrawerData` (66) left
@@ -831,8 +961,10 @@ pub(crate) mod tests_support {
 mod tests {
     use super::*;
     use tests_support::{
-        synthetic_drawer_icon, synthetic_icon, synthetic_icon_at, synthetic_icon_of_type,
-        synthetic_icon_with_trailing_window_bytes_but_no_drawer_data,
+        synthetic_drawer_icon, synthetic_drawer_icon_with_drawer_data2,
+        synthetic_drawer_icon_with_form_instead_of_drawer_data2,
+        synthetic_drawer_icon_without_revision_bit, synthetic_icon, synthetic_icon_at,
+        synthetic_icon_of_type, synthetic_icon_with_trailing_window_bytes_but_no_drawer_data,
     };
 
     /// A minimal icon with a `GadgetRender` `Image` whose claimed
@@ -1010,54 +1142,125 @@ mod tests {
         }
     }
 
+    // The four tests below replace `show_all_files_round_trips_and_leaves_the_rest_alone`
+    // and `dd_flags_is_an_enum_and_the_three_measured_values_round_trip`, both
+    // of which read and wrote `dd_Flags` at `HEADER_LEN + 14` — inside
+    // `DrawerData`'s own `NewWindow.Flags` field, not `DrawerData2` at all.
+    // core/amigaicon's own oracle (`round_trip_every_icon_in_a_folder_when_asked`)
+    // found this for real: all 96 real drawer-data icons in the owner's
+    // AmigaOS 3.9 tree carried the identical value at that offset, because it
+    // is a fixed window-geometry field the same icon editor wrote into every
+    // one, never a per-drawer Show-mode setting. See [`DRAWER_DATA2_LEN`]'s
+    // own doc for the measurement that pinned down where `dd_Flags` actually
+    // lives.
+
     #[test]
-    fn show_all_files_round_trips_and_leaves_the_rest_alone() {
-        let before = synthetic_drawer_icon(10, 20, 300, 200);
+    fn dd_flags_is_read_from_after_the_optional_blocks_not_from_the_legacy_offset() {
+        // legacy_window_flags stands in for real NewWindow.Flags noise (the
+        // exact value core/amigaicon's own oracle found identical across all
+        // 96 real drawer-data icons) at HEADER_LEN + 14 - the offset an
+        // earlier version of this module wrongly read dd_Flags from. The
+        // real DrawerData2 carries a DIFFERENT value (DDFLAGS_SHOWICONS, 1)
+        // so a reader at the wrong offset gets a wrong answer, not a
+        // coincidentally matching one.
+        let legacy_window_flags = 0x0200127Fu32;
+        let icon =
+            synthetic_drawer_icon_with_drawer_data2(legacy_window_flags, DDFLAGS_SHOWICONS, 3);
+
+        let range = drawer_data2_range(&icon)
+            .unwrap()
+            .expect("has a DrawerData2");
+        assert_eq!(
+            range.start,
+            HEADER_LEN + DRAWER_DATA_LEN,
+            "DrawerData2 sits right after DrawerData when no other optional block follows it"
+        );
+        assert_ne!(
+            range.start,
+            HEADER_LEN + 14,
+            "must not resolve to the legacy NewWindow.Flags offset"
+        );
+
+        let real_flags = be_u32(&icon, range.start).unwrap();
+        assert_eq!(real_flags, DDFLAGS_SHOWICONS, "reads the real dd_Flags");
+        assert_ne!(
+            real_flags, legacy_window_flags,
+            "must not read the legacy NewWindow.Flags value instead"
+        );
+    }
+
+    #[test]
+    fn setting_show_all_files_only_touches_the_computed_drawer_data2_offset() {
+        // Same deliberately-mismatched fixture as above: if the write ever
+        // regresses back to the legacy offset, this fails on the bytes at 92
+        // changing rather than merely on a wrong readback.
+        let legacy_window_flags = 0x0200127Fu32;
+        let before =
+            synthetic_drawer_icon_with_drawer_data2(legacy_window_flags, DDFLAGS_SHOWDEFAULT, 0);
+        let range = drawer_data2_range(&before).unwrap().unwrap();
+
         let toggled_on = set_show_all_files(&before, true).unwrap();
         assert_ne!(toggled_on, before, "turning it on must change something");
         assert_eq!(toggled_on.len(), before.len(), "no length change");
-        for i in (0..before.len()).filter(|i| !(OFF_DRAWER_FLAGS..OFF_DRAWER_FLAGS + 4).contains(i))
-        {
+        assert_eq!(
+            be_u32(&toggled_on, HEADER_LEN + 14).unwrap(),
+            legacy_window_flags,
+            "the legacy NewWindow.Flags bytes at offset 92 must be untouched"
+        );
+        for i in (0..before.len()).filter(|i| !range.contains(i)) {
             assert_eq!(
                 toggled_on[i], before[i],
                 "byte {i} changed and should not have"
             );
         }
+        assert_eq!(be_u32(&toggled_on, range.start).unwrap(), DDFLAGS_SHOWALL);
+
         let back = set_show_all_files(&toggled_on, false).unwrap();
         assert_eq!(
-            back, before,
-            "turning it back off restores the original bytes"
+            be_u32(&back, range.start).unwrap(),
+            DDFLAGS_SHOWDEFAULT,
+            "false settles at the documented default"
+        );
+        assert_eq!(
+            be_u32(&back, HEADER_LEN + 14).unwrap(),
+            legacy_window_flags,
+            "the legacy offset must still be untouched after the round-trip"
         );
     }
 
     #[test]
-    fn dd_flags_is_an_enum_and_the_three_measured_values_round_trip() {
-        // Measured across 59 real drawer icons in the owner's AmigaOS 3.9
-        // tree: only 0, 1 and 2 ever appear, never a combination - so this
-        // is an enum and a bit-OR/AND-NOT would be wrong.
-        assert_eq!(DDFLAGS_SHOWDEFAULT, 0);
-        assert_eq!(DDFLAGS_SHOWICONS, 1);
-        assert_eq!(DDFLAGS_SHOWALL, 2);
+    fn an_icon_whose_artwork_starts_right_after_drawerdata_has_no_drawer_data2() {
+        // The revision bit is set, but a FORM begins exactly where
+        // DrawerData2 would - the third condition drawer_data2_range checks,
+        // the one the earlier 59-icon census silently excluded (which is why
+        // it counted 59 real drawer icons where a plain do_DrawerData != 0
+        // sweep counts 96).
+        let icon = synthetic_drawer_icon_with_form_instead_of_drawer_data2();
+        assert!(has_drawer_data2(&icon).unwrap(), "revision bit is set");
+        assert_eq!(drawer_data2_range(&icon).unwrap(), None);
 
-        // Start from DDFLAGS_SHOWICONS (1) - a real measured value that is
-        // not the zero-filled default a plain synthetic fixture would give
-        // for free.
-        let mut show_icons = synthetic_drawer_icon(0, 0, 100, 100);
-        show_icons[OFF_DRAWER_FLAGS..OFF_DRAWER_FLAGS + 4]
-            .copy_from_slice(&DDFLAGS_SHOWICONS.to_be_bytes());
+        let err = set_show_all_files(&icon, true).unwrap_err();
+        assert!(
+            format!("{err}").contains("DrawerData2"),
+            "the refusal must name DrawerData2 specifically, not just DrawerData: {err}"
+        );
+    }
 
-        // true writes the enum value 2 outright - never 1 | 2.
-        let all = set_show_all_files(&show_icons, true).unwrap();
-        assert_eq!(be_u32(&all, OFF_DRAWER_FLAGS).unwrap(), DDFLAGS_SHOWALL);
+    #[test]
+    fn a_revision_zero_icon_has_no_drawer_data2_even_with_plausible_bytes_behind_it() {
+        // Six bytes that would decode as a perfectly valid DrawerData2
+        // (dd_Flags = DDFLAGS_SHOWALL) follow DrawerData here, but the
+        // revision bit is clear - an icon old enough to predate the
+        // extension cannot carry one, regardless of what bytes happen to sit
+        // where it would go.
+        let icon = synthetic_drawer_icon_without_revision_bit();
+        assert!(!has_drawer_data2(&icon).unwrap(), "revision bit is clear");
+        assert_eq!(drawer_data2_range(&icon).unwrap(), None);
 
-        // false writes the DEFAULT (0), not merely clearing the SHOWALL bit
-        // - which would leave an icon that started at DDFLAGS_SHOWICONS (1)
-        // sitting at 1 again instead of returning to the true default.
-        let back_to_default = set_show_all_files(&all, false).unwrap();
-        assert_eq!(
-            be_u32(&back_to_default, OFF_DRAWER_FLAGS).unwrap(),
-            DDFLAGS_SHOWDEFAULT,
-            "false must write the default, not merely clear a bit"
+        let err = set_show_all_files(&icon, true).unwrap_err();
+        assert!(
+            format!("{err}").contains("DrawerData2"),
+            "the refusal must name DrawerData2 specifically, not just DrawerData: {err}"
         );
     }
 
@@ -1394,7 +1597,7 @@ mod tests {
     /// | `set_tooltypes(bytes, tooltypes(bytes))` | byte-identical to the input — for the icons where that is even possible (see the `lossy_tooltypes` paragraph below) — with or without an existing `ToolTypes` block, so it also exercises the "grow a block" / "clear a block" paths `merge_tooltypes` never touches |
     /// | `set_position(Some((37, 11)))` | reads back as `Some((37, 11))`, and no byte outside 58..66 changed |
     /// | `set_position(None)` | reads back as `None` — both coordinates carry [`NO_POSITION`], never a plain `0` |
-    /// | `set_show_all_files(true)` then `(false)` | no byte outside the flags word ([`OFF_DRAWER_FLAGS`]) changes, and that word ends at exactly [`DDFLAGS_SHOWDEFAULT`] — asked only of icons that actually carry a `DrawerData` block ([`drawer_window`] returning `Some`, the same guard [`set_show_all_files`] itself enforces); icons with none are counted in `no_drawer_data`, the same "measured, not assumed" split `no_tooltypes` already uses, never folded into `failed`. See the `no_drawer_data` paragraph below for why this is *not* "returns to the original bytes" |
+    /// | `set_show_all_files(true)` then `(false)` | no byte outside the computed [`drawer_data2_range`] changes, and that word ends at exactly [`DDFLAGS_SHOWDEFAULT`] — asked only of icons that actually carry a `DrawerData2` extension; icons with a `DrawerData` block but no `DrawerData2` are counted in `no_drawer_data2`, and icons with no `DrawerData` block at all in `no_drawer_data` — the same "measured, not assumed" split `no_tooltypes` already uses, neither ever folded into `failed`. See the `no_drawer_data2` paragraph below for why this is *not* "returns to the original bytes" |
     /// | `render::rendered_size(bytes)` | never smaller than the `Gadget` width/height at the fixed offsets, and never zero in either dimension |
     ///
     /// **`set_tooltypes(bytes, tooltypes(bytes))` is only asked to be
@@ -1417,29 +1620,38 @@ mod tests {
     /// back from the rewritten file must still equal the text that was
     /// written, even though the underlying bytes cannot be.
     ///
-    /// **`set_show_all_files`'s round-trip claim had to be weakened after
-    /// measuring against this corpus, and the reason is worth recording
-    /// here rather than only in a commit message.** [`OFF_DRAWER_FLAGS`]'s
-    /// own doc comment cites `Prefs/Presets/Beeps/Boings.info` as measured
-    /// evidence of [`DDFLAGS_SHOWALL`] (2) — but in this exact file, in this
-    /// exact tree, that word reads `0x0200127F`, not `2`. It is not
-    /// scattered noise either: **all 96** of the real drawer-data icons in
-    /// this 798-icon corpus carry that identical `0x0200127F`, which looks
-    /// far more like a fixed Intuition `NewWindow` flags template baked in
-    /// by whatever last opened these windows than a per-drawer Show-mode
-    /// enum. That contradicts the "exactly 0, 1 or 2, never a combination"
-    /// claim measured against a different, smaller sample of 59 icons
-    /// elsewhere in this module — **an unresolved discrepancy, not a settled
-    /// one**, and beyond this task's scope to chase down (it would need the
-    /// same outside verification CLAUDE.md asks of any format claim, against
-    /// real AmigaOS documentation or a second independent reader). So this
-    /// test does not — and, until that is resolved, cannot — verify that
-    /// `set_show_all_files` changes what a real Workbench actually displays.
-    /// What it does verify, honestly: the writer keeps its own two
-    /// documented promises — it touches nothing outside the flags word, and
-    /// `false` always settles at the documented default. See
-    /// `docs/ISSUES.md` for whether this has been filed as its own defect
-    /// by the time this comment is read.
+    /// **This test's first real run found a genuine offset defect, not a
+    /// false alarm, and it is worth recording how here rather than only in a
+    /// commit message.** A first version of `set_show_all_files` read and
+    /// wrote `dd_Flags` at a fixed offset (`HEADER_LEN + 14`) inside
+    /// `DrawerData`'s own `NewWindow` — a real field, just the wrong one.
+    /// Every one of the 96 real drawer-data icons in this 798-icon corpus
+    /// carried the identical value there (`0x0200127F`), which is exactly
+    /// what a shared `NewWindow` geometry template written by one editor
+    /// looks like, not a per-drawer Show-mode setting. `DrawerData2` — the
+    /// structure that actually carries `dd_Flags` — is not a field inside
+    /// `DrawerData` at all: it is a separate 6-byte extension appended
+    /// *after every optional block*, at the exact offset [`layout`]'s own
+    /// `trailing` range already starts from. [`drawer_data2_range`] computes
+    /// that offset instead of assuming a constant one, and hand-measuring
+    /// `Prefs/Presets/Beeps/Boings.info` at the corrected location confirmed
+    /// the original "0, 1 or 2, never a combination" census (against 59 real
+    /// icons) had the values right all along — `dd_Flags = 2`
+    /// (`DDFLAGS_SHOWALL`) sits in the file's own last 6 bytes, right where
+    /// the corrected offset says. See [`DRAWER_DATA2_LEN`]'s own doc for the
+    /// byte-by-byte walk.
+    ///
+    /// **The round-trip check below is still not "returns to the original
+    /// bytes", and that is not a residue of the old defect — it is
+    /// [`set_show_all_files`]'s own documented limitation, now measured
+    /// against the *correct* field.** An icon whose `dd_Flags` started at
+    /// `DDFLAGS_SHOWICONS` (1) still cannot be restored to `1` by
+    /// `true` then `false`, because `false`'s boolean signature has no way
+    /// to ask for anything but the default (0) — see
+    /// [`set_show_all_files`]'s own doc for why. What this test checks
+    /// instead, honestly: the writer touches nothing outside the *computed*
+    /// `DrawerData2` range, and `false` always settles it at the documented
+    /// default.
     ///
     /// What **is** unconditional, for every icon regardless of shape: `layout`
     /// itself must not error, and its `trailing` range must run to the end
@@ -1454,6 +1666,7 @@ mod tests {
     /// it is recorded by name in `failed` and the whole test fails once, at
     /// the end, printing every one of them — machine-readable
     /// (`ART_ICON_RESULT checked=… failed=… no_tooltypes=… no_drawer_data=…
+    /// no_drawer_data2=…
     /// lossy_tooltypes=…`, one `ART_ICON_FAIL <path>: <reason>` per miss, the
     /// reason naming a byte offset wherever one is the actual point of
     /// failure) so the driving script can report them without scraping
@@ -1471,6 +1684,7 @@ mod tests {
         let mut checked = 0usize;
         let mut no_tooltypes = 0usize;
         let mut no_drawer_data = 0usize;
+        let mut no_drawer_data2 = 0usize;
         let mut lossy_tooltypes = 0usize;
         let mut failed: Vec<String> = Vec::new();
         for entry in &entries {
@@ -1619,47 +1833,70 @@ mod tests {
             }
 
             // Task 7: set_show_all_files(true) then (false) must touch
-            // nothing outside its own flags word, and must settle that word
-            // at exactly DDFLAGS_SHOWDEFAULT — see this test's own doc
-            // comment for why "returns to the original bytes" turned out not
-            // to be a claim this corpus can support, and why this weaker
-            // pair is what is actually checked instead. Only asked of icons
-            // that carry a DrawerData block — the same guard
-            // set_show_all_files itself enforces — so an icon with none is
-            // counted separately rather than folded into failed.
+            // nothing outside the computed DrawerData2 range, and must
+            // settle that word at exactly DDFLAGS_SHOWDEFAULT — see this
+            // test's own doc comment for why "returns to the original
+            // bytes" is not the claim this checks, and why this weaker pair
+            // is. Only asked of icons that actually have a DrawerData2
+            // extension; an icon with a DrawerData block but no DrawerData2
+            // is counted in no_drawer_data2 and must still be refused by
+            // name (a regression there — accepting the write instead of
+            // refusing it — is a real failure, not a shape to skip quietly);
+            // an icon with no DrawerData block at all is counted in
+            // no_drawer_data, same as before.
             match drawer_window(&bytes) {
-                Ok(Some(_)) => {
-                    match set_show_all_files(&bytes, true)
-                        .and_then(|on| set_show_all_files(&on, false))
-                    {
-                        Ok(back) => {
-                            if let Some(i) = (0..bytes.len())
-                                .filter(|i| !(OFF_DRAWER_FLAGS..OFF_DRAWER_FLAGS + 4).contains(i))
-                                .find(|&i| back[i] != bytes[i])
-                            {
-                                failed.push(format!(
-                                    "{}: set_show_all_files(true) then (false) changed byte {i}, outside the flags word it owns",
-                                    entry.display()
-                                ));
+                Ok(Some(_)) => match drawer_data2_range(&bytes) {
+                    Ok(Some(range)) => {
+                        match set_show_all_files(&bytes, true)
+                            .and_then(|on| set_show_all_files(&on, false))
+                        {
+                            Ok(back) => {
+                                if let Some(i) = (0..bytes.len())
+                                    .filter(|i| !range.contains(i))
+                                    .find(|&i| back[i] != bytes[i])
+                                {
+                                    failed.push(format!(
+                                        "{}: set_show_all_files(true) then (false) changed byte {i}, outside the DrawerData2 range {}..{} it owns",
+                                        entry.display(),
+                                        range.start,
+                                        range.end
+                                    ));
+                                }
+                                match be_u32(&back, range.start) {
+                                    Ok(flags) if flags == DDFLAGS_SHOWDEFAULT => {}
+                                    Ok(flags) => failed.push(format!(
+                                        "{}: set_show_all_files(true) then (false) settled at {flags:#010x}, not the documented default {DDFLAGS_SHOWDEFAULT:#010x}",
+                                        entry.display()
+                                    )),
+                                    Err(err) => failed.push(format!(
+                                        "{}: reading back dd_Flags failed: {err}",
+                                        entry.display()
+                                    )),
+                                }
                             }
-                            match be_u32(&back, OFF_DRAWER_FLAGS) {
-                                Ok(flags) if flags == DDFLAGS_SHOWDEFAULT => {}
-                                Ok(flags) => failed.push(format!(
-                                    "{}: set_show_all_files(true) then (false) settled at {flags:#010x}, not the documented default {DDFLAGS_SHOWDEFAULT:#010x}",
-                                    entry.display()
-                                )),
-                                Err(err) => failed.push(format!(
-                                    "{}: reading back the flags word failed: {err}",
-                                    entry.display()
-                                )),
-                            }
+                            Err(err) => failed.push(format!(
+                                "{}: set_show_all_files round-trip failed: {err}",
+                                entry.display()
+                            )),
                         }
-                        Err(err) => failed.push(format!(
-                            "{}: set_show_all_files round-trip failed: {err}",
-                            entry.display()
-                        )),
                     }
-                }
+                    Ok(None) => {
+                        no_drawer_data2 += 1;
+                        // A DrawerData block with no DrawerData2 extension
+                        // must still be refused by name, not silently
+                        // accepted into bytes that do not belong to it.
+                        if set_show_all_files(&bytes, true).is_ok() {
+                            failed.push(format!(
+                                "{}: has no DrawerData2, but set_show_all_files did not refuse",
+                                entry.display()
+                            ));
+                        }
+                    }
+                    Err(err) => failed.push(format!(
+                        "{}: drawer_data2_range failed: {err}",
+                        entry.display()
+                    )),
+                },
                 Ok(None) => no_drawer_data += 1,
                 Err(err) => {
                     failed.push(format!("{}: drawer_window failed: {err}", entry.display()))
@@ -1698,7 +1935,7 @@ mod tests {
         }
 
         println!(
-            "ART_ICON_RESULT checked={checked} failed={} no_tooltypes={no_tooltypes} no_drawer_data={no_drawer_data} lossy_tooltypes={lossy_tooltypes}",
+            "ART_ICON_RESULT checked={checked} failed={} no_tooltypes={no_tooltypes} no_drawer_data={no_drawer_data} no_drawer_data2={no_drawer_data2} lossy_tooltypes={lossy_tooltypes}",
             failed.len()
         );
         for f in &failed {

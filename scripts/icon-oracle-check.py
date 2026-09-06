@@ -52,20 +52,34 @@ file:
     set_position(None)                  reads back as unplaced — both
                                          coordinates carry the NO_POSITION
                                          sentinel (i32::MIN), never a plain 0.
-    set_show_all_files(true) then       touches nothing outside its own flags
-        (false)                         word, and settles that word at
-                                         exactly the documented default — see
-                                         core/amigaicon's own test doc
-                                         comment for why this is *not* "back
-                                         to the original bytes": the field's
-                                         real-world meaning turned out to be
-                                         an open question this script's own
-                                         run surfaced, not a settled one.
-                                         Only asked of icons that actually
-                                         carry a DrawerData block; a plain
-                                         Tool or Project icon has none, and
-                                         that split is counted in
-                                         `no_drawer_data`, never a failure.
+    set_show_all_files(true) then       touches nothing outside the computed
+        (false)                         DrawerData2 range, and settles
+                                         dd_Flags at exactly the documented
+                                         default — never "back to the
+                                         original bytes", which is
+                                         core/amigaicon's own documented
+                                         limitation (a boolean cannot ask to
+                                         restore DDFLAGS_SHOWICONS), not a
+                                         residue of anything this script
+                                         found wrong. This script's first
+                                         real run *did* find something wrong
+                                         here — the offset itself, fixed since
+                                         (see core/amigaicon's own doc
+                                         comment on DRAWER_DATA2_LEN) — which
+                                         is exactly the class of defect this
+                                         oracle exists to catch: the old
+                                         reader and writer agreed with each
+                                         other perfectly and still both read
+                                         the wrong field. Only asked of icons
+                                         that actually carry a DrawerData2
+                                         extension; a DrawerData block with
+                                         none is counted in `no_drawer_data2`
+                                         (and still checked to refuse by
+                                         name, never a silent wrong write); a
+                                         plain Tool or Project icon with no
+                                         DrawerData block at all is counted
+                                         in `no_drawer_data`. Neither is a
+                                         failure.
     render::rendered_size(bytes)        never smaller than the Gadget
                                          width/height, and never zero in
                                          either dimension.
@@ -296,6 +310,7 @@ def main() -> int:
         failed_count = None
         no_tooltypes = None
         no_drawer_data = None
+        no_drawer_data2 = None
         lossy_tooltypes = None
         fail_lines: list[str] = []
         for line in result.stdout.splitlines():
@@ -307,6 +322,7 @@ def main() -> int:
                 failed_count = int(parts.get("failed", "0"))
                 no_tooltypes = int(parts.get("no_tooltypes", "0"))
                 no_drawer_data = int(parts.get("no_drawer_data", "0"))
+                no_drawer_data2 = int(parts.get("no_drawer_data2", "0"))
                 lossy_tooltypes = int(parts.get("lossy_tooltypes", "0"))
             elif line.startswith("ART_ICON_FAIL "):
                 fail_lines.append(line[len("ART_ICON_FAIL ") :])
@@ -320,7 +336,8 @@ def main() -> int:
 
         print(
             f"\nchecked={checked} failed={failed_count} no_tooltypes={no_tooltypes} "
-            f"no_drawer_data={no_drawer_data} lossy_tooltypes={lossy_tooltypes}"
+            f"no_drawer_data={no_drawer_data} no_drawer_data2={no_drawer_data2} "
+            f"lossy_tooltypes={lossy_tooltypes}"
         )
         if no_tooltypes:
             print(
@@ -334,6 +351,15 @@ def main() -> int:
                 f"({no_drawer_data} of them carry no DrawerData block at all — a "
                 "plain Tool or Project icon, say — so set_show_all_files has "
                 "nothing to toggle. Not a failure.)"
+            )
+        if no_drawer_data2:
+            print(
+                f"({no_drawer_data2} of them carry a DrawerData block but no "
+                "DrawerData2 extension — an editor old enough to predate it, or "
+                "appended artwork leaving no room for one — so set_show_all_files "
+                "has nothing to toggle either. Not a failure, but still checked: "
+                "set_show_all_files must refuse these by name, not silently write "
+                "into bytes that are not DrawerData2 at all.)"
             )
         if lossy_tooltypes:
             print(
