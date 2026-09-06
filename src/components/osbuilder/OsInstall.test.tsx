@@ -1449,8 +1449,9 @@ describe("the folder's own evidence for a partial build (refusal-evidence round,
     ).toBeTruthy();
 
     // The false sentence the union alone would have produced is not on
-    // screen — this release's own base media is not "AmigaOS 3.2 media, not
-    // this release's own".
+    // screen — this release's own base media is not called "AmigaOS 3.2
+    // media" (M1: even the corrected wording still overclaims for the
+    // wrong disks, so it must not fire here at all).
     expect(
       screen.queryByText(
         i18n.t("osinstall.evidence.otherRelease", {
@@ -1778,6 +1779,150 @@ describe("the evidence covers the added folders too (ART-256)", () => {
     // not asked about at all.
     await waitFor(() => expect(scanMediaMock).toHaveBeenCalledWith("E:\\base322"));
     expect(scanMediaMock).not.toHaveBeenCalledWith(EXTRA);
+  });
+
+  // M2 (fix wave 5, 2026-09-06 final review) — `foundVolumeNames`'s own doc
+  // comment and `docs/FEATURES.md` both claim a disk held by two folders is
+  // listed once. Nothing asserted it: deleting the dedup fold left the whole
+  // suite green. This is the guard, and it asserts the specific listing
+  // rather than a count, because "one name" and "the right name" are
+  // different claims.
+  it("lists a disk held by two folders once, not twice (M2)", async () => {
+    scanMediaMock.mockReset().mockImplementation((folder: string) =>
+      Promise.resolve(
+        folder === EXTRA
+          ? ({
+              outcome: "found",
+              media: [
+                { path: `${EXTRA}\\Backup.adf`, volumeName: "Workbench3.2", kind: "floppy" },
+              ],
+            } satisfies MediaScanResult)
+          : ({
+              outcome: "found",
+              media: [
+                { path: "E:\\media\\Disk1.adf", volumeName: "Workbench3.2", kind: "floppy" },
+              ],
+            } satisfies MediaScanResult)
+      )
+    );
+    planMock.mockReset().mockResolvedValue({
+      outcome: "planned",
+      plan: {
+        release: "AmigaOS 3.2",
+        items: [],
+        refusals: [
+          { refusal: "media-missing", component: "install-libs", volume_name: "Install3.2" },
+        ],
+        totalBytes: 0,
+        totalFiles: 0,
+        componentsOn: ["workbench-base"],
+        mediaPaths: {},
+        packages: [],
+        packageMedia: {},
+        userStartup: [],
+        activations: [],
+        mediaStamps: {},
+        removals: [],
+        layers: [],
+      },
+    } satisfies PlanResult);
+    releaseForMediaMock.mockReset().mockResolvedValue("AmigaOS 3.2");
+    mediaEvidenceMock.mockReset().mockResolvedValue({
+      release: "AmigaOS 3.2",
+      distinguishing: ["Workbench3.2"],
+      shared: [],
+      missingRequired: ["Install3.2"],
+    });
+    seedRemembered({ ...FULL_FIELDS, "osinstall.extraMediaFolders": [EXTRA] });
+    render(<OsInstall />);
+
+    // Named once — a sentence that named it twice would be a worse account
+    // of the same disk, and `media-ambiguous` already says "two folders, one
+    // name" properly, disk by disk, in the refusals list.
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.evidence.sameRelease", {
+          found: "Workbench3.2",
+          missing: "Install3.2",
+        })
+      )
+    ).toBeTruthy();
+
+    // And Rust was asked about one name, not the same name twice.
+    await waitFor(() =>
+      expect(mediaEvidenceMock).toHaveBeenCalledWith("AmigaOS 3.2", ["Workbench3.2"])
+    );
+  });
+
+  // Two folders can spell one volume differently — AmigaDOS folds case, ART's
+  // own scan does not. The doc comment's own claim: folded case-insensitively,
+  // first spelling kept. Asserted here rather than assumed, because "kept"
+  // and "kept which one" are different claims and only one of them is tested
+  // by the test above (identical spelling either way looks the same).
+  it("keeps the first spelling when two folders name the same disk differently (M2)", async () => {
+    scanMediaMock.mockReset().mockImplementation((folder: string) =>
+      Promise.resolve(
+        folder === EXTRA
+          ? ({
+              outcome: "found",
+              media: [
+                { path: `${EXTRA}\\Backup.adf`, volumeName: "WORKBENCH3.2", kind: "floppy" },
+              ],
+            } satisfies MediaScanResult)
+          : ({
+              outcome: "found",
+              media: [
+                { path: "E:\\media\\Disk1.adf", volumeName: "Workbench3.2", kind: "floppy" },
+              ],
+            } satisfies MediaScanResult)
+      )
+    );
+    planMock.mockReset().mockResolvedValue({
+      outcome: "planned",
+      plan: {
+        release: "AmigaOS 3.2",
+        items: [],
+        refusals: [
+          { refusal: "media-missing", component: "install-libs", volume_name: "Install3.2" },
+        ],
+        totalBytes: 0,
+        totalFiles: 0,
+        componentsOn: ["workbench-base"],
+        mediaPaths: {},
+        packages: [],
+        packageMedia: {},
+        userStartup: [],
+        activations: [],
+        mediaStamps: {},
+        removals: [],
+        layers: [],
+      },
+    } satisfies PlanResult);
+    releaseForMediaMock.mockReset().mockResolvedValue("AmigaOS 3.2");
+    mediaEvidenceMock.mockReset().mockResolvedValue({
+      release: "AmigaOS 3.2",
+      distinguishing: ["Workbench3.2"],
+      shared: [],
+      missingRequired: ["Install3.2"],
+    });
+    seedRemembered({ ...FULL_FIELDS, "osinstall.extraMediaFolders": [EXTRA] });
+    render(<OsInstall />);
+
+    // The main folder's own spelling survives — it is scanned before the
+    // added folder in `foundVolumeNames`'s own walk order.
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.evidence.sameRelease", {
+          found: "Workbench3.2",
+          missing: "Install3.2",
+        })
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText(/WORKBENCH3\.2/)).toBeNull();
+
+    await waitFor(() =>
+      expect(mediaEvidenceMock).toHaveBeenCalledWith("AmigaOS 3.2", ["Workbench3.2"])
+    );
   });
 });
 

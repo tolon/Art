@@ -129,6 +129,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before making that claim, and says it only when it is true; otherwise you get
   the per-disk list naming exactly which disk is missing (ART-253).
 
+- **The "looks like a different release's media" line no longer claims a
+  folder holds none of your release's own media when it also holds disks more
+  than one release asks for.** `Fonts` and `Locale` are on every release's own
+  list, so a folder built mostly of a different release's media but carrying
+  `Fonts` too was still told *"that looks like AmigaOS 3.9 media, not this
+  release's own"* — false about `Fonts`. The line now says only what ART
+  checked: that the folder looks like the named release, and what this
+  release is still missing.
+
 - **A built distribution's own drawers no longer disappear on Workbench.**
   `Prefs`, `System`, `Devs`, `Expansion`, `Classes`, `C`, `Libs`, `Rexxc`, `S`
   and every other top-level drawer a recipe copies with a `Subtree` rule were

@@ -1307,8 +1307,13 @@ export function wrongMediaFolder(
  *    The sentence claims only that: this release's own media is among what
  *    the folder holds, which is what was checked (ART-258).
  *  - **Identified**, a *different* release, and none of this release's own
- *    media in the pile — `otherRelease`, naming which one, so the user can
- *    tell "wrong folder" from "one disk short".
+ *    **distinguishing** media in the pile — `otherRelease`, naming which
+ *    one, so the user can tell "wrong folder" from "one disk short". `shared`
+ *    can still be non-empty here (`Fonts`, `Locale` — media more than one
+ *    release asks for), so the sentence says only that the folder looks like
+ *    the named release, never that none of it is this release's own (M1,
+ *    2026-09-06 review): `wrongMediaFolder` three functions up reads that
+ *    same `shared` field as exactly the media this release does ask for.
  *  - **Ambiguous or unknown, and none of this release's own evidence in the
  *    pile** — `releaseHolding` is `null` for both (`recipe::release_holding`
  *    collapses them, ART-208's own type), and since this cannot tell them
@@ -1354,13 +1359,27 @@ export function mediaEvidence(input: {
   const { plan, found, releaseHolding, release } = input;
   const evidence = input.evidence;
   // ART-254. **The plan, the evidence and the release being built must all
-  // name the same release**, and the three-way agreement is stated as two
-  // comparisons, not three: this one, and `evidence` against `plan.release`
-  // inside {@link wrongMediaFolder} below (which is where it has to live —
-  // `osinstallBlocker` calls that function with no `release` of its own).
-  // The third pair follows from those two, and ART-253's own ruling was that
-  // a condition which cannot fire is decoration, so it is not written out: a
-  // mutation of it survives every test in the file, because it can.
+  // name the same release**, and the three-way agreement takes three
+  // comparisons, not two: this one; `evidence` against `plan.release` inside
+  // {@link wrongMediaFolder} below (which is where it has to live —
+  // `osinstallBlocker` calls that function with no `release` of its own);
+  // and `evidence.release === release` directly, written out as `checkable`
+  // further down and gating all three reads of `evidence` past this point.
+  //
+  // The third does **not** follow from the first two, which is why it is
+  // written out rather than left as decoration (ART-253's own ruling: a
+  // condition that cannot fire is decoration, and this one can). Calling
+  // `wrongMediaFolder` below returns null far more often for reasons that
+  // have nothing to do with the release match — a mixed refusal list, no
+  // media missing at all — than because its own `evidence.release !==
+  // plan.release` check fired, so reaching this point with `plan.release
+  // === release` and a falsy `wrongMediaFolder` result does not establish
+  // that `evidence` is about this release. Stale evidence can still be
+  // sitting in `evidence` here, and `checkable` is what keeps it from being
+  // read as if it were current. Removing the `evidence.release === release`
+  // half of `checkable` is exactly the mutation
+  // `will not call a folder somebody else's media without this release's own
+  // evidence` (osinstall.test.ts) exists to catch.
   //
   // The plan is checked here rather than in the sibling because this is the
   // only place that receives the release being built, and it withdraws the
@@ -1400,9 +1419,9 @@ export function mediaEvidence(input: {
    * (`identify.rs::a_based_releases_own_evidence_claims_the_base_set`).
    *
    * So `releaseHolding !== release` alone does **not** mean somebody else's
-   * media, and saying *"that looks like AmigaOS 3.2 media, not this release's
-   * own"* over a half-built 3.2.2 would be a false sentence sending a user to
-   * look for a different folder — with the disks they need already in it.
+   * media, and saying *"that looks like AmigaOS 3.2 media"* over a half-built
+   * 3.2.2 would be a misleading sentence sending a user to look for a
+   * different folder — with the disks they need already in it.
    *
    * The release's **own recipe** is what settles it, and it is asked rather
    * than reasoned about: `distinguishing` is "present, named by this release,
@@ -1453,13 +1472,22 @@ export function mediaEvidence(input: {
   if (releaseHolding === null) {
     return { key: "osinstall.evidence.unidentified", params: { found: foundNames } };
   }
-  // `otherRelease` says *"not this release's own"*, and that half of the
-  // sentence is a claim about this release's recipe, not about `identify`'s
-  // answer — the same claim `wrongMediaFolder` makes and the same reason
-  // ART-253 gave it evidence to check it against. In flight, failed, or a
-  // release behind (ART-254), there is nothing to check it against, so it is
-  // not said. The user is not left without an answer: the per-disk refusals
-  // list is below it and is true whatever the evidence turns out to be.
+  // `otherRelease` no longer claims the folder holds none of this release's
+  // own media (M1, 2026-09-06 review): `evidence.shared` can be non-empty
+  // here even though `distinguishing` is empty, and `wrongMediaFolder` three
+  // functions up already reads that same field as media this release does
+  // ask for, so the old wording overclaimed exactly what that sibling
+  // function was careful not to. The sentence now says only what `identify`
+  // and the refusals list support — the folder looks like a named different
+  // release, and these disks are still missing.
+  //
+  // Reaching this point still needs `checkable`: while evidence is in
+  // flight, failed, or a release behind (ART-254), it might yet turn out
+  // this release's own distinguishing media is in the pile too
+  // (`holdsThisReleasesOwnMedia`), so nothing is said until evidence can
+  // rule that out. The user is not left without an answer: the per-disk
+  // refusals list is below it and is true whatever the evidence turns out
+  // to be.
   if (!checkable) return null;
   return {
     key: "osinstall.evidence.otherRelease",

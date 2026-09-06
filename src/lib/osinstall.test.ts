@@ -1343,11 +1343,13 @@ describe("mediaEvidence", () => {
   });
 
   it("will not call a folder somebody else's media without this release's own evidence", () => {
-    // `otherRelease`'s second clause — *"not this release's own"* — is a
-    // claim about the recipe, so evidence a release behind (ART-254's
-    // window, and it is wider here: a switch to a based release lands with
-    // the base release's evidence still held) cannot support it. The
-    // per-disk refusals below say what is missing either way.
+    // `otherRelease` no longer claims the folder holds none of this
+    // release's own media (M1), but it still must not fire while stale
+    // evidence (ART-254's window, and it is wider here: a switch to a based
+    // release lands with the base release's evidence still held) could yet
+    // turn out to hold this release's own distinguishing media once it
+    // resolves — which would make `sameRelease` the right ending instead.
+    // The per-disk refusals below say what is missing either way.
     const stale: ReleaseEvidence = { ...BASED_EVIDENCE, release: RELEASE };
     const args = {
       plan: BASED_PLAN,

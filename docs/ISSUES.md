@@ -642,6 +642,34 @@ unreadable. Filed here as a real, measured gap rather than left to be
 rediscovered as a surprise the next time someone opens `Utilities` on a built
 tree and finds it missing.
 
+**ART-260** 🔵 **`setLayerIdentified({})` writes a fresh object where its two
+neighbours guard with `prev => prev`, and nothing wakes it yet** — *found
+2026-09-06 by the whole-branch review of the refusal-evidence round (M3),
+filed rather than fixed by fix wave 5's own brief*
+`src/components/osbuilder/OsInstall.tsx:493`
+
+When a release has no layers, the effect resets `layerIdentified` to `{}`
+unconditionally on every run. Its two neighbours in the same file —
+`setLayerScans` (line 448) and `setExtraScans` (line 922) — both guard the
+identical reset with `prev => (Object.keys(prev).length === 0 ? prev : {})`,
+so a no-op reset keeps the *same* object rather than manufacturing a new one.
+`setLayerIdentified` has no such guard.
+
+**Harmless today** because `layerIdentified` is read only once, directly in
+render (`layerIdentified[layer.id]`, line 524) — nothing takes it as a
+`useMemo` or `useEffect` dependency, so a fresh identity on every no-op reset
+costs nothing. **It would wake the day something does**: a future effect or
+memo that depends on `layerIdentified` itself, rather than a value read out
+of it, would see a new object on every render this branch takes and could be
+driven into the exact reflow ART-178 and ART-195 both were — a fresh identity
+mistaken for a real change.
+
+Not fixed here, on purpose: fix wave 5's own brief named this as latent and
+the round as closing, and an unforced change to an effect that fixes no
+observed bug is how this project has hurt itself before. Add the same
+`prev => prev` guard the day a real dependency on `layerIdentified` is added,
+not before.
+
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
@@ -967,14 +995,24 @@ recipe's own `release`, and `InstallPlan.release` is the same string from the
 same recipe (`plan.rs`: `recipe.release.clone()`). **The plan, the evidence
 and the release being built must all name the same release**, compared exactly
 the way `releaseHolding === release` and `isInstallRelease` compare release
-names elsewhere, and the three-way agreement is written as **two**
+names elsewhere, and the three-way agreement was first written as **two**
 comparisons: `wrongMediaFolder` treats evidence naming a release other than
 `plan.release` the way it already treats `null` evidence — not checked, so
 nothing claimed — and `mediaEvidence` refuses a `plan` naming a release other
-than the one being built. The third pair follows from those two and is
-deliberately **not** written out: ART-253's own ruling was that a condition
-which cannot fire is decoration, and a mutation of that third comparison
-survives every test in the file, because it can.
+than the one being built. **The third pair does not follow from those two.**
+`wrongMediaFolder` returns null far more often for reasons that have nothing
+to do with the release match — a mixed refusal list, nothing missing at all —
+than because its own `evidence.release !== plan.release` check fired, so a
+plan that names the release being built and a falsy `wrongMediaFolder` result
+do not together establish that `evidence` is about that release. Fix wave 3
+(ART-257, 2026-09-06) wrote the third comparison out explicitly, as
+`mediaEvidence`'s own `checkable = evidence !== null && evidence.release ===
+release`, gating all three later reads of `evidence`. It is live and tested:
+weakening it to `evidence !== null` alone turns
+`will not call a folder somebody else's media without this release's own
+evidence` (`src/lib/osinstall.test.ts`) from a pass into `AssertionError:
+expected { …(2) } to be null` — the folder's own sentence (`sameRelease`)
+comes back over evidence a release behind.
 
 `mediaEvidence` withdraws *whole* on a stale plan rather than nulling one
 clause: `missing` is read straight off the plan, so the alternative is a line
