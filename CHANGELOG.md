@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Drawers with no icon position get arranged into a tidy grid.** Turn on
+  "Arrange icons" on the OS Builder's volumes step and any icon the release
+  did not already place for itself — most of them do carry a position, and
+  those are left exactly where they are — is laid out in a grid sized to the
+  drawer's own window, labels included so nothing overlaps. Nothing has been
+  opened on a real Amiga to confirm the grid looks right; the bytes are
+  verified to round-trip correctly, which is a different claim.
 - **A built distribution can carry your own wallpaper.** Drop in a PNG or JPEG
   on the OS Builder's volumes step and it is converted to the ILBM format
   Workbench actually reads — scaled to fit, its colours reduced to what the
@@ -52,6 +59,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A built distribution's own drawers no longer disappear on Workbench.**
+  `Prefs`, `System`, `Utilities`, `WBStartup` and other top-level drawers were
+  being copied with everything inside them but not their own icon, so a real
+  Workbench window showed the disk as empty even though every file was there.
+  Each drawer now arrives with its icon alongside it, the way the release
+  media itself carries it.
 - **A WHDLoad archive with one unreadable drawer no longer costs you the rest.**
   One bad slave used to abandon the whole scan; now that drawer is skipped by
   name and the other 892 are catalogued.
