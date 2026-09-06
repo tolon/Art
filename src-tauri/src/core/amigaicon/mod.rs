@@ -1311,15 +1311,63 @@ mod tests {
         }
     }
 
-    /// **The icon oracle's Rust half** (Task 11). `layout` and
+    /// The index of the first byte at which `a` and `b` differ — a length
+    /// mismatch counts as a difference at the shorter length. Used only by
+    /// the folder-walk oracle test below, so a failure names an offset
+    /// instead of a bare "not equal".
+    fn first_difference(a: &[u8], b: &[u8]) -> usize {
+        if a.len() != b.len() {
+            return a.len().min(b.len());
+        }
+        a.iter()
+            .zip(b.iter())
+            .position(|(x, y)| x != y)
+            .unwrap_or(a.len())
+    }
+
+    /// Whether every tool type in `bytes`' `ToolTypes` block (if it has one
+    /// at all) is valid UTF-8 in its raw, on-disk bytes — the exact
+    /// condition under which [`tooltypes`]'s `String::from_utf8_lossy` call
+    /// returns the input unchanged rather than substituting `U+FFFD`.
+    ///
+    /// Walks the block the same way [`skip_tooltypes`] does (duplicated
+    /// rather than shared, deliberately: this asks a different question —
+    /// "is this reversible", not "is this well-formed" — and the two must
+    /// not be allowed to silently drift onto the same code path and answer
+    /// only one of them). Used only by the folder-walk oracle test below.
+    fn tooltypes_round_trip_losslessly(bytes: &[u8]) -> CoreResult<bool> {
+        let Some(range) = layout(bytes)?.tooltypes else {
+            return Ok(true); // no block at all - nothing to lose.
+        };
+        let mut p = advance(bytes, range.start, 4)?; // past the block's own size field.
+        while p < range.end {
+            let len = be_u32(bytes, p)? as usize;
+            let after_len = advance(bytes, p, 4)?;
+            let end = advance(bytes, after_len, len)?;
+            if std::str::from_utf8(&bytes[after_len..end]).is_err() {
+                return Ok(false);
+            }
+            p = end;
+        }
+        Ok(true)
+    }
+
+    /// **The icon oracle's Rust half** (Task 11 for reading; Task 7 of the
+    /// drawer-icons round added the writer checks below — this module's
+    /// first writes, and CLAUDE.md's own rule that a format's writer and
+    /// reader can share a mistake and agree with each other perfectly, so
+    /// only something outside both can catch it). `layout` and
     /// `merge_tooltypes` above were measured against three real `.info`
     /// files (the module doc comment's own admission). This is what checks
-    /// them against far more than three, without checking any of it into
-    /// the repository: `scripts/icon-oracle-check.py` extracts every
-    /// `.info` from the owner's own ADFs into a scratch directory and points
-    /// `ART_ICON_DIR` at it — this test never reads the owner's media
-    /// directly and is a no-op (not a failure) when the variable is unset,
-    /// so the ordinary suite stays green with nothing extracted.
+    /// them — and every writer this module has grown since — against far
+    /// more than three, without checking any of it into the repository:
+    /// `scripts/icon-oracle-check.py` extracts every `.info` from the
+    /// owner's own ADFs, and stages any `.info` files that already sit
+    /// unpacked on disk (an OS Builder distribution tree, say), into a
+    /// scratch directory and points `ART_ICON_DIR` at it — this test never
+    /// reads the owner's media directly and is a no-op (not a failure) when
+    /// the variable is unset, so the ordinary suite stays green with nothing
+    /// extracted.
     ///
     /// **`merge_tooltypes(x, x) == x` is only asked of icons that carry a
     /// `ToolTypes` block, and that split is measured, not assumed.** The
@@ -1339,6 +1387,60 @@ mod tests {
     /// counted in `no_tooltypes`, printed on its own line, and never in
     /// `failed`.
     ///
+    /// **What every write is checked against, added for Task 7:**
+    ///
+    /// | Write | What must hold |
+    /// |---|---|
+    /// | `set_tooltypes(bytes, tooltypes(bytes))` | byte-identical to the input — for the icons where that is even possible (see the `lossy_tooltypes` paragraph below) — with or without an existing `ToolTypes` block, so it also exercises the "grow a block" / "clear a block" paths `merge_tooltypes` never touches |
+    /// | `set_position(Some((37, 11)))` | reads back as `Some((37, 11))`, and no byte outside 58..66 changed |
+    /// | `set_position(None)` | reads back as `None` — both coordinates carry [`NO_POSITION`], never a plain `0` |
+    /// | `set_show_all_files(true)` then `(false)` | no byte outside the flags word ([`OFF_DRAWER_FLAGS`]) changes, and that word ends at exactly [`DDFLAGS_SHOWDEFAULT`] — asked only of icons that actually carry a `DrawerData` block ([`drawer_window`] returning `Some`, the same guard [`set_show_all_files`] itself enforces); icons with none are counted in `no_drawer_data`, the same "measured, not assumed" split `no_tooltypes` already uses, never folded into `failed`. See the `no_drawer_data` paragraph below for why this is *not* "returns to the original bytes" |
+    /// | `render::rendered_size(bytes)` | never smaller than the `Gadget` width/height at the fixed offsets, and never zero in either dimension |
+    ///
+    /// **`set_tooltypes(bytes, tooltypes(bytes))` is only asked to be
+    /// byte-identical when it *can* be — measured, not assumed, the same
+    /// discipline `no_tooltypes` already applies.** [`tooltypes`]'s own doc
+    /// comment already admits it decodes lossily
+    /// (`String::from_utf8_lossy`) because real AmigaDOS text is Latin-1,
+    /// not UTF-8. Real material shows this is not just a theoretical corner
+    /// case: 69 of 798 icons in the owner's AmigaOS 3.9 tree carry a NewIcon
+    /// `IM1=`/`IM2=` tool type whose pixel-encoding bytes legitimately run
+    /// past 0x7F (they are not accidental Latin-1 text at all, just bytes
+    /// that are not valid UTF-8 on their own) — decoding one to a `String`
+    /// replaces the offending byte(s) with `U+FFFD`, and re-encoding that
+    /// back to UTF-8 does not reproduce the original bytes, growing the
+    /// file. This is a real, present gap in the write path this test
+    /// exists to catch, not a reason to weaken what it checks: an icon
+    /// whose raw `ToolTypes` bytes are not all valid UTF-8 is counted in
+    /// `lossy_tooltypes` rather than `failed`, but is still held to a
+    /// weaker, still-meaningful invariant — the *text* [`tooltypes`] reads
+    /// back from the rewritten file must still equal the text that was
+    /// written, even though the underlying bytes cannot be.
+    ///
+    /// **`set_show_all_files`'s round-trip claim had to be weakened after
+    /// measuring against this corpus, and the reason is worth recording
+    /// here rather than only in a commit message.** [`OFF_DRAWER_FLAGS`]'s
+    /// own doc comment cites `Prefs/Presets/Beeps/Boings.info` as measured
+    /// evidence of [`DDFLAGS_SHOWALL`] (2) — but in this exact file, in this
+    /// exact tree, that word reads `0x0200127F`, not `2`. It is not
+    /// scattered noise either: **all 96** of the real drawer-data icons in
+    /// this 798-icon corpus carry that identical `0x0200127F`, which looks
+    /// far more like a fixed Intuition `NewWindow` flags template baked in
+    /// by whatever last opened these windows than a per-drawer Show-mode
+    /// enum. That contradicts the "exactly 0, 1 or 2, never a combination"
+    /// claim measured against a different, smaller sample of 59 icons
+    /// elsewhere in this module — **an unresolved discrepancy, not a settled
+    /// one**, and beyond this task's scope to chase down (it would need the
+    /// same outside verification CLAUDE.md asks of any format claim, against
+    /// real AmigaOS documentation or a second independent reader). So this
+    /// test does not — and, until that is resolved, cannot — verify that
+    /// `set_show_all_files` changes what a real Workbench actually displays.
+    /// What it does verify, honestly: the writer keeps its own two
+    /// documented promises — it touches nothing outside the flags word, and
+    /// `false` always settles at the documented default. See
+    /// `docs/ISSUES.md` for whether this has been filed as its own defect
+    /// by the time this comment is read.
+    ///
     /// What **is** unconditional, for every icon regardless of shape: `layout`
     /// itself must not error, and its `trailing` range must run to the end
     /// of the buffer (true by construction, asserted anyway so a future
@@ -1347,12 +1449,15 @@ mod tests {
     /// end-of-file or at the start of a trailing IFF block" claim this test
     /// exists to check.
     ///
-    /// A file that does not parse, whose merge does not round-trip, or
-    /// whose `trailing` region does not reach end-of-file is not a panic: it
-    /// is recorded by name in `failed` and the whole test fails once, at the
-    /// end, printing every one of them — machine-readable (`ART_ICON_RESULT
-    /// checked=… failed=… no_tooltypes=…`, one `ART_ICON_FAIL <path>` per
-    /// miss) so the driving script can report them without scraping prose.
+    /// A file that does not parse, whose merge or write does not round-trip,
+    /// or whose `trailing` region does not reach end-of-file is not a panic:
+    /// it is recorded by name in `failed` and the whole test fails once, at
+    /// the end, printing every one of them — machine-readable
+    /// (`ART_ICON_RESULT checked=… failed=… no_tooltypes=… no_drawer_data=…
+    /// lossy_tooltypes=…`, one `ART_ICON_FAIL <path>: <reason>` per miss, the
+    /// reason naming a byte offset wherever one is the actual point of
+    /// failure) so the driving script can report them without scraping
+    /// prose.
     #[test]
     #[ignore = "needs a folder of real .info files"]
     fn round_trip_every_icon_in_a_folder_when_asked() {
@@ -1365,6 +1470,8 @@ mod tests {
 
         let mut checked = 0usize;
         let mut no_tooltypes = 0usize;
+        let mut no_drawer_data = 0usize;
+        let mut lossy_tooltypes = 0usize;
         let mut failed: Vec<String> = Vec::new();
         for entry in &entries {
             let bytes = match std::fs::read(entry) {
@@ -1396,23 +1503,202 @@ mod tests {
                 // A real, common shape — see the doc comment above — not a
                 // reason to call `merge_tooltypes` at all.
                 no_tooltypes += 1;
-                continue;
+            } else {
+                match merge_tooltypes(&bytes, &bytes) {
+                    Ok(same) if same == bytes => {}
+                    Ok(different) => failed.push(format!(
+                        "{}: merge_tooltypes(x, x) did not return x byte for byte (first differing byte at {})",
+                        entry.display(),
+                        first_difference(&bytes, &different)
+                    )),
+                    Err(err) => failed.push(format!(
+                        "{}: merge_tooltypes failed: {err}",
+                        entry.display()
+                    )),
+                }
             }
-            match merge_tooltypes(&bytes, &bytes) {
-                Ok(same) if same == bytes => {}
-                Ok(_) => failed.push(format!(
-                    "{}: merge_tooltypes(x, x) did not return x byte for byte",
+
+            // Task 7: replacing an icon's tool types with the ones it
+            // already has must leave the file byte-identical. Asked of
+            // every icon, with or without an existing ToolTypes block — the
+            // sharpest test in the set, per the task brief: it exercises the
+            // whole splice path (including growing/clearing a block) and any
+            // drift shows up immediately.
+            //
+            // Byte-identical is only possible when tooltypes()'s lossy UTF-8
+            // decode is lossless for this icon in the first place — see the
+            // lossy_tooltypes paragraph in this test's own doc comment. When
+            // it is not, this still checks the weaker, still-real invariant
+            // that the *text* survives the round-trip even though the raw
+            // bytes cannot.
+            let lossless = match tooltypes_round_trip_losslessly(&bytes) {
+                Ok(v) => v,
+                Err(err) => {
+                    failed.push(format!(
+                        "{}: tooltypes_round_trip_losslessly failed: {err}",
+                        entry.display()
+                    ));
+                    true
+                }
+            };
+            match tooltypes(&bytes) {
+                Ok(existing) => match set_tooltypes(&bytes, &existing) {
+                    Ok(same) if same == bytes => {}
+                    Ok(different) if !lossless => {
+                        lossy_tooltypes += 1;
+                        match tooltypes(&different) {
+                            Ok(again) if again == existing => {}
+                            Ok(_) => failed.push(format!(
+                                "{}: set_tooltypes(existing) changed the tool-type text itself, not just its lossy re-encoding",
+                                entry.display()
+                            )),
+                            Err(err) => failed.push(format!(
+                                "{}: tooltypes() on the rewritten file failed: {err}",
+                                entry.display()
+                            )),
+                        }
+                    }
+                    Ok(different) => failed.push(format!(
+                        "{}: set_tooltypes(existing) changed the file (first differing byte at {})",
+                        entry.display(),
+                        first_difference(&bytes, &different)
+                    )),
+                    Err(err) => failed.push(format!(
+                        "{}: set_tooltypes(existing) failed: {err}",
+                        entry.display()
+                    )),
+                },
+                Err(err) => failed.push(format!("{}: tooltypes() failed: {err}", entry.display())),
+            }
+
+            // Task 7: set_position(Some(...)) must change only bytes 58..66
+            // and must read back as the position just written.
+            match set_position(&bytes, Some((37, 11))) {
+                Ok(placed) if placed.len() != bytes.len() => failed.push(format!(
+                    "{}: set_position(Some) changed the file's length",
                     entry.display()
                 )),
+                Ok(placed) => {
+                    if !matches!(position(&placed), Ok(Some((37, 11)))) {
+                        failed.push(format!(
+                            "{}: set_position(Some((37, 11))) does not read back as placed",
+                            entry.display()
+                        ));
+                    }
+                    if let Some(i) = (0..bytes.len())
+                        .filter(|i| !(58..66).contains(i))
+                        .find(|&i| placed[i] != bytes[i])
+                    {
+                        failed.push(format!(
+                            "{}: set_position(Some) changed byte {i}, outside the 58..66 it owns",
+                            entry.display()
+                        ));
+                    }
+                }
                 Err(err) => failed.push(format!(
-                    "{}: merge_tooltypes failed: {err}",
+                    "{}: set_position(Some) failed: {err}",
                     entry.display()
                 )),
+            }
+
+            // Task 7: set_position(None) must write NO_POSITION (i32::MIN)
+            // into both coordinates, never a plain 0.
+            match set_position(&bytes, None) {
+                Ok(cleared) => {
+                    if !matches!(position(&cleared), Ok(None)) {
+                        failed.push(format!(
+                            "{}: set_position(None) does not read back as unplaced",
+                            entry.display()
+                        ));
+                    }
+                }
+                Err(err) => failed.push(format!(
+                    "{}: set_position(None) failed: {err}",
+                    entry.display()
+                )),
+            }
+
+            // Task 7: set_show_all_files(true) then (false) must touch
+            // nothing outside its own flags word, and must settle that word
+            // at exactly DDFLAGS_SHOWDEFAULT — see this test's own doc
+            // comment for why "returns to the original bytes" turned out not
+            // to be a claim this corpus can support, and why this weaker
+            // pair is what is actually checked instead. Only asked of icons
+            // that carry a DrawerData block — the same guard
+            // set_show_all_files itself enforces — so an icon with none is
+            // counted separately rather than folded into failed.
+            match drawer_window(&bytes) {
+                Ok(Some(_)) => {
+                    match set_show_all_files(&bytes, true)
+                        .and_then(|on| set_show_all_files(&on, false))
+                    {
+                        Ok(back) => {
+                            if let Some(i) = (0..bytes.len())
+                                .filter(|i| !(OFF_DRAWER_FLAGS..OFF_DRAWER_FLAGS + 4).contains(i))
+                                .find(|&i| back[i] != bytes[i])
+                            {
+                                failed.push(format!(
+                                    "{}: set_show_all_files(true) then (false) changed byte {i}, outside the flags word it owns",
+                                    entry.display()
+                                ));
+                            }
+                            match be_u32(&back, OFF_DRAWER_FLAGS) {
+                                Ok(flags) if flags == DDFLAGS_SHOWDEFAULT => {}
+                                Ok(flags) => failed.push(format!(
+                                    "{}: set_show_all_files(true) then (false) settled at {flags:#010x}, not the documented default {DDFLAGS_SHOWDEFAULT:#010x}",
+                                    entry.display()
+                                )),
+                                Err(err) => failed.push(format!(
+                                    "{}: reading back the flags word failed: {err}",
+                                    entry.display()
+                                )),
+                            }
+                        }
+                        Err(err) => failed.push(format!(
+                            "{}: set_show_all_files round-trip failed: {err}",
+                            entry.display()
+                        )),
+                    }
+                }
+                Ok(None) => no_drawer_data += 1,
+                Err(err) => {
+                    failed.push(format!("{}: drawer_window failed: {err}", entry.display()))
+                }
+            }
+
+            // Task 7: rendered_size is never smaller than the Gadget size,
+            // and never zero in either dimension.
+            match render::rendered_size(&bytes) {
+                Ok(r) => {
+                    let gadget_w = be_u16(&bytes, OFF_GADGET_WIDTH).unwrap_or(0);
+                    let gadget_h = be_u16(&bytes, OFF_GADGET_HEIGHT).unwrap_or(0);
+                    if r.width < gadget_w || r.height < gadget_h {
+                        failed.push(format!(
+                            "{}: rendered_size {}x{} is smaller than the Gadget size {}x{}",
+                            entry.display(),
+                            r.width,
+                            r.height,
+                            gadget_w,
+                            gadget_h
+                        ));
+                    }
+                    if r.width == 0 || r.height == 0 {
+                        failed.push(format!(
+                            "{}: rendered_size is {}x{} — zero in a dimension",
+                            entry.display(),
+                            r.width,
+                            r.height
+                        ));
+                    }
+                }
+                Err(err) => {
+                    failed.push(format!("{}: rendered_size failed: {err}", entry.display()))
+                }
             }
         }
 
         println!(
-            "ART_ICON_RESULT checked={checked} failed={} no_tooltypes={no_tooltypes}",
+            "ART_ICON_RESULT checked={checked} failed={} no_tooltypes={no_tooltypes} no_drawer_data={no_drawer_data} lossy_tooltypes={lossy_tooltypes}",
             failed.len()
         );
         for f in &failed {
