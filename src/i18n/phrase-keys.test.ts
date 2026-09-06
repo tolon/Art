@@ -101,11 +101,13 @@ import {
   conditionalReason,
   conditionalReasonText,
   hostPlacementBlockKey,
+  mediaEvidence,
   osinstallBlocker,
   refusalPhrase as osinstallRefusalPhrase,
   type Collision,
   type ConditionalReason,
   type HostPlacementBlock,
+  type InstallPlan as OsInstallPlan,
   type PlanResult,
   type RefusalReason as OsInstallRefusalReason,
 } from "@/lib/osinstall";
@@ -1277,6 +1279,67 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     for (const reason of Object.values(reasonsByVariant)) {
       const phrase = osinstallRefusalPhrase(reason);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  // Refusal-evidence round, Task 1: `mediaEvidence`'s three states —
+  // `null` (nothing missing, no folder, or the all-or-nothing case
+  // `wrongMediaFolder` owns) is not a `Phrase` and has nothing to register.
+  it("mediaEvidence: every identified state resolves to a real key", () => {
+    const RELEASE = "AmigaOS 3.2";
+    const planWith = (missing: string[], items: number): OsInstallPlan => ({
+      release: RELEASE,
+      items: Array.from({ length: items }, (_, i) => ({
+        component: `component-${i}`,
+        media: "Workbench3.2",
+        from: `DF0:C/Item${i}`,
+        to: `C/Item${i}`,
+        isDir: false,
+        decompress: false,
+        bytes: 10,
+        mergeIcon: false,
+      })),
+      refusals: missing.map((volume_name) => ({
+        refusal: "media-missing",
+        component: `component-${volume_name}`,
+        volume_name,
+      })),
+      totalBytes: 0,
+      totalFiles: 0,
+      componentsOn: [],
+      mediaPaths: {},
+      packages: [],
+      packageMedia: {},
+      userStartup: [],
+      activations: [],
+      mediaStamps: {},
+      removals: [],
+      layers: [],
+    });
+
+    const phrases = [
+      mediaEvidence({
+        plan: planWith(["Extras3.2"], 12),
+        found: ["Workbench3.2", "Fonts"],
+        releaseHolding: RELEASE,
+        release: RELEASE,
+      }),
+      mediaEvidence({
+        plan: planWith(["Extras3.2"], 3),
+        found: ["Workbench3.1", "Fonts"],
+        releaseHolding: "AmigaOS 3.1",
+        release: RELEASE,
+      }),
+      mediaEvidence({
+        plan: planWith(["Workbench3.2"], 2),
+        found: ["Fonts", "Locale"],
+        releaseHolding: null,
+        release: RELEASE,
+      }),
+    ];
+    for (const phrase of phrases) {
+      expect(phrase).not.toBeNull();
+      expect(isLeafKey(phrase!.key), phrase!.key).toBe(true);
     }
   });
 

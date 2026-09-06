@@ -2175,6 +2175,11 @@
       "nothingToInstall": "Nothing would be installed — choose at least one component.",
       "destinationExists": "Something already exists at {{path}}. ART never builds a distribution tree over what is already there — choose a name that does not exist yet, or move the old one aside."
     },
+    "evidence": {
+      "sameRelease": "This folder holds {{found}} — the right media for this release. Still missing: {{missing}}.",
+      "otherRelease": "This folder's media is {{release}}'s, not this release's own. Still missing: {{missing}}.",
+      "unidentified": "This folder holds {{found}}, which does not identify a release on its own — some disks carry no version of their own."
+    },
     "refusal": {
       "mediaMissing": "{{component}} needs {{volume}}, and no file in the media folder carries that volume name.",
       "mediaPathMissing": "{{component}}'s own {{path}} is missing from {{media}} — this looks like a different revision of that disk.",

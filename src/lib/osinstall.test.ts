@@ -27,6 +27,7 @@ import {
   hasRomUnknownRefusal,
   isForcedOnByCondition,
   keymapsIn,
+  mediaEvidence,
   osinstallBlocker,
   parseOptionalSlot,
   parsePartitionIndex,
@@ -35,6 +36,7 @@ import {
   sanitizeChosen,
   toggleChosen,
   withoutExcluded,
+  wrongMediaFolder,
   INSTALL_RELEASES,
   type ComponentDef,
   type InstallPlan,
@@ -741,6 +743,150 @@ describe("osinstallBlocker", () => {
       plan: planned({ refusals: [MEDIA_MISSING("workbench-base", "Workbench3.2")] }),
     });
     expect(blocker?.key).toBe("osinstall.blocked.refusals");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mediaEvidence — the partial-media case wrongMediaFolder refuses to speak,
+// and the round this file's own module comment does not yet mention: the
+// refusals list already names which component wants which disk, this adds
+// what the folder itself looks like.
+// ---------------------------------------------------------------------------
+
+describe("mediaEvidence", () => {
+  const RELEASE = "AmigaOS 3.2";
+
+  function planWith(missing: string[], items: number): InstallPlan {
+    return {
+      release: RELEASE,
+      items: Array.from({ length: items }, (_, i) => ({
+        component: `component-${i}`,
+        media: "Workbench3.2",
+        from: `DF0:C/Item${i}`,
+        to: `C/Item${i}`,
+        isDir: false,
+        decompress: false,
+        bytes: 10,
+        mergeIcon: false,
+      })),
+      refusals: missing.map((volume_name) => ({
+        refusal: "media-missing",
+        component: `component-${volume_name}`,
+        volume_name,
+      })),
+      totalBytes: 0,
+      totalFiles: 0,
+      componentsOn: [],
+      mediaPaths: {},
+      packages: [],
+      packageMedia: {},
+      userStartup: [],
+      activations: [],
+      mediaStamps: {},
+      removals: [],
+      layers: [],
+    };
+  }
+
+  it("says nothing when nothing is missing", () => {
+    expect(
+      mediaEvidence({
+        plan: planWith([], 40),
+        found: ["Workbench3.2"],
+        releaseHolding: RELEASE,
+        release: RELEASE,
+      })
+    ).toBeNull();
+  });
+
+  it("says nothing when wrongMediaFolder owns the case", () => {
+    // Its five conditions: folder non-empty, no items at all, every refusal
+    // media-missing, none of the missing volumes present. The two helpers
+    // must never both produce a sentence.
+    const plan = planWith(["Workbench3.2", "Extras3.2"], 0);
+    const found = ["Workbench3.1"];
+    expect(wrongMediaFolder(plan, found)).not.toBeNull();
+    expect(
+      mediaEvidence({ plan, found, releaseHolding: "AmigaOS 3.1", release: RELEASE })
+    ).toBeNull();
+  });
+
+  it("names what the folder holds and which disks are absent", () => {
+    const phrase = mediaEvidence({
+      plan: planWith(["Extras3.2", "Classes3.2"], 12),
+      found: ["Workbench3.2", "Fonts", "Locale", "Install3.2"],
+      releaseHolding: RELEASE,
+      release: RELEASE,
+    });
+    expect(phrase?.key).toBe("osinstall.evidence.sameRelease");
+    expect(phrase?.params?.found).toBe("Workbench3.2, Fonts, Locale, Install3.2");
+    expect(phrase?.params?.missing).toBe("Extras3.2, Classes3.2");
+  });
+
+  it("says which release the folder is when it is a different one", () => {
+    const phrase = mediaEvidence({
+      plan: planWith(["Extras3.2"], 3),
+      found: ["Workbench3.1", "Fonts", "Locale"],
+      releaseHolding: "AmigaOS 3.1",
+      release: RELEASE,
+    });
+    expect(phrase?.key).toBe("osinstall.evidence.otherRelease");
+    expect(phrase?.params?.release).toBe("AmigaOS 3.1");
+    // and it still names the missing disk, because that is what the user acts on
+    expect(phrase?.params?.missing).toBe("Extras3.2");
+  });
+
+  it("does not name a release it cannot identify", () => {
+    // `Fonts` and `Locale` are unversioned across 3.1, 3.1.4 and 3.2, so a
+    // folder holding only those identifies nothing. Saying "this looks like
+    // 3.2" here would be a confident wrong sentence.
+    const phrase = mediaEvidence({
+      plan: planWith(["Workbench3.2"], 2),
+      found: ["Fonts", "Locale"],
+      releaseHolding: null,
+      release: RELEASE,
+    });
+    expect(phrase?.key).toBe("osinstall.evidence.unidentified");
+    expect(phrase?.params?.found).toBe("Fonts, Locale");
+    expect(JSON.stringify(phrase?.params)).not.toContain(RELEASE);
+  });
+
+  it("says nothing at all when no folder has been chosen", () => {
+    // `osinstall.blocked.noFolder` already owns this; a second sentence here
+    // would be two answers to one question.
+    expect(
+      mediaEvidence({ plan: planWith(["Workbench3.2"], 0), found: [], releaseHolding: null, release: RELEASE })
+    ).toBeNull();
+  });
+
+  it("returns a different key for every state", () => {
+    // The round's central guard. Every other test checks one state in
+    // isolation and would stay green if two of them were merged into one
+    // sentence — which is precisely the collapse this project names as its
+    // most expensive failure. This is the only test that can see it.
+    const keys = [
+      mediaEvidence({
+        plan: planWith(["Extras3.2"], 12),
+        found: ["Workbench3.2", "Fonts"],
+        releaseHolding: RELEASE,
+        release: RELEASE,
+      }),
+      mediaEvidence({
+        plan: planWith(["Extras3.2"], 3),
+        found: ["Workbench3.1", "Fonts"],
+        releaseHolding: "AmigaOS 3.1",
+        release: RELEASE,
+      }),
+      mediaEvidence({
+        plan: planWith(["Workbench3.2"], 2),
+        found: ["Fonts", "Locale"],
+        releaseHolding: null,
+        release: RELEASE,
+      }),
+    ].map((phrase) => phrase?.key);
+
+    expect(keys.every((key) => typeof key === "string")).toBe(true);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 });
 

@@ -1187,6 +1187,74 @@ export function wrongMediaFolder(plan: InstallPlan, found: string[]): string | n
   return found.join(", ");
 }
 
+/**
+ * Context for the ordinary partial-media case — one or more disks missing,
+ * but at least one component *is* installable — which is exactly the case
+ * {@link wrongMediaFolder} above refuses to speak in. The refusals list
+ * already names which component wants which disk; this adds what
+ * `wrongMediaFolder` cannot reach there: what the folder itself looks like.
+ *
+ * Four endings, never collapsed into each other (this project's own named
+ * failure class — see CLAUDE.md, "The failure that does not crash"):
+ *
+ *  - nothing missing, or no folder chosen yet — silent, both owned
+ *    elsewhere (`osinstall.blocked.noFolder` for the second).
+ *  - `wrongMediaFolder` owns the all-or-nothing case — silent here too, so
+ *    the two callers can never both produce a sentence about the same plan.
+ *  - **Identified**, same release as the one being built — `sameRelease`,
+ *    naming what is present and what is still absent.
+ *  - **Identified**, a *different* release — `otherRelease`, naming which
+ *    one, so the user can tell "wrong folder" from "one disk short".
+ *  - **Ambiguous or unknown** — `releaseHolding` is `null` for both
+ *    (`recipe::release_holding` collapses them, ART-208's own type), and
+ *    since this cannot tell them apart it says the weaker thing rather than
+ *    guess: `unidentified`, naming only what is present. `Fonts` and
+ *    `Locale` carry no version across 3.1, 3.1.4 and 3.2, so a folder
+ *    holding only those genuinely identifies nothing — claiming a release
+ *    from them would be exactly the confident-wrong sentence this project
+ *    pays most for.
+ */
+export function mediaEvidence(input: {
+  plan: InstallPlan;
+  /** Volume names the media scan actually found in the folder. */
+  found: string[];
+  /** Which shipped release those names are the install media of, when ART
+   *  can tell — `null` when they are nobody's, or more than one release's. */
+  releaseHolding: string | null;
+  /** The release being built, to tell "this folder's media" from "someone
+   *  else's media" apart. */
+  release: string;
+}): Phrase | null {
+  const { plan, found, releaseHolding, release } = input;
+  // No folder chosen — `osinstall.blocked.noFolder` already owns this
+  // sentence; a second one here would answer the same question twice.
+  if (found.length === 0) return null;
+  const missing = plan.refusals.filter(
+    (refusal): refusal is Extract<RefusalReason, { refusal: "media-missing" }> =>
+      refusal.refusal === "media-missing"
+  );
+  if (missing.length === 0) return null;
+  // The all-or-nothing case belongs to the sibling above; never both speak.
+  if (wrongMediaFolder(plan, found)) return null;
+
+  const foundNames = found.join(", ");
+  const missingNames = missing.map((refusal) => refusal.volume_name).join(", ");
+
+  if (releaseHolding === null) {
+    return { key: "osinstall.evidence.unidentified", params: { found: foundNames } };
+  }
+  if (releaseHolding === release) {
+    return {
+      key: "osinstall.evidence.sameRelease",
+      params: { found: foundNames, missing: missingNames },
+    };
+  }
+  return {
+    key: "osinstall.evidence.otherRelease",
+    params: { release: releaseHolding, missing: missingNames },
+  };
+}
+
 export function osinstallBlocker(input: {
   mediaFolder: string | null;
   destination: string | null;

@@ -2175,6 +2175,11 @@
       "nothingToInstall": "Hiçbir şey kurulmayacak — en az bir bileşen seç.",
       "destinationExists": "{{path}} yolunda zaten bir şey var. ART, var olanın üzerine dağıtım ağacı kurmaz — henüz var olmayan bir ad seçin ya da eskisini kenara alın."
     },
+    "evidence": {
+      "sameRelease": "Bu klasörde şunlar var: {{found}} — bu, bu sürüm için doğru ortam. Eksik kalanlar: {{missing}}.",
+      "otherRelease": "Bu klasördeki ortam {{release}}'e ait, bu sürümün kendi ortamı değil. Eksik kalanlar: {{missing}}.",
+      "unidentified": "Bu klasörde şunlar var: {{found}} — bu, tek başına bir sürümü belirlemiyor; bazı diskler kendi başına sürüm taşımıyor."
+    },
     "refusal": {
       "mediaMissing": "{{component}}, {{volume}} istiyor ve medya klasöründe bu birim adını taşıyan bir dosya yok.",
       "mediaPathMissing": "{{component}}'in kendi {{path}} yolu {{media}}'da eksik — bu diskin farklı bir sürümü gibi görünüyor.",
