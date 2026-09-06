@@ -126,7 +126,7 @@ vi.mock("@/lib/settings", async (importOriginal) => ({
 }));
 
 const { OsInstall } = await import("@/components/osbuilder/OsInstall");
-const { refusalPhrase, mediaEvidence } = await import("@/lib/osinstall");
+const { refusalPhrase } = await import("@/lib/osinstall");
 const { DEFAULT_SETTINGS } = await import("@/lib/settings");
 
 afterEach(async () => {
@@ -1182,21 +1182,21 @@ describe("the folder's own evidence for a partial build (refusal-evidence round,
   it("shows what the folder holds above the refusals when some disks are missing", async () => {
     await renderPartialMedia("AmigaOS 3.2");
 
-    const evidence = mediaEvidence({
-      plan: PARTIAL_PLAN,
-      found: ["Workbench3.2"],
-      releaseHolding: "AmigaOS 3.2",
-      release: "AmigaOS 3.2",
-      evidence: {
-        release: "AmigaOS 3.2",
-        distinguishing: ["Workbench3.2"],
-        shared: [],
-        missingRequired: ["Install3.2"],
-      },
-    });
-    if (!evidence) throw new Error("expected mediaEvidence to return a phrase");
-
-    expect(await screen.findByText(i18n.t(evidence.key, evidence.params))).toBeTruthy();
+    // **The sentence, named** — not `mediaEvidence(…)`'s own answer rendered
+    // back at it (the 2026-09-06 review's M4 wave, finding M7). Building the
+    // expectation by calling the helper made both sides move together: the
+    // key mapping could change to any other state's key and this stayed
+    // green, so it guarded "the component renders whatever the helper
+    // returns" and not "the right sentence for this state". Its siblings in
+    // this file name their key; so does this one now.
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.evidence.sameRelease", {
+          found: "Workbench3.2",
+          missing: "Extras3.2",
+        })
+      )
+    ).toBeTruthy();
 
     // Context, not a replacement: the per-disk refusal this line sits above
     // must still be there.
@@ -1206,21 +1206,61 @@ describe("the folder's own evidence for a partial build (refusal-evidence round,
     ).toBeTruthy();
   });
 
+  // **The fixture this used to run on was one the core cannot emit**, and
+  // ART-257 is what exposed it: a folder holding nothing but `Workbench3.2`,
+  // with `osinstall_release_for_media` answering `"AmigaOS 3.9"` and
+  // `osinstall_media_evidence` answering that `Workbench3.2` is AmigaOS 3.2's
+  // own distinguishing media — two answers about one pile that contradict
+  // each other, since a folder holding 3.2's own Workbench disk is never
+  // identified as 3.9. It passed only because nothing read the second answer.
+  //
+  // The real shape of "this is somebody else's folder, but not *entirely*":
+  // AmigaOS 3.9's disc beside a plain `Fonts`, while building 3.2. `Fonts`
+  // carries no version and every release asks for it, so 3.2's own evidence
+  // is `shared: ["Fonts"]` with **nothing** distinguishing — which is what
+  // keeps `wrongMediaFolder` quiet (the folder is not entirely foreign) and
+  // makes this the sentence to say.
+  const OTHER_RELEASE_REFUSALS: RefusalReason[] = [
+    { refusal: "media-missing", component: "workbench-base", volume_name: "Workbench3.2" },
+    { refusal: "media-missing", component: "install-libs", volume_name: "Install3.2" },
+    { refusal: "media-missing", component: "extras", volume_name: "Extras3.2" },
+  ];
+
   it("names the other release when the folder is a different one", async () => {
-    await renderPartialMedia("AmigaOS 3.9");
+    scanMediaMock.mockReset().mockResolvedValue({
+      outcome: "found",
+      media: [
+        { path: "E:\\media\\AmigaOS3.9.iso", volumeName: "AmigaOS3.9", kind: "disc" },
+        { path: "E:\\media\\Fonts.adf", volumeName: "Fonts", kind: "floppy" },
+      ],
+    } satisfies MediaScanResult);
+    planMock.mockReset().mockResolvedValue({
+      outcome: "planned",
+      plan: { ...PARTIAL_PLAN, refusals: OTHER_RELEASE_REFUSALS },
+    } satisfies PlanResult);
+    releaseForMediaMock.mockReset().mockResolvedValue("AmigaOS 3.9");
+    mediaEvidenceMock.mockReset().mockResolvedValue({
+      release: "AmigaOS 3.2",
+      distinguishing: [],
+      shared: ["Fonts"],
+      missingRequired: ["Workbench3.2", "Install3.2"],
+    });
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(planMock).toHaveBeenCalled());
 
     expect(
       await screen.findByText(
         i18n.t("osinstall.evidence.otherRelease", {
-          found: "Workbench3.2",
+          found: "AmigaOS3.9, Fonts",
           release: "AmigaOS 3.9",
-          missing: "Extras3.2",
+          missing: "Workbench3.2, Install3.2, Extras3.2",
         })
       )
     ).toBeTruthy();
 
     // Still just context — the refusal itself is still named below it.
-    const refusalPhraseText = refusalPhrase(PARTIAL_REFUSALS[0]);
+    const refusalPhraseText = refusalPhrase(OTHER_RELEASE_REFUSALS[0]);
     expect(
       screen.getByText(i18n.t(refusalPhraseText.key, refusalPhraseText.params))
     ).toBeTruthy();
@@ -1277,6 +1317,235 @@ describe("the folder's own evidence for a partial build (refusal-evidence round,
     // number that is already there.
     expect(line.textContent).not.toMatch(/carry no version/i);
     expect(line.textContent).not.toMatch(/version of (its|their) own/i);
+  });
+
+  // ART-258. The sentence bound *"the right media for this release"* to the
+  // whole listing, and the listing is everything the scan found — ART ships
+  // recipes for 3.2, 3.2.2 and 3.9 only, so a `Workbench3.1` disk kept beside
+  // a 3.2 set contributes nothing to `identify`, the folder still resolves to
+  // AmigaOS 3.2, and the line called that disk the right media for a release
+  // it has nothing to do with. A claim about each listed disk that ART never
+  // made.
+  it("does not call every disk in the folder the right media for this release", async () => {
+    const STRAY = ["Workbench3.2", "Extras3.2", "Workbench3.1"];
+    scanMediaMock.mockReset().mockResolvedValue({
+      outcome: "found",
+      media: STRAY.map((volumeName) => ({
+        path: `E:\\media\\${volumeName}.adf`,
+        volumeName,
+        kind: "floppy",
+      })),
+    } satisfies MediaScanResult);
+    planMock.mockReset().mockResolvedValue({
+      outcome: "planned",
+      plan: {
+        ...PARTIAL_PLAN,
+        refusals: [
+          { refusal: "media-missing", component: "install-libs", volume_name: "Install3.2" },
+        ],
+      },
+    } satisfies PlanResult);
+    releaseForMediaMock.mockReset().mockResolvedValue("AmigaOS 3.2");
+    // `Workbench3.1` is in neither list: it is no release ART installs, so
+    // this release's own recipe says nothing about it.
+    mediaEvidenceMock.mockReset().mockResolvedValue({
+      release: "AmigaOS 3.2",
+      distinguishing: ["Workbench3.2", "Extras3.2"],
+      shared: [],
+      missingRequired: ["Install3.2"],
+    });
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+
+    const line = await screen.findByText(
+      i18n.t("osinstall.evidence.sameRelease", {
+        found: STRAY.join(", "),
+        missing: "Install3.2",
+      })
+    );
+
+    // The listing itself is right — the scan really did read those three
+    // names, and hiding one would be a different lie. What must not be there
+    // is the claim *about* them, and this is the only assertion here a
+    // reverted catalogue entry fails: `i18n.t(key, params)` above resolves
+    // from the very file under test, so it moves with any rewording.
+    expect(line.textContent).not.toMatch(/the right media/i);
+    // The weaker claim ART did check — `identify` named this release off
+    // these disks — still has to be said, or the line says nothing at all.
+    expect(line.textContent).toMatch(/this release's own media is among them/i);
+  });
+
+  // ART-257. **The release with two media folders is the one most likely to
+  // arrive part-complete, and it was the one this whole feature never
+  // reached.** A layered release sets no flat folder — `mediaFolder` is
+  // remembered per release and its field is never drawn — so `mediaScan`
+  // stayed `null`, `foundVolumeNames` stayed `[]`, and the evidence line was
+  // silent for every AmigaOS 3.2.2 build however full the layer folders were.
+  //
+  // Both halves are asserted here, because the union alone would have made
+  // the line *speak falsely*: `identify` answers `"AmigaOS 3.2"` for the base
+  // set (correctly — a based release must not be named off its base's disks
+  // alone), and the old branching would have read that as somebody else's
+  // media.
+  it("says what a layered release's own folders hold, and does not call the base set somebody else's", async () => {
+    const BASE_FOLDER = "E:\\base322";
+    const BASE_SET = ["Workbench3.2", "Install3.2", "Extras3.2", "Fonts", "Locale"];
+    scanMediaMock.mockReset().mockImplementation((folder: string) =>
+      Promise.resolve(
+        folder === BASE_FOLDER
+          ? ({
+              outcome: "found",
+              media: BASE_SET.map((volumeName) => ({
+                path: `${BASE_FOLDER}\\${volumeName}.adf`,
+                volumeName,
+                kind: "floppy",
+              })),
+            } satisfies MediaScanResult)
+          : ({ outcome: "found", media: [] } satisfies MediaScanResult)
+      )
+    );
+    planMock.mockReset().mockResolvedValue({
+      outcome: "planned",
+      plan: {
+        ...PARTIAL_PLAN,
+        release: "AmigaOS 3.2.2",
+        refusals: [
+          { refusal: "media-missing", component: "update-322-system", volume_name: "Update3.2.2" },
+          {
+            refusal: "media-missing",
+            component: "update-322-classes",
+            volume_name: "Classes3.2.2",
+          },
+        ],
+      },
+    } satisfies PlanResult);
+    // Both answers measured off the shipped recipes rather than chosen —
+    // `identify.rs::a_based_releases_own_evidence_claims_the_base_set`.
+    releaseForMediaMock.mockReset().mockResolvedValue("AmigaOS 3.2");
+    mediaEvidenceMock.mockReset().mockResolvedValue({
+      release: "AmigaOS 3.2.2",
+      distinguishing: ["Workbench3.2", "Install3.2", "Extras3.2"],
+      shared: ["Locale", "Fonts"],
+      missingRequired: ["Update3.2.2", "Classes3.2.2"],
+    });
+    seedRemembered({
+      ...FULL_FIELDS,
+      "buildSession.release": "AmigaOS 3.2.2",
+      "osinstall.destination.AmigaOS 3.2.2": "E:\\dist322",
+      // `osinstall.mediaFolder.<layerId>.<release>` — see `layerFolderKey`.
+      "osinstall.mediaFolder.base.AmigaOS 3.2.2": BASE_FOLDER,
+    });
+    render(<OsInstall />);
+
+    // The whole sentence, both parameters: the base disks the layer folder
+    // really holds, and the update disks that are really absent.
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.evidence.sameRelease", {
+          found: BASE_SET.join(", "),
+          missing: "Update3.2.2, Classes3.2.2",
+        })
+      )
+    ).toBeTruthy();
+
+    // The false sentence the union alone would have produced is not on
+    // screen — this release's own base media is not "AmigaOS 3.2 media, not
+    // this release's own".
+    expect(
+      screen.queryByText(
+        i18n.t("osinstall.evidence.otherRelease", {
+          found: BASE_SET.join(", "),
+          release: "AmigaOS 3.2",
+          missing: "Update3.2.2, Classes3.2.2",
+        })
+      )
+    ).toBeNull();
+
+    // And Rust was asked about the layer folder's own disks — a screen
+    // cannot be right downstream of a lookup that was asked about nothing.
+    await waitFor(() =>
+      expect(mediaEvidenceMock).toHaveBeenCalledWith("AmigaOS 3.2.2", BASE_SET)
+    );
+  });
+
+  // ART-257's other half, and a survivor of the first mutation round rather
+  // than something the reading found: `layers` is `[]` both when a release is
+  // unlayered *and* before `layersFor` has answered (ART-256 named that trap
+  // one layer down). On the render straight after a switch to a layered
+  // release, `layers` is still the previous release's answer and `mediaScan`
+  // is still the previous release's folder — so a `foundVolumeNames` that did
+  // not ask whether `layers` is this release's answer would hand the new
+  // release's evidence lookup the **old** folder's disks, and the sentence
+  // would be about a folder this build never reads.
+  //
+  // An invariant, not a wait: the question is one Rust must never be asked,
+  // so no timing decides it.
+  it("never asks about the previous release's folder while a layered release is loading", async () => {
+    scanMediaMock.mockReset().mockImplementation((folder: string) =>
+      Promise.resolve(
+        folder === "E:\\media"
+          ? ({
+              outcome: "found",
+              media: [{ path: "E:\\media\\Disk1.adf", volumeName: "Workbench3.2", kind: "floppy" }],
+            } satisfies MediaScanResult)
+          : ({ outcome: "found", media: [] } satisfies MediaScanResult)
+      )
+    );
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+
+    // Proven, not assumed: the flat folder really is being asked about for
+    // AmigaOS 3.2 before the switch, so the absence below is about the
+    // switch and not about a screen that never asked anything.
+    await waitFor(() =>
+      expect(mediaEvidenceMock).toHaveBeenCalledWith("AmigaOS 3.2", ["Workbench3.2"])
+    );
+
+    const picker = await screen.findByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    });
+    await userEvent.selectOptions(picker, "AmigaOS 3.2.2");
+
+    // AmigaOS 3.2.2 reads its layer folders, and its own is empty. The one
+    // question that must never be asked is the new release against the old
+    // release's flat folder.
+    await waitFor(() => expect(layersForMock).toHaveBeenCalledWith("AmigaOS 3.2.2"));
+    expect(mediaEvidenceMock).not.toHaveBeenCalledWith("AmigaOS 3.2.2", ["Workbench3.2"]);
+  });
+
+  // ART-178/ART-195's own shape, one folder set further on. `layerScans` now
+  // feeds the memo the two evidence lookups depend on, so an effect that
+  // writes a **fresh** empty object on every run — which is what "no layers,
+  // clear the scans" used to do — hands `foundVolumeNames` a new identity for
+  // no new information and both lookups are asked again for it.
+  //
+  // Counted, both arms, because "it feels the same" is not a result: with the
+  // guard the settled unlayered screen asks each lookup **once**; writing a
+  // fresh `{}` instead makes it **twice**. Nothing is on a clock here — the
+  // count is read once the sentence those lookups produce is on screen.
+  it("asks each media lookup once for a settled folder, not once per render", async () => {
+    seedRemembered(FULL_FIELDS);
+    planMock.mockReset().mockResolvedValue({
+      outcome: "planned",
+      plan: {
+        ...PARTIAL_PLAN,
+        refusals: [
+          { refusal: "media-missing", component: "install-libs", volume_name: "Install3.2" },
+        ],
+      },
+    } satisfies PlanResult);
+    releaseForMediaMock.mockReset().mockResolvedValue("AmigaOS 3.2");
+    render(<OsInstall />);
+
+    await screen.findByText(
+      i18n.t("osinstall.evidence.sameRelease", {
+        found: "Workbench3.2",
+        missing: "Install3.2",
+      })
+    );
+
+    expect(mediaEvidenceMock.mock.calls).toEqual([["AmigaOS 3.2", ["Workbench3.2"]]]);
+    expect(releaseForMediaMock.mock.calls).toEqual([[["Workbench3.2"]]]);
   });
 });
 

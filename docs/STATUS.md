@@ -1007,16 +1007,23 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
 
 - **The OS Builder now shows what media was found when it cannot complete a
   build.** The `mediaEvidence` helper renders a line above the refusals list
-  showing: same release found, different release found, unidentified media, or
-  nothing (when no folder is chosen). Four states kept distinct; zero Rust
-  changes — the evidence strings (`wrongMediaFolder`, `osinstall.blocked.*`)
-  already existed, gated behind an all-or-nothing condition that made them
-  unreachable for partial media sets. **Ungating them and displaying them
-  properly is the round.** Three new i18n keys (`osinstall.evidence.*`),
-  tests exist for both the helper and the render. **Held on `art-refusal-evidence`
-  for the owner's decision** — three tasks, each reviewed. Full detail: the
-  `task-3-report.md` in this round's own `superpowers/sdd/` folder and the
-  design under `superpowers/specs/` dated 2026-09-06.
+  saying which of three things is true: this release's own media is among what
+  the folder holds, the folder holds a different release's, or what is there
+  does not settle which release it is. With no folder chosen the line says
+  **nothing** — `osinstall.blocked.noFolder` already owns that sentence, and
+  the helper's own doc comment forbids saying it twice. *(That fourth "state"
+  was described as one of the line's own until 2026-09-06; the review's M6
+  caught it in `CHANGELOG.md` and it was corrected here at the same time.)*
+  Three new i18n keys (`osinstall.evidence.*`); tests exist for both the
+  helper and the render. **The round's own three tasks changed no Rust** — the
+  evidence strings already existed, gated behind an all-or-nothing condition
+  that made them unreachable for partial media sets, and ungating them is what
+  the round was. Its **final whole-branch review** then found seven things, and
+  three fix waves closed all of them, adding both Rust and frontend work:
+  [ART-253](ISSUES.md) through [ART-258](ISSUES.md). **Held on
+  `art-refusal-evidence` for the owner's decision.** Full detail: the task and
+  fix-wave reports in this round's own `superpowers/sdd/` folder and the design
+  under `superpowers/specs/` dated 2026-09-06.
 - **A tree ART builds now carries its drawers' own icons, and the ones that
   arrive with no position get laid out instead of being scattered by
   Workbench.** Round 2 of six taking what is worth taking from
@@ -1148,28 +1155,33 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
   Hatcher intake's round 2 `art-drawer-icons` (merged `722a8c5`) — each merged
   `--no-ff` and pushed. `art-refusal-evidence`, the intake's round 3, branched
   off `main` right after that last merge and is the one **live branch that is
-  not merged**: 82 frontend files / **1076** tests, **2925** Rust passed with 0
-  failed and 49 ignored (run twice, 25.25 s and 28.15 s), `pnpm lint` exit 0,
+  not merged**: 82 frontend files / **1082** tests, **2926** Rust passed with 0
+  failed and 49 ignored (run twice, 28.55 s and 32.76 s), `pnpm lint` exit 0,
   `cargo fmt --check` and `clippy --all-targets -- -D warnings` clean,
   control-byte and scratch-root sweeps clean, contrast **113/113** both themes,
   i18n **2012** leaf keys each catalogue — re-measured 2026-09-06 after the
-  review's fix wave 2 ([ART-254](ISSUES.md), [ART-255](ISSUES.md),
-  [ART-256](ISSUES.md); wave 1 was [ART-253](ISSUES.md)). Held there on purpose
+  review's fix wave 3 ([ART-257](ISSUES.md), [ART-258](ISSUES.md); wave 2 was
+  [ART-254](ISSUES.md), [ART-255](ISSUES.md) and [ART-256](ISSUES.md), wave 1
+  [ART-253](ISSUES.md)). Held there on purpose
   so the owner decides whether and when it joins `main`, rather than being
   merged by the round that built it.
 - **Fifteen open entries**, counted on this branch 2026-09-06. The
   refusal-evidence round itself added none — but its **final whole-branch
-  review did**: [ART-253](ISSUES.md) in fix wave 1, and
-  [ART-254](ISSUES.md), [ART-255](ISSUES.md) and [ART-256](ISSUES.md) in fix
-  wave 2 — false or over-claiming sentences on the OS Builder's own screen,
-  each filed and fixed in the same wave, so all four are in Fixed rather than
-  Open and the count is unchanged. **ART-254 is ART-253's own sentence reached
-  through a different door**: the evidence that checks the claim was never
-  asked which release it was about, so a release switch could put the new
-  release's plan beside the old release's evidence. The review's four Minor
-  findings are a separate wave and are still open work, **M5 included** — the
-  wave-2 report establishes that it was never addressed (the wave-1 report's
-  own mutation trial happened to carry the same label). [ART-166](ISSUES.md) and
+  review did**: [ART-253](ISSUES.md) in fix wave 1, [ART-254](ISSUES.md),
+  [ART-255](ISSUES.md) and [ART-256](ISSUES.md) in fix wave 2, and
+  [ART-257](ISSUES.md) and [ART-258](ISSUES.md) in fix wave 3 — false or
+  over-claiming sentences on the OS Builder's own screen, each filed and fixed
+  in the same wave, so all six are in Fixed rather than Open and the count is
+  unchanged. **ART-254 is ART-253's own sentence reached through a different
+  door**: the evidence that checks the claim was never asked which release it
+  was about, so a release switch could put the new release's plan beside the
+  old release's evidence. **The review is now closed**: wave 3 took the four
+  Minor findings — the evidence line never reached a layered release at all
+  (ART-257, and the union alone would have called AmigaOS 3.2.2's own base
+  disks somebody else's media), `sameRelease` called every disk in the folder
+  the right media (ART-258), the CHANGELOG described a state the line is
+  deliberately silent in, and a component test that asserted against the
+  helper's own output. [ART-166](ISSUES.md) and
   [ART-117](ISSUES.md) are standing decisions; [ART-118](ISSUES.md) and
   [ART-062](ISSUES.md) need a person at a screen; [ART-235](ISSUES.md) is a
   guard reporting a false positive; [ART-241](ISSUES.md) is the accessibility

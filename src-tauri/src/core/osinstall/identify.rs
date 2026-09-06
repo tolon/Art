@@ -964,6 +964,67 @@ mod tests {
         );
     }
 
+    /// **What a based release's own evidence says about nothing but its base
+    /// set** — the answer the OS Builder's evidence line is built on
+    /// (ART-257), constructed and read rather than assumed.
+    ///
+    /// The screen holds two answers about one pile of media, and they
+    /// disagree here on purpose:
+    ///
+    ///  - [`release_holding`] names **`"AmigaOS 3.2"`**, because the
+    ///    base-subsumption pass above drops a based release that found none
+    ///    of its own update disks. Naming 3.2.2 off the base set alone is
+    ///    exactly the confident wrong sentence that pass exists to prevent.
+    ///  - [`evidence_for`] asked about **AmigaOS 3.2.2** claims those very
+    ///    disks as that release's own `distinguishing` media — a based
+    ///    recipe inherits its base's whole component list — and names the
+    ///    update disks in `missing_required`.
+    ///
+    /// A screen that read only the first would tell a user assembling AmigaOS
+    /// 3.2.2 that their base disks *"look like AmigaOS 3.2 media, not this
+    /// release's own"* and send them away from the right folder. The second
+    /// is what makes the line true, so it is pinned here: if a future
+    /// `merge_base` stopped inheriting components, or the pass stopped
+    /// subsuming, this fails rather than the frontend quietly changing
+    /// sentence.
+    #[test]
+    fn a_based_releases_own_evidence_claims_the_base_set() {
+        let base_set = names(&["Workbench3.2", "Install3.2", "Extras3.2", "Fonts", "Locale"]);
+
+        assert_eq!(
+            release_holding(&base_set).expect("the shipped recipes must load"),
+            Some("AmigaOS 3.2".to_string()),
+            "the base set alone must not be called AmigaOS 3.2.2"
+        );
+
+        let evidence =
+            evidence_for("AmigaOS 3.2.2", &base_set).expect("the shipped recipe must load");
+        assert_eq!(
+            evidence.distinguishing,
+            names(&["Workbench3.2", "Install3.2", "Extras3.2"]),
+            "a based recipe inherits its base's components, so the base disks are its own media"
+        );
+        assert_eq!(
+            evidence.missing_required,
+            names(&["Update3.2.2", "Classes3.2.2"]),
+            "and its own required update disks are what is actually absent"
+        );
+
+        // The other side of the same window, so "the two answers differ" is
+        // shown rather than implied: with the update disks present as well,
+        // both answers name AmigaOS 3.2.2 and nothing required is missing.
+        let mut whole_set = base_set.clone();
+        whole_set.extend(names(&["Update3.2.2", "Classes3.2.2"]));
+        assert_eq!(
+            release_holding(&whole_set).expect("the shipped recipes must load"),
+            Some("AmigaOS 3.2.2".to_string())
+        );
+        assert!(evidence_for("AmigaOS 3.2.2", &whole_set)
+            .expect("the shipped recipe must load")
+            .missing_required
+            .is_empty());
+    }
+
     // layer_holding — Task 10 fix round, Finding 1 --------------------------
     //
     // The mistake a two-field screen invites and `release_holding` cannot

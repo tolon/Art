@@ -1232,6 +1232,101 @@ describe("mediaEvidence", () => {
       params: { found: "Workbench3.2, AmigaOS3.9" },
     });
   });
+
+  // -------------------------------------------------------------------------
+  // ART-257 — a based release's inherited media is its own media
+  // -------------------------------------------------------------------------
+  //
+  // The layered release is the one most likely to arrive part-complete, and
+  // it is the one where `identify` and the release being built legitimately
+  // disagree. Every fixture below is the answer the shipped recipes actually
+  // give, pinned on the Rust side by
+  // `identify.rs::a_based_releases_own_evidence_claims_the_base_set`:
+  // `release_holding` of the AmigaOS 3.2 base set is `"AmigaOS 3.2"`, while
+  // `evidence_for("AmigaOS 3.2.2", …)` of the same names claims those disks
+  // as 3.2.2's own `distinguishing` media and names the update disks absent.
+
+  const BASED = "AmigaOS 3.2.2";
+  /** The base set on the shelf, nothing of the update yet. */
+  const BASE_SET = ["Workbench3.2", "Install3.2", "Extras3.2", "Fonts", "Locale"];
+  const BASED_PLAN: InstallPlan = {
+    ...planWith(["Update3.2.2", "Classes3.2.2"]),
+    release: BASED,
+  };
+  const BASED_EVIDENCE: ReleaseEvidence = {
+    release: BASED,
+    distinguishing: ["Workbench3.2", "Install3.2", "Extras3.2"],
+    shared: ["Locale", "Fonts"],
+    missingRequired: ["Update3.2.2", "Classes3.2.2"],
+  };
+
+  it("calls the inherited base set this release's own media, not the base release's", () => {
+    expect(
+      mediaEvidence({
+        plan: BASED_PLAN,
+        found: BASE_SET,
+        // `identify`'s own answer, and it is right: a based release must not
+        // be named off its base's disks alone.
+        releaseHolding: RELEASE,
+        release: BASED,
+        evidence: BASED_EVIDENCE,
+      })
+    ).toEqual({
+      key: "osinstall.evidence.sameRelease",
+      params: {
+        found: "Workbench3.2, Install3.2, Extras3.2, Fonts, Locale",
+        missing: "Update3.2.2, Classes3.2.2",
+      },
+    });
+
+    // The control, one field apart. With none of this release's own
+    // distinguishing media in the pile — the folder really is somebody
+    // else's — the other sentence is still the one said, so what produced
+    // the sentence above was the evidence and not the release names, the
+    // refusals or the folder.
+    expect(
+      mediaEvidence({
+        plan: BASED_PLAN,
+        found: BASE_SET,
+        releaseHolding: RELEASE,
+        release: BASED,
+        evidence: { ...BASED_EVIDENCE, distinguishing: [] },
+      })
+    ).toEqual({
+      key: "osinstall.evidence.otherRelease",
+      params: {
+        found: "Workbench3.2, Install3.2, Extras3.2, Fonts, Locale",
+        release: RELEASE,
+        missing: "Update3.2.2, Classes3.2.2",
+      },
+    });
+  });
+
+  it("will not call a folder somebody else's media without this release's own evidence", () => {
+    // `otherRelease`'s second clause — *"not this release's own"* — is a
+    // claim about the recipe, so evidence a release behind (ART-254's
+    // window, and it is wider here: a switch to a based release lands with
+    // the base release's evidence still held) cannot support it. The
+    // per-disk refusals below say what is missing either way.
+    const stale: ReleaseEvidence = { ...BASED_EVIDENCE, release: RELEASE };
+    const args = {
+      plan: BASED_PLAN,
+      found: BASE_SET,
+      releaseHolding: RELEASE,
+      release: BASED,
+    };
+
+    expect(mediaEvidence({ ...args, evidence: stale })).toBeNull();
+    // In flight is the same answer for the same reason.
+    expect(mediaEvidence({ ...args, evidence: null })).toBeNull();
+
+    // The control: the identical evidence, labelled with the release it is
+    // actually about, does produce a sentence — so the silence above has one
+    // cause and it is the release label, not the folder or the refusals.
+    expect(mediaEvidence({ ...args, evidence: BASED_EVIDENCE })?.key).toBe(
+      "osinstall.evidence.sameRelease"
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

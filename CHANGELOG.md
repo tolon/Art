@@ -13,9 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   build.** When you choose a media folder but ART still cannot build — because
   the folder does not hold a release ART knows, or it holds a different release
   than the one the build needs — a line above the refusals list shows: the
-  release is the same as what you picked, the folder holds a different release,
-  the media is there but unidentifiable, or no folder was chosen at all. Four
-  states, kept apart so you know where to look next.
+  folder holds this release's own media, it holds a different release's, or the
+  media is there but does not settle which release it is. Three states, kept
+  apart so you know where to look next — and when no folder has been chosen at
+  all the line says nothing, because "choose the media folder first" is already
+  on screen and answering it twice helps nobody.
 - **Drawers with no icon position get arranged into a tidy grid.** Turn on
   "Arrange icons" on the OS Builder's volumes step and any icon the release
   did not already place for itself — most of them do carry a position, and
@@ -68,6 +70,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are yours.
 
 ### Fixed
+
+- **A part-built AmigaOS 3.2.2 now gets the same "what is in this folder" line
+  as every other release — and it is not told its own disks belong to
+  something else.** AmigaOS 3.2.2 is assembled from two folders, a 3.2 base set
+  and the update disks, and the line said nothing at all for it: it only ever
+  read the single folder field that release does not use. It now reads both
+  folders. That alone would have made it say the wrong thing, though — a folder
+  holding only the 3.2 base set really is "AmigaOS 3.2" as far as ART's
+  identification goes, so you would have been told your base disks *look like
+  AmigaOS 3.2 media, not this release's own* while building 3.2.2 from them.
+  ART now asks the release you are building what it makes of the disks, so the
+  line names them as your own media and tells you which update disks are still
+  missing (ART-257).
+
+- **The line no longer calls every disk in the folder the right media for this
+  release.** Keep a `Workbench3.1` disk beside your 3.2 set and it was listed
+  with the rest as "the right media for this release", which ART never checked
+  and which is not true of that disk. It now says only what was checked: this
+  release's own media is among what the folder holds (ART-258).
 
 - **The OS Builder's "what is in this folder" line now counts the folders you
   added, not just the first one.** If you add a second media folder, ART's plan

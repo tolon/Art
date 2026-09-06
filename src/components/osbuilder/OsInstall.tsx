@@ -440,7 +440,12 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const [layerScans, setLayerScans] = useState<Record<string, MediaScanResult | null>>({});
   useEffect(() => {
     if (layers.length === 0) {
-      setLayerScans({});
+      // The previous object is kept when it is already empty — the same
+      // guard `extraScans` below carries, and for the same reason now that
+      // `foundVolumeNames` is memoized on this one too (ART-257): a fresh
+      // `{}` per run is a new identity for nothing, and the two evidence
+      // lookups downstream would be asked again for it (ART-178/ART-195).
+      setLayerScans((prev) => (Object.keys(prev).length === 0 ? prev : {}));
       return;
     }
     let cancelled = false;
@@ -1244,8 +1249,9 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
 
   /**
    * The volume names the scans actually read out of **every folder the plan
-   * request carries** — the main one and each added one (ART-256), never the
-   * main one alone. Memoized on the scans themselves so this is one identity
+   * request carries** — the main one and each added one for an unlayered
+   * release (ART-256), each layer's own for a layered one (ART-257), never
+   * the main one alone. Memoized on the scans themselves so this is one identity
    * per scan and not one per render: ART-195 was a fresh `[]` per render
    * driving an effect into a loop, and both effects below list this among
    * their dependencies.
@@ -1270,12 +1276,33 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         names.push(medium.volumeName);
       }
     };
+    // **Which folders this release actually reads**, said once, the same way
+    // the plan request and the extra-folder scan say it (ART-256's own rule,
+    // and `layersKnown` for the same reason: `layers === []` is one value
+    // with two causes, and the wrong branch here would describe a folder set
+    // the request never carries).
+    //
+    // ART-257: a layered release sets no flat folder at all — `mediaFolder`
+    // is remembered per release and its field is never drawn — so before
+    // this, `foundVolumeNames` was `[]` for every AmigaOS 3.2.2 build and
+    // the whole evidence line was silent for the one release most likely to
+    // arrive part-complete. The per-layer scans are the same
+    // `osinstallScanMedia` results; the union across them is what the
+    // release-level question is about (`evidence_for` and `release_holding`
+    // both answer for a *release*, never for one layer — `layer_holding`
+    // owns the per-field question and still does, beside this).
+    if (!layersKnown) return names;
+    if (layers.length > 0) {
+      // Recipe order, which is the order the fields are drawn in.
+      for (const layer of layers) take(layerScans[layer.id]);
+      return names;
+    }
     take(mediaScan);
     // Walked in the order the user added them rather than over the record's
     // own keys, so the listing reads in the order the fields are drawn in.
     for (const folder of extraMediaFolders) take(extraScans[folder]);
     return names;
-  }, [mediaScan, extraScans, extraMediaFolders]);
+  }, [layersKnown, layers, layerScans, mediaScan, extraScans, extraMediaFolders]);
   /**
    * ART-208. Non-null when the folder holds media and this release wants
    * none of it — the owner's own screen, where sixteen `MediaMissing`

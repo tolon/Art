@@ -1299,10 +1299,16 @@ export function wrongMediaFolder(
  *    elsewhere (`osinstall.blocked.noFolder` for the second).
  *  - `wrongMediaFolder` owns the all-or-nothing case — silent here too, so
  *    the two callers can never both produce a sentence about the same plan.
- *  - **Identified**, same release as the one being built — `sameRelease`,
- *    naming what is present and what is still absent.
- *  - **Identified**, a *different* release — `otherRelease`, naming which
- *    one, so the user can tell "wrong folder" from "one disk short".
+ *  - **This release's own media, partly here** — `sameRelease`, naming what
+ *    is present and what is still absent. Either because `identify` named
+ *    this very release, or because this release's own recipe claims disks in
+ *    the pile that no other release names (ART-257 — a based release's
+ *    inherited base set is exactly that, and `identify` calls it the base).
+ *    The sentence claims only that: this release's own media is among what
+ *    the folder holds, which is what was checked (ART-258).
+ *  - **Identified**, a *different* release, and none of this release's own
+ *    media in the pile — `otherRelease`, naming which one, so the user can
+ *    tell "wrong folder" from "one disk short".
  *  - **Ambiguous or unknown** — `releaseHolding` is `null` for both
  *    (`recipe::release_holding` collapses them, ART-208's own type), and
  *    since this cannot tell them apart it says the weaker thing rather than
@@ -1373,12 +1379,60 @@ export function mediaEvidence(input: {
   if (releaseHolding === null) {
     return { key: "osinstall.evidence.unidentified", params: { found: foundNames } };
   }
-  if (releaseHolding === release) {
+  /**
+   * **A based release's inherited media is its own media** (ART-257).
+   *
+   * `identify` answers "which release is this pile", and for a folder holding
+   * nothing but AmigaOS 3.2's disks that answer is *"AmigaOS 3.2"* even when
+   * the release being built is AmigaOS 3.2.2 — the based recipe is dropped
+   * from the candidates because it found none of its **own** update disks
+   * (`identify.rs`'s base-subsumption pass, and it is right to: a based
+   * release must not be named on its base's evidence alone). Measured, not
+   * assumed: `evidence_for("AmigaOS 3.2.2", <the 3.2 base set>)` answers
+   * `distinguishing: [Workbench3.2, Install3.2, Extras3.2]`,
+   * `missing_required: [Update3.2.2, Classes3.2.2]`, while
+   * `release_holding` of the same names answers `"AmigaOS 3.2"`
+   * (`identify.rs::a_based_releases_own_evidence_claims_the_base_set`).
+   *
+   * So `releaseHolding !== release` alone does **not** mean somebody else's
+   * media, and saying *"that looks like AmigaOS 3.2 media, not this release's
+   * own"* over a half-built 3.2.2 would be a false sentence sending a user to
+   * look for a different folder — with the disks they need already in it.
+   *
+   * The release's **own recipe** is what settles it, and it is asked rather
+   * than reasoned about: `distinguishing` is "present, named by this release,
+   * named by no other" (`Fonts` and `Locale` are in `shared` and never count
+   * here), so a non-empty one means at least one disk in this pile is media
+   * only the release being built asks for. That is the same claim
+   * `sameRelease` makes, so it is the sentence said.
+   *
+   * Not a fourth ending: "the base is here, the update disks are not" and
+   * "some of this release's disks are here, others are not" are one state
+   * with one next step, and `missing` already names exactly which disks.
+   * Splitting them would be a second sentence for one answer, not a distinct
+   * ending.
+   *
+   * Stale or in-flight evidence cannot answer for this release (ART-254), so
+   * it does not: the check requires the evidence to say which release it is
+   * about, and `releaseHolding === release` above still stands on its own
+   * for every folder `identify` can name outright.
+   */
+  const checkable = evidence !== null && evidence.release === release;
+  const holdsThisReleasesOwnMedia = checkable && evidence.distinguishing.length > 0;
+  if (releaseHolding === release || holdsThisReleasesOwnMedia) {
     return {
       key: "osinstall.evidence.sameRelease",
       params: { found: foundNames, missing: missingNames },
     };
   }
+  // `otherRelease` says *"not this release's own"*, and that half of the
+  // sentence is a claim about this release's recipe, not about `identify`'s
+  // answer — the same claim `wrongMediaFolder` makes and the same reason
+  // ART-253 gave it evidence to check it against. In flight, failed, or a
+  // release behind (ART-254), there is nothing to check it against, so it is
+  // not said. The user is not left without an answer: the per-disk refusals
+  // list is below it and is true whatever the evidence turns out to be.
+  if (!checkable) return null;
   return {
     key: "osinstall.evidence.otherRelease",
     params: { found: foundNames, release: releaseHolding, missing: missingNames },

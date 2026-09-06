@@ -2176,7 +2176,7 @@
       "destinationExists": "{{path}} yolunda zaten bir şey var. ART, var olanın üzerine dağıtım ağacı kurmaz — henüz var olmayan bir ad seçin ya da eskisini kenara alın."
     },
     "evidence": {
-      "sameRelease": "Bu klasörde şunlar var: {{found}} — bu, bu sürüm için doğru ortam. Eksik kalanlar: {{missing}}.",
+      "sameRelease": "Bu klasörde şunlar var: {{found}}; bunların arasında bu sürümün kendi ortamı da var. Eksik kalanlar: {{missing}}.",
       "otherRelease": "Bu klasörde şunlar var: {{found}} — bu, {{release}} ortamına benziyor, bu sürümün kendi ortamı değil. Eksik kalanlar: {{missing}}.",
       "unidentified": "Bu klasörde şunlar var: {{found}}; bunlar hangi sürüm olduğunu belirlemiyor."
     },

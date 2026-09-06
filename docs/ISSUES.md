@@ -661,6 +661,132 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-258** 🟡 ✅ **`sameRelease` called every disk in the folder "the right
+media for this release"** — *found 2026-09-06 by the whole-branch review of
+the refusal-evidence round (M5)*
+`src/i18n/en.json` · `src/i18n/tr.json`, `osinstall.evidence.sameRelease`
+
+The string read *"This folder holds {{found}} — the right media for this
+release. Still missing: {{missing}}."*, and `{{found}}` is every volume name
+the scan returned, not the subset the recipe named. ART ships recipes for 3.2,
+3.2.2 and 3.9 only, so a `Workbench3.1` disk kept beside a 3.2 set contributes
+nothing to `identify`, the folder still resolves to AmigaOS 3.2, and the line
+said *"This folder holds Workbench3.2, Extras3.2, Workbench3.1 — the right
+media for this release."* `Workbench3.1` is not. Nothing broke — the plan
+refuses by name regardless — but it is a claim about each listed disk that ART
+never made, and this project's standard is that a sentence says what was
+checked.
+
+**Fixed** by saying what *was* checked. `identify` naming this release off
+these disks establishes that the release's own media is among them, and no
+more than that: *"This folder holds {{found}}, and this release's own media is
+among them. Still missing: {{missing}}."* Both catalogues in the same commit,
+the Turkish restructured to the new shape rather than left under a new key
+(*"Bu klasörde şunlar var: {{found}}; bunların arasında bu sürümün kendi
+ortamı da var. Eksik kalanlar: {{missing}}."*).
+
+**Listing only `distinguishing + shared` was considered and not taken**, and
+the reason is worth recording: it is a stronger sentence, but it needs the
+release's own evidence to be in hand, and ART-254's window — a release switch
+with the previous release's evidence still held — is exactly when it is not.
+Withdrawing the whole line there would have deleted ART-254's own guard
+(`says the partial-media sentence, not the false one, while the evidence is a
+release behind`) in favour of silence. The listing is what the scan really
+read; what needed fixing was the claim about it.
+
+**Guarded** by `does not call every disk in the folder the right media for
+this release` (`src/components/osbuilder/OsInstall.test.tsx`) — the stray-disk
+folder, which nothing in the round had constructed, asserting the rendered
+line and that it does **not** carry the old claim. `i18n.t(key, params)`
+resolves from the very file under test and moves with any rewording, so that
+negative assertion is the only one a reverted catalogue entry fails — the same
+shape ART-255's guard uses.
+
+**Mutated.** The old English string put back: `expected 'This folder holds
+Workbench3.2, Extra…' not to match /the right media/i`.
+
+*(ART-256's recorded mutation message below quotes the previous wording; it
+was accurate for the run it records.)*
+
+**ART-257** 🟠 ✅ **A layered release got no evidence line at all, and the
+union alone would have made it say the wrong thing** — *found 2026-09-06 by
+the whole-branch review of the refusal-evidence round (M4)*
+`src/components/osbuilder/OsInstall.tsx` · `src/lib/osinstall.ts`
+
+Two defects, and the second only became reachable by fixing the first.
+
+**The gap.** When `layers.length > 0` the media step renders per-layer folder
+fields and no flat one; `mediaFolder` is remembered per release, so for
+AmigaOS 3.2.2 it is never set. `mediaScan` stayed `null`, `foundVolumeNames`
+stayed `[]`, and `mediaEvidence` returned `null` — the whole feature was
+silent for the one release with two media folders, which is the release most
+likely to arrive part-complete. Never wrong, and exactly the round's own
+purpose missing its best case.
+
+**The sentence the union alone would have produced.** Constructed and read
+rather than assumed (`identify.rs::a_based_releases_own_evidence_claims_the_base_set`,
+added with this fix): for the AmigaOS 3.2 base set alone, `release_holding`
+answers `"AmigaOS 3.2"` — correctly, since `identify`'s base-subsumption pass
+must not name a based release off its base's disks — while
+`evidence_for("AmigaOS 3.2.2", …)` of the same names claims those disks as
+3.2.2's own `distinguishing` media and puts `Update3.2.2` and `Classes3.2.2`
+in `missing_required`. `mediaEvidence` branched on `releaseHolding` alone, so
+a user assembling AmigaOS 3.2.2 with their base disks in the base field would
+have been told *"that looks like AmigaOS 3.2 media, not this release's own"* —
+false, and it sends them away from the folder holding what they need.
+
+**Fixed** in two places. `foundVolumeNames` became the union across each
+layer's own scan for a layered release, extending ART-256's producer rather
+than adding a second one, and scoped with the same `layersKnown` that fix
+introduced — "which folders is this release about" is stated once, in the
+producer. And `mediaEvidence` now says `sameRelease` when *either* `identify`
+named this release *or* this release's own evidence claims a disk in the pile
+that no other release names. Not a fourth ending: "the base is here, the
+update disks are not" and "some of this release's disks are here, others are
+not" are one state with one next step, and `missing` already names which
+disks. `otherRelease`'s second clause — *"not this release's own"* — is a
+claim about the recipe, so it is now withdrawn entirely when the evidence is
+in flight or a release behind, the same rule ART-253 gave `wrongMediaFolder`.
+
+**A fixture that was lying**, found the same way ART-254's six were: the
+component test for `otherRelease` held a folder of `Workbench3.2` with
+`release_for_media` answering `"AmigaOS 3.9"` and `media_evidence` answering
+that `Workbench3.2` is AmigaOS 3.2's own distinguishing media — two answers
+about one pile that contradict each other, and no core can emit them. It
+passed only because nothing read the second. Rewritten as the real shape:
+AmigaOS 3.9's disc beside a plain `Fonts`, while building 3.2.
+
+**Guarded** by `a_based_releases_own_evidence_claims_the_base_set`
+(`src-tauri/src/core/osinstall/identify.rs`), `calls the inherited base set
+this release's own media, not the base release's` and `will not call a folder
+somebody else's media without this release's own evidence`
+(`src/lib/osinstall.test.ts`, each with a one-field control), and three in
+`src/components/osbuilder/OsInstall.test.tsx`: `says what a layered release's
+own folders hold, and does not call the base set somebody else's`, `never asks
+about the previous release's folder while a layered release is loading`, and
+`asks each media lookup once for a settled folder, not once per render`. The
+last two were written **because** their mutations survived the first round.
+
+**Mutated.** The layer union removed: `Unable to find an element with the
+text: This folder holds Workbench3.2, Install3.2, Extras3.2, Fonts, Locale,
+and this release's own media is among them. Still missing: Update3.2.2,
+Classes3.2.2.` The own-media disjunct removed: `expected
+'osinstall.evidence.otherRelease' to be 'osinstall.evidence.sameRelease'` and
+the same missing element. The `identify` disjunct removed instead — the
+control, proving neither half is decoration: `expected null to deeply equal
+{ …(2) }` on ART-254's own guard. The evidence gate on `otherRelease` removed:
+`expected { …(2) } to be null`. `layersKnown` removed: `expected "vi.fn()" to
+not be called with arguments: [ 'AmigaOS 3.2.2', [ 'Workbench3.2' ] ]`. The
+`layerScans` identity guard removed: `expected [ [ 'AmigaOS 3.2', …(1) ],
+…(1) ] to deeply equal [ [ 'AmigaOS 3.2', …(1) ] ]` — one lookup per folder
+became two. On the Rust side, `identify`'s base-subsumption `else` branch
+removed: `assertion left == right failed: the base set alone must not be
+called AmigaOS 3.2.2 / left: None / right: Some("AmigaOS 3.2")`; and a based
+recipe's evidence made to count only its own layer: `assertion left == right
+failed: a based recipe inherits its base's components, so the base disks are
+its own media / left: [] / right: ["Workbench3.2", "Install3.2",
+"Extras3.2"]`.
+
 **ART-256** 🟠 ✅ **The OS Builder's evidence line described one media folder
 while the plan had been built from several** — *found 2026-09-06 by the
 whole-branch review of the refusal-evidence round (I3), confirmed by the
