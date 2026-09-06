@@ -31,12 +31,55 @@ A user reading that cannot tell whether they pointed at the wrong folder, are
 missing one disk, or have the whole set of a **different release**. ART knows
 which, and does not say.
 
-### 1.2 ART already has the answer and throws it away
+### 1.2 The evidence already exists, is already well written, and is gated on
+### an all-or-nothing condition
 
-`core/osinstall/plan.rs:1611` holds `found` — the complete scan of the media
-folder — and the very next lines emit
-`RefusalReason::MediaMissing { component, volume_name }`, carrying **none** of
-it. The evidence is one variable away from the refusal that needs it.
+**This section replaces a wrong first reading, and the correction is the whole
+shape of the round.** The first pass concluded that ART holds the folder's scan
+at `plan.rs:1611` and throws it away. That is true of the *core*, and it is
+beside the point, because the **frontend** already computes and already says all
+of it — just not when it matters most.
+
+`src/lib/osinstall.ts::wrongMediaFolder` and two catalogue strings already
+deliver everything §1.1 asked for:
+
+> **`osinstall.blocked.wrongFolder`** — *"None of the disks in this folder are
+> ones this release asks for. It holds: {{found}}."*
+>
+> **`osinstall.blocked.wrongFolderIsRelease`** — *"The disks in this folder are
+> not this release's — they are {{release}} media ({{found}})."*
+
+The first is the folder listing. The second names the release. Both are good
+sentences and neither needs writing.
+
+**They are simply unreachable in the case the owner is looking at.**
+`wrongMediaFolder` returns a value only when **all five** hold: the folder has
+something in it; **`plan.items.len() == 0`, so nothing at all can be installed**;
+there is at least one refusal; **every** refusal is `media-missing`; and **none**
+of the missing volumes is in the folder. And `OsInstall.tsx:1723` renders the
+refusals list only when `!wrongFolder`, so the two are mutually exclusive.
+
+So the moment **one** component can be installed — a partially complete media
+set, which is the ordinary way a person arrives at this screen — the evidence
+disappears entirely and the bare refusals list is all that is left.
+
+The existing code already reasoned about half of this. `OsInstall.tsx:1718`:
+*"The list stays for every other case, which is most of them — one absent disk
+in an otherwise right folder has to say* which *disk."* That is right. What was
+never added is the **context around** the disk's name.
+
+### 1.2.1 Which makes this a frontend round with no Rust change at all
+
+Both values the evidence needs are already computed and already in scope at the
+render site: `foundVolumeNames` (`OsInstall.tsx:1164`) and `releaseHolding`
+(`:1175`), in the same component as the refusals section at `:1723`. The missing
+disks are the `media-missing` refusals' own `volume_name`s, already on screen.
+
+**No new command, no new scan, no `RefusalReason` change, and nothing new in
+`core/`.** An earlier draft of this document proposed an `InstallPlan`-level
+`MediaEvidence` struct; that was written before the frontend was read and is
+not needed. It is recorded here rather than deleted, because the next person to
+look at this will have the same first idea.
 
 ### 1.3 …and it can already name the release, too
 
@@ -84,20 +127,23 @@ with no table to verify and nothing new to ship.
 
 ## 2. What this round builds
 
-### 2.1 One evidence block, not nineteen enriched refusals
+### 2.1 One evidence line above the existing list
 
-The evidence is about **the folder**, not about each refusal, so it is gathered
-once rather than duplicated into every variant. `InstallPlan` gains:
+The evidence is about **the folder**, not about each refusal, so it is stated
+once above the list rather than folded into nineteen variants. It is built in
+`OsInstall.tsx` from `foundVolumeNames` and `releaseHolding`, both already in
+scope, plus the `media-missing` refusals already being rendered.
 
-```rust
-pub media_evidence: Option<MediaEvidence>,
-```
+**Nothing in `core/` changes. `RefusalReason` does not change.** Its nineteen
+sentences stay exactly as they are — they are already good, they are already
+tested, and this round does not touch them.
 
-carrying what the scan found, what `identify` made of it, and which required
-volumes are absent. **`RefusalReason` does not change** — its variants stay as
-they are, their sentences stay as they are, and nothing in the existing i18n
-catalogue is rewritten. That keeps the diff small and keeps nineteen tested
-sentences untouched.
+The one piece of logic worth extracting to `src/lib` is the decision of *which*
+sentence to show, since `src/lib` is where this project puts pure logic and
+where `wrongMediaFolder` already lives. It returns a `Phrase`, and the component
+calls `t()` — `src/lib` has no i18next singleton. Whatever it can return must be
+enumerated in `src/i18n/phrase-keys.test.ts`, because nothing else in the build
+catches a `Phrase` pointing at a key nobody added.
 
 ### 2.2 What the screen gains
 
@@ -110,6 +156,13 @@ and, when the release is right and only disks are missing:
 
 > The media folder holds **Workbench3.2, Fonts, Locale, Install3.2**.
 > **Extras3.2** and **Classes3.2** are not there.
+
+### 2.2.1 And the case that must not regress
+
+`wrongMediaFolder`'s own all-or-nothing message is **better** than the new line
+when it fires, because it can say *"none of these are this release's"* outright.
+It stays, unchanged, and keeps its exclusive claim on that case. The new line is
+for the case that has nothing today — where some disks matched and some did not.
 
 ### 2.3 The three states it must keep apart
 
