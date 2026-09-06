@@ -3,6 +3,8 @@
 //! Kept separate from the Tauri command error (`crate::error::AppError`) so the
 //! core engine can be compiled and tested without Tauri.
 
+use std::path::PathBuf;
+
 use thiserror::Error;
 
 /// Errors produced by the Amiga core engine.
@@ -167,6 +169,25 @@ pub enum CoreError {
     )]
     EscapedNamesNeedNativeCopy { pairs: Vec<(String, String)> },
 
+    /// The tree's own `S/Startup-Sequence` never runs `S:User-Startup`, so the
+    /// block ART would merge there could not execute. Writing it and saying
+    /// "installed" would be a confident wrong sentence (spec §7).
+    #[error(
+        "{} never runs S:User-Startup, so a first-boot block placed there would never execute. \
+         Both AmigaOS 3.2 and 3.9 ship a sequence that does; restore that line or use the \
+         release's own Startup-Sequence.",
+        file.display()
+    )]
+    FirstBootHookUnreachable { file: PathBuf },
+
+    /// No `distribution.json` — this is not a tree ART built.
+    #[error(
+        "{} is not a distribution tree ART built (no distribution.json), so ART cannot say what a \
+         first boot would run against.",
+        tree.display()
+    )]
+    FirstBootNotATree { tree: PathBuf },
+
     /// The input is **well-formed** and larger than a bound ART sets for
     /// itself — ART-158.
     ///
@@ -233,6 +254,8 @@ impl CoreError {
             Self::NonAsciiPfs3Names { .. } => "ART-PFS3-NON-ASCII-NAME",
             Self::ForeignRdbEmbedNotSupported => "ART-NATIVE-EMBED-UNSUPPORTED",
             Self::EscapedNamesNeedNativeCopy { .. } => "ART-ESCAPED-NAME-NEEDS-NATIVE",
+            Self::FirstBootHookUnreachable { .. } => "ART-FIRSTBOOT-HOOK-UNREACHABLE",
+            Self::FirstBootNotATree { .. } => "ART-FIRSTBOOT-NOT-A-TREE",
             Self::LimitExceeded { .. } => "ART-LIMIT-EXCEEDED",
         }
     }
@@ -356,6 +379,10 @@ mod tests {
             CoreError::EscapedNamesNeedNativeCopy {
                 pairs: vec![("Storage/DOSDrivers/_AUX".into(), "AUX".into())],
             },
+            CoreError::FirstBootHookUnreachable {
+                file: "S/Startup-Sequence".into(),
+            },
+            CoreError::FirstBootNotATree { tree: "x".into() },
             CoreError::LimitExceeded {
                 subject: "iso9660 walk".into(),
                 detail: "x".into(),
