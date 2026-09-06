@@ -25,6 +25,53 @@ pass — filed and closed together rather than sitting in Open in between.
 ---
 
 ## Open
+**ART-261** 🟠 **`cargo test --lib` reports exit 0 with no `test result:`
+line whenever `commands::artwork` runs, and passes cleanly without it** —
+*found 2026-09-06 by round 4's Task 1, localised the same day by a two-armed
+run*
+`src-tauri/src/commands/artwork.rs` (tests) · `src-tauri/src/core/artwork/`
+
+Measured, both arms, on this machine:
+
+| run | result |
+|---|---|
+| `cargo test --lib -- --skip artwork` | **`test result: ok. 2841 passed; 0 failed; 49 ignored`**, 17.98 s |
+| `cargo test --lib artwork` | dies mid-run — no summary line, **exit 0** |
+| `cargo test --lib commands::artwork::tests::a_hand_attached_picture_survives_the_artwork_cache_being_deleted -- --exact` | **1 passed**, 0.02 s |
+
+With `--test-threads=1` the run stops at exactly
+`a_hand_attached_picture_survives_the_artwork_cache_being_deleted` — the name
+prints, the result never does — identically across two attempts. That same
+test passes on its own. So no single test is broken; running the **module**
+kills the process.
+
+**A wrong elimination, corrected here rather than left standing.** Earlier the
+same day this controller concluded the harness was being killed after a fixed
+elapsed time — *“always the same place” really meaning “always the same
+duration”*. The two-armed run above refutes it: the **short** run (89 tests)
+dies and the **long** one (2841 tests, 18 s) completes. Duration is not the
+variable. `CLAUDE.md` asks for a refuted elimination to be corrected in place,
+because a confident wrong one costs more than none.
+
+**What is consistent but NOT proven.** Exit 0 with no summary and no `FAILED`
+is what an externally killed process looks like, not a panic. The machine runs
+Trend Micro Maximum Security with Defender's real-time protection off, the
+owner has already observed it reacting to `art_lib`, and the artwork tests
+write image files in quick succession — which fits. **It has not been tested
+with the scanner disabled**, so the cause is a hypothesis, not a finding. Do
+not record it as solved on the strength of the fit.
+
+**Consequence, and it is the expensive part:** `cargo test` cannot currently be
+quoted honestly on this machine without `--skip artwork`, and an exit code
+cannot tell a completed suite from a killed one. Any number quoted from a full
+run here is suspect unless its `test result:` line is shown.
+
+Next step is machine configuration rather than code: exclude
+`src-tauri/target/` and the test scratch root from the scanner, then re-run
+both arms and record what changed. Until then, quote the `--skip artwork`
+summary and say that is what it is.
+
+
 
 **ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
 neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
