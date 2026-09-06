@@ -552,6 +552,140 @@ export async function osinstallScanMedia(mediaFolder: string): Promise<MediaScan
   return invoke<MediaScanResult>("osinstall_scan_media", { folder: mediaFolder });
 }
 
+// ---------------------------------------------------------------------------
+// Identifying media by content hash — mirrors `core::osinstall::mediahash`
+// ---------------------------------------------------------------------------
+
+/**
+ * One row of the 186-row install-media table ART compiles in, adopted from
+ * Emu68 Hatcher (MIT). Mirrors `core::osinstall::mediahash::MediaRow`.
+ *
+ * Every field is **as the table states it** and none of them may be
+ * re-derived here. Two traps the Rust side documents and this side inherits:
+ * the mapping is many-to-one (one logical disk has many hashes —
+ * `Workbench3_1` has eleven), and the table's own `version` and `source`
+ * disagree for the Hotfix Pack, which is the source's disagreement to report
+ * rather than ART's to resolve.
+ */
+export interface MediaRow {
+  /** 32 lowercase hex characters. */
+  md5: string;
+  version: string;
+  /**
+   * **Hatcher's identifier for the disk — not the disk's AmigaDOS volume
+   * name, and never to be compared with one.**
+   *
+   * Measured 2026-09-06 against the owner's own AmigaOS 3.2 media: 0 of 12
+   * matched. This says `Backdrops3_2`, `LocaleDE3_2`, `DiskDoctor3_2`; the
+   * same disks' own root blocks say `Backdrops3.2`, `Locale-DE`,
+   * `DiskDoctor`. Joining them would have put all 35 of the owner's good
+   * disks in conflict with the table. Never render this as the disk's name —
+   * {@link MediaMatch.volumeName} is that.
+   */
+  volume: string;
+  /** A human-readable label for the disk, as the table names it. */
+  name: string;
+  /** Where the table says this dump came from. */
+  source: string;
+  /** The disk's position in its set, when the source states one. */
+  sequence: number | null;
+}
+
+/**
+ * What one file in a media folder turned out to be. Mirrors
+ * `core::osinstall::mediahash::MediaMatch`.
+ *
+ * The two middle fields come from two different sources on purpose and are
+ * never reconciled: `volumeName` is the disk's own answer, `row` is the
+ * table's.
+ */
+export interface MediaMatch {
+  path: string;
+  /**
+   * What the **disk** says it is called, off its own root block. `null` when
+   * this file is not something ART can open as media at all (an `.lha`, or a
+   * damaged image) — which does not stop it being hashed and looked up.
+   */
+  volumeName: string | null;
+  /**
+   * What the **table** says about these bytes, or `null` when no row claims
+   * them.
+   *
+   * `null` is **"not in the table"**, which is a claim about the table and
+   * not about the disk: 151 of the 186 rows are themselves unconfirmed, and
+   * a re-imaged disk is a legitimate miss. It must never read as "not
+   * genuine", and it must never weaken what `volumeName` already said.
+   */
+  row: MediaRow | null;
+  /** The key the lookup was made with, 32 lowercase hex characters. */
+  md5: string;
+}
+
+/**
+ * What one pass over a media folder found. Mirrors
+ * `core::osinstall::mediahash::Identification`, flattened beside the job id.
+ *
+ * `unreadable` and the two counts are here so the screen can keep four
+ * endings distinct rather than collapsing them: matched, not in the table,
+ * could not be read, and not hashed yet are four different sentences with
+ * four different next steps (§89).
+ */
+export interface MediaIdentification {
+  /** One entry per candidate file that could be hashed, in path order. */
+  matches: MediaMatch[];
+  /** Candidates whose bytes could not be read at all — reported, never
+   *  silently dropped: a file missing from `matches` reads as a file that is
+   *  not in the folder. */
+  unreadable: string[];
+  /** How many files this pass actually read and hashed. */
+  hashed: number;
+  /** How many were answered out of ART's scan cache without being read. */
+  remembered: number;
+}
+
+/** The event `osinstall_identify_media`'s own background job answers on. */
+export const OSINSTALL_IDENTIFY_MEDIA_EVENT = "osinstall-identify-media-result";
+
+interface OsInstallIdentifyMediaResult extends MediaIdentification {
+  job_id: number;
+}
+
+/**
+ * What every install disk in `folder` turns out to be, by content hash,
+ * looked up in the table ART compiles in. Reads the files and writes nothing
+ * to them.
+ *
+ * **Additive to {@link osinstallScanMedia}, never a replacement for it.** A
+ * disk's volume name and its table row are two facts from two sources; this
+ * adds the second one and takes nothing away from the first.
+ *
+ * Runs as a background job on the Rust side (§54 — the first pass over the
+ * owner's own 3.2 folder reads 31 MB), in its own lane so picking a second
+ * folder supersedes the first pass instead of stacking on it. This wrapper
+ * hides that behind an ordinary promise the way {@link osinstallCollisions}
+ * does, by starting the job and awaiting its own result event.
+ *
+ * A second call over an unchanged folder hashes nothing: the result is kept
+ * against the same `(path, size, mtime)` identity ART's scan cache already
+ * uses, and `remembered` says how many answers came from there.
+ */
+export async function osinstallIdentifyMedia(folder: string): Promise<MediaIdentification> {
+  if (!folder) return { matches: [], unreadable: [], hashed: 0, remembered: 0 };
+  // `awaitJobResult` subscribes before it calls `start` — see its own doc
+  // comment: a pass answered entirely from the cache can finish before the
+  // frontend has even learnt its job id.
+  return awaitJobResult<OsInstallIdentifyMediaResult, MediaIdentification>(
+    OSINSTALL_IDENTIFY_MEDIA_EVENT,
+    () => invoke<number>("osinstall_identify_media", { folder }),
+    ({ matches, unreadable, hashed, remembered }) => ({
+      matches,
+      unreadable,
+      hashed,
+      remembered,
+    })
+  );
+}
+
 /**
  * Which shipped release these volume names are the install media of, or
  * `null` when they are nobody's or more than one release's (ART-208).

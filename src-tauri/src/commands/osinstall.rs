@@ -93,6 +93,7 @@ use crate::core::osinstall::apply::{
 };
 use crate::core::osinstall::chain::{self, FoundTree, TreeSummary};
 use crate::core::osinstall::collide::{self, CollisionReport, Incoming};
+use crate::core::osinstall::mediahash::{self, Identification};
 use crate::core::osinstall::package::{self, Package};
 use crate::core::osinstall::plan::{
     detect_package_refusals, expand_rules, plan_with_cache_in, InstallPlan, InstallRequest,
@@ -407,6 +408,77 @@ pub fn osinstall_rescan_media() -> AppResult<usize> {
 }
 
 // ---------------------------------------------------------------------------
+// osinstall_identify_media
+// ---------------------------------------------------------------------------
+
+/// The event a finished identification arrives on.
+pub const OSINSTALL_IDENTIFY_MEDIA_EVENT: &str = "osinstall-identify-media-result";
+
+/// `job_id`, not `jobId` — the spelling every other result in this module
+/// uses, and the one `src/lib/osinstall.ts` declares.
+#[derive(Debug, Clone, Serialize)]
+pub struct OsInstallIdentifyMediaResult {
+    pub job_id: u64,
+    #[serde(flatten)]
+    pub identification: Identification,
+}
+
+/// What every install disk in `folder` turns out to be, by content hash,
+/// looked up in the 186-row table ART compiles in.
+///
+/// **Additive to the volume name, never instead of it.** Each answer carries
+/// the disk's own name *and* the table's row as two separate facts from two
+/// separate sources — they are different namespaces (`core::osinstall::
+/// mediahash::MediaRow::volume` records the measurement), and nothing here or
+/// downstream may join them.
+///
+/// **A job, not a synchronous answer** (§54/§55). Hashing the owner's own 3.2
+/// folder reads 31 MB the first time; an ISO folder reads far more. The
+/// progress total is the candidate count, known before the first byte, so the
+/// bar is a real one. In its own lane, so picking a second folder supersedes
+/// the first pass rather than stacking on it (ART-195).
+///
+/// The scratch root is resolved **here rather than inside the job**: a root
+/// that has gone away is the user's to fix and they should hear it from the
+/// action they took, not out of a job that failed a moment later (ART-196).
+/// A folder that cannot be read fails the job instead, through the ordinary
+/// `job-progress` failed state — unlike `osinstall_scan_media`, this command
+/// has already answered with a job id by then, so there is no synchronous
+/// value left to shape a typed refusal into.
+#[tauri::command]
+pub fn osinstall_identify_media(
+    folder: PathBuf,
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
+) -> AppResult<u64> {
+    let title = format!("Identifying media in {}", folder.display());
+    let emit_app = app.clone();
+    let registry = Arc::clone(&registry);
+    let scratch_root = crate::scratch::root()?;
+
+    let id = spawn_job_in_lane(
+        &app,
+        registry,
+        &title,
+        IDENTIFY_MEDIA_LANE,
+        move |job_id, progress| {
+            let cache = ScanCache::in_dir(&scratch_root);
+            let identification = mediahash::identify_media_in(&folder, &cache, progress)?;
+            let _ = emit_app.emit(
+                OSINSTALL_IDENTIFY_MEDIA_EVENT,
+                OsInstallIdentifyMediaResult {
+                    job_id,
+                    identification,
+                },
+            );
+            Ok(())
+        },
+    );
+
+    Ok(id)
+}
+
+// ---------------------------------------------------------------------------
 // osinstall_components
 // ---------------------------------------------------------------------------
 
@@ -677,6 +749,13 @@ const MAX_PREVIEW_BYTES: u64 = 512 * 1024 * 1024;
 /// cancelling the other.
 const COMPONENT_PREVIEW_LANE: &str = "osinstall-component-preview";
 const PACKAGE_PREVIEW_LANE: &str = "osinstall-package-preview";
+
+/// A third lane, for [`osinstall_identify_media`]: hashing a media folder is
+/// the longest read-only thing the OS Builder does, and a user clicking
+/// through three folders in a row must not leave three of them running.
+/// Its own lane rather than sharing one, for the reason above — the answer
+/// is about a different thing from either preview.
+const IDENTIFY_MEDIA_LANE: &str = "osinstall-identify-media";
 
 /// Every scratch directory this module writes lives under this prefix, so
 /// [`sweep_stale_preview_scratch_dirs`] can find them (and only them) inside
@@ -4444,6 +4523,66 @@ mod tests {
                     "icons",
                     "iconMergeFailures",
                 ],
+            );
+        }
+
+        /// The wire shape `src/lib/osinstall.ts`'s own `MediaMatch` and
+        /// `MediaRow` declare.
+        ///
+        /// Both are pinned in one test because the row travels *inside* the
+        /// match: a `rename_all` added to `MediaRow` on the Rust side alone
+        /// would leave every field of the row `undefined` on screen while
+        /// the match itself still looked right, which is the shape of
+        /// mistake this whole module of tests exists for (`VerifyReport::
+        /// not_checked`, fix round 1).
+        ///
+        /// The row is a real one — `Backdrops3_2` — rather than a
+        /// hand-built literal, so this also fails if the shipped table stops
+        /// carrying the fields the frontend was told to expect.
+        #[test]
+        fn media_match_serializes_with_the_keys_the_frontend_declares() {
+            let row = mediahash::rows()
+                .expect("the shipped table must parse")
+                .iter()
+                .find(|r| r.volume == "Backdrops3_2")
+                .expect("the shipped table carries the Backdrops 3.2 row")
+                .clone();
+            let md5 = row.md5.clone();
+            let found = mediahash::MediaMatch {
+                path: PathBuf::from("E:\\amiga\\Backdrops3.2.adf"),
+                // The disk's own name, which is *not* the row's `volume` —
+                // two namespaces, and the wire carries both separately.
+                volume_name: Some("Backdrops3.2".into()),
+                row: Some(row),
+                md5,
+            };
+            let value = serde_json::to_value(&found).unwrap();
+            expect_keys(&value, &["path", "volumeName", "row", "md5"]);
+            expect_keys(
+                &value["row"],
+                &["md5", "version", "volume", "name", "source", "sequence"],
+            );
+            assert_eq!(value["row"]["volume"], "Backdrops3_2");
+            assert_eq!(value["volumeName"], "Backdrops3.2");
+        }
+
+        /// The wire shape `osinstallIdentifyMedia` reads: the job id beside
+        /// the identification's own four fields, flattened into one object.
+        #[test]
+        fn identify_media_result_serializes_with_the_keys_the_frontend_declares() {
+            let result = OsInstallIdentifyMediaResult {
+                job_id: 7,
+                identification: Identification {
+                    matches: Vec::new(),
+                    unreadable: vec![PathBuf::from("E:\\amiga\\locked.adf")],
+                    hashed: 2,
+                    remembered: 1,
+                },
+            };
+            let value = serde_json::to_value(&result).unwrap();
+            expect_keys(
+                &value,
+                &["job_id", "matches", "unreadable", "hashed", "remembered"],
             );
         }
 

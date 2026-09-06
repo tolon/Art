@@ -26,6 +26,17 @@
 //! 2026-09-06-media-identification-by-hash-design.md`) is what governs how a
 //! caller may phrase a match; this module just hands back the row's fields.
 //!
+//! ## Two halves
+//!
+//! Everything down to [`row_for`] is that pure lookup and depends on nothing
+//! but the compiled-in JSON. Below it is [`identify_media_in`], which meets
+//! real files: it walks a folder the user named, hashes what it has not
+//! already hashed (the result is kept in `super::scan_cache`, against the
+//! `(path, size, mtime)` identity that module already keys on — one cache,
+//! not a second one), and pairs each file's row with the volume name the
+//! disk itself carries. That half necessarily reaches its two sibling
+//! modules, `scan` and `scan_cache`; the table half still reaches nothing.
+//!
 //! ## Loading, and what happens if the shipped JSON is broken
 //!
 //! Same shape as `core/distro`'s registry: a JSON file in this directory,
@@ -60,13 +71,27 @@
 //! from it on every subsequent call, with the original error's text
 //! unchanged.
 
-use crate::core::error::{CoreError, CoreResult};
-use serde::Deserialize;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+
+use serde::{Deserialize, Serialize};
+
+use crate::core::error::{CoreError, CoreResult};
+use crate::core::hashing::md5_file;
+use crate::core::jobs::{cancelled_error, ProgressSink};
+
+use super::scan;
+use super::scan_cache::ScanCache;
 
 /// One row of the table: a single dump's hash and what Emu68 Hatcher's data
 /// says about it.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+///
+/// `Serialize` as well as `Deserialize` because a row crosses the wire whole,
+/// inside a [`MediaMatch`]: the screen's sentence names the row's own
+/// `name`/`version`/`source` and attributes the claim to Hatcher's table, so
+/// every field has to arrive intact rather than being summarised into a
+/// string on this side.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MediaRow {
     /// 32 lowercase hex characters. Table lookup only — never ART's
     /// integrity hash (that stays SHA-256; see `core/hashing.rs`).
@@ -74,8 +99,23 @@ pub struct MediaRow {
     /// As the row states it. **Not re-derived** — see this module's own doc
     /// comment on the Hotfix Pack disagreement.
     pub version: String,
-    /// The AmigaDOS volume name this dump carries — the same value
-    /// `core/osinstall/scan.rs` already reads off a real disk's root block.
+    /// Hatcher's own identifier for the disk this dump is of — **not the
+    /// AmigaDOS volume name**, and never to be compared with one.
+    ///
+    /// This doc comment used to say it was "the same value
+    /// `core/osinstall/scan.rs` already reads off a real disk's root block".
+    /// **It is not.** Measured 2026-09-06 against the owner's own AmigaOS 3.2
+    /// media: **0 of 12 matched.** This field says `Backdrops3_2`,
+    /// `LocaleDE3_2`, `DiskDoctor3_2`; the same disks' own root blocks say
+    /// `Backdrops3.2`, `Locale-DE`, `DiskDoctor`. Two namespaces — one
+    /// somebody else's internal identifier, one what AmigaDOS actually
+    /// wrote. Joining them would have reported all 35 of the owner's good
+    /// disks as being in conflict with the table.
+    ///
+    /// So a [`MediaMatch`] carries this field and the disk's own
+    /// `volume_name` as two separate facts from two separate sources, and
+    /// nothing anywhere compares them or presents this one as the disk's
+    /// name.
     pub volume: String,
     /// A human-readable label for the disk, as Hatcher's table names it.
     pub name: String,
@@ -151,6 +191,234 @@ pub fn rows() -> CoreResult<&'static [MediaRow]> {
 pub fn row_for(md5: &str) -> CoreResult<Option<&'static MediaRow>> {
     let needle = md5.to_ascii_lowercase();
     Ok(table()?.iter().find(|row| row.md5 == needle))
+}
+
+// ---------------------------------------------------------------------------
+// Identifying a folder against the table
+// ---------------------------------------------------------------------------
+//
+// The half of this module that meets real files. Everything above is a pure
+// lookup in compiled-in data; everything below walks a folder the user
+// named, hashes what is in it, and joins the answer to what the disks
+// themselves say.
+//
+// **Two facts, two sources, never reconciled.** [`MediaMatch::volume_name`]
+// is what the disk's own root block says, read by `scan::identify` exactly
+// as the OS Builder already reads it. [`MediaMatch::row`] is what the table
+// says about the file's bytes. They are kept apart in the type because they
+// *are* apart in reality — see [`MediaRow::volume`] for the measurement that
+// settled it — and because §4.3 of the design turns on the two being
+// reported separately: a hit adds a claim attributed to Hatcher's table, and
+// a miss subtracts nothing from what the volume name already established.
+//
+// **It is an index, not a verdict.** The owner's own phrasing for what this
+// is for — *"ne nerede duruyor öğrenir"*, so it learns what is where — and
+// it is why the result is cached rather than recomputed: asking again which
+// disks are in a folder must not mean reading every byte of them again.
+//
+// **The name.** There is already a `MediaMatch` in this module tree —
+// `scan::MediaMatch`, the enum answering "which file in this folder carries
+// this volume name". This one answers "what is this file", which is a
+// different question about a different thing, and callers spell it
+// `mediahash::MediaMatch` rather than importing it bare.
+
+/// What one file in a media folder turned out to be.
+///
+/// Four fields, and the two middle ones come from different places on
+/// purpose: `volume_name` is the disk's own answer, `row` is the table's.
+/// Either can be absent without saying anything about the other — a disk
+/// whose root block ART cannot read is still hashable, and a file in no row
+/// still has a perfectly good volume name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaMatch {
+    pub path: PathBuf,
+    /// What **the disk** says its volume is called, read off its root block
+    /// by `scan::identify`. `None` when this file is not something ART can
+    /// open as media at all — an `.lha` archive, or a damaged image — which
+    /// is not a failure and does not stop it being hashed and looked up.
+    ///
+    /// **Never compared with [`MediaRow::volume`]** — see that field.
+    pub volume_name: Option<String>,
+    /// What **the table** says about these bytes, or `None` when no row
+    /// claims them.
+    ///
+    /// `None` is "not in the table", which is a claim about the table and
+    /// not about the disk: 151 of the 186 rows are themselves unconfirmed,
+    /// and a re-imaged disk is a legitimate miss. It must never be rendered
+    /// as "not genuine", and it must never weaken what `volume_name`
+    /// already established.
+    pub row: Option<MediaRow>,
+    /// The key the lookup was made with, 32 lowercase hex characters.
+    /// Carried so the screen can show what was asked, and so a user can take
+    /// it to Hatcher's own table for a row ART does not ship.
+    pub md5: String,
+}
+
+/// What one pass over a media folder found.
+///
+/// The counts and `unreadable` are here so the four endings §4.3 requires
+/// stay distinct — "matched", "not in the table", "could not be read" and
+/// "not hashed yet" are four different sentences and four different next
+/// steps, and a screen that only received `matches` could not tell the third
+/// from the first two.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Identification {
+    /// One entry per candidate file that could be hashed, in path order.
+    pub matches: Vec<MediaMatch>,
+    /// Candidates whose bytes could not be read at all. Reported rather than
+    /// dropped: a file silently missing from `matches` would read as a file
+    /// that is not there.
+    pub unreadable: Vec<PathBuf>,
+    /// How many files this pass actually read and hashed.
+    pub hashed: usize,
+    /// How many were answered out of the scan cache without being read.
+    pub remembered: usize,
+}
+
+/// The file extensions a media folder is searched for, lowercase.
+///
+/// The same three `scripts/media-table-check.py` looks at, deliberately: the
+/// script and this function must ask the same question of a folder, or the
+/// outside check stops checking the thing that ships.
+const MEDIA_EXTENSIONS: [&str; 3] = ["adf", "iso", "lha"];
+
+/// Every file in `folder` this module will try to identify, in sorted path
+/// order.
+///
+/// Not recursive, matching `scan::find_media`: the OS Builder's media folder
+/// is a folder of disks, and a layered install names its folders separately
+/// rather than nesting them. `symlink_metadata`, so a symlink is never
+/// followed — `find_media`'s own rule and its reason.
+///
+/// A folder that cannot be read is an error, not an empty list: the user
+/// just named it, so "that path is gone" is the true sentence.
+pub fn candidates_in(folder: &Path) -> CoreResult<Vec<PathBuf>> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(folder)? {
+        let path = entry?.path();
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let is_media = path.extension().is_some_and(|ext| {
+            let ext = ext.to_string_lossy().to_ascii_lowercase();
+            MEDIA_EXTENSIONS.contains(&ext.as_str())
+        });
+        if is_media {
+            found.push(path);
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// Join one file's two facts into a [`MediaMatch`].
+///
+/// Split out so the join itself can be tested against a hash that really is
+/// in the table — which no synthetic fixture can ever produce, since ART
+/// ships no copyrighted media and nobody can invent an MD5 preimage.
+pub fn match_for(path: &Path, volume_name: Option<String>, md5: String) -> CoreResult<MediaMatch> {
+    let row = row_for(&md5)?.cloned();
+    Ok(MediaMatch {
+        path: path.to_path_buf(),
+        volume_name,
+        row,
+        md5,
+    })
+}
+
+/// What the disk itself says it is called, as cheaply as it can be had.
+///
+/// The cached listing first — a preview that has already walked this medium
+/// recorded its volume name, and re-opening a 468 MB disc to read a string
+/// ART already has is the exact cost `scan_cache` exists to avoid. Otherwise
+/// `scan::identify`, which is the one producer of this answer; nothing here
+/// re-implements the probe.
+fn volume_name_for(path: &Path, cache: &ScanCache) -> Option<String> {
+    if let Some(listing) = cache.lookup(path) {
+        return Some(listing.volume_name);
+    }
+    scan::identify(path).map(|found| found.volume_name)
+}
+
+/// Identify every candidate file in `folder`, hashing only what the cache
+/// cannot already answer.
+///
+/// **Long, so it takes a [`ProgressSink`]** (§54/§55). The total is the
+/// number of candidate files and is known before the first byte is read, so
+/// the bar is a real one — this project's named defect is a fixed-width bar
+/// over an unknown total, which looks like progress and carries none.
+///
+/// **Cancellation is checked between whole files, never mid-read.** The only
+/// thing this writes is cache entries, one per completed file, each through
+/// `atomic_write`; stopping therefore leaves the files it already did
+/// recorded correctly and the ones it did not reach untouched, and never a
+/// half-written entry.
+///
+/// A file whose bytes cannot be read goes into `unreadable` and the pass
+/// carries on. One unreadable file in a folder of thirty-five must not cost
+/// the other thirty-four, and it must not disappear either.
+pub fn identify_media_in(
+    folder: &Path,
+    cache: &ScanCache,
+    progress: &dyn ProgressSink,
+) -> CoreResult<Identification> {
+    let candidates = candidates_in(folder)?;
+    let total = candidates.len() as u64;
+
+    let mut found = Identification {
+        matches: Vec::new(),
+        unreadable: Vec::new(),
+        hashed: 0,
+        remembered: 0,
+    };
+
+    progress.report(0, Some(total), "");
+    for (index, path) in candidates.iter().enumerate() {
+        // Between whole files, before this one is opened: the only work
+        // already committed is the previous file's cache entry, which is
+        // written and fsynced or not written at all.
+        if progress.is_cancelled() {
+            return Err(cancelled_error());
+        }
+
+        let done = index as u64 + 1;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        let md5 = match cache.lookup_md5(path) {
+            Some(remembered) => {
+                found.remembered += 1;
+                remembered
+            }
+            None => match md5_file(path) {
+                Ok(md5) => {
+                    cache.store_md5(path, &md5);
+                    found.hashed += 1;
+                    md5
+                }
+                Err(_) => {
+                    // Reported, never fatal and never silently dropped.
+                    found.unreadable.push(path.clone());
+                    progress.report(done, Some(total), &name);
+                    continue;
+                }
+            },
+        };
+
+        found
+            .matches
+            .push(match_for(path, volume_name_for(path, cache), md5)?);
+        progress.report(done, Some(total), &name);
+    }
+
+    Ok(found)
 }
 
 #[cfg(test)]
@@ -441,6 +709,419 @@ mod tests {
             "{} conflicting row(s) — see ART_MEDIA_CONFLICT lines above",
             conflicting.len()
         );
+    }
+
+    // -- Identifying a folder (the module's second half).
+
+    use crate::core::jobs::CancelToken;
+    use crate::core::osinstall::fixtures;
+    use crate::core::ScratchDir;
+    use std::sync::Mutex;
+
+    /// A sink that records every report and can be told to cancel after a
+    /// given number of them — so "stopped between whole files" is asserted
+    /// against a specific file, not against a stopwatch (CLAUDE.md: anything
+    /// timing-dependent gets an invariant, not a wait).
+    struct CancelAfter {
+        reports: Mutex<Vec<(u64, Option<u64>, String)>>,
+        cancel_after: usize,
+        token: CancelToken,
+    }
+
+    impl CancelAfter {
+        fn new(cancel_after: usize) -> Self {
+            Self {
+                reports: Mutex::new(Vec::new()),
+                cancel_after,
+                token: CancelToken::new(),
+            }
+        }
+        fn never() -> Self {
+            Self::new(usize::MAX)
+        }
+        fn reports(&self) -> Vec<(u64, Option<u64>, String)> {
+            self.reports.lock().unwrap().clone()
+        }
+    }
+
+    impl ProgressSink for CancelAfter {
+        fn report(&self, done: u64, total: Option<u64>, message: &str) {
+            let mut reports = self.reports.lock().unwrap();
+            reports.push((done, total, message.to_string()));
+            // Counted in reports, not in files: report number 1 is the
+            // 0-of-N one sent before anything is read, so `2` here means
+            // "cancel once the first file has been finished and reported".
+            if reports.len() >= self.cancel_after {
+                self.token.cancel();
+            }
+        }
+        fn is_cancelled(&self) -> bool {
+            self.token.is_cancelled()
+        }
+    }
+
+    /// Three synthetic disks and somewhere to cache what is learnt about
+    /// them. Synthetic and built at run time — ART ships no Amiga content.
+    fn folder_of_media(tag: &str) -> (ScratchDir, PathBuf, ScanCache, Vec<PathBuf>) {
+        let dir = ScratchDir::new("art-mediahash", tag);
+        let media = dir.join("media");
+        std::fs::create_dir_all(&media).unwrap();
+        let disks = vec![
+            fixtures::media(
+                &media,
+                "Workbench3.2",
+                "a-wb.adf",
+                &[("C/LoadModule", b"cmd", 0x20)],
+            ),
+            fixtures::media(
+                &media,
+                "Locale-DE",
+                "b-locale.adf",
+                &[("Catalogs/x", b"cat", 0x20)],
+            ),
+            fixtures::media(
+                &media,
+                "Storage3.2",
+                "c-storage.adf",
+                &[("Monitors/y", b"mon", 0x20)],
+            ),
+        ];
+        let cache_dir = dir.join("cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        (dir, media, ScanCache::in_dir(cache_dir), disks)
+    }
+
+    /// **The join, against a hash that really is in the table.**
+    ///
+    /// No synthetic fixture can ever hash to a shipped row — that would need
+    /// an MD5 preimage — so the join is exercised directly with a real
+    /// row's key. Deliberately the `Backdrops3_2` row, because it is one of
+    /// the twelve the 2026-09-06 measurement was taken on: the table calls
+    /// that disk `Backdrops3_2` and the disk's own root block calls itself
+    /// `Backdrops3.2`. Both come back, unchanged and unreconciled.
+    #[test]
+    fn a_match_carries_the_disks_own_name_and_the_tables_name_as_two_separate_facts() {
+        let row = shipped_rows()
+            .iter()
+            .find(|r| r.volume == "Backdrops3_2")
+            .expect("the shipped table carries the Backdrops 3.2 row");
+
+        let found = match_for(
+            Path::new("E:\\amiga\\Backdrops3.2.adf"),
+            Some("Backdrops3.2".to_string()),
+            row.md5.clone(),
+        )
+        .expect("the shipped table must parse");
+
+        let matched = found.row.as_ref().expect("this hash is in the table");
+        assert_eq!(matched.volume, "Backdrops3_2", "the table's own identifier");
+        assert_eq!(
+            found.volume_name.as_deref(),
+            Some("Backdrops3.2"),
+            "the disk's own root block, untouched by the lookup"
+        );
+        assert_ne!(
+            matched.volume,
+            found.volume_name.clone().unwrap(),
+            "these are two namespaces; measured 2026-09-06 as 0 of 12 matching, and \
+             nothing may join them"
+        );
+        assert_eq!(matched.name, row.name);
+        assert_eq!(matched.source, row.source);
+        assert_eq!(matched.version, row.version);
+    }
+
+    /// A hash in no row is "not in the table", and it takes nothing away
+    /// from what the disk already said about itself (§4.3: additive, never
+    /// subtractive).
+    #[test]
+    fn a_hash_in_no_row_leaves_the_disks_own_name_standing() {
+        let found = match_for(
+            Path::new("E:\\amiga\\mine.adf"),
+            Some("Workbench3.2".to_string()),
+            "00000000000000000000000000000000".to_string(),
+        )
+        .unwrap();
+        assert!(found.row.is_none(), "no row claims this hash");
+        assert_eq!(
+            found.volume_name.as_deref(),
+            Some("Workbench3.2"),
+            "a miss must not weaken what the volume name established"
+        );
+        assert_eq!(found.md5, "00000000000000000000000000000000");
+    }
+
+    /// The whole pass over a real folder: every candidate hashed, the hash
+    /// pinned against `md5_file`'s own answer, the volume name read off the
+    /// disk, and a real progress total from the very first report.
+    #[test]
+    fn a_folder_is_identified_file_by_file_with_a_real_total() {
+        let (_dir, folder, cache, disks) = folder_of_media("folder");
+        let sink = CancelAfter::never();
+        let found = identify_media_in(&folder, &cache, &sink).unwrap();
+
+        assert_eq!(found.matches.len(), 3);
+        assert_eq!(found.hashed, 3);
+        assert_eq!(found.remembered, 0);
+        assert!(found.unreadable.is_empty());
+
+        for (entry, disk) in found.matches.iter().zip(&disks) {
+            assert_eq!(&entry.path, disk);
+            assert_eq!(entry.md5, crate::core::hashing::md5_file(disk).unwrap());
+            assert!(entry.row.is_none(), "a synthetic disk is in no row");
+        }
+        assert_eq!(
+            found
+                .matches
+                .iter()
+                .map(|m| m.volume_name.clone().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["Workbench3.2", "Locale-DE", "Storage3.2"],
+            "each disk's own root block, in path order"
+        );
+
+        let reports = sink.reports();
+        assert_eq!(reports.len(), 4, "one before the first file, one per file");
+        assert!(
+            reports.iter().all(|(_, total, _)| *total == Some(3)),
+            "the total is known before the first byte is read: {reports:?}"
+        );
+        assert_eq!(reports[0].0, 0);
+        assert_eq!(reports[3].0, 3);
+    }
+
+    /// Only the three extensions the outside check looks at, and never a
+    /// directory that happens to be named like one.
+    #[test]
+    fn only_media_extensions_are_candidates_and_a_directory_is_not_one() {
+        let dir = ScratchDir::new("art-mediahash", "candidates");
+        for name in ["a.adf", "b.ISO", "c.lha", "notes.txt", "d.hdf"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        std::fs::create_dir_all(dir.join("trap.adf")).unwrap();
+
+        let names: Vec<String> = candidates_in(dir.path())
+            .unwrap()
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["a.adf", "b.ISO", "c.lha"]);
+    }
+
+    /// A folder that is not there is an error, not an empty answer — the
+    /// user just named it.
+    #[test]
+    fn a_folder_that_cannot_be_read_is_an_error_not_an_empty_list() {
+        let dir = ScratchDir::new("art-mediahash", "gone");
+        assert!(candidates_in(&dir.join("nowhere")).is_err());
+    }
+
+    /// **The second pass hashes nothing, and this is a counted difference
+    /// rather than an impression.**
+    ///
+    /// `hashed`/`remembered` go from 3/0 to 0/3 over the same folder, and
+    /// the three answers are byte-identical. Both halves are asserted
+    /// because `hashed == 0` on its own has a second cause — a pass that
+    /// found no files at all would report it too.
+    #[test]
+    fn a_second_pass_over_the_same_folder_hashes_nothing() {
+        let (_dir, folder, cache, _disks) = folder_of_media("counted");
+
+        let first = identify_media_in(&folder, &cache, &CancelAfter::never()).unwrap();
+        assert_eq!((first.hashed, first.remembered), (3, 0));
+
+        let second = identify_media_in(&folder, &cache, &CancelAfter::never()).unwrap();
+        assert_eq!(
+            (second.hashed, second.remembered),
+            (0, 3),
+            "every hash came out of the cache"
+        );
+        assert_eq!(second.matches.len(), 3, "and all three were still answered");
+        assert_eq!(first.matches, second.matches);
+    }
+
+    /// **…and the cached hash really is the one that is served, which the
+    /// counted test alone cannot prove.**
+    ///
+    /// `scan_cache`'s own trap, one layer up: a cache-hit test passes even
+    /// when the cache is never consulted, because re-reading the file would
+    /// have produced the same answer. So the disks are overwritten with
+    /// different bytes while their `(path, size, mtime)` are held exactly as
+    /// they were. A re-hash would now return three different MD5s; the
+    /// cache returns the original three.
+    ///
+    /// This is also the stale-answer arrangement `ScanCache::forget_all`
+    /// exists for, and the last two lines are that escape hatch working.
+    #[test]
+    fn a_cached_hash_is_served_even_when_the_bytes_have_changed_underneath() {
+        let (_dir, folder, cache, disks) = folder_of_media("consulted");
+        let first = identify_media_in(&folder, &cache, &CancelAfter::never()).unwrap();
+
+        let mut rehashed = Vec::new();
+        for disk in &disks {
+            let metadata = std::fs::metadata(disk).unwrap();
+            let stamp = metadata.modified().unwrap();
+            std::fs::write(disk, vec![0x5au8; metadata.len() as usize]).unwrap();
+            let file = std::fs::OpenOptions::new().write(true).open(disk).unwrap();
+            file.set_modified(stamp).unwrap();
+            file.sync_all().unwrap();
+            rehashed.push(crate::core::hashing::md5_file(disk).unwrap());
+        }
+        for (entry, now) in first.matches.iter().zip(&rehashed) {
+            assert_ne!(
+                &entry.md5, now,
+                "the fixture must really have different bytes now, or this proves nothing"
+            );
+        }
+
+        let second = identify_media_in(&folder, &cache, &CancelAfter::never()).unwrap();
+        assert_eq!(
+            second
+                .matches
+                .iter()
+                .map(|m| m.md5.clone())
+                .collect::<Vec<_>>(),
+            first
+                .matches
+                .iter()
+                .map(|m| m.md5.clone())
+                .collect::<Vec<_>>(),
+            "an answer this can only have come from the cache"
+        );
+        assert_eq!((second.hashed, second.remembered), (0, 3));
+
+        // The escape hatch: after a rescan the bytes are read again.
+        assert_eq!(cache.forget_all(), 3);
+        let third = identify_media_in(&folder, &cache, &CancelAfter::never()).unwrap();
+        assert_eq!(
+            third
+                .matches
+                .iter()
+                .map(|m| m.md5.clone())
+                .collect::<Vec<_>>(),
+            rehashed,
+            "a rescan goes back to the file"
+        );
+        assert_eq!((third.hashed, third.remembered), (3, 0));
+    }
+
+    /// A file whose bytes cannot be read is reported by name and costs the
+    /// others nothing. Not silently skipped: a file missing from `matches`
+    /// reads as a file that is not in the folder, which is a different and
+    /// untrue sentence.
+    #[test]
+    fn a_file_that_cannot_be_read_is_reported_and_the_rest_still_run() {
+        let (_dir, folder, cache, disks) = folder_of_media("unreadable");
+        let locked = &disks[1];
+        let _guard = deny_reads(locked);
+        assert!(
+            std::fs::read(locked).is_err(),
+            "the fixture must genuinely be unreadable, or this test proves nothing"
+        );
+
+        let found = identify_media_in(&folder, &cache, &CancelAfter::never()).unwrap();
+        assert_eq!(found.unreadable, vec![locked.clone()]);
+        assert_eq!(found.matches.len(), 2);
+        assert_eq!(found.hashed, 2);
+        assert!(
+            found.matches.iter().all(|m| &m.path != locked),
+            "an unreadable file has no hash and so no match"
+        );
+        assert!(
+            cache.lookup_md5(locked).is_none(),
+            "and nothing was recorded about it"
+        );
+    }
+
+    /// **Cancelling stops between whole files and leaves nothing
+    /// half-written.**
+    ///
+    /// The sink cancels after the first file's report, so the second file's
+    /// check is the one that trips. Asserted three ways, because "the third
+    /// disk has no cache entry" alone has a second cause (a `store_md5` that
+    /// never worked at all): the first disk's entry is present *and*
+    /// correct, the later ones are absent, the cache directory holds nothing
+    /// but well-formed entries, and every disk is byte-for-byte what it was.
+    #[test]
+    fn cancelling_stops_between_files_and_leaves_nothing_half_written() {
+        let (_dir, folder, cache, disks) = folder_of_media("cancel");
+        let before: Vec<Vec<u8>> = disks.iter().map(|d| std::fs::read(d).unwrap()).collect();
+
+        // Cancel the moment the first file has been hashed and reported, so
+        // the *second* file's check is the one that trips.
+        let sink = CancelAfter::new(2);
+        let outcome = identify_media_in(&folder, &cache, &sink);
+        let Err(err) = &outcome else {
+            panic!("cancelling must stop the pass; instead it ran every file to the end");
+        };
+        assert!(
+            matches!(err, CoreError::Cancelled),
+            "stopping because the user asked is not a failure, it is {err:?}"
+        );
+
+        assert_eq!(
+            cache.lookup_md5(&disks[0]),
+            Some(crate::core::hashing::md5_file(&disks[0]).unwrap()),
+            "the file it finished is recorded, and recorded correctly"
+        );
+        assert_eq!(
+            cache.lookup_md5(&disks[1]),
+            None,
+            "it stopped before this one"
+        );
+        assert_eq!(cache.lookup_md5(&disks[2]), None);
+
+        let ScanCache::In(cache_dir) = &cache else {
+            unreachable!()
+        };
+        let entries: Vec<PathBuf> = std::fs::read_dir(cache_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "one entry, no half-written strays: {entries:?}"
+        );
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(&entries[0]).unwrap())
+                .is_ok(),
+            "and it is whole"
+        );
+
+        for (disk, was) in disks.iter().zip(&before) {
+            assert_eq!(
+                &std::fs::read(disk).unwrap(),
+                was,
+                "{} was written to",
+                disk.display()
+            );
+        }
+    }
+
+    /// Hold `path` open in a way that makes reading it fail, for as long as
+    /// the returned guard lives.
+    ///
+    /// Test-only, and platform-specific because "unreadable" is: Windows has
+    /// no read permission bit that applies to the file's owner, and Unix has
+    /// no exclusive share mode. `core/` itself stays platform-independent —
+    /// nothing outside `#[cfg(test)]` here touches either.
+    #[cfg(windows)]
+    fn deny_reads(path: &Path) -> std::fs::File {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .share_mode(0) // no FILE_SHARE_READ: nothing else may open it
+            .open(path)
+            .expect("the fixture exists")
+    }
+
+    #[cfg(not(windows))]
+    fn deny_reads(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000))
+            .expect("the fixture exists");
     }
 
     #[test]

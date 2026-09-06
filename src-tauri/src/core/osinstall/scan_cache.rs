@@ -70,6 +70,38 @@
 //! file content — [`CachedSource::read`] opens the real medium (once,
 //! lazily) and reads through it, so the bytes an install writes always come
 //! off the medium itself and never out of `%TEMP%`.
+//!
+//! ## One entry, two facts: the listing and the MD5
+//!
+//! An entry also carries the medium's **MD5**, when something has computed
+//! one ([`ScanCache::store_md5`] / [`ScanCache::lookup_md5`]). That is
+//! `core::osinstall::mediahash`'s key into the 186-row install-media table,
+//! and it is expensive in exactly the way this module's own doc comment says
+//! a hash is: hashing the owner's 3.2 ADF folder reads 31 MB, and their
+//! `AmigaOS39.iso` 468 MB, every time the answer is wanted again.
+//!
+//! **This does not reverse the refusal above, and the difference matters.**
+//! The identity that decides staleness is still `(path, size, mtime)` —
+//! three constant-time reads. The MD5 is a *result* stored against that
+//! identity, never the identity itself: nothing here hashes a file to find
+//! out whether it changed. A hash answers "are these two files the same",
+//! which is the question `mediahash` asks of a table somebody else built;
+//! this cache still asks "is this the same file I read last time".
+//!
+//! **Two facts in one file, and neither may evict the other.** A hash-only
+//! pass must not throw away a listing a preview paid a disc walk for, and a
+//! preview must not throw away a hash. So every write goes through
+//! [`ScanCache::store_with`], which reads whatever is already recorded for
+//! this identity and replaces only its own half. One producer, one file per
+//! medium path, the way the module has always worked — a second cache
+//! alongside this one is what ART-249 cost.
+//!
+//! The stale-entry risk is the listing's, unchanged and now shared: a
+//! restored backup that preserves its timestamps would be served the
+//! previous disc's hash, and a hash is what names a disk. That is the same
+//! escape hatch as before — [`ScanCache::forget_all`] drops the whole entry,
+//! hash and listing together — and it is why the rescan button is not a
+//! convenience.
 
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -87,7 +119,12 @@ use super::source::{starts_with_ignoring_case, MediaEntry, MediaSource};
 /// Bumped whenever the on-disk shape changes — including a change to
 /// [`MediaEntry`]'s own fields, which are serialised into it verbatim. An
 /// entry written by a different schema is a miss, never a partial read.
-const SCAN_CACHE_SCHEMA: u32 = 1;
+///
+/// `2`: the listing moved into its own optional object and an optional
+/// `md5` joined it beside it (see the module doc's "One entry, two facts").
+/// A schema-1 entry is a miss, not an upgrade — it costs one walk and can
+/// never cost a wrong answer.
+const SCAN_CACHE_SCHEMA: u32 = 2;
 
 /// Every file this module writes starts with this, so [`ScanCache::sweep`]
 /// and [`ScanCache::forget_all`] can find them — and only them — inside a
@@ -145,7 +182,8 @@ pub fn identity_of(path: &Path) -> Option<MediaIdentity> {
     })
 }
 
-/// One medium's listing, exactly as it was read off the medium.
+/// What one medium path has been found to hold: its identity, and whichever
+/// of the two facts about it have been worked out so far.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CacheFile {
     schema: u32,
@@ -155,6 +193,24 @@ struct CacheFile {
     path: String,
     size: u64,
     mtime_nanos: u64,
+    /// What the medium held, when something has walked it. `None` when this
+    /// entry was written by a pass that only hashed the file — see the
+    /// module doc's "One entry, two facts".
+    #[serde(default)]
+    listing: Option<StoredListing>,
+    /// The medium's MD5, when something has computed one. **Table lookup
+    /// only** (`core::hashing`'s own doc comment): this is
+    /// `core::osinstall::mediahash`'s key, never an integrity check. `None`
+    /// when nothing has hashed this medium yet, which is a different
+    /// situation from "hashed, and in no row" and must not be collapsed
+    /// into it.
+    #[serde(default)]
+    md5: Option<String>,
+}
+
+/// One medium's listing, exactly as it was read off the medium.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredListing {
     volume_name: String,
     kind: MediaKind,
     /// What `entry("")` answered — every implementation builds its own
@@ -227,14 +283,18 @@ impl ScanCache {
         )))
     }
 
-    /// The listing recorded for `media_path`, **only** if it was recorded
-    /// for exactly the file that is there now.
+    /// Everything recorded for `media_path`, **only** if it was recorded for
+    /// exactly the file that is there now.
     ///
     /// Every other outcome — no file, unreadable, oversized, not JSON, a
     /// different schema, a different recorded path, a different size, a
     /// different mtime — is `None`. Nothing here repairs, upgrades or
     /// partly believes a cache file; see the module doc.
-    pub fn lookup(&self, media_path: &Path) -> Option<CachedListing> {
+    ///
+    /// The one place the guarded read lives, so [`Self::lookup`],
+    /// [`Self::lookup_md5`] and [`Self::store_with`] cannot come to disagree
+    /// about what makes an entry usable.
+    fn read_valid(&self, media_path: &Path) -> Option<CacheFile> {
         let file = self.file_for(media_path)?;
         let identity = identity_of(media_path)?;
 
@@ -254,24 +314,70 @@ impl ScanCache {
         {
             return None;
         }
+        Some(parsed)
+    }
 
+    /// The listing recorded for `media_path`, if this medium is still the
+    /// one it was recorded for and something has actually walked it.
+    pub fn lookup(&self, media_path: &Path) -> Option<CachedListing> {
+        let parsed = self.read_valid(media_path)?;
+        let listing = parsed.listing?;
         Some(CachedListing {
-            volume_name: parsed.volume_name,
-            kind: parsed.kind,
-            root: parsed.root,
-            entries: parsed.entries,
+            volume_name: listing.volume_name,
+            kind: listing.kind,
+            root: listing.root,
+            entries: listing.entries,
         })
     }
 
-    /// Record `listing` as what `media_path` held, keyed on the identity it
-    /// has **now**.
+    /// The MD5 recorded for `media_path`, if this medium is still the one it
+    /// was recorded for and something has actually hashed it.
+    ///
+    /// `None` means "nothing has hashed this", which is not "this file is in
+    /// no row" — those are two different sentences and
+    /// `core::osinstall::mediahash` keeps them apart.
+    pub fn lookup_md5(&self, media_path: &Path) -> Option<String> {
+        self.read_valid(media_path)?.md5
+    }
+
+    /// Record `listing` as what `media_path` held, keeping whatever hash is
+    /// already recorded for it.
+    pub fn store(&self, media_path: &Path, listing: &CachedListing) {
+        self.store_with(media_path, |entry| {
+            entry.listing = Some(StoredListing {
+                volume_name: listing.volume_name.clone(),
+                kind: listing.kind,
+                root: listing.root.clone(),
+                entries: listing.entries.clone(),
+            });
+        });
+    }
+
+    /// Record `md5` as `media_path`'s hash, keeping whatever listing is
+    /// already recorded for it.
+    pub fn store_md5(&self, media_path: &Path, md5: &str) {
+        self.store_with(media_path, |entry| entry.md5 = Some(md5.to_string()));
+    }
+
+    /// Update this medium's entry, keyed on the identity it has **now**, and
+    /// leave every fact `update` does not touch exactly as it was.
+    ///
+    /// **The merge is the point** (see the module doc's "One entry, two
+    /// facts"): a hash-only pass must not discard a listing a preview paid a
+    /// disc walk for, and a preview must not discard a hash. An entry that
+    /// is not usable for the file that is there now — stale, corrupt,
+    /// another schema — is replaced outright rather than merged into, which
+    /// is the same "discarded, never partly believed" rule [`read_valid`]
+    /// applies on the way in.
+    ///
+    /// [`read_valid`]: Self::read_valid
     ///
     /// Best-effort and infallible by design: this is derived data, and a
     /// `%TEMP%` that is full or read-only must cost a walk, never fail the
     /// preview the walk was for. `atomic_write`, never `std::fs::write` —
     /// a half-written listing that still parsed would be a silently short
     /// install plan, and ART's own rule is that nothing is left truncated.
-    pub fn store(&self, media_path: &Path, listing: &CachedListing) {
+    fn store_with(&self, media_path: &Path, update: impl FnOnce(&mut CacheFile)) {
         let Some(file) = self.file_for(media_path) else {
             return;
         };
@@ -284,16 +390,15 @@ impl ScanCache {
         if std::fs::create_dir_all(dir).is_err() {
             return;
         }
-        let payload = CacheFile {
+        let mut payload = self.read_valid(media_path).unwrap_or(CacheFile {
             schema: SCAN_CACHE_SCHEMA,
             path: media_path.to_string_lossy().into_owned(),
             size: identity.size,
             mtime_nanos: identity.mtime_nanos,
-            volume_name: listing.volume_name.clone(),
-            kind: listing.kind,
-            root: listing.root.clone(),
-            entries: listing.entries.clone(),
-        };
+            listing: None,
+            md5: None,
+        });
+        update(&mut payload);
         let Ok(bytes) = serde_json::to_vec(&payload) else {
             return;
         };
@@ -563,6 +668,104 @@ mod tests {
         let listing = listing_for(&image);
         cache.store(&image, &listing);
         assert_eq!(cache.lookup(&image).unwrap(), listing);
+    }
+
+    /// The hash half of the round trip, and the staleness rule applies to it
+    /// exactly as it applies to a listing: a medium that is no longer the
+    /// medium the hash was computed from has no hash here.
+    #[test]
+    fn a_stored_md5_comes_back_and_a_replaced_medium_has_none() {
+        let (_dir, image, cache) = media_and_cache("md5-round-trip");
+        assert_eq!(
+            cache.lookup_md5(&image),
+            None,
+            "nothing has hashed this medium yet — which is not 'in no row'"
+        );
+
+        let md5 = crate::core::hashing::md5_file(&image).unwrap();
+        cache.store_md5(&image, &md5);
+        assert_eq!(cache.lookup_md5(&image), Some(md5.clone()));
+
+        // Same path, different bytes, a later mtime: a different disc, and
+        // the previous disc's hash must not be served for it — a stale hash
+        // would name the wrong disk with complete confidence.
+        let mut bytes = std::fs::read(&image).unwrap();
+        bytes[0x100] ^= 0xff;
+        let stamp = std::fs::metadata(&image)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .checked_add(Duration::from_secs(60))
+            .unwrap();
+        std::fs::write(&image, &bytes).unwrap();
+        filetime_set(&image, stamp);
+        assert_eq!(cache.lookup_md5(&image), None);
+    }
+
+    /// **One entry, two facts, and neither evicts the other.**
+    ///
+    /// The whole reason the hash lives in the listing cache's own file
+    /// rather than in a second cache beside it (ART-249). Written in both
+    /// orders, because a merge that only works one way round would leave
+    /// whichever pass ran second silently throwing the other's work away —
+    /// visible to a user only as a disc being walked, or 468 MB being
+    /// hashed, again for no reason.
+    #[test]
+    fn a_hash_and_a_listing_share_one_entry_without_evicting_each_other() {
+        let (_dir, image, cache) = media_and_cache("merge");
+        let listing = listing_for(&image);
+        let md5 = crate::core::hashing::md5_file(&image).unwrap();
+
+        // Listing first, then hash.
+        cache.store(&image, &listing);
+        cache.store_md5(&image, &md5);
+        assert_eq!(
+            cache.lookup(&image).as_ref(),
+            Some(&listing),
+            "storing a hash must not discard the listing"
+        );
+        assert_eq!(cache.lookup_md5(&image), Some(md5.clone()));
+
+        // …and the other way round, on a clean entry.
+        assert_eq!(cache.forget_all(), 1);
+        cache.store_md5(&image, &md5);
+        cache.store(&image, &listing);
+        assert_eq!(
+            cache.lookup_md5(&image),
+            Some(md5),
+            "storing a listing must not discard the hash"
+        );
+        assert_eq!(cache.lookup(&image).as_ref(), Some(&listing));
+    }
+
+    /// The rescan drops both facts together — a rescan that left the hash
+    /// behind would re-identify the disc from the very hash the user asked
+    /// ART to stop trusting.
+    #[test]
+    fn forgetting_drops_the_hash_as_well_as_the_listing() {
+        let (_dir, image, cache) = media_and_cache("forget-md5");
+        cache.store(&image, &listing_for(&image));
+        cache.store_md5(&image, "0123456789abcdef0123456789abcdef");
+        assert!(cache.lookup_md5(&image).is_some(), "stored");
+
+        assert_eq!(cache.forget_all(), 1);
+        assert_eq!(cache.lookup_md5(&image), None);
+        assert!(cache.lookup(&image).is_none());
+    }
+
+    /// Off means off for the hash too, in both directions.
+    #[test]
+    fn a_cache_that_is_off_neither_reads_nor_writes_a_hash() {
+        let (dir, image, _cache) = media_and_cache("off-md5");
+        let off = ScanCache::off();
+        off.store_md5(&image, "0123456789abcdef0123456789abcdef");
+        assert_eq!(off.lookup_md5(&image), None);
+        let strays: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| is_cache_file_name(&e.file_name().to_string_lossy()))
+            .collect();
+        assert!(strays.is_empty(), "an off cache wrote {strays:?}");
     }
 
     /// **The staleness guard, and the fixture is built so it cannot pass
