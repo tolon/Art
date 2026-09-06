@@ -48,14 +48,20 @@
 //! `collide` ([`collide::preview`] — entirely read-only: what every planned
 //! item in a package would land on inside a tree already built, so a
 //! downgrade or an undeclared overwrite is a fact seen before it happens
-//! rather than after) exist so far — this module tree lands one task at a
-//! time, each adding its own `pub mod` line, so the crate compiles at the
-//! end of every task rather than only at the end of the feature.
+//! rather than after) and now `mediahash` ([`mediahash::row_for`] — a
+//! compiled-in, 186-row table adopted from Emu68 Hatcher (MIT) mapping a
+//! disk's content hash to what that project's own data says about it,
+//! additively to the volume-name identification `scan.rs` already does; see
+//! `mediahash`'s own doc comment for the two traps in the data) exist so far
+//! — this module tree lands one task at a time, each adding its own `pub
+//! mod` line, so the crate compiles at the end of every task rather than
+//! only at the end of the feature.
 
 pub mod apply;
 pub mod chain;
 pub mod collide;
 pub mod identify;
+pub mod mediahash;
 pub mod package;
 pub mod plan;
 pub mod recipe;

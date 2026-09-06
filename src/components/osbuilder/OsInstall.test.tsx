@@ -55,6 +55,7 @@ import type {
   InstallPlan,
   InstallRelease,
   InstallRequest,
+  MediaIdentification,
   MediaScanResult,
   OsInstallResult,
   PlanItem,
@@ -79,6 +80,7 @@ const rescanMock = vi.hoisted(() => vi.fn());
 const releaseForMediaMock = vi.hoisted(() => vi.fn());
 const mediaEvidenceMock = vi.hoisted(() => vi.fn());
 const packagesMock = vi.hoisted(() => vi.fn());
+const identifyMediaMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
@@ -90,6 +92,7 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   osinstallRescanMedia: rescanMock,
   osinstallReleaseForMedia: releaseForMediaMock,
   osinstallMediaEvidence: mediaEvidenceMock,
+  osinstallIdentifyMedia: identifyMediaMock,
   osinstallPackages: packagesMock,
   osinstallComponentCollisions: componentCollisionsMock,
   osinstallApply: applyMock,
@@ -439,6 +442,25 @@ beforeEach(() => {
     missingRequired: ["Install3.2"],
   });
   packagesMock.mockReset().mockResolvedValue([]);
+  // The honest default for the content-hash pass: it ran, it read the one
+  // disk the media scan above reports, and no row in the table claims it.
+  // **A miss is the default on purpose** — every other test in this file
+  // therefore renders with the hash lines saying "not in the table", which
+  // is the state that must take nothing away from anything else on screen.
+  identifyMediaMock.mockReset().mockResolvedValue({
+    matches: [
+      {
+        path: "E:\\media\\Disk1.adf",
+        volumeName: "Workbench3.2",
+        row: null,
+        md5: "0".repeat(32),
+        confirmed: null,
+      },
+    ],
+    unreadable: [],
+    hashed: 1,
+    remembered: 0,
+  } satisfies MediaIdentification);
   useSettingsStore.setState({ loaded: false, settings: DEFAULT_SETTINGS });
 });
 
@@ -2869,5 +2891,365 @@ describe("one folder field per media layer the release declares (Task 10)", () =
     await screen.findByTestId("layer-field-base");
     expect(screen.queryByTestId("layer-wrong-hint-base")).toBeNull();
     expect(screen.queryByTestId("layer-wrong-hint-update-3.2.2")).toBeNull();
+  });
+
+  /**
+   * **Two layers pointed at one folder identify it once, not once per layer**
+   * (final-review.md M5, fix wave 2). `identifyFoldersKey` used to be built
+   * from every layer's own folder with no de-duplication, so a user who
+   * pointed both `base` and `update-3.2.2` at the same disks — a plausible
+   * mistake on a screen that shows two fields for one folder of media —
+   * hashed that folder twice and rendered every line twice under the same
+   * `key={line.path}`.
+   *
+   * Asserted as an exact count on both sides, never by presence alone: "one
+   * line" must not be satisfiable by the line simply being absent, and one
+   * call must not be satisfiable by the mock never having been asked at all.
+   */
+  it("identifies a folder once when two layers are pointed at it (M5)", async () => {
+    const SHARED = "E:\\media\\Shared";
+    renderOsInstall({ release: "AmigaOS 3.2.2" });
+    await browseLayerFolder("base", SHARED);
+    await browseLayerFolder("update-3.2.2", SHARED);
+
+    await waitFor(() => expect(identifyMediaMock).toHaveBeenCalledWith(SHARED));
+    // Not one call per layer: the de-duplicated key never asks the shared
+    // folder to be identified twice, however many layers name it.
+    expect(identifyMediaMock.mock.calls.filter((call) => call[0] === SHARED)).toHaveLength(1);
+
+    // And exactly one line for the one file the (mocked) pass reports in
+    // that folder -- two would be the duplicate-key defect rendering both
+    // layers' identical answers.
+    const lines = await screen.findAllByTestId("media-identity-not-in-table");
+    expect(lines).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// What the screen says about a file's *contents* — design §4.3
+// ---------------------------------------------------------------------------
+//
+// The round's whole risk surface. Everything before this either matched or
+// did not; these are the sentences a person reads and acts on, and this
+// project's most expensive defects are the confident wrong sentence rather
+// than the crash.
+describe("identifying install media by content hash (design §4.3)", () => {
+  /** One `MediaMatch` on the wire, as the Rust side would send it. */
+  function match(over: Partial<MediaIdentification["matches"][number]> = {}) {
+    return {
+      path: "E:\\media\\Disk1.adf",
+      volumeName: "Workbench3.2",
+      row: null,
+      md5: "0".repeat(32),
+      confirmed: null,
+      ...over,
+    };
+  }
+  const ROW = {
+    md5: "5edf0b7a10409ef992ea351565ef8b6c",
+    version: "3.2",
+    // Hatcher's own identifier, which is *not* what the disk calls itself.
+    volume: "Workbench3_2",
+    name: "Workbench 3.2",
+    source: "Hyperion (3.2 base)",
+    sequence: 1,
+  };
+
+  function answersWith(identification: MediaIdentification) {
+    identifyMediaMock.mockReset().mockResolvedValue(identification);
+  }
+
+  /**
+   * **A miss takes nothing away.** §4.3's "additive, never subtractive", and
+   * the reason it is the first test here: any modification, re-imaging or
+   * different revision breaks the hash, so a miss is the *ordinary* state
+   * for somebody's own disks and must never be allowed to weaken, contradict
+   * or remove what the disk's own volume name already established.
+   *
+   * The two claims are asserted together on purpose. Asserting only that the
+   * "not in the table" line appears would pass while the found line had
+   * silently gone; asserting only the found line would pass while the hash
+   * pass had never run at all.
+   */
+  it("leaves what the disks call themselves standing when nothing matches the table", async () => {
+    answersWith({ matches: [match()], unreadable: [], hashed: 1, remembered: 0 });
+    await renderFull();
+
+    // The name-based result, unchanged and unqualified: read off the disk's
+    // own root block, from a different source, and the hash pass has no
+    // business touching it.
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.media.found", { count: 1, names: "Workbench3.2" })
+      )
+    ).toBeTruthy();
+
+    // And the miss really is on screen, saying what it is a fact about.
+    const miss = await screen.findByTestId("media-identity-not-in-table");
+    expect(miss.textContent).toContain("Disk1.adf");
+    expect(miss.textContent).toContain("not in Emu68 Hatcher's install-media table");
+    expect(miss.textContent).toContain("fact about the table, not about the disk");
+    // Never an accusation, and never a claim about the disk's identity.
+    expect(miss.textContent).not.toMatch(/not genuine|fake|counterfeit|invalid/i);
+  });
+
+  /**
+   * **A confirmed row and an unconfirmed one are two sentences.** 35 of the
+   * table's 186 rows have been hashed off a real disk; 151 have not. Both
+   * arms in one test, because the guard is the *difference*: a screen that
+   * printed the confirmed sentence for everything would pass a
+   * confirmed-only test, and one that printed the unconfirmed sentence for
+   * everything would pass an unconfirmed-only test.
+   */
+  it("does not present a checked row and an unchecked one with the same confidence", async () => {
+    answersWith({
+      matches: [
+        match({
+          path: "E:\\media\\Workbench3.2.adf",
+          row: ROW,
+          md5: ROW.md5,
+          confirmed: {
+            checked: "2026-09-06",
+            against: "the ART author's own AmigaOS 3.2 install set, 35 ADFs",
+          },
+        }),
+        match({
+          path: "E:\\media\\Someone-elses.adf",
+          volumeName: "Workbench3.1",
+          row: { ...ROW, md5: "a".repeat(32), name: "Workbench 3.1", version: "3.1" },
+          md5: "a".repeat(32),
+          confirmed: null,
+        }),
+      ],
+      unreadable: [],
+      hashed: 2,
+      remembered: 0,
+    });
+    await renderFull();
+
+    const confirmed = await screen.findByTestId("media-identity-confirmed");
+    const unconfirmed = await screen.findByTestId("media-identity-unconfirmed");
+
+    // The confirmed one cites what checked it and when — a badge that cannot
+    // say what confirmed it is not a citation.
+    expect(confirmed.textContent).toContain("checked against a real disk here");
+    expect(confirmed.textContent).toContain("the ART author's own AmigaOS 3.2 install set");
+    expect(confirmed.textContent).toContain("2026-09-06");
+
+    // The unconfirmed one says plainly that nobody has, and how much of the
+    // table that is true of.
+    expect(unconfirmed.textContent).toContain("Nobody has checked that row against a real disk");
+    expect(unconfirmed.textContent).toContain("151 of the table's 186 rows");
+    expect(unconfirmed.textContent).not.toContain("checked against a real disk here");
+
+    // Two different sentences, not one sentence twice.
+    expect(confirmed.textContent).not.toEqual(unconfirmed.textContent);
+  });
+
+  /**
+   * **Attribution is inside the sentence, not a footnote.** ART's claim is
+   * about the *row*, not about the disk: "this file matches the row Emu68
+   * Hatcher's table calls X". That stays true even if the row is wrong.
+   */
+  it("names whose table the claim comes from, in the sentence itself", async () => {
+    answersWith({
+      matches: [match({ row: ROW, md5: ROW.md5 })],
+      unreadable: [],
+      hashed: 1,
+      remembered: 0,
+    });
+    await renderFull();
+
+    const line = await screen.findByTestId("media-identity-unconfirmed");
+    expect(line.textContent).toContain("Emu68 Hatcher's install-media table");
+    expect(line.textContent).toContain("Workbench 3.2");
+    // The row's own fields, as the table states them — never re-derived.
+    expect(line.textContent).toContain("Hyperion (3.2 base)");
+    // And never the row's `volume` as if it were the disk's own name: those
+    // are two namespaces, measured 0 of 12 matching.
+    expect(line.textContent).not.toContain("Workbench3_2");
+  });
+
+  /**
+   * **"Could not be read" is not "not in the table".** The first has a next
+   * step (fix the file); the second has none. `unreadable` exists on the
+   * wire so these cannot collapse, and this is the screen half of that.
+   */
+  it("keeps a file it could not read apart from a file no row claims", async () => {
+    answersWith({
+      matches: [match()],
+      unreadable: ["E:\\media\\locked.adf"],
+      hashed: 1,
+      remembered: 0,
+    });
+    await renderFull();
+
+    const unreadable = await screen.findByTestId("media-identity-unreadable");
+    expect(unreadable.textContent).toContain("locked.adf");
+    expect(unreadable.textContent).toContain("could not read this file's bytes");
+    expect(unreadable.textContent).toContain("the table was never asked");
+
+    const miss = await screen.findByTestId("media-identity-not-in-table");
+    expect(miss.textContent).toContain("Disk1.adf");
+    expect(miss.textContent).not.toContain("locked.adf");
+  });
+
+  /**
+   * **The screen says where its answer came from.** The hash is remembered
+   * against `(path, size, mtime)`, so a restored backup that keeps its
+   * timestamps is answered out of the previous file's hash — with complete
+   * confidence, and wrong. A stale listing is a stale list; a stale hash is a
+   * wrong *name* for a disk. So the counts are on screen and the escape
+   * hatch is named.
+   */
+  it("says how much it read now and how much it remembered, and names the way out", async () => {
+    answersWith({ matches: [match()], unreadable: [], hashed: 0, remembered: 1 });
+    await renderFull();
+
+    const summary = await screen.findByTestId("media-identity-summary");
+    expect(summary.textContent).toContain("Read now: 0");
+    expect(summary.textContent).toContain("Answered from an earlier pass: 1");
+    expect(summary.textContent).toContain("Scan again");
+    // The button that sentence points at is really there, under that name.
+    expect(screen.getByRole("button", { name: i18n.t("osinstall.media.rescan") })).toBeTruthy();
+  });
+
+  /**
+   * **A pass that could not run is its own ending.** Falling back to an
+   * empty result would read as "ART looked and found nothing", which is the
+   * §89 collapse — and it would be the fourth ending wearing the third's
+   * sentence.
+   */
+  it("says the pass failed rather than showing an empty result", async () => {
+    identifyMediaMock.mockReset().mockRejectedValue(new Error("no"));
+    await renderFull();
+
+    const summary = await screen.findByTestId("media-identity-summary");
+    expect(summary.textContent).toBe(
+      i18n.t("osinstall.mediaId.failed", { folder: "E:\\media", identified: 0, total: 1 })
+    );
+    expect(summary.textContent).toContain("could not read E:\\media");
+    expect(screen.queryByTestId("media-identity-not-in-table")).toBeNull();
+    // And the name-based line is untouched by the failure, the same way a
+    // miss leaves it alone.
+    expect(
+      screen.getByText(i18n.t("osinstall.media.found", { count: 1, names: "Workbench3.2" }))
+    ).toBeTruthy();
+  });
+
+  /**
+   * **Pressing Stop is not ART failing** (fix wave 1, M1). `awaitJobResult`
+   * rejects with `Error("cancelled")` when the user stops the job, and that
+   * used to arrive in the same `catch` as a real failure — so a user who
+   * stopped the pass themselves was told ART "could not identify these files
+   * by content", which is both untrue and the wrong next step.
+   *
+   * Asserted on the two sentences together, because the failure mode is one
+   * of them wearing the other's words: a test that only checked the cancelled
+   * sentence appears would pass if both states rendered it.
+   */
+  it("does not report a pass the user stopped as a failure", async () => {
+    identifyMediaMock.mockReset().mockRejectedValue(new Error("cancelled"));
+    await renderFull();
+
+    const summary = await screen.findByTestId("media-identity-summary");
+    expect(summary.textContent).toBe(
+      i18n.t("osinstall.mediaId.cancelled", { identified: 0, total: 1 })
+    );
+    expect(summary.textContent).toContain("You stopped this pass");
+    expect(summary.textContent).toContain(i18n.t("osinstall.media.rescan"));
+    // The failure sentence, and the accusation inside it, are absent.
+    expect(summary.textContent).not.toContain("could not read");
+    expect(summary.textContent).not.toBe(
+      i18n.t("osinstall.mediaId.failed", { folder: "E:\\media", identified: 0, total: 1 })
+    );
+    // The folder is reported as stopped, by name — not as unreadable.
+    const folder = await screen.findByTestId("media-identity-folder-stopped");
+    expect(folder.textContent).toContain("E:\\media");
+    expect(screen.queryByTestId("media-identity-folder-unreadable")).toBeNull();
+  });
+
+  /**
+   * **One bad folder must not discard the folders already identified** (fix
+   * wave 1, M2). The pass merges across folders in a loop; a rejection on the
+   * second used to throw away what the first had found and say the whole pass
+   * failed — ART denying work it had done.
+   *
+   * `core/hostfs.rs`'s rule is the shape: per entry, by name and by result.
+   */
+  it("keeps the folders it identified when a later folder cannot be read", async () => {
+    const EXTRA = "E:\\media\\Update";
+    identifyMediaMock
+      .mockReset()
+      .mockImplementation((folder: string) =>
+        folder === EXTRA
+          ? Promise.reject(new Error("boom"))
+          : Promise.resolve({
+              matches: [
+                {
+                  path: "E:\\media\\Disk1.adf",
+                  volumeName: "Workbench3.2",
+                  row: ROW,
+                  md5: ROW.md5,
+                  confirmed: null,
+                },
+              ],
+              unreadable: [],
+              hashed: 1,
+              remembered: 0,
+            } satisfies MediaIdentification)
+      );
+    seedRemembered({ ...FULL_FIELDS, "osinstall.extraMediaFolders": [EXTRA] });
+    render(<OsInstall />);
+    await screen.findByText(i18n.t("osinstall.plan.heading"));
+
+    // What the first folder produced is still on screen, in full.
+    const kept = await screen.findByTestId("media-identity-unconfirmed");
+    expect(kept.textContent).toContain("Disk1.adf");
+    expect(kept.textContent).toContain("Workbench 3.2");
+
+    // And the report says which folder failed and how many finished — a
+    // count with no name would leave the user to guess which of their two
+    // folders ART never got through.
+    const summary = await screen.findByTestId("media-identity-summary");
+    expect(summary.textContent).toBe(
+      i18n.t("osinstall.mediaId.failed", { folder: EXTRA, identified: 1, total: 2 })
+    );
+
+    const ok = await screen.findByTestId("media-identity-folder-identified");
+    expect(ok.textContent).toContain("E:\\media");
+    const bad = await screen.findByTestId("media-identity-folder-unreadable");
+    expect(bad.textContent).toContain(EXTRA);
+    expect(bad.textContent).not.toBe(ok.textContent);
+  });
+
+  /** Every folder the plan reads is identified, not only the first — and one
+   *  at a time, because the job lane supersedes a second start and would
+   *  leave the first promise unsettled. */
+  it("identifies every folder the request carries", async () => {
+    await renderFull();
+    identifyMediaMock.mockClear();
+
+    dialogOpenMock.mockResolvedValue("E:\\media\\Update");
+    await userEvent.click(screen.getByRole("button", { name: /add another folder/i }));
+
+    await waitFor(() =>
+      expect(identifyMediaMock.mock.calls.map((c) => c[0])).toEqual([
+        "E:\\media",
+        "E:\\media\\Update",
+      ])
+    );
+  });
+
+  /** "Scan again" drops the remembered hashes as well as the remembered
+   *  listings, so what is on screen is about nothing until the pass runs
+   *  again. */
+  it("re-identifies after the remembered answers are dropped", async () => {
+    await renderFull();
+    identifyMediaMock.mockClear();
+
+    await userEvent.click(screen.getByRole("button", { name: i18n.t("osinstall.media.rescan") }));
+
+    await waitFor(() => expect(identifyMediaMock).toHaveBeenCalledWith("E:\\media"));
   });
 });

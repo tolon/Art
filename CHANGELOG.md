@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ART can now say what an install disk actually is, by its content —
+  additively to the name it already reads off the disk, never in place of it.**
+  On the OS Builder's media step, each file is checked against a 186-row table
+  of known AmigaOS install media (adopted from the Emu68 Hatcher project,
+  MIT-licensed) and one of five things is said: it matches a known disk and
+  ART has checked that match against a real disk of its own; it matches a
+  known disk but nobody has checked that row against a real one yet; it is not
+  in the table at all — which says nothing about the disk, only that this
+  exact copy is not one the table happens to list; ART could not read the
+  file; or nothing has been checked yet. A miss never takes away what the
+  disk's own volume name already told you. Runs as a background job with
+  progress and a cancel button, and a file already hashed is not re-hashed
+  unless it changes.
 - **The OS Builder now shows what media was found when it cannot complete a
   build.** When you choose a media folder but ART still cannot build — because
   the folder does not hold a release ART knows, or it holds a different release
@@ -70,6 +83,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are yours.
 
 ### Fixed
+
+- **Stopping the "what are these disks" check no longer reads as ART having
+  failed.** Pressing Stop while install media is being identified by content
+  used to produce *"ART could not identify these files by content"* — the same
+  sentence a real failure produces, sending you to look for a problem with your
+  media that was not there. Stopping now says so plainly, says how much it got
+  through, and points at the "Scan again" button.
+- **One folder ART cannot read no longer throws away the folders it already
+  identified.** When install media is spread over more than one folder, a
+  failure on the second used to discard everything the first had found and
+  report that the whole check failed — about files ART had in fact identified.
+  What was identified now stays on screen, and every folder is reported by
+  name and by what became of it: identified, could not be read, stopped, or
+  never reached.
+- **Pointing two media layers at the same folder no longer lists every disk
+  in it twice.** AmigaOS 3.2.2 asks for a base folder and an update folder
+  separately; pointing both at the same folder — an easy mistake when your
+  disks are not actually split that way — hashed and listed the same disks
+  twice. Each folder is now identified once, however many layers name it.
 
 - **A part-built AmigaOS 3.2.2 now gets the same "what is in this folder" line
   as every other release — and it is not told its own disks belong to

@@ -28,6 +28,14 @@ import {
   isForcedOnByCondition,
   keymapsIn,
   mediaEvidence,
+  mediaIdentityFolderLines,
+  mediaIdentityLines,
+  mediaIdentitySummary,
+  type MediaConfirmation,
+  type MediaIdentification,
+  type MediaIdentityState,
+  type MediaMatch,
+  type MediaRow,
   type ReleaseEvidence,
   osinstallBlocker,
   parseOptionalSlot,
@@ -1523,5 +1531,331 @@ describe("keymapsIn", () => {
       "i",
       "usa",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The five endings a content-hash result is allowed to produce (design §4.3)
+// ---------------------------------------------------------------------------
+
+describe("what a content-hash result is allowed to say", () => {
+  const ROW: MediaRow = {
+    md5: "5edf0b7a10409ef992ea351565ef8b6c",
+    version: "3.2",
+    // Hatcher's own identifier for the disk, which is measurably *not* the
+    // disk's own AmigaDOS volume name (0 of 12 matched, 2026-09-06).
+    volume: "Workbench3_2",
+    name: "Workbench 3.2",
+    source: "Hyperion (3.2 base)",
+    sequence: 1,
+  };
+  const CHECK: MediaConfirmation = {
+    checked: "2026-09-06",
+    against: "the ART author's own AmigaOS 3.2 install set, 35 ADFs",
+  };
+  function match(over: Partial<MediaMatch> = {}): MediaMatch {
+    return {
+      path: "E:\\media\\Disk1.adf",
+      volumeName: "Workbench3.2",
+      row: null,
+      md5: "0".repeat(32),
+      confirmed: null,
+      ...over,
+    };
+  }
+  function identified(over: Partial<MediaIdentification> = {}): MediaIdentityState {
+    return {
+      kind: "identified",
+      identification: { matches: [], unreadable: [], hashed: 0, remembered: 0, ...over },
+    };
+  }
+
+  /**
+   * **Four files, four endings, four different keys.** Asserted as a set
+   * rather than one at a time: the failure this guards against is two of
+   * them collapsing into one sentence, and a per-ending test would still
+   * pass while two endings shared a key.
+   */
+  it("gives a matched-and-checked, a matched-unchecked, a miss and an unreadable file four different sentences", () => {
+    const lines = mediaIdentityLines(
+      identified({
+        matches: [
+          match({ path: "a.adf", row: ROW, md5: ROW.md5, confirmed: CHECK }),
+          match({ path: "b.adf", row: ROW, md5: ROW.md5 }),
+          match({ path: "c.adf" }),
+        ],
+        unreadable: ["d.adf"],
+      })
+    );
+    expect(lines.map((l) => l.kind)).toEqual([
+      "confirmed",
+      "unconfirmed",
+      "not-in-table",
+      "unreadable",
+    ]);
+    const keys = lines.map((l) => l.phrase.key);
+    expect(new Set(keys).size).toBe(4);
+    expect(keys).toEqual([
+      "osinstall.mediaId.confirmed",
+      "osinstall.mediaId.unconfirmed",
+      "osinstall.mediaId.notInTable",
+      "osinstall.mediaId.unreadable",
+    ]);
+  });
+
+  /**
+   * **A confirmation is cited, not badged.** Both fields have to reach the
+   * sentence, or "confirmed" is an assertion with nothing behind it.
+   */
+  it("carries what confirmed the row and when, into the sentence", () => {
+    const [line] = mediaIdentityLines(
+      identified({ matches: [match({ row: ROW, md5: ROW.md5, confirmed: CHECK })] })
+    );
+    expect(line.phrase.params).toMatchObject({
+      name: "Workbench 3.2",
+      version: "3.2",
+      source: "Hyperion (3.2 base)",
+      checked: "2026-09-06",
+      against: CHECK.against,
+    });
+  });
+
+  /**
+   * **Additive, never subtractive — at the level where it is structural.**
+   * The component test proves the volume-name line survives a miss on
+   * screen; this proves the stronger property that makes it survive: no
+   * sentence built here reads `volumeName` at all, for *any* ending. The two
+   * facts come from two sources and are rendered from two places, so there
+   * is no code path along which a hash result could weaken a name result.
+   */
+  it("never puts the disk's own name into a sentence about the table", () => {
+    const lines = mediaIdentityLines(
+      identified({
+        matches: [
+          match({ path: "a.adf", row: ROW, md5: ROW.md5, confirmed: CHECK }),
+          match({ path: "b.adf", row: ROW, md5: ROW.md5 }),
+          match({ path: "c.adf" }),
+        ],
+        unreadable: ["d.adf"],
+      })
+    );
+    for (const line of lines) {
+      const values = Object.values(line.phrase.params ?? {}).map(String);
+      expect(values).not.toContain("Workbench3.2");
+      // And the row's `volume` is not smuggled in as a stand-in for it
+      // either — that field is Hatcher's internal identifier and belongs in
+      // no sentence at all.
+      expect(values).not.toContain("Workbench3_2");
+    }
+  });
+
+  /** A miss names the file and nothing else: there is no row to quote, and
+   *  inventing a claim about the disk is exactly what §4.3 forbids. */
+  it("says only which file when no row claims it", () => {
+    const [line] = mediaIdentityLines(identified({ matches: [match({ path: "E:\\m\\odd.adf" })] }));
+    expect(line.kind).toBe("not-in-table");
+    expect(line.phrase.params).toEqual({ file: "odd.adf" });
+  });
+
+  /** Sorted by path, so two folders' files interleave in one readable list
+   *  rather than in arrival order — and an unreadable file sits among them
+   *  rather than in a footnote a reader can miss. */
+  it("lists every file in one path-ordered list, unreadable ones included", () => {
+    const lines = mediaIdentityLines(
+      identified({
+        matches: [match({ path: "E:\\m\\c.adf" }), match({ path: "E:\\m\\a.adf" })],
+        unreadable: ["E:\\m\\b.adf"],
+      })
+    );
+    expect(lines.map((l) => l.file)).toEqual(["a.adf", "b.adf", "c.adf"]);
+  });
+
+  /**
+   * **"Not hashed yet", "running", "could not run" and a real result are
+   * four states with four next steps.** Collapsing any pair — most
+   * temptingly a failure into an empty result — is the §89 defect.
+   */
+  it("keeps not-asked, running, failed, stopped and done apart", () => {
+    expect(mediaIdentitySummary({ kind: "not-asked" })).toEqual({
+      key: "osinstall.mediaId.notHashedYet",
+    });
+    expect(mediaIdentitySummary({ kind: "identifying" })).toEqual({
+      key: "osinstall.mediaId.identifying",
+    });
+    expect(mediaIdentitySummary(stalled("failed"))?.key).toBe("osinstall.mediaId.failed");
+    expect(mediaIdentitySummary(stalled("cancelled"))?.key).toBe("osinstall.mediaId.cancelled");
+    expect(mediaIdentitySummary(identified({ hashed: 2, remembered: 1 }))).toEqual({
+      key: "osinstall.mediaId.provenance",
+      params: { hashed: 2, remembered: 1 },
+    });
+    // The point of the two above is that they are *different*: a "cancelled"
+    // that is only a second message on the `failed` state is one edit away
+    // from collapsing back.
+    expect(mediaIdentitySummary(stalled("failed"))?.key).not.toBe(
+      mediaIdentitySummary(stalled("cancelled"))?.key
+    );
+  });
+
+  // -- Fix wave 1, M1 and M2. Pressing Stop is not a failure, and a pass that
+  // died on folder 3 still did folders 1 and 2.
+
+  /** A pass over three folders that ended on the second, in whichever way.
+   *  Deliberately built with one folder of each outcome, so an assertion
+   *  about "the folder that failed" cannot be satisfied by the only folder
+   *  there is. */
+  function stalled(kind: "failed" | "cancelled"): MediaIdentityState {
+    return {
+      kind,
+      identification: {
+        matches: [match({ path: "E:\\one\\a.adf", row: ROW, md5: ROW.md5, confirmed: CHECK })],
+        unreadable: [],
+        hashed: 1,
+        remembered: 0,
+      },
+      folders: [
+        { folder: "E:\\one", result: "identified" },
+        { folder: "E:\\two", result: kind === "failed" ? "unreadable" : "stopped" },
+        { folder: "E:\\three", result: "not-reached" },
+      ],
+    };
+  }
+
+  /**
+   * **The user pressing Stop is not ART failing**, and the two sentences send
+   * a user to different places: one says scan again, the other says something
+   * is wrong with the media. Asserted on the *sentence*, not on "the panel
+   * shows something", which is reachable from four other states.
+   */
+  it("does not tell a user who pressed Stop that ART could not identify their media", () => {
+    const phrase = mediaIdentitySummary(stalled("cancelled"));
+    expect(phrase?.key).toBe("osinstall.mediaId.cancelled");
+    // And it does not smuggle the failure sentence in under another key.
+    expect(phrase?.key).not.toContain("failed");
+  });
+
+  /**
+   * **A refusal names what it could not read.** "ART could not read a folder"
+   * with no folder in it is a refusal the user cannot act on, and with three
+   * folders configured it is not even a hint.
+   */
+  it("names the folder a failed pass died on, and counts the ones it finished", () => {
+    expect(mediaIdentitySummary(stalled("failed"))?.params).toEqual({
+      folder: "E:\\two",
+      identified: 1,
+      total: 3,
+    });
+    // The stopped case has no unreadable folder to name, so it counts only.
+    expect(mediaIdentitySummary(stalled("cancelled"))?.params).toEqual({
+      identified: 1,
+      total: 3,
+    });
+  });
+
+  /**
+   * **Never claim what you did not do, read the other way round.** ART hashed
+   * the first folder's disk; a second folder it could not open takes nothing
+   * away from that, and a screen showing an empty list would be denying work
+   * ART had finished.
+   */
+  it("keeps the files an interrupted pass did identify", () => {
+    for (const kind of ["failed", "cancelled"] as const) {
+      const lines = mediaIdentityLines(stalled(kind));
+      expect(lines.map((l) => l.file), kind).toEqual(["a.adf"]);
+      expect(lines[0].kind, kind).toBe("confirmed");
+    }
+  });
+
+  /**
+   * **Per entry, by name and by result** — `core/hostfs.rs`'s rule. Four
+   * results, four keys, and the folder's own name in each: a report that
+   * said "2 of 3 folders" without saying *which* would leave the user to
+   * guess which of their folders was never opened.
+   */
+  it("reports every folder of an interrupted pass by name and by result", () => {
+    const lines = mediaIdentityFolderLines(stalled("failed"));
+    expect(lines.map((l) => l.folder)).toEqual(["E:\\one", "E:\\two", "E:\\three"]);
+    expect(lines.map((l) => l.result)).toEqual(["identified", "unreadable", "not-reached"]);
+    expect(new Set(lines.map((l) => l.phrase.key)).size).toBe(3);
+    for (const line of lines) {
+      expect(line.phrase.params).toEqual({ folder: line.folder });
+    }
+    // The fourth result is the cancelled pass's in-flight folder, and it has
+    // a key of its own — "you stopped me here" is not "I could not read it".
+    const stoppedLine = mediaIdentityFolderLines(stalled("cancelled"))[1];
+    expect(stoppedLine.result).toBe("stopped");
+    expect(stoppedLine.phrase.key).toBe("osinstall.mediaId.folderStopped");
+    expect(stoppedLine.phrase.key).not.toBe(lines[1].phrase.key);
+  });
+
+  /** Nothing per-folder to say about a pass that has not run, is running, or
+   *  covered every folder — for the last, the per-file list *is* the report,
+   *  and a second list would be the screen answering twice. */
+  it("says nothing per folder about a pass that ran to the end", () => {
+    expect(mediaIdentityFolderLines({ kind: "not-asked" })).toEqual([]);
+    expect(mediaIdentityFolderLines({ kind: "identifying" })).toEqual([]);
+    expect(mediaIdentityFolderLines(identified({ hashed: 1 }))).toEqual([]);
+  });
+
+  /** Where the answer came from is on screen, because a remembered hash can
+   *  be stale: the identity is `(path, size, mtime)`, and a restored backup
+   *  keeps all three. A wrong *name* for a disk is worse than a stale
+   *  listing, so the counts are stated rather than hidden. */
+  it("states how many answers were read now and how many were remembered", () => {
+    expect(mediaIdentitySummary(identified({ hashed: 0, remembered: 35 }))?.params).toEqual({
+      hashed: 0,
+      remembered: 35,
+    });
+  });
+
+  /** A folder with nothing hashable in it says nothing here —
+   *  `osinstall.media.empty` already owns that sentence, and two lines
+   *  counting the same zero would be the screen answering one question
+   *  twice. */
+  it("says nothing about a pass that had no files to look at", () => {
+    expect(mediaIdentitySummary(identified())).toBeNull();
+    expect(mediaIdentityLines(identified())).toEqual([]);
+  });
+
+  /**
+   * **The same `null` is also reached a second way** (final-review.md M6):
+   * every candidate came back unreadable, so `hashed + remembered` is zero
+   * even though the folder plainly had files in it. `mediaIdentitySummary`'s
+   * own doc comment used to name only the empty-folder cause; this is the
+   * other one, and it must not produce the same silence as "nothing here" —
+   * the per-file `unreadable` lines are the report for this case, which is
+   * why the summary staying silent is correct, not merely untested.
+   */
+  it("also says nothing about the pass itself when every candidate was unreadable — but the per-file lines still report it", () => {
+    const state = identified({ unreadable: ["a.adf", "b.adf"] });
+    expect(mediaIdentitySummary(state)).toBeNull();
+    const lines = mediaIdentityLines(state);
+    expect(lines).toHaveLength(2);
+    expect(lines.every((line) => line.kind === "unreadable")).toBe(true);
+  });
+
+  /** Nothing to show before an answer exists — including while one is in
+   *  flight, when a stale list from the previous folder would be the worst
+   *  of the options. */
+  it("shows no per-file line until there is a result", () => {
+    expect(mediaIdentityLines({ kind: "not-asked" })).toEqual([]);
+    expect(mediaIdentityLines({ kind: "identifying" })).toEqual([]);
+    // A pass that failed before it identified anything is empty too — but it
+    // is empty because nothing was found, not because the state discards it
+    // (`keeps the files an interrupted pass did identify` is that half).
+    expect(
+      mediaIdentityLines({
+        kind: "failed",
+        identification: { matches: [], unreadable: [], hashed: 0, remembered: 0 },
+        folders: [{ folder: "E:\\one", result: "unreadable" }],
+      })
+    ).toEqual([]);
+  });
+
+  /** Both separators, because the folder is the user's and a future CLI
+   *  shell's fixtures are POSIX. */
+  it("names a file by its own name on either kind of path", () => {
+    expect(
+      mediaIdentityLines(identified({ matches: [match({ path: "/mnt/media/Fonts.adf" })] }))[0].file
+    ).toBe("Fonts.adf");
   });
 });

@@ -2228,6 +2228,22 @@
       "addTitle": "Bu sürümün disketlerini tutan başka bir klasör seçin",
       "addHint": "AmigaOS 3.2.2.1, 3.2 disketleriniz artı Update ve Hotfix klasörleri — her birini ekleyin."
     },
+    "mediaId": {
+      "heading": "Bu dosyalar, içeriklerine göre ne",
+      "confirmed": "{{file}} — Emu68 Hatcher'ın kurulum ortamı tablosunun “{{name}}” dediği satırla eşleşiyor ({{version}}, {{source}}). O satır burada gerçek bir disketle karşılaştırıldı: {{against}}, {{checked}}.",
+      "unconfirmed": "{{file}} — Emu68 Hatcher'ın kurulum ortamı tablosunun “{{name}}” dediği satırla eşleşiyor ({{version}}, {{source}}). O satırı burada hiç kimse gerçek bir disketle karşılaştırmadı — tablonun 186 satırından 151'i denenmemiş durumda, yani bu iddia yalnızca tablonun.",
+      "notInTable": "{{file}} — Emu68 Hatcher'ın kurulum ortamı tablosunda yok. Bu, tablo hakkında bir bilgidir, disket hakkında değil: yeniden imaj almak da, tek bir baytını değiştirmek de, başka bir sürümüne sahip olmak da özeti değiştirir. Disketin kendi adı olduğu gibi geçerlidir.",
+      "unreadable": "{{file}} — ART bu dosyanın baytlarını okuyamadı, dolayısıyla özeti hiç alınmadı. Bu “tabloda yok” demek değildir: tabloya hiç sorulmadı.",
+      "notHashedYet": "İçeriğine göre henüz hiçbir şey tanımlanmadı.",
+      "identifying": "Dosyalar okunuyor ve özetleri alınıyor…",
+      "failed": "ART {{folder}} klasörünü okuyamadı, tarama orada durdu. Bundan önce içeriğine göre tanımlanan klasörler: {{total}} klasörün {{identified}} tanesi. Onların bulduğu yukarıda duruyor ve disketlerin kendi adları bundan etkilenmez.",
+      "provenance": "Şimdi okunan: {{hashed}}. Önceki taramadan gelen: {{remembered}}. ART bir özeti yol, boyut ve tarihe göre hatırlar — üçü de değişmeden yerine konan bir dosya yine eskisiyle yanıtlanır; gördüğünüz taktığınızla uyuşmuyorsa Yeniden tara deyin.",
+      "cancelled": "Bu taramayı siz durdurdunuz. Durmadan önce içeriğine göre tanımlanan klasörler: {{total}} klasörün {{identified}} tanesi ve onların bulduğu duruyor. Ortamınızda bir sorun yok — geri kalanını içeriğine göre tanımlamak için “Yeniden tara” deyin.",
+      "folderIdentified": "{{folder}} — içeriğine göre tanımlandı.",
+      "folderUnreadable": "{{folder}} — ART bu klasörü okuyamadı, dolayısıyla içindeki hiçbir şey tanımlanmadı.",
+      "folderStopped": "{{folder}} — ART bu klasörü okurken taramayı durdurdunuz, dolayısıyla içindeki hiçbir şey tanımlanmadı. Bu, klasörde bir kusur olduğu anlamına gelmez.",
+      "folderNotReached": "{{folder}} — tarama bu klasörün sırası gelmeden bitti, klasör hiç açılmadı. Hakkında ne olumlu ne olumsuz bir şey biliniyor."
+    },
     "rom": {
       "label": "Eşlenen Kickstart",
       "none": "ROM seçilmedi.",

@@ -166,6 +166,32 @@ export function subscribeSafely(subscribe: () => Promise<UnlistenFn>): () => voi
 // ---------------------------------------------------------------------------
 
 /**
+ * The message {@link awaitJobResult} rejects with when the job was
+ * **cancelled** rather than failed.
+ *
+ * Exported, and read back through {@link isJobCancellation}, because a caller
+ * that cannot tell those two rejections apart has only one ending for both —
+ * and "the user pressed Stop" and "ART could not do this" are two endings with
+ * two different next steps (`CLAUDE.md`, *Endings stay distinct*). The
+ * constant and the `reject` below are the same value so the two cannot drift.
+ */
+export const JOB_CANCELLED_MESSAGE = "cancelled";
+
+/**
+ * Was this rejection the user stopping the job, rather than the job failing?
+ *
+ * Deliberately narrow: only an `Error` carrying exactly
+ * {@link JOB_CANCELLED_MESSAGE}. A failed job rejects with its own message and
+ * its `ART-*` code appended, so it can never be mistaken for this one — and a
+ * rejection from anywhere else (a dropped connection, a command that threw
+ * before the job started) is a failure, which is the safer of the two to
+ * report.
+ */
+export function isJobCancellation(err: unknown): boolean {
+  return err instanceof Error && err.message === JOB_CANCELLED_MESSAGE;
+}
+
+/**
  * Wait for exactly one job to finish, resolving with the value its own
  * result event carries — or rejecting with a readable sentence if the job
  * fails or is cancelled first. `resultEvent` is a Tauri event name whose
@@ -224,7 +250,7 @@ export function awaitJobResult<TPayload extends { job_id: number }, TValue>(
       } else if (job.state.state === "cancelled") {
         settled = true;
         cleanup();
-        reject(new Error("cancelled"));
+        reject(new Error(JOB_CANCELLED_MESSAGE));
       }
     }
 

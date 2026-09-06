@@ -96,9 +96,13 @@ import {
   osinstallBlocker,
   osinstallDestinationTaken,
   osinstallPlan,
+  osinstallIdentifyMedia,
   osinstallRescanMedia,
   osinstallReleaseForMedia,
   keymapsIn,
+  mediaIdentityFolderLines,
+  mediaIdentityLines,
+  mediaIdentitySummary,
   osinstallMediaEvidence,
   osinstallScanMedia,
   pruneStaleExclusions,
@@ -116,6 +120,9 @@ import {
   type InstallPlan,
   type InstallRelease,
   type InstallRequest,
+  type MediaFolderOutcome,
+  type MediaIdentification,
+  type MediaIdentityState,
   type MediaScanResult,
   type OsInstallResult,
   type PlanResult,
@@ -125,7 +132,13 @@ import { isFlag, isText, isTextList, isTextOrNothing, recall, remember } from "@
 import { useRemembered } from "@/lib/useRemembered";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useBuildSession } from "@/lib/useBuildSession";
-import { fraction, onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
+import {
+  fraction,
+  isJobCancellation,
+  onJobProgress,
+  subscribeSafely,
+  type JobProgress,
+} from "@/lib/jobs";
 import { Field } from "@/components/osbuilder/Field";
 import { PackagePanel } from "@/components/osbuilder/PackagePanel";
 import { AmigaInstallPanel } from "@/components/osbuilder/AmigaInstallPanel";
@@ -899,6 +912,135 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     };
   }, [mediaFolder]);
 
+  /**
+   * **What the files in those folders are by content**, additively to the
+   * volume names read above (design §4.3).
+   *
+   * Two facts from two sources, and they are never joined: `mediaScan` says
+   * what each disk calls itself, this says what Emu68 Hatcher's table makes
+   * of its bytes. A miss here removes nothing from the line above it — the
+   * two are computed separately, rendered separately, and neither reads the
+   * other.
+   *
+   * **One folder at a time, awaited in turn.** `osinstall_identify_media`
+   * runs in its own job lane, and starting a second job in a lane supersedes
+   * the first — whose promise then never settles. Firing one per folder with
+   * `Promise.all` would therefore hang on every folder but the last. The
+   * loop below has at most one job in flight, so nothing is superseded by
+   * this screen's own doing.
+   *
+   * **The dependency is a primitive string, not the folder array.**
+   * ART-178/ART-195 were a fresh identity per render driving an effect into a
+   * loop; `identifyFoldersKey` is built fresh every render but two equal
+   * strings are the same value to React, exactly as `layerFoldersKey` above
+   * already relies on.
+   *
+   * **Every `set` is behind `cancelled`** (ART-089's mechanism): a folder
+   * switched while a 700 MB disc is being read must not have the previous
+   * folder's answer land on top of the new one.
+   */
+  const [mediaIdentity, setMediaIdentity] = useState<MediaIdentityState>({ kind: "not-asked" });
+  /** Bumped by "Scan again", which drops the remembered hashes as well as
+   *  the remembered listings — so the pass has to run again to say anything
+   *  true. */
+  const [identifyNonce, setIdentifyNonce] = useState(0);
+  // De-duplicated: two layers pointed at one folder (M5, fix wave 2) must
+  // identify it once, not once per layer. `extraMediaFolders` already
+  // dedupes on add (`addMediaFolder` above); a layered release has no such
+  // gate — two layer fields are two independent remembered keys, and nothing
+  // stops a user pointing both at the same disks. Without this, every file in
+  // that folder was hashed and reported twice, under the same `path`, which
+  // is both wasted work and a duplicate React key at the render site.
+  const identifyFoldersKey = !layersKnown
+    ? ""
+    : Array.from(
+        new Set(
+          (layers.length > 0
+            ? layers.map((layer) => folderForLayer(layer.id))
+            : [mediaFolder, ...extraMediaFolders]
+          ).filter((folder): folder is string => !!folder)
+        )
+      ).join("\n");
+  useEffect(() => {
+    const folders = identifyFoldersKey ? identifyFoldersKey.split("\n") : [];
+    if (folders.length === 0) {
+      setMediaIdentity({ kind: "not-asked" });
+      return;
+    }
+    let cancelled = false;
+    setMediaIdentity({ kind: "identifying" });
+    void (async () => {
+      // Merged across folders, because the four endings are per *file* and a
+      // user who added a second folder is looking at one pile of disks.
+      const merged: MediaIdentification = {
+        matches: [],
+        unreadable: [],
+        hashed: 0,
+        remembered: 0,
+      };
+      // What became of each folder, by name. `core/hostfs.rs`'s rule one
+      // layer up: the loop below is per entry and a folder already hashed
+      // cannot be un-hashed by a later one failing, so every folder ends up
+      // with its own result rather than the whole pass having one. Every
+      // folder starts as "never opened", which is what is true of it before
+      // its turn comes.
+      const outcomes: MediaFolderOutcome[] = folders.map((folder) => ({
+        folder,
+        result: "not-reached",
+      }));
+      for (let i = 0; i < folders.length; i += 1) {
+        try {
+          const found = await osinstallIdentifyMedia(folders[i]);
+          if (cancelled) return;
+          merged.matches.push(...found.matches);
+          merged.unreadable.push(...found.unreadable);
+          merged.hashed += found.hashed;
+          merged.remembered += found.remembered;
+          outcomes[i] = { folder: folders[i], result: "identified" };
+        } catch (err) {
+          // ART-089's guard first, and before anything is put on screen: a
+          // folder the user has already navigated away from must not land
+          // its ending over the newer one.
+          if (cancelled) return;
+          // **Two rejections, two endings.** `awaitJobResult` rejects with
+          // exactly `JOB_CANCELLED_MESSAGE` when the user pressed Stop and
+          // with the job's own message otherwise, so the two are told apart
+          // by the one predicate that owns that contract rather than by a
+          // string compared here. Telling a user who stopped the pass that
+          // ART "could not identify these files" is the §89 collapse — and
+          // their next step (scan again) is not a failure's.
+          if (isJobCancellation(err)) {
+            outcomes[i] = { folder: folders[i], result: "stopped" };
+            setMediaIdentity({ kind: "cancelled", identification: merged, folders: outcomes });
+          } else {
+            outcomes[i] = { folder: folders[i], result: "unreadable" };
+            setMediaIdentity({ kind: "failed", identification: merged, folders: outcomes });
+          }
+          // Either way `merged` goes with it. Discarding what folders 1 and 2
+          // identified because folder 3 could not be opened would be ART
+          // claiming it had not done work it had — "never claim what you did
+          // not do", read the other way round.
+          return;
+        }
+      }
+      if (!cancelled) setMediaIdentity({ kind: "identified", identification: merged });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [identifyFoldersKey, identifyNonce]);
+  /** The sentences, built by `src/lib` and translated here — `src/lib/*` has
+   *  no translator (see `phrase.ts`), so it hands back keys and params and
+   *  this is the only place that renders one. */
+  const identityLines = useMemo(() => mediaIdentityLines(mediaIdentity), [mediaIdentity]);
+  const identitySummary = useMemo(() => mediaIdentitySummary(mediaIdentity), [mediaIdentity]);
+  /** Per folder, by name and by result — empty unless the pass stopped early,
+   *  in which case the per-file list above cannot be read as a full report. */
+  const identityFolders = useMemo(
+    () => mediaIdentityFolderLines(mediaIdentity),
+    [mediaIdentity]
+  );
+
   // ART-256. Every added folder scanned the same way, one round trip each,
   // so `foundVolumeNames` below can cover the same disks `plan()` does.
   useEffect(() => {
@@ -1473,6 +1615,12 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       // identity is the point: the plan effect keys on these values, and
       // nothing else about the request has changed.
       setRescanNonce((n) => n + 1);
+      // `forget_all` drops the remembered *hashes* too, not only the
+      // remembered listings — so the content-hash lines above are now about
+      // nothing and have to be recomputed. Leaving them on screen would be
+      // the stale answer this button exists to escape, still being shown
+      // after the user pressed the escape hatch.
+      setIdentifyNonce((n) => n + 1);
       if (mediaFolder) void osinstallScanMedia(mediaFolder).then(setMediaScan).catch(() => {});
     } catch (e) {
       setPlanError(errorText(t, e));
@@ -1675,6 +1823,74 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
             })}
           </p>
         )}
+
+        {/*
+          **What the same files are by content** — design §4.3, and the whole
+          risk surface of the hash round. Deliberately *below* the line above
+          and deliberately separate from it: that line is what the disks call
+          themselves, this is what Emu68 Hatcher's table makes of their bytes,
+          and a row's `volume` is measurably not a disk's volume name (0 of 12
+          matched). Two facts from two sources, never one reconciled answer.
+
+          Nothing here is gated on Power mode. `usePowerMode` only ever hides
+          what a user can do without, and "is this disk the one the table
+          knows" is not an advanced question — it is the question somebody
+          with a folder of ADFs of uncertain provenance actually has.
+        */}
+        <div data-testid="media-identity" style={{ margin: "0 0 12px" }}>
+          {identityLines.length > 0 && (
+            <p className="faint" style={{ fontSize: 11, margin: "0 0 4px", fontWeight: 600 }}>
+              {t("osinstall.mediaId.heading")}
+            </p>
+          )}
+          {identityLines.map((line) => (
+            <p
+              key={line.path}
+              data-testid={`media-identity-${line.kind}`}
+              className={line.kind === "unreadable" ? "badge badge-err" : "faint"}
+              style={{
+                fontSize: 11,
+                margin: "0 0 3px",
+                ...(line.kind === "unreadable" ? { display: "inline-block" } : {}),
+              }}
+              title={line.path}
+            >
+              {t(line.phrase.key, line.phrase.params)}
+            </p>
+          ))}
+          {identitySummary && (
+            <p
+              className="faint"
+              data-testid="media-identity-summary"
+              style={{ fontSize: 11, margin: "0 0 4px" }}
+            >
+              {t(identitySummary.key, identitySummary.params)}
+            </p>
+          )}
+          {/*
+            A pass that stopped early, reported **per folder, by name and by
+            result** — `core/hostfs.rs`'s rule for an operation that cannot be
+            undone as a whole. Nothing renders here when the pass covered
+            every folder: the per-file list above is then the whole report,
+            and a second list repeating it would be the screen answering the
+            same question twice.
+          */}
+          {identityFolders.map((line) => (
+            <p
+              key={line.folder}
+              data-testid={`media-identity-folder-${line.result}`}
+              className={line.result === "unreadable" ? "badge badge-err" : "faint"}
+              style={{
+                fontSize: 11,
+                margin: "0 0 3px",
+                ...(line.result === "unreadable" ? { display: "inline-block" } : {}),
+              }}
+              title={line.folder}
+            >
+              {t(line.phrase.key, line.phrase.params)}
+            </p>
+          ))}
+        </div>
 
         {/*
           ART-194's two controls, and they belong together: the toggle says

@@ -2228,6 +2228,22 @@
       "addTitle": "Choose another folder holding this release's disks",
       "addHint": "AmigaOS 3.2.2.1 is your 3.2 disks plus the Update and Hotfix folders — add each one."
     },
+    "mediaId": {
+      "heading": "What these files are, by content",
+      "confirmed": "{{file}} — matches the row Emu68 Hatcher's install-media table calls “{{name}}” ({{version}}, {{source}}). That row has been checked against a real disk here: {{against}}, {{checked}}.",
+      "unconfirmed": "{{file}} — matches the row Emu68 Hatcher's install-media table calls “{{name}}” ({{version}}, {{source}}). Nobody has checked that row against a real disk here — 151 of the table's 186 rows are unchecked, so the claim is the table's alone.",
+      "notInTable": "{{file}} — not in Emu68 Hatcher's install-media table. That is a fact about the table, not about the disk: re-imaging it, changing one byte of it or owning a different revision all change the hash. What the disk calls itself still stands.",
+      "unreadable": "{{file}} — ART could not read this file's bytes, so it was never hashed. This is not “not in the table”: the table was never asked.",
+      "notHashedYet": "Nothing has been identified by content yet.",
+      "identifying": "Reading these files and hashing them…",
+      "failed": "ART could not read {{folder}}, so the pass stopped there. Folders identified by content before that: {{identified}} of {{total}}. Whatever they found is still listed above, and what the disks call themselves is unaffected.",
+      "provenance": "Read now: {{hashed}}. Answered from an earlier pass: {{remembered}}. ART remembers a hash by path, size and date — a file replaced without any of the three changing is still answered with the old one, so use Scan again if what you see is not what you put in.",
+      "cancelled": "You stopped this pass. Folders identified by content before that: {{identified}} of {{total}}, and what they found is kept. Nothing is wrong with your media — press “Scan again” to identify the rest by content.",
+      "folderIdentified": "{{folder}} — identified by content.",
+      "folderUnreadable": "{{folder}} — ART could not read this folder, so nothing in it was identified.",
+      "folderStopped": "{{folder}} — you stopped the pass while ART was reading this folder, so nothing in it was identified. That is not a fault in the folder.",
+      "folderNotReached": "{{folder}} — the pass ended before this folder’s turn, so it was never opened. Nothing is known about it either way."
+    },
     "rom": {
       "label": "Paired Kickstart",
       "none": "No ROM chosen.",

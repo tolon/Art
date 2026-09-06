@@ -26,6 +26,118 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-261** 🟠 **`cargo test --lib` reports exit 0 with no `test result:`
+line whenever `commands::artwork` runs, and passes cleanly without it** —
+*found 2026-09-06 by round 4's Task 1, localised the same day by a two-armed
+run*
+`src-tauri/src/commands/artwork.rs` (tests) · `src-tauri/src/core/artwork/`
+
+Measured, both arms, on this machine:
+
+| run | result |
+|---|---|
+| `cargo test --lib -- --skip artwork` | **`test result: ok. 2841 passed; 0 failed; 49 ignored`**, 17.98 s |
+| `cargo test --lib artwork` | dies mid-run — no summary line, **exit 0** |
+| `cargo test --lib commands::artwork::tests::a_hand_attached_picture_survives_the_artwork_cache_being_deleted -- --exact` | **1 passed**, 0.02 s |
+
+With `--test-threads=1` the run stops at exactly
+`a_hand_attached_picture_survives_the_artwork_cache_being_deleted` — the name
+prints, the result never does — identically across two attempts. That same
+test passes on its own. So no single test is broken; running the **module**
+kills the process.
+
+**A wrong elimination, corrected here rather than left standing.** Earlier the
+same day this controller concluded the harness was being killed after a fixed
+elapsed time — *“always the same place” really meaning “always the same
+duration”*. The two-armed run above refutes it: the **short** run (89 tests)
+dies and the **long** one (2841 tests, 18 s) completes. Duration is not the
+variable. `CLAUDE.md` asks for a refuted elimination to be corrected in place,
+because a confident wrong one costs more than none.
+
+**The cause is the antivirus, and it is not an inference — the owner watched
+it happen** (*“antivirus yaptı ben gördüm”*, 2026-09-06). Trend Micro Maximum
+Security is active on this machine, with Defender's real-time protection off,
+and the owner had already seen it react to `art_lib` earlier the same day.
+Exit 0 with no summary and no `FAILED` is what an externally killed process
+looks like rather than a panic, and the artwork tests write image files in
+quick succession, which is what draws the scanner.
+
+This paragraph replaces one that called the cause a hypothesis because the
+scanner had not been switched off to test it. That was the right thing to
+write at the time and the wrong thing to keep: a person at the machine saw the
+event, which is evidence this session could not have produced by reasoning
+about symptoms. **The owner at the screen outranks the controller's
+inference** — six of seven defects in one earlier round were found the same
+way.
+
+**Consequence, and it is the expensive part:** `cargo test` cannot currently be
+quoted honestly on this machine without `--skip artwork`, and an exit code
+cannot tell a completed suite from a killed one. Any number quoted from a full
+run here is suspect unless its `test result:` line is shown.
+
+**The fix is machine configuration, not code.** Nothing in `commands::artwork`
+is wrong: every one of its tests passes when run alone. Exclude
+`src-tauri\target\`, the test scratch root (`D:\tmp\art-tests\`, pointed there
+by `src-tauri/.cargo/config.toml`) and `art_lib`'s build output from Trend
+Micro, then re-run both arms and record what changed **as numbers**, so the
+entry closes on a measurement rather than on the symptom going quiet.
+
+Until that is done, quote the `--skip artwork` summary and say that is what it
+is. This entry stays open while the workaround is what the numbers rest on.
+
+**CLOSED BY MEASUREMENT, 2026-09-06.** The owner switched the scanner off and
+both arms were re-run. Before, on the left; after, on the right:
+
+| run | with the scanner on | with it off |
+|---|---|---|
+| `cargo test --lib artwork` | died, no summary, exit 0 | **`ok. 89 passed; 0 failed`**, 0.15 s |
+| `cargo test --lib` (full) | died, no summary, exit 0 | **`ok. 2930 passed; 0 failed; 49 ignored`**, 18.00 s |
+
+Repeated twice more, since a suite that fails at random trains people to re-run
+until green: **2939 passed / 0 failed** at 18.74 s and again at 33.30 s. (The
+2930 → 2939 step is round 4's Task 2 landing tests between runs, not
+flakiness.) Both arms flipped together and nothing in `commands::artwork`
+changed, so the cause is settled rather than merely quiet.
+
+**The durable fix is exclusions, not a scanner left off.** Switching protection
+off was the right way to *measure* and is the wrong way to *live*: exclude
+`src-tauri\target\`, the test scratch root (`D:\tmp\art-tests\`, pointed there
+by `src-tauri/.cargo/config.toml`) and `art_lib`'s build output, then protection
+goes back on and the numbers above should hold. This entry records the
+measurement; it does not recommend the machine stay in the state that produced
+it.
+
+**REOPENED 2026-09-06, and closing it was the controller's error.** Round 4's
+Task 4 hit the identical symptom hours later, and it reproduces now:
+
+| run | result |
+|---|---|
+| `cargo test --lib` (full) | dies, no summary, exit 0 |
+| `cargo test --lib artwork` | dies, no summary, exit 0 |
+| `cargo test --lib -- --skip artwork` | **`ok. 2869 passed; 0 failed; 50 ignored`**, 27.86 s |
+
+Nothing touched `commands::artwork` in between. The scanner is simply on again.
+
+**The measurement was sound; the closure was not.** This entry itself said the
+durable fix is exclusions and that *"a closed issue that quietly depends on a
+machine being left unprotected would be a worse record than an open one"* — and
+it was then closed anyway, on numbers taken during the few minutes protection
+was off. Switching a scanner off is a **state**, not a fix, and a state reverts.
+Recorded here rather than quietly re-closing, because the mistake is the useful
+part: an issue closes when the thing that caused it cannot recur, not when it
+stops happening for a while.
+
+**What actually closes this**, and it has not been done: add exclusions for
+`src-tauri\target\`, the test scratch root (`D:\tmp\art-tests\`, pointed there
+by `src-tauri/.cargo/config.toml`) and `art_lib`'s build output, leave
+protection **on**, then re-run both arms and paste the two `test result:` lines
+here. Two summary lines with the scanner running is the evidence this needs;
+anything else is the symptom being quiet.
+
+Until then: quote `--skip artwork` numbers and say that is what they are. An
+exit code cannot tell a finished suite from a killed one.
+
+
 **ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
 neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
 8's real run, on `content-layer`*
@@ -688,6 +800,276 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-270** 🔵 ✅ **Two new MD5 tests leaked their scratch directory on a
+panic, and so did the two sha256 tests they copied the pattern from** —
+*found 2026-09-06, whole-branch review of the media-identification round (M7),
+fixed in fix wave 2*
+`src-tauri/src/core/hashing.rs` (all four tests in the module)
+
+`md5_file_matches_bytes` and `md5_large_file_streams_the_whole_content` built
+their scratch directory with `std::env::temp_dir().join(...)` and removed it
+on a trailing statement — skipped exactly when the test panics, which is
+ART-184's own recorded cost (169,291 directories, ~987 GB, one session). The
+finding named only the two new tests; checking the neighbours they copied the
+style from (`file_matches_bytes`, `large_file_does_not_panic`) found the
+identical shape in both, predating this round. A leaked directory from this
+exact defect (`art-hash-md5-big-24592-3`, from an earlier run this same
+session) was still sitting in `D:/tmp/art-tests` before any deliberate
+mutation was run.
+
+**Fixed** by moving all four tests onto `core::ScratchDir`, whose `Drop` runs
+on the panicking path.
+
+**Proven with a controlled, two-armed experiment** (no existing test asserts
+"the directory survives a panic," so this had to be measured rather than
+read): a forced `panic!()` added to one test between directory creation and
+cleanup. With the old pattern, the panic left `art-hash-md5-22068-0` behind
+in `D:/tmp/art-tests`; with `ScratchDir`, the identical forced panic left
+nothing. One variable (the scratch mechanism), both arms reported.
+
+---
+
+**ART-269** 🔵 ✅ **A doc comment named one cause for a state that has two** —
+*found 2026-09-06, whole-branch review of the media-identification round (M6),
+fixed in fix wave 2*
+`src/lib/osinstall.ts::mediaIdentitySummary`
+
+The null case (`hashed + remembered === 0`) was documented as "a folder with
+no `.adf`/`.iso`/`.lha` in it at all." It is also reached when every
+candidate came back `unreadable` — those files count toward neither `hashed`
+nor `remembered`. No untrue sentence resulted either way (the per-file
+`unreadable` lines still render), but a doc naming one of two causes is
+exactly the shape this project's standing trap starts from ("never assert a
+state that has more than one cause").
+
+**Fixed** by rewriting the comment to name both causes and the one condition
+they actually share, rather than the single cause that happened to be true
+when it was written. Since the behaviour itself was already correct, this is
+a documentation fix; the code is unchanged.
+
+**Guarded** by a new test for the previously-uncovered cause: `also says
+nothing about the pass itself when every candidate was unreadable — but the
+per-file lines still report it` (`src/lib/osinstall.test.ts`). Verified live:
+mutated the (otherwise unchanged) function to also require `unreadable.length
+=== 0` before staying silent — a plausible wrong "fix" for the very confusion
+the stale comment invited — and got a rendered `osinstall.mediaId.provenance`
+phrase instead of `null`. Restored, clean.
+
+---
+
+**ART-268** 🔵 ✅ **Two layers pointed at one folder identified it twice and
+rendered every line twice under the same React key** — *found 2026-09-06,
+whole-branch review of the media-identification round (M5), fixed in fix
+wave 2*
+`src/components/osbuilder/OsInstall.tsx::identifyFoldersKey`
+
+`extraMediaFolders` already refuses to add a folder already present; the
+layered path had no equivalent gate; `identifyFoldersKey` folded every
+layer's own folder into one key with no de-duplication. A user who pointed
+`base` and `update-3.2.2` at the same disks — plausible on a screen that
+shows two fields for what is, for that user, one folder of media — hashed it
+twice and rendered every line twice under `key={line.path}`.
+
+**Fixed** by running the filtered folder list through a `Set` before joining
+it into the key, for both the layered and unlayered branches.
+
+**Guarded** by `identifies a folder once when two layers are pointed at it
+(M5)` (`OsInstall.test.tsx`), asserted as an exact count on both sides (one
+call, one rendered line) rather than by presence — a missing line reads as
+"not two" just as easily as a correct single line does. Reverting the fix
+reproduced the real defect exactly, including React's own console warning:
+*"Encountered two children with the same key, `E:\media\Disk1.adf`"*, with
+3 recorded calls where the test expects 1.
+
+---
+
+**ART-267** 🟡 ✅ **`--emit-confirmed` replaced ART's own confirmation record
+instead of adding to it, discarding an earlier run's material the moment a
+second one was made** — *found 2026-09-06, whole-branch review of the
+media-identification round (M4), fixed in fix wave 2*
+`scripts/media-table-check.py::emit_confirmed`,
+`core/osinstall/mediahash.rs::parse_confirmed`
+
+`media_hashes_confirmed.json`'s whole design is a `checks: [...]` list of
+check *events* — date, material, hashes — precisely so several people's media
+can accumulate over time. `emit_confirmed` always wrote a single-element
+list, so confirming a second body of media (the owner's 3.1 set, after the
+3.2 set already on file) silently threw away the first run's record. The
+file's own `$comment` says "do not hand-edit; re-run the check instead," and
+re-running it was exactly what erased the previous run.
+
+**Fixed** by reading the file's existing `checks` list and appending, never
+replacing — tolerant of a missing or malformed file (falls back to empty
+rather than raising, so a real check run is never blocked by a previously
+broken one). Appending rather than prepending matters: `parse_confirmed`
+keeps the *first* check to name a repeated hash, so appending preserves
+"the earliest recorded provenance for a hash wins," which prepending would
+have silently reversed.
+
+The duplicate-hash branch in `parse_confirmed` (the `continue` on a repeated
+md5 across checks) had no test naming it. **Guarded** by
+`two_checks_naming_the_same_hash_keep_the_first_runs_confirmation`
+(`mediahash.rs`). Verified against a real scratch file and the owner's own
+table rows: two `emit_confirmed` calls left 2 check events, both preserved,
+where the old code left 1. Removing `parse_confirmed`'s dedup guard produced
+`` assertion `left == right` failed: one entry per distinct hash, not per
+check\n left: 3\n right: 2 ``; restored, clean.
+
+---
+
+**ART-266** 🔵 ✅ **"151 of the table's 186 rows" was two literal digits in
+two catalogues, tied to nothing that would fail if the data changed** —
+*found 2026-09-06, whole-branch review of the media-identification round
+(M3), fixed in fix wave 2*
+`src/i18n/en.json`, `src/i18n/tr.json` (`osinstall.mediaId.unconfirmed`)
+
+`mediahash.rs`'s own
+`the_shipped_record_confirms_35_of_the_186_rows_and_not_the_other_151` test
+already fails when `media_hashes_confirmed.json` changes — but it names
+itself, not the two catalogue strings, so a person "fixing" that test by
+editing 35/151 to a new pair ships a screen stating the old numbers. Exactly
+the round's own lesson: a claim in the record with nothing holding it up.
+
+**Fixed with a guard, not interpolation** — threading the real counts onto
+the wire would touch a wire-format struct, both TS/Rust types, every
+`MediaIdentification` test fixture, and both catalogues' wording, for a
+number that is the same on every line of a pass rather than a per-file fact.
+Added `src/i18n/media-table-counts.test.ts`, following the exact precedent of
+`distro-registry-keys.test.ts`: reads `media_hashes.json` and
+`media_hashes_confirmed.json` directly, computes the same counts
+`mediahash.rs`'s test computes, and fails unless both catalogues' prose still
+names both numbers as standalone digits.
+
+**Proven**: mutated `en.json`'s "186" to "999" and reran — `AssertionError:
+expected false to be true`. Restored, clean.
+
+---
+
+**ART-265** 🔵 ✅ **Both media-table checks passed with 0 verified, so neither
+could fail on the thing it exists to check** — *found 2026-09-06, whole-branch
+review of the media-identification round (M8)*
+`scripts/media-table-check.py`,
+`core/osinstall/mediahash.rs::every_real_disk_in_a_folder_is_looked_up_through_cores_own_code_when_asked`
+
+The script and its `#[ignore]`d Rust twin printed *35 verified, 151
+unverified, 0 conflicting* and then succeeded whatever those numbers were:
+the only failure condition was `conflicting`, which `mediahash.rs`'s own
+`every_md5_in_the_table_is_distinct` already rules out for the shipped table.
+So **0 verified — a broken reader, a renamed field, an emptied table — was
+success**, and the 35/151/0 measurement existed only as printed output. The
+round's own named lesson, turned on the round: *a test is not a guard until
+the defect has been put back and seen to fail it.*
+
+**Fixed** with two assertions of deliberately different kinds. **At least one
+row must verify** when a directory is given — `scripts/rom-table-check.py
+--scan`'s own condition (it returns its hit count, so "no ROM identified" is
+exit 1). And **where the caller states a number it is held to exactly**:
+`--expect-verified N` and `ART_MEDIA_EXPECT_VERIFIED`. The owner's 35 is
+deliberately *not* hardcoded — it is this machine's measurement against this
+machine's disks, it lives in `media_hashes_confirmed.json` and on the command
+line, and a user with a 3.1 set must not meet a check that fails because
+their media is not the author's.
+
+**Proven both ways** against a scratch directory holding one junk `.adf`:
+before, the script exited **0** on `0 verified`; after, it exits **1** with
+*"no row in the table verified against anything in …"*, and the Rust twin
+panics with the same sentence. The positive arm was run too — a probe row
+carrying the junk file's own md5 added to the table temporarily — and both
+report `1 verified` and pass, with `--expect-verified 2` /
+`ART_MEDIA_EXPECT_VERIFIED=2` failing on the count.
+
+---
+
+**ART-264** 🟠 ✅ **One unreadable folder discarded every folder already
+identified, and the screen said the whole pass failed** — *found 2026-09-06,
+whole-branch review of the media-identification round (M2)*
+`src/components/osbuilder/OsInstall.tsx`, the identification effect
+
+The hash pass walks the media folders one at a time and merges the results.
+A rejection on folder 3 was caught outside the loop, so the matches already
+collected from folders 1 and 2 were thrown away and the summary read *"ART
+could not identify these files by content"* — about files ART **had**
+identified. `CLAUDE.md`'s *never claim what you did not do*, read the other
+way round.
+
+**Fixed** the way `core/hostfs.rs` already answers this for recycling files:
+where an operation is per entry and cannot be undone as a whole, **the
+outcome is reported per entry, by name and by result**. The `catch` moved
+inside the loop, the partial `MediaIdentification` travels with the failure
+state, and each folder ends with one of four results — `identified`,
+`unreadable`, `stopped`, `not-reached` — each with its own sentence and its
+own next step. The summary names the folder it died on and counts the ones it
+finished.
+
+**Guarded** by `keeps the folders it identified when a later folder cannot be
+read` (`src/components/osbuilder/OsInstall.test.tsx`) and `keeps the files an
+interrupted pass did identify`, `names the folder a failed pass died on, and
+counts the ones it finished` and `reports every folder of an interrupted pass
+by name and by result` (`src/lib/osinstall.test.ts`).
+
+---
+
+**ART-263** 🟠 ✅ **Pressing Stop on the media-identification pass said ART
+had failed** — *found 2026-09-06, whole-branch review of the
+media-identification round (M1)*
+`src/components/osbuilder/OsInstall.tsx`, `src/lib/osinstall.ts`,
+`src/lib/jobs.ts`
+
+`awaitJobResult` rejects with `Error("cancelled")` when the user presses
+Stop, and the identification effect's `catch` mapped **every** rejection to
+`{ kind: "failed" }` — rendering *"ART could not identify these files by
+content."* A user who stopped the pass themselves was told it could not run,
+and sent to look for a problem with their media that does not exist.
+`CLAUDE.md`: *Endings stay distinct… never collapse them into "not
+succeeded".*
+
+**Fixed in the type, not only in the string** — a second message on the same
+`failed` state is one edit from collapsing back. `MediaIdentityState` gained
+a fifth variant, `cancelled`, and `jobs.ts` now owns the cancellation
+contract it always implied: `JOB_CANCELLED_MESSAGE` is the value it rejects
+with and `isJobCancellation(err)` is how a caller reads it back, so no
+component compares that string for itself. A stopped pass now says *"You
+stopped this pass. Folders identified by content before that: N of M, and
+what they found is kept. Nothing is wrong with your media — press "Scan
+again" to identify the rest by content."*
+
+**Guarded** by `does not report a pass the user stopped as a failure`
+(`src/components/osbuilder/OsInstall.test.tsx`), `does not tell a user who
+pressed Stop that ART could not identify their media` and `keeps not-asked,
+running, failed, stopped and done apart` (`src/lib/osinstall.test.ts`).
+
+---
+
+**ART-262** 🟠 ✅ **The module the hash round reversed still argued, in ART's
+own voice, that ART does not hash** — *found 2026-09-06, whole-branch review
+of the media-identification round (I1)*
+`src-tauri/src/core/osinstall/identify.rs`, module doc
+
+Two sentences: *"So there is no table here"* and *"**It does not hash
+anything.** … a hash table is a claim about pressings nobody here can check,
+and it goes stale silently."* Both were false of the tree the moment
+`media_hashes.json` (186 rows) and `mediahash.rs` landed beside them. This is
+the project's named failure class pointed at its own documentation: someone
+reading `identify.rs` a month from now would have concluded `mediahash.rs`
+was a mistake.
+
+**Fixed by recording the reversal rather than performing it silently**, which
+is what §3 of the round's own design asked for. The refusal is kept verbatim
+as a block quote, followed by what measured it: the owner's own 35 AmigaOS
+3.2 ADFs, MD5'd and looked up in the adopted table, **35 of 35 matched** to
+the right name and the right publisher, zero misses. The half of the refusal
+that was *not* overturned — "it goes stale silently" — is named as answered
+structurally instead, by `media_hashes_confirmed.json` keeping ART's own
+measurement separate from Hatcher's adopted rows. And the reason the two
+modules coexist is stated: the hash path is **additive**, `identify.rs` still
+answers by name, and a row's `volume` field is measurably *not* a disk's
+AmigaDOS volume name (0 of 12 matched), so the two are never compared.
+
+**Not test-guarded, and deliberately so** — no check in this repository can
+tell a true doc comment from a false one. What it has instead is the round's
+report and this entry.
+
+---
 
 **ART-259** 🟠 ✅ **ART-257's own evidence check ran after the branch it was
 meant to reach through, so it never ran for the one folder it exists for** —

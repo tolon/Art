@@ -552,6 +552,439 @@ export async function osinstallScanMedia(mediaFolder: string): Promise<MediaScan
   return invoke<MediaScanResult>("osinstall_scan_media", { folder: mediaFolder });
 }
 
+// ---------------------------------------------------------------------------
+// Identifying media by content hash — mirrors `core::osinstall::mediahash`
+// ---------------------------------------------------------------------------
+
+/**
+ * One row of the 186-row install-media table ART compiles in, adopted from
+ * Emu68 Hatcher (MIT). Mirrors `core::osinstall::mediahash::MediaRow`.
+ *
+ * Every field is **as the table states it** and none of them may be
+ * re-derived here. Two traps the Rust side documents and this side inherits:
+ * the mapping is many-to-one (one logical disk has many hashes —
+ * `Workbench3_1` has eleven), and the table's own `version` and `source`
+ * disagree for the Hotfix Pack, which is the source's disagreement to report
+ * rather than ART's to resolve.
+ */
+export interface MediaRow {
+  /** 32 lowercase hex characters. */
+  md5: string;
+  version: string;
+  /**
+   * **Hatcher's identifier for the disk — not the disk's AmigaDOS volume
+   * name, and never to be compared with one.**
+   *
+   * Measured 2026-09-06 against the owner's own AmigaOS 3.2 media: 0 of 12
+   * matched. This says `Backdrops3_2`, `LocaleDE3_2`, `DiskDoctor3_2`; the
+   * same disks' own root blocks say `Backdrops3.2`, `Locale-DE`,
+   * `DiskDoctor`. Joining them would have put all 35 of the owner's good
+   * disks in conflict with the table. Never render this as the disk's name —
+   * {@link MediaMatch.volumeName} is that.
+   */
+  volume: string;
+  /** A human-readable label for the disk, as the table names it. */
+  name: string;
+  /** Where the table says this dump came from. */
+  source: string;
+  /** The disk's position in its set, when the source states one. */
+  sequence: number | null;
+}
+
+/**
+ * What one file in a media folder turned out to be. Mirrors
+ * `core::osinstall::mediahash::MediaMatch`.
+ *
+ * The two middle fields come from two different sources on purpose and are
+ * never reconciled: `volumeName` is the disk's own answer, `row` is the
+ * table's.
+ */
+export interface MediaMatch {
+  path: string;
+  /**
+   * What the **disk** says it is called, off its own root block. `null` when
+   * this file is not something ART can open as media at all (an `.lha`, or a
+   * damaged image) — which does not stop it being hashed and looked up.
+   */
+  volumeName: string | null;
+  /**
+   * What the **table** says about these bytes, or `null` when no row claims
+   * them.
+   *
+   * `null` is **"not in the table"**, which is a claim about the table and
+   * not about the disk: 151 of the 186 rows are themselves unconfirmed, and
+   * a re-imaged disk is a legitimate miss. It must never read as "not
+   * genuine", and it must never weaken what `volumeName` already said.
+   */
+  row: MediaRow | null;
+  /** The key the lookup was made with, 32 lowercase hex characters. */
+  md5: string;
+  /**
+   * The check that confirmed {@link row} against a real disk, when one has.
+   * Mirrors `core::osinstall::mediahash::Confirmation`.
+   *
+   * `null` beside a non-null `row` is **"matched a row nobody has ever
+   * checked against a real disk"** — 151 of the table's 186 rows, and a
+   * weaker sentence than a confirmed match. Collapsing the two would hand
+   * those 151 a confidence nobody earned. Always `null` when `row` is
+   * `null`: a confirmation is about a row, and there is no row.
+   */
+  confirmed: MediaConfirmation | null;
+}
+
+/**
+ * A check somebody really ran, and what they ran it against. Mirrors
+ * `core::osinstall::mediahash::Confirmation`.
+ *
+ * Both fields are rendered verbatim, because a confirmation that cannot say
+ * what confirmed it is a badge rather than a citation.
+ */
+export interface MediaConfirmation {
+  /** ISO date the check was run. */
+  checked: string;
+  /** What it was run against, in the words the screen shows. */
+  against: string;
+}
+
+/**
+ * What one pass over a media folder found. Mirrors
+ * `core::osinstall::mediahash::Identification`, flattened beside the job id.
+ *
+ * `unreadable` and the two counts are here so the screen can keep four
+ * endings distinct rather than collapsing them: matched, not in the table,
+ * could not be read, and not hashed yet are four different sentences with
+ * four different next steps (§89).
+ */
+export interface MediaIdentification {
+  /** One entry per candidate file that could be hashed, in path order. */
+  matches: MediaMatch[];
+  /** Candidates whose bytes could not be read at all — reported, never
+   *  silently dropped: a file missing from `matches` reads as a file that is
+   *  not in the folder. */
+  unreadable: string[];
+  /** How many files this pass actually read and hashed. */
+  hashed: number;
+  /** How many were answered out of ART's scan cache without being read. */
+  remembered: number;
+}
+
+/** The event `osinstall_identify_media`'s own background job answers on. */
+export const OSINSTALL_IDENTIFY_MEDIA_EVENT = "osinstall-identify-media-result";
+
+interface OsInstallIdentifyMediaResult extends MediaIdentification {
+  job_id: number;
+}
+
+/**
+ * What every install disk in `folder` turns out to be, by content hash,
+ * looked up in the table ART compiles in. Reads the files and writes nothing
+ * to them.
+ *
+ * **Additive to {@link osinstallScanMedia}, never a replacement for it.** A
+ * disk's volume name and its table row are two facts from two sources; this
+ * adds the second one and takes nothing away from the first.
+ *
+ * Runs as a background job on the Rust side (§54 — the first pass over the
+ * owner's own 3.2 folder reads 31 MB), in its own lane so picking a second
+ * folder supersedes the first pass instead of stacking on it. This wrapper
+ * hides that behind an ordinary promise the way {@link osinstallCollisions}
+ * does, by starting the job and awaiting its own result event.
+ *
+ * A second call over an unchanged folder hashes nothing: the result is kept
+ * against the same `(path, size, mtime)` identity ART's scan cache already
+ * uses, and `remembered` says how many answers came from there.
+ */
+export async function osinstallIdentifyMedia(folder: string): Promise<MediaIdentification> {
+  if (!folder) return { matches: [], unreadable: [], hashed: 0, remembered: 0 };
+  // `awaitJobResult` subscribes before it calls `start` — see its own doc
+  // comment: a pass answered entirely from the cache can finish before the
+  // frontend has even learnt its job id.
+  return awaitJobResult<OsInstallIdentifyMediaResult, MediaIdentification>(
+    OSINSTALL_IDENTIFY_MEDIA_EVENT,
+    () => invoke<number>("osinstall_identify_media", { folder }),
+    ({ matches, unreadable, hashed, remembered }) => ({
+      matches,
+      unreadable,
+      hashed,
+      remembered,
+    })
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The sentences a hash result is allowed to produce (design §4.3)
+// ---------------------------------------------------------------------------
+//
+// **This is the round's whole risk surface.** Everything under it either
+// matched or did not; these functions are where that becomes something a
+// person reads and acts on, and this project's most expensive defects are
+// exactly the confident wrong sentence. Four rules, all of them from §4.3 and
+// none of them negotiable by a later edit:
+//
+// 1. **A match is a claim about the row, not about the disk.** ART says
+//    *"this file matches the row Emu68 Hatcher's table calls X"* — never
+//    *"this is X"*. That sentence stays true even if the row is wrong,
+//    because it reports what was checked and where the claim came from. The
+//    attribution is inside the sentence, not a footnote under the list.
+// 2. **A confirmed row and an unconfirmed one are two sentences.** 35 of the
+//    186 rows have been hashed off a real disk (`media_hashes_confirmed.json`,
+//    generated by `scripts/media-table-check.py --emit-confirmed`); 151 have
+//    not. Showing all 186 with one voice would give 151 rows a confidence
+//    nobody earned.
+// 3. **A miss is not an accusation, and takes nothing away.** Any
+//    modification, re-imaging or different revision breaks the hash. "Not in
+//    the table" is a fact about the table. It never reads as "not genuine",
+//    and it never weakens or removes what the disk's own volume name already
+//    established — which is a *different* line on the screen, from a
+//    different source, and it stays exactly as it was.
+// 4. **"Could not be read" is not "not in the table", and "not hashed yet"
+//    is neither.** Five endings, five next steps: fix the file, nothing,
+//    wait, nothing, and choose a folder. Collapsing any pair of them is the
+//    §89 defect.
+//
+// **The disk's own name is deliberately absent from every sentence below.**
+// A row's `volume` is not the disk's volume name — measured 0 of 12 matching
+// — so the two are shown as two facts from two sources: the existing
+// `osinstall.media.found` line says what the disks call themselves, and these
+// lines say what the table makes of their bytes. Nothing here joins them and
+// nothing here reconciles them.
+
+/**
+ * What happened to **one** media folder in a pass.
+ *
+ * Four results and never three, for the reason `core/hostfs.rs` states about
+ * recycling files: an operation that runs per entry and cannot be undone as a
+ * whole is **reported per entry, by name and by result**, because "the pass
+ * did not finish" says nothing about which entries did. A pass over three
+ * folders that dies on the second one produced one of each of the first three
+ * results below, and a screen that showed only the failure would be claiming
+ * ART did not do something it did.
+ */
+export type MediaFolderResult =
+  /** Its files were hashed and are in the list. */
+  | "identified"
+  /** ART asked and the pass failed on this folder. */
+  | "unreadable"
+  /** The user pressed Stop while this folder was being read. Not the same as
+   *  `unreadable`: nothing is wrong with the folder and the next step is to
+   *  scan again, not to fix anything. */
+  | "stopped"
+  /** The pass ended before this folder's turn, so it was never opened. Not
+   *  the same as either failure above: nothing is known about it at all. */
+  | "not-reached";
+
+/** One folder, by name, and what became of it. */
+export type MediaFolderOutcome = { folder: string; result: MediaFolderResult };
+
+/** What ART currently knows about a folder's contents by content hash. */
+export type MediaIdentityState =
+  /** No folder, or nothing has been asked yet. */
+  | { kind: "not-asked" }
+  /** A pass is running right now. Distinct from `not-asked`: the next step is
+   *  to wait, not to do something. */
+  | { kind: "identifying" }
+  /** The pass stopped on a folder ART could not read. Distinct from an empty
+   *  result, which would read as "ART looked and found nothing" — and it
+   *  carries whatever earlier folders **did** identify, because throwing that
+   *  away and reporting "the pass failed" would be ART denying work it had
+   *  already finished. */
+  | { kind: "failed"; identification: MediaIdentification; folders: MediaFolderOutcome[] }
+  /** The user pressed Stop. **Not a failure**, and it must never render as
+   *  one: the next step is "scan again", not "something is wrong with your
+   *  media". Its own `kind` rather than a second message on `failed`, so the
+   *  next edit cannot quietly collapse the two back into one ending. */
+  | { kind: "cancelled"; identification: MediaIdentification; folders: MediaFolderOutcome[] }
+  | { kind: "identified"; identification: MediaIdentification };
+
+/** One file, and the one sentence that is true about it. */
+export type MediaIdentityLine = {
+  /** Which of the four per-file endings this is. Kept on the object so a
+   *  screen can style them differently without re-deriving which is which
+   *  from the phrase key. */
+  kind: "confirmed" | "unconfirmed" | "not-in-table" | "unreadable";
+  /** The file's own name, which is what the user recognises it by. */
+  file: string;
+  /** Its full path, for a `key` and a tooltip. */
+  path: string;
+  phrase: Phrase;
+};
+
+/** The last path segment, on either separator. Media folders are chosen by
+ *  the user and carry Windows paths, but a test fixture and a future CLI
+ *  shell carry POSIX ones. */
+function fileName(path: string): string {
+  const parts = path.split(/[\\/]/);
+  return parts[parts.length - 1] || path;
+}
+
+/**
+ * One line per file, in path order, each carrying the single sentence that is
+ * true about it.
+ *
+ * Unreadable files are folded into the same list rather than kept in a
+ * footnote, because a file that appears nowhere reads as a file that is not
+ * in the folder — but they keep their own `kind` and their own key, so
+ * "ART could not read this" can never be mistaken for "the table does not
+ * know this".
+ *
+ * **A pass that failed or was stopped still lists what it did identify.** The
+ * per-file endings are per file; a folder ART could not open says nothing
+ * about the thirty-five disks it already read in the folder before it. What
+ * changes for those two states is the summary below, which says the pass did
+ * not finish and names the folders it did not cover — never this list, which
+ * would then be claiming ART had not done work it had.
+ */
+export function mediaIdentityLines(state: MediaIdentityState): MediaIdentityLine[] {
+  if (state.kind === "not-asked" || state.kind === "identifying") return [];
+  const { matches, unreadable } = state.identification;
+
+  const matched: MediaIdentityLine[] = matches.map((found) => {
+    const file = fileName(found.path);
+    if (!found.row) {
+      return {
+        kind: "not-in-table",
+        file,
+        path: found.path,
+        phrase: { key: "osinstall.mediaId.notInTable", params: { file } },
+      };
+    }
+    // The row's own three fields, as the table states them — never
+    // re-derived, and never resolved when they disagree (the Hotfix Pack's
+    // `version` and `source` do).
+    const row = { name: found.row.name, version: found.row.version, source: found.row.source };
+    if (found.confirmed) {
+      return {
+        kind: "confirmed",
+        file,
+        path: found.path,
+        phrase: {
+          key: "osinstall.mediaId.confirmed",
+          params: {
+            file,
+            ...row,
+            checked: found.confirmed.checked,
+            against: found.confirmed.against,
+          },
+        },
+      };
+    }
+    return {
+      kind: "unconfirmed",
+      file,
+      path: found.path,
+      phrase: { key: "osinstall.mediaId.unconfirmed", params: { file, ...row } },
+    };
+  });
+
+  const unread: MediaIdentityLine[] = unreadable.map((path) => ({
+    kind: "unreadable",
+    file: fileName(path),
+    path,
+    phrase: { key: "osinstall.mediaId.unreadable", params: { file: fileName(path) } },
+  }));
+
+  return [...matched, ...unread].sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/**
+ * The one line about the pass itself — what ART did, not what it found.
+ *
+ * `null` when there is nothing to say about *how the pass answered* —
+ * `hashed + remembered === 0`, which is two different folders in practice:
+ * one with no `.adf`/`.iso`/`.lha` in it at all (`osinstall.media.empty`
+ * already owns that sentence, and a second one counting the same zero would
+ * be this screen contradicting itself), and one whose every candidate came
+ * back `unreadable` (that sentence is owned per file, above, in
+ * {@link mediaIdentityLines} — nothing here needs to repeat it, and nothing
+ * untrue is said by staying silent). Both share the one condition that
+ * matters to this function: there were zero hashes to report where they came
+ * from.
+ *
+ * **The identified case states where its answer came from, and that is
+ * deliberate.** The hash is cached against `(path, size, mtime)` — the same
+ * identity `scan_cache` keys a listing on — so a restored backup that keeps
+ * its timestamps is answered, with complete confidence, out of the previous
+ * file's hash. A stale listing is a stale list of files; a stale *hash* is a
+ * wrong **name** for a disk, which is worse. So the line says how many
+ * answers were read now and how many were remembered, and names the escape
+ * hatch (ART-194's "Re-scan media" button, which drops the hash as well as
+ * the listing) instead of leaving the user to discover the possibility.
+ */
+export function mediaIdentitySummary(state: MediaIdentityState): Phrase | null {
+  switch (state.kind) {
+    case "not-asked":
+      return { key: "osinstall.mediaId.notHashedYet" };
+    case "identifying":
+      return { key: "osinstall.mediaId.identifying" };
+    case "failed": {
+      const { done, total } = foldersDone(state.folders);
+      // The folder it died on, by name — a refusal that cannot say *which*
+      // folder is one the user cannot act on.
+      const folder = state.folders.find((f) => f.result === "unreadable")?.folder ?? "";
+      return { key: "osinstall.mediaId.failed", params: { folder, identified: done, total } };
+    }
+    case "cancelled": {
+      const { done, total } = foldersDone(state.folders);
+      return { key: "osinstall.mediaId.cancelled", params: { identified: done, total } };
+    }
+    case "identified": {
+      const { hashed, remembered } = state.identification;
+      if (hashed + remembered === 0) return null;
+      return { key: "osinstall.mediaId.provenance", params: { hashed, remembered } };
+    }
+  }
+}
+
+/** How many of the pass's folders got all the way through, and how many there
+ *  were. Counted off the outcomes rather than tracked separately, so the
+ *  number in the sentence and the list of folders below it cannot disagree. */
+function foldersDone(folders: MediaFolderOutcome[]): { done: number; total: number } {
+  return {
+    done: folders.filter((f) => f.result === "identified").length,
+    total: folders.length,
+  };
+}
+
+/** One folder, and the one sentence that is true about it. */
+export type MediaFolderLine = {
+  folder: string;
+  result: MediaFolderResult;
+  phrase: Phrase;
+};
+
+/**
+ * One line per **folder**, for a pass that did not finish.
+ *
+ * `core/hostfs.rs`'s rule, applied one layer up: the pass walks the folders
+ * one at a time and a folder already hashed cannot be un-hashed by a later
+ * one failing, so the outcome is reported per entry, by name and by result.
+ * The four results are four different sentences with four different next
+ * steps — fix the folder, scan again, scan again, and nothing — and
+ * collapsing any pair of them is the §89 defect this round is about.
+ *
+ * Empty for the three states where there is nothing per-folder to say: a pass
+ * that has not run, one still running, and one that covered every folder (for
+ * which the per-file list *is* the report).
+ */
+export function mediaIdentityFolderLines(state: MediaIdentityState): MediaFolderLine[] {
+  if (state.kind !== "failed" && state.kind !== "cancelled") return [];
+  return state.folders.map(({ folder, result }) => ({
+    folder,
+    result,
+    phrase: { key: FOLDER_RESULT_KEYS[result], params: { folder } },
+  }));
+}
+
+/** One key per result, as a total record rather than a `switch`, so a fifth
+ *  result cannot compile without a sentence of its own.
+ *  `src/i18n/phrase-keys.test.ts` is what proves all four keys exist. */
+const FOLDER_RESULT_KEYS: Record<MediaFolderResult, string> = {
+  identified: "osinstall.mediaId.folderIdentified",
+  unreadable: "osinstall.mediaId.folderUnreadable",
+  stopped: "osinstall.mediaId.folderStopped",
+  "not-reached": "osinstall.mediaId.folderNotReached",
+};
+
 /**
  * Which shipped release these volume names are the install media of, or
  * `null` when they are nobody's or more than one release's (ART-208).
