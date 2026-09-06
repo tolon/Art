@@ -12,7 +12,7 @@
 // `saveSettings` rejects in jsdom with nothing to catch it.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import i18n from "@/i18n";
@@ -218,6 +218,74 @@ describe("what a successful apply says", () => {
 
     await screen.findByTestId("appearance-done");
     expect(screen.queryByTestId("appearance-backup")).toBeNull();
+  });
+});
+
+describe("what reaches the wire", () => {
+  // Fix round 1: the wallpaper path was tested to the standard of "assert the
+  // exact object handed to core", but screen depth and shell defaults —
+  // added on this task's own initiative, alongside the wallpaper the brief
+  // named — were only exercised through the pure `appearanceBlocker`
+  // function. A test that never ticks the box and never reads
+  // `applyMock.mock.calls` cannot tell "the value reaches the request" from
+  // "the field renders and does nothing".
+  it("sends the screen depth, and the wallpaper stays absent", async () => {
+    seedStore();
+    render(<AppearancePanel />);
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /change the screen depth/i })
+    );
+    const depthField = screen.getByRole("textbox", { name: /depth/i });
+    // A single `change` event carrying the whole new value, rather than
+    // `userEvent.type` keystroke by keystroke: the field is controlled and
+    // only commits a value inside its guarded range (1-8), so a `clear()`
+    // that briefly leaves it empty is correctly refused rather than
+    // committed — this is the field working as intended, not a test
+    // workaround for a bug.
+    fireEvent.change(depthField, { target: { value: "6" } });
+
+    await userEvent.click(screen.getByRole("button", { name: /apply/i }));
+    await waitFor(() => expect(applyMock).toHaveBeenCalled());
+
+    const [tree, request] = applyMock.mock.calls.at(-1)!;
+    expect(tree).toBe(TREE);
+    expect(request.screenDepth).toBe(6);
+    // The test cannot pass on a request that simply contains everything —
+    // the wallpaper was never ticked, so it must be absent, not merely
+    // "some value or other".
+    expect(request.wallpaper).toBeNull();
+    expect(request.shellDefaults).toBe(false);
+  });
+
+  it("sends the shell defaults flag, and the wallpaper and screen depth stay absent", async () => {
+    seedStore();
+    render(<AppearancePanel />);
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /write the shell's own defaults/i })
+    );
+    await userEvent.click(screen.getByRole("button", { name: /apply/i }));
+    await waitFor(() => expect(applyMock).toHaveBeenCalled());
+
+    const [tree, request] = applyMock.mock.calls.at(-1)!;
+    expect(tree).toBe(TREE);
+    expect(request.shellDefaults).toBe(true);
+    expect(request.wallpaper).toBeNull();
+    expect(request.screenDepth).toBeNull();
+  });
+});
+
+describe("a stale or hand-edited settings file cannot put a bad value on screen", () => {
+  it("falls back to the default depth when the stored value is outside the guard's range", async () => {
+    // `isWholeNumberBetween(1, 8)`'s whole purpose: a value a guard rejects
+    // must fall back to the default (4) rather than reach the screen —
+    // ART's own "nothing changes unless the user changes it" rule read from
+    // the other side, for a file the user never touched but something else
+    // (an older ART, a hand edit) did.
+    seedStore({ "appearance.screenDepthOn": true, "appearance.screenDepth": 999 });
+    render(<AppearancePanel />);
+
+    const depthField = await screen.findByRole("textbox", { name: /depth/i });
+    expect((depthField as HTMLInputElement).value).toBe("4");
   });
 });
 
