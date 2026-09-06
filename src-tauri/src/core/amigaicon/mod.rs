@@ -601,6 +601,33 @@ pub(crate) mod tests_support {
         buf.extend_from_slice(&drawer_data);
         buf
     }
+
+    /// A valid icon at least 86 bytes long, with plausible-looking
+    /// `NewWindow` bytes sitting right where [`super::drawer_window`] would
+    /// read them (offset 78, `HEADER_LEN`) — but `do_DrawerData` (66) left
+    /// at zero, so there is no `DrawerData` block and those bytes are not a
+    /// window at all.
+    ///
+    /// This is what isolates the `do_DrawerData == 0` guard from a plain
+    /// bounds check: [`synthetic_icon`]`(&[], 4096, &[])` is only 82 bytes,
+    /// so removing the guard there fails on "not enough bytes for a
+    /// window" rather than on the guard itself. This fixture has plenty of
+    /// bytes — removing the guard here must read a wrong window, not error.
+    pub(crate) fn synthetic_icon_with_trailing_window_bytes_but_no_drawer_data() -> Vec<u8> {
+        let mut buf = vec![0u8; HEADER_LEN];
+        buf[0..2].copy_from_slice(&MAGIC.to_be_bytes());
+        buf[2..4].copy_from_slice(&1u16.to_be_bytes()); // do_Version
+                                                        // OFF_DRAWER_DATA (66..70) is left zero: no DrawerData block declared.
+        let left: i16 = 10;
+        let top: i16 = 20;
+        let width: i16 = 300;
+        let height: i16 = 200;
+        buf.extend_from_slice(&left.to_be_bytes());
+        buf.extend_from_slice(&top.to_be_bytes());
+        buf.extend_from_slice(&width.to_be_bytes());
+        buf.extend_from_slice(&height.to_be_bytes());
+        buf
+    }
 }
 
 #[cfg(test)]
@@ -608,6 +635,7 @@ mod tests {
     use super::*;
     use tests_support::{
         synthetic_drawer_icon, synthetic_icon, synthetic_icon_at, synthetic_icon_of_type,
+        synthetic_icon_with_trailing_window_bytes_but_no_drawer_data,
     };
 
     /// A minimal icon with a `GadgetRender` `Image` whose claimed
@@ -745,7 +773,7 @@ mod tests {
     }
 
     #[test]
-    fn a_drawer_window_reads_only_when_drawer_data_is_present() {
+    fn a_drawer_window_reads_the_real_rectangle_when_drawer_data_is_present() {
         // Measured: art1/Devs/DataTypes.info -> 393,126 342x163; the project
         // icon beside it has do_DrawerData = 0 and no window at all.
         assert_eq!(
@@ -757,10 +785,34 @@ mod tests {
                 height: 163
             })
         );
+    }
+
+    #[test]
+    fn a_short_icon_with_no_drawer_data_returns_none_without_needing_window_sized_bytes() {
+        // `synthetic_icon(&[], 4096, &[])` is 82 bytes - too short to hold a
+        // window at all (a window needs 86). This proves the early
+        // `do_DrawerData == 0` return means a minimal icon is not forced to
+        // carry window-sized bytes it has no use for. It does NOT by itself
+        // isolate the do_DrawerData guard: with the guard removed, this same
+        // fixture fails on a bounds error (not enough bytes for a window),
+        // which is a different failure than the guard being absent — see
+        // `a_zero_drawer_data_pointer_means_no_window_even_when_bytes_follow`
+        // for the test that isolates that specifically.
         assert_eq!(
             drawer_window(&synthetic_icon(&[], 4096, &[])).unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn a_zero_drawer_data_pointer_means_no_window_even_when_bytes_follow() {
+        // 86+ bytes with a plausible NewWindow at 78, but do_DrawerData == 0.
+        // Without the guard this reads a window out of bytes that are not
+        // one - which is a wrong answer, not an error, and is what the guard
+        // prevents. This is the test that isolates the do_DrawerData == 0
+        // check itself, rather than incidentally exercising a bounds check.
+        let icon = synthetic_icon_with_trailing_window_bytes_but_no_drawer_data();
+        assert_eq!(drawer_window(&icon).unwrap(), None);
     }
 
     #[test]
