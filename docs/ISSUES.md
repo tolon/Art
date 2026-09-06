@@ -2224,6 +2224,48 @@ The two-arm comparison stays because it is what identifies the *cause* rather
 than the outcome: same window title, same bytes, `600.4GB boþ` under
 `topaz.font` and `600.4GB boş` under `TOPAZ-ISO9`, one variable.
 
+**This hook stopped mid-run four times in the drawer-icons round
+(2026-09-06), and the cause is the machine, not the recipe.** Re-run against
+the same disc with the round's own two new sibling-icon components also on
+(`components_on=[...] items=2391 bytes=19138812`), all four attempts printed
+a clean plan — `refusals` never non-empty — and then the process ended
+partway through `apply()`: **exit code 0, no panic, no `test result:` line**,
+identically whether the pipe was removed and the exit code read directly.
+That is CLAUDE.md's own 2026-09-04 antivirus-interference shape, verbatim.
+The fix round's own report initially flagged this as unresolved and
+recommended "a dedicated look before anyone relies on that recipe path" —
+over-stated, because the one thing that had argued *against* the antivirus
+reading turned out to argue for a sharper version of it. All four runs
+stopped at **exactly** 561 of 2391 files, leaving the same leftover
+`Prefs/Presets/Patterns/Eyestrain/.HypnoGreen.jpg.art-tmp-<stamp>-560` —
+a complete `atomic_write` temp file never renamed into place. Random
+interference does not stop at the same file four times, which read as
+evidence against a scanner; but the owner then identified what the scanner
+actually reacts to — **`art_lib`, this crate's own library name**
+(`src-tauri/Cargo.toml`, `[lib] name = "art_lib"`, built as
+`staticlib`/`cdylib`/`rlib`) — and that explains the identical stopping point
+better than a hang in the recipe path does: the scanner kills the **test
+harness itself**, not any file the harness is writing, so a deterministic
+run dies after roughly the same elapsed time on every attempt and therefore
+at roughly the same file. "Always the same place" turned out to mean
+"always the same duration"; the stray `.art-tmp` is whatever `atomic_write`
+was mid-way through when the process died, not the trigger. The same
+session logged this twice more from the outside — one `cargo test`
+invocation reporting `0 passed`, and a full-suite run truncating at about
+eighty lines — both consistent with the same cause.
+
+**Explained, not proven — nobody has yet re-run this hook with the scanner
+excluded.** That re-run (with `src-tauri\target\` and the scratch root
+excluded, see STATUS.md) is what would close this properly; until it
+happens, "the antivirus did it" is the reading the evidence supports, not a
+settled fact. What *is* proven this round: the other two real-material hooks
+this round needed — the AmigaOS 3.2.2 layered build and the AmigaOS 3.9 base
+build — both ran to completion with `refusals=[]`, so the Subtree-icon
+collision risk this round's own feature could have introduced is measured
+clean on two of three releases; only this hook's own contribution stays
+unmeasured, and it stays unmeasured for an environment reason rather than a
+recipe one.
+
 
 **ART-224** 🟠 ✅ **Two AmigaOS 3.2 components declared an override over
 `storage` and were declared above it, so both overrides silently did
