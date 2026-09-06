@@ -28,6 +28,7 @@ import {
   isForcedOnByCondition,
   keymapsIn,
   mediaEvidence,
+  mediaIdentityFolderLines,
   mediaIdentityLines,
   mediaIdentitySummary,
   type MediaConfirmation,
@@ -1674,20 +1675,125 @@ describe("what a content-hash result is allowed to say", () => {
    * four states with four next steps.** Collapsing any pair — most
    * temptingly a failure into an empty result — is the §89 defect.
    */
-  it("keeps not-asked, running, failed and done apart", () => {
+  it("keeps not-asked, running, failed, stopped and done apart", () => {
     expect(mediaIdentitySummary({ kind: "not-asked" })).toEqual({
       key: "osinstall.mediaId.notHashedYet",
     });
     expect(mediaIdentitySummary({ kind: "identifying" })).toEqual({
       key: "osinstall.mediaId.identifying",
     });
-    expect(mediaIdentitySummary({ kind: "failed" })).toEqual({
-      key: "osinstall.mediaId.failed",
-    });
+    expect(mediaIdentitySummary(stalled("failed"))?.key).toBe("osinstall.mediaId.failed");
+    expect(mediaIdentitySummary(stalled("cancelled"))?.key).toBe("osinstall.mediaId.cancelled");
     expect(mediaIdentitySummary(identified({ hashed: 2, remembered: 1 }))).toEqual({
       key: "osinstall.mediaId.provenance",
       params: { hashed: 2, remembered: 1 },
     });
+    // The point of the two above is that they are *different*: a "cancelled"
+    // that is only a second message on the `failed` state is one edit away
+    // from collapsing back.
+    expect(mediaIdentitySummary(stalled("failed"))?.key).not.toBe(
+      mediaIdentitySummary(stalled("cancelled"))?.key
+    );
+  });
+
+  // -- Fix wave 1, M1 and M2. Pressing Stop is not a failure, and a pass that
+  // died on folder 3 still did folders 1 and 2.
+
+  /** A pass over three folders that ended on the second, in whichever way.
+   *  Deliberately built with one folder of each outcome, so an assertion
+   *  about "the folder that failed" cannot be satisfied by the only folder
+   *  there is. */
+  function stalled(kind: "failed" | "cancelled"): MediaIdentityState {
+    return {
+      kind,
+      identification: {
+        matches: [match({ path: "E:\\one\\a.adf", row: ROW, md5: ROW.md5, confirmed: CHECK })],
+        unreadable: [],
+        hashed: 1,
+        remembered: 0,
+      },
+      folders: [
+        { folder: "E:\\one", result: "identified" },
+        { folder: "E:\\two", result: kind === "failed" ? "unreadable" : "stopped" },
+        { folder: "E:\\three", result: "not-reached" },
+      ],
+    };
+  }
+
+  /**
+   * **The user pressing Stop is not ART failing**, and the two sentences send
+   * a user to different places: one says scan again, the other says something
+   * is wrong with the media. Asserted on the *sentence*, not on "the panel
+   * shows something", which is reachable from four other states.
+   */
+  it("does not tell a user who pressed Stop that ART could not identify their media", () => {
+    const phrase = mediaIdentitySummary(stalled("cancelled"));
+    expect(phrase?.key).toBe("osinstall.mediaId.cancelled");
+    // And it does not smuggle the failure sentence in under another key.
+    expect(phrase?.key).not.toContain("failed");
+  });
+
+  /**
+   * **A refusal names what it could not read.** "ART could not read a folder"
+   * with no folder in it is a refusal the user cannot act on, and with three
+   * folders configured it is not even a hint.
+   */
+  it("names the folder a failed pass died on, and counts the ones it finished", () => {
+    expect(mediaIdentitySummary(stalled("failed"))?.params).toEqual({
+      folder: "E:\\two",
+      identified: 1,
+      total: 3,
+    });
+    // The stopped case has no unreadable folder to name, so it counts only.
+    expect(mediaIdentitySummary(stalled("cancelled"))?.params).toEqual({
+      identified: 1,
+      total: 3,
+    });
+  });
+
+  /**
+   * **Never claim what you did not do, read the other way round.** ART hashed
+   * the first folder's disk; a second folder it could not open takes nothing
+   * away from that, and a screen showing an empty list would be denying work
+   * ART had finished.
+   */
+  it("keeps the files an interrupted pass did identify", () => {
+    for (const kind of ["failed", "cancelled"] as const) {
+      const lines = mediaIdentityLines(stalled(kind));
+      expect(lines.map((l) => l.file), kind).toEqual(["a.adf"]);
+      expect(lines[0].kind, kind).toBe("confirmed");
+    }
+  });
+
+  /**
+   * **Per entry, by name and by result** — `core/hostfs.rs`'s rule. Four
+   * results, four keys, and the folder's own name in each: a report that
+   * said "2 of 3 folders" without saying *which* would leave the user to
+   * guess which of their folders was never opened.
+   */
+  it("reports every folder of an interrupted pass by name and by result", () => {
+    const lines = mediaIdentityFolderLines(stalled("failed"));
+    expect(lines.map((l) => l.folder)).toEqual(["E:\\one", "E:\\two", "E:\\three"]);
+    expect(lines.map((l) => l.result)).toEqual(["identified", "unreadable", "not-reached"]);
+    expect(new Set(lines.map((l) => l.phrase.key)).size).toBe(3);
+    for (const line of lines) {
+      expect(line.phrase.params).toEqual({ folder: line.folder });
+    }
+    // The fourth result is the cancelled pass's in-flight folder, and it has
+    // a key of its own — "you stopped me here" is not "I could not read it".
+    const stoppedLine = mediaIdentityFolderLines(stalled("cancelled"))[1];
+    expect(stoppedLine.result).toBe("stopped");
+    expect(stoppedLine.phrase.key).toBe("osinstall.mediaId.folderStopped");
+    expect(stoppedLine.phrase.key).not.toBe(lines[1].phrase.key);
+  });
+
+  /** Nothing per-folder to say about a pass that has not run, is running, or
+   *  covered every folder — for the last, the per-file list *is* the report,
+   *  and a second list would be the screen answering twice. */
+  it("says nothing per folder about a pass that ran to the end", () => {
+    expect(mediaIdentityFolderLines({ kind: "not-asked" })).toEqual([]);
+    expect(mediaIdentityFolderLines({ kind: "identifying" })).toEqual([]);
+    expect(mediaIdentityFolderLines(identified({ hashed: 1 }))).toEqual([]);
   });
 
   /** Where the answer came from is on screen, because a remembered hash can
@@ -1716,7 +1822,16 @@ describe("what a content-hash result is allowed to say", () => {
   it("shows no per-file line until there is a result", () => {
     expect(mediaIdentityLines({ kind: "not-asked" })).toEqual([]);
     expect(mediaIdentityLines({ kind: "identifying" })).toEqual([]);
-    expect(mediaIdentityLines({ kind: "failed" })).toEqual([]);
+    // A pass that failed before it identified anything is empty too — but it
+    // is empty because nothing was found, not because the state discards it
+    // (`keeps the files an interrupted pass did identify` is that half).
+    expect(
+      mediaIdentityLines({
+        kind: "failed",
+        identification: { matches: [], unreadable: [], hashed: 0, remembered: 0 },
+        folders: [{ folder: "E:\\one", result: "unreadable" }],
+      })
+    ).toEqual([]);
   });
 
   /** Both separators, because the folder is the user's and a future CLI

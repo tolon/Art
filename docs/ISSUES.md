@@ -800,6 +800,132 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-265** 🔵 ✅ **Both media-table checks passed with 0 verified, so neither
+could fail on the thing it exists to check** — *found 2026-09-06, whole-branch
+review of the media-identification round (M8)*
+`scripts/media-table-check.py`,
+`core/osinstall/mediahash.rs::every_real_disk_in_a_folder_is_looked_up_through_cores_own_code_when_asked`
+
+The script and its `#[ignore]`d Rust twin printed *35 verified, 151
+unverified, 0 conflicting* and then succeeded whatever those numbers were:
+the only failure condition was `conflicting`, which `mediahash.rs`'s own
+`every_md5_in_the_table_is_distinct` already rules out for the shipped table.
+So **0 verified — a broken reader, a renamed field, an emptied table — was
+success**, and the 35/151/0 measurement existed only as printed output. The
+round's own named lesson, turned on the round: *a test is not a guard until
+the defect has been put back and seen to fail it.*
+
+**Fixed** with two assertions of deliberately different kinds. **At least one
+row must verify** when a directory is given — `scripts/rom-table-check.py
+--scan`'s own condition (it returns its hit count, so "no ROM identified" is
+exit 1). And **where the caller states a number it is held to exactly**:
+`--expect-verified N` and `ART_MEDIA_EXPECT_VERIFIED`. The owner's 35 is
+deliberately *not* hardcoded — it is this machine's measurement against this
+machine's disks, it lives in `media_hashes_confirmed.json` and on the command
+line, and a user with a 3.1 set must not meet a check that fails because
+their media is not the author's.
+
+**Proven both ways** against a scratch directory holding one junk `.adf`:
+before, the script exited **0** on `0 verified`; after, it exits **1** with
+*"no row in the table verified against anything in …"*, and the Rust twin
+panics with the same sentence. The positive arm was run too — a probe row
+carrying the junk file's own md5 added to the table temporarily — and both
+report `1 verified` and pass, with `--expect-verified 2` /
+`ART_MEDIA_EXPECT_VERIFIED=2` failing on the count.
+
+---
+
+**ART-264** 🟠 ✅ **One unreadable folder discarded every folder already
+identified, and the screen said the whole pass failed** — *found 2026-09-06,
+whole-branch review of the media-identification round (M2)*
+`src/components/osbuilder/OsInstall.tsx`, the identification effect
+
+The hash pass walks the media folders one at a time and merges the results.
+A rejection on folder 3 was caught outside the loop, so the matches already
+collected from folders 1 and 2 were thrown away and the summary read *"ART
+could not identify these files by content"* — about files ART **had**
+identified. `CLAUDE.md`'s *never claim what you did not do*, read the other
+way round.
+
+**Fixed** the way `core/hostfs.rs` already answers this for recycling files:
+where an operation is per entry and cannot be undone as a whole, **the
+outcome is reported per entry, by name and by result**. The `catch` moved
+inside the loop, the partial `MediaIdentification` travels with the failure
+state, and each folder ends with one of four results — `identified`,
+`unreadable`, `stopped`, `not-reached` — each with its own sentence and its
+own next step. The summary names the folder it died on and counts the ones it
+finished.
+
+**Guarded** by `keeps the folders it identified when a later folder cannot be
+read` (`src/components/osbuilder/OsInstall.test.tsx`) and `keeps the files an
+interrupted pass did identify`, `names the folder a failed pass died on, and
+counts the ones it finished` and `reports every folder of an interrupted pass
+by name and by result` (`src/lib/osinstall.test.ts`).
+
+---
+
+**ART-263** 🟠 ✅ **Pressing Stop on the media-identification pass said ART
+had failed** — *found 2026-09-06, whole-branch review of the
+media-identification round (M1)*
+`src/components/osbuilder/OsInstall.tsx`, `src/lib/osinstall.ts`,
+`src/lib/jobs.ts`
+
+`awaitJobResult` rejects with `Error("cancelled")` when the user presses
+Stop, and the identification effect's `catch` mapped **every** rejection to
+`{ kind: "failed" }` — rendering *"ART could not identify these files by
+content."* A user who stopped the pass themselves was told it could not run,
+and sent to look for a problem with their media that does not exist.
+`CLAUDE.md`: *Endings stay distinct… never collapse them into "not
+succeeded".*
+
+**Fixed in the type, not only in the string** — a second message on the same
+`failed` state is one edit from collapsing back. `MediaIdentityState` gained
+a fifth variant, `cancelled`, and `jobs.ts` now owns the cancellation
+contract it always implied: `JOB_CANCELLED_MESSAGE` is the value it rejects
+with and `isJobCancellation(err)` is how a caller reads it back, so no
+component compares that string for itself. A stopped pass now says *"You
+stopped this pass. Folders identified by content before that: N of M, and
+what they found is kept. Nothing is wrong with your media — press "Scan
+again" to identify the rest by content."*
+
+**Guarded** by `does not report a pass the user stopped as a failure`
+(`src/components/osbuilder/OsInstall.test.tsx`), `does not tell a user who
+pressed Stop that ART could not identify their media` and `keeps not-asked,
+running, failed, stopped and done apart` (`src/lib/osinstall.test.ts`).
+
+---
+
+**ART-262** 🟠 ✅ **The module the hash round reversed still argued, in ART's
+own voice, that ART does not hash** — *found 2026-09-06, whole-branch review
+of the media-identification round (I1)*
+`src-tauri/src/core/osinstall/identify.rs`, module doc
+
+Two sentences: *"So there is no table here"* and *"**It does not hash
+anything.** … a hash table is a claim about pressings nobody here can check,
+and it goes stale silently."* Both were false of the tree the moment
+`media_hashes.json` (186 rows) and `mediahash.rs` landed beside them. This is
+the project's named failure class pointed at its own documentation: someone
+reading `identify.rs` a month from now would have concluded `mediahash.rs`
+was a mistake.
+
+**Fixed by recording the reversal rather than performing it silently**, which
+is what §3 of the round's own design asked for. The refusal is kept verbatim
+as a block quote, followed by what measured it: the owner's own 35 AmigaOS
+3.2 ADFs, MD5'd and looked up in the adopted table, **35 of 35 matched** to
+the right name and the right publisher, zero misses. The half of the refusal
+that was *not* overturned — "it goes stale silently" — is named as answered
+structurally instead, by `media_hashes_confirmed.json` keeping ART's own
+measurement separate from Hatcher's adopted rows. And the reason the two
+modules coexist is stated: the hash path is **additive**, `identify.rs` still
+answers by name, and a row's `volume` field is measurably *not* a disk's
+AmigaDOS volume name (0 of 12 matched), so the two are never compared.
+
+**Not test-guarded, and deliberately so** — no check in this repository can
+tell a true doc comment from a false one. What it has instead is the round's
+report and this entry.
+
+---
+
 **ART-259** 🟠 ✅ **ART-257's own evidence check ran after the branch it was
 meant to reach through, so it never ran for the one folder it exists for** —
 *found 2026-09-06, in this fix wave's own re-review of ART-257*

@@ -877,9 +877,34 @@ mod tests {
     /// happen if the shipped table itself carries a duplicate `md5` —
     /// something `every_md5_in_the_table_is_distinct` above already
     /// asserts never happens, checked again here independently, against
-    /// [`rows`] rather than trusted from that other test). Only
-    /// `conflicting` fails this test; `unverified` is printed and left
-    /// alone.
+    /// [`rows`] rather than trusted from that other test). `unverified` is
+    /// printed and never asserted on.
+    ///
+    /// # What it asserts, and why it used to assert nothing
+    ///
+    /// The first version of this test failed only on `conflicting`, which the
+    /// shipped table's own invariant test already rules out — so it **passed
+    /// with 0 verified**, the one result that means the table and the reader
+    /// no longer agree at all. *A test is not a guard until the defect has
+    /// been put back and seen to fail it*, and this one could not fail on the
+    /// thing it exists to check. Two assertions now, deliberately of
+    /// different kinds:
+    ///
+    /// - **At least one row verifies.** `ART_MEDIA_DIR` was set, so the
+    ///   caller says that folder holds install media; zero matches is what a
+    ///   broken lookup, a renamed field or an emptied table all produce. This
+    ///   is `scripts/rom-table-check.py --scan`'s own condition (it returns
+    ///   its hit count, so "no ROM identified" is exit 1).
+    /// - **`ART_MEDIA_EXPECT_VERIFIED`, when set, is held to exactly.** A
+    ///   specific number is a claim about specific media, so it comes from
+    ///   the caller and never from a constant here: the owner's 35 is *this
+    ///   machine's* measurement against *this machine's* disks, and a user
+    ///   with a 3.1 set must not meet a check that fails because their media
+    ///   is not the author's. `media_hashes_confirmed.json` is where that
+    ///   specific claim is recorded.
+    ///
+    /// No directory, no assertions — the test returns before it has anything
+    /// to be right or wrong about.
     #[test]
     #[ignore = "needs a folder of the owner's own real install media"]
     fn every_real_disk_in_a_folder_is_looked_up_through_cores_own_code_when_asked() {
@@ -968,6 +993,29 @@ mod tests {
             "{} conflicting row(s) — see ART_MEDIA_CONFLICT lines above",
             conflicting.len()
         );
+
+        // The assertion that makes this a guard rather than a printout.
+        assert!(
+            verified > 0,
+            "no row in the shipped table verified against anything in {folder}: \
+             {checked} file(s) were hashed and none of them matched a row. Either that \
+             folder does not hold install media, or the table and the reader no longer \
+             agree — which is the whole reason this test exists"
+        );
+
+        // And the caller's own number, when the caller states one. Never a
+        // constant here: 35 is the owner's measurement of the owner's disks.
+        if let Ok(expected) = std::env::var("ART_MEDIA_EXPECT_VERIFIED") {
+            let expected: usize = expected
+                .trim()
+                .parse()
+                .expect("ART_MEDIA_EXPECT_VERIFIED must be a whole number");
+            assert_eq!(
+                verified, expected,
+                "expected exactly {expected} verified row(s) against {folder}, got {verified} — \
+                 a difference here is a finding to report, not a number to adjust"
+            );
+        }
     }
 
     // -- Identifying a folder (the module's second half).

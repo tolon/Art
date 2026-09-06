@@ -749,6 +749,33 @@ export async function osinstallIdentifyMedia(folder: string): Promise<MediaIdent
 // lines say what the table makes of their bytes. Nothing here joins them and
 // nothing here reconciles them.
 
+/**
+ * What happened to **one** media folder in a pass.
+ *
+ * Four results and never three, for the reason `core/hostfs.rs` states about
+ * recycling files: an operation that runs per entry and cannot be undone as a
+ * whole is **reported per entry, by name and by result**, because "the pass
+ * did not finish" says nothing about which entries did. A pass over three
+ * folders that dies on the second one produced one of each of the first three
+ * results below, and a screen that showed only the failure would be claiming
+ * ART did not do something it did.
+ */
+export type MediaFolderResult =
+  /** Its files were hashed and are in the list. */
+  | "identified"
+  /** ART asked and the pass failed on this folder. */
+  | "unreadable"
+  /** The user pressed Stop while this folder was being read. Not the same as
+   *  `unreadable`: nothing is wrong with the folder and the next step is to
+   *  scan again, not to fix anything. */
+  | "stopped"
+  /** The pass ended before this folder's turn, so it was never opened. Not
+   *  the same as either failure above: nothing is known about it at all. */
+  | "not-reached";
+
+/** One folder, by name, and what became of it. */
+export type MediaFolderOutcome = { folder: string; result: MediaFolderResult };
+
 /** What ART currently knows about a folder's contents by content hash. */
 export type MediaIdentityState =
   /** No folder, or nothing has been asked yet. */
@@ -756,9 +783,17 @@ export type MediaIdentityState =
   /** A pass is running right now. Distinct from `not-asked`: the next step is
    *  to wait, not to do something. */
   | { kind: "identifying" }
-  /** The pass itself could not run. Distinct from an empty result, which
-   *  would read as "ART looked and found nothing". */
-  | { kind: "failed" }
+  /** The pass stopped on a folder ART could not read. Distinct from an empty
+   *  result, which would read as "ART looked and found nothing" — and it
+   *  carries whatever earlier folders **did** identify, because throwing that
+   *  away and reporting "the pass failed" would be ART denying work it had
+   *  already finished. */
+  | { kind: "failed"; identification: MediaIdentification; folders: MediaFolderOutcome[] }
+  /** The user pressed Stop. **Not a failure**, and it must never render as
+   *  one: the next step is "scan again", not "something is wrong with your
+   *  media". Its own `kind` rather than a second message on `failed`, so the
+   *  next edit cannot quietly collapse the two back into one ending. */
+  | { kind: "cancelled"; identification: MediaIdentification; folders: MediaFolderOutcome[] }
   | { kind: "identified"; identification: MediaIdentification };
 
 /** One file, and the one sentence that is true about it. */
@@ -791,9 +826,16 @@ function fileName(path: string): string {
  * in the folder — but they keep their own `kind` and their own key, so
  * "ART could not read this" can never be mistaken for "the table does not
  * know this".
+ *
+ * **A pass that failed or was stopped still lists what it did identify.** The
+ * per-file endings are per file; a folder ART could not open says nothing
+ * about the thirty-five disks it already read in the folder before it. What
+ * changes for those two states is the summary below, which says the pass did
+ * not finish and names the folders it did not cover — never this list, which
+ * would then be claiming ART had not done work it had.
  */
 export function mediaIdentityLines(state: MediaIdentityState): MediaIdentityLine[] {
-  if (state.kind !== "identified") return [];
+  if (state.kind === "not-asked" || state.kind === "identifying") return [];
   const { matches, unreadable } = state.identification;
 
   const matched: MediaIdentityLine[] = matches.map((found) => {
@@ -868,8 +910,17 @@ export function mediaIdentitySummary(state: MediaIdentityState): Phrase | null {
       return { key: "osinstall.mediaId.notHashedYet" };
     case "identifying":
       return { key: "osinstall.mediaId.identifying" };
-    case "failed":
-      return { key: "osinstall.mediaId.failed" };
+    case "failed": {
+      const { done, total } = foldersDone(state.folders);
+      // The folder it died on, by name — a refusal that cannot say *which*
+      // folder is one the user cannot act on.
+      const folder = state.folders.find((f) => f.result === "unreadable")?.folder ?? "";
+      return { key: "osinstall.mediaId.failed", params: { folder, identified: done, total } };
+    }
+    case "cancelled": {
+      const { done, total } = foldersDone(state.folders);
+      return { key: "osinstall.mediaId.cancelled", params: { identified: done, total } };
+    }
     case "identified": {
       const { hashed, remembered } = state.identification;
       if (hashed + remembered === 0) return null;
@@ -877,6 +928,56 @@ export function mediaIdentitySummary(state: MediaIdentityState): Phrase | null {
     }
   }
 }
+
+/** How many of the pass's folders got all the way through, and how many there
+ *  were. Counted off the outcomes rather than tracked separately, so the
+ *  number in the sentence and the list of folders below it cannot disagree. */
+function foldersDone(folders: MediaFolderOutcome[]): { done: number; total: number } {
+  return {
+    done: folders.filter((f) => f.result === "identified").length,
+    total: folders.length,
+  };
+}
+
+/** One folder, and the one sentence that is true about it. */
+export type MediaFolderLine = {
+  folder: string;
+  result: MediaFolderResult;
+  phrase: Phrase;
+};
+
+/**
+ * One line per **folder**, for a pass that did not finish.
+ *
+ * `core/hostfs.rs`'s rule, applied one layer up: the pass walks the folders
+ * one at a time and a folder already hashed cannot be un-hashed by a later
+ * one failing, so the outcome is reported per entry, by name and by result.
+ * The four results are four different sentences with four different next
+ * steps — fix the folder, scan again, scan again, and nothing — and
+ * collapsing any pair of them is the §89 defect this round is about.
+ *
+ * Empty for the three states where there is nothing per-folder to say: a pass
+ * that has not run, one still running, and one that covered every folder (for
+ * which the per-file list *is* the report).
+ */
+export function mediaIdentityFolderLines(state: MediaIdentityState): MediaFolderLine[] {
+  if (state.kind !== "failed" && state.kind !== "cancelled") return [];
+  return state.folders.map(({ folder, result }) => ({
+    folder,
+    result,
+    phrase: { key: FOLDER_RESULT_KEYS[result], params: { folder } },
+  }));
+}
+
+/** One key per result, as a total record rather than a `switch`, so a fifth
+ *  result cannot compile without a sentence of its own.
+ *  `src/i18n/phrase-keys.test.ts` is what proves all four keys exist. */
+const FOLDER_RESULT_KEYS: Record<MediaFolderResult, string> = {
+  identified: "osinstall.mediaId.folderIdentified",
+  unreadable: "osinstall.mediaId.folderUnreadable",
+  stopped: "osinstall.mediaId.folderStopped",
+  "not-reached": "osinstall.mediaId.folderNotReached",
+};
 
 /**
  * Which shipped release these volume names are the install media of, or

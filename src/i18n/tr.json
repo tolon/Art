@@ -2236,8 +2236,13 @@
       "unreadable": "{{file}} — ART bu dosyanın baytlarını okuyamadı, dolayısıyla özeti hiç alınmadı. Bu “tabloda yok” demek değildir: tabloya hiç sorulmadı.",
       "notHashedYet": "İçeriğine göre henüz hiçbir şey tanımlanmadı.",
       "identifying": "Dosyalar okunuyor ve özetleri alınıyor…",
-      "failed": "ART bu dosyaları içeriklerine göre tanımlayamadı. Disketlerin kendi adları bundan etkilenmez.",
-      "provenance": "Şimdi okunan: {{hashed}}. Önceki taramadan gelen: {{remembered}}. ART bir özeti yol, boyut ve tarihe göre hatırlar — üçü de değişmeden yerine konan bir dosya yine eskisiyle yanıtlanır; gördüğünüz taktığınızla uyuşmuyorsa Yeniden tara deyin."
+      "failed": "ART {{folder}} klasörünü okuyamadı, tarama orada durdu. Bundan önce içeriğine göre tanımlanan klasörler: {{total}} klasörün {{identified}} tanesi. Onların bulduğu yukarıda duruyor ve disketlerin kendi adları bundan etkilenmez.",
+      "provenance": "Şimdi okunan: {{hashed}}. Önceki taramadan gelen: {{remembered}}. ART bir özeti yol, boyut ve tarihe göre hatırlar — üçü de değişmeden yerine konan bir dosya yine eskisiyle yanıtlanır; gördüğünüz taktığınızla uyuşmuyorsa Yeniden tara deyin.",
+      "cancelled": "Bu taramayı siz durdurdunuz. Durmadan önce içeriğine göre tanımlanan klasörler: {{total}} klasörün {{identified}} tanesi ve onların bulduğu duruyor. Ortamınızda bir sorun yok — geri kalanını içeriğine göre tanımlamak için “Yeniden tara” deyin.",
+      "folderIdentified": "{{folder}} — içeriğine göre tanımlandı.",
+      "folderUnreadable": "{{folder}} — ART bu klasörü okuyamadı, dolayısıyla içindeki hiçbir şey tanımlanmadı.",
+      "folderStopped": "{{folder}} — ART bu klasörü okurken taramayı durdurdunuz, dolayısıyla içindeki hiçbir şey tanımlanmadı. Bu, klasörde bir kusur olduğu anlamına gelmez.",
+      "folderNotReached": "{{folder}} — tarama bu klasörün sırası gelmeden bitti, klasör hiç açılmadı. Hakkında ne olumlu ne olumsuz bir şey biliniyor."
     },
     "rom": {
       "label": "Eşlenen Kickstart",

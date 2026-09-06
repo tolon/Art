@@ -102,6 +102,7 @@ import {
   conditionalReasonText,
   hostPlacementBlockKey,
   mediaEvidence,
+  mediaIdentityFolderLines,
   mediaIdentityLines,
   mediaIdentitySummary,
   osinstallBlocker,
@@ -110,6 +111,7 @@ import {
   type ConditionalReason,
   type HostPlacementBlock,
   type InstallPlan as OsInstallPlan,
+  type MediaFolderOutcome,
   type MediaIdentification,
   type MediaIdentityState,
   type PlanResult,
@@ -1419,17 +1421,40 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       expect(isLeafKey(line.phrase.key), line.phrase.key).toBe(true);
     }
 
+    // Every folder result, so a pass that stopped early can never render a
+    // folder with a key nobody added. All four in one state on purpose:
+    // enumerating them separately would pass while two shared a key.
+    const folders: MediaFolderOutcome[] = [
+      { folder: "E:\\one", result: "identified" },
+      { folder: "E:\\two", result: "unreadable" },
+      { folder: "E:\\three", result: "stopped" },
+      { folder: "E:\\four", result: "not-reached" },
+    ];
+
     const states: MediaIdentityState[] = [
       { kind: "not-asked" },
       { kind: "identifying" },
-      { kind: "failed" },
+      { kind: "failed", identification, folders },
+      { kind: "cancelled", identification, folders },
       { kind: "identified", identification },
     ];
     for (const state of states) {
       const phrase = mediaIdentitySummary(state);
       expect(phrase).not.toBeNull();
       expect(isLeafKey(phrase!.key), phrase!.key).toBe(true);
+      for (const line of mediaIdentityFolderLines(state)) {
+        expect(isLeafKey(line.phrase.key), line.phrase.key).toBe(true);
+      }
     }
+    // And all four folder keys really were reached, rather than the loop
+    // above having quietly covered none.
+    expect(
+      new Set(
+        mediaIdentityFolderLines({ kind: "failed", identification, folders }).map(
+          (l) => l.phrase.key
+        )
+      ).size
+    ).toBe(4);
   });
 
   // ART-143: why a hand-attached picture could not be put back after the

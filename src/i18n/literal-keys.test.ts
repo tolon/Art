@@ -473,6 +473,13 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // four endings that must never collapse into one, decided in pure
     // TypeScript where a test can enumerate them, not in JSX where it
     // cannot. `phrase-keys.test.ts` enumerates every variant of both.
-    expect(dynamicCalls).toBe(148);
+    // 148 -> 149 (fix wave 1, M1/M2): one. `mediaIdentityFolderLines` gives
+    // each *folder* of an interrupted pass the one sentence true of it —
+    // identified, unreadable, stopped by the user, or never reached — the
+    // same `Phrase`-off-a-mapper shape as the two above, and the same reason
+    // for it: a pass that ends on folder 2 of 3 has three different things
+    // to say and collapsing them is the defect the round is named for.
+    // `phrase-keys.test.ts` enumerates all four variants.
+    expect(dynamicCalls).toBe(149);
   });
 });

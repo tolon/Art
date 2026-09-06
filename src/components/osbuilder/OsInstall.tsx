@@ -100,6 +100,7 @@ import {
   osinstallRescanMedia,
   osinstallReleaseForMedia,
   keymapsIn,
+  mediaIdentityFolderLines,
   mediaIdentityLines,
   mediaIdentitySummary,
   osinstallMediaEvidence,
@@ -119,6 +120,7 @@ import {
   type InstallPlan,
   type InstallRelease,
   type InstallRequest,
+  type MediaFolderOutcome,
   type MediaIdentification,
   type MediaIdentityState,
   type MediaScanResult,
@@ -130,7 +132,13 @@ import { isFlag, isText, isTextList, isTextOrNothing, recall, remember } from "@
 import { useRemembered } from "@/lib/useRemembered";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useBuildSession } from "@/lib/useBuildSession";
-import { fraction, onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
+import {
+  fraction,
+  isJobCancellation,
+  onJobProgress,
+  subscribeSafely,
+  type JobProgress,
+} from "@/lib/jobs";
 import { Field } from "@/components/osbuilder/Field";
 import { PackagePanel } from "@/components/osbuilder/PackagePanel";
 import { AmigaInstallPanel } from "@/components/osbuilder/AmigaInstallPanel";
@@ -961,21 +969,50 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         hashed: 0,
         remembered: 0,
       };
-      try {
-        for (const folder of folders) {
-          const found = await osinstallIdentifyMedia(folder);
+      // What became of each folder, by name. `core/hostfs.rs`'s rule one
+      // layer up: the loop below is per entry and a folder already hashed
+      // cannot be un-hashed by a later one failing, so every folder ends up
+      // with its own result rather than the whole pass having one. Every
+      // folder starts as "never opened", which is what is true of it before
+      // its turn comes.
+      const outcomes: MediaFolderOutcome[] = folders.map((folder) => ({
+        folder,
+        result: "not-reached",
+      }));
+      for (let i = 0; i < folders.length; i += 1) {
+        try {
+          const found = await osinstallIdentifyMedia(folders[i]);
           if (cancelled) return;
           merged.matches.push(...found.matches);
           merged.unreadable.push(...found.unreadable);
           merged.hashed += found.hashed;
           merged.remembered += found.remembered;
+          outcomes[i] = { folder: folders[i], result: "identified" };
+        } catch (err) {
+          // ART-089's guard first, and before anything is put on screen: a
+          // folder the user has already navigated away from must not land
+          // its ending over the newer one.
+          if (cancelled) return;
+          // **Two rejections, two endings.** `awaitJobResult` rejects with
+          // exactly `JOB_CANCELLED_MESSAGE` when the user pressed Stop and
+          // with the job's own message otherwise, so the two are told apart
+          // by the one predicate that owns that contract rather than by a
+          // string compared here. Telling a user who stopped the pass that
+          // ART "could not identify these files" is the §89 collapse — and
+          // their next step (scan again) is not a failure's.
+          if (isJobCancellation(err)) {
+            outcomes[i] = { folder: folders[i], result: "stopped" };
+            setMediaIdentity({ kind: "cancelled", identification: merged, folders: outcomes });
+          } else {
+            outcomes[i] = { folder: folders[i], result: "unreadable" };
+            setMediaIdentity({ kind: "failed", identification: merged, folders: outcomes });
+          }
+          // Either way `merged` goes with it. Discarding what folders 1 and 2
+          // identified because folder 3 could not be opened would be ART
+          // claiming it had not done work it had — "never claim what you did
+          // not do", read the other way round.
+          return;
         }
-      } catch {
-        // "The pass could not run" is its own sentence. Falling back to an
-        // empty result would read as "ART looked and found nothing", which
-        // is the collapse §4.3 forbids.
-        if (!cancelled) setMediaIdentity({ kind: "failed" });
-        return;
       }
       if (!cancelled) setMediaIdentity({ kind: "identified", identification: merged });
     })();
@@ -988,6 +1025,12 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    *  this is the only place that renders one. */
   const identityLines = useMemo(() => mediaIdentityLines(mediaIdentity), [mediaIdentity]);
   const identitySummary = useMemo(() => mediaIdentitySummary(mediaIdentity), [mediaIdentity]);
+  /** Per folder, by name and by result — empty unless the pass stopped early,
+   *  in which case the per-file list above cannot be read as a full report. */
+  const identityFolders = useMemo(
+    () => mediaIdentityFolderLines(mediaIdentity),
+    [mediaIdentity]
+  );
 
   // ART-256. Every added folder scanned the same way, one round trip each,
   // so `foundVolumeNames` below can cover the same disks `plan()` does.
@@ -1815,6 +1858,29 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
               {t(identitySummary.key, identitySummary.params)}
             </p>
           )}
+          {/*
+            A pass that stopped early, reported **per folder, by name and by
+            result** — `core/hostfs.rs`'s rule for an operation that cannot be
+            undone as a whole. Nothing renders here when the pass covered
+            every folder: the per-file list above is then the whole report,
+            and a second list repeating it would be the screen answering the
+            same question twice.
+          */}
+          {identityFolders.map((line) => (
+            <p
+              key={line.folder}
+              data-testid={`media-identity-folder-${line.result}`}
+              className={line.result === "unreadable" ? "badge badge-err" : "faint"}
+              style={{
+                fontSize: 11,
+                margin: "0 0 3px",
+                ...(line.result === "unreadable" ? { display: "inline-block" } : {}),
+              }}
+              title={line.folder}
+            >
+              {t(line.phrase.key, line.phrase.params)}
+            </p>
+          ))}
         </div>
 
         {/*

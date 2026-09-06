@@ -8,17 +8,22 @@
 //! a disk the user does not own and cannot get, which is this project's
 //! "a refusal must be actionable" rule broken in the ordinary way.
 //!
-//! # The table is the recipes, and that is the whole point
+//! # *This* module's table is the recipes, and that is still the whole point
 //!
 //! The item this module closes is titled *"a table ART can stand behind"*,
 //! because the round before it **dropped** a 186-row Kickstart hash table that
-//! ART could not verify. So there is no table here. Every name below is read
-//! out of [`recipe::by_release`] at call time: a recipe declares each
+//! ART could not verify. So there is no table **here**. Every name below is
+//! read out of [`recipe::by_release`] at call time: a recipe declares each
 //! component's `media` (the volume name **inside** the image) and whether the
 //! component is `required`, and those two fields are already checked against
 //! the owner's real discs by the plan tests. A future release is a JSON file,
 //! exactly as `CLAUDE.md` requires — and it teaches this module its media for
 //! free.
+//!
+//! That is still true of this module, and it is the reason this module and
+//! [`super::mediahash`] coexist rather than one replacing the other — see
+//! "It does not hash anything" below, which is the paragraph the 2026-09-06
+//! round overturned.
 //!
 //! # Evidence, and the names that are not evidence
 //!
@@ -54,10 +59,48 @@
 //! AmigaOS **3.5** shipped as 3.9 ([ART-159]). Unnamed is the honest answer
 //! and [`MediaVerdict::Unknown`] is where it goes.
 //!
-//! **It does not hash anything.** HstWB identifies each disk by MD5 as well as
-//! by volume name, which is strictly stronger evidence and which ART cannot
-//! carry: a hash table is a claim about pressings nobody here can check, and
-//! it goes stale silently. Volume names are read from the artefact every time.
+//! **It does not hash anything**, and that is still true of *this* module.
+//! What follows is the refusal as it was written, kept because the reasoning
+//! is worth more than the conclusion, and then what measurement did to it.
+//!
+//! > HstWB identifies each disk by MD5 as well as by volume name, which is
+//! > strictly stronger evidence and which ART cannot carry: a hash table is a
+//! > claim about pressings nobody here can check, and it goes stale silently.
+//! > Volume names are read from the artefact every time.
+//!
+//! **The premise was measured on 2026-09-06 and found false.** "Nobody here
+//! can check it" was a claim about this project, not about hashing, and it
+//! was never tested — so it was tested. The owner's own AmigaOS 3.2 install
+//! set, 35 ADFs, was MD5'd and each hash looked up in the 186-row
+//! install-media table adopted from `rootrootde/emu68hatcher` (MIT):
+//! **35 of 35 matched**, to the right name and the right publisher
+//! (`Hyperion (3.2 base)`), with zero misses and zero rows claiming two
+//! disks. Re-runnable rather than recalled —
+//! `python scripts/media-table-check.py DIR` and the `#[ignore]`d
+//! `every_real_disk_in_a_folder_is_looked_up_through_cores_own_code_when_asked`
+//! are the two halves of it, and both now fail when a directory verifies
+//! nothing.
+//!
+//! What stands now, in [`super::mediahash`] and not here:
+//!
+//! - ART **does** hash install media, and reports what the matched row says
+//!   about itself — never what the disk is. A match is evidence about the
+//!   row; §4.3 of the design governs every sentence it is allowed to produce.
+//! - The "goes stale silently" half of the refusal was **not** overturned and
+//!   is answered structurally instead: ART's own record of which rows a real
+//!   disk here has actually been hashed against lives in its own file,
+//!   `media_hashes_confirmed.json`, so a confirmed row and one nobody here
+//!   has ever seen a disk for get two different sentences (35 confirmed, 151
+//!   not, on the day above).
+//! - **The hash path is additive to this one, never a replacement.** They
+//!   answer two different questions from two different sources — this module
+//!   asks what a disk calls itself, `mediahash` asks what a table makes of
+//!   its bytes — and nothing joins them. In particular a row's `volume` field
+//!   is measurably *not* the disk's AmigaDOS volume name (0 of 12 matched:
+//!   `Backdrops3_2` against `Backdrops3.2`, `LocaleDE3_2` against
+//!   `Locale-DE`), so the two must never be compared and a row's `volume` is
+//!   never rendered as a disk's name. A miss over there removes nothing from
+//!   the verdict over here.
 //!
 //! [ART-159]: ../../../../docs/ISSUES.md
 //! [ART-222]: ../../../../docs/ISSUES.md

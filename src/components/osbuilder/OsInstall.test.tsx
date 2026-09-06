@@ -3094,13 +3094,102 @@ describe("identifying install media by content hash (design §4.3)", () => {
     await renderFull();
 
     const summary = await screen.findByTestId("media-identity-summary");
-    expect(summary.textContent).toBe(i18n.t("osinstall.mediaId.failed"));
+    expect(summary.textContent).toBe(
+      i18n.t("osinstall.mediaId.failed", { folder: "E:\\media", identified: 0, total: 1 })
+    );
+    expect(summary.textContent).toContain("could not read E:\\media");
     expect(screen.queryByTestId("media-identity-not-in-table")).toBeNull();
     // And the name-based line is untouched by the failure, the same way a
     // miss leaves it alone.
     expect(
       screen.getByText(i18n.t("osinstall.media.found", { count: 1, names: "Workbench3.2" }))
     ).toBeTruthy();
+  });
+
+  /**
+   * **Pressing Stop is not ART failing** (fix wave 1, M1). `awaitJobResult`
+   * rejects with `Error("cancelled")` when the user stops the job, and that
+   * used to arrive in the same `catch` as a real failure — so a user who
+   * stopped the pass themselves was told ART "could not identify these files
+   * by content", which is both untrue and the wrong next step.
+   *
+   * Asserted on the two sentences together, because the failure mode is one
+   * of them wearing the other's words: a test that only checked the cancelled
+   * sentence appears would pass if both states rendered it.
+   */
+  it("does not report a pass the user stopped as a failure", async () => {
+    identifyMediaMock.mockReset().mockRejectedValue(new Error("cancelled"));
+    await renderFull();
+
+    const summary = await screen.findByTestId("media-identity-summary");
+    expect(summary.textContent).toBe(
+      i18n.t("osinstall.mediaId.cancelled", { identified: 0, total: 1 })
+    );
+    expect(summary.textContent).toContain("You stopped this pass");
+    expect(summary.textContent).toContain(i18n.t("osinstall.media.rescan"));
+    // The failure sentence, and the accusation inside it, are absent.
+    expect(summary.textContent).not.toContain("could not read");
+    expect(summary.textContent).not.toBe(
+      i18n.t("osinstall.mediaId.failed", { folder: "E:\\media", identified: 0, total: 1 })
+    );
+    // The folder is reported as stopped, by name — not as unreadable.
+    const folder = await screen.findByTestId("media-identity-folder-stopped");
+    expect(folder.textContent).toContain("E:\\media");
+    expect(screen.queryByTestId("media-identity-folder-unreadable")).toBeNull();
+  });
+
+  /**
+   * **One bad folder must not discard the folders already identified** (fix
+   * wave 1, M2). The pass merges across folders in a loop; a rejection on the
+   * second used to throw away what the first had found and say the whole pass
+   * failed — ART denying work it had done.
+   *
+   * `core/hostfs.rs`'s rule is the shape: per entry, by name and by result.
+   */
+  it("keeps the folders it identified when a later folder cannot be read", async () => {
+    const EXTRA = "E:\\media\\Update";
+    identifyMediaMock
+      .mockReset()
+      .mockImplementation((folder: string) =>
+        folder === EXTRA
+          ? Promise.reject(new Error("boom"))
+          : Promise.resolve({
+              matches: [
+                {
+                  path: "E:\\media\\Disk1.adf",
+                  volumeName: "Workbench3.2",
+                  row: ROW,
+                  md5: ROW.md5,
+                  confirmed: null,
+                },
+              ],
+              unreadable: [],
+              hashed: 1,
+              remembered: 0,
+            } satisfies MediaIdentification)
+      );
+    seedRemembered({ ...FULL_FIELDS, "osinstall.extraMediaFolders": [EXTRA] });
+    render(<OsInstall />);
+    await screen.findByText(i18n.t("osinstall.plan.heading"));
+
+    // What the first folder produced is still on screen, in full.
+    const kept = await screen.findByTestId("media-identity-unconfirmed");
+    expect(kept.textContent).toContain("Disk1.adf");
+    expect(kept.textContent).toContain("Workbench 3.2");
+
+    // And the report says which folder failed and how many finished — a
+    // count with no name would leave the user to guess which of their two
+    // folders ART never got through.
+    const summary = await screen.findByTestId("media-identity-summary");
+    expect(summary.textContent).toBe(
+      i18n.t("osinstall.mediaId.failed", { folder: EXTRA, identified: 1, total: 2 })
+    );
+
+    const ok = await screen.findByTestId("media-identity-folder-identified");
+    expect(ok.textContent).toContain("E:\\media");
+    const bad = await screen.findByTestId("media-identity-folder-unreadable");
+    expect(bad.textContent).toContain(EXTRA);
+    expect(bad.textContent).not.toBe(ok.textContent);
   });
 
   /** Every folder the plan reads is identified, not only the first — and one

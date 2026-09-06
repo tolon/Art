@@ -2236,8 +2236,13 @@
       "unreadable": "{{file}} — ART could not read this file's bytes, so it was never hashed. This is not “not in the table”: the table was never asked.",
       "notHashedYet": "Nothing has been identified by content yet.",
       "identifying": "Reading these files and hashing them…",
-      "failed": "ART could not identify these files by content. What the disks call themselves is unaffected.",
-      "provenance": "Read now: {{hashed}}. Answered from an earlier pass: {{remembered}}. ART remembers a hash by path, size and date — a file replaced without any of the three changing is still answered with the old one, so use Scan again if what you see is not what you put in."
+      "failed": "ART could not read {{folder}}, so the pass stopped there. Folders identified by content before that: {{identified}} of {{total}}. Whatever they found is still listed above, and what the disks call themselves is unaffected.",
+      "provenance": "Read now: {{hashed}}. Answered from an earlier pass: {{remembered}}. ART remembers a hash by path, size and date — a file replaced without any of the three changing is still answered with the old one, so use Scan again if what you see is not what you put in.",
+      "cancelled": "You stopped this pass. Folders identified by content before that: {{identified}} of {{total}}, and what they found is kept. Nothing is wrong with your media — press “Scan again” to identify the rest by content.",
+      "folderIdentified": "{{folder}} — identified by content.",
+      "folderUnreadable": "{{folder}} — ART could not read this folder, so nothing in it was identified.",
+      "folderStopped": "{{folder}} — you stopped the pass while ART was reading this folder, so nothing in it was identified. That is not a fault in the folder.",
+      "folderNotReached": "{{folder}} — the pass ended before this folder’s turn, so it was never opened. Nothing is known about it either way."
     },
     "rom": {
       "label": "Paired Kickstart",

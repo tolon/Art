@@ -52,18 +52,50 @@ collapsing them into one):
                      contradict the table's own schema, independent of
                      whether the owner has a copy of it at all.
 
+What makes it a check rather than a report
+------------------------------------------
+
+**A test is not a guard until the defect has been put back and seen to fail
+it** (`CLAUDE.md`). The first version of this script printed the three numbers
+above and then exited 0 whatever they were, so it passed with **0 verified** —
+the one result that means the table and the media no longer agree at all. Two
+assertions close that, and they are deliberately different in kind:
+
+    at least one row verifies    A directory was given, so files were meant to
+                                 be found in it and looked up. Zero is the
+                                 outcome a broken reader, a renamed hash field
+                                 or a table gutted down to nothing all produce,
+                                 and it is exactly what the old script called
+                                 success. This is `rom-table-check.py --scan`'s
+                                 own condition (`return hit`, so no ROM
+                                 identified is exit 1), applied to the same
+                                 kind of question.
+    --expect-verified N          When the *caller* states a number, it is held
+                                 to that number exactly. This is where a
+                                 specific claim about specific media belongs —
+                                 never a constant in this file. The owner's 35
+                                 is this machine's measurement against this
+                                 machine's disks; a user with a 3.1 set must
+                                 not meet a check that fails because their
+                                 media is not the author's.
+
+`conflicting` remains a failure on its own, independent of both.
+
 The standing measurement (2026-09-06), against
 `E:\\amiga\\Amigatolon\\paketler\\3.2\\AmigaOs 3.2\\ADF`: **35 verified, 151
 unverified, 0 conflicting** — every one of the owner's 35 ADFs matched a row,
 to the right name and the right source (`Hyperion (3.2 base)`), zero misses.
-If a re-run gets a different number, that is a finding to report, not
-something to adjust this script until it agrees.
+That number is the owner's own and lives in `media_hashes_confirmed.json` and
+in `--expect-verified`, not in this script's pass condition. If a re-run gets
+a different number, that is a finding to report, not something to adjust this
+script until it agrees.
 
 Not in CI, ever: it needs media ART must never ship — the same reason
 `fat-oracle-check.py` and `icon-oracle-check.py` are not in CI.
 
 Usage:
     python scripts/media-table-check.py DIR
+    python scripts/media-table-check.py DIR --expect-verified 35
     python scripts/media-table-check.py DIR --emit-confirmed --against "..."
 
 DIR is walked recursively for `.adf`, `.iso` and `.lha` files (case-insensitive
@@ -193,6 +225,15 @@ def main() -> int:
         help="rewrite core/osinstall/media_hashes_confirmed.json from this run's verified rows",
     )
     parser.add_argument(
+        "--expect-verified",
+        type=int,
+        default=None,
+        metavar="N",
+        help="fail unless exactly N rows verify. The caller's own claim about the caller's "
+        "own media -- never a constant in this script, which must stay true for a user "
+        "whose disks are not the author's",
+    )
+    parser.add_argument(
         "--against",
         default="",
         help="what this run checked the table against, in the words the screen will show "
@@ -274,6 +315,30 @@ def main() -> int:
         print("\nFAIL: conflicting row(s) found - see above.")
         return 1
 
+    # The assertion that makes this a check. A directory was given, so files
+    # were meant to be hashed and looked up; zero rows verifying is what a
+    # broken reader, a renamed field or an emptied table all look like, and it
+    # is what the first version of this script called success.
+    if not verified:
+        print(
+            f"\nFAIL: no row in the table verified against anything in {directory}."
+            f"\n      {len(files)} file(s) with a recognised extension were hashed and none"
+            "\n      of them matched a row. Either this is not a folder of install media,"
+            "\n      or the table and the reader no longer agree - which is the whole"
+            "\n      reason this script exists."
+        )
+        return 1
+
+    # And where the caller stated a number, it is held to it exactly. The
+    # owner's 35 is the owner's, and it belongs on the command line and in
+    # media_hashes_confirmed.json - never in this file's pass condition.
+    if args.expect_verified is not None and len(verified) != args.expect_verified:
+        print(
+            f"\nFAIL: expected exactly {args.expect_verified} verified row(s), got {len(verified)}."
+            "\n      A difference here is a finding to report, not a number to adjust."
+        )
+        return 1
+
     if args.emit_confirmed:
         if not args.against:
             print("\nFAIL: --emit-confirmed needs --against, which is the sentence a")
@@ -282,7 +347,15 @@ def main() -> int:
             return 2
         emit_confirmed([row for row, _matches in verified], args.against)
 
-    print("\nok   every row that matched a file matched cleanly, and nothing in the table contradicts itself")
+    expected = (
+        f", and exactly the {args.expect_verified} the caller expected"
+        if args.expect_verified is not None
+        else ""
+    )
+    print(
+        f"\nok   {len(verified)} row(s) verified against real media{expected}, every match was "
+        "clean,\n     and nothing in the table contradicts itself"
+    )
     return 0
 
 

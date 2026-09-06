@@ -84,6 +84,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Stopping the "what are these disks" check no longer reads as ART having
+  failed.** Pressing Stop while install media is being identified by content
+  used to produce *"ART could not identify these files by content"* — the same
+  sentence a real failure produces, sending you to look for a problem with your
+  media that was not there. Stopping now says so plainly, says how much it got
+  through, and points at the "Scan again" button.
+- **One folder ART cannot read no longer throws away the folders it already
+  identified.** When install media is spread over more than one folder, a
+  failure on the second used to discard everything the first had found and
+  report that the whole check failed — about files ART had in fact identified.
+  What was identified now stays on screen, and every folder is reported by
+  name and by what became of it: identified, could not be read, stopped, or
+  never reached.
+
 - **A part-built AmigaOS 3.2.2 now gets the same "what is in this folder" line
   as every other release — and it is not told its own disks belong to
   something else.** AmigaOS 3.2.2 is assembled from two folders, a 3.2 base set
