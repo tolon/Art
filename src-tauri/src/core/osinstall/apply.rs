@@ -4183,10 +4183,26 @@ mod tests {
         // Russian and Turkish need, plus the three `Font-GR/PL/RU.prefs`
         // presets. Turkish's own `Support/Prefs/Presets` is empty on the
         // owner's disk, which is why it is three and not four.
+        //
+        // **+7 files / +10 632 bytes, both rows, 2026-09-06** — Task 1 of
+        // the drawer-icons round (design doc §1.1/§2.1). A `Subtree` rule
+        // now also takes the drawer's own sibling icon, and measured against
+        // this exact media set that is `Devs.info`, `Expansion.info`,
+        // `HDTools.info`, `Prefs.info`, `Storage.info`, `System.info` and
+        // `Tools.info` — seven, not the nineteen root-level `.info` files
+        // counted across all five disks in §1.1, because two of those
+        // (`WBStartup.info`, `Utilities.info`) sit beside drawers no rule in
+        // the shipped recipe copies at all — a different, pre-existing gap
+        // this task does not close — and the fifth, `Disk.info`, is the
+        // volume icon every disk carries, excluded on purpose (§2.1). Same
+        // delta in both ROM branches: no icon-emitting rule's destination
+        // depends on `modules-a1200`. Directory and medium counts are
+        // unchanged, since no new drawer or disk is introduced — only a file
+        // beside an existing one.
         let (want_components, want_media, want_files, want_dirs, want_bytes) = if rom_major < 47 {
-            (29, 28, 4033, 295, 20_043_395)
+            (29, 28, 4040, 295, 20_054_027)
         } else {
-            (28, 27, 4029, 292, 19_993_875)
+            (28, 27, 4036, 292, 20_004_507)
         };
         assert_eq!(
             planned.components_on.len(),
@@ -4204,6 +4220,31 @@ mod tests {
         assert_eq!(outcome.files, want_files);
         assert_eq!(outcome.directories, want_dirs);
         assert_eq!(outcome.bytes, want_bytes);
+
+        // **Task 1's own claim, asked of the tree rather than of the plan.**
+        // The design doc opened with `ls dist-3.2/*.info | wc -l` reading
+        // `0` against real media; this is the same measurement, taken here
+        // so a regression that stops emitting a drawer's own icon is caught
+        // by this hook rather than only by a human rerunning that `ls`.
+        let root_info_files: Vec<String> = std::fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().is_file())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| name.ends_with(".info"))
+            .collect();
+        println!(
+            "root-level .info files: {} {:?}",
+            root_info_files.len(),
+            root_info_files
+        );
+        assert_eq!(
+            root_info_files.len(),
+            7,
+            "measured on this media set 2026-09-06 (see the comment above); \
+             a different count means either a recipe change or a regression \
+             in the sibling-icon rule, not something to bump blindly: {root_info_files:?}"
+        );
 
         let manifest_text = std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap();
         let manifest: DistributionManifest = serde_json::from_str(&manifest_text).unwrap();

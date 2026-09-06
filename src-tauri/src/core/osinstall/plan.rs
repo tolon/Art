@@ -1283,6 +1283,59 @@ pub(crate) fn expand_rules(
                         merge_icon: false,
                     });
                 }
+
+                // The drawer's own icon is its SIBLING on the medium
+                // (`Prefs.info` beside `Prefs/`), never its child — so the
+                // `walk` above, which only sees what is *inside* `from`, can
+                // never place it. Design doc §2.1/§1.1 measured this against
+                // `Workbench3.2.adf`'s own root (19 root-level `.info` files
+                // across five disks, 0 in ART's built tree) before this rule
+                // was written.
+                //
+                // `from: ""` is excluded on purpose, permanently, not as a
+                // gap to "complete" later: `fonts` and `backdrops` copy a
+                // whole medium, and a medium's own root icon is `Disk.info` —
+                // a VOLUME icon (`do_Type = 1`), not a drawer icon
+                // (`do_Type = 2`). Handing a drawer a disk icon is not "the
+                // icon it should have" (spec §2.1).
+                if !rule.from.is_empty() {
+                    let icon_from = format!("{}.info", rule.from);
+                    // Absence is the ordinary case — not every drawer a
+                    // release ships carries a sibling icon — so a missing
+                    // `.info` places nothing and refuses nothing, exactly
+                    // like every other optional icon in this module.
+                    if let Some(icon) = source.entry(&icon_from)? {
+                        // A `.info` that resolves to a *drawer* is not the
+                        // drawer icon this rule is looking for — skip it
+                        // rather than emit an item that would fail
+                        // `the_icon_item_is_a_file_not_a_directory`'s own
+                        // guarantee.
+                        if !icon.is_dir {
+                            let icon_to = format!("{}.info", rule.to);
+                            // Decided the same way every other file item in
+                            // this function decides it — an icon is never
+                            // `compress`-format in practice, but nothing here
+                            // assumes that rather than asking.
+                            let compressed = compress::is_compressed_name(&icon_from);
+                            items.push(PlanItem {
+                                component: component.id.clone(),
+                                media: component.media.clone(),
+                                from: icon_from,
+                                to: if compressed {
+                                    compress::name_without_suffix(&icon_to)
+                                        .map(str::to_string)
+                                        .unwrap_or(icon_to)
+                                } else {
+                                    icon_to
+                                },
+                                is_dir: false,
+                                bytes: icon.size,
+                                decompress: compressed,
+                                merge_icon: false,
+                            });
+                        }
+                    }
+                }
             }
         }
     }
@@ -3560,6 +3613,264 @@ mod plan_tests {
                 if path == "D/x" && components.len() == 2
         ));
         assert!(plan.items.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // Task 1 (2026-09-06-drawer-icons, spec §2.1): a `Subtree` rule also
+    // takes the drawer's own icon — its SIBLING on the medium, never its
+    // child, so `expand_rules`'s own walk (which only sees what is *inside*
+    // `from`) can never place it by itself. `Workbench3.2.adf`'s root
+    // carries `Prefs.info` beside `Prefs/`; before this task ART's built
+    // tree carried neither `Prefs.info` nor five siblings like it.
+    // -----------------------------------------------------------------
+
+    /// A single-component recipe with one `Subtree` rule, over media built
+    /// from exactly the entries the test names — so each test below states
+    /// only what it varies, the same shape [`plan_with_a_walked_file_colliding_with_a_direct_file`]
+    /// already uses for a hand-built recipe rather than the shipped one.
+    fn plan_with_one_subtree_rule(
+        subtree_from: &str,
+        subtree_to: &str,
+        entries: &[(&str, &[u8], u32)],
+    ) -> InstallPlan {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-drawer-icon");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        crate::core::osinstall::fixtures::media(&folder, "Shelf", "shelf.adf", entries);
+
+        let recipe = Recipe {
+            layers: vec![],
+            base: None,
+            release: "Test".to_string(),
+            components: vec![Component {
+                layer: None,
+                id: "drawer-owner".to_string(),
+                media: "Shelf".to_string(),
+                rules: vec![PathRule {
+                    from: subtree_from.to_string(),
+                    to: subtree_to.to_string(),
+                    kind: RuleKind::Subtree,
+                }],
+                required: false,
+                condition: None,
+                overrides: vec![],
+                user_startup: vec![],
+                activate: vec![],
+                exclusive_group: None,
+                label_key: None,
+                available: true,
+                removes: Vec::new(),
+            }],
+        };
+
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2".to_string(),
+            media_folder: folder,
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: vec!["drawer-owner".to_string()],
+            destination: dir.join("dist"),
+            excluded: Vec::new(),
+            scan_cache: Default::default(),
+        };
+        plan(&request, &recipe).unwrap()
+    }
+
+    /// **The defect itself, reproduced synthetically.** `Prefs.info` sits
+    /// beside `Prefs/` on the medium, the same shape `Workbench3.2.adf`'s
+    /// own root has — a `Subtree` rule from `Prefs` to `Prefs` must place
+    /// `Prefs.info -> Prefs.info` in addition to the subtree's own files.
+    #[test]
+    fn a_subtree_rule_also_places_the_drawers_own_icon() {
+        let plan = plan_with_one_subtree_rule(
+            "Prefs",
+            "Prefs",
+            &[
+                ("Prefs/dummy", b"data", 0),
+                ("Prefs.info", b"icon-bytes", 0),
+            ],
+        );
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+        assert!(
+            plan.items
+                .iter()
+                .any(|item| item.from == "Prefs.info" && item.to == "Prefs.info"),
+            "missing the drawer's own icon: {:#?}",
+            plan.items
+        );
+    }
+
+    /// **Provenance.** `distribution.json` records which component and
+    /// which medium each file came from — the icon item is an ordinary
+    /// placed file, so it must carry the same two fields every other item
+    /// this component contributes does, not a value special-cased for icons.
+    #[test]
+    fn the_icon_item_is_attributed_to_the_same_component_and_medium() {
+        let plan = plan_with_one_subtree_rule(
+            "Prefs",
+            "Prefs",
+            &[
+                ("Prefs/dummy", b"data", 0),
+                ("Prefs.info", b"icon-bytes", 0),
+            ],
+        );
+        let icon = plan
+            .items
+            .iter()
+            .find(|item| item.to == "Prefs.info")
+            .expect("the icon item must be on the plan");
+        assert_eq!(icon.component, "drawer-owner");
+        assert_eq!(icon.media, "Shelf");
+    }
+
+    /// **The ordinary case.** Most drawers a release ships do not carry a
+    /// sibling icon at all (`Workbench3.2.adf`'s `C`, `Classes`, `Libs`,
+    /// `Rexxc` and `S` have none among the seven root icons the disks do
+    /// carry) — absence is not a refusal, and it places nothing.
+    #[test]
+    fn a_subtree_rule_whose_medium_has_no_sibling_icon_places_none() {
+        let plan = plan_with_one_subtree_rule("Prefs", "Prefs", &[("Prefs/dummy", b"data", 0)]);
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+        assert!(
+            !plan.items.iter().any(|item| item.to == "Prefs.info"),
+            "no sibling icon on the medium should mean no icon item: {:#?}",
+            plan.items
+        );
+    }
+
+    /// **Excluded on purpose, forever — spec §2.1.** `fonts` and `backdrops`
+    /// copy a whole medium with `from: ""`; that medium's own root icon is
+    /// `Disk.info`, a VOLUME icon (`do_Type = 1`), not a drawer icon
+    /// (`do_Type = 2`), so `from: ""` takes no icon at all.
+    ///
+    /// The medium here carries a file literally named `.info` — the
+    /// spelling `expand_rules`'s own naming convention
+    /// (`format!("{from}.info")`) would look up for an *empty* `from` if
+    /// the exclusion were ever lifted or bypassed — so a regression that
+    /// drops the `from.is_empty()` guard has something on the medium to
+    /// wrongly pick up and fails this test rather than passing it by
+    /// accident (see the mutation table in the task report).
+    #[test]
+    fn a_from_empty_subtree_rule_takes_no_icon() {
+        let plan = plan_with_one_subtree_rule("", "Fonts", &[(".info", b"whole-disk-icon", 0)]);
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+        assert!(
+            !plan.items.iter().any(|item| item.to == "Fonts.info"),
+            "a from:\"\" rule must take no icon at all: {:#?}",
+            plan.items
+        );
+    }
+
+    /// **A file, not a directory — and its own size, not a guess.** `apply`
+    /// copies `bytes` from `from`, and a preview's total is only right if
+    /// this is the icon's real on-medium size.
+    #[test]
+    fn the_icon_item_is_a_file_not_a_directory() {
+        let icon_bytes: &[u8] = b"icon-bytes";
+        let plan = plan_with_one_subtree_rule(
+            "Prefs",
+            "Prefs",
+            &[("Prefs/dummy", b"data", 0), ("Prefs.info", icon_bytes, 0)],
+        );
+        let icon = plan
+            .items
+            .iter()
+            .find(|item| item.to == "Prefs.info")
+            .expect("the icon item must be on the plan");
+        assert!(!icon.is_dir);
+        assert_eq!(icon.bytes, icon_bytes.len() as u64);
+    }
+
+    /// **The same rule as any other file destination.** The icon item is an
+    /// ordinary [`PlanItem`], not a parallel path around `detect_collisions`
+    /// — two components each placing a drawer icon at the same destination,
+    /// with neither declaring `overrides`, is refused exactly like two
+    /// components writing the same `C/Format`.
+    #[test]
+    fn two_components_placing_the_same_drawer_icon_is_a_collision_like_any_other() {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-drawer-icon-collision");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        // Distinct names inside each subtree (`dummyA` / `dummyB`) so the
+        // *walked* files land at different destinations — `Prefs/dummyA` and
+        // `Prefs/dummyB` — and the only thing that actually coincides is the
+        // two components' drawer icons, which is the one collision this test
+        // means to exercise.
+        crate::core::osinstall::fixtures::media(
+            &folder,
+            "MediaA",
+            "a.adf",
+            &[("Prefs/dummyA", b"a", 0), ("Prefs.info", b"icon-a", 0)],
+        );
+        crate::core::osinstall::fixtures::media(
+            &folder,
+            "MediaB",
+            "b.adf",
+            &[
+                ("Settings/dummyB", b"b", 0),
+                ("Settings.info", b"icon-b", 0),
+            ],
+        );
+
+        let component = |id: &str, media: &str, from: &str| Component {
+            layer: None,
+            id: id.to_string(),
+            media: media.to_string(),
+            rules: vec![PathRule {
+                from: from.to_string(),
+                to: "Prefs".to_string(),
+                kind: RuleKind::Subtree,
+            }],
+            required: false,
+            condition: None,
+            overrides: vec![],
+            user_startup: vec![],
+            activate: vec![],
+            exclusive_group: None,
+            label_key: None,
+            available: true,
+            removes: Vec::new(),
+        };
+        let recipe = Recipe {
+            layers: vec![],
+            base: None,
+            release: "Test".to_string(),
+            components: vec![
+                component("owner-a", "MediaA", "Prefs"),
+                component("owner-b", "MediaB", "Settings"),
+            ],
+        };
+
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2".to_string(),
+            media_folder: folder,
+            extra_media_folders: Vec::new(),
+            media_folders: BTreeMap::new(),
+            keymap: None,
+            rom: None,
+            chosen: vec!["owner-a".to_string(), "owner-b".to_string()],
+            destination: dir.join("dist"),
+            excluded: Vec::new(),
+            scan_cache: Default::default(),
+        };
+        let planned = plan(&request, &recipe).unwrap();
+        assert!(
+            matches!(
+                planned.refusals.as_slice(),
+                [RefusalReason::DestinationCollision { path, components }]
+                    if path == "Prefs.info" && components.len() == 2
+            ),
+            "two drawer icons at the same destination must collide like any \
+             other undeclared claim: {:?}",
+            planned.refusals
+        );
+        assert!(planned.items.is_empty());
     }
 
     /// Promoted from Minor after review: a `File` rule that actually
