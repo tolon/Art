@@ -131,8 +131,33 @@ it("says nothing at all when no folder has been chosen", () => {
 });
 
 it("returns a different key for every state", () => {
-  // Guards the round's central rule: the states must not collapse. If two
-  // states ever return the same key, this fails.
+  // The round's central guard. Every other test checks one state in
+  // isolation and would stay green if two of them were merged into one
+  // sentence - which is precisely the collapse this project names as its
+  // most expensive failure. This is the only test that can see it.
+  const keys = [
+    mediaEvidence({
+      plan: planWith(["Extras3.2"], 12),
+      found: ["Workbench3.2", "Fonts"],
+      releaseHolding: RELEASE,
+      release: RELEASE,
+    }),
+    mediaEvidence({
+      plan: planWith(["Extras3.2"], 3),
+      found: ["Workbench3.1", "Fonts"],
+      releaseHolding: "AmigaOS 3.1",
+      release: RELEASE,
+    }),
+    mediaEvidence({
+      plan: planWith(["Workbench3.2"], 2),
+      found: ["Fonts", "Locale"],
+      releaseHolding: null,
+      release: RELEASE,
+    }),
+  ].map((phrase) => phrase?.key);
+
+  expect(keys.every((key) => typeof key === "string")).toBe(true);
+  expect(new Set(keys).size).toBe(keys.length);
 });
 ```
 
