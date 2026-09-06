@@ -2700,5 +2700,60 @@
       "noDevice": "The stack needs a driver name.",
       "staticIncomplete": "A fixed address needs every field; {{field}} is empty."
     }
+  },
+  "appearance": {
+    "heading": "Appearance",
+    "intro": "Set the desktop wallpaper, the screen depth and the shell's own defaults on this tree — written straight into the release's own WBPattern.prefs and ScreenMode.prefs, the files AmigaOS itself reads.",
+    "wallpaper": {
+      "enable": "Change the desktop wallpaper",
+      "whichLabel": "Apply to",
+      "which": {
+        "root": "Desktop",
+        "drawer": "Drawer windows",
+        "screen": "Workbench screen"
+      },
+      "source": {
+        "existing": "Use a backdrop already in the tree",
+        "host": "Choose a picture from this PC"
+      },
+      "backdropLabel": "Backdrop",
+      "backdrop": {
+        "choose": "Choose a backdrop…",
+        "none": "Nothing has been placed there yet."
+      },
+      "pictureLabel": "Picture",
+      "picture": {
+        "none": "No picture chosen",
+        "chooseTitle": "Choose a picture",
+        "hint": "PNG or JPEG only."
+      },
+      "colours": "Colours",
+      "placementLabel": "Placement",
+      "placement": {
+        "tile": "Tile",
+        "center": "Center",
+        "scale": "Scale",
+        "scale-good": "Scale (best quality)"
+      }
+    },
+    "screen": {
+      "enable": "Change the screen depth",
+      "depth": "Depth (bitplanes)"
+    },
+    "shell": {
+      "enable": "Write the shell's own defaults (width, height, colours)"
+    },
+    "apply": "Apply",
+    "applying": "Applying…",
+    "done": {
+      "written": "Written: {{files}}",
+      "backup": "Previous version backed up to: {{files}}"
+    },
+    "blocked": {
+      "noTree": "Choose a system volume first.",
+      "nothingChosen": "Tick the wallpaper, the screen depth, the shell defaults, or some of them.",
+      "noBackdropChosen": "Choose a backdrop already in the tree.",
+      "noPictureChosen": "Choose a picture on this PC."
+    }
   }
 }

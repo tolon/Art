@@ -1979,6 +1979,7 @@ fn verify_at(request: &VerifyRequest) -> AppResult<VerifyReport> {
         request.slot,
         request.index,
         &manifest,
+        &request.dist_root,
     )?)
 }
 
@@ -4163,7 +4164,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.failed, 0, "{:?}", report.files);
-        assert_eq!(report.not_checked, 1);
+        assert_eq!(
+            report.not_checked, 2,
+            "the unreadable family itself, plus Task 8's own NotChecked for a dist_root with \
+             no prefs files at all: {:?}",
+            report.files
+        );
     }
 
     // -------------------------------------------------------------------

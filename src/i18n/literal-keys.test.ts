@@ -442,6 +442,20 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // `igameVerdictPhrase` turns an `IGameState` into a key and
     // `TitleDetail.tsx` renders it over the write's own result;
     // `phrase-keys.test.ts` enumerates all four variants.
-    expect(dynamicCalls).toBe(140);
+    // 140 -> 145 (prefs-and-wallpaper Task 10, the appearance panel): five,
+    // all of them patterns already on this list. Two read a `Phrase.key` off
+    // `appearanceBlocker` — the button's `title` and the sentence beside it,
+    // the exact shape `networkBlocker` already contributed at "131 -> 135",
+    // and `phrase-keys.test.ts` enumerates every one of that mapper's
+    // variants. One is a ternary over two literal keys (apply/applying), the
+    // same shape as the show/hide and write/writing pairs above. The last
+    // two are template literals over a fixed, exhaustive TypeScript array
+    // (`appearance.wallpaper.which.${w}` over `WHICHES`,
+    // `appearance.wallpaper.placement.${p}` over `PLACEMENTS`) rather than a
+    // mapper's own union, so there is no `Phrase` variant for
+    // `phrase-keys.test.ts` to enumerate — `dead-keys.test.ts` covers these
+    // two instead, since every key both arrays can produce is a literal leaf
+    // already present in the catalogue.
+    expect(dynamicCalls).toBe(145);
   });
 });

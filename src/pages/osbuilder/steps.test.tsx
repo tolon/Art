@@ -242,6 +242,10 @@ describe("Verify against a card is on the volumes step (ART-197 wave 3)", () => 
     renderAt("/os-builder/birimler");
     expect(screen.getByTestId("volumes")).toBeTruthy();
     expect(screen.getByTestId("verify")).toBeTruthy();
+    // Fix round 1, Minor: unmocked like `NetworkPanel` beside it, so this is
+    // the one route-level check that a deleted `<AppearancePanel />` in
+    // `StepBirimler` would actually fail.
+    expect(screen.getByTestId("appearance-panel")).toBeTruthy();
   });
 
   /// The other half, and the one that would make the move a loss if it were

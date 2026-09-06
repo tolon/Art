@@ -7,6 +7,7 @@
 pub mod adf;
 pub mod amigainstall;
 pub mod amiganet;
+pub mod appearance;
 pub mod archive;
 pub mod archives;
 pub mod artwork;

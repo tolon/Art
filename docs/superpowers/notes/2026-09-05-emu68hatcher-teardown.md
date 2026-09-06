@@ -293,6 +293,111 @@ The alternative that *is* consistent with the existing ruling is finding 2
 above: place the wrapper's loose files and let the BoingBag's own `Updater`
 run at first boot, on the Amiga, which is the machine it was written for.
 
+## Correction, 2026-09-06 — round 1 landed, and the first read missed six things
+
+**This note is history and the paragraphs above are unchanged.** Round 1 of
+the intake — wallpaper and prefs, SD-3 G14 — was designed and built the day
+after this note was written
+([2026-09-05-prefs-and-wallpaper-design.md](../specs/2026-09-05-prefs-and-wallpaper-design.md),
+`art-prefs-wallpaper`), and its own opening line says plainly that this note
+"read their `builder/` and missed the `configure_*` family, `staging/prefs.py`,
+and the IFF PTCH decoder entirely." Re-reading the same repository at the
+same commit (`3f38b22`, 2026-08-28) to close that gap found **six** things
+missed the first time, not three — the design round named three in passing
+and stopped there because it only needed one of them (`staging/prefs.py`'s
+`WBPattern.prefs` writer, whose six-byte `PTRN` pack is what this note's own
+§1.1 already quotes as wrong). The other five are recorded here because they
+have nothing to do with wallpaper and belong to later rounds of the intake.
+
+1. **The `CONFIGURE` pipeline stage is six modules, not one function.**
+   `builder/pipeline/configure.py`, `configure_boot.py`,
+   `configure_hardware.py`, `configure_icons.py`, `configure_network.py`,
+   `configure_prefs.py` and `configure_scripts.py` — the stage-registry line
+   in the pipeline diagram above names one word for what is actually a whole
+   sub-tree. Everything below was read out of those files.
+
+2. **`staging/prefs.py` also patches an *existing* `ScreenMode.prefs` in
+   place**, which this note's own §1.1 quote did not mention.
+   `configure_workbench_screen_mode` reads
+   `Env-Archive/Sys/ScreenMode.prefs`, writes an unmodified `.Native` copy
+   beside it as a backup, then overwrites the original with
+   `patch_screenmode_prefs`'s output. That function walks the IFF `FORM`
+   bounds-checked (refusing a truncated chunk rather than reading past it —
+   the one thing it does that this note's earlier read of `prefs.py` would
+   have called competent), finds the `SCRM` chunk, and pokes two fields
+   directly: `DisplayID` at body offset 16, and — this is the thing worth
+   keeping — **`Depth` as one raw byte at body offset 25**. That confirms,
+   from their own source rather than from re-derivation, the finding the
+   prefs-and-wallpaper design's §1.2 made independently by reading a real
+   file: their code writes the low half of a `u16` field, which happens to
+   work for every depth in practice but is not what the structure states.
+   ART writes the whole two-byte field.
+
+3. **An IFF `PTCH` (`spatch`) binary-patch decoder lives in
+   `staging/toolsdaemon.py`**, and it has nothing to do with prefs or
+   wallpaper at all. `patch_toolsdaemon` upgrades three installed
+   ToolsDaemon 2.1a files to 2.2 in place by applying a `FORM PTCH` patch:
+   an `INPF` chunk records the expected input file's length and checksum
+   (a plain byte sum, verified before anything is decoded), an `OUTF` chunk
+   records the same for the result, and a `PSEQ` chunk holds a byte-level
+   opcode stream — copy N bytes from the source, insert N literal bytes,
+   skip N source bytes, or add a small delta to one byte — that
+   `_decode_sequence` walks to produce the new file, checked against `OUTF`
+   before it is trusted. A general-purpose Amiga binary patcher, general
+   enough that it is worth knowing exists the day ART needs to patch a
+   binary rather than a `FORM PREF`.
+
+4. **Hardware identity is tooltype-patched onto stock `.info` files**,
+   `configure_hardware.py::_configure_videocore_tooltypes` and
+   `_configure_hdtoolbox_tooltypes`. `Videocore.info` gets roughly twenty
+   measured VC4 tuning tokens rewritten into its ToolTypes (scaler mode,
+   phase, sprite opacity, integer scaling, switch method), `uaegfx.info`
+   gets four; and `HDToolBoxPi3.info` / `HDToolBoxPi4.info` each have their
+   placeholder `SCSI_DEVICE_NAME=scsi.device` rewritten to the board's real
+   device (`brcm-sdhc.device` on a Pi 3, `brcm-emmc.device` on a Pi 4), with
+   the other board's device left in as a commented-out alternate rather
+   than deleted. Same family as finding 4 of "What ART should take" above
+   (icons that make the result look like a real Workbench) but for hardware
+   identity rather than iconography, and ART has no equivalent for either
+   `.info` today.
+
+5. **The dependency resolver that finding 3 of "What ART should take" above
+   (the package model, `data/package_schema.py`) described only as a
+   Pydantic schema is a real, working algorithm** — `data/package_resolver.py`.
+   `_ResolverContext.dependency_closure` runs a worklist over
+   `requested | mandatory` package names, and for every `requires` token a
+   package declares, `pick_provider` resolves it against the `provides` set
+   every package publishes (a token a package can satisfy is its own name
+   plus its declared aliases), preferring in order: a provider already
+   selected this run, then one the user explicitly requested, then one
+   marked mandatory for this build, then the provider's own declared
+   default — falling back to the alphabetically first candidate only when
+   none of those distinguish them. An unsatisfiable requirement is recorded
+   by token, naming every package that asked for it, rather than silently
+   dropped. That earlier finding's "design work" undersold this: the
+   resolution *order* is already written, tested against their own package
+   set, and worth reading before ART designs its own rather than after.
+
+6. **Emu68 boot tuning is a `config.txt` device-tree overlay, not a
+   `cmdline.txt` token** — `builder/staging/scripts/generator.py::
+   _emu68_overlay`, emitted only for Emu68 1.1 and newer:
+   `dtoverlay=emu68,FP0,SC,SCS=<n>,DBF,BW` — fast-page-zero, a chip-RAM
+   slowdown with a configurable distance, a DBF slowdown, and a blit-wait
+   toggle. **Checked against the tree rather than assumed missing**:
+   `core/pistorm/options.rs` (✅ in FEATURES.md) covers `cmdline.txt`
+   tokens — `nofpu`, `vbr_move`, `enable_cache`, `limit_2g` and others —
+   which is a different file, and `core/pistorm/firmware.rs`'s own
+   `MANAGED_OVERLAYS` names only `dtoverlay=sdhc,`/`dtoverlay=emmc,` as
+   ART's to rewrite, passing every other `dtoverlay=` line — this one
+   included — through verbatim. So a user who hand-writes this line keeps
+   it; nothing in ART today offers it as a choice. Genuinely new scope, not
+   a gap in an existing module.
+
+Finding 2 is spent — this round used it. **Findings 1, 3, 4, 5 and 6 belong
+to whichever future round of the intake reaches package modelling and
+hardware polish**; they are recorded here rather than acted on now, the same
+discipline "Suggested order" below already states.
+
 ## Suggested order, if this becomes work
 
 1. **Media identification by hash** — closes a defect class ART has already

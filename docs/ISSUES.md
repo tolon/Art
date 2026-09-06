@@ -478,6 +478,100 @@ archives who refreshes often, the fix is a size/mtime-keyed skip for an
 archive that has not changed, the same as the file walk already has — not a
 redesign.
 
+**ART-245** 🔵 **A missing backdrop and a wrong-type match at the same name
+read as the same sentence** — *found 2026-09-05/06 during the
+prefs-and-wallpaper round's whole-branch review, filed rather than fixed*
+`src-tauri/src/core/osinstall/verify.rs::check_one_backdrop_path`
+
+The verify check that confirms every `PTRN`-named backdrop path exists in the
+tree (§3.5 of the prefs-and-wallpaper design) reports `Fail` with "was not
+found under this distribution tree" whenever `resolve_ci_optional` returns
+`None` — which it does both when nothing at that path exists at all, and when
+the path resolves to something of the **wrong kind** (a directory sitting
+where a picture file was named). CLAUDE.md's own rule is that a refusal names
+what is missing; "not found" is the right sentence for the first case and the
+wrong one for the second, where the honest sentence is "that name is a
+directory, not the picture file". Not tested for and not exercised on any
+real material seen this round — every measured `PTRN` chunk named a file, not
+a directory — so this is latent rather than observed. Low severity: the
+message is merely less specific than it should be, not wrong about whether
+verification passed.
+
+**ART-246** 🔵 **`verify_volume`'s prefs check has an untested failure path:
+a permission error walking the tree folds into one `Fail` row with no test
+provoking it** — *found 2026-09-05/06 by the prefs-and-wallpaper round's Task
+8 review, disclosed rather than faked*
+`src-tauri/src/core/osinstall/verify.rs::verify_volume` (the
+`check_prefs_paths(dist_root)` `Err` arm)
+
+When `check_prefs_paths` cannot walk the distribution tree's `Prefs/`
+directory at all — a real-world cause is a permission error partway through a
+directory walk — `verify_volume` folds that into a single `Fail` row naming
+the error rather than failing the whole report. The fold itself is
+reasonable and matches the file's existing `DosFamily::Other` pattern of
+turning an inability to look into a named verdict rather than a silent
+`Ok`. What is missing is a test that provokes a *real* OS-level permission
+error mid-walk rather than a constructed `CoreError`, the same standard
+Task 7's partial-commit fix was held to in this round. Provoking one
+portably (a directory made unreadable, then restored, without leaving the
+test suite's own scratch in a state `Drop` cannot clean up) is genuinely
+awkward, which is why it was disclosed rather than attempted under time
+pressure at the end of a twelve-task round. Low severity: the branch is
+defensive coding for a case that is plausible but has not been observed.
+
+**ART-247** 🔵 **A PNG decode arm the `png` crate's own `EXPAND` transform
+should make unreachable has no test of its own** — *found 2026-09-05/06
+during the prefs-and-wallpaper round's Task 6, disclosed with a traced
+unreachability argument rather than asserted*
+`src-tauri/src/core/picture/mod.rs::decode` (the `png::ColorType::Indexed`
+arm)
+
+`core/picture::decode` sets `Transformations::EXPAND` on the PNG reader,
+which the crate documents as always turning a palette (indexed) image into
+`Rgb` or `Rgba` before `next_frame` returns — so the `ColorType::Indexed` arm
+of the match on the decoded frame's colour type should never run for any PNG
+this decoder can produce. Per this round's own rule (recorded in CLAUDE.md,
+"the failure that does not crash" / unreachable-code section): this is
+unreachable because of a **third party's current behaviour** on
+attacker-supplied bytes, not because of ART's own arithmetic, so it correctly
+stays a runtime `CoreError::Malformed` refusal rather than a `debug_assert!`
+that would compile out in release and let a future `png` upgrade turn a
+silently-misread palette image into a confident-wrong result. What is
+missing is a test — no PNG fixture has been found or constructed that
+reaches this arm, because reaching it would mean the crate's own documented
+guarantee is already broken, which is precisely why one has not been forced.
+Low severity: the arm cannot be exercised without first finding the
+third-party defect it exists to catch.
+
+**ART-248** 🔵 **`appearance_apply` runs the whole wallpaper pipeline
+synchronously on the command thread, with no progress and no cancel** — *found
+2026-09-05/06 during the prefs-and-wallpaper round's whole-branch review,
+filed rather than fixed*
+`src-tauri/src/commands/appearance.rs::appearance_apply`,
+`src-tauri/src/core/appearance/mod.rs::plan_wallpaper`,
+`src-tauri/src/core/picture/quantise.rs`
+
+`commands/appearance.rs::appearance_apply` calls `apply_appearance` directly
+on the Tauri command thread rather than through `core::jobs::spawn_job`, and
+`apply_appearance`'s wallpaper path (`plan_wallpaper`) runs the whole decode →
+scale → quantise → ILBM-encode pipeline inline. `core/picture::quantise` is
+median-cut, O(target_colours × pixels): the scale target comes from the
+tree's own `ScreenMode.prefs` (`screen_size_for_scaling`), so a request
+against an RTG tree at 1920×1080 with 256 colours means on the order of 256
+passes over roughly 2.07 million pixels — with the application window frozen
+for the whole call, no progress shown, and no way to cancel it. §54/§55
+("Background work") already made this call for four other operations in this
+codebase — `commands/layout.rs`, `commands/archives.rs` and `commands/card.rs`
+all move comparably expensive work off the command thread through
+`core::jobs::spawn_job` for exactly this reason. `appearance_apply` was added
+this round without that wrapper. Not yet measured against a real 1920×1080
+picture (every fixture used so far is small), so the actual stall duration on
+real hardware is unknown; the shape of the fix is not — give `plan_wallpaper`
+a `&dyn ProgressSink` the way `core/gameindex::scan_titles_with` does, route
+`appearance_apply` through `spawn_job`, and keep a thin synchronous wrapper
+for callers (tests) that do not need a job, the same split
+`scan_titles`/`scan_titles_with` already uses.
+
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 

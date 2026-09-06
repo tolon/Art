@@ -202,6 +202,8 @@ pub fn run() {
             commands::gameindex::igamewrite_apply,
             commands::amiganet::amiganet_seed,
             commands::amiganet::amiganet_networks_already_there,
+            commands::appearance::appearance_backdrops,
+            commands::appearance::appearance_apply,
             commands::artwork::artwork_defaults,
             commands::artwork::artwork_check_source,
             commands::artwork::artwork_dir,
