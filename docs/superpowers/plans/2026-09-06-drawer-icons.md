@@ -273,7 +273,6 @@ In every case the result is `max(gadget, found)`, never smaller than the gadget.
 
 - [ ] **Step 1: Write the failing tests**
 
-```rust
 Rust has no named arguments; the calls below are written with positional
 parameters in the order `(gadget_w, gadget_h, face_w, face_h, with_imag)` and
 `(gadget_w, gadget_h, im1_w, im1_h)`. Write the builders with those signatures.
