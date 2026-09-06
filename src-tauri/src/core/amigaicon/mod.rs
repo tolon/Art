@@ -123,15 +123,34 @@ const OFF_STACK_SIZE: usize = 74;
 /// `IDCMPFlags`), so absolute offset `HEADER_LEN + 14`. Workbench overloads
 /// this field — otherwise an Intuition `NewWindow`'s flags, meaningless for a
 /// window that is closed and saved to disk — to carry its own display-mode
-/// bits instead.
+/// value instead.
 const OFF_DRAWER_FLAGS: usize = HEADER_LEN + 14;
 
-/// The bit inside `OFF_DRAWER_FLAGS` for "Show All Files" versus "Show Icons"
-/// — `DDFLAGS_SHOWALL` (`1 << 1`) in `workbench/workbench.h`. **This one bit
-/// is not independently measured against a real icon with the setting
-/// toggled**, unlike every other offset this module's doc comment lists —
-/// [`set_show_all_files`]'s own doc says what would close that gap.
-const DDFLAGS_SHOWALL: u32 = 1 << 1;
+/// `OFF_DRAWER_FLAGS`'s three values, **measured** against 59 real drawer
+/// and garbage icons carrying a `DrawerData2` in the owner's own AmigaOS 3.9
+/// tree — the same register `core/ilbm`'s `BMHD` doc uses to separate
+/// measured fields from adopted ones:
+///
+/// | Value | Count | Example |
+/// |---|---|---|
+/// | `DDFLAGS_SHOWDEFAULT` (0) | 34 | `Devs/Monitors.info` |
+/// | `DDFLAGS_SHOWICONS` (1) | 15 | `Devs/DataTypes.info` |
+/// | `DDFLAGS_SHOWALL` (2) | 10 | `Prefs/Presets/Beeps/Boings.info` |
+///
+/// **This is an enum, not a bitfield.** Exactly these three values appear
+/// across all 59 icons and never a combination — no `3`, no higher bit — so
+/// [`set_show_all_files`] writes the whole word to one of these constants
+/// rather than OR-ing or AND-NOT-ing a bit into whatever was already there.
+///
+/// `Prefs/Presets/Beeps/Boings.info` carrying `DDFLAGS_SHOWALL` is the
+/// stronger half of the evidence, not just the count: it is a drawer of
+/// sound files with no icons of their own, so without "show all files" it
+/// opens as an **empty window** on a real Workbench — exactly the case this
+/// feature exists for. Finding the flag set on precisely that drawer is what
+/// turns this from a plausible constant into a confirmed one.
+const DDFLAGS_SHOWDEFAULT: u32 = 0;
+const DDFLAGS_SHOWICONS: u32 = 1;
+const DDFLAGS_SHOWALL: u32 = 2;
 
 /// `do_CurrentX`/`do_CurrentY`'s sentinel for "the release did not place
 /// this icon" — `0x80000000`, `i32::MIN`. Measured: 361 of 798 real icons
@@ -649,25 +668,25 @@ pub fn set_window(bytes: &[u8], window: DrawerWindow) -> CoreResult<Vec<u8>> {
     Ok(out)
 }
 
-/// Set or clear Workbench's "Show All Files" bit for this drawer
-/// (`DDFLAGS_SHOWALL` inside `dd_NewWindow.Flags`, [`OFF_DRAWER_FLAGS`]),
-/// leaving every other bit of that field — and every other byte of the
-/// icon — untouched. A read-modify-write of one bit rather than an
-/// overwrite of the whole word, because the same field also carries
-/// `DDFLAGS_SHOWICONS` and the view-by mode, neither of which this call was
-/// asked to change.
+/// Set or clear Workbench's "Show All Files" mode for this drawer —
+/// `OFF_DRAWER_FLAGS`, measured (see its own doc comment) to be an **enum**
+/// of exactly three values, never a bitfield. `show_all: true` writes
+/// `DDFLAGS_SHOWALL` (2); `false` writes `DDFLAGS_SHOWDEFAULT` (0) — the
+/// measured default, not whatever bits happened to be clear before. Every
+/// other byte of the icon is untouched.
+///
+/// This call always chooses between exactly two of the three measured
+/// values: it has no way to ask for `DDFLAGS_SHOWICONS` (1) explicitly, the
+/// same way [`set_position`]'s `None` only ever writes [`NO_POSITION`]. An
+/// icon already carrying `DDFLAGS_SHOWICONS` that is asked to turn "show all
+/// files" off moves to the default (0), not back to `DDFLAGS_SHOWICONS`
+/// (1) — there is no third state this function's boolean signature can
+/// express, and `false` unambiguously means "off", not "whatever this was
+/// before `true`".
 ///
 /// Refuses when `do_DrawerData` is zero, the same case [`set_window`]
 /// refuses for the same reason: there is no `DrawerData` block, so there is
-/// no `Flags` word to set the bit in.
-///
-/// **What is not independently measured, unlike the rest of this module:**
-/// `DDFLAGS_SHOWALL`'s bit position is adopted from the community's
-/// documented reimplementation of `workbench/workbench.h`, not confirmed
-/// against a real icon saved with the setting toggled — a gap [`icon-oracle-check.py`](
-/// ../../../../scripts/icon-oracle-check.py)'s round-trip check (Task 7)
-/// does not close either, since it only proves this call preserves every
-/// *other* byte, not that this particular bit is the right one.
+/// no `Flags` word to write.
 pub fn set_show_all_files(bytes: &[u8], show_all: bool) -> CoreResult<Vec<u8>> {
     check_header(bytes)?;
     if be_u32(bytes, OFF_DRAWER_DATA)? == 0 {
@@ -680,11 +699,10 @@ pub fn set_show_all_files(bytes: &[u8], show_all: bool) -> CoreResult<Vec<u8>> {
     // so `OFF_DRAWER_FLAGS` (HEADER_LEN + 14, needing 4 bytes) is in bounds.
     advance(bytes, HEADER_LEN, DRAWER_DATA_LEN)?;
 
-    let flags = be_u32(bytes, OFF_DRAWER_FLAGS)?;
     let flags = if show_all {
-        flags | DDFLAGS_SHOWALL
+        DDFLAGS_SHOWALL
     } else {
-        flags & !DDFLAGS_SHOWALL
+        DDFLAGS_SHOWDEFAULT
     };
 
     let mut out = bytes.to_vec();
@@ -1009,6 +1027,37 @@ mod tests {
         assert_eq!(
             back, before,
             "turning it back off restores the original bytes"
+        );
+    }
+
+    #[test]
+    fn dd_flags_is_an_enum_and_the_three_measured_values_round_trip() {
+        // Measured across 59 real drawer icons in the owner's AmigaOS 3.9
+        // tree: only 0, 1 and 2 ever appear, never a combination - so this
+        // is an enum and a bit-OR/AND-NOT would be wrong.
+        assert_eq!(DDFLAGS_SHOWDEFAULT, 0);
+        assert_eq!(DDFLAGS_SHOWICONS, 1);
+        assert_eq!(DDFLAGS_SHOWALL, 2);
+
+        // Start from DDFLAGS_SHOWICONS (1) - a real measured value that is
+        // not the zero-filled default a plain synthetic fixture would give
+        // for free.
+        let mut show_icons = synthetic_drawer_icon(0, 0, 100, 100);
+        show_icons[OFF_DRAWER_FLAGS..OFF_DRAWER_FLAGS + 4]
+            .copy_from_slice(&DDFLAGS_SHOWICONS.to_be_bytes());
+
+        // true writes the enum value 2 outright - never 1 | 2.
+        let all = set_show_all_files(&show_icons, true).unwrap();
+        assert_eq!(be_u32(&all, OFF_DRAWER_FLAGS).unwrap(), DDFLAGS_SHOWALL);
+
+        // false writes the DEFAULT (0), not merely clearing the SHOWALL bit
+        // - which would leave an icon that started at DDFLAGS_SHOWICONS (1)
+        // sitting at 1 again instead of returning to the true default.
+        let back_to_default = set_show_all_files(&all, false).unwrap();
+        assert_eq!(
+            be_u32(&back_to_default, OFF_DRAWER_FLAGS).unwrap(),
+            DDFLAGS_SHOWDEFAULT,
+            "false must write the default, not merely clear a bit"
         );
     }
 
