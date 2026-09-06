@@ -25,6 +25,119 @@ pass — filed and closed together rather than sitting in Open in between.
 ---
 
 ## Open
+
+**ART-261** 🟠 **`cargo test --lib` reports exit 0 with no `test result:`
+line whenever `commands::artwork` runs, and passes cleanly without it** —
+*found 2026-09-06 by round 4's Task 1, localised the same day by a two-armed
+run*
+`src-tauri/src/commands/artwork.rs` (tests) · `src-tauri/src/core/artwork/`
+
+Measured, both arms, on this machine:
+
+| run | result |
+|---|---|
+| `cargo test --lib -- --skip artwork` | **`test result: ok. 2841 passed; 0 failed; 49 ignored`**, 17.98 s |
+| `cargo test --lib artwork` | dies mid-run — no summary line, **exit 0** |
+| `cargo test --lib commands::artwork::tests::a_hand_attached_picture_survives_the_artwork_cache_being_deleted -- --exact` | **1 passed**, 0.02 s |
+
+With `--test-threads=1` the run stops at exactly
+`a_hand_attached_picture_survives_the_artwork_cache_being_deleted` — the name
+prints, the result never does — identically across two attempts. That same
+test passes on its own. So no single test is broken; running the **module**
+kills the process.
+
+**A wrong elimination, corrected here rather than left standing.** Earlier the
+same day this controller concluded the harness was being killed after a fixed
+elapsed time — *“always the same place” really meaning “always the same
+duration”*. The two-armed run above refutes it: the **short** run (89 tests)
+dies and the **long** one (2841 tests, 18 s) completes. Duration is not the
+variable. `CLAUDE.md` asks for a refuted elimination to be corrected in place,
+because a confident wrong one costs more than none.
+
+**The cause is the antivirus, and it is not an inference — the owner watched
+it happen** (*“antivirus yaptı ben gördüm”*, 2026-09-06). Trend Micro Maximum
+Security is active on this machine, with Defender's real-time protection off,
+and the owner had already seen it react to `art_lib` earlier the same day.
+Exit 0 with no summary and no `FAILED` is what an externally killed process
+looks like rather than a panic, and the artwork tests write image files in
+quick succession, which is what draws the scanner.
+
+This paragraph replaces one that called the cause a hypothesis because the
+scanner had not been switched off to test it. That was the right thing to
+write at the time and the wrong thing to keep: a person at the machine saw the
+event, which is evidence this session could not have produced by reasoning
+about symptoms. **The owner at the screen outranks the controller's
+inference** — six of seven defects in one earlier round were found the same
+way.
+
+**Consequence, and it is the expensive part:** `cargo test` cannot currently be
+quoted honestly on this machine without `--skip artwork`, and an exit code
+cannot tell a completed suite from a killed one. Any number quoted from a full
+run here is suspect unless its `test result:` line is shown.
+
+**The fix is machine configuration, not code.** Nothing in `commands::artwork`
+is wrong: every one of its tests passes when run alone. Exclude
+`src-tauri\target\`, the test scratch root (`D:\tmp\art-tests\`, pointed there
+by `src-tauri/.cargo/config.toml`) and `art_lib`'s build output from Trend
+Micro, then re-run both arms and record what changed **as numbers**, so the
+entry closes on a measurement rather than on the symptom going quiet.
+
+Until that is done, quote the `--skip artwork` summary and say that is what it
+is. This entry stays open while the workaround is what the numbers rest on.
+
+**CLOSED BY MEASUREMENT, 2026-09-06.** The owner switched the scanner off and
+both arms were re-run. Before, on the left; after, on the right:
+
+| run | with the scanner on | with it off |
+|---|---|---|
+| `cargo test --lib artwork` | died, no summary, exit 0 | **`ok. 89 passed; 0 failed`**, 0.15 s |
+| `cargo test --lib` (full) | died, no summary, exit 0 | **`ok. 2930 passed; 0 failed; 49 ignored`**, 18.00 s |
+
+Repeated twice more, since a suite that fails at random trains people to re-run
+until green: **2939 passed / 0 failed** at 18.74 s and again at 33.30 s. (The
+2930 → 2939 step is round 4's Task 2 landing tests between runs, not
+flakiness.) Both arms flipped together and nothing in `commands::artwork`
+changed, so the cause is settled rather than merely quiet.
+
+**The durable fix is exclusions, not a scanner left off.** Switching protection
+off was the right way to *measure* and is the wrong way to *live*: exclude
+`src-tauri\target\`, the test scratch root (`D:\tmp\art-tests\`, pointed there
+by `src-tauri/.cargo/config.toml`) and `art_lib`'s build output, then protection
+goes back on and the numbers above should hold. This entry records the
+measurement; it does not recommend the machine stay in the state that produced
+it.
+
+**REOPENED 2026-09-06, and closing it was the controller's error.** Round 4's
+Task 4 hit the identical symptom hours later, and it reproduces now:
+
+| run | result |
+|---|---|
+| `cargo test --lib` (full) | dies, no summary, exit 0 |
+| `cargo test --lib artwork` | dies, no summary, exit 0 |
+| `cargo test --lib -- --skip artwork` | **`ok. 2869 passed; 0 failed; 50 ignored`**, 27.86 s |
+
+Nothing touched `commands::artwork` in between. The scanner is simply on again.
+
+**The measurement was sound; the closure was not.** This entry itself said the
+durable fix is exclusions and that *"a closed issue that quietly depends on a
+machine being left unprotected would be a worse record than an open one"* — and
+it was then closed anyway, on numbers taken during the few minutes protection
+was off. Switching a scanner off is a **state**, not a fix, and a state reverts.
+Recorded here rather than quietly re-closing, because the mistake is the useful
+part: an issue closes when the thing that caused it cannot recur, not when it
+stops happening for a while.
+
+**What actually closes this**, and it has not been done: add exclusions for
+`src-tauri\target\`, the test scratch root (`D:\tmp\art-tests\`, pointed there
+by `src-tauri/.cargo/config.toml`) and `art_lib`'s build output, leave
+protection **on**, then re-run both arms and paste the two `test result:` lines
+here. Two summary lines with the scanner running is the evidence this needs;
+anything else is the symptom being quiet.
+
+Until then: quote `--skip artwork` numbers and say that is what they are. An
+exit code cannot tell a finished suite from a killed one.
+
+
 **ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
 neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
 8's real run, on `content-layer`*
@@ -687,89 +800,6 @@ re-audits them without reason:
 ---
 
 ## Fixed
-**ART-261** 🟠 **`cargo test --lib` reports exit 0 with no `test result:`
-line whenever `commands::artwork` runs, and passes cleanly without it** —
-*found 2026-09-06 by round 4's Task 1, localised the same day by a two-armed
-run*
-`src-tauri/src/commands/artwork.rs` (tests) · `src-tauri/src/core/artwork/`
-
-Measured, both arms, on this machine:
-
-| run | result |
-|---|---|
-| `cargo test --lib -- --skip artwork` | **`test result: ok. 2841 passed; 0 failed; 49 ignored`**, 17.98 s |
-| `cargo test --lib artwork` | dies mid-run — no summary line, **exit 0** |
-| `cargo test --lib commands::artwork::tests::a_hand_attached_picture_survives_the_artwork_cache_being_deleted -- --exact` | **1 passed**, 0.02 s |
-
-With `--test-threads=1` the run stops at exactly
-`a_hand_attached_picture_survives_the_artwork_cache_being_deleted` — the name
-prints, the result never does — identically across two attempts. That same
-test passes on its own. So no single test is broken; running the **module**
-kills the process.
-
-**A wrong elimination, corrected here rather than left standing.** Earlier the
-same day this controller concluded the harness was being killed after a fixed
-elapsed time — *“always the same place” really meaning “always the same
-duration”*. The two-armed run above refutes it: the **short** run (89 tests)
-dies and the **long** one (2841 tests, 18 s) completes. Duration is not the
-variable. `CLAUDE.md` asks for a refuted elimination to be corrected in place,
-because a confident wrong one costs more than none.
-
-**The cause is the antivirus, and it is not an inference — the owner watched
-it happen** (*“antivirus yaptı ben gördüm”*, 2026-09-06). Trend Micro Maximum
-Security is active on this machine, with Defender's real-time protection off,
-and the owner had already seen it react to `art_lib` earlier the same day.
-Exit 0 with no summary and no `FAILED` is what an externally killed process
-looks like rather than a panic, and the artwork tests write image files in
-quick succession, which is what draws the scanner.
-
-This paragraph replaces one that called the cause a hypothesis because the
-scanner had not been switched off to test it. That was the right thing to
-write at the time and the wrong thing to keep: a person at the machine saw the
-event, which is evidence this session could not have produced by reasoning
-about symptoms. **The owner at the screen outranks the controller's
-inference** — six of seven defects in one earlier round were found the same
-way.
-
-**Consequence, and it is the expensive part:** `cargo test` cannot currently be
-quoted honestly on this machine without `--skip artwork`, and an exit code
-cannot tell a completed suite from a killed one. Any number quoted from a full
-run here is suspect unless its `test result:` line is shown.
-
-**The fix is machine configuration, not code.** Nothing in `commands::artwork`
-is wrong: every one of its tests passes when run alone. Exclude
-`src-tauri\target\`, the test scratch root (`D:\tmp\art-tests\`, pointed there
-by `src-tauri/.cargo/config.toml`) and `art_lib`'s build output from Trend
-Micro, then re-run both arms and record what changed **as numbers**, so the
-entry closes on a measurement rather than on the symptom going quiet.
-
-Until that is done, quote the `--skip artwork` summary and say that is what it
-is. This entry stays open while the workaround is what the numbers rest on.
-
-**CLOSED BY MEASUREMENT, 2026-09-06.** The owner switched the scanner off and
-both arms were re-run. Before, on the left; after, on the right:
-
-| run | with the scanner on | with it off |
-|---|---|---|
-| `cargo test --lib artwork` | died, no summary, exit 0 | **`ok. 89 passed; 0 failed`**, 0.15 s |
-| `cargo test --lib` (full) | died, no summary, exit 0 | **`ok. 2930 passed; 0 failed; 49 ignored`**, 18.00 s |
-
-Repeated twice more, since a suite that fails at random trains people to re-run
-until green: **2939 passed / 0 failed** at 18.74 s and again at 33.30 s. (The
-2930 → 2939 step is round 4's Task 2 landing tests between runs, not
-flakiness.) Both arms flipped together and nothing in `commands::artwork`
-changed, so the cause is settled rather than merely quiet.
-
-**The durable fix is exclusions, not a scanner left off.** Switching protection
-off was the right way to *measure* and is the wrong way to *live*: exclude
-`src-tauri\target\`, the test scratch root (`D:\tmp\art-tests\`, pointed there
-by `src-tauri/.cargo/config.toml`) and `art_lib`'s build output, then protection
-goes back on and the numbers above should hold. This entry records the
-measurement; it does not recommend the machine stay in the state that produced
-it.
-
-
-
 **ART-259** 🟠 ✅ **ART-257's own evidence check ran after the branch it was
 meant to reach through, so it never ran for the one folder it exists for** —
 *found 2026-09-06, in this fix wave's own re-review of ART-257*
