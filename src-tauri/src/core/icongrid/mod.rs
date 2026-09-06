@@ -5,37 +5,49 @@
 //! three numbers, and it is why the plan keeps it separate from the module
 //! that reads and writes `.info` files.
 //!
-//! # The constants, field by field: adopted, reasoned, or ART-specific
+//! # The constants, field by field: adopted, or ART-specific
 //!
 //! Every numeric constant below except one is **adopted from Emu68 Hatcher**
 //! (`rootrootde/emu68hatcher`, MIT — `docs/superpowers/notes/2026-09-05-emu68hatcher-teardown.md`),
 //! not measured by ART against real icons the way `core/amigaicon`'s rendered-size
 //! rule was. The same honesty `core/ilbm`'s `BMHD` doc applies to its header
 //! applies here: this module states which of these ART has evidence for, and
-//! which it does not.
+//! which it does not. **None of these numbers have been checked against a
+//! real, rendered Workbench window** — they are adopted from Hatcher's own
+//! source, not measured by ART the way `core/amigaicon`'s rendered-size rule
+//! was against 798 real icons. That remains true even where the composition
+//! below is cited to an exact source line.
 //!
 //! - **`TOPAZ_CHAR_WIDTH = 8`** — adopted. Topaz, AmigaOS's default system
 //!   font, is fixed-width at 8 pixels per character. Used to turn a drawer
 //!   entry's *name* into a pixel width, because a `.info`'s `Gadget` size
 //!   describes the icon image, not the label Workbench draws under it.
-//! - **`EMBOSS = 3`** — adopted, and this module could not recover Hatcher's
-//!   own source to see exactly how it composes with the other quantities
-//!   (the clone available to this round carries the teardown note, not the
-//!   `staging/icon_grid.py` source itself — see the teardown note's §"Icons
-//!   that make the result look like a real Workbench"). What is adopted is
-//!   the *value*: 3 pixels, described as the 3D frame IControl draws around
-//!   a selected icon. How it is used below — as symmetric padding added to
-//!   a cell's width footprint and to a row's height footprint, but **not**
-//!   as an offset on the icon's own placed position — is ART's own reasoned
-//!   choice, made explicit here rather than left implicit, so a future
-//!   reader does not mistake it for something Hatcher's own code was checked
-//!   against.
+//! - **`EMBOSS = 3`** — adopted, formula included. Found in
+//!   `builder/staging/icon_grid.py` (Emu68 Hatcher):
+//!   ```text
+//!   27:  _EMBOSS = 3  # 3D frame workbench draws around the bitmap (IControl default)
+//!   173: return _Icon(path, do_type, width + _EMBOSS, height + _EMBOSS, png=True)   # frameless
+//!   192: pad = _EMBOSS * 2 if framed else _EMBOSS
+//!   ```
+//!   So the padding a cell's *icon* carries, in each dimension, is
+//!   `2 * EMBOSS` when the icon is framed and `EMBOSS` when it is not — never
+//!   an offset on the icon's own placed `(x, y)`, only on the footprint used
+//!   to size columns, rows and the window (confirmed by this module's own
+//!   `EMBOSS`-difference test, below). This was first written up as "ART's
+//!   own reasoned choice" because the round's initial read of Hatcher found
+//!   only the teardown note, which names the *value* but not the formula,
+//!   and looked for the composition in the grid-layout module
+//!   (`staging/icon_grid.py`'s own grid-arranging code) rather than in the
+//!   per-icon *sizing* function the three lines above actually live in. A
+//!   later review supplied the exact lines; this doc — and [`Cell::framed`]
+//!   — is the correction, not a fresh guess.
 //! - **`MARGIN_X = 10`, `MARGIN_Y = 4`** — adopted: the inset from the
 //!   window's inner edge to the first icon, asymmetric across vs down.
 //! - **`COLUMN_GAP = 8`** — adopted: horizontal pixels between two columns'
 //!   footprints.
-//! - **`ROW_PAD = 18`** — adopted: vertical pixels reserved below an icon's
-//!   image for its label line (one line of Topaz plus breathing room).
+//! - **`ROW_PAD = 18`** — adopted: vertical pixels reserved below a row's
+//!   tallest (already emboss-padded) icon for its label line (one line of
+//!   Topaz plus breathing room).
 //! - **`TARGET_ASPECT = 2.0`** — adopted from iTidy, a widely-used Workbench
 //!   icon-tidying tool: the width:height ratio a "tidied" icon grid aims
 //!   for. Used only to choose a column count; it is a preference, not a
@@ -56,15 +68,24 @@
 //!
 //! # What "cell" means
 //!
-//! A cell's on-screen footprint is the wider of its rendered icon image and
-//! its label at [`TOPAZ_CHAR_WIDTH`] pixels per character — a 15-character
-//! name is 120px, wider than a typical 46px icon, and a grid that sizes
-//! columns from the image alone overlaps every label in the row. [`EMBOSS`]
-//! is added symmetrically around that width, and around the row's tallest
-//! icon height plus [`ROW_PAD`], as reserved space for the frame IControl
-//! draws — reserved, not an offset on the icon's own `(x, y)`, which always
-//! lands at the column/row's own origin (a single cell always lands exactly
-//! at `(MARGIN_X, MARGIN_Y)`, never at `(MARGIN_X + EMBOSS, ...)`).
+//! A cell's icon footprint, in each dimension, is its rendered size plus
+//! [`EMBOSS`] padding — doubled when [`Cell::framed`] is `true`, single when
+//! it is not (Hatcher's own rule; see the `EMBOSS` entry above). **Only
+//! after** that padding is applied does the width footprint get compared
+//! against the label: a cell's final width is the wider of its padded icon
+//! and its label at [`TOPAZ_CHAR_WIDTH`] pixels per character — a
+//! 15-character name is 120px, wider than a typical 46px icon even after
+//! padding, and a grid that sizes columns from the image alone overlaps
+//! every label in the row. The padding never touches the icon's own placed
+//! `(x, y)` — a single cell always lands exactly at `(MARGIN_X, MARGIN_Y)`,
+//! never at `(MARGIN_X + EMBOSS, ...)`; it exists only to keep one icon's
+//! frame clear of its neighbours' columns, rows and the window's own edge.
+//!
+//! `Cell::framed` is exactly the field `core::amigaicon`'s Task 3 added as
+//! `Rendered::framed` (set from the ColorIcon `FACE` chunk's frameless bit,
+//! `true` otherwise) — this module is that field's reader. A caller (Task 6)
+//! is expected to copy `Rendered::framed` straight into `Cell::framed`
+//! rather than leaving it at some fixed default.
 //!
 //! # Degenerate inputs
 //!
@@ -102,10 +123,10 @@
 /// from Emu68 Hatcher — see the module doc.
 const TOPAZ_CHAR_WIDTH: u32 = 8;
 
-/// Pixels of padding reserved on every side of a cell's image (and, doubled,
-/// added to a row's icon height) for the 3D frame IControl draws around a
-/// selected icon. Adopted from Emu68 Hatcher; how it composes with the other
-/// constants is ART's own reasoned choice — see the module doc.
+/// Pixels of padding for the 3D frame IControl draws around a selected
+/// icon. Adopted from Emu68 Hatcher, formula included — see the module doc
+/// and [`icon_pad`]: a framed icon is padded `2 * EMBOSS` in each dimension,
+/// a frameless one `EMBOSS`.
 const EMBOSS: u32 = 3;
 
 /// Horizontal inset from the window's inner edge to the first column.
@@ -120,8 +141,8 @@ const MARGIN_Y: u32 = 4;
 /// Emu68 Hatcher.
 const COLUMN_GAP: u32 = 8;
 
-/// Vertical pixels reserved below a row's tallest icon for its label line.
-/// Adopted from Emu68 Hatcher.
+/// Vertical pixels reserved below a row's tallest (already emboss-padded)
+/// icon for its label line. Adopted from Emu68 Hatcher.
 const ROW_PAD: u32 = 18;
 
 /// The width:height ratio [`arrange`] prefers when choosing a column count,
@@ -143,13 +164,16 @@ pub const ROOT_INNER_WIDTH: u16 = 420;
 /// `core::amigaicon`'s rendered-size rule) and the name Workbench will
 /// print under it. `is_container` distinguishes a drawer/volume icon from a
 /// plain file icon, since drawers sort before files in the layout this
-/// module produces.
+/// module produces. `framed` is `core::amigaicon`'s `Rendered::framed`
+/// (Task 3) carried straight through — see the module doc's `EMBOSS` entry
+/// for why it changes a cell's footprint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
     pub label: String,
     pub width: u16,
     pub height: u16,
     pub is_container: bool,
+    pub framed: bool,
 }
 
 /// Where one input [`Cell`] lands. `index` is the cell's position in the
@@ -172,9 +196,17 @@ pub struct GridResult {
     pub window: (i16, i16),
 }
 
+/// One sorted cell's pre-computed numbers: its original index (into the
+/// slice [`arrange`] was given), its final width footprint (icon-vs-label,
+/// already emboss-padded on the icon side), its raw rendered height (used
+/// only for bottom-alignment within a row), and its emboss-padded icon
+/// height (used only for row/window sizing).
+type SortedCell = (usize, u32, u32, u32);
+
 /// The measurements of a candidate column count: how wide each column is,
-/// how tall each row is (the icon alone, and the icon plus its emboss and
-/// label padding), and the grid's total footprint.
+/// how tall each row is (the tallest raw icon height, for bottom-aligning;
+/// and the tallest padded-icon-plus-label-pad height, for spacing rows),
+/// and the grid's total footprint.
 struct GridShape {
     col_widths: Vec<u32>,
     row_icon_heights: Vec<u32>,
@@ -192,30 +224,50 @@ fn label_px_width(label: &str) -> u32 {
         .min(u64::from(u32::MAX)) as u32
 }
 
-/// A cell's width footprint: the wider of its image and its label, plus
-/// [`EMBOSS`] on both sides.
-fn footprint_width(cell: &Cell) -> u32 {
-    let content = u32::from(cell.width).max(label_px_width(&cell.label));
-    content.saturating_add(2 * EMBOSS)
+/// The emboss padding added to an icon's own footprint, in each dimension:
+/// `2 * EMBOSS` when framed, `EMBOSS` when not. Adopted from Emu68 Hatcher's
+/// `builder/staging/icon_grid.py:192` — see the module doc's `EMBOSS` entry.
+fn icon_pad(framed: bool) -> u32 {
+    if framed {
+        2 * EMBOSS
+    } else {
+        EMBOSS
+    }
 }
 
-/// Lay `sorted` (original index, footprint width, rendered height) into a
-/// row-major grid of `columns` columns and report its shape. `columns` is
-/// always at least 1 — never a division by zero.
-fn shape_for(sorted: &[(usize, u32, u32)], columns: usize) -> GridShape {
+/// A cell's width footprint: its rendered width plus [`icon_pad`], then
+/// widened to its label's pixel width if that label is wider still.
+fn footprint_width(cell: &Cell) -> u32 {
+    let icon = u32::from(cell.width).saturating_add(icon_pad(cell.framed));
+    icon.max(label_px_width(&cell.label))
+}
+
+/// A cell's padded icon height: its rendered height plus [`icon_pad`]. Used
+/// only for row spacing and window sizing — never for the bottom-alignment
+/// offset, which uses the raw rendered height so that only real icon-height
+/// differences shift a cell within its row.
+fn padded_icon_height(cell: &Cell) -> u32 {
+    u32::from(cell.height).saturating_add(icon_pad(cell.framed))
+}
+
+/// Lay `sorted` cells into a row-major grid of `columns` columns and report
+/// its shape. `columns` is always at least 1 — never a division by zero.
+fn shape_for(sorted: &[SortedCell], columns: usize) -> GridShape {
     debug_assert!(columns >= 1);
     let rows = sorted.len().div_ceil(columns);
     let mut col_widths = vec![0u32; columns];
     let mut row_icon_heights = vec![0u32; rows];
-    for (k, &(_, fw, h)) in sorted.iter().enumerate() {
+    let mut row_padded_heights = vec![0u32; rows];
+    for (k, &(_, fw, raw_h, padded_h)) in sorted.iter().enumerate() {
         let col = k % columns;
         let row = k / columns;
         col_widths[col] = col_widths[col].max(fw);
-        row_icon_heights[row] = row_icon_heights[row].max(h);
+        row_icon_heights[row] = row_icon_heights[row].max(raw_h);
+        row_padded_heights[row] = row_padded_heights[row].max(padded_h);
     }
-    let row_footprint_heights: Vec<u32> = row_icon_heights
+    let row_footprint_heights: Vec<u32> = row_padded_heights
         .iter()
-        .map(|&h| h.saturating_add(2 * EMBOSS).saturating_add(ROW_PAD))
+        .map(|&h| h.saturating_add(ROW_PAD))
         .collect();
     let total_width = col_widths
         .iter()
@@ -237,7 +289,7 @@ fn shape_for(sorted: &[(usize, u32, u32)], columns: usize) -> GridShape {
 /// lands closest to [`TARGET_ASPECT`], ignoring the width budget — the
 /// budget is enforced afterwards by shrinking. Ties keep the first (lowest)
 /// column count found, so the search is deterministic.
-fn choose_columns(sorted: &[(usize, u32, u32)], min_columns: usize, max_columns: usize) -> usize {
+fn choose_columns(sorted: &[SortedCell], min_columns: usize, max_columns: usize) -> usize {
     let mut best = min_columns;
     let mut best_diff = f64::INFINITY;
     for columns in min_columns..=max_columns {
@@ -283,9 +335,17 @@ pub fn arrange(cells: &[Cell], inner_width: u16) -> GridResult {
         key_a.cmp(&key_b)
     });
 
-    let sorted: Vec<(usize, u32, u32)> = order
+    let sorted: Vec<SortedCell> = order
         .iter()
-        .map(|&i| (i, footprint_width(&cells[i]), u32::from(cells[i].height)))
+        .map(|&i| {
+            let cell = &cells[i];
+            (
+                i,
+                footprint_width(cell),
+                u32::from(cell.height),
+                padded_icon_height(cell),
+            )
+        })
         .collect();
 
     let n = sorted.len();
@@ -324,14 +384,14 @@ pub fn arrange(cells: &[Cell], inner_width: u16) -> GridResult {
     let placements = sorted
         .iter()
         .enumerate()
-        .map(|(k, &(original_index, _fw, height))| {
+        .map(|(k, &(original_index, _fw, raw_height, _padded_height))| {
             let col = k % columns;
             let row = k / columns;
             let x = x_col[col];
-            // Bottom-align: row_icon_heights[row] is the tallest rendered
-            // icon in this row, always >= this cell's own height, so the
-            // subtraction below never underflows.
-            let y = y_row[row].saturating_add(shape.row_icon_heights[row] - height);
+            // Bottom-align: row_icon_heights[row] is the tallest *raw*
+            // rendered icon in this row, always >= this cell's own raw
+            // height, so the subtraction below never underflows.
+            let y = y_row[row].saturating_add(shape.row_icon_heights[row] - raw_height);
             Placement {
                 index: original_index,
                 x: x as i32,
@@ -364,12 +424,14 @@ mod tests {
                 width: 46,
                 height: 46,
                 is_container: false,
+                framed: true,
             },
             Cell {
                 label: "X".into(),
                 width: 46,
                 height: 46,
                 is_container: false,
+                framed: true,
             },
         ];
         let g = arrange(&cells, DRAWER_INNER_WIDTH);
@@ -387,24 +449,28 @@ mod tests {
                 width: 20,
                 height: 20,
                 is_container: false,
+                framed: true,
             },
             Cell {
                 label: "Beta".into(),
                 width: 20,
                 height: 20,
                 is_container: false,
+                framed: true,
             },
             Cell {
                 label: "MDrawer".into(),
                 width: 20,
                 height: 20,
                 is_container: true,
+                framed: true,
             },
             Cell {
                 label: "Alpha_drawer".into(),
                 width: 20,
                 height: 20,
                 is_container: true,
+                framed: true,
             },
         ];
         let g = arrange(&cells, DRAWER_INNER_WIDTH);
@@ -430,6 +496,7 @@ mod tests {
                     width: 20 + (i % 40) as u16,
                     height: 20 + (i % 30) as u16,
                     is_container: i % 5 == 0,
+                    framed: i % 2 == 0,
                 })
                 .collect();
             let g = arrange(&cells, DRAWER_INNER_WIDTH);
@@ -455,12 +522,14 @@ mod tests {
                 width: 20,
                 height: 20,
                 is_container: false,
+                framed: true,
             },
             Cell {
                 label: "B".into(),
                 width: 20,
                 height: 46,
                 is_container: false,
+                framed: true,
             },
         ];
         let g = arrange(&cells, DRAWER_INNER_WIDTH);
@@ -482,6 +551,7 @@ mod tests {
             width: 46,
             height: 46,
             is_container: false,
+            framed: true,
         }];
         let g = arrange(&cells, DRAWER_INNER_WIDTH);
         assert_eq!(g.placements.len(), 1);
@@ -504,6 +574,7 @@ mod tests {
                 width: 200,
                 height: 200,
                 is_container: false,
+                framed: true,
             })
             .collect();
         let g = arrange(&cells, DRAWER_INNER_WIDTH);
@@ -532,15 +603,49 @@ mod tests {
                 width: 46,
                 height: 46,
                 is_container: false,
+                framed: true,
             },
             Cell {
                 label: "B".into(),
                 width: 46,
                 height: 46,
                 is_container: false,
+                framed: true,
             },
         ];
         let g = arrange(&cells, 0);
         assert_eq!(g.placements.len(), 2);
+    }
+
+    #[test]
+    fn a_framed_icon_takes_three_more_pixels_each_way_than_a_frameless_one() {
+        // Adopted from Hatcher's icon_grid.py:192 - framed pads 2*EMBOSS,
+        // frameless pads EMBOSS, on both dimensions. Label is short enough
+        // ("Z", 8px) that it never dominates the width footprint, so the
+        // whole difference is attributable to the icon's own padding.
+        let framed = Cell {
+            label: "Z".into(),
+            width: 100,
+            height: 100,
+            is_container: false,
+            framed: true,
+        };
+        let frameless = Cell {
+            label: "Z".into(),
+            width: 100,
+            height: 100,
+            is_container: false,
+            framed: false,
+        };
+        assert_eq!(
+            footprint_width(&framed) - footprint_width(&frameless),
+            EMBOSS,
+            "a framed cell's width footprint is exactly EMBOSS wider"
+        );
+        assert_eq!(
+            padded_icon_height(&framed) - padded_icon_height(&frameless),
+            EMBOSS,
+            "a framed cell's padded icon height is exactly EMBOSS taller"
+        );
     }
 }
