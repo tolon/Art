@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The OS Builder now shows what media was found when it cannot complete a
+  build.** When you choose a media folder but ART still cannot build — because
+  the folder does not hold a release ART knows, or it holds a different release
+  than the one the build needs — a line above the refusals list shows: the
+  release is the same as what you picked, the folder holds a different release,
+  the media is there but unidentifiable, or no folder was chosen at all. Four
+  states, kept apart so you know where to look next.
 - **Drawers with no icon position get arranged into a tidy grid.** Turn on
   "Arrange icons" on the OS Builder's volumes step and any icon the release
   did not already place for itself — most of them do carry a position, and

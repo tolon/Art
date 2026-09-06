@@ -35,7 +35,7 @@ Update it at the end of any session that changes what works.
 | **Icon oracle** | on `art-drawer-icons`, unmerged — see the branch row above. `scripts/icon-oracle-check.py` round-trips real `.info` files through `core/amigaicon`'s reader **and its four writers** (`set_position`, `set_tooltypes`, `set_show_all_files`, and `rendered_size`'s never-smaller-than-`Gadget` invariant), against the owner's own AmigaOS 3.9 material: `checked=798 failed=0 no_drawer_data2=0 lossy_tooltypes=69` — up from round 1's 485-icon, reader-only corpus. Earned its place on its first real run: found [ART-249](ISSUES.md#fixed), a writer offset landing inside the wrong struct, that no unit test could see because the reader and the writer shared the identical wrong constant. The 69 `lossy_tooltypes` icons are counted apart, never folded into `failed` — checked for text identity only, not byte identity ([ART-250](ISSUES.md)) |
 | **cargo-deny** | advisories, bans, licences, sources — all ok |
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
-| **i18n** | `en.json` and `tr.json` on `main`: **2005** leaf keys each, item 7's own count carried in by its merge (`bf5bbe7`) — up from **1972**, counted 2026-09-05 after the WHDLoad-drawer round (1958 earlier the same day, 1916 before the layered-release round). On the unmerged `art-drawer-icons` branch: **2008**, up from 2005 at the branch's start. Count them, do not quote this; parity enforced by `pnpm test` |
+| **i18n** | `en.json` and `tr.json` on `main`: **2005** leaf keys each, item 7's own count carried in by its merge (`bf5bbe7`) — up from **1972**, counted 2026-09-05 after the WHDLoad-drawer round (1958 earlier the same day, 1916 before the layered-release round). On the unmerged `art-drawer-icons` branch: **2008**, up from 2005 at the branch's start. On the unmerged `art-refusal-evidence` branch: **2012**, up from 2009 at the branch's start — three new keys for the mediaEvidence feature. Count them, do not quote this; parity enforced by `pnpm test` |
 | **Release bundle** | rebuilt 2026-09-04 for 0.9.0 — `Amiga Retro Toolkit_0.9.0_x64_en-US.msi` and `_x64-setup.exe`, both produced by `pnpm tauri build` in 5m 47s. **Not code-signed**, which the README now says rather than leaving to SmartScreen |
 | **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later**. **[v0.9.0](https://github.com/tolon/Art/releases/tag/v0.9.0) is released, 2026-09-04**, with both installers attached (NSIS 5.1 MB, MSI 6.3 MB) — built by `release.yml` from the tagged commit, after CI went green on that same commit. The built `.exe` was launched and answered before the draft was published. Work lands on `sd-1` and merges to `main` at the phase's
 end; the licence *inventory* still said MIT until 2026-08-13, months after the
@@ -1005,6 +1005,18 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
 
 ### Where the work stands (as of 2026-09-06)
 
+- **The OS Builder now shows what media was found when it cannot complete a
+  build.** The `mediaEvidence` helper renders a line above the refusals list
+  showing: same release found, different release found, unidentified media, or
+  nothing (when no folder is chosen). Four states kept distinct; zero Rust
+  changes — the evidence strings (`wrongMediaFolder`, `osinstall.blocked.*`)
+  already existed, gated behind an all-or-nothing condition that made them
+  unreachable for partial media sets. **Ungating them and displaying them
+  properly is the round.** Three new i18n keys (`osinstall.evidence.*`),
+  tests exist for both the helper and the render. **Held on `art-refusal-evidence`
+  for the owner's decision** — three tasks, each reviewed. Full detail: the
+  `task-3-report.md` in this round's own `superpowers/sdd/` folder and the
+  design under `superpowers/specs/` dated 2026-09-06.
 - **A tree ART builds now carries its drawers' own icons, and the ones that
   arrive with no position get laid out instead of being scattered by
   Workbench.** Round 2 of six taking what is worth taking from
