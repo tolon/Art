@@ -1256,11 +1256,17 @@ export function wrongMediaFolder(
 }
 
 /**
- * Context for the ordinary partial-media case — one or more disks missing,
- * but at least one component *is* installable — which is exactly the case
- * {@link wrongMediaFolder} above refuses to speak in. The refusals list
- * already names which component wants which disk; this adds what
- * `wrongMediaFolder` cannot reach there: what the folder itself looks like.
+ * Context for the ordinary partial-media case — the folder holds some of this
+ * release's own disks and is missing others — which is exactly the case
+ * {@link wrongMediaFolder} above refuses to speak in, because there its
+ * sentence would be false. The refusals list already names which component
+ * wants which disk; this adds what `wrongMediaFolder` cannot reach there:
+ * what the folder itself looks like.
+ *
+ * **Not "at least one component is installable"**, which is what this said
+ * until ART-253 and is a state the core cannot emit: any refusal at all
+ * empties `items` (`plan.rs:1866`). The two are told apart by the release's
+ * own evidence, never by counting plan items.
  *
  * Four endings, never collapsed into each other (this project's own named
  * failure class — see CLAUDE.md, "The failure that does not crash"):
