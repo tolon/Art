@@ -99,12 +99,14 @@ import {
   osinstallRescanMedia,
   osinstallReleaseForMedia,
   keymapsIn,
+  osinstallMediaEvidence,
   osinstallScanMedia,
   pruneStaleExclusions,
   refusalPhrase,
   wrongMediaFolder,
   rememberedComponentKey,
   type InstallLayer,
+  type ReleaseEvidence,
   type ScanCachePolicy,
   sanitizeChosen,
   toggleChosen,
@@ -1172,7 +1174,37 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    * refusals meant one wrong folder rather than sixteen missing disks. A
    * string or `null`, so it is a stable dependency for the lookup below.
    */
-  const wrongFolder = effectivePlan ? wrongMediaFolder(effectivePlan, foundVolumeNames) : null;
+  /**
+   * ART-253. What the release being built makes of the names in the folder —
+   * the only thing that can *check* `wrongMediaFolder`'s claim rather than
+   * infer it. Held as its own state, and `null` until it lands: the sentence
+   * withdraws while it is in flight, because a specific claim with nothing
+   * to check it against is what the defect was.
+   */
+  const [mediaFacts, setMediaFacts] = useState<ReleaseEvidence | null>(null);
+  useEffect(() => {
+    if (foundVolumeNames.length === 0) {
+      setMediaFacts(null);
+      return;
+    }
+    let cancelled = false;
+    osinstallMediaEvidence(release, foundVolumeNames)
+      .then((facts) => {
+        if (!cancelled) setMediaFacts(facts);
+      })
+      // A release with no shipped recipe throws, and there is nothing
+      // truthful to say about a folder against a recipe ART does not have.
+      // `null` is "not checked", which withdraws the claim.
+      .catch(() => {
+        if (!cancelled) setMediaFacts(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [release, foundVolumeNames]);
+  const wrongFolder = effectivePlan
+    ? wrongMediaFolder(effectivePlan, foundVolumeNames, mediaFacts)
+    : null;
   const [releaseHolding, setReleaseHolding] = useState<string | null>(null);
   useEffect(() => {
     // Looked up whenever the folder holds media, not only for the
@@ -1206,7 +1238,13 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    * `wrongMediaFolder`'s own sentence, so the two can never both render.
    */
   const mediaEvidenceLine = effectivePlan
-    ? mediaEvidence({ plan: effectivePlan, found: foundVolumeNames, releaseHolding, release })
+    ? mediaEvidence({
+        plan: effectivePlan,
+        found: foundVolumeNames,
+        releaseHolding,
+        release,
+        evidence: mediaFacts,
+      })
     : null;
 
   /**
@@ -1242,6 +1280,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     plan: effectivePlanResult,
     found: foundVolumeNames,
     releaseHolding,
+    mediaFacts,
   });
   const baseRomUnknown = basePlan ? hasRomUnknownRefusal(basePlan) : false;
 

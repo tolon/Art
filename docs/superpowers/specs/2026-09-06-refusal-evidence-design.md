@@ -68,12 +68,35 @@ The existing code already reasoned about half of this. `OsInstall.tsx:1718`:
 in an otherwise right folder has to say* which *disk."* That is right. What was
 never added is the **context around** the disk's name.
 
+**Corrected 2026-09-06 by the final whole-branch review (ART-253): "the moment
+one component can be installed" is a moment that does not exist.** `InstallPlan`
+is *either* a full description of what would be written *or* every reason it
+cannot proceed, never both — `plan.rs:1866` empties `items` for any refusal at
+all, and production builds an `InstallPlan` in exactly one place immediately
+after. So `plan.items.len() == 0` is not one of five conditions gating
+`wrongMediaFolder`; it is always true there and gates nothing. The paragraph
+above and the five-condition list before it describe a mechanism the code does
+not have. What actually kept `wrongMediaFolder` quiet in the tests was fixtures
+carrying refusals *and* items — plans the core cannot emit — and in production
+it was not quiet at all: it rendered a false sentence over the ordinary partial
+folder. The round's own conclusion (an evidence line for the partial case) still
+stands; the reason given for it did not.
+
 ### 1.2.1 Which makes this a frontend round with no Rust change at all
 
 Both values the evidence needs are already computed and already in scope at the
 render site: `foundVolumeNames` (`OsInstall.tsx:1164`) and `releaseHolding`
 (`:1175`), in the same component as the refusals section at `:1723`. The missing
 disks are the `media-missing` refusals' own `volume_name`s, already on screen.
+
+**Superseded 2026-09-06 (ART-253).** This conclusion was drawn from §1.2's
+premise, and that premise is false, so it does not bind. Making
+`wrongMediaFolder`'s claim checkable needed exactly what this paragraph rules
+out: `core::osinstall::identify::evidence_for` and a new
+`osinstall_media_evidence` command. The `InstallPlan`-level `MediaEvidence`
+struct the earlier draft proposed is still *not* what was built — the evidence
+is asked for separately, off the volume names already in hand, not carried on
+the plan.
 
 **No new command, no new scan, no `RefusalReason` change, and nothing new in
 `core/`.** An earlier draft of this document proposed an `InstallPlan`-level

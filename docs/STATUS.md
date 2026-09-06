@@ -1148,12 +1148,18 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
   Hatcher intake's round 2 `art-drawer-icons` (merged `722a8c5`) — each merged
   `--no-ff` and pushed. `art-refusal-evidence`, the intake's round 3, branched
   off `main` right after that last merge and is the one **live branch that is
-  not merged**: 82 frontend files / 1062 tests, 2918 Rust passed with 0 failed
-  and 49 ignored, `pnpm lint` exit 0, control-byte and contrast sweeps clean.
-  Held there on purpose so the owner decides whether and when it joins `main`,
-  rather than being merged by the round that built it.
-- **Fifteen open entries**, counted on this branch 2026-09-06; the
-  refusal-evidence round added none, having found no defect in shipped code. [ART-166](ISSUES.md) and
+  not merged**: 82 frontend files / **1068** tests, **2925** Rust passed with 0
+  failed and 49 ignored, `pnpm lint` exit 0, `cargo fmt --check` and
+  `clippy --all-targets -- -D warnings` clean, control-byte and scratch-root
+  sweeps clean — re-measured 2026-09-06 after the review's fix wave 1
+  ([ART-253](ISSUES.md)). Held there on purpose so the owner decides whether
+  and when it joins `main`, rather than being merged by the round that built
+  it.
+- **Fifteen open entries**, counted on this branch 2026-09-06. The
+  refusal-evidence round itself added none — but its **final whole-branch
+  review did**: [ART-253](ISSUES.md), a false sentence on the OS Builder's own
+  screen that was on `main` and older than the round, filed and fixed in the
+  same wave, so it is in Fixed rather than Open and the count is unchanged. [ART-166](ISSUES.md) and
   [ART-117](ISSUES.md) are standing decisions; [ART-118](ISSUES.md) and
   [ART-062](ISSUES.md) need a person at a screen; [ART-235](ISSUES.md) is a
   guard reporting a false positive; [ART-241](ISSUES.md) is the accessibility

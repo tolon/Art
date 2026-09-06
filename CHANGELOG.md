@@ -69,6 +69,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The OS Builder no longer tells you your media folder is the wrong one when
+  it is the right one.** With a folder holding, say, `Workbench3.2`, `Fonts` and
+  `Locale` but not `Extras3.2` — one disk short of a full set, which is how most
+  people arrive at this screen — it said *"None of the disks in this folder are
+  ones this release asks for. It holds: Workbench3.2, Fonts, Locale."* That is
+  false about `Workbench3.2`, and it sends you away from the folder you should
+  be using. ART now asks the release's own recipe what the folder holds of it
+  before making that claim, and says it only when it is true; otherwise you get
+  the per-disk list naming exactly which disk is missing (ART-253).
+
 - **A built distribution's own drawers no longer disappear on Workbench.**
   `Prefs`, `System`, `Devs`, `Expansion`, `Classes`, `C`, `Libs`, `Rexxc`, `S`
   and every other top-level drawer a recipe copies with a `Subtree` rule were

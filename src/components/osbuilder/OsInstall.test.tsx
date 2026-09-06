@@ -77,6 +77,7 @@ const dialogOpenMock = vi.hoisted(() => vi.fn());
 const onJobProgressMock = vi.hoisted(() => vi.fn());
 const rescanMock = vi.hoisted(() => vi.fn());
 const releaseForMediaMock = vi.hoisted(() => vi.fn());
+const mediaEvidenceMock = vi.hoisted(() => vi.fn());
 const packagesMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
@@ -88,6 +89,7 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   osinstallPlan: planMock,
   osinstallRescanMedia: rescanMock,
   osinstallReleaseForMedia: releaseForMediaMock,
+  osinstallMediaEvidence: mediaEvidenceMock,
   osinstallPackages: packagesMock,
   osinstallComponentCollisions: componentCollisionsMock,
   osinstallApply: applyMock,
@@ -424,6 +426,18 @@ beforeEach(() => {
   onJobProgressMock.mockReset().mockResolvedValue(() => {});
   rescanMock.mockReset().mockResolvedValue(1);
   releaseForMediaMock.mockReset().mockResolvedValue(null);
+  // ART-253. `wrongMediaFolder`'s claim is checked against the chosen
+  // release's own recipe rather than inferred, so this screen asks Rust what
+  // the folder holds of it. The default is the ordinary state of the
+  // fixtures below — a folder holding this release's own `Workbench3.2` —
+  // and the tests about a *wrong* folder override it, which is the whole
+  // distinction the command exists to draw.
+  mediaEvidenceMock.mockReset().mockResolvedValue({
+    release: "AmigaOS 3.2",
+    distinguishing: ["Workbench3.2"],
+    shared: [],
+    missingRequired: ["Install3.2"],
+  });
   packagesMock.mockReset().mockResolvedValue([]);
   useSettingsStore.setState({ loaded: false, settings: DEFAULT_SETTINGS });
 });
@@ -1001,6 +1015,15 @@ describe("a folder that is simply the wrong one (ART-208)", () => {
       } satisfies PlanResult)
     );
     releaseForMediaMock.mockReset().mockResolvedValue(releaseHolding);
+    // The folder holds one AmigaOS 3.9 disc and nothing 3.2 asks for — the
+    // only state in which "none of the disks in this folder are ones this
+    // release asks for" is a true sentence (ART-253).
+    mediaEvidenceMock.mockReset().mockResolvedValue({
+      release: "AmigaOS 3.2",
+      distinguishing: [],
+      shared: [],
+      missingRequired: ["Workbench3.2", "Install3.2"],
+    });
     seedRemembered(FULL_FIELDS);
     render(<OsInstall />);
     await waitFor(() => expect(planMock).toHaveBeenCalled());
@@ -1106,13 +1129,40 @@ describe("a folder that is simply the wrong one (ART-208)", () => {
 });
 
 describe("the folder's own evidence for a partial build (refusal-evidence round, Task 2)", () => {
-  // A component *is* installable (`items` non-empty), one disk the plan
-  // still wants is not in the folder — the ordinary partial case, where the
-  // refusals list already names which disk and this line adds what it
-  // cannot: what the folder itself looks like.
+  // The folder holds disks this release asks for and one it wants is absent
+  // — the ordinary partial case, where the refusals list already names which
+  // disk and this line adds what it cannot: what the folder itself looks
+  // like.
+  //
+  // **The fixture used to carry `items: [ITEM_WORKBENCH]` alongside the
+  // refusal, and this comment used to say "a component *is* installable
+  // (`items` non-empty)".** No plan the core can emit is like that
+  // (ART-253): any refusal at all empties `items`
+  // (`core/osinstall/plan.rs`). What separates this case from the
+  // all-or-nothing one is not the item count — it is that the folder holds
+  // media this release asks for, which is what `osinstallMediaEvidence`
+  // answers.
   const PARTIAL_REFUSALS: RefusalReason[] = [
     { refusal: "media-missing", component: "extras", volume_name: "Extras3.2" },
   ];
+
+  /** The plan the fixtures below share — refusals, and therefore no items. */
+  const PARTIAL_PLAN = {
+    release: "3.2",
+    items: [],
+    refusals: PARTIAL_REFUSALS,
+    totalBytes: 0,
+    totalFiles: 0,
+    componentsOn: ["workbench-base", "install-libs", "extras"],
+    mediaPaths: {},
+    packages: [],
+    packageMedia: {},
+    userStartup: [],
+    activations: [],
+    mediaStamps: {},
+    removals: [],
+    layers: [],
+  } satisfies InstallPlan;
 
   async function renderPartialMedia(releaseHolding: string | null) {
     scanMediaMock.mockReset().mockResolvedValue({
@@ -1121,22 +1171,7 @@ describe("the folder's own evidence for a partial build (refusal-evidence round,
     } satisfies MediaScanResult);
     planMock.mockReset().mockResolvedValue({
       outcome: "planned",
-      plan: {
-        release: "3.2",
-        items: [ITEM_WORKBENCH],
-        refusals: PARTIAL_REFUSALS,
-        totalBytes: ITEM_WORKBENCH.bytes,
-        totalFiles: 1,
-        componentsOn: ["workbench-base", "install-libs", "extras"],
-        mediaPaths: { "Workbench3.2": "E:\\media\\Disk1.adf" },
-        packages: [],
-        packageMedia: {},
-        userStartup: [],
-        activations: [],
-        mediaStamps: {},
-        removals: [],
-        layers: [],
-      },
+      plan: { ...PARTIAL_PLAN, mediaPaths: { "Workbench3.2": "E:\\media\\Disk1.adf" } },
     } satisfies PlanResult);
     releaseForMediaMock.mockReset().mockResolvedValue(releaseHolding);
     seedRemembered(FULL_FIELDS);
@@ -1148,25 +1183,16 @@ describe("the folder's own evidence for a partial build (refusal-evidence round,
     await renderPartialMedia("AmigaOS 3.2");
 
     const evidence = mediaEvidence({
-      plan: {
-        release: "3.2",
-        items: [ITEM_WORKBENCH],
-        refusals: PARTIAL_REFUSALS,
-        totalBytes: ITEM_WORKBENCH.bytes,
-        totalFiles: 1,
-        componentsOn: ["workbench-base", "install-libs", "extras"],
-        mediaPaths: {},
-        packages: [],
-        packageMedia: {},
-        userStartup: [],
-        activations: [],
-        mediaStamps: {},
-        removals: [],
-        layers: [],
-      },
+      plan: PARTIAL_PLAN,
       found: ["Workbench3.2"],
       releaseHolding: "AmigaOS 3.2",
       release: "AmigaOS 3.2",
+      evidence: {
+        release: "AmigaOS 3.2",
+        distinguishing: ["Workbench3.2"],
+        shared: [],
+        missingRequired: ["Install3.2"],
+      },
     });
     if (!evidence) throw new Error("expected mediaEvidence to return a phrase");
 

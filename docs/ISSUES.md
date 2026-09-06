@@ -661,6 +661,98 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-253** 🔴 ✅ **`wrongMediaFolder` told a user with the *right*
+media folder that none of its disks were ones the release asks for — two of
+its five conditions could never fire** — *found 2026-09-06 by the final
+whole-branch review of the refusal-evidence round; confirmed independently by
+the controller reading `plan.rs`. **A defect on `main`, not one that round
+introduced.***
+`src/lib/osinstall.ts::wrongMediaFolder`
+
+`InstallPlan` carries a documented invariant (`core/osinstall/plan.rs`): a plan
+is **either** a full description of what would be written **or** every reason it
+cannot proceed, never both. `plan.rs:1866` enforces it unconditionally, and
+production constructs an `InstallPlan` in exactly one place, immediately after
+(`plan.rs:1914`). So `items.len() > 0` together with a non-empty `refusals` is a
+state the core cannot emit.
+
+`wrongMediaFolder` gated its claim on five conditions, and two of them therefore
+did no work:
+
+- `if (plan.items.length > 0) return null;` — never true when refusals exist.
+- `if (missing.some((r) => inFolder.has(r.volume_name.toLowerCase()))) return null;`
+  — asks whether a **missing** disk is in the folder. In the ordinary partial
+  case it is not, near-tautologically, so this did not withdraw either.
+
+With a folder holding `Workbench3.2`, `Fonts` and `Locale` and `Extras3.2`
+absent — the ordinary way a person arrives at this screen —
+`wrongMediaFolder` spoke, and `osinstall.blocked.wrongFolder` rendered
+**verbatim**:
+
+> *"None of the disks in this folder are ones this release asks for. It holds:
+> Workbench3.2, Fonts, Locale. Choose the folder your install disks are in, or
+> change the release above."*
+
+`Workbench3.2` **is** one this release asks for. The sentence is false, nothing
+crashes, and it sends a user away from the correct folder — this project's
+named failure class (`CLAUDE.md`, "The failure that does not crash"). The
+function's own doc comment already said the claim is *"checked rather than
+inferred from an empty plan"*. The intent was right; the check did not implement
+it.
+
+**How it survived a whole suite.** Every fixture that exercised the withdrawal
+built a plan carrying refusals *and* items — 12, 3, 2 and 40 of them — so the
+condition doing the withdrawing in the tests was one that can never do it in
+production. A test against an impossible state is a test against nothing.
+
+**Fixed** by asking the recipe instead of inferring. `core/osinstall/identify.rs`
+gained `evidence_for(release, found)`, the per-release counterpart to
+`release_holding` and the same shape as `layer_holding` one level down: *which of
+**this** release's own media is in this folder*. The per-recipe body of
+`identify()` was **extracted** into one private `evidence_of` rather than copied,
+because two copies of that matching is exactly ART-249's shape and the drift
+would be silent. `commands::osinstall::osinstall_media_evidence` carries it, and
+`wrongMediaFolder` now withdraws whenever `distinguishing + shared` is non-empty
+— `shared` counts here even though it never counts for *identification*, since
+`Fonts` and `Locale` are still disks the 3.2 recipe asks for. Evidence not yet
+loaded (`null`) is also silence: a specific claim is never made unchecked. **Both
+inert conditions were deleted** rather than kept as defence in depth — a
+condition that cannot fire is decoration.
+
+`osinstall.blocked.wrongFolder` (the bare listing, no release named) **keeps a
+reachable state and stays in both catalogues**: a folder of disks that are no
+release's install media — `release_holding` answers `null` and the chosen
+release's evidence is empty, so the sentence is simply true. Guarded by
+`still names a folder holding disks that are no release's install media`.
+
+**Guarded** by `does not call the folder wrong when it holds this release's own
+disks and one is absent` and `names the folder's own disks and the absent one,
+for the review's own folder` (both `src/lib/osinstall.test.ts`, the second
+asserting the whole `sameRelease` phrase — key and both parameters), and on the
+Rust side by `a_partial_folder_reports_both_what_is_there_and_what_is_not`,
+`a_folder_holding_only_ambiguous_names_still_counts_as_this_releases_media` and
+`a_release_no_recipe_declares_is_refused_not_answered_empty`. Every fixture
+helper that builds an `InstallPlan` now **refuses** to build one carrying both
+refusals and items (`refuses to build a plan carrying both refusals and items`),
+so no future fixture can drift back.
+
+**Mutated.** `main`'s own `wrongMediaFolder` body put back: **12 tests fail**,
+the new one reporting `expected 'Workbench3.2, Fonts, Locale' to be null` — the
+false sentence's own parameter. The fixture guard removed: `expected [Function]
+to throw an error`. `evidence_for` answering an empty evidence instead of a
+refusal for an unknown release: `a release with no shipped recipe must be
+refused: ReleaseEvidence { release: "AmigaOS 4.1", ... }`. Ambiguous names
+dropped instead of reported: 4 failures, `left: [] right: ["Locale", "Fonts"]`.
+
+**One mutation survived and the guard was fixed rather than recorded.** A
+drifted second copy of the matcher — `evidence_for` with its own inline loop
+that forgets `missing_required`, ART-249's shape exactly — left
+`evidence_for_and_identify_agree_about_the_same_folder` green, because its
+folder held *both* required disks and two empty vectors compare equal. The
+guard now uses a **partial** folder and asserts every field carries something;
+with the drifted copy back it fails `missing_required: ["Install3.2"]` against
+`missing_required: []`.
+
 **ART-252** 🔴 ✅ **`rendered_size` tested `layout().trailing.start` for an
 appended ColorIcon's `FORM` tag, but a present `DrawerData2` sits there
 instead — every container icon with both fell back to the `Gadget` size this

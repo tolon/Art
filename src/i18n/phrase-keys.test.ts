@@ -1105,6 +1105,23 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       plan: planned,
       found: ["Workbench3.2"],
       releaseHolding: null,
+      // ART-253: `wrongMediaFolder`'s claim is checked against the release's
+      // own recipe, so the blockers below have to say what that recipe made
+      // of the folder. This one holds `Workbench3.2`, which 3.2 does ask for.
+      mediaFacts: {
+        release: "AmigaOS 3.2",
+        distinguishing: ["Workbench3.2"],
+        shared: [],
+        missingRequired: ["Install3.2"],
+      },
+    };
+    /** Nothing this release asks for is in the folder — what makes the
+     *  all-or-nothing sentence a true one. */
+    const nothingOfThisRelease = {
+      release: "AmigaOS 3.2",
+      distinguishing: [],
+      shared: [],
+      missingRequired: ["Workbench3.2", "Install3.2"],
     };
 
     const blockers = [
@@ -1132,6 +1149,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       osinstallBlocker({
         ...ready,
         found: ["AmigaOS3.9"],
+        mediaFacts: nothingOfThisRelease,
         plan: {
           ...planned,
           plan: {
@@ -1147,6 +1165,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         ...ready,
         found: ["AmigaOS3.9"],
         releaseHolding: "AmigaOS 3.9",
+        mediaFacts: nothingOfThisRelease,
         plan: {
           ...planned,
           plan: {
@@ -1287,9 +1306,12 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
   // `wrongMediaFolder` owns) is not a `Phrase` and has nothing to register.
   it("mediaEvidence: every identified state resolves to a real key", () => {
     const RELEASE = "AmigaOS 3.2";
-    const planWith = (missing: string[], items: number): OsInstallPlan => ({
+    // ART-253: `items` is derived, never passed. Any refusal at all empties
+    // it (`core/osinstall/plan.rs`), so a fixture carrying both is a plan
+    // the core cannot emit.
+    const planWith = (missing: string[]): OsInstallPlan => ({
       release: RELEASE,
-      items: Array.from({ length: items }, (_, i) => ({
+      items: Array.from({ length: missing.length > 0 ? 0 : 40 }, (_, i) => ({
         component: `component-${i}`,
         media: "Workbench3.2",
         from: `DF0:C/Item${i}`,
@@ -1319,22 +1341,40 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
 
     const phrases = [
       mediaEvidence({
-        plan: planWith(["Extras3.2"], 12),
+        plan: planWith(["Extras3.2"]),
         found: ["Workbench3.2", "Fonts"],
         releaseHolding: RELEASE,
         release: RELEASE,
+        evidence: {
+          release: RELEASE,
+          distinguishing: ["Workbench3.2"],
+          shared: ["Fonts"],
+          missingRequired: [],
+        },
       }),
       mediaEvidence({
-        plan: planWith(["Extras3.2"], 3),
+        plan: planWith(["Extras3.2"]),
         found: ["Workbench3.1", "Fonts"],
         releaseHolding: "AmigaOS 3.1",
         release: RELEASE,
+        evidence: {
+          release: RELEASE,
+          distinguishing: [],
+          shared: ["Fonts"],
+          missingRequired: ["Workbench3.2", "Install3.2"],
+        },
       }),
       mediaEvidence({
-        plan: planWith(["Workbench3.2"], 2),
+        plan: planWith(["Workbench3.2"]),
         found: ["Fonts", "Locale"],
         releaseHolding: null,
         release: RELEASE,
+        evidence: {
+          release: RELEASE,
+          distinguishing: [],
+          shared: ["Locale", "Fonts"],
+          missingRequired: ["Workbench3.2", "Install3.2"],
+        },
       }),
     ];
     for (const phrase of phrases) {
