@@ -140,6 +140,14 @@ import {
   type MountNote,
 } from "@/lib/launch";
 import { STEP_IDS, stepLabelKey } from "@/lib/buildSteps";
+import {
+  endingPhrase,
+  fatMountPhrase,
+  stepOutcomePhrase,
+  type Ending,
+  type FatMount,
+  type StepOutcome,
+} from "@/lib/firstboot";
 
 /** Whether `dotted` (e.g. "whdload.outcome.installed") names a string leaf. */
 function isLeafKey(dotted: string): boolean {
@@ -1729,6 +1737,35 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     // strip whatever kind is being built.
     for (const step of STEP_IDS) {
       expect(resolvesAtRuntime(stepLabelKey(step)), step).toBe(true);
+    }
+  });
+
+  it("stepOutcomePhrase: every StepOutcome kind resolves", () => {
+    const outcomes: StepOutcome[] = [
+      { kind: "ok" },
+      { kind: "skipped", reason: "not-3.9" },
+      { kind: "refused", rc: 20 },
+      { kind: "unfinished" },
+    ];
+    for (const outcome of outcomes) {
+      const phrase = stepOutcomePhrase(outcome);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("endingPhrase: every Ending resolves", () => {
+    const endings: Ending[] = ["not-booted", "unfinished", "done-all", "done-partial"];
+    for (const ending of endings) {
+      const phrase = endingPhrase(ending);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("fatMountPhrase: both FatMount kinds resolve", () => {
+    const mounts: FatMount[] = [{ kind: "available" }, { kind: "unavailable", needs: "fat95" }];
+    for (const mount of mounts) {
+      const phrase = fatMountPhrase(mount);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
     }
   });
 });

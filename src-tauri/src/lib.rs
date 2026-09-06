@@ -167,6 +167,8 @@ pub fn run() {
             commands::osinstall::osinstall_verify,
             commands::amigainstall::amiga_install_preview,
             commands::amigainstall::amiga_install_run,
+            commands::firstboot::firstboot_preview,
+            commands::firstboot::firstboot_write,
             commands::gotek::gotek_scan,
             commands::gotek::gotek_save,
             commands::distro::distro_profiles,

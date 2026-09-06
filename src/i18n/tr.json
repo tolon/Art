@@ -2782,5 +2782,23 @@
       "noBackdropChosen": "Ağaçta zaten olan bir arka plan seçin.",
       "noPictureChosen": "Bu bilgisayardan bir resim seçin."
     }
+  },
+  "firstboot": {
+    "step": {
+      "ok": "Tamamlandı",
+      "skipped": "Atlandı: {{reason}}",
+      "refused": "Reddedildi (kod {{rc}}); bir sonraki açılışta yeniden denenecek",
+      "unfinished": "Başladı ama hiç bitmedi; Amiga bu adımda durdu ya da takıldı"
+    },
+    "ending": {
+      "notBooted": "Bu kart henüz bir Amiga'da açılmadı.",
+      "unfinished": "İlk açılış başladı ama sonuna ulaşmadı.",
+      "doneAll": "İlk açılışın her adımı çalıştı.",
+      "donePartial": "İlk açılış çalıştı; bazı adımlar hâlâ bir sonraki açılışı bekliyor."
+    },
+    "fat": {
+      "available": "FAT önyükleme bölümü EMU68BOOT: olarak bağlanacak (L:fat95 ağaçta var).",
+      "unavailable": "FAT önyükleme bölümü bağlanmayacak: ağaçta L:{{needs}} yok. Aminet disk/misc/{{needs}} bunu sağlar; adım o olmadan atlanır."
+    }
   }
 }

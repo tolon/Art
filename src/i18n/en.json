@@ -2782,5 +2782,23 @@
       "noBackdropChosen": "Choose a backdrop already in the tree.",
       "noPictureChosen": "Choose a picture on this PC."
     }
+  },
+  "firstboot": {
+    "step": {
+      "ok": "Done",
+      "skipped": "Skipped: {{reason}}",
+      "refused": "Refused (code {{rc}}); it will be tried again on the next boot",
+      "unfinished": "Started and never finished; the Amiga stopped or hung on this step"
+    },
+    "ending": {
+      "notBooted": "This card has not been booted on an Amiga yet.",
+      "unfinished": "The first boot began and did not reach its end.",
+      "doneAll": "Every first-boot step has run.",
+      "donePartial": "The first boot ran; some steps are still waiting for the next boot."
+    },
+    "fat": {
+      "available": "The FAT boot partition will be mounted as EMU68BOOT: (L:fat95 is in the tree).",
+      "unavailable": "The FAT boot partition will not be mounted: the tree has no L:{{needs}}. Aminet disk/misc/{{needs}} supplies it; the step skips without it."
+    }
   }
 }
