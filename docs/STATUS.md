@@ -1152,8 +1152,8 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
   ART-235's pre-existing false positive, in a file this wave never
   touched). Report:
   `.superpowers/sdd/2026-09-06-media-identification-by-hash/fix-wave-2-report.md`.
-  **Still on `art-media-hash`, not merged and not pushed** — the round and
-  both fix waves are complete; merging is the owner's decision.
+  **Merged to `main` as `800fdc0`, not pushed** — the round and both fix
+  waves are complete; publishing is the owner's.
 - **The OS Builder now shows what media was found when it cannot complete a
   build.** The `mediaEvidence` helper renders a line above the refusals list
   saying which of three things is true: this release's own media is among what
