@@ -143,6 +143,27 @@ cd src-tauri && ART_322_BASE="E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF" 
 cd src-tauri && ART_ICON_DIR="<a folder of extracted .info files>" \
   cargo test round_trip_every_icon_in_a_folder_when_asked -- --nocapture --ignored
 
+# The install-media hash table's outside check (§4.2 of the 2026-09-06
+# media-identification-by-hash round, task 3) -- the sibling of
+# rom-table-check.py, for the 186-row table adopted from Emu68 Hatcher.
+# Hashes every .adf/.iso/.lha under a directory and reports per row:
+# verified (a file here matches it), unverified (no file here does -- expected
+# for most rows, never a failure) and conflicting (something matched but
+# disagrees). Read-only: only ever opens a file to hash it. Not in CI --
+# needs media ART must never ship. Standing measurement (2026-09-06), against
+# the owner's own AmigaOS 3.2 ADFs: 35 verified, 151 unverified, 0 conflicting
+# -- every one of the 35 matched, to the right name and the right source
+# (Hyperion (3.2 base)), zero misses.
+python scripts/media-table-check.py "E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF"
+
+# The Rust half of the same check -- the same lookup through core's own
+# row_for/rows rather than the script's independent re-implementation, the
+# pattern round_trip_every_icon_in_a_folder_when_asked established. Same
+# directory, same result: checked=35 not_in_table=0 verified=35
+# unverified=151 conflicting=0.
+cd src-tauri && ART_MEDIA_DIR="E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF" \
+  cargo test every_real_disk_in_a_folder_is_looked_up_through_cores_own_code_when_asked -- --nocapture --ignored
+
 cd src-tauri && cargo deny check                       # licences and advisories
 pnpm tauri build                                       # full bundle (slow)
 ```

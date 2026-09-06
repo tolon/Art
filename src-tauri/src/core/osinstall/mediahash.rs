@@ -302,6 +302,147 @@ mod tests {
         assert_eq!(rows[0].volume, "Workbench3_2");
     }
 
+    // -- The outside check: this table against real media (§4.2 of the
+    // design). Sibling of `scripts/media-table-check.py`, and the Rust half
+    // of the pattern `core/amigaicon`'s
+    // `round_trip_every_icon_in_a_folder_when_asked` established: the same
+    // lookup, exercised through `core`'s own public API rather than the
+    // Python script's independent re-implementation, so a mistake shared
+    // between this module's reader and the shipped JSON cannot hide behind
+    // agreement with itself. Needs media ART must never ship, so it is
+    // `#[ignore]`d and reads its directory from `ART_MEDIA_DIR` rather than
+    // a fixture — never in CI, same reason `ART_ICON_DIR`'s test is not.
+
+    /// Every `.adf`/`.iso`/`.lha` file under `dir`, recursively — the same
+    /// extensions `scripts/media-table-check.py` looks for. Read-only:
+    /// `std::fs::read_dir` only lists entries.
+    fn collect_media_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_media_files(&path, out);
+            } else if path.extension().is_some_and(|ext| {
+                let ext = ext.to_ascii_lowercase();
+                ext == "adf" || ext == "iso" || ext == "lha"
+            }) {
+                out.push(path);
+            }
+        }
+    }
+
+    /// The standing measurement (2026-09-06), against the owner's own
+    /// `E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF`: 35 files, all 35
+    /// hashing to a row in the shipped table, to the right `name` and the
+    /// right `source` (`Hyperion (3.2 base)`), 151 of the table's 186 rows
+    /// left unverified (rows the owner does not happen to own a copy of —
+    /// expected, and never a failure) and 0 conflicting.
+    ///
+    /// Three outcomes, kept distinct per this project's own named failure
+    /// class (a confident wrong sentence): **verified** (a file here hashes
+    /// to this row, via [`row_for`] — the exact function
+    /// `commands/`-layer code would call), **unverified** (no file here
+    /// does — reported, never asserted, since it says nothing about
+    /// whether the row is right), and **conflicting** (a real defect: the
+    /// same file's hash resolves to more than one row, which can only
+    /// happen if the shipped table itself carries a duplicate `md5` —
+    /// something `every_md5_in_the_table_is_distinct` above already
+    /// asserts never happens, checked again here independently, against
+    /// [`rows`] rather than trusted from that other test). Only
+    /// `conflicting` fails this test; `unverified` is printed and left
+    /// alone.
+    #[test]
+    #[ignore = "needs a folder of the owner's own real install media"]
+    fn every_real_disk_in_a_folder_is_looked_up_through_cores_own_code_when_asked() {
+        let Ok(folder) = std::env::var("ART_MEDIA_DIR") else {
+            return;
+        };
+        let mut entries = Vec::new();
+        collect_media_files(std::path::Path::new(&folder), &mut entries);
+        entries.sort();
+
+        let table = shipped_rows();
+
+        // Independent of any real file: does the shipped table itself ever
+        // claim one hash for two different rows? `row_for` can only ever
+        // return one match per hash, so this is the only way "one file
+        // matching two rows" could actually happen — checked here against
+        // the table directly, not inferred from a lookup result.
+        let mut by_md5: std::collections::HashMap<&str, Vec<&MediaRow>> =
+            std::collections::HashMap::new();
+        for row in table {
+            by_md5.entry(row.md5.as_str()).or_default().push(row);
+        }
+        let mut conflicting: Vec<String> = Vec::new();
+        for (md5, rows_for_hash) in &by_md5 {
+            if rows_for_hash.len() > 1 {
+                let names: Vec<&str> = rows_for_hash.iter().map(|r| r.name.as_str()).collect();
+                conflicting.push(format!(
+                    "{md5} is claimed by {} rows: {}",
+                    rows_for_hash.len(),
+                    names.join(", ")
+                ));
+            }
+        }
+
+        let mut checked = 0usize;
+        let mut not_in_table = 0usize;
+        let mut matched_md5: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for entry in &entries {
+            let hash = match crate::core::hashing::md5_file(entry) {
+                Ok(h) => h,
+                Err(err) => {
+                    println!("ART_MEDIA_UNREADABLE {}: {err}", entry.display());
+                    continue;
+                }
+            };
+            checked += 1;
+            match row_for(&hash) {
+                Ok(Some(row)) => {
+                    matched_md5.insert(row.md5.clone());
+                    println!(
+                        "ART_MEDIA_MATCH {}: {} ({}, {})",
+                        entry.display(),
+                        row.name,
+                        row.version,
+                        row.source
+                    );
+                }
+                Ok(None) => {
+                    // No row claims this file. Says nothing about the
+                    // file's identity (§4.3 of the design) — reported, not
+                    // a failure.
+                    not_in_table += 1;
+                }
+                Err(err) => {
+                    conflicting.push(format!("row_for({hash}) for {}: {err}", entry.display()));
+                }
+            }
+        }
+
+        let verified = table
+            .iter()
+            .filter(|r| matched_md5.contains(&r.md5))
+            .count();
+        let unverified = table.len() - verified;
+
+        println!(
+            "ART_MEDIA_RESULT checked={checked} not_in_table={not_in_table} verified={verified} unverified={unverified} conflicting={}",
+            conflicting.len()
+        );
+        for c in &conflicting {
+            println!("ART_MEDIA_CONFLICT {c}");
+        }
+
+        assert!(
+            conflicting.is_empty(),
+            "{} conflicting row(s) — see ART_MEDIA_CONFLICT lines above",
+            conflicting.len()
+        );
+    }
+
     #[test]
     fn a_parse_failure_is_cached_not_reparsed_on_the_second_call() {
         // Exercises `cached` directly against a private `OnceLock`, so this

@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""ART's install-media hash table, checked against the owner's own media (§4.2).
+
+Sibling of `scripts/rom-table-check.py` (ART-104): that script re-verifies the
+Kickstart table against an independent database. This one re-verifies the
+186-row install-media table (`core/osinstall/media_hashes.json`, adopted from
+`rootrootde/emu68hatcher`, MIT) against real disks — the check ART's own unit
+tests cannot do, because a mistake shared between `mediahash.rs`'s reader and
+the JSON it reads would pass every test in the suite and still be wrong.
+
+**Read-only, by construction.** This script only ever opens a file inside the
+given directory in `"rb"` mode to hash it (`hashlib.md5`, streamed in 1 MiB
+chunks) or lists directory entries (`os.walk`). Nothing here calls
+`open(..., "w")`, `os.remove`, `os.rename`, `shutil.move`, or anything else
+that writes, renames or deletes — there is no such call anywhere in this file.
+The directory named on the command line is the owner's own irreplaceable
+install media and this script treats it exactly like `fat-oracle-check.py` and
+`icon-oracle-check.py` treat theirs: read, never touched.
+
+Three outcomes, kept distinct (this project's named failure class is
+collapsing them into one):
+
+    verified     a file under the directory hashes to exactly this row's md5.
+                 Strong evidence *about the row*, not about the disk (§4.3 of
+                 the design) — reported with what confirmed it.
+    unverified   no file under the directory hashes to this row. Expected for
+                 most rows — the owner does not own every disk Hatcher's table
+                 knows about — and is **not** a failure. 151 of 186 rows were
+                 unverified on the day this script was written, and that
+                 number describes what the owner happens to own, not a defect.
+    conflicting  something matched but disagrees. Checked two ways, both
+                 independent of which files happen to be on hand:
+                   - a real file's md5 lands on more than one row (only
+                     possible if two rows share an md5, which
+                     mediahash.rs's own `every_md5_in_the_table_is_distinct`
+                     test already asserts never happens in the shipped table
+                     — checked again here anyway, against the file actually
+                     read, rather than trusted from that test);
+                   - a row's own required fields are missing or malformed
+                     (an empty version/volume/name/source, or an md5 that is
+                     not 32 lowercase hex characters) — a row whose fields
+                     contradict the table's own schema, independent of
+                     whether the owner has a copy of it at all.
+
+The standing measurement (2026-09-06), against
+`E:\\amiga\\Amigatolon\\paketler\\3.2\\AmigaOs 3.2\\ADF`: **35 verified, 151
+unverified, 0 conflicting** — every one of the owner's 35 ADFs matched a row,
+to the right name and the right source (`Hyperion (3.2 base)`), zero misses.
+If a re-run gets a different number, that is a finding to report, not
+something to adjust this script until it agrees.
+
+Not in CI, ever: it needs media ART must never ship — the same reason
+`fat-oracle-check.py` and `icon-oracle-check.py` are not in CI.
+
+Usage:
+    python scripts/media-table-check.py DIR
+
+DIR is walked recursively for `.adf`, `.iso` and `.lha` files (case-insensitive
+extension match, per the design's own recipe-media shapes).
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+TABLE_PATH = REPO / "src-tauri" / "src" / "core" / "osinstall" / "media_hashes.json"
+MEDIA_EXTENSIONS = {".adf", ".iso", ".lha"}
+CHUNK_SIZE = 1024 * 1024
+
+
+def load_table() -> list[dict]:
+    data = json.loads(TABLE_PATH.read_text(encoding="utf-8"))
+    return data["media"]
+
+
+def md5_of(path: Path) -> str:
+    """Streamed, so a multi-hundred-MB `.iso` does not have to fit in memory
+    at once — the same reason `core/hashing.rs::md5_file` chunks rather than
+    reading a file whole. Opens the file for reading only.
+    """
+    digest = hashlib.md5()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(CHUNK_SIZE), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def find_media(directory: Path) -> list[Path]:
+    """Every `.adf`/`.iso`/`.lha` file under `directory`, recursively.
+    `os.walk` only lists names; nothing here touches an entry it finds.
+    """
+    found: list[Path] = []
+    for root, _dirs, files in os.walk(directory):
+        for name in files:
+            if Path(name).suffix.lower() in MEDIA_EXTENSIONS:
+                found.append(Path(root) / name)
+    return sorted(found)
+
+
+def row_schema_problem(row: dict) -> str | None:
+    """Mirrors `mediahash.rs`'s own invariant tests
+    (`every_md5_is_32_lowercase_hex_characters`,
+    `every_row_has_its_descriptive_fields_filled_in`) — checked again here,
+    independently, against whatever table this script is actually pointed at,
+    rather than trusted from the Rust suite.
+    """
+    md5 = row.get("md5", "")
+    if len(md5) != 32 or not all(c in "0123456789abcdef" for c in md5):
+        return f"md5 {md5!r} is not 32 lowercase hex characters"
+    for field in ("version", "volume", "name", "source"):
+        if not row.get(field):
+            return f"'{field}' is empty"
+    return None
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "directory", help="a folder of real install media (.adf/.iso/.lha) — read-only"
+    )
+    args = parser.parse_args()
+
+    directory = Path(args.directory)
+    if not directory.is_dir():
+        print(f"{directory} is not a directory")
+        return 2
+
+    rows = load_table()
+    try:
+        table_shown = os.path.relpath(TABLE_PATH, REPO)
+    except ValueError:  # a different drive on Windows -- relpath cannot express it
+        table_shown = str(TABLE_PATH)
+    print(f"table: {len(rows)} row(s) from {table_shown}")
+
+    # Which real hash a row's md5 belongs to more than one row for — a table
+    # defect, not something a missing disk could ever produce.
+    rows_by_md5: dict[str, list[dict]] = {}
+    for row in rows:
+        rows_by_md5.setdefault(row.get("md5", ""), []).append(row)
+    duplicated_md5 = {md5: rs for md5, rs in rows_by_md5.items() if len(rs) > 1}
+
+    files = find_media(directory)
+    print(f"media directory: {len(files)} file(s) with a recognised extension\n")
+
+    files_by_hash: dict[str, list[Path]] = {}
+    for path in files:
+        digest = md5_of(path)
+        files_by_hash.setdefault(digest, []).append(path)
+
+    verified: list[tuple[dict, list[Path]]] = []
+    unverified: list[dict] = []
+    conflicting: list[tuple[dict, str]] = []
+
+    for row in rows:
+        schema_problem = row_schema_problem(row)
+        md5 = row.get("md5", "")
+        matches = files_by_hash.get(md5, [])
+
+        if schema_problem is not None:
+            conflicting.append((row, f"row's own fields contradict the schema: {schema_problem}"))
+        elif md5 in duplicated_md5:
+            other_names = ", ".join(
+                r["name"] for r in duplicated_md5[md5] if r is not row
+            )
+            conflicting.append(
+                (row, f"this md5 is also claimed by: {other_names} (a match here would be ambiguous)")
+            )
+        elif matches:
+            verified.append((row, matches))
+        else:
+            unverified.append(row)
+
+    print(f"verified:    {len(verified)}")
+    print(f"unverified:  {len(unverified)}")
+    print(f"conflicting: {len(conflicting)}\n")
+
+    for row, matches in verified:
+        names = ", ".join(str(p.relative_to(directory)) for p in matches)
+        print(f"  ok   {row['name']} ({row['version']}, {row['source']})  <- {names}")
+
+    for row, why in conflicting:
+        print(f"  FAIL {row['name']} ({row.get('md5', '')}): {why}")
+
+    for row in unverified:
+        print(f"  --   {row['name']} ({row['version']}, {row['source']}, {row['md5']})")
+
+    print(
+        f"\n{len(files)} file(s) hashed against {len(rows)} row(s): "
+        f"{len(verified)} verified, {len(unverified)} unverified "
+        f"(no file here claims them - not a failure), {len(conflicting)} conflicting"
+    )
+
+    if conflicting:
+        print("\nFAIL: conflicting row(s) found - see above.")
+        return 1
+
+    print("\nok   every row that matched a file matched cleanly, and nothing in the table contradicts itself")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
