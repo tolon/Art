@@ -28,9 +28,15 @@
 //! "done" without being told where the previous version went has been given
 //! nothing (CLAUDE.md, "the failure that does not crash"). So this goes
 //! through `oplog::write_result`, synchronously, the same shape
-//! `commands/adf.rs::adf_add_file` uses — not a background job, because the
-//! whole operation touches at most eight small text files and one image, not
-//! hundreds of megabytes off real media.
+//! `commands/adf.rs::adf_add_file` uses — not a background job, because even
+//! the largest real case (arranging icons across a 3.9-scale tree, hundreds
+//! of small `.info` writes) is nowhere near the hundreds of megabytes a real
+//! media copy moves. **Corrected 2026-09-06** (final whole-branch review of
+//! the drawer-icons round, C5): this used to say "at most eight small text
+//! files and one image", true before `arrange_icons` existed and false
+//! since — 361 of the owner's own 798 real icons are unplaced, so a single
+//! call can commit that many files. The oplog's own `Written`/`Backups`
+//! details are capped the same way — see `some_of` at the call site below.
 //!
 //! `appearance_backdrops` reads a directory listing and writes nothing, so it
 //! is not logged — the same rule `osinstall_components`/`osinstall_packages`
@@ -42,6 +48,8 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::core::amigaprefs::wbpattern;
+use crate::core::osinstall::apply::some_of;
+
 use crate::core::appearance::{
     apply_appearance, backdrops_in_tree, AppearanceOutcome, AppearanceRequest, WallpaperSource,
 };
@@ -272,13 +280,19 @@ pub fn appearance_apply(
             .destination(tree.display().to_string()),
         &result,
         |record, outcome: &AppearanceOutcomeWire| {
-            let record = record.detail("Written", outcome.written.join(", "));
+            // C5 (final whole-branch review): capped the same way a package
+            // refusal naming up to 211 real files already is
+            // (`core::osinstall::apply::some_of`) — arranging icons across a
+            // 3.9-scale tree can commit hundreds of `.info` files in one
+            // call, and joining every one of them into a single log line is
+            // as unusable on disk as it is on screen.
+            let record = record.detail("Written", some_of(&outcome.written));
             let record = if outcome.backups.is_empty() {
                 record
             } else {
                 record
                     .backup(outcome.backups.first().cloned())
-                    .detail("Backups", outcome.backups.join(", "))
+                    .detail("Backups", some_of(&outcome.backups))
             };
             record.outcome(OperationOutcome::verified(true))
         },

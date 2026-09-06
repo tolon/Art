@@ -2749,8 +2749,9 @@
     "apply": "Uygula",
     "applying": "Uygulanıyor…",
     "done": {
-      "written": "Yazıldı: {{files}}",
-      "backup": "Önceki sürüm şuraya yedeklendi: {{files}}",
+      "written": "{{count}} dosya yazıldı: {{files}}",
+      "nothingWritten": "Yazılacak bir şey yoktu — her simgenin zaten bir konumu vardı ve duvar kağıdı ya da kabuk ayarlarından hiçbiri değiştirilmedi.",
+      "backup": "{{count}} önceki sürüm şuraya yedeklendi: {{files}}",
       "iconsPlaced": "{{drawers}} çekmecede {{count}} simge yerleştirildi.",
       "iconsSkipped": "{{count}} simge okunamadı, dokunulmadan bırakıldı: {{files}}"
     },

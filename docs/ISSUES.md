@@ -576,7 +576,7 @@ for callers (tests) that do not need a job, the same split
 round-trip a NewIcon `IM1=`/`IM2=` tool type** — *found 2026-09-06 by the
 drawer-icons round's icon-oracle run against the owner's own AmigaOS 3.9
 material*
-`src-tauri/src/core/amigaicon/mod.rs::tooltypes`
+`src-tauri/src/core/amigaicon/mod.rs::{tooltypes, set_tooltypes}`
 
 `tooltypes` decodes a `ToolTypes` entry with `String::from_utf8_lossy` rather
 than refusing on invalid UTF-8 — deliberately, because real AmigaDOS text is
@@ -599,11 +599,23 @@ for all 69; byte identity does not, and nothing here claims otherwise.
 Left open: fixing it means `tooltypes`/`set_tooltypes` carrying raw bytes
 instead of `String` for a NewIcon-shaped entry, which is a real change to a
 public shape three round's worth of code now depends on, not a one-line fix.
-No tree ART builds writes new NewIcon tool types today — this is only felt
-when a NewIcon-carrying icon already on a tree is rewritten by
-`set_tooltypes`, `set_position`, `set_window` or `set_show_all_files`, which
-this round's `core/appearance::plan_icons_in_dir` does for `set_position`
-alone.
+No tree ART builds writes new NewIcon tool types today.
+
+**Corrected 2026-09-06, by the final whole-branch review**: an earlier version
+of this entry said the loss is felt when a NewIcon-carrying icon "is rewritten
+by `set_tooltypes`, `set_position`, `set_window` or `set_show_all_files`" —
+naming all four of this module's writers. Only one of them can trip it.
+`set_position`, `set_window` and `set_show_all_files` all `bytes.to_vec()` and
+overwrite a fixed, disjoint range of the file; none of them reads or rewrites
+the `ToolTypes` block at all, and the icon oracle proves this byte-for-byte
+across all 798 real icons, the 69 lossy ones included — `set_position` alone
+is what this round's `core/appearance::plan_icons_in_dir` actually calls on a
+NewIcon-carrying icon, and it changes eight bytes at offset 58, nowhere near
+`ToolTypes`. **Only `set_tooltypes` can lose bytes, and only when fed the
+output of `tooltypes()`** — the shape `merge_tooltypes`'s own callers use, not
+anything `plan_icons_in_dir` calls today. The warning now lives on
+`set_tooltypes`'s own doc comment (`core/amigaicon/mod.rs`) so a future caller
+reads it where it applies.
 
 **ART-251** 🟡 **The AmigaOS 3.2 recipe has no rule for `Utilities` or
 `WBStartup`, so a tree ART builds has neither** — *found 2026-09-06 during
@@ -648,6 +660,59 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-252** 🔴 ✅ **`rendered_size` tested `layout().trailing.start` for an
+appended ColorIcon's `FORM` tag, but a present `DrawerData2` sits there
+instead — every container icon with both fell back to the `Gadget` size this
+module exists to stop trusting** — *found 2026-09-06 by the final whole-branch
+review of the drawer-icons round, hand-verified by the controller on
+`art1/Devs/DataTypes.info`*
+`src-tauri/src/core/amigaicon/render.rs::rendered_size`
+
+`DrawerData2` (six bytes: `dd_Flags`, `dd_ViewModes`) is appended after every
+optional block, at the exact offset `layout()`'s own `trailing` range starts
+from — `drawer_data2_range` (added by Task 4/ART-249) already computes this.
+`rendered_size` was written assuming `trailing` begins with the appended IFF
+blob directly (Task 3), which Task 7 itself proved false for any icon
+carrying a real `DrawerData2`: the `FORM` tag sits six bytes later. Hand
+measurement on `art1/Devs/DataTypes.info` (3144 bytes): `trailing.start =
+1230`; the twelve bytes there are `00 00 00 01 00 01 46 4F 52 4D 00 00` —
+`dd_Flags = 1`, `dd_ViewModes = 1`, *then* `FORM`. `rendered_size` returned
+**44×44** where `FACE` says **46×46** — the exact measurement §1.3 of the
+design spec cites to justify this module's existence.
+
+Measured over the owner's whole corpus: **76 of 798 icons** have a
+`FORM…ICON` that is not at `trailing.start`, **100% of them containers** (46
+drawers, 27 disks, 3 garbage) — 560 seen + 76 missed = 636, exactly the
+design's own ColorIcon census. The failure this produces: a drawer icon with
+an 8×8 `Gadget` stub and a 46×46 real ColorIcon gets a `Cell { height: 8 }`,
+so `icongrid` spaces rows for 8px artwork drawn 46px tall — every row
+overlapping the one below by roughly 14px, labels drawn across the next
+row's artwork. The precise overlap the drawer-icons round exists to prevent,
+reintroduced by the module meant to prevent it.
+
+**Fixed** by asking `drawer_data2_range(bytes)` and starting the `FORM`
+search at its `end` when present, at `trailing.start` otherwise — reusing the
+computation rather than re-deriving it, which is exactly what caused
+ART-249.
+
+**Guarded** by
+`a_colour_icon_behind_a_real_drawer_data2_is_still_found` (a fixture with a
+real `DrawerData2` *and* an appended ColorIcon, asserting the `FACE` size —
+46×46, not merely "≥ 44×44" — is found), and by strengthening the icon
+oracle's own `rendered_size` check: its only existing assertion (never
+smaller than the `Gadget` size) is satisfied trivially by the very fallback
+this bug produces, so a second, independently written chunk walk
+(`find_form_icon_face_size`, deliberately not a call into
+`render::color_icon_face_size`) now scans an icon's trailing region for a
+`FORM…ICON` blob wherever it actually starts and requires `rendered_size` to
+report at least that size. **Mutated** (the `trailing.start`-only check put
+back): the unit test fails exactly as predicted (`left: (44, 44) right: (46,
+46)`), and the oracle over the same 798-icon corpus goes from `failed=0` to
+`failed=56` — every failure reading `rendered_size WxH is smaller than the
+ColorIcon FACE size W'xH' found in the trailing region — the FORM was
+missed`. Restoring the fix returns both to green:
+`checked=798 failed=0 no_drawer_data2=0 lossy_tooltypes=69`.
 
 **ART-249** 🔴 ✅ **`set_show_all_files` wrote `dd_Flags` at a fixed offset
 that lands inside `DrawerData`'s own `NewWindow` struct, overwriting drawer

@@ -2749,8 +2749,9 @@
     "apply": "Apply",
     "applying": "Applying…",
     "done": {
-      "written": "Written: {{files}}",
-      "backup": "Previous version backed up to: {{files}}",
+      "written": "Wrote {{count}} file(s): {{files}}",
+      "nothingWritten": "Nothing needed writing — every icon already had a position, and no wallpaper or shell setting was changed.",
+      "backup": "Backed up {{count}} previous version(s) to: {{files}}",
       "iconsPlaced": "Placed {{count}} icon(s) across {{drawers}} drawer(s).",
       "iconsSkipped": "Could not read {{count}} icon(s), left untouched: {{files}}"
     },

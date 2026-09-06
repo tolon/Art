@@ -379,6 +379,36 @@ describe("what a successful icon arrangement says", () => {
     const skipped = await screen.findByTestId("appearance-icons-skipped");
     expect(skipped.textContent).toContain("E:\\amiga\\dist-3.2\\Utilities\\Bad.info");
   });
+
+  it("says nothing needed writing, rather than a bare written line, when every icon was already placed", async () => {
+    // C7 (final whole-branch review): ticking only "Arrange icons" on a tree
+    // whose icons are all already placed used to render `Written: ` with
+    // nothing after it — the same blank shape a real failure could produce,
+    // which is exactly the "must not be the same screen" defect CLAUDE.md
+    // names. A directory with nothing to place commits nothing at all
+    // (`core::appearance::plan_icon_arrangement`'s own doc), so `written`,
+    // `iconsPlaced` and `drawersArranged` are all zero here.
+    applyMock.mockResolvedValue({
+      written: [],
+      backups: [],
+      picturePlaced: null,
+      amigaPath: null,
+      iconsPlaced: 0,
+      drawersArranged: 0,
+      iconsSkipped: [],
+    });
+    seedStore();
+    render(<AppearancePanel />);
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /arrange the drawer icons/i })
+    );
+    await userEvent.click(screen.getByRole("button", { name: /apply/i }));
+
+    const nothing = await screen.findByTestId("appearance-nothing-written");
+    expect(nothing.textContent).toBeTruthy();
+    expect(screen.queryByTestId("appearance-icons-placed")).toBeNull();
+    expect(screen.queryByTestId("appearance-icons-skipped")).toBeNull();
+  });
 });
 
 describe("a stale or hand-edited settings file cannot put a bad value on screen", () => {

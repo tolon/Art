@@ -40,6 +40,7 @@ import { useTranslation } from "react-i18next";
 import {
   appearanceApply,
   appearanceBackdrops,
+  someOf,
   type AppearanceOutcome,
   type AppearancePlacement,
   type AppearanceWallpaperSource,
@@ -485,12 +486,34 @@ export function AppearancePanel() {
           className="badge badge-ok"
           style={{ display: "block", fontSize: 11, padding: "4px 8px", marginTop: 8 }}
         >
-          <p style={{ margin: 0 }}>{t("appearance.done.written", { files: done.written.join(", ") })}</p>
+          {/* C5/C7 (final whole-branch review): a run that arranges icons
+              across a 3.9-scale tree can write hundreds of files, and a run
+              that touches none (every icon already placed, nothing else
+              requested) writes zero. "Written: " with nothing after it and
+              a genuine failure must not read as the same screen, and a list
+              of 361 paths joined into one paragraph is honest and
+              unusable — capped with `someOf`, the same convention
+              `core::osinstall::apply::some_of` uses on the Rust side. */}
+          {done.written.length > 0 ? (
+            <p style={{ margin: 0 }}>
+              {t("appearance.done.written", {
+                count: done.written.length,
+                files: someOf(done.written),
+              })}
+            </p>
+          ) : (
+            <p data-testid="appearance-nothing-written" style={{ margin: 0 }}>
+              {t("appearance.done.nothingWritten")}
+            </p>
+          )}
           {/* spec §92 / CLAUDE.md: a user told "done" without being told
               where the previous version went has been given nothing. */}
           {done.backups.length > 0 && (
             <p data-testid="appearance-backup" style={{ margin: "4px 0 0" }}>
-              {t("appearance.done.backup", { files: done.backups.join(", ") })}
+              {t("appearance.done.backup", {
+                count: done.backups.length,
+                files: someOf(done.backups),
+              })}
             </p>
           )}
           {/* Task 8 of the drawer-icons round: a run that arranged icons and

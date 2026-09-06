@@ -1933,10 +1933,16 @@ fn undeclared_overwrites(
 /// A real BoingBag carries 211 files, so "name every one" is a wall of text
 /// nobody reads and a log line nothing can hold. Enough to recognise the
 /// shape of the problem, and then the number.
-const REFUSAL_PATHS_SHOWN: usize = 5;
+///
+/// `pub(crate)`, not `pub(super)`: `core::appearance::partial_commit_error`
+/// reuses this exact style for the same reason — an icon-arrangement pass
+/// over a 3.9-scale tree can commit hundreds of files before one fails, and
+/// "name every one" is exactly as unusable there as it is for a BoingBag.
+/// One capping convention, not two.
+pub(crate) const REFUSAL_PATHS_SHOWN: usize = 5;
 
 /// `paths`, capped — see [`REFUSAL_PATHS_SHOWN`].
-fn some_of(paths: &[String]) -> String {
+pub(crate) fn some_of(paths: &[String]) -> String {
     if paths.len() <= REFUSAL_PATHS_SHOWN {
         return paths.join(", ");
     }
@@ -4975,12 +4981,28 @@ mod tests {
                 // tree; the recipe has carried `workbench-39` over
                 // `workbench-base` since then, and ART-206 corrected the
                 // components assertion above without re-measuring these. The
-                // numbers below are this run's own output against
+                // numbers below were this run's own output against
                 // `E:\amiga\Amigatolon\iso\AmigaOS39.iso`, 11.58 s on a
                 // release build.
-                assert_eq!(outcome.files, 1242, "files written");
+                //
+                // **Re-measured again 2026-09-06, by the drawer-icons
+                // round's own final whole-branch review (C4).** `files`
+                // moved 1242 -> 1249 and `bytes` 14,883,492 -> 14,904,548, a
+                // difference of exactly 7 files and 21,056 bytes. Not a
+                // regression and not the destination-collision this review
+                // was checking for (`planned.refusals` above is empty): this
+                // disc's root now carries seven sibling `.info` files it did
+                // not before — `Devs.info`, `Expansion.info`, `Prefs.info`,
+                // `Storage.info`, `System.info`, `Tools.info`,
+                // `Utilities.info`, 3114+3110+2824+3008+2810+3092+3098 =
+                // 21,056 bytes exactly — which is this round's own §2.1
+                // feature (a `Subtree` rule now takes its drawer's sibling
+                // icon) reaching the 3.9 tree the same way it reaches 3.2.
+                // `directories` is unchanged (105): the icon feature adds
+                // files, never a directory.
+                assert_eq!(outcome.files, 1249, "files written");
                 assert_eq!(outcome.directories, 105, "directories written");
-                assert_eq!(outcome.bytes, 14_883_492, "file bytes written");
+                assert_eq!(outcome.bytes, 14_904_548, "file bytes written");
 
                 // Fix round 1, review item 2: the counts and sums above would
                 // pass just as well if every file landed empty. Name one

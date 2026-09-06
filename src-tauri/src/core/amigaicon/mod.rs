@@ -1,4 +1,10 @@
-//! Amiga `.info` icons — read the layout, and merge tooltypes and stack size.
+//! Amiga `.info` icons. Originally read just enough of the layout to merge
+//! tooltypes and stack size (see ART-104's context below); the drawer-icons
+//! round (2026-09-06) grew it into a full reader and writer: `do_Type`, the
+//! desktop position and its sentinel, `DrawerData` presence and its
+//! `NewWindow`, the revision bit and `DrawerData2`'s flags, plus four
+//! writers (`set_tooltypes`, `set_position`, `set_window`,
+//! `set_show_all_files`) and the [`render`] submodule's rendered-size rule.
 //!
 //! ART-104's context: the AmigaOS 3.2.2 update ships `Tools/IconEdit.info`
 //! with `do_StackSize` **doubled** from 4 096 to 8 192 for a binary the same
@@ -639,6 +645,22 @@ pub fn merge_tooltypes(dest: &[u8], source: &[u8]) -> CoreResult<Vec<u8>> {
 /// Refuses whenever the icon itself does not parse — the same bound-checked
 /// walk every other function in this module goes through — never a
 /// best-effort rewrite of a file it could not fully account for.
+///
+/// **Lossy when fed straight back the output of [`tooltypes`] on an icon
+/// that carries a NewIcon `IM1=`/`IM2=` tool type** (ART-250): that reader's
+/// `String::from_utf8_lossy` substitutes `U+FFFD` for any byte in the
+/// pixel-encoding data that is not valid UTF-8 on its own — real bytes, not
+/// accidental Latin-1 text — and re-encoding that string back to UTF-8 here
+/// does not reproduce the original bytes. Measured: 69 of the owner's 798
+/// real icons trip this; the tool-type *text* still round-trips, the raw
+/// bytes do not. Of the three other writers in this module, none is
+/// affected: [`set_position`], [`set_window`] and [`set_show_all_files`]
+/// all `bytes.to_vec()` and overwrite a fixed, disjoint range — they never
+/// touch the `ToolTypes` block at all, proven byte-for-byte by the icon
+/// oracle across all 798 real icons, the 69 lossy ones included. A caller
+/// that only needs to change the position, window or Show-mode of an icon
+/// that happens to carry NewIcon tool types is unaffected by this; only a
+/// caller of *this* function, fed `tooltypes(bytes)`, can lose bytes.
 pub fn set_tooltypes(bytes: &[u8], tooltypes: &[String]) -> CoreResult<Vec<u8>> {
     let start = position_before_tooltypes(bytes)?;
     let had_block = be_u32(bytes, OFF_TOOL_TYPES)? != 0;
@@ -1475,19 +1497,40 @@ mod tests {
         // its missing 0xE310 magic rather than for its length, so such a
         // test passes with every bounds check deleted - a state with more
         // than one cause, which is the defect this project names.
+        //
+        // **What this actually proves, corrected 2026-09-06 (C7, final
+        // whole-branch review).** Every length below is less than
+        // `HEADER_LEN` (78), and both `icon_type` and `position` call
+        // `check_header` before touching `OFF_TYPE` (48) or
+        // `OFF_CURRENT_X`/`OFF_CURRENT_Y` (58/62) at all — so `check_header`
+        // alone refuses all six, and this test cannot exercise a per-field
+        // bound on either offset specifically (no length here sits between
+        // 49 and 77 in a way that would isolate one). The earlier
+        // `icon_type(cut).is_err() || len > 48` / `position(cut).is_err() ||
+        // len > 65` form was vacuous for every length above the named
+        // threshold (57, 62 and 65 for the first; the same shape would have
+        // applied above 65 for the second): a mutation that broke
+        // `icon_type`'s or `position`'s own bound check without touching
+        // `check_header` would still pass here, because `len > 48` (or `len
+        // > 65`) alone makes the assertion true regardless of what
+        // `icon_type`/`position` return. Asserting `is_err()` plainly is no
+        // weaker in practice — `check_header`'s guard already makes it true
+        // for every length tested — and does not carry a second, silently
+        // permissive way to pass.
         let whole = synthetic_icon_at(13, 4);
         assert!(
             icon_type(&whole).is_ok(),
             "the fixture must be valid to start with"
         );
         for len in [12usize, 45, 48, 57, 62, 65] {
+            assert!(len < HEADER_LEN, "fixture assumption: {len} < {HEADER_LEN}");
             let cut = &whole[..len];
             assert!(
-                icon_type(cut).is_err() || len > 48,
+                icon_type(cut).is_err(),
                 "icon_type read do_Type out of {len} bytes"
             );
             assert!(
-                position(cut).is_err() || len > 65,
+                position(cut).is_err(),
                 "position read a coordinate out of {len} bytes"
             );
         }
@@ -1526,6 +1569,65 @@ mod tests {
             .zip(b.iter())
             .position(|(x, y)| x != y)
             .unwrap_or(a.len())
+    }
+
+    /// Independently scan `region` (a `.info`'s trailing bytes — `layout()`'s
+    /// own `trailing` range) for an appended `FORM … ICON` IFF blob's `FACE`
+    /// chunk size, wherever in `region` it actually starts — never assuming,
+    /// the way an earlier version of `render::rendered_size` did (ART-252 /
+    /// C1), that it starts at `region[0]`. A present `DrawerData2` extension
+    /// (six bytes) commonly sits before it. Returns `None` when no such blob
+    /// is found, or its `FACE` chunk has no `IMAG` sibling — the same trust
+    /// rule `render`'s own chunk walk documents. Written independently of
+    /// `render::color_icon_face_size` (a second, cruder chunk walk rather
+    /// than a call into the code under test) so a shared mistake in both
+    /// could not agree with itself the way the reader and the first
+    /// `set_show_all_files` did (ART-249). Used only by the folder-walk
+    /// oracle test below.
+    fn find_form_icon_face_size(region: &[u8]) -> Option<(u16, u16)> {
+        let mut start = 0usize;
+        while start + 12 <= region.len() {
+            if &region[start..start + 4] == b"FORM" && &region[start + 8..start + 12] == b"ICON" {
+                let mut pos = start + 12;
+                let mut face: Option<(u16, u16)> = None;
+                let mut has_imag = false;
+                while pos + 8 <= region.len() {
+                    let id = &region[pos..pos + 4];
+                    let size = u32::from_be_bytes([
+                        region[pos + 4],
+                        region[pos + 5],
+                        region[pos + 6],
+                        region[pos + 7],
+                    ]) as usize;
+                    let Some(payload_start) = pos.checked_add(8) else {
+                        break;
+                    };
+                    let Some(payload_end) = payload_start.checked_add(size) else {
+                        break;
+                    };
+                    if payload_end > region.len() {
+                        break;
+                    }
+                    if id == b"FACE" && size >= 3 && face.is_none() {
+                        face = Some((
+                            region[payload_start] as u16 + 1,
+                            region[payload_start + 1] as u16 + 1,
+                        ));
+                    }
+                    if id == b"IMAG" {
+                        has_imag = true;
+                    }
+                    let padded = if size % 2 == 1 { size + 1 } else { size };
+                    let Some(next) = payload_start.checked_add(padded) else {
+                        break;
+                    };
+                    pos = next;
+                }
+                return if has_imag { face } else { None };
+            }
+            start += 1;
+        }
+        None
     }
 
     /// Whether every tool type in `bytes`' `ToolTypes` block (if it has one
@@ -1926,6 +2028,30 @@ mod tests {
                             r.width,
                             r.height
                         ));
+                    }
+                    // ART-252 (C1): a lower bound against the Gadget size is
+                    // satisfied trivially by the fallback this test exists to
+                    // catch - a container icon whose FORM sits behind a real
+                    // DrawerData2 fell back to its Gadget size, which is
+                    // never *smaller* than itself. So also check, completely
+                    // independently of render::rendered_size's own chunk
+                    // walk, whether the icon's trailing region carries a
+                    // FORM...ICON blob anywhere at all, and require
+                    // rendered_size to report at least that blob's FACE
+                    // size.
+                    if let Some((face_w, face_h)) =
+                        find_form_icon_face_size(&bytes[parsed.trailing.clone()])
+                    {
+                        if r.width < face_w || r.height < face_h {
+                            failed.push(format!(
+                                "{}: rendered_size {}x{} is smaller than the ColorIcon FACE size {}x{} found in the trailing region — the FORM was missed",
+                                entry.display(),
+                                r.width,
+                                r.height,
+                                face_w,
+                                face_h
+                            ));
+                        }
                     }
                 }
                 Err(err) => {

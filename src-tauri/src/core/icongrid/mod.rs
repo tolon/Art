@@ -488,11 +488,30 @@ mod tests {
 
     #[test]
     fn nothing_is_placed_outside_the_inner_width() {
-        // Every x plus its cell width stays within the budget, for 1..40 cells.
+        // Every x plus its cell FOOTPRINT stays within the budget, for
+        // 1..40 cells. Corrected 2026-09-06 (C7, final whole-branch review):
+        // an earlier version checked `cells[p.index].width` — the raw
+        // rendered width — but the shrink loop that keeps a column inside
+        // `inner_width` sizes columns by `footprint_width` (rendered width
+        // plus emboss padding, widened further by the label's own pixel
+        // width when that label is wider still). The raw width is always
+        // <= the footprint, so that version could stay green even if a
+        // regression dropped the label from the footprint calculation and a
+        // wide label actually overran the drawer's right edge — the
+        // property under test is about the footprint, and only asserting
+        // the footprint proves it.
         for n in 1..40usize {
             let cells: Vec<Cell> = (0..n)
                 .map(|i| Cell {
-                    label: format!("N{i}"),
+                    // A longer label every few cells so some of them are
+                    // label-widened rather than icon-widened — the exact
+                    // case a width-only assertion cannot see the footprint
+                    // include.
+                    label: if i % 7 == 0 {
+                        format!("A rather long drawer name N{i}")
+                    } else {
+                        format!("N{i}")
+                    },
                     width: 20 + (i % 40) as u16,
                     height: 20 + (i % 30) as u16,
                     is_container: i % 5 == 0,
@@ -501,12 +520,12 @@ mod tests {
                 .collect();
             let g = arrange(&cells, DRAWER_INNER_WIDTH);
             for p in &g.placements {
-                let w = i32::from(cells[p.index].width);
+                let fw = i32::try_from(footprint_width(&cells[p.index])).unwrap();
                 assert!(
-                    p.x + w <= i32::from(DRAWER_INNER_WIDTH),
-                    "n={n}: placement at x={} width={} overflows budget {}",
+                    p.x + fw <= i32::from(DRAWER_INNER_WIDTH),
+                    "n={n}: placement at x={} footprint={} overflows budget {}",
                     p.x,
-                    w,
+                    fw,
                     DRAWER_INNER_WIDTH
                 );
             }

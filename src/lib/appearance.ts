@@ -62,6 +62,22 @@ export interface AppearanceOutcome {
   iconsSkipped: string[];
 }
 
+/**
+ * At most this many paths joined, with a count for the rest — the same
+ * capping convention `core::osinstall::apply::some_of` uses for a package
+ * refusal naming up to 211 real files, reused here rather than a second
+ * style (C5, final whole-branch review of the drawer-icons round):
+ * arranging icons across a 3.9-scale tree can write hundreds of `.info`
+ * files in one call, and joining every one of them into a single paragraph
+ * is honest and unusable.
+ */
+export function someOf(paths: string[], max = 5): string {
+  if (paths.length <= max) {
+    return paths.join(", ");
+  }
+  return `${paths.slice(0, max).join(", ")}, and ${paths.length - max} more`;
+}
+
 /** Every backdrop `tree` already carries under `Prefs/Presets/Backdrops`. */
 export async function appearanceBackdrops(tree: string): Promise<string[]> {
   return invoke<string[]>("appearance_backdrops", { tree });

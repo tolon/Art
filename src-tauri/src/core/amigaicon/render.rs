@@ -30,6 +30,16 @@
 //! the `Gadget` fields, because those are a real, if sometimes wrong,
 //! minimum a caller can always fall back to.
 //!
+//! **The appended `FORM` does not always sit at `layout().trailing.start`.**
+//! A present `DrawerData2` extension (six bytes, `dd_Flags` + `dd_ViewModes`)
+//! sits *there* instead, on 96 of 96 real drawer-data icons measured — the
+//! `FORM` begins six bytes later. [`rendered_size`] asks `drawer_data2_range`
+//! rather than testing `trailing.start` itself, which is what missed the
+//! `FORM` on every one of the 76 real container icons that carry both
+//! (ART-252 / C1): a drawer or disk icon's `FACE` size was silently dropped
+//! in favour of its `Gadget` size — exactly the fallback this module exists
+//! to stop trusting.
+//!
 //! **What is not independently re-verified here.** The exact meaning of the
 //! `IM1=` byte at `im1 + 4` (the NewIcon encoding reserves it for something
 //! other than width/height — likely a palette or transparency indicator)
@@ -38,7 +48,9 @@
 //! (bytes 11..14 relative to the chunk payload) are not read — this module
 //! only needs the width, height and frameless bit to size a layout cell.
 
-use super::{be_u16, layout, malformed, tooltypes, OFF_GADGET_HEIGHT, OFF_GADGET_WIDTH};
+use super::{
+    be_u16, drawer_data2_range, layout, malformed, tooltypes, OFF_GADGET_HEIGHT, OFF_GADGET_WIDTH,
+};
 use crate::core::error::CoreResult;
 
 /// The size a layout should actually reserve for this icon, plus whether it
@@ -59,7 +71,23 @@ pub fn rendered_size(bytes: &[u8]) -> CoreResult<Rendered> {
     let gadget_w = be_u16(bytes, OFF_GADGET_WIDTH)?;
     let gadget_h = be_u16(bytes, OFF_GADGET_HEIGHT)?;
 
-    if let Some((w, h, frameless)) = color_icon_face_size(bytes, parsed.trailing.clone())? {
+    // ART-252 (C1): a present `DrawerData2` (six bytes: `dd_Flags`,
+    // `dd_ViewModes`) sits at `layout().trailing.start` *before* an appended
+    // ColorIcon/NewIcon `FORM` blob, not at the same offset as it — measured
+    // on 96 of 96 real drawer-data icons in the oracle corpus via
+    // `drawer_data2_range`. Testing `trailing.start` itself against `FORM`
+    // (as an earlier version of this function did) missed every one of the
+    // 76 real container icons that carry both, and silently fell back to the
+    // `Gadget` size this module exists to stop trusting. `drawer_data2_range`
+    // already computes whether one is present and where it ends; re-deriving
+    // that here is exactly what caused ART-249, so it is reused rather than
+    // recomputed.
+    let form_search_start = match drawer_data2_range(bytes)? {
+        Some(range) => range.end,
+        None => parsed.trailing.start,
+    };
+
+    if let Some((w, h, frameless)) = color_icon_face_size(bytes, form_search_start..bytes.len())? {
         return Ok(Rendered {
             width: gadget_w.max(w),
             height: gadget_h.max(h),
@@ -138,6 +166,12 @@ fn scan_color_icon_chunks(data: &[u8]) -> CoreResult<(Option<usize>, bool)> {
 /// The ColorIcon `FACE` size, or `None` when there is no appended `FORM …
 /// ICON` blob, or its `FACE` chunk has no `IMAG` chunk backing it (the
 /// degenerate MagicWB case this module refuses to trust).
+///
+/// `trailing.start` here is where the caller believes a `FORM` tag would
+/// start — **not necessarily** [`layout`]'s own `trailing.start`:
+/// [`rendered_size`] passes `drawer_data2_range`'s end when a `DrawerData2`
+/// extension is present, since that six-byte block sits before the `FORM`,
+/// not after it.
 fn color_icon_face_size(
     bytes: &[u8],
     trailing: std::ops::Range<usize>,
@@ -222,24 +256,22 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// would be a second place for the offsets to drift.
 #[cfg(test)]
 pub(crate) mod tests_support {
-    use super::super::tests_support::synthetic_icon;
+    use super::super::tests_support::{synthetic_drawer_icon_with_drawer_data2, synthetic_icon};
     use super::super::{OFF_GADGET_HEIGHT, OFF_GADGET_WIDTH};
 
-    /// An icon carrying an appended `FORM … ICON` ColorIcon blob whose
+    /// Build a standalone appended `FORM … ICON` ColorIcon blob (the bytes
+    /// that go *after* wherever the caller has decided the blob starts) whose
     /// `FACE` chunk claims `face_w`x`face_h`, with an `IMAG` chunk following
-    /// it only when `with_imag` is true. `frameless` sets the `FACE`
-    /// chunk's flags bit 0 — [`rendered_size`]'s own doc: frameless when
-    /// that bit is set, framed otherwise — and only has any effect when
-    /// `with_imag` is also true, since a `FACE` with no backing `IMAG` is
-    /// not trusted at all (the degenerate MagicWB case).
-    pub(crate) fn synthetic_colour_icon(
-        gadget_w: u16,
-        gadget_h: u16,
-        face_w: u16,
-        face_h: u16,
-        with_imag: bool,
-        frameless: bool,
-    ) -> Vec<u8> {
+    /// it only when `with_imag` is true. `frameless` sets the `FACE` chunk's
+    /// flags bit 0 — [`rendered_size`]'s own doc: frameless when that bit is
+    /// set, framed otherwise — and only has any effect when `with_imag` is
+    /// also true, since a `FACE` with no backing `IMAG` is not trusted at all
+    /// (the degenerate MagicWB case). Shared by [`synthetic_colour_icon`]
+    /// (which appends it straight after `ToolTypes`) and
+    /// [`synthetic_drawer_icon_with_drawer_data2_and_colour_icon`] (which
+    /// appends it after a real `DrawerData2`), so the chunk layout cannot
+    /// drift between the two fixtures that most need to agree on it.
+    fn color_icon_form(face_w: u16, face_h: u16, with_imag: bool, frameless: bool) -> Vec<u8> {
         let face_payload: [u8; 6] = [
             (face_w.saturating_sub(1)) as u8,
             (face_h.saturating_sub(1)) as u8,
@@ -268,8 +300,52 @@ pub(crate) mod tests_support {
         form.extend_from_slice(&form_size.to_be_bytes());
         form.extend_from_slice(b"ICON");
         form.extend_from_slice(&chunks);
+        form
+    }
 
+    /// An icon carrying an appended `FORM … ICON` ColorIcon blob immediately
+    /// after `ToolTypes` — i.e. no `DrawerData`, so `layout().trailing.start`
+    /// and the `FORM`'s own start coincide. See
+    /// [`synthetic_drawer_icon_with_drawer_data2_and_colour_icon`] for the
+    /// shape where they do not.
+    pub(crate) fn synthetic_colour_icon(
+        gadget_w: u16,
+        gadget_h: u16,
+        face_w: u16,
+        face_h: u16,
+        with_imag: bool,
+        frameless: bool,
+    ) -> Vec<u8> {
+        let form = color_icon_form(face_w, face_h, with_imag, frameless);
         let mut buf = synthetic_icon(&[], 4096, &form);
+        buf[OFF_GADGET_WIDTH..OFF_GADGET_WIDTH + 2].copy_from_slice(&gadget_w.to_be_bytes());
+        buf[OFF_GADGET_HEIGHT..OFF_GADGET_HEIGHT + 2].copy_from_slice(&gadget_h.to_be_bytes());
+        buf
+    }
+
+    /// A drawer icon carrying a **real** `DrawerData2` extension *and* an
+    /// appended `FORM … ICON` ColorIcon blob after it — the exact shape C1
+    /// found broken: `layout().trailing.start` lands on `DrawerData2`'s own
+    /// `dd_Flags`, six bytes before the `FORM` tag, so a `rendered_size` that
+    /// tests `trailing.start` itself against `FORM` never finds this icon's
+    /// artwork at all and silently falls back to the `Gadget` size. Measured
+    /// shape: 76 of the owner's 798 real icons (100% of them containers —
+    /// drawers, disks, garbage) carry both. Built on
+    /// [`synthetic_drawer_icon_with_drawer_data2`] (which is only the header
+    /// plus `DrawerData` plus `DrawerData2` — no `ToolTypes`, no trailing
+    /// bytes of its own) with the `FORM` blob appended directly after it,
+    /// mirroring the real on-disk order: `DrawerData`, `DrawerData2`, then
+    /// the appended blob.
+    pub(crate) fn synthetic_drawer_icon_with_drawer_data2_and_colour_icon(
+        gadget_w: u16,
+        gadget_h: u16,
+        face_w: u16,
+        face_h: u16,
+    ) -> Vec<u8> {
+        // dd_Flags = DDFLAGS_SHOWDEFAULT (0), dd_ViewModes = 0 - the exact
+        // values do not matter here, only that they are not "FORM".
+        let mut buf = synthetic_drawer_icon_with_drawer_data2(0, 0, 0);
+        buf.extend_from_slice(&color_icon_form(face_w, face_h, true, false));
         buf[OFF_GADGET_WIDTH..OFF_GADGET_WIDTH + 2].copy_from_slice(&gadget_w.to_be_bytes());
         buf[OFF_GADGET_HEIGHT..OFF_GADGET_HEIGHT + 2].copy_from_slice(&gadget_h.to_be_bytes());
         buf
@@ -298,7 +374,10 @@ pub(crate) mod tests_support {
 #[cfg(test)]
 mod tests {
     use super::super::tests_support::{synthetic_icon, synthetic_icon_sized};
-    use super::tests_support::{synthetic_colour_icon, synthetic_newicon};
+    use super::tests_support::{
+        synthetic_colour_icon, synthetic_drawer_icon_with_drawer_data2_and_colour_icon,
+        synthetic_newicon,
+    };
     use super::*;
 
     #[test]
@@ -309,6 +388,26 @@ mod tests {
         let icon = synthetic_colour_icon(44, 44, 46, 46, true, false);
         let r = rendered_size(&icon).unwrap();
         assert_eq!((r.width, r.height), (46, 46));
+    }
+
+    #[test]
+    fn a_colour_icon_behind_a_real_drawer_data2_is_still_found() {
+        // C1 (ART-252): art1/Devs/DataTypes.info itself has a DrawerData
+        // block, so DrawerData2 - not the appended FORM - sits at
+        // layout().trailing.start. A version of this function that tested
+        // trailing.start against "FORM" directly missed the FACE chunk
+        // entirely and fell back to the Gadget size (44x44), the exact
+        // regression measured across 76 of 798 real icons, 100% of them
+        // containers. Assert the FACE size (46x46), not merely "greater
+        // than the Gadget size" - a weaker assertion the old, broken code
+        // also happened to satisfy trivially (44 >= 44).
+        let icon = synthetic_drawer_icon_with_drawer_data2_and_colour_icon(44, 44, 46, 46);
+        let r = rendered_size(&icon).unwrap();
+        assert_eq!(
+            (r.width, r.height),
+            (46, 46),
+            "the ColorIcon FACE size must be found behind a real DrawerData2, not just when it starts at trailing.start"
+        );
     }
 
     #[test]

@@ -636,9 +636,15 @@ fn plan_icons_in_dir(
 /// backdrop name is free — happens while building a plan for each requested
 /// part, **before** this function writes anything at all. Only once every
 /// requested part has a validated plan does it commit them, through
-/// [`guarded_write`] (`BackupPolicy::CONFIG`) for every file. A refusal at
-/// any point therefore leaves the whole tree — every prefs file, every
-/// backdrop — exactly as it was.
+/// [`guarded_write`] — `BackupPolicy::CONFIG` for a prefs file or a placed
+/// backdrop, `BackupPolicy::NONE` for an icon arrangement write (C6, final
+/// whole-branch review: hundreds of small, easily-reproduced icon writes
+/// fanning a `.art-backup` drawer into essentially every drawer the tree has
+/// is a different cost/value question than one hand-tuned prefs file, and
+/// answered the same way `BackupPolicy::LARGE_IMAGE` already answers it for
+/// a multi-gigabyte image). A refusal at any point therefore leaves the
+/// whole tree — every prefs file, every backdrop, every icon — exactly as
+/// it was; only the *kept generations* differ by which kind of file it is.
 pub fn apply_appearance(tree: &Path, req: &AppearanceRequest) -> CoreResult<AppearanceOutcome> {
     // ---- Plan: everything that can fail happens here. ----
     let wallpaper_plan = match &req.wallpaper {
@@ -677,23 +683,33 @@ pub fn apply_appearance(tree: &Path, req: &AppearanceRequest) -> CoreResult<Appe
             if let Some(parent) = picture_path.parent() {
                 commit_mkdir(parent, &committed)?;
             }
-            commit_write(picture_path.clone(), &bytes, &mut committed)?;
+            commit_write(
+                picture_path.clone(),
+                &bytes,
+                BackupPolicy::CONFIG,
+                &mut committed,
+            )?;
             picture_placed = Some(picture_path);
         }
 
-        commit_write(plan.prefs_path, &plan.prefs_bytes, &mut committed)?;
+        commit_write(
+            plan.prefs_path,
+            &plan.prefs_bytes,
+            BackupPolicy::CONFIG,
+            &mut committed,
+        )?;
         amiga_path = Some(plan.amiga_path);
     }
 
     if let Some(plan) = screen_plan {
-        commit_write(plan.path, &plan.bytes, &mut committed)?;
+        commit_write(plan.path, &plan.bytes, BackupPolicy::CONFIG, &mut committed)?;
     }
 
     for plan in shell_plans {
         if let Some(parent) = plan.path.parent() {
             commit_mkdir(parent, &committed)?;
         }
-        commit_write(plan.path, &plan.bytes, &mut committed)?;
+        commit_write(plan.path, &plan.bytes, BackupPolicy::CONFIG, &mut committed)?;
     }
 
     let mut icons_placed = 0usize;
@@ -704,7 +720,20 @@ pub fn apply_appearance(tree: &Path, req: &AppearanceRequest) -> CoreResult<Appe
         drawers_arranged = plan.drawers_arranged;
         icons_skipped = plan.icons_skipped;
         for (path, bytes) in plan.writes {
-            commit_write(path, &bytes, &mut committed)?;
+            // C6 (final whole-branch review): every icon write used to go
+            // through the same `BackupPolicy::CONFIG` as a hand-tuned prefs
+            // file. A prefs write is one file, rarely touched; arranging
+            // icons across a 3.9-scale tree writes hundreds — 361 of the
+            // owner's own 798 real icons are unplaced — so that policy
+            // fanned a `.art-backup` drawer into essentially every drawer
+            // the tree has, not the two or three round 1 shipped. The change
+            // this writes is small (eight bytes, a position moving off the
+            // `NO_POSITION` sentinel) and easily reproduced by re-running
+            // arrangement, unlike a hand-tuned `WBPattern.prefs` a user
+            // edited themselves — the same cost/value question
+            // `BackupPolicy::LARGE_IMAGE` already answers "no" to for a
+            // multi-gigabyte image, opted out of the same way here.
+            commit_write(path, &bytes, BackupPolicy::NONE, &mut committed)?;
         }
     }
 
@@ -731,12 +760,19 @@ pub fn apply_appearance(tree: &Path, req: &AppearanceRequest) -> CoreResult<Appe
 /// Write one file through [`guarded_write`] and record it in `committed`.
 /// See [`apply_appearance`]'s own comment on `committed` for why a failure
 /// here is wrapped with what already succeeded rather than reported bare.
+///
+/// `policy` is the caller's choice, not a fixed `BackupPolicy::CONFIG` —
+/// see C6 (final whole-branch review, `core::appearance::apply_appearance`'s
+/// own comment on the icon-write call site) for why a icon write and a
+/// prefs write need different answers to "is a generation of this worth
+/// keeping".
 fn commit_write(
     path: PathBuf,
     bytes: &[u8],
+    policy: BackupPolicy,
     committed: &mut Vec<(PathBuf, Option<PathBuf>)>,
 ) -> CoreResult<()> {
-    match guarded_write(&path, bytes, BackupPolicy::CONFIG) {
+    match guarded_write(&path, bytes, policy) {
         Ok(backup) => {
             committed.push((path, backup));
             Ok(())
@@ -757,6 +793,15 @@ fn commit_mkdir(parent: &Path, committed: &[(PathBuf, Option<PathBuf>)]) -> Core
 /// same call to [`apply_appearance`], so a caller told "this failed" is also
 /// told what did not. A failure before anything in this call has landed yet
 /// is returned unchanged — there is nothing yet to report.
+///
+/// **Capped, not exhaustive** (C5, final whole-branch review): a wallpaper or
+/// shell-defaults commit touches a handful of files, but arranging icons
+/// across a 3.9-scale tree can commit hundreds before one fails — 361 of the
+/// owner's own 798 real icons are unplaced, so a failure partway through a
+/// full arrangement pass could join that many path-plus-backup pairs into one
+/// sentence. `crate::core::osinstall::apply::some_of` already solves exactly
+/// this for a package refusal naming up to 211 real files; reused here rather
+/// than inventing a second capping style with its own threshold.
 fn partial_commit_error(err: CoreError, committed: &[(PathBuf, Option<PathBuf>)]) -> CoreError {
     if committed.is_empty() {
         return err;
@@ -772,7 +817,10 @@ fn partial_commit_error(err: CoreError, committed: &[(PathBuf, Option<PathBuf>)]
             None => format!("'{}' was already written", path.display()),
         })
         .collect();
-    CoreError::InvalidInput(format!("{err}, but {}", already.join("; ")))
+    CoreError::InvalidInput(format!(
+        "{err}, but {}",
+        crate::core::osinstall::apply::some_of(&already)
+    ))
 }
 
 /// List the backdrops a distribution tree actually holds — the file names
@@ -1538,6 +1586,48 @@ mod tests {
         assert!(
             amigaicon::position(&after).unwrap().is_some(),
             "the icon must have been given a position"
+        );
+    }
+
+    /// **C6 (final whole-branch review).** Rewriting an unplaced icon must
+    /// leave no `.art-backup` drawer behind — `BackupPolicy::NONE`, not the
+    /// `CONFIG` a hand-tuned prefs file gets. Round 1 shipped two or three of
+    /// these drawers; without this, arranging icons across a 3.9-scale tree
+    /// (361 of the owner's own 798 real icons are unplaced) would fan one
+    /// into essentially every drawer the tree has, and `core/preload`'s
+    /// `collect_into` copies everything but `.uaem` onto a PiStorm card, so
+    /// every one of them would ship. Two icons in two different drawers
+    /// (`Solo` at the tree root, `Nested/Other`) both get a position and
+    /// neither leaves a backup anywhere.
+    #[test]
+    fn arranging_icons_leaves_no_art_backup_drawer_anywhere() {
+        let scratch = ScratchDir::new("art-appearance-icons", "no-backup-drawer");
+        let tree = scratch.path().to_path_buf();
+        write_icon_entry(&tree, "Solo", &icon_bytes(30, 20, None));
+        std::fs::create_dir_all(tree.join("Nested")).unwrap();
+        write_icon_entry(&tree.join("Nested"), "Other", &icon_bytes(30, 20, None));
+
+        let req = AppearanceRequest {
+            wallpaper: None,
+            screen_depth: None,
+            shell_defaults: false,
+            arrange_icons: true,
+        };
+        let outcome = apply_appearance(&tree, &req).unwrap();
+
+        assert_eq!(outcome.icons_placed, 2, "both icons were unplaced");
+        assert!(
+            outcome.backups.is_empty(),
+            "an icon write must take no backup: {:?}",
+            outcome.backups
+        );
+        assert!(
+            !tree.join(BACKUP_DIR).exists(),
+            "no .art-backup at the tree root"
+        );
+        assert!(
+            !tree.join("Nested").join(BACKUP_DIR).exists(),
+            "no .art-backup inside the nested drawer either"
         );
     }
 
