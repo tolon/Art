@@ -159,6 +159,63 @@ fn is_ambiguous(name: &str) -> bool {
         .any(|shared| super::amiga_names_equal(name, shared))
 }
 
+/// One recipe's signature read against the names in hand — the whole of what
+/// [`identify`] does per release, and the whole of what [`evidence_for`]
+/// answers for one.
+///
+/// **Extracted rather than copied, deliberately.** ART-249 was a reader and a
+/// writer carrying the same wrong constant, so every round-trip test passed
+/// over the defect; two copies of this matching would be that shape again,
+/// and the drift would be silent — a release's evidence line and its
+/// identification would simply stop agreeing about which disks are in the
+/// folder, with nothing failing.
+fn evidence_of(recipe: &Recipe, volume_names: &[String]) -> ReleaseEvidence {
+    let mut evidence = ReleaseEvidence {
+        release: recipe.release.clone(),
+        distinguishing: Vec::new(),
+        shared: Vec::new(),
+        missing_required: Vec::new(),
+    };
+
+    for component in &recipe.components {
+        let present = volume_names
+            .iter()
+            .find(|found| super::amiga_names_equal(found, &component.media));
+
+        match present {
+            // Report the name the **medium** spells, not the recipe's —
+            // the same reasoning ART-225 cost a day to learn on the other
+            // side of this codebase, where destinations were retyped off a
+            // listing. A disc that spells it `TÜRKÇE` should read back
+            // `TÜRKÇE`.
+            Some(found) => {
+                let bucket = if is_ambiguous(&component.media) {
+                    &mut evidence.shared
+                } else {
+                    &mut evidence.distinguishing
+                };
+                if !bucket.iter().any(|n| super::amiga_names_equal(n, found)) {
+                    bucket.push(found.clone());
+                }
+            }
+            // Two components can mark the same disk required, so the
+            // absence is recorded once — a person told `Install3.2` is
+            // missing twice would go looking for two disks.
+            None if component.required
+                && !evidence
+                    .missing_required
+                    .iter()
+                    .any(|n| super::amiga_names_equal(n, &component.media)) =>
+            {
+                evidence.missing_required.push(component.media.clone());
+            }
+            None => {}
+        }
+    }
+
+    evidence
+}
+
 /// Name the release a set of volume names belongs to, or decline to.
 ///
 /// Takes the names rather than a folder on purpose: `scan::find_media` has
@@ -174,49 +231,7 @@ pub fn identify(volume_names: &[String]) -> CoreResult<MediaVerdict> {
 
     for release in recipe::releases() {
         let recipe = recipe::by_release(release)?;
-        let mut evidence = ReleaseEvidence {
-            release: recipe.release.clone(),
-            distinguishing: Vec::new(),
-            shared: Vec::new(),
-            missing_required: Vec::new(),
-        };
-
-        for component in &recipe.components {
-            let present = volume_names
-                .iter()
-                .find(|found| super::amiga_names_equal(found, &component.media));
-
-            match present {
-                // Report the name the **medium** spells, not the recipe's —
-                // the same reasoning ART-225 cost a day to learn on the other
-                // side of this codebase, where destinations were retyped off a
-                // listing. A disc that spells it `TÜRKÇE` should read back
-                // `TÜRKÇE`.
-                Some(found) => {
-                    let bucket = if is_ambiguous(&component.media) {
-                        &mut evidence.shared
-                    } else {
-                        &mut evidence.distinguishing
-                    };
-                    if !bucket.iter().any(|n| super::amiga_names_equal(n, found)) {
-                        bucket.push(found.clone());
-                    }
-                }
-                // Two components can mark the same disk required, so the
-                // absence is recorded once — a person told `Install3.2` is
-                // missing twice would go looking for two disks.
-                None if component.required
-                    && !evidence
-                        .missing_required
-                        .iter()
-                        .any(|n| super::amiga_names_equal(n, &component.media)) =>
-                {
-                    evidence.missing_required.push(component.media.clone());
-                }
-                None => {}
-            }
-        }
-
+        let evidence = evidence_of(&recipe, volume_names);
         if !evidence.is_silent() {
             candidates.push(evidence);
         }
@@ -358,6 +373,39 @@ pub fn release_holding(found: &[String]) -> CoreResult<Option<String>> {
         MediaVerdict::Identified { evidence } => Some(evidence.release),
         MediaVerdict::Ambiguous { .. } | MediaVerdict::Unknown { .. } => None,
     })
+}
+
+/// What **this one release's** own signature made of the names in hand —
+/// never which release, that is [`release_holding`]'s job.
+///
+/// # Why one release rather than all of them
+///
+/// The same reason [`layer_holding`] below exists one level down, and its
+/// doc comment says it in the same words: *the question is "which of **this**
+/// release's own layers", never "which release"*. Here it is "which of
+/// **this** release's own media". [`identify`] cannot answer it — it drops a
+/// candidate that found nothing ([`ReleaseEvidence::is_silent`]) and then
+/// picks between the survivors, so "the release you chose, and it matched
+/// none of this folder" comes back as `Unknown` or as somebody *else's*
+/// release, never as an empty evidence for yours. That is exactly the answer
+/// the screen needs.
+///
+/// # What it is for (the Critical of the 2026-09-06 review)
+///
+/// `wrongMediaFolder` on the frontend claims *"none of the disks in this
+/// folder are ones this release asks for"*. It used to try to check that by
+/// asking whether the plan had items and whether a **missing** disk was
+/// somehow in the folder — neither of which can ever be true, so the sentence
+/// was rendered over folders holding `Workbench3.2`. The claim is about this
+/// release's media, so it is answered by this release's evidence, computed
+/// where the recipes are read.
+///
+/// A release no recipe declares is a [`CoreError`], not an empty evidence:
+/// an empty evidence *means* "this folder holds none of it", and answering
+/// that about a release ART cannot even look up would be inventing the very
+/// sentence this exists to make honest.
+pub fn evidence_for(release: &str, found: &[String]) -> CoreResult<ReleaseEvidence> {
+    Ok(evidence_of(&recipe::by_release(release)?, found))
 }
 
 /// Which of `recipe`'s own layers this pile of media looks like — `None`
@@ -775,6 +823,206 @@ mod tests {
         // "This folder holds no install media at all" is a different sentence
         // the screen already has, and it must not be overwritten by a guess.
         assert_eq!(release_holding(&[]).unwrap(), None);
+    }
+
+    // evidence_for — the Critical of the 2026-09-06 review -----------------
+    //
+    // `wrongMediaFolder` claimed "none of the disks in this folder are ones
+    // this release asks for" over a folder holding `Workbench3.2`, because
+    // the two conditions meant to check that claim could not fire. The claim
+    // is answered here now, against the recipe itself.
+
+    #[test]
+    fn a_partial_folder_reports_both_what_is_there_and_what_is_not() {
+        // The exact folder from the review: the release's own Workbench disk
+        // plus the two unversioned ones, with `Extras3.2` absent. The old
+        // frontend sentence said none of these were asked for.
+        //
+        // `Install3.2` is the one this recipe marks `required` besides
+        // `Workbench3.2` — read off `amigaos-3.2.json`, not assumed: only
+        // those two carry `"required": true`, which is why `Extras3.2` is
+        // absent from `missing_required` even though it is absent from the
+        // folder. That distinction is the field's whole point.
+        let evidence = evidence_for("AmigaOS 3.2", &names(&["Workbench3.2", "Fonts", "Locale"]))
+            .expect("the shipped recipe must load");
+
+        assert_eq!(evidence.release, "AmigaOS 3.2");
+        assert!(
+            evidence
+                .distinguishing
+                .contains(&"Workbench3.2".to_string()),
+            "Workbench3.2 is this release's own media: {evidence:?}"
+        );
+        // `Fonts` and `Locale` are carried unsuffixed by 3.1, 3.1.4 and 3.2
+        // alike, so they are reported and not counted — but they are still
+        // media this release asks for, which is the whole question here.
+        assert!(
+            evidence.shared.contains(&"Fonts".to_string()),
+            "{evidence:?}"
+        );
+        assert!(
+            evidence.shared.contains(&"Locale".to_string()),
+            "{evidence:?}"
+        );
+        assert!(
+            evidence
+                .missing_required
+                .contains(&"Install3.2".to_string()),
+            "Install3.2 is required and absent: {evidence:?}"
+        );
+        assert!(
+            !evidence.missing_required.contains(&"Extras3.2".to_string()),
+            "Extras3.2 is absent but not required, so it is not a missing requirement: {evidence:?}"
+        );
+    }
+
+    #[test]
+    fn a_folder_holding_none_of_this_releases_media_reports_nothing_present() {
+        // The state that makes "none of the disks in this folder are ones
+        // this release asks for" a *true* sentence, and the only one that
+        // may render it.
+        let evidence = evidence_for("AmigaOS 3.2", &names(&["MyBackup", "Games"]))
+            .expect("the shipped recipe must load");
+
+        assert!(evidence.distinguishing.is_empty(), "{evidence:?}");
+        assert!(evidence.shared.is_empty(), "{evidence:?}");
+        assert!(
+            !evidence.missing_required.is_empty(),
+            "a release whose media is wholly absent still names what it wanted: {evidence:?}"
+        );
+    }
+
+    #[test]
+    fn a_folder_holding_only_ambiguous_names_still_counts_as_this_releases_media() {
+        // `identify` answers `Unknown` here, on purpose — `Fonts` and
+        // `Locale` cannot separate 3.1 from 3.2. But they *are* disks the 3.2
+        // recipe asks for, so the folder is not somebody else's, and the
+        // all-or-nothing sentence must withdraw. This is the difference
+        // between the two questions and the reason this function exists
+        // rather than the screen reading `identify`'s verdict.
+        let evidence = evidence_for("AmigaOS 3.2", &names(&["Fonts", "Locale"]))
+            .expect("the shipped recipe must load");
+
+        assert!(
+            evidence.distinguishing.is_empty(),
+            "neither name distinguishes a release: {evidence:?}"
+        );
+        // Recipe order, not alphabetical: `locale-base` is declared before
+        // `fonts` in `amigaos-3.2.json`, and this reports in the order the
+        // recipe walks.
+        assert_eq!(evidence.shared, names(&["Locale", "Fonts"]));
+
+        match identify(&names(&["Fonts", "Locale"])).expect("the shipped recipes must load") {
+            MediaVerdict::Unknown { .. } => {}
+            other => panic!("expected Unknown from identify, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_folder_reports_the_name_the_medium_spells() {
+        // Same rule as `identify`'s, and it is the same code — a disc
+        // labelled in upper case reads back in upper case, never retyped off
+        // the recipe (ART-225).
+        let evidence = evidence_for("AmigaOS 3.2", &names(&["WORKBENCH3.2"]))
+            .expect("the shipped recipe must load");
+        assert_eq!(evidence.distinguishing, names(&["WORKBENCH3.2"]));
+    }
+
+    #[test]
+    fn a_release_no_recipe_declares_is_refused_not_answered_empty() {
+        // An empty evidence *means* "this folder holds none of it". Handing
+        // that back for a release ART cannot look up would manufacture the
+        // exact false sentence this function exists to prevent.
+        let err = evidence_for("AmigaOS 4.1", &names(&["Workbench3.2"]))
+            .expect_err("a release with no shipped recipe must be refused");
+        assert!(
+            err.to_string().contains("AmigaOS 4.1"),
+            "the refusal names what was asked for: {err}"
+        );
+    }
+
+    #[test]
+    fn evidence_for_and_identify_agree_about_the_same_folder() {
+        // The guard on the extraction. `identify` and `evidence_for` share
+        // one matcher; if a copy is ever reintroduced, this is what notices
+        // the two answers drifting apart (ART-249's shape).
+        // A **partial** folder, deliberately: `Install3.2` is absent, so
+        // `missing_required` is non-empty on both sides. The first version of
+        // this test used a folder holding both required disks, and a
+        // reintroduced copy that forgot `missing_required` altogether
+        // survived it — two empty vectors compare equal. Every field of the
+        // record has to be doing work here or the guard is decoration.
+        let found = names(&["Workbench3.2", "Fonts", "Locale"]);
+        let from_identify = identified(&["Workbench3.2", "Fonts", "Locale"]);
+        let direct = evidence_for("AmigaOS 3.2", &found).expect("the shipped recipe must load");
+        assert_eq!(from_identify, direct);
+        assert!(
+            !direct.missing_required.is_empty()
+                && !direct.distinguishing.is_empty()
+                && !direct.shared.is_empty(),
+            "every field must carry something, or agreement proves nothing: {direct:?}"
+        );
+    }
+
+    /// **What a based release's own evidence says about nothing but its base
+    /// set** — the answer the OS Builder's evidence line is built on
+    /// (ART-257), constructed and read rather than assumed.
+    ///
+    /// The screen holds two answers about one pile of media, and they
+    /// disagree here on purpose:
+    ///
+    ///  - [`release_holding`] names **`"AmigaOS 3.2"`**, because the
+    ///    base-subsumption pass above drops a based release that found none
+    ///    of its own update disks. Naming 3.2.2 off the base set alone is
+    ///    exactly the confident wrong sentence that pass exists to prevent.
+    ///  - [`evidence_for`] asked about **AmigaOS 3.2.2** claims those very
+    ///    disks as that release's own `distinguishing` media — a based
+    ///    recipe inherits its base's whole component list — and names the
+    ///    update disks in `missing_required`.
+    ///
+    /// A screen that read only the first would tell a user assembling AmigaOS
+    /// 3.2.2 that their base disks *"look like AmigaOS 3.2 media, not this
+    /// release's own"* and send them away from the right folder. The second
+    /// is what makes the line true, so it is pinned here: if a future
+    /// `merge_base` stopped inheriting components, or the pass stopped
+    /// subsuming, this fails rather than the frontend quietly changing
+    /// sentence.
+    #[test]
+    fn a_based_releases_own_evidence_claims_the_base_set() {
+        let base_set = names(&["Workbench3.2", "Install3.2", "Extras3.2", "Fonts", "Locale"]);
+
+        assert_eq!(
+            release_holding(&base_set).expect("the shipped recipes must load"),
+            Some("AmigaOS 3.2".to_string()),
+            "the base set alone must not be called AmigaOS 3.2.2"
+        );
+
+        let evidence =
+            evidence_for("AmigaOS 3.2.2", &base_set).expect("the shipped recipe must load");
+        assert_eq!(
+            evidence.distinguishing,
+            names(&["Workbench3.2", "Install3.2", "Extras3.2"]),
+            "a based recipe inherits its base's components, so the base disks are its own media"
+        );
+        assert_eq!(
+            evidence.missing_required,
+            names(&["Update3.2.2", "Classes3.2.2"]),
+            "and its own required update disks are what is actually absent"
+        );
+
+        // The other side of the same window, so "the two answers differ" is
+        // shown rather than implied: with the update disks present as well,
+        // both answers name AmigaOS 3.2.2 and nothing required is missing.
+        let mut whole_set = base_set.clone();
+        whole_set.extend(names(&["Update3.2.2", "Classes3.2.2"]));
+        assert_eq!(
+            release_holding(&whole_set).expect("the shipped recipes must load"),
+            Some("AmigaOS 3.2.2".to_string())
+        );
+        assert!(evidence_for("AmigaOS 3.2.2", &whole_set)
+            .expect("the shipped recipe must load")
+            .missing_required
+            .is_empty());
     }
 
     // layer_holding — Task 10 fix round, Finding 1 --------------------------

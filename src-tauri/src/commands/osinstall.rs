@@ -224,6 +224,31 @@ pub fn osinstall_release_for_media(volume_names: Vec<String>) -> AppResult<Optio
     )?)
 }
 
+/// What **one** release's own signature made of these volume names — never
+/// which release, that is [`osinstall_release_for_media`]'s job.
+///
+/// Asked so the screen's "none of the disks in this folder are ones this
+/// release asks for" can be *checked* rather than inferred. It used to be
+/// inferred, from an empty plan and from whether a **missing** disk was in
+/// the folder, and neither can ever be true — so the sentence rendered over
+/// a folder holding `Workbench3.2` (the 2026-09-06 review's Critical,
+/// ART-253).
+///
+/// Volume names, not a folder, for the same reason
+/// [`osinstall_release_for_media`] takes them: the caller has already
+/// scanned, and re-reading thirty-five ADFs to answer a question about names
+/// already in hand would be a second pass for nothing.
+#[tauri::command]
+pub fn osinstall_media_evidence(
+    release: String,
+    volume_names: Vec<String>,
+) -> AppResult<crate::core::osinstall::identify::ReleaseEvidence> {
+    Ok(crate::core::osinstall::identify::evidence_for(
+        &release,
+        &volume_names,
+    )?)
+}
+
 /// Which of `release`'s own layers these volume names look like — never
 /// which release, that is [`osinstall_release_for_media`]'s job. Asked when a
 /// layer's own field holds media, so a screen can say "this folder holds
@@ -4419,6 +4444,26 @@ mod tests {
                     "icons",
                     "iconMergeFailures",
                 ],
+            );
+        }
+
+        /// The wire shape `src/lib/osinstall.ts`'s own `ReleaseEvidence`
+        /// declares. Hand-maintained on the TS side like every mirror here,
+        /// so this pins the Rust half: `missing_required` crosses as
+        /// `missingRequired`, and a rename on either side that silently drops
+        /// the field would leave `wrongMediaFolder` reading `undefined` and
+        /// making its false claim again.
+        #[test]
+        fn release_evidence_serializes_with_the_keys_the_frontend_declares() {
+            let evidence = crate::core::osinstall::identify::evidence_for(
+                "AmigaOS 3.2",
+                &["Workbench3.2".to_string()],
+            )
+            .expect("the shipped recipe must load");
+            let value = serde_json::to_value(&evidence).unwrap();
+            expect_keys(
+                &value,
+                &["release", "distinguishing", "shared", "missingRequired"],
             );
         }
 

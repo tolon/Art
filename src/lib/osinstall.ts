@@ -567,6 +567,54 @@ export async function osinstallReleaseForMedia(volumeNames: string[]): Promise<s
 }
 
 /**
+ * What **one** release's own signature made of the volume names in hand —
+ * mirrors `core::osinstall::identify::ReleaseEvidence`.
+ *
+ * Not the same question as {@link osinstallReleaseForMedia}, and the
+ * difference is the point: that one asks "which release is this folder", and
+ * answers `null` for a folder holding only `Fonts` and `Locale` because those
+ * cannot separate 3.1 from 3.2. This asks "how much of *the release being
+ * built* is in this folder", and answers `shared: ["Locale", "Fonts"]` for
+ * the same folder — media this release does ask for, whatever else also asks
+ * for it.
+ */
+export interface ReleaseEvidence {
+  /** The recipe's own release name, echoed back. */
+  release: string;
+  /** Present, named by this release, and named by no other release ART knows
+   *  of. */
+  distinguishing: string[];
+  /** Present and named by this release, but also carried by another release
+   *  — `Fonts`, `Locale`. Reported, never counted as identification. */
+  shared: string[];
+  /** Media this release marks `required` that the folder does not hold. */
+  missingRequired: string[];
+}
+
+/**
+ * How much of `release`'s own install media `volumeNames` are.
+ *
+ * **Why the screen needs this** (the 2026-09-06 review's Critical, ART-253):
+ * `wrongMediaFolder` claims "none of the disks in this folder are ones this
+ * release asks for", and had no way to check it. It inferred the claim from
+ * an empty `plan.items` and from whether a *missing* disk was somehow in the
+ * folder — neither of which any plan the core can emit ever satisfies
+ * differently, so the sentence rendered over a folder holding `Workbench3.2`.
+ * The claim is about this release's media, so it is answered from this
+ * release's recipe.
+ *
+ * Throws for a release ART ships no recipe for. An empty evidence *means*
+ * "this folder holds none of it", so answering that for an unknown release
+ * would manufacture the very sentence this exists to make honest.
+ */
+export async function osinstallMediaEvidence(
+  release: string,
+  volumeNames: string[]
+): Promise<ReleaseEvidence> {
+  return invoke<ReleaseEvidence>("osinstall_media_evidence", { release, volumeNames });
+}
+
+/**
  * One media folder the chosen release asks for, in the recipe's own order.
  *
  * Mirrors `core::osinstall::MediaLayer` — `labelKey` is an **i18n key**, not
@@ -1145,46 +1193,306 @@ export async function osinstallTreesIn(folder: string): Promise<FoundTree[]> {
  * refusals: one per component, every one true, and together read as "a lot of
  * programs are missing" about a folder that was simply the wrong one.
  *
- * **Every one of the four conditions is load-bearing, and each is a sentence
- * this must not steal:**
+ * # ART-253: it said that about the right folder too
+ *
+ * This used to gate the claim on five conditions, and **two of them could not
+ * fire**. `InstallPlan` carries an invariant (`core/osinstall/plan.rs`): a
+ * plan is *either* a full description of what would be written *or* every
+ * reason it cannot proceed, never both, and the one production construction
+ * site empties `items` whenever there is any refusal at all. So
+ * `plan.items.length > 0` is never true here, and asking whether a
+ * **missing** disk is in the folder is near-tautologically false in the
+ * ordinary partial case. Neither withdrew. A folder holding `Workbench3.2`,
+ * `Fonts` and `Locale` with `Extras3.2` absent rendered *"None of the disks
+ * in this folder are ones this release asks for. It holds: Workbench3.2,
+ * Fonts, Locale."* — a false sentence that sends a user away from the correct
+ * folder, which is this project's named failure class.
+ *
+ * Both are gone. The claim is now **checked against the release's own
+ * recipe**, which is the only thing that knows what it asks for:
+ * `evidence.distinguishing` plus `evidence.shared` is exactly "media this
+ * release names that the folder holds", and if that is non-empty the sentence
+ * is false and this withdraws in favour of the per-disk list and
+ * {@link mediaEvidence}.
+ *
+ * `shared` counts here even though it never counts for *identification*:
+ * `Fonts` and `Locale` cannot tell 3.1 from 3.2, but they are still disks the
+ * 3.2 recipe asks for, so a folder holding them is not a folder holding none
+ * of this release's media.
+ *
+ * **The conditions that remain, each still load-bearing:**
  *
  *  - `found` non-empty — an empty folder is `osinstall.media.empty`, said the
  *    moment it was picked. "None of these disks are the right ones" is a
  *    claim about disks that are not there.
- *  - no plan items — one absent disk in an otherwise right folder is a
- *    *missing disk*, and telling that user their folder is wrong would be
- *    false about the fifteen disks in it that are right.
  *  - at least one refusal — with none there is nothing to explain.
  *  - **every** refusal about media — an unreadable ROM, a destination
  *    collision or an exclusive-group conflict is a different problem with a
  *    different fix, and must never be papered over with a sentence about
  *    folders.
- *  - **not one refused disk is in the folder** — the sentence makes a
- *    specific claim, so it is checked rather than inferred from an empty
- *    plan. This is the condition the rest of the suite caught missing: a
- *    fixture whose folder held `Workbench3.2` while a refusal said
- *    `Workbench3.2` was absent got told its folder was somebody else's.
+ *  - **nothing this release asks for is in the folder**, from `evidence`.
  *
- * The last check folds case with `toLowerCase`, which is **not** AmigaDOS's
- * own folding (`amiga_names_equal`, which folds the Latin-1 accented range
- * an international volume folds). It does not need to be, and the direction
- * of the difference is why: these are names the Rust matcher has already
- * refused to match, so a JS fold that calls two of them equal can only ever
- * *withdraw* this sentence in favour of the per-disk list. It cannot produce
- * the claim wrongly.
+ * @param evidence what `osinstallMediaEvidence` said about the release being
+ *   built — `null` while the lookup is in flight or after it failed, and that
+ *   is answered with silence. The sentence makes a specific claim and there
+ *   is nothing to check it against; the per-disk refusal list shown instead
+ *   is true either way.
+ *
+ * # ART-254: evidence about a *different* release is not evidence
+ *
+ * ART-253's guard checks the plan against the evidence, and that only means
+ * anything while the two are about the same release. On the screen they are
+ * fetched by two uncoordinated effects (`OsInstall.tsx`), so pressing the
+ * "switch to the release this folder holds" button leaves a window in which
+ * the plan is the new release's and the evidence is still the old one's —
+ * and 3.1 evidence is legitimately empty for a folder full of 3.2 disks,
+ * which is exactly the input that makes this sentence fire falsely again.
+ *
+ * Both artefacts state their own identity, so this is settled by an
+ * **invariant** rather than by a reset, an ordering or a loading flag
+ * (`CLAUDE.md`: *"anything timing-dependent gets an invariant, not a wait"*).
+ * `ReleaseEvidence.release` is the recipe's own `release` and `plan.release`
+ * is the same string from the same recipe (`plan.rs`: `recipe.release.clone()`),
+ * so they are compared exactly, the way `releaseHolding === release` and
+ * `isInstallRelease` compare release names everywhere else here — no folding,
+ * no trimming, because a release name is not user-entered text.
+ *
+ * Mismatched evidence is treated as `null`: not checked, so nothing claimed.
  */
-export function wrongMediaFolder(plan: InstallPlan, found: string[]): string | null {
+export function wrongMediaFolder(
+  plan: InstallPlan,
+  found: string[],
+  evidence: ReleaseEvidence | null
+): string | null {
   if (found.length === 0) return null;
-  if (plan.items.length > 0) return null;
   if (plan.refusals.length === 0) return null;
   const missing = plan.refusals.filter(
     (refusal): refusal is Extract<RefusalReason, { refusal: "media-missing" }> =>
       refusal.refusal === "media-missing"
   );
   if (missing.length !== plan.refusals.length) return null;
-  const inFolder = new Set(found.map((name) => name.toLowerCase()));
-  if (missing.some((refusal) => inFolder.has(refusal.volume_name.toLowerCase()))) return null;
+  if (evidence === null) return null;
+  // ART-254 — see the doc comment above. Stale evidence cannot answer for
+  // this plan's release, so it answers for nothing.
+  if (evidence.release !== plan.release) return null;
+  if (evidence.distinguishing.length + evidence.shared.length > 0) return null;
   return found.join(", ");
+}
+
+/**
+ * Context for the ordinary partial-media case — the folder holds some of this
+ * release's own disks and is missing others — which is exactly the case
+ * {@link wrongMediaFolder} above refuses to speak in, because there its
+ * sentence would be false. The refusals list already names which component
+ * wants which disk; this adds what `wrongMediaFolder` cannot reach there:
+ * what the folder itself looks like.
+ *
+ * **Not "at least one component is installable"**, which is what this said
+ * until ART-253 and is a state the core cannot emit: any refusal at all
+ * empties `items` (`plan.rs:1866`). The two are told apart by the release's
+ * own evidence, never by counting plan items.
+ *
+ * Four endings, never collapsed into each other (this project's own named
+ * failure class — see CLAUDE.md, "The failure that does not crash"):
+ *
+ *  - nothing missing, or no folder chosen yet — silent, both owned
+ *    elsewhere (`osinstall.blocked.noFolder` for the second).
+ *  - `wrongMediaFolder` owns the all-or-nothing case — silent here too, so
+ *    the two callers can never both produce a sentence about the same plan.
+ *  - **This release's own media, partly here** — `sameRelease`, naming what
+ *    is present and what is still absent. Either because `identify` named
+ *    this very release, or because this release's own recipe claims disks in
+ *    the pile that no other release names (ART-257 — a based release's
+ *    inherited base set is exactly that, and `identify` calls it the base).
+ *    The sentence claims only that: this release's own media is among what
+ *    the folder holds, which is what was checked (ART-258).
+ *  - **Identified**, a *different* release, and none of this release's own
+ *    **distinguishing** media in the pile — `otherRelease`, naming which
+ *    one, so the user can tell "wrong folder" from "one disk short". `shared`
+ *    can still be non-empty here (`Fonts`, `Locale` — media more than one
+ *    release asks for), so the sentence says only that the folder looks like
+ *    the named release, never that none of it is this release's own (M1,
+ *    2026-09-06 review): `wrongMediaFolder` three functions up reads that
+ *    same `shared` field as exactly the media this release does ask for.
+ *  - **Ambiguous or unknown, and none of this release's own evidence in the
+ *    pile** — `releaseHolding` is `null` for both (`recipe::release_holding`
+ *    collapses them, ART-208's own type), and since this cannot tell them
+ *    apart it says the weaker thing rather than guess: `unidentified`,
+ *    naming only what is present. Claiming a release here would be exactly
+ *    the confident-wrong sentence this project pays most for.
+ *
+ *    **`releaseHolding === null` is not on its own enough to reach this
+ *    ending** (ART-259). A based release's update-only folder — `identify`
+ *    answers `Unknown` for it, the same as a folder of `Fonts` and `Locale`
+ *    — is the *first* ending above, not this one: this release's own recipe
+ *    claims those disks (`holdsThisReleasesOwnMedia`), and that check runs
+ *    before this one so the sentence said is `sameRelease`, never
+ *    `unidentified`, over media that really is this release's own.
+ *
+ *    **The sentence states no reason, and that is deliberate** (ART-255).
+ *    It used to end *"— some disks carry no version of their own"*, which is
+ *    true of the Unknown case a folder of `Fonts` and `Locale` produces and
+ *    false of the other three that reach this key: an **Ambiguous** folder
+ *    (`Workbench3.2` *and* `AmigaOS3.9` — disks that do carry versions, two
+ *    releases named, ART declining to choose), the render before the lookup
+ *    lands, and the catch path. Three of the four states got a reason that
+ *    was never checked, pointing the user at the wrong problem. `null` is
+ *    one value with four causes, so the honest sentence is the one true of
+ *    all of them: the contents do not settle which release this is.
+ */
+export function mediaEvidence(input: {
+  plan: InstallPlan;
+  /** Volume names the media scan actually found in the folder. */
+  found: string[];
+  /** Which shipped release those names are the install media of, when ART
+   *  can tell — `null` when they are nobody's, or more than one release's. */
+  releaseHolding: string | null;
+  /** The release being built, to tell "this folder's media" from "someone
+   *  else's media" apart. */
+  release: string;
+  /** What that release's own recipe made of `found` — passed straight
+   *  through to {@link wrongMediaFolder}, which is the only thing here that
+   *  reads it, and which refuses it when it answers for a release other than
+   *  the plan's (ART-254). `null` while the lookup is in flight. */
+  evidence: ReleaseEvidence | null;
+}): Phrase | null {
+  const { plan, found, releaseHolding, release } = input;
+  const evidence = input.evidence;
+  // ART-254. **The plan, the evidence and the release being built must all
+  // name the same release**, and the three-way agreement takes three
+  // comparisons, not two: this one; `evidence` against `plan.release` inside
+  // {@link wrongMediaFolder} below (which is where it has to live —
+  // `osinstallBlocker` calls that function with no `release` of its own);
+  // and `evidence.release === release` directly, written out as `checkable`
+  // further down and gating all three reads of `evidence` past this point.
+  //
+  // The third does **not** follow from the first two, which is why it is
+  // written out rather than left as decoration (ART-253's own ruling: a
+  // condition that cannot fire is decoration, and this one can). Calling
+  // `wrongMediaFolder` below returns null far more often for reasons that
+  // have nothing to do with the release match — a mixed refusal list, no
+  // media missing at all — than because its own `evidence.release !==
+  // plan.release` check fired, so reaching this point with `plan.release
+  // === release` and a falsy `wrongMediaFolder` result does not establish
+  // that `evidence` is about this release. Stale evidence can still be
+  // sitting in `evidence` here, and `checkable` is what keeps it from being
+  // read as if it were current. Removing the `evidence.release === release`
+  // half of `checkable` is exactly the mutation
+  // `will not call a folder somebody else's media without this release's own
+  // evidence` (osinstall.test.ts) exists to catch.
+  //
+  // The plan is checked here rather than in the sibling because this is the
+  // only place that receives the release being built, and it withdraws the
+  // whole sentence rather than one clause: `missing` is read straight off the
+  // plan, so a plan the release switch has left behind would have this line
+  // naming *the previous release's* absent disks under the new release's
+  // name. Two stale artefacts agreeing with each other do not make one
+  // current sentence.
+  if (plan.release !== release) return null;
+  // No folder chosen — `osinstall.blocked.noFolder` already owns this
+  // sentence; a second one here would answer the same question twice.
+  if (found.length === 0) return null;
+  const missing = plan.refusals.filter(
+    (refusal): refusal is Extract<RefusalReason, { refusal: "media-missing" }> =>
+      refusal.refusal === "media-missing"
+  );
+  if (missing.length === 0) return null;
+  // The all-or-nothing case belongs to the sibling above; never both speak.
+  if (wrongMediaFolder(plan, found, evidence)) return null;
+
+  const foundNames = found.join(", ");
+  const missingNames = missing.map((refusal) => refusal.volume_name).join(", ");
+
+  /**
+   * **A based release's inherited media is its own media** (ART-257).
+   *
+   * `identify` answers "which release is this pile", and for a folder holding
+   * nothing but AmigaOS 3.2's disks that answer is *"AmigaOS 3.2"* even when
+   * the release being built is AmigaOS 3.2.2 — the based recipe is dropped
+   * from the candidates because it found none of its **own** update disks
+   * (`identify.rs`'s base-subsumption pass, and it is right to: a based
+   * release must not be named on its base's evidence alone). Measured, not
+   * assumed: `evidence_for("AmigaOS 3.2.2", <the 3.2 base set>)` answers
+   * `distinguishing: [Workbench3.2, Install3.2, Extras3.2]`,
+   * `missing_required: [Update3.2.2, Classes3.2.2]`, while
+   * `release_holding` of the same names answers `"AmigaOS 3.2"`
+   * (`identify.rs::a_based_releases_own_evidence_claims_the_base_set`).
+   *
+   * So `releaseHolding !== release` alone does **not** mean somebody else's
+   * media, and saying *"that looks like AmigaOS 3.2 media"* over a half-built
+   * 3.2.2 would be a misleading sentence sending a user to look for a
+   * different folder — with the disks they need already in it.
+   *
+   * The release's **own recipe** is what settles it, and it is asked rather
+   * than reasoned about: `distinguishing` is "present, named by this release,
+   * named by no other" (`Fonts` and `Locale` are in `shared` and never count
+   * here), so a non-empty one means at least one disk in this pile is media
+   * only the release being built asks for. That is the same claim
+   * `sameRelease` makes, so it is the sentence said.
+   *
+   * Not a fourth ending: "the base is here, the update disks are not" and
+   * "some of this release's disks are here, others are not" are one state
+   * with one next step, and `missing` already names exactly which disks.
+   * Splitting them would be a second sentence for one answer, not a distinct
+   * ending.
+   *
+   * Stale or in-flight evidence cannot answer for this release (ART-254), so
+   * it does not: the check requires the evidence to say which release it is
+   * about, and `releaseHolding === release` above still stands on its own
+   * for every folder `identify` can name outright.
+   *
+   * **This check must run before the `releaseHolding === null` branch below**
+   * (ART-259, caught in this fix wave's own re-review of ART-257). A folder
+   * holding only AmigaOS 3.2.2's *update* disks (`Update3.2.2`,
+   * `Classes3.2.2`) and none of the base set makes `identify` answer
+   * `Unknown` — a based release with none of its base present has a
+   * non-empty `missing_required` and is dropped from the named candidates,
+   * and no other release claims update-disk names — so `releaseHolding` is
+   * `null` for exactly the folder this check exists to recognise. Testing
+   * `releaseHolding === null` first, as the original ART-257 fix did, made
+   * this whole block unreachable for that folder and answered
+   * `unidentified` — *"this folder does not identify a release"* — about a
+   * folder that names update disks nothing else in the catalogue does.
+   */
+  const checkable = evidence !== null && evidence.release === release;
+  const holdsThisReleasesOwnMedia = checkable && evidence.distinguishing.length > 0;
+  if (releaseHolding === release || holdsThisReleasesOwnMedia) {
+    return {
+      key: "osinstall.evidence.sameRelease",
+      params: { found: foundNames, missing: missingNames },
+    };
+  }
+  // Reached only once this release's own evidence has already been asked and
+  // has nothing to say (`holdsThisReleasesOwnMedia` is false, or the evidence
+  // cannot answer for this release at all). `releaseHolding === null` here
+  // covers Unknown, Ambiguous, the lookup still in flight and the catch path
+  // alike (ART-255) — none of which this release's own recipe told apart
+  // from any other, so the weaker sentence, naming no release, is the honest
+  // one.
+  if (releaseHolding === null) {
+    return { key: "osinstall.evidence.unidentified", params: { found: foundNames } };
+  }
+  // `otherRelease` no longer claims the folder holds none of this release's
+  // own media (M1, 2026-09-06 review): `evidence.shared` can be non-empty
+  // here even though `distinguishing` is empty, and `wrongMediaFolder` three
+  // functions up already reads that same field as media this release does
+  // ask for, so the old wording overclaimed exactly what that sibling
+  // function was careful not to. The sentence now says only what `identify`
+  // and the refusals list support — the folder looks like a named different
+  // release, and these disks are still missing.
+  //
+  // Reaching this point still needs `checkable`: while evidence is in
+  // flight, failed, or a release behind (ART-254), it might yet turn out
+  // this release's own distinguishing media is in the pile too
+  // (`holdsThisReleasesOwnMedia`), so nothing is said until evidence can
+  // rule that out. The user is not left without an answer: the per-disk
+  // refusals list is below it and is true whatever the evidence turns out
+  // to be.
+  if (!checkable) return null;
+  return {
+    key: "osinstall.evidence.otherRelease",
+    params: { found: foundNames, release: releaseHolding, missing: missingNames },
+  };
 }
 
 export function osinstallBlocker(input: {
@@ -1198,6 +1506,9 @@ export function osinstallBlocker(input: {
    *  can tell — `null` when they are nobody's, or more than one release's
    *  (`recipe::release_holding`). */
   releaseHolding: string | null;
+  /** What the release being built makes of those names — see
+   *  {@link wrongMediaFolder}, which is what reads it. */
+  mediaFacts: ReleaseEvidence | null;
 }): Phrase | null {
   if (!input.mediaFolder?.trim()) return { key: "osinstall.blocked.noFolder" };
   if (!input.destination?.trim()) return { key: "osinstall.blocked.noDestination" };
@@ -1211,7 +1522,7 @@ export function osinstallBlocker(input: {
     return { key: "osinstall.blocked.folderUnreadable" };
   }
   if (input.plan.plan.refusals.length > 0) {
-    const wrongFolder = wrongMediaFolder(input.plan.plan, input.found);
+    const wrongFolder = wrongMediaFolder(input.plan.plan, input.found, input.mediaFacts);
     if (wrongFolder) {
       return input.releaseHolding
         ? {

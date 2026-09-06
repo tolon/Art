@@ -23,7 +23,7 @@ Update it at the end of any session that changes what works.
 | **Current stage** | **SD-0, SD-1, SD-2 and SD-4 built; SD-3 mostly, SD-5 part-built.** The per-gap detail is the stage table further down this file, which is maintained gap by gap — this cell no longer retells it. Three sentences that have not changed and are the ones to read first: **what is left in SD-1 is not code — a card flashed and an A500 booted**; what emulation has settled is the **filesystem** side (a PFS3 volume ART formatted, and an AmigaOS 3.2 tree ART built, each boot a licensed Kickstart to a clean Workbench — so `expansion.library` and the real `pfs3aio` binary have accepted ART's disk, which is not provisional), and it does **not** touch the card path, where an MBR, an Amiga disk starting 1.1 GB in and Emu68's `brcm-sdhc.device` are the untested rung ([ART-095](ISSUES.md)); and **no card ART built has been flashed or booted** |
 | **Build** | PASS |
 | **Tests** | `main`'s own count as of item 7's merge (`bf5bbe7`, 2026-09-06): **2863 Rust passed, 0 failed, 49 ignored; 1045 frontend across 82 files** — the prefs-and-wallpaper round's own last-measured figures, carried into `main` unchanged by the merge and not independently re-run against `main` by this session. Before that merge: **2771 Rust passed, 0 failed, 47 ignored; 1027 frontend passed across 80 files** (re-measured 2026-09-05 at the end of the WHDLoad-drawer round — 30.99 s and 31.19 s, run twice per the standing rule; the previous figures, 2707/1016, were the layered-release round earlier the same day, and 2626/1004 were 2026-09-04). The ignored ones are the real-material hooks, env-gated and run by hand - real install media, a real card, `hst.imager.exe`, Microsoft's `Get-VHD`, the owner's own 1.2 GB `AmiKit.hdf` ([ART-146](ISSUES.md#fixed)), and since 2026-08-24 the three that leave the machine for the real Aminet (`net/live_aminet.rs`). **Quote the `test result:` line, never the exit code** — on 2026-09-04 an antivirus interfering with `rustup.exe` killed the harness after about seventy tests and the shell still saw exit 0, four runs in a row, with no summary line and no failure (recorded in CLAUDE.md, "Before you commit"). **The trigger has a name now, found 2026-09-06 by the drawer-icons round and confirmed by the owner: the scanner reacts to `art_lib` itself** — this crate's own library name (`src-tauri/Cargo.toml`, `[lib] name = "art_lib"`, built as `staticlib`/`cdylib`/`rlib`) — not to any file the tests write, which is why the harness dies mid-run with a clean exit and no summary rather than failing a specific test. This is machine configuration, not a code defect: excluding `src-tauri\target\` and `D:\tmp\art-tests\` from the scanner is expected to close the whole class, and that re-run is what would turn "explained" into "settled" — see ART-159's own addendum in ISSUES.md for the case that named it. Outside the two suites: **113 contrast pairs** (`scripts/contrast-check.py`, blocking in CI, and since [ART-232](ISSUES.md#fixed) it covers the colours three screens hard-code outside the token system as well as `theme.css`). **The scratch-directory class is closed rather than reduced**: [ART-164](ISSUES.md) fixed `core::iso`, [ART-173](ISSUES.md) fixed `core::cbm` and `core::detect` (4 failures in 40 runs, two different tests, one failing with the *other* test's 1000-byte fixture), and a sweep then took every remaining test scratch helper in the crate - 70 keyed on the process id, then 26 more keyed on `as_nanos()` **alone**, which is the worse shape since two threads can share a nanosecond but not a pid. The first sweep script reported a clean zero while blind to those 26; the widened one (`scripts/scratch-counter-sweep.py`) is the reason that number means anything. It reports **one** site "needing a counter" and that one is a **false positive**: the helper in `commands/osinstall.rs::staging_is_removed_however_the_preview_ends` keys on the thread id rather than a counter ([ART-182](ISSUES.md#fixed)'s own fix), which is unique within the process and which the sweep does not recognise ([ART-235](ISSUES.md)) |
-| **On the unmerged `art-drawer-icons` branch** | **Re-measured 2026-09-06 by the final whole-branch review's fix wave.** **2918 Rust passed, 0 failed, 49 ignored** (run twice — 18.95 s and 20.22 s); **1050 frontend tests**, 82 files. `pnpm lint` clean, `cargo fmt --check` OK, `clippy --all-targets -- -D warnings` clean. Sweeps: control-byte clean, scratch-root clean, contrast **113/113** both themes, scratch-counter reports the same one known false positive as `main` ([ART-235](ISSUES.md)). i18n: **2009** leaf keys each file, up from 2005 at the branch's start (item 7's own count) — the fix wave's own `appearance.done.nothingWritten` key (C7) is the last one of that count. Branch totals (`git diff --shortstat main...art-drawer-icons`, taken with this fix wave's own changes staged for commit): **19 commits, 25 files changed, 5 649 insertions, 136 deletions**. These numbers are the branch's, not `main`'s — `main` is the row above until the owner merges it. **Of the three real-material hooks this round needed, two ran clean and one could not be measured.** The AmigaOS 3.2.2 layered build and the AmigaOS 3.9 base build both completed with `refusals=[]`, so this round's own sibling-icon feature is measured clean against two of the three releases. `build_the_real_39_language_components_when_asked` (ART-159's own hook) died mid-run four attempts in four — exit 0, no `test result:` line — which the antivirus finding above explains; it is not evidence against this round's own change and it is not evidence for it either, since the hook never finished |
+| **Round 2 (`art-drawer-icons`), merged into `main` as `722a8c5`** | **Re-measured 2026-09-06 by the final whole-branch review's fix wave.** **2918 Rust passed, 0 failed, 49 ignored** (run twice — 18.95 s and 20.22 s); **1050 frontend tests**, 82 files. `pnpm lint` clean, `cargo fmt --check` OK, `clippy --all-targets -- -D warnings` clean. Sweeps: control-byte clean, scratch-root clean, contrast **113/113** both themes, scratch-counter reports the same one known false positive as `main` ([ART-235](ISSUES.md)). i18n: **2009** leaf keys each file, up from 2005 at the branch's start (item 7's own count) — the fix wave's own `appearance.done.nothingWritten` key (C7) is the last one of that count. Branch totals (`git diff --shortstat main...art-drawer-icons`, taken with this fix wave's own changes staged for commit): **19 commits, 25 files changed, 5 649 insertions, 136 deletions**. These numbers were the branch's when measured; it merged on 2026-09-06, so `main` carries them now and the row above is the same tree. **Of the three real-material hooks this round needed, two ran clean and one could not be measured.** The AmigaOS 3.2.2 layered build and the AmigaOS 3.9 base build both completed with `refusals=[]`, so this round's own sibling-icon feature is measured clean against two of the three releases. `build_the_real_39_language_components_when_asked` (ART-159's own hook) died mid-run four attempts in four — exit 0, no `test result:` line — which the antivirus finding above explains; it is not evidence against this round's own change and it is not evidence for it either, since the hook never finished |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **Kickstart table** | 154 dumps, generated from amitools' Remus split database and verified against it on every CI run (`scripts/rom-table-check.py`, ART-104). 24 of the user's own collection now named *with their machine*, including the two 40.68 builds told apart; ART's previous ten hand-listed hashes matched none of them. **Licensed Amiga Forever ROMs are first-class input** (ART-128): decoded with the `rom.key` beside them and then identified like any dump, and refused for a card build when the key is absent — they used to reach the boot partition still encrypted, which no Amiga could start |
@@ -32,10 +32,10 @@ Update it at the end of any session that changes what works.
 | **7-Zip disc oracle** | 4 fixtures — Joliet, ISO9660-only, raw Mode 1, raw Mode 2/XA — names, sizes and every file's SHA-256 |
 | **hst-imager PFS3 oracle** | both directions, local only (`scripts/pfs3-oracle-check.py`, no `hst.imager.exe` in CI): ART writes a volume through `NativeFormatter` and `hst-imager fs dir -r` reads it back — names, sizes, and every protection-bit string, `hsparwed` cased as `hst-imager` spells it; `hst-imager` formats and fills a volume and ART reads it back through `libpfs3`, SHA-256 per file rather than a length (ART-079's exact shape) plus the same protection strings |
 | **ILBM oracle / prefs oracle** | on `main` since item 7 merged (`bf5bbe7`, 2026-09-06). `scripts/ilbm-oracle-check.py` (ART writes, ffmpeg reads, every pixel compared) agrees with ffmpeg on **8 of 8** ILBM fixtures, every pixel compared; an `#[ignore]`d `ART_PREFS_DIR` hook against the owner's own AmigaOS 3.9 material found 24 `.prefs` files, of which **15 genuine `FORM PREF` containers round-trip byte-for-byte with 0 failures** through `replace_bodies(&[])`, the real rebuilder (9 are third-party non-IFF formats, reported apart) |
-| **Icon oracle** | on `art-drawer-icons`, unmerged — see the branch row above. `scripts/icon-oracle-check.py` round-trips real `.info` files through `core/amigaicon`'s reader **and its four writers** (`set_position`, `set_tooltypes`, `set_show_all_files`, and `rendered_size`'s never-smaller-than-`Gadget` invariant), against the owner's own AmigaOS 3.9 material: `checked=798 failed=0 no_drawer_data2=0 lossy_tooltypes=69` — up from round 1's 485-icon, reader-only corpus. Earned its place on its first real run: found [ART-249](ISSUES.md#fixed), a writer offset landing inside the wrong struct, that no unit test could see because the reader and the writer shared the identical wrong constant. The 69 `lossy_tooltypes` icons are counted apart, never folded into `failed` — checked for text identity only, not byte identity ([ART-250](ISSUES.md)) |
+| **Icon oracle** | merged to `main` in `722a8c5` — see the round-2 row above. `scripts/icon-oracle-check.py` round-trips real `.info` files through `core/amigaicon`'s reader **and its four writers** (`set_position`, `set_tooltypes`, `set_show_all_files`, and `rendered_size`'s never-smaller-than-`Gadget` invariant), against the owner's own AmigaOS 3.9 material: `checked=798 failed=0 no_drawer_data2=0 lossy_tooltypes=69` — up from round 1's 485-icon, reader-only corpus. Earned its place on its first real run: found [ART-249](ISSUES.md#fixed), a writer offset landing inside the wrong struct, that no unit test could see because the reader and the writer shared the identical wrong constant. The 69 `lossy_tooltypes` icons are counted apart, never folded into `failed` — checked for text identity only, not byte identity ([ART-250](ISSUES.md)) |
 | **cargo-deny** | advisories, bans, licences, sources — all ok |
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
-| **i18n** | `en.json` and `tr.json` on `main`: **2005** leaf keys each, item 7's own count carried in by its merge (`bf5bbe7`) — up from **1972**, counted 2026-09-05 after the WHDLoad-drawer round (1958 earlier the same day, 1916 before the layered-release round). On the unmerged `art-drawer-icons` branch: **2008**, up from 2005 at the branch's start. Count them, do not quote this; parity enforced by `pnpm test` |
+| **i18n** | `en.json` and `tr.json` on `main`: **2009** leaf keys each, counted 2026-09-06 after the drawer-icons merge (`722a8c5`) — up from **2005** at item 7's merge (`bf5bbe7`), **1972** after the WHDLoad-drawer round, 1958 earlier that same day, 1916 before the layered-release round. On the unmerged `art-refusal-evidence` branch: **2012**, up from `main`'s 2009 — the three `osinstall.evidence.*` keys. The 2008 this row carried for the drawer-icons branch was wrong and contradicted the branch row's own 2009; both were re-counted rather than reconciled. Count them, do not quote this; parity enforced by `pnpm test` |
 | **Release bundle** | rebuilt 2026-09-04 for 0.9.0 — `Amiga Retro Toolkit_0.9.0_x64_en-US.msi` and `_x64-setup.exe`, both produced by `pnpm tauri build` in 5m 47s. **Not code-signed**, which the README now says rather than leaving to SmartScreen |
 | **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later**. **[v0.9.0](https://github.com/tolon/Art/releases/tag/v0.9.0) is released, 2026-09-04**, with both installers attached (NSIS 5.1 MB, MSI 6.3 MB) — built by `release.yml` from the tagged commit, after CI went green on that same commit. The built `.exe` was launched and answered before the draft was published. Work lands on `sd-1` and merges to `main` at the phase's
 end; the licence *inventory* still said MIT until 2026-08-13, months after the
@@ -1005,6 +1005,25 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
 
 ### Where the work stands (as of 2026-09-06)
 
+- **The OS Builder now shows what media was found when it cannot complete a
+  build.** The `mediaEvidence` helper renders a line above the refusals list
+  saying which of three things is true: this release's own media is among what
+  the folder holds, the folder holds a different release's, or what is there
+  does not settle which release it is. With no folder chosen the line says
+  **nothing** — `osinstall.blocked.noFolder` already owns that sentence, and
+  the helper's own doc comment forbids saying it twice. *(That fourth "state"
+  was described as one of the line's own until 2026-09-06; the review's M6
+  caught it in `CHANGELOG.md` and it was corrected here at the same time.)*
+  Three new i18n keys (`osinstall.evidence.*`); tests exist for both the
+  helper and the render. **The round's own three tasks changed no Rust** — the
+  evidence strings already existed, gated behind an all-or-nothing condition
+  that made them unreachable for partial media sets, and ungating them is what
+  the round was. Its **final whole-branch review** then found seven things, and
+  three fix waves closed all of them, adding both Rust and frontend work:
+  [ART-253](ISSUES.md) through [ART-258](ISSUES.md). **Held on
+  `art-refusal-evidence` for the owner's decision.** Full detail: the task and
+  fix-wave reports in this round's own `superpowers/sdd/` folder and the design
+  under `superpowers/specs/` dated 2026-09-06.
 - **A tree ART builds now carries its drawers' own icons, and the ones that
   arrive with no position get laid out instead of being scattered by
   Workbench.** Round 2 of six taking what is worth taking from
@@ -1041,9 +1060,9 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
   of 798 real icons — text identity holds, byte identity does not
   ([ART-250](ISSUES.md)). **Not claimed: no Amiga has opened an
   ART-arranged icon** — the oracle proves the bytes round-trip and the fields
-  read back, not that Workbench draws the predicted grid. **Held unmerged on
-  `art-drawer-icons`, built off `main` after item 7 merged into it, for the
-  owner's decision** — nine tasks, each reviewed. Full detail:
+  read back, not that Workbench draws the predicted grid. **Merged into `main` as `722a8c5` on
+  2026-09-06**, built off `main` after item 7 merged into it — nine tasks,
+  each reviewed. Full detail:
   [session log](session-log.md), design and plan under `superpowers/specs/`
   and `superpowers/plans/` dated 2026-09-06.
 - **Work-list item 7 — the prefs-and-wallpaper round — is merged to `main`**
@@ -1130,17 +1149,45 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
   nine gaps in the README are unverified in both directions, so a green result
   closes one as surely as a defect opens one. Nothing had come back as of
   2026-09-05: no issues, three release downloads.
-- **`main` is clean; `art-drawer-icons` is not, and that is deliberate.**
-  Three rounds landed on 2026-09-05/06 in sequence, `art-layered-release`,
-  `art-whdload-drawers` and then `art-prefs-wallpaper` (merged `bf5bbe7`,
-  2026-09-06) — each merged `--no-ff` and pushed. `art-drawer-icons`, the
-  Hatcher intake's round 2, branched off `main` right after that merge and is
-  the one **live branch that is not merged**: built and verified to the
-  numbers in the Snapshot's branch row, held there on purpose so the owner
-  decides whether and when it joins `main`, rather than being merged by the
-  round that built it.
-- **Fifteen open entries**, two of them new on the unmerged branch and not
-  yet in the count anywhere merge has not reached. [ART-166](ISSUES.md) and
+- **`main` is clean; `art-refusal-evidence` is not, and that is deliberate.**
+  Four rounds landed on 2026-09-05/06 in sequence — `art-layered-release`,
+  `art-whdload-drawers`, `art-prefs-wallpaper` (merged `bf5bbe7`) and the
+  Hatcher intake's round 2 `art-drawer-icons` (merged `722a8c5`) — each merged
+  `--no-ff` and pushed. `art-refusal-evidence`, the intake's round 3, branched
+  off `main` right after that last merge and is the one **live branch that is
+  not merged**: 82 frontend files / **1085** tests, **2926** Rust passed with 0
+  failed and 49 ignored, `pnpm lint` exit 0 (measured unpiped — a pipe reports
+  `tail`'s status, not `tsc`'s), control-byte, scratch-root and contrast
+  (**113/113**, both themes) sweeps clean, i18n **2012** leaf keys each
+  catalogue. **14 commits, 18 files, +3463 / −113.** Re-measured by the
+  controller 2026-09-06 after the review's **fourth** fix wave, not quoted from
+  a report. The whole-branch review found 1 Critical, 2 Important and 4 Minor,
+  and each wave's re-review found the next thing: wave 1
+  [ART-253](ISSUES.md#fixed), wave 2 [ART-254](ISSUES.md#fixed),
+  [ART-255](ISSUES.md#fixed), [ART-256](ISSUES.md#fixed), wave 3
+  [ART-257](ISSUES.md#fixed), [ART-258](ISSUES.md#fixed), wave 4
+  [ART-259](ISSUES.md#fixed) — which was **introduced by ART-257's own fix and
+  caught by its re-review**, the round's named failure class turning up inside
+  the round's own repair. Held there on purpose
+  so the owner decides whether and when it joins `main`, rather than being
+  merged by the round that built it.
+- **Fifteen open entries**, counted on this branch 2026-09-06. The
+  refusal-evidence round itself added none — but its **final whole-branch
+  review did**: [ART-253](ISSUES.md) in fix wave 1, [ART-254](ISSUES.md),
+  [ART-255](ISSUES.md) and [ART-256](ISSUES.md) in fix wave 2, and
+  [ART-257](ISSUES.md) and [ART-258](ISSUES.md) in fix wave 3 — false or
+  over-claiming sentences on the OS Builder's own screen, each filed and fixed
+  in the same wave, so all six are in Fixed rather than Open and the count is
+  unchanged. **ART-254 is ART-253's own sentence reached through a different
+  door**: the evidence that checks the claim was never asked which release it
+  was about, so a release switch could put the new release's plan beside the
+  old release's evidence. **The review is now closed**: wave 3 took the four
+  Minor findings — the evidence line never reached a layered release at all
+  (ART-257, and the union alone would have called AmigaOS 3.2.2's own base
+  disks somebody else's media), `sameRelease` called every disk in the folder
+  the right media (ART-258), the CHANGELOG described a state the line is
+  deliberately silent in, and a component test that asserted against the
+  helper's own output. [ART-166](ISSUES.md) and
   [ART-117](ISSUES.md) are standing decisions; [ART-118](ISSUES.md) and
   [ART-062](ISSUES.md) need a person at a screen; [ART-235](ISSUES.md) is a
   guard reporting a false positive; [ART-241](ISSUES.md) is the accessibility
@@ -1159,8 +1206,7 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
   [ART-247](ISSUES.md) (a PNG decode arm a third-party crate's own guarantee
   should make unreachable has no test of its own) and [ART-248](ISSUES.md)
   (the wallpaper apply runs synchronously on the command thread, no progress,
-  no cancel); and the drawer-icons round above filed two on the still-unmerged
-  branch — [ART-250](ISSUES.md) (a NewIcon tool type cannot round-trip
+  no cancel); and the drawer-icons round above filed two, now on `main` — [ART-250](ISSUES.md) (a NewIcon tool type cannot round-trip
   byte-for-byte through the lossy UTF-8 decode `tooltypes()` uses, measured on
   69 of 798 real icons) and [ART-251](ISSUES.md) (the AmigaOS 3.2 recipe has
   no rule at all for `Utilities` or `WBStartup`, so a tree ART builds ships

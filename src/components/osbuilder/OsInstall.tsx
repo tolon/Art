@@ -88,6 +88,7 @@ import {
   groupCollisionsForPreview,
   layerForMedia,
   layersFor,
+  mediaEvidence,
   onOsInstallResult,
   osinstallApply,
   osinstallComponentCollisions,
@@ -98,12 +99,14 @@ import {
   osinstallRescanMedia,
   osinstallReleaseForMedia,
   keymapsIn,
+  osinstallMediaEvidence,
   osinstallScanMedia,
   pruneStaleExclusions,
   refusalPhrase,
   wrongMediaFolder,
   rememberedComponentKey,
   type InstallLayer,
+  type ReleaseEvidence,
   type ScanCachePolicy,
   sanitizeChosen,
   toggleChosen,
@@ -304,19 +307,42 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    * itself, only on whether this array is empty.
    */
   const [layers, setLayers] = useState<InstallLayer[]>([]);
+  /**
+   * **Which release `layers` is the answer for** — `null` before the first
+   * answer lands, and the *previous* release's name for the moment after a
+   * switch (ART-256).
+   *
+   * `layers` alone cannot say this: `[]` is one value with two causes,
+   * "this release is unlayered" and "nobody has asked yet", and this
+   * project's own rule is that a state with more than one cause is not a
+   * state anything may branch on. Anything scoping itself with
+   * `layers.length > 0` therefore reads a layered release as unlayered until
+   * `layersFor` resolves. The extra-folder scan below is the one that
+   * noticed — it scanned a folder a layered release never sends — and it is
+   * settled the same way S1's staleness is: by asking the answer which
+   * question it answers, not by ordering the effects.
+   */
+  const [layersRelease, setLayersRelease] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     layersFor(release)
       .then((ls) => {
-        if (!cancelled) setLayers(ls);
+        if (cancelled) return;
+        setLayers(ls);
+        setLayersRelease(release);
       })
       .catch(() => {
-        if (!cancelled) setLayers([]);
+        if (cancelled) return;
+        setLayers([]);
+        setLayersRelease(release);
       });
     return () => {
       cancelled = true;
     };
   }, [release]);
+  /** Whether `layers` is this release's own answer rather than the previous
+   *  one's, or none at all. A primitive, so it is a stable effect dependency. */
+  const layersKnown = layersRelease === release;
 
   /**
    * **Per layer, not per release** (the rest of ART-207's own rule, one level
@@ -414,7 +440,12 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const [layerScans, setLayerScans] = useState<Record<string, MediaScanResult | null>>({});
   useEffect(() => {
     if (layers.length === 0) {
-      setLayerScans({});
+      // The previous object is kept when it is already empty — the same
+      // guard `extraScans` below carries, and for the same reason now that
+      // `foundVolumeNames` is memoized on this one too (ART-257): a fresh
+      // `{}` per run is a new identity for nothing, and the two evidence
+      // lookups downstream would be asked again for it (ART-178/ART-195).
+      setLayerScans((prev) => (Object.keys(prev).length === 0 ? prev : {}));
       return;
     }
     let cancelled = false;
@@ -698,6 +729,25 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     return key ? t(key) : componentLabel(catalogue ?? [], id);
   }
   const [mediaScan, setMediaScan] = useState<MediaScanResult | null>(null);
+  /**
+   * **The added folders' own scans** (ART-256), keyed by folder path — the
+   * same `osinstallScanMedia`, once per folder, exactly the shape
+   * `layerScans` above already has for a layered release's own fields.
+   *
+   * Why it has to exist: the plan request carries `extraMediaFolders`
+   * alongside `mediaFolder`, so `plan()` reads every one of them, while the
+   * evidence was computed from the main folder alone. A user with
+   * `Workbench3.2` in the main folder and `Extras3.2` in an added one got an
+   * evidence line describing a strictly smaller pile of disks than the plan
+   * beside it had reasoned about — the screen out-claiming the core, from
+   * the direction where the screen knows *less*.
+   *
+   * A layered release holds none of these: it passes `extraMediaFolders: []`
+   * on the wire and never renders the add-folder control, so the set scanned
+   * here is exactly the set the request carries, and the layered case cannot
+   * double-count a folder its own `layerScans` already covers.
+   */
+  const [extraScans, setExtraScans] = useState<Record<string, MediaScanResult | null>>({});
   const [rom, setRom] = useState<RomInfo | null>(null);
   const [romError, setRomError] = useState(false);
   /**
@@ -848,6 +898,48 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       cancelled = true;
     };
   }, [mediaFolder]);
+
+  // ART-256. Every added folder scanned the same way, one round trip each,
+  // so `foundVolumeNames` below can cover the same disks `plan()` does.
+  useEffect(() => {
+    // The layered case scopes itself out here rather than in the reader, so
+    // there is one statement of "which folders is this about" and it is the
+    // same one the plan request makes (`extraMediaFolders: []` when layered).
+    //
+    // `layersKnown` is the other half, and a test found it rather than a
+    // reading: until `layersFor` answers, `layers` is `[]` and a layered
+    // release looks unlayered from here, so this scanned a folder AmigaOS
+    // 3.2.2 never sends. Not knowing is also what clears the previous
+    // release's extras on a switch, so `foundVolumeNames` never carries one
+    // release's added folder into another's plan.
+    const folders = !layersKnown || layers.length > 0 ? [] : extraMediaFolders;
+    if (folders.length === 0) {
+      // The previous object is kept when it is already empty. A fresh `{}`
+      // would be a new identity for nothing, and `foundVolumeNames` is
+      // memoized on this — ART-178/ART-195 were exactly a per-render identity
+      // driving an effect, and the evidence lookup below is one of those
+      // effects.
+      setExtraScans((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+      return;
+    }
+    let cancelled = false;
+    Promise.all(
+      folders.map(async (folder) => {
+        try {
+          return [folder, await osinstallScanMedia(folder)] as const;
+        } catch {
+          // Absence, not a badge — the same way the main folder's own effect
+          // above treats a folder it cannot read.
+          return [folder, null] as const;
+        }
+      })
+    ).then((entries) => {
+      if (!cancelled) setExtraScans(Object.fromEntries(entries));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [layersKnown, layers, extraMediaFolders]);
 
   // Re-identify whatever ROM was remembered, for the same reason.
   useEffect(() => {
@@ -1156,25 +1248,106 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const effectivePlan = effectivePlanResult?.outcome === "planned" ? effectivePlanResult.plan : null;
 
   /**
-   * The volume names the scan actually read out of the folder — memoized on
-   * `mediaScan` itself so this is one identity per scan and not one per
-   * render. ART-195 was a fresh `[]` per render driving an effect into a
-   * loop; the effect below lists this among its dependencies.
+   * The volume names the scans actually read out of **every folder the plan
+   * request carries** — the main one and each added one for an unlayered
+   * release (ART-256), each layer's own for a layered one (ART-257), never
+   * the main one alone. Memoized on the scans themselves so this is one identity
+   * per scan and not one per render: ART-195 was a fresh `[]` per render
+   * driving an effect into a loop, and both effects below list this among
+   * their dependencies.
+   *
+   * **Duplicates are collapsed, first spelling kept.** Two folders can hold
+   * the same volume name; the core refuses that by name (`scan::media_for`
+   * raises `media-ambiguous`, and the refusals list says so disk by disk), so
+   * this line naming `Workbench3.2` twice would be a second, worse account of
+   * a problem already stated properly. Folded case-insensitively, because
+   * `Workbench3.2` and `WORKBENCH3.2` are one volume name to AmigaDOS
+   * (`core::osinstall::amiga_names_equal`) and would otherwise both appear.
    */
-  const foundVolumeNames = useMemo(
-    () => (mediaScan?.outcome === "found" ? mediaScan.media.map((m) => m.volumeName) : []),
-    [mediaScan]
-  );
+  const foundVolumeNames = useMemo(() => {
+    const names: string[] = [];
+    const seen = new Set<string>();
+    const take = (scan: MediaScanResult | null | undefined) => {
+      if (scan?.outcome !== "found") return;
+      for (const medium of scan.media) {
+        const folded = medium.volumeName.toLowerCase();
+        if (seen.has(folded)) continue;
+        seen.add(folded);
+        names.push(medium.volumeName);
+      }
+    };
+    // **Which folders this release actually reads**, said once, the same way
+    // the plan request and the extra-folder scan say it (ART-256's own rule,
+    // and `layersKnown` for the same reason: `layers === []` is one value
+    // with two causes, and the wrong branch here would describe a folder set
+    // the request never carries).
+    //
+    // ART-257: a layered release sets no flat folder at all — `mediaFolder`
+    // is remembered per release and its field is never drawn — so before
+    // this, `foundVolumeNames` was `[]` for every AmigaOS 3.2.2 build and
+    // the whole evidence line was silent for the one release most likely to
+    // arrive part-complete. The per-layer scans are the same
+    // `osinstallScanMedia` results; the union across them is what the
+    // release-level question is about (`evidence_for` and `release_holding`
+    // both answer for a *release*, never for one layer — `layer_holding`
+    // owns the per-field question and still does, beside this).
+    if (!layersKnown) return names;
+    if (layers.length > 0) {
+      // Recipe order, which is the order the fields are drawn in.
+      for (const layer of layers) take(layerScans[layer.id]);
+      return names;
+    }
+    take(mediaScan);
+    // Walked in the order the user added them rather than over the record's
+    // own keys, so the listing reads in the order the fields are drawn in.
+    for (const folder of extraMediaFolders) take(extraScans[folder]);
+    return names;
+  }, [layersKnown, layers, layerScans, mediaScan, extraScans, extraMediaFolders]);
   /**
    * ART-208. Non-null when the folder holds media and this release wants
    * none of it — the owner's own screen, where sixteen `MediaMissing`
    * refusals meant one wrong folder rather than sixteen missing disks. A
    * string or `null`, so it is a stable dependency for the lookup below.
    */
-  const wrongFolder = effectivePlan ? wrongMediaFolder(effectivePlan, foundVolumeNames) : null;
+  /**
+   * ART-253. What the release being built makes of the names in the folder —
+   * the only thing that can *check* `wrongMediaFolder`'s claim rather than
+   * infer it. Held as its own state, and `null` until it lands: the sentence
+   * withdraws while it is in flight, because a specific claim with nothing
+   * to check it against is what the defect was.
+   */
+  const [mediaFacts, setMediaFacts] = useState<ReleaseEvidence | null>(null);
+  useEffect(() => {
+    if (foundVolumeNames.length === 0) {
+      setMediaFacts(null);
+      return;
+    }
+    let cancelled = false;
+    osinstallMediaEvidence(release, foundVolumeNames)
+      .then((facts) => {
+        if (!cancelled) setMediaFacts(facts);
+      })
+      // A release with no shipped recipe throws, and there is nothing
+      // truthful to say about a folder against a recipe ART does not have.
+      // `null` is "not checked", which withdraws the claim.
+      .catch(() => {
+        if (!cancelled) setMediaFacts(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [release, foundVolumeNames]);
+  const wrongFolder = effectivePlan
+    ? wrongMediaFolder(effectivePlan, foundVolumeNames, mediaFacts)
+    : null;
   const [releaseHolding, setReleaseHolding] = useState<string | null>(null);
   useEffect(() => {
-    if (!wrongFolder) {
+    // Looked up whenever the folder holds media, not only for the
+    // all-or-nothing `wrongFolder` sentence above: the ordinary partial
+    // case's own evidence line (`mediaEvidence` below, refusal-evidence
+    // round Task 2) needs the same answer to tell "this release's own
+    // media, some disks short" from "somebody else's media" apart.
+    if (foundVolumeNames.length === 0) {
       setReleaseHolding(null);
       return;
     }
@@ -1192,7 +1365,22 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     return () => {
       cancelled = true;
     };
-  }, [wrongFolder, foundVolumeNames]);
+  }, [foundVolumeNames]);
+  /**
+   * ART-208's follow-on (refusal-evidence round, Task 2). What the folder
+   * holds, for the ordinary partial case the refusals list already names
+   * disk-by-disk — `mediaEvidence` itself refuses to speak over
+   * `wrongMediaFolder`'s own sentence, so the two can never both render.
+   */
+  const mediaEvidenceLine = effectivePlan
+    ? mediaEvidence({
+        plan: effectivePlan,
+        found: foundVolumeNames,
+        releaseHolding,
+        release,
+        evidence: mediaFacts,
+      })
+    : null;
 
   /**
    * What the plan would really put in `Devs/Keymaps` — the picker's options,
@@ -1227,6 +1415,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     plan: effectivePlanResult,
     found: foundVolumeNames,
     releaseHolding,
+    mediaFacts,
   });
   const baseRomUnknown = basePlan ? hasRomUnknownRefusal(basePlan) : false;
 
@@ -1465,16 +1654,24 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
             {t("osinstall.media.unreadable")}
           </p>
         )}
-        {mediaScan?.outcome === "found" && mediaScan.media.length === 0 && (
+        {/*
+          ART-256. Both lines read `foundVolumeNames`, which is every folder
+          the request carries, not `mediaScan` alone. Two sentences on one
+          screen counting the same disks differently — "1 install disk found"
+          above an evidence line naming two — is the same contradiction from
+          the inside, and there is no reading of "this folder holds" that
+          makes it right.
+        */}
+        {mediaScan?.outcome === "found" && foundVolumeNames.length === 0 && (
           <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
             {t("osinstall.media.empty")}
           </p>
         )}
-        {mediaScan?.outcome === "found" && mediaScan.media.length > 0 && (
+        {foundVolumeNames.length > 0 && (
           <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
             {t("osinstall.media.found", {
-              count: mediaScan.media.length,
-              names: mediaScan.media.map((m) => m.volumeName).join(", "),
+              count: foundVolumeNames.length,
+              names: foundVolumeNames.join(", "),
             })}
           </p>
         )}
@@ -1723,6 +1920,16 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       {effectivePlan && effectivePlan.refusals.length > 0 && !wrongFolder && (
         <section className="card" style={{ marginBottom: 16 }}>
           <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osinstall.refusals.heading")}</h2>
+          {/* Refusal-evidence round, Task 2: context the list below cannot
+              give on its own — what the folder actually holds. Adds to the
+              per-disk list, never replaces it (`wrongMediaFolder` above owns
+              the all-or-nothing sentence instead, so the two never both
+              show). */}
+          {mediaEvidenceLine && (
+            <p className="faint" style={{ fontSize: 12, margin: "0 0 8px" }}>
+              {t(mediaEvidenceLine.key, mediaEvidenceLine.params)}
+            </p>
+          )}
           <ul className="muted" style={{ fontSize: 12, margin: 0, paddingLeft: 20 }}>
             {effectivePlan.refusals.map((r, i) => {
               const phrase = refusalPhrase(r);

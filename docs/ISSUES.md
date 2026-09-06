@@ -642,6 +642,34 @@ unreadable. Filed here as a real, measured gap rather than left to be
 rediscovered as a surprise the next time someone opens `Utilities` on a built
 tree and finds it missing.
 
+**ART-260** 🔵 **`setLayerIdentified({})` writes a fresh object where its two
+neighbours guard with `prev => prev`, and nothing wakes it yet** — *found
+2026-09-06 by the whole-branch review of the refusal-evidence round (M3),
+filed rather than fixed by fix wave 5's own brief*
+`src/components/osbuilder/OsInstall.tsx:493`
+
+When a release has no layers, the effect resets `layerIdentified` to `{}`
+unconditionally on every run. Its two neighbours in the same file —
+`setLayerScans` (line 448) and `setExtraScans` (line 922) — both guard the
+identical reset with `prev => (Object.keys(prev).length === 0 ? prev : {})`,
+so a no-op reset keeps the *same* object rather than manufacturing a new one.
+`setLayerIdentified` has no such guard.
+
+**Harmless today** because `layerIdentified` is read only once, directly in
+render (`layerIdentified[layer.id]`, line 524) — nothing takes it as a
+`useMemo` or `useEffect` dependency, so a fresh identity on every no-op reset
+costs nothing. **It would wake the day something does**: a future effect or
+memo that depends on `layerIdentified` itself, rather than a value read out
+of it, would see a new object on every render this branch takes and could be
+driven into the exact reflow ART-178 and ART-195 both were — a fresh identity
+mistaken for a real change.
+
+Not fixed here, on purpose: fix wave 5's own brief named this as latent and
+the round as closing, and an unforced change to an effect that fixes no
+observed bug is how this project has hurt itself before. Add the same
+`prev => prev` guard the day a real dependency on `layerIdentified` is added,
+not before.
+
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
@@ -660,6 +688,460 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-259** 🟠 ✅ **ART-257's own evidence check ran after the branch it was
+meant to reach through, so it never ran for the one folder it exists for** —
+*found 2026-09-06, in this fix wave's own re-review of ART-257*
+`src/lib/osinstall.ts::mediaEvidence`
+
+ART-257 taught `mediaEvidence` that a based release's own evidence
+(`holdsThisReleasesOwnMedia`) can call a folder `sameRelease` even when
+`identify` cannot name the release at all. The check was written correctly
+and placed **after** the function's existing `if (releaseHolding === null)
+return unidentified` early return — so for every folder where `identify`
+answers `Unknown`, the function returned before ART-257's own check ever ran.
+
+**The folder this made unreachable.** AmigaOS 3.2.2's media folder holding
+only the *update* disks (`Update3.2.2`, `Classes3.2.2`) and none of the base
+set. `identify` answers `Unknown` for this pile: a based release with none of
+its base present has a non-empty `missing_required` and is dropped from the
+named candidates (`identify.rs`'s base-subsumption pass), and the update disk
+names are nobody else's — so `release_holding` is `None`, not `"AmigaOS
+3.2.2"` and not `"AmigaOS 3.2"`. `evidence_for("AmigaOS 3.2.2", …)` of the
+same names answers `distinguishing: [Update3.2.2, Classes3.2.2]`,
+`missing_required` naming the base disks — genuine evidence this is the
+release's own media — but `releaseHolding === null` fired first and the
+function returned *"This folder holds Update3.2.2, Classes3.2.2, which does
+not settle which release this is"* — false, and the true sentence
+(`sameRelease`, naming the base disks as what's still missing) sat in the
+very next branch down.
+
+**Fixed** by branch order alone, exactly as ART-257 intended: the
+`holdsThisReleasesOwnMedia` check (and `releaseHolding === release`) now runs
+before the `releaseHolding === null` return, not after. No new logic. The
+`unidentified` ending still fires for every state it is genuinely right for
+— a folder with none of this release's own `distinguishing` media in it,
+whatever `releaseHolding` says — because `holdsThisReleasesOwnMedia` is
+`false` there regardless of order.
+
+**One real behaviour change, checked and kept.** ART-255's own Ambiguous
+fixture (`Workbench3.2` and `AmigaOS3.9` together) used `Workbench3.2` —
+which really is AmigaOS 3.2's own distinguishing disk — to stand for "two
+releases named, cannot choose". With the reorder that fixture now answers
+`sameRelease`, not `unidentified`, and that is correct: the claim
+`sameRelease` makes is only "this release's own media is among what the
+folder holds", which stays true whatever else is in the pile. Fix wave 3's
+own report recorded rejecting this exact reorder for this exact reason
+(*"Reordering would have made a folder holding Workbench3.2 and AmigaOS3.9
+say sameRelease, which is true but drops the fact that a foreign disk is
+there"*) — the sentence being true was the point missed. ART-255's fixture
+was replaced with one that isolates its own state (two *other* releases
+named, neither disk this release's own), and a new test pins the corrected
+behaviour for the original pairing.
+
+**Guarded** by `calls the update-only folder this release's own media even
+though identify names no release at all` and `still says unidentified for a
+folder holding neither this release's base nor its update disks`, plus the
+corrected `says the unidentified sentence for a folder naming two other
+releases, not just an unknown one` and the new `calls an ambiguous folder
+this release's own once one of its disks genuinely is`, all in
+`src/lib/osinstall.test.ts`.
+
+**Mutated.** The pre-fix branch order put back (`releaseHolding === null`
+checked first again): `calls the update-only folder…` failed with `expected
+{ key: "osinstall.evidence.sameRelease", … } to deeply equal { key:
+"osinstall.evidence.unidentified", … }`, and `calls an ambiguous folder…`
+failed the same way.
+
+**ART-258** 🟡 ✅ **`sameRelease` called every disk in the folder "the right
+media for this release"** — *found 2026-09-06 by the whole-branch review of
+the refusal-evidence round (M5)*
+`src/i18n/en.json` · `src/i18n/tr.json`, `osinstall.evidence.sameRelease`
+
+The string read *"This folder holds {{found}} — the right media for this
+release. Still missing: {{missing}}."*, and `{{found}}` is every volume name
+the scan returned, not the subset the recipe named. ART ships recipes for 3.2,
+3.2.2 and 3.9 only, so a `Workbench3.1` disk kept beside a 3.2 set contributes
+nothing to `identify`, the folder still resolves to AmigaOS 3.2, and the line
+said *"This folder holds Workbench3.2, Extras3.2, Workbench3.1 — the right
+media for this release."* `Workbench3.1` is not. Nothing broke — the plan
+refuses by name regardless — but it is a claim about each listed disk that ART
+never made, and this project's standard is that a sentence says what was
+checked.
+
+**Fixed** by saying what *was* checked. `identify` naming this release off
+these disks establishes that the release's own media is among them, and no
+more than that: *"This folder holds {{found}}, and this release's own media is
+among them. Still missing: {{missing}}."* Both catalogues in the same commit,
+the Turkish restructured to the new shape rather than left under a new key
+(*"Bu klasörde şunlar var: {{found}}; bunların arasında bu sürümün kendi
+ortamı da var. Eksik kalanlar: {{missing}}."*).
+
+**Listing only `distinguishing + shared` was considered and not taken**, and
+the reason is worth recording: it is a stronger sentence, but it needs the
+release's own evidence to be in hand, and ART-254's window — a release switch
+with the previous release's evidence still held — is exactly when it is not.
+Withdrawing the whole line there would have deleted ART-254's own guard
+(`says the partial-media sentence, not the false one, while the evidence is a
+release behind`) in favour of silence. The listing is what the scan really
+read; what needed fixing was the claim about it.
+
+**Guarded** by `does not call every disk in the folder the right media for
+this release` (`src/components/osbuilder/OsInstall.test.tsx`) — the stray-disk
+folder, which nothing in the round had constructed, asserting the rendered
+line and that it does **not** carry the old claim. `i18n.t(key, params)`
+resolves from the very file under test and moves with any rewording, so that
+negative assertion is the only one a reverted catalogue entry fails — the same
+shape ART-255's guard uses.
+
+**Mutated.** The old English string put back: `expected 'This folder holds
+Workbench3.2, Extra…' not to match /the right media/i`.
+
+*(ART-256's recorded mutation message below quotes the previous wording; it
+was accurate for the run it records.)*
+
+**ART-257** 🟠 ✅ **A layered release got no evidence line at all, and the
+union alone would have made it say the wrong thing** — *found 2026-09-06 by
+the whole-branch review of the refusal-evidence round (M4)*
+`src/components/osbuilder/OsInstall.tsx` · `src/lib/osinstall.ts`
+
+Two defects, and the second only became reachable by fixing the first.
+
+**The gap.** When `layers.length > 0` the media step renders per-layer folder
+fields and no flat one; `mediaFolder` is remembered per release, so for
+AmigaOS 3.2.2 it is never set. `mediaScan` stayed `null`, `foundVolumeNames`
+stayed `[]`, and `mediaEvidence` returned `null` — the whole feature was
+silent for the one release with two media folders, which is the release most
+likely to arrive part-complete. Never wrong, and exactly the round's own
+purpose missing its best case.
+
+**The sentence the union alone would have produced.** Constructed and read
+rather than assumed (`identify.rs::a_based_releases_own_evidence_claims_the_base_set`,
+added with this fix): for the AmigaOS 3.2 base set alone, `release_holding`
+answers `"AmigaOS 3.2"` — correctly, since `identify`'s base-subsumption pass
+must not name a based release off its base's disks — while
+`evidence_for("AmigaOS 3.2.2", …)` of the same names claims those disks as
+3.2.2's own `distinguishing` media and puts `Update3.2.2` and `Classes3.2.2`
+in `missing_required`. `mediaEvidence` branched on `releaseHolding` alone, so
+a user assembling AmigaOS 3.2.2 with their base disks in the base field would
+have been told *"that looks like AmigaOS 3.2 media, not this release's own"* —
+false, and it sends them away from the folder holding what they need.
+
+**Fixed** in two places. `foundVolumeNames` became the union across each
+layer's own scan for a layered release, extending ART-256's producer rather
+than adding a second one, and scoped with the same `layersKnown` that fix
+introduced — "which folders is this release about" is stated once, in the
+producer. And `mediaEvidence` now says `sameRelease` when *either* `identify`
+named this release *or* this release's own evidence claims a disk in the pile
+that no other release names. Not a fourth ending: "the base is here, the
+update disks are not" and "some of this release's disks are here, others are
+not" are one state with one next step, and `missing` already names which
+disks. `otherRelease`'s second clause — *"not this release's own"* — is a
+claim about the recipe, so it is now withdrawn entirely when the evidence is
+in flight or a release behind, the same rule ART-253 gave `wrongMediaFolder`.
+
+**A fixture that was lying**, found the same way ART-254's six were: the
+component test for `otherRelease` held a folder of `Workbench3.2` with
+`release_for_media` answering `"AmigaOS 3.9"` and `media_evidence` answering
+that `Workbench3.2` is AmigaOS 3.2's own distinguishing media — two answers
+about one pile that contradict each other, and no core can emit them. It
+passed only because nothing read the second. Rewritten as the real shape:
+AmigaOS 3.9's disc beside a plain `Fonts`, while building 3.2.
+
+**Guarded** by `a_based_releases_own_evidence_claims_the_base_set`
+(`src-tauri/src/core/osinstall/identify.rs`), `calls the inherited base set
+this release's own media, not the base release's` and `will not call a folder
+somebody else's media without this release's own evidence`
+(`src/lib/osinstall.test.ts`, each with a one-field control), and three in
+`src/components/osbuilder/OsInstall.test.tsx`: `says what a layered release's
+own folders hold, and does not call the base set somebody else's`, `never asks
+about the previous release's folder while a layered release is loading`, and
+`asks each media lookup once for a settled folder, not once per render`. The
+last two were written **because** their mutations survived the first round.
+
+**Mutated.** The layer union removed: `Unable to find an element with the
+text: This folder holds Workbench3.2, Install3.2, Extras3.2, Fonts, Locale,
+and this release's own media is among them. Still missing: Update3.2.2,
+Classes3.2.2.` The own-media disjunct removed: `expected
+'osinstall.evidence.otherRelease' to be 'osinstall.evidence.sameRelease'` and
+the same missing element. The `identify` disjunct removed instead — the
+control, proving neither half is decoration: `expected null to deeply equal
+{ …(2) }` on ART-254's own guard. The evidence gate on `otherRelease` removed:
+`expected { …(2) } to be null`. `layersKnown` removed: `expected "vi.fn()" to
+not be called with arguments: [ 'AmigaOS 3.2.2', [ 'Workbench3.2' ] ]`. The
+`layerScans` identity guard removed: `expected [ [ 'AmigaOS 3.2', …(1) ],
+…(1) ] to deeply equal [ [ 'AmigaOS 3.2', …(1) ] ]` — one lookup per folder
+became two. On the Rust side, `identify`'s base-subsumption `else` branch
+removed: `assertion left == right failed: the base set alone must not be
+called AmigaOS 3.2.2 / left: None / right: Some("AmigaOS 3.2")`; and a based
+recipe's evidence made to count only its own layer: `assertion left == right
+failed: a based recipe inherits its base's components, so the base disks are
+its own media / left: [] / right: ["Workbench3.2", "Install3.2",
+"Extras3.2"]`.
+
+**ART-256** 🟠 ✅ **The OS Builder's evidence line described one media folder
+while the plan had been built from several** — *found 2026-09-06 by the
+whole-branch review of the refusal-evidence round (I3), confirmed by the
+controller reading the tree*
+`src/components/osbuilder/OsInstall.tsx`
+
+The plan request carries `extraMediaFolders` beside `mediaFolder`, and
+`plan()` reads every one of them. The scan that feeds `foundVolumeNames` —
+and therefore `wrongMediaFolder`, `mediaEvidence` and
+`osinstall_media_evidence`'s own question — scanned `mediaFolder` alone. A
+user with `Workbench3.2` in the main folder and `Extras3.2` in an added one
+got an evidence line describing a strictly smaller pile of disks than the
+refusals list beside it had reasoned about: an incomplete listing, or a
+release reported as unidentified, about material ART had already identified
+and planned from. The screen out-claiming the core, from the direction where
+the screen knows *less*.
+
+**Fixed** by scanning every folder the request carries, in the shape the
+layered path already had (`layerScans`): one `osinstallScanMedia` per added
+folder, keyed by folder path, and `foundVolumeNames` the union — walked in
+the order the user added the folders, duplicates collapsed on an
+AmigaDOS-style case fold and the first spelling kept, because the core already
+refuses a name held by two folders (`media-ambiguous`, said disk by disk) and
+a listing naming it twice would be a second, worse account of it. The media
+section's own "N install disks found" line reads the same union, so the two
+sentences on that screen cannot count the same disks differently.
+
+**A second defect fell out of the guard**, and it was found by the test rather
+than by reading: `layers` is `[]` both when a release is unlayered *and*
+before `layersFor` has answered, so the new scan read AmigaOS 3.2.2 as
+unlayered for the first render and scanned a folder a layered request never
+sends. One value, two causes — this project's own named trap. Split by
+`layersRelease`, which records *which release* `layers` is the answer for;
+`layersKnown` is the comparison, and it is also what clears one release's
+added folders when the user switches to another.
+
+**Guarded** by `names a disk that is only in an added folder` (the whole
+sentence, plus the assertion that `osinstall_media_evidence` was asked about
+both disks — a screen cannot be right downstream of a lookup asked the smaller
+question) and `does not scan the added folders for a layered release, the way
+the request does not send them`, both `src/components/osbuilder/OsInstall.test.tsx`.
+
+**Mutated.** The union reverted to `take(mediaScan)` alone: `Unable to find an
+element with the text: This folder holds Workbench3.2, Extras3.2 — the right
+media for this release. Still missing: Install3.2.` The layered scope reverted
+to `layers.length > 0` alone: `expected "vi.fn()" to not be called with
+arguments: [ 'E:\media\extras' ]`.
+
+**ART-255** 🟡 ✅ **The unidentified-folder sentence stated a reason that is
+false in three of the four states that reach it** — *found 2026-09-06 by the
+whole-branch review of the refusal-evidence round (I2)*
+`src/i18n/en.json` · `src/i18n/tr.json`, `osinstall.evidence.unidentified`
+
+The string read *"This folder holds {{found}}, which does not identify a
+release on its own — some disks carry no version of their own."* The clause
+after the dash explains **why**, and `mediaEvidence` reaches this key with
+`releaseHolding === null`, which `recipe::release_holding` produces for four
+different situations. The clause is true of exactly one of them:
+
+- **Ambiguous** — `Workbench3.2` *and* `AmigaOS3.9` in one folder. Both disks
+  carry a version; two releases are named and ART declines to choose. Telling
+  that user their disks carry no version is false and sends them looking for a
+  version number that is already there.
+- **The pending render and the catch path** — ART has not looked yet, or the
+  lookup failed. A claim about the disks, made where no claim was checked.
+- **Unknown** — `Fonts` and `Locale` alone. The only state the clause fitted.
+
+**Fixed** by dropping the causal clause in both catalogues rather than
+guessing a fourth sentence: `release_holding` genuinely cannot tell Ambiguous
+from Unknown, and this project's rule is to say the weaker true thing rather
+than the stronger guess. English is now *"This folder holds {{found}}, which
+does not settle which release this is."*, Turkish *"Bu klasörde şunlar var:
+{{found}}; bunlar hangi sürüm olduğunu belirlemiyor."*
+
+**Guarded** by `says the unidentified sentence for a folder naming two
+releases, not just an unknown one` (`src/lib/osinstall.test.ts`, the whole
+phrase) and `does not tell a folder naming two releases that its disks carry
+no version` (`src/components/osbuilder/OsInstall.test.tsx`), which constructs
+the Ambiguous folder on screen — nothing in the round had — and asserts the
+rendered sentence makes no claim about the disks' versions.
+
+**Mutated.** The old English put back: `expected 'This folder holds
+Workbench3.2, Amiga…' not to match /carry no version/i`.
+
+**ART-254** 🔴 ✅ **A release switch could bring ART-253's false sentence back
+through a different door — the evidence was never asked which release it was
+about** — *found 2026-09-06 by the whole-branch review of the
+refusal-evidence round (S1), confirmed by the controller reading the tree.
+The same sentence as ART-253, reached by a different route.*
+`src/lib/osinstall.ts::wrongMediaFolder` · `::mediaEvidence`
+
+ART-253 made the "none of the disks in this folder are ones this release asks
+for" claim **checked** — `distinguishing + shared` non-empty withdraws it —
+and that check only means anything while the plan and the evidence are about
+the same release. On the screen they are fetched by **two uncoordinated
+effects**, and `mediaFacts` is not cleared when its own effect re-runs, so it
+holds the *previous* release's evidence until the new fetch resolves.
+
+The input is a first-class action on that screen, not an edge case. A folder
+of AmigaOS 3.2 disks with the build on another release renders
+`osinstall.blocked.wrongFolderIsRelease` and a button offering to switch to
+the release the folder actually holds (`setRelease(releaseHolding)`). Press
+it, and if the new plan lands before the new evidence, `wrongMediaFolder`
+compares the new release's plan against the old release's evidence — which is
+legitimately empty, because the folder holds none of the old release's media.
+That is exactly the shape ART-253's check reads as "none of these disks are
+wanted", and the screen says it about a folder holding precisely the disks the
+release asks for.
+
+**Fixed** with an invariant rather than a reset, an ordering or a loading flag
+(`CLAUDE.md`: *anything timing-dependent gets an invariant, not a wait*). Both
+artefacts already state their own identity — `ReleaseEvidence.release` is the
+recipe's own `release`, and `InstallPlan.release` is the same string from the
+same recipe (`plan.rs`: `recipe.release.clone()`). **The plan, the evidence
+and the release being built must all name the same release**, compared exactly
+the way `releaseHolding === release` and `isInstallRelease` compare release
+names elsewhere, and the three-way agreement was first written as **two**
+comparisons: `wrongMediaFolder` treats evidence naming a release other than
+`plan.release` the way it already treats `null` evidence — not checked, so
+nothing claimed — and `mediaEvidence` refuses a `plan` naming a release other
+than the one being built. **The third pair does not follow from those two.**
+`wrongMediaFolder` returns null far more often for reasons that have nothing
+to do with the release match — a mixed refusal list, nothing missing at all —
+than because its own `evidence.release !== plan.release` check fired, so a
+plan that names the release being built and a falsy `wrongMediaFolder` result
+do not together establish that `evidence` is about that release. Fix wave 3
+(ART-257, 2026-09-06) wrote the third comparison out explicitly, as
+`mediaEvidence`'s own `checkable = evidence !== null && evidence.release ===
+release`, gating all three later reads of `evidence`. It is live and tested:
+weakening it to `evidence !== null` alone turns
+`will not call a folder somebody else's media without this release's own
+evidence` (`src/lib/osinstall.test.ts`) from a pass into `AssertionError:
+expected { …(2) } to be null` — the folder's own sentence (`sameRelease`)
+comes back over evidence a release behind.
+
+`mediaEvidence` withdraws *whole* on a stale plan rather than nulling one
+clause: `missing` is read straight off the plan, so the alternative is a line
+naming the previous release's absent disks under the new release's name. Two
+stale artefacts agreeing with each other do not make one current sentence.
+
+Six plan fixtures across two test files carried `release: "3.2"`, which no
+recipe emits; they now carry the release name the recipe actually states, or
+the request's own.
+
+**Guarded** by `wrongMediaFolder withdraws when the evidence answers for a
+different release than the plan`, `says the partial-media sentence, not the
+false one, while the evidence is a release behind` and `says nothing at all
+while the plan itself is still the previous release's`
+(`src/lib/osinstall.test.ts` — each with a control differing in exactly the
+one field under test, because "says nothing" is true here for several
+reasons), and by `says what the folder really holds while the previous
+release's evidence is still the only one held`
+(`src/components/osbuilder/OsInstall.test.tsx`), which switches release with
+media present — the diff contained no such test, which is why this survived.
+The window is held open deterministically (the new release's evidence lookup
+simply never resolves) rather than raced.
+
+**Mutated.** `wrongMediaFolder`'s comparison removed: 3 failures, the first
+reporting `expected 'Workbench3.2, Fonts, Locale' to be null` — ART-253's own
+message, verbatim, which is the point. `mediaEvidence`'s plan comparison
+removed: `expected { …(2) } to be null`.
+
+**Not fixed, and stated rather than left implied.** One render earlier the
+plan, the evidence *and* the folder listing are all still the previous
+release's, agreeing with each other, and `osinstallBlocker` — which calls
+`wrongMediaFolder` with no `release` of its own — can then render a sentence
+that is true of the release the picker has already left. That is a stale
+screen rather than a mismatched claim, one tick long, and of the same family
+as the refusals list beside it lagging by one release; closing it needs
+`osinstallBlocker` to take the release being built, which is a wider change
+than this finding.
+
+**ART-253** 🔴 ✅ **`wrongMediaFolder` told a user with the *right*
+media folder that none of its disks were ones the release asks for — two of
+its five conditions could never fire** — *found 2026-09-06 by the final
+whole-branch review of the refusal-evidence round; confirmed independently by
+the controller reading `plan.rs`. **A defect on `main`, not one that round
+introduced.***
+`src/lib/osinstall.ts::wrongMediaFolder`
+
+`InstallPlan` carries a documented invariant (`core/osinstall/plan.rs`): a plan
+is **either** a full description of what would be written **or** every reason it
+cannot proceed, never both. `plan.rs:1866` enforces it unconditionally, and
+production constructs an `InstallPlan` in exactly one place, immediately after
+(`plan.rs:1914`). So `items.len() > 0` together with a non-empty `refusals` is a
+state the core cannot emit.
+
+`wrongMediaFolder` gated its claim on five conditions, and two of them therefore
+did no work:
+
+- `if (plan.items.length > 0) return null;` — never true when refusals exist.
+- `if (missing.some((r) => inFolder.has(r.volume_name.toLowerCase()))) return null;`
+  — asks whether a **missing** disk is in the folder. In the ordinary partial
+  case it is not, near-tautologically, so this did not withdraw either.
+
+With a folder holding `Workbench3.2`, `Fonts` and `Locale` and `Extras3.2`
+absent — the ordinary way a person arrives at this screen —
+`wrongMediaFolder` spoke, and `osinstall.blocked.wrongFolder` rendered
+**verbatim**:
+
+> *"None of the disks in this folder are ones this release asks for. It holds:
+> Workbench3.2, Fonts, Locale. Choose the folder your install disks are in, or
+> change the release above."*
+
+`Workbench3.2` **is** one this release asks for. The sentence is false, nothing
+crashes, and it sends a user away from the correct folder — this project's
+named failure class (`CLAUDE.md`, "The failure that does not crash"). The
+function's own doc comment already said the claim is *"checked rather than
+inferred from an empty plan"*. The intent was right; the check did not implement
+it.
+
+**How it survived a whole suite.** Every fixture that exercised the withdrawal
+built a plan carrying refusals *and* items — 12, 3, 2 and 40 of them — so the
+condition doing the withdrawing in the tests was one that can never do it in
+production. A test against an impossible state is a test against nothing.
+
+**Fixed** by asking the recipe instead of inferring. `core/osinstall/identify.rs`
+gained `evidence_for(release, found)`, the per-release counterpart to
+`release_holding` and the same shape as `layer_holding` one level down: *which of
+**this** release's own media is in this folder*. The per-recipe body of
+`identify()` was **extracted** into one private `evidence_of` rather than copied,
+because two copies of that matching is exactly ART-249's shape and the drift
+would be silent. `commands::osinstall::osinstall_media_evidence` carries it, and
+`wrongMediaFolder` now withdraws whenever `distinguishing + shared` is non-empty
+— `shared` counts here even though it never counts for *identification*, since
+`Fonts` and `Locale` are still disks the 3.2 recipe asks for. Evidence not yet
+loaded (`null`) is also silence: a specific claim is never made unchecked. **Both
+inert conditions were deleted** rather than kept as defence in depth — a
+condition that cannot fire is decoration.
+
+`osinstall.blocked.wrongFolder` (the bare listing, no release named) **keeps a
+reachable state and stays in both catalogues**: a folder of disks that are no
+release's install media — `release_holding` answers `null` and the chosen
+release's evidence is empty, so the sentence is simply true. Guarded by
+`still names a folder holding disks that are no release's install media`.
+
+**Guarded** by `does not call the folder wrong when it holds this release's own
+disks and one is absent` and `names the folder's own disks and the absent one,
+for the review's own folder` (both `src/lib/osinstall.test.ts`, the second
+asserting the whole `sameRelease` phrase — key and both parameters), and on the
+Rust side by `a_partial_folder_reports_both_what_is_there_and_what_is_not`,
+`a_folder_holding_only_ambiguous_names_still_counts_as_this_releases_media` and
+`a_release_no_recipe_declares_is_refused_not_answered_empty`. Every fixture
+helper that builds an `InstallPlan` now **refuses** to build one carrying both
+refusals and items (`refuses to build a plan carrying both refusals and items`),
+so no future fixture can drift back.
+
+**Mutated.** `main`'s own `wrongMediaFolder` body put back: **12 tests fail**,
+the new one reporting `expected 'Workbench3.2, Fonts, Locale' to be null` — the
+false sentence's own parameter. The fixture guard removed: `expected [Function]
+to throw an error`. `evidence_for` answering an empty evidence instead of a
+refusal for an unknown release: `a release with no shipped recipe must be
+refused: ReleaseEvidence { release: "AmigaOS 4.1", ... }`. Ambiguous names
+dropped instead of reported: 4 failures, `left: [] right: ["Locale", "Fonts"]`.
+
+**One mutation survived and the guard was fixed rather than recorded.** A
+drifted second copy of the matcher — `evidence_for` with its own inline loop
+that forgets `missing_required`, ART-249's shape exactly — left
+`evidence_for_and_identify_agree_about_the_same_folder` green, because its
+folder held *both* required disks and two empty vectors compare equal. The
+guard now uses a **partial** folder and asserts every field carries something;
+with the drifted copy back it fails `missing_required: ["Install3.2"]` against
+`missing_required: []`.
 
 **ART-252** 🔴 ✅ **`rendered_size` tested `layout().trailing.start` for an
 appended ColorIcon's `FORM` tag, but a present `DrawerData2` sits there

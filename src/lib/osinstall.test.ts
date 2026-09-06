@@ -27,6 +27,8 @@ import {
   hasRomUnknownRefusal,
   isForcedOnByCondition,
   keymapsIn,
+  mediaEvidence,
+  type ReleaseEvidence,
   osinstallBlocker,
   parseOptionalSlot,
   parsePartitionIndex,
@@ -35,6 +37,7 @@ import {
   sanitizeChosen,
   toggleChosen,
   withoutExcluded,
+  wrongMediaFolder,
   INSTALL_RELEASES,
   type ComponentDef,
   type InstallPlan,
@@ -588,14 +591,49 @@ describe("osinstallBlocker", () => {
     volume_name: volume,
   });
 
+  /**
+   * A `ReleaseEvidence` fixture. Written out rather than derived, because
+   * deriving it in TypeScript would be a second copy of the matcher
+   * `core::osinstall::identify` owns — the ART-249 shape this round is
+   * removing, not adding. The Rust side has its own tests that the evidence
+   * a real recipe produces is this shape.
+   */
+  const evidenceOf = (
+    distinguishing: string[],
+    shared: string[] = [],
+    missingRequired: string[] = []
+  ): ReleaseEvidence => ({
+    release: "AmigaOS 3.2",
+    distinguishing,
+    shared,
+    missingRequired,
+  });
+
+  /** No media this release asks for is in the folder — the only state that
+   *  makes `wrongMediaFolder`'s claim a true one. */
+  const NOTHING_OF_THIS_RELEASE = evidenceOf([], [], ["Workbench3.2", "Install3.2"]);
+
   function planned(input: {
     refusals?: RefusalReason[];
     items?: InstallPlan["items"];
   }): PlanResult {
+    // ART-253's guard, at the place fixtures are built. `InstallPlan`'s own
+    // invariant (`core/osinstall/plan.rs`): a plan is either a full
+    // description of what would be written or every reason it cannot
+    // proceed, never both. The one production construction site empties
+    // `items` whenever there is any refusal — so a fixture carrying both
+    // exercises a state the core cannot emit, and a screen tested only
+    // against it is tested against nothing. That is how the false sentence
+    // survived a whole suite.
+    if ((input.refusals?.length ?? 0) > 0 && (input.items?.length ?? 0) > 0) {
+      throw new Error(
+        "InstallPlan invariant: a plan with refusals has no items (core/osinstall/plan.rs)"
+      );
+    }
     return {
       outcome: "planned",
       plan: {
-        release: "3.2",
+        release: "AmigaOS 3.2",
         items: input.items ?? [],
         refusals: input.refusals ?? [],
         totalBytes: 0,
@@ -619,6 +657,7 @@ describe("osinstallBlocker", () => {
     destinationTaken: false,
     found: ["Workbench3.2"],
     releaseHolding: null,
+    mediaFacts: evidenceOf(["Workbench3.2"]),
   };
 
   it("says nothing is wrong when a plan has items and no refusals", () => {
@@ -651,6 +690,7 @@ describe("osinstallBlocker", () => {
     const blocker = osinstallBlocker({
       ...READY,
       found: ["AmigaOS3.9"],
+      mediaFacts: NOTHING_OF_THIS_RELEASE,
       plan: planned({
         refusals: [
           MEDIA_MISSING("workbench-base", "Workbench3.2"),
@@ -668,6 +708,7 @@ describe("osinstallBlocker", () => {
       ...READY,
       found: ["AmigaOS3.9"],
       releaseHolding: "AmigaOS 3.9",
+      mediaFacts: NOTHING_OF_THIS_RELEASE,
       plan: planned({ refusals: [MEDIA_MISSING("workbench-base", "Workbench3.2")] }),
     });
     expect(blocker?.key).toBe("osinstall.blocked.wrongFolderIsRelease");
@@ -679,11 +720,95 @@ describe("osinstallBlocker", () => {
   // otherwise right folder is a missing disk, and telling that user "none of
   // these disks are what this release wants" would be false about a folder
   // holding fifteen disks it does want.
+  //
+  // **The fixture used to carry one placed item beside the refusal**, and no
+  // plan the core can emit does (ART-253): any refusal at all empties
+  // `items`. So the condition that actually withdrew the sentence in
+  // production was never the one this test thought it was exercising. What
+  // withdraws it now is the evidence — the folder holds `Workbench3.2`,
+  // which this release does ask for.
   it("keeps the per-disk refusal when the folder is the right one and a disk is missing", () => {
     const blocker = osinstallBlocker({
       ...READY,
       found: ["Workbench3.2", "Locale-TR"],
-      plan: planned({
+      mediaFacts: evidenceOf(["Workbench3.2", "Locale-TR"], [], ["Install3.2"]),
+      plan: planned({ refusals: [MEDIA_MISSING("storage", "Storage3.2")] }),
+    });
+    expect(blocker?.key).toBe("osinstall.blocked.refusals");
+  });
+
+  // The review's own folder, at the blocker: `Workbench3.2`, `Fonts` and
+  // `Locale` present, `Extras3.2` absent. On `main` this rendered
+  //
+  //   "None of the disks in this folder are ones this release asks for. It
+  //    holds: Workbench3.2, Fonts, Locale."
+  //
+  // — false about `Workbench3.2`, and it sends a user away from the right
+  // folder. `Fonts` and `Locale` are `shared`, never `distinguishing`, and
+  // they still count here: they are disks this recipe asks for whatever else
+  // also asks for them.
+  it("does not call the folder wrong when it holds this release's own disks and one is absent", () => {
+    const blocker = osinstallBlocker({
+      ...READY,
+      found: ["Workbench3.2", "Fonts", "Locale"],
+      plan: planned({ refusals: [MEDIA_MISSING("extras", "Extras3.2")] }),
+      mediaFacts: evidenceOf(["Workbench3.2"], ["Locale", "Fonts"], ["Install3.2"]),
+    });
+    expect(blocker?.key).toBe("osinstall.blocked.refusals");
+    expect(blocker?.key).not.toBe("osinstall.blocked.wrongFolder");
+  });
+
+  // Same folder, one difference: ART can name what it is holding. The
+  // all-or-nothing sentence must still withdraw — naming the release does
+  // not make "none of these disks are asked for" true.
+  it("does not call the folder wrong even when a release can be named for it", () => {
+    const blocker = osinstallBlocker({
+      ...READY,
+      found: ["Workbench3.2", "Fonts", "Locale"],
+      releaseHolding: "AmigaOS 3.2",
+      plan: planned({ refusals: [MEDIA_MISSING("extras", "Extras3.2")] }),
+      mediaFacts: evidenceOf(["Workbench3.2"], ["Locale", "Fonts"], ["Install3.2"]),
+    });
+    expect(blocker?.key).toBe("osinstall.blocked.refusals");
+  });
+
+  // ART-253 asked whether `osinstall.blocked.wrongFolder` — the bare listing,
+  // no release named — still has a reachable state once the claim is checked
+  // properly. It does, and this is it: a folder of disks that are nobody's
+  // install media. `release_holding` answers `null` for them (they match no
+  // recipe), the chosen release's evidence is empty (same reason), and the
+  // sentence is then simply true. The string stays in both catalogues.
+  it("still names a folder holding disks that are no release's install media", () => {
+    const blocker = osinstallBlocker({
+      ...READY,
+      found: ["Lemmings", "MyBackup"],
+      releaseHolding: null,
+      mediaFacts: NOTHING_OF_THIS_RELEASE,
+      plan: planned({ refusals: [MEDIA_MISSING("workbench-base", "Workbench3.2")] }),
+    });
+    expect(blocker?.key).toBe("osinstall.blocked.wrongFolder");
+    expect(blocker?.params?.found).toBe("Lemmings, MyBackup");
+  });
+
+  // The claim is specific, so it is never made unchecked. Until the lookup
+  // lands there is nothing to check it against, and the per-disk list below
+  // is true either way.
+  it("says nothing about the folder while the evidence has not arrived", () => {
+    const blocker = osinstallBlocker({
+      ...READY,
+      found: ["AmigaOS3.9"],
+      mediaFacts: null,
+      plan: planned({ refusals: [MEDIA_MISSING("workbench-base", "Workbench3.2")] }),
+    });
+    expect(blocker?.key).toBe("osinstall.blocked.refusals");
+  });
+
+  // The fixture guard itself. A future edit that hands `planned` both a
+  // refusal and an item is building a plan the core cannot emit, and this is
+  // what stops it becoming a test that proves nothing.
+  it("refuses to build a plan carrying both refusals and items", () => {
+    expect(() =>
+      planned({
         refusals: [MEDIA_MISSING("storage", "Storage3.2")],
         items: [
           {
@@ -697,9 +822,8 @@ describe("osinstallBlocker", () => {
             mergeIcon: false,
           },
         ],
-      }),
-    });
-    expect(blocker?.key).toBe("osinstall.blocked.refusals");
+      })
+    ).toThrow(/invariant/);
   });
 
   // The sentence claims something specific — "none of the disks in this
@@ -711,6 +835,7 @@ describe("osinstallBlocker", () => {
     const blocker = osinstallBlocker({
       ...READY,
       found: ["Workbench3.2"],
+      mediaFacts: evidenceOf(["Workbench3.2"], [], ["Install3.2"]),
       plan: planned({ refusals: [MEDIA_MISSING("workbench-base", "Workbench3.2")] }),
     });
     expect(blocker?.key).toBe("osinstall.blocked.refusals");
@@ -723,6 +848,7 @@ describe("osinstallBlocker", () => {
     const blocker = osinstallBlocker({
       ...READY,
       found: ["AmigaOS3.9"],
+      mediaFacts: NOTHING_OF_THIS_RELEASE,
       plan: planned({
         refusals: [MEDIA_MISSING("workbench-base", "Workbench3.2"), { refusal: "rom-unknown" }],
       }),
@@ -738,9 +864,577 @@ describe("osinstallBlocker", () => {
     const blocker = osinstallBlocker({
       ...READY,
       found: [],
+      mediaFacts: NOTHING_OF_THIS_RELEASE,
       plan: planned({ refusals: [MEDIA_MISSING("workbench-base", "Workbench3.2")] }),
     });
     expect(blocker?.key).toBe("osinstall.blocked.refusals");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mediaEvidence — the partial-media case wrongMediaFolder refuses to speak,
+// and the round this file's own module comment does not yet mention: the
+// refusals list already names which component wants which disk, this adds
+// what the folder itself looks like.
+// ---------------------------------------------------------------------------
+
+describe("mediaEvidence", () => {
+  const RELEASE = "AmigaOS 3.2";
+
+  /**
+   * A `ReleaseEvidence` fixture — the same shape and the same reasoning as
+   * the one in `osinstallBlocker`'s describe above: written out rather than
+   * derived, because deriving it here would be a second copy of the matcher
+   * `core::osinstall::identify` owns.
+   */
+  const evidenceOf = (
+    distinguishing: string[],
+    shared: string[] = [],
+    missingRequired: string[] = []
+  ): ReleaseEvidence => ({
+    release: RELEASE,
+    distinguishing,
+    shared,
+    missingRequired,
+  });
+
+  /**
+   * ART-253. **`items` is derived, not taken.**
+   *
+   * It used to be a parameter, and every test in this describe passed it 12,
+   * 3, 2 or 40 alongside refusals — a plan the core cannot emit.
+   * `InstallPlan`'s invariant (`core/osinstall/plan.rs`) is that a plan is
+   * either a full description of what would be written or every reason it
+   * cannot proceed, never both, and the one production construction site
+   * empties `items` for any refusal at all. So every assertion in here was
+   * exercising an impossible state, and `wrongMediaFolder` was being
+   * withdrawn by a condition that can never fire in production.
+   *
+   * Derived means the impossible plan is not merely rejected, it is
+   * unspellable.
+   */
+  function planWith(missing: string[]): InstallPlan {
+    const items =
+      missing.length > 0
+        ? 0
+        : // No refusals: a planned tree really does carry items, and the two
+          // silent-state tests below need one that does.
+          40;
+    return {
+      release: RELEASE,
+      items: Array.from({ length: items }, (_, i) => ({
+        component: `component-${i}`,
+        media: "Workbench3.2",
+        from: `DF0:C/Item${i}`,
+        to: `C/Item${i}`,
+        isDir: false,
+        decompress: false,
+        bytes: 10,
+        mergeIcon: false,
+      })),
+      refusals: missing.map((volume_name) => ({
+        refusal: "media-missing",
+        component: `component-${volume_name}`,
+        volume_name,
+      })),
+      totalBytes: 0,
+      totalFiles: 0,
+      componentsOn: [],
+      mediaPaths: {},
+      packages: [],
+      packageMedia: {},
+      userStartup: [],
+      activations: [],
+      mediaStamps: {},
+      removals: [],
+      layers: [],
+    };
+  }
+
+  it("says nothing when nothing is missing", () => {
+    expect(
+      mediaEvidence({
+        plan: planWith([]),
+        found: ["Workbench3.2"],
+        releaseHolding: RELEASE,
+        release: RELEASE,
+        evidence: evidenceOf(["Workbench3.2"]),
+      })
+    ).toBeNull();
+  });
+
+  it("says nothing when wrongMediaFolder owns the case", () => {
+    // Its conditions: folder non-empty, at least one refusal, every refusal
+    // media-missing, and — checked against the recipe rather than inferred
+    // (ART-253) — none of this release's own media in the folder. A 3.1
+    // Workbench disk is none of 3.2's. The two helpers must never both
+    // produce a sentence.
+    const plan = planWith(["Workbench3.2", "Extras3.2"]);
+    const found = ["Workbench3.1"];
+    const evidence = evidenceOf([], [], ["Workbench3.2", "Install3.2"]);
+    expect(wrongMediaFolder(plan, found, evidence)).not.toBeNull();
+    expect(
+      mediaEvidence({ plan, found, releaseHolding: "AmigaOS 3.1", release: RELEASE, evidence })
+    ).toBeNull();
+  });
+
+  it("names what the folder holds and which disks are absent", () => {
+    const phrase = mediaEvidence({
+      plan: planWith(["Extras3.2", "Classes3.2"]),
+      found: ["Workbench3.2", "Fonts", "Locale", "Install3.2"],
+      releaseHolding: RELEASE,
+      release: RELEASE,
+      evidence: evidenceOf(["Workbench3.2", "Install3.2"], ["Locale", "Fonts"]),
+    });
+    expect(phrase?.key).toBe("osinstall.evidence.sameRelease");
+    expect(phrase?.params?.found).toBe("Workbench3.2, Fonts, Locale, Install3.2");
+    expect(phrase?.params?.missing).toBe("Extras3.2, Classes3.2");
+  });
+
+  it("says which release the folder is when it is a different one", () => {
+    const phrase = mediaEvidence({
+      plan: planWith(["Extras3.2"]),
+      found: ["Workbench3.1", "Fonts", "Locale"],
+      releaseHolding: "AmigaOS 3.1",
+      release: RELEASE,
+      // `Fonts` and `Locale` are unsuffixed across 3.1, 3.1.4 and 3.2, so
+      // 3.2's own recipe does ask for them. That is what keeps
+      // `wrongMediaFolder` quiet here and lets this sentence be the one said
+      // — on the old fixture it was the impossible `items: 3` doing that job.
+      evidence: evidenceOf([], ["Locale", "Fonts"], ["Workbench3.2", "Install3.2"]),
+    });
+    expect(phrase?.key).toBe("osinstall.evidence.otherRelease");
+    expect(phrase?.params?.release).toBe("AmigaOS 3.1");
+    // and it still names the missing disk, because that is what the user acts on
+    expect(phrase?.params?.missing).toBe("Extras3.2");
+    // and it names what the folder holds — "this is 3.1 media" is an
+    // assertion; naming the disks found is evidence the user can check.
+    expect(phrase?.params?.found).toBe("Workbench3.1, Fonts, Locale");
+  });
+
+  it("does not name a release it cannot identify", () => {
+    // `Fonts` and `Locale` are unversioned across 3.1, 3.1.4 and 3.2, so a
+    // folder holding only those identifies nothing. Saying "this looks like
+    // 3.2" here would be a confident wrong sentence.
+    const phrase = mediaEvidence({
+      plan: planWith(["Workbench3.2"]),
+      found: ["Fonts", "Locale"],
+      releaseHolding: null,
+      release: RELEASE,
+      evidence: evidenceOf([], ["Locale", "Fonts"], ["Workbench3.2", "Install3.2"]),
+    });
+    expect(phrase?.key).toBe("osinstall.evidence.unidentified");
+    expect(phrase?.params?.found).toBe("Fonts, Locale");
+    expect(JSON.stringify(phrase?.params)).not.toContain(RELEASE);
+  });
+
+  it("says nothing at all when no folder has been chosen", () => {
+    // `osinstall.blocked.noFolder` already owns this; a second sentence here
+    // would be two answers to one question.
+    expect(
+      mediaEvidence({
+        plan: planWith(["Workbench3.2"]),
+        found: [],
+        releaseHolding: null,
+        release: RELEASE,
+        evidence: evidenceOf([], [], ["Workbench3.2", "Install3.2"]),
+      })
+    ).toBeNull();
+  });
+
+  // ART-253, the folder the review measured: `Workbench3.2`, `Fonts` and
+  // `Locale` in hand, `Extras3.2` absent. It is the ordinary partial case
+  // and it was never covered — every fixture in this describe reached it
+  // through an impossible `items` count instead. On `main` the screen said
+  //
+  //   "None of the disks in this folder are ones this release asks for. It
+  //    holds: Workbench3.2, Fonts, Locale."
+  //
+  // The whole sentence is asserted here, key and both parameters, not merely
+  // that something was said: "something was said" was true of the false
+  // sentence too.
+  it("names the folder's own disks and the absent one, for the review's own folder", () => {
+    const plan = planWith(["Extras3.2"]);
+    const found = ["Workbench3.2", "Fonts", "Locale"];
+    const evidence = evidenceOf(["Workbench3.2"], ["Locale", "Fonts"], ["Install3.2"]);
+
+    // First: the false sentence is not available at all here.
+    expect(wrongMediaFolder(plan, found, evidence)).toBeNull();
+
+    const phrase = mediaEvidence({
+      plan,
+      found,
+      releaseHolding: RELEASE,
+      release: RELEASE,
+      evidence,
+    });
+    expect(phrase).toEqual({
+      key: "osinstall.evidence.sameRelease",
+      params: { found: "Workbench3.2, Fonts, Locale", missing: "Extras3.2" },
+    });
+  });
+
+  it("returns a different key for every state", () => {
+    // The round's central guard. Every other test checks one state in
+    // isolation and would stay green if two of them were merged into one
+    // sentence — which is precisely the collapse this project names as its
+    // most expensive failure. This is the only test that can see it.
+    const keys = [
+      mediaEvidence({
+        plan: planWith(["Extras3.2"]),
+        found: ["Workbench3.2", "Fonts"],
+        releaseHolding: RELEASE,
+        release: RELEASE,
+        evidence: evidenceOf(["Workbench3.2"], ["Fonts"]),
+      }),
+      mediaEvidence({
+        plan: planWith(["Extras3.2"]),
+        found: ["Workbench3.1", "Fonts"],
+        releaseHolding: "AmigaOS 3.1",
+        release: RELEASE,
+        evidence: evidenceOf([], ["Fonts"], ["Workbench3.2", "Install3.2"]),
+      }),
+      mediaEvidence({
+        plan: planWith(["Workbench3.2"]),
+        found: ["Fonts", "Locale"],
+        releaseHolding: null,
+        release: RELEASE,
+        evidence: evidenceOf([], ["Locale", "Fonts"], ["Workbench3.2", "Install3.2"]),
+      }),
+    ].map((phrase) => phrase?.key);
+
+    expect(keys.every((key) => typeof key === "string")).toBe(true);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  // -------------------------------------------------------------------------
+  // ART-254 — evidence about another release brings ART-253's sentence back
+  // -------------------------------------------------------------------------
+  //
+  // The plan and the evidence are fetched by two uncoordinated effects on the
+  // screen, so a release switch leaves a window where the plan is the new
+  // release's and the evidence is still the old release's. Old evidence for a
+  // folder of *this* release's disks is legitimately empty — the folder holds
+  // none of AmigaOS 3.1's media — which is precisely the shape ART-253's
+  // check reads as "none of the disks in this folder are ones this release
+  // asks for".
+
+  /** AmigaOS 3.1's honest answer about a folder full of 3.2 disks: it holds
+   *  nothing of 3.1. True, and about a question nobody on screen is asking
+   *  any more. */
+  const STALE_31_EVIDENCE: ReleaseEvidence = {
+    release: "AmigaOS 3.1",
+    distinguishing: [],
+    shared: [],
+    missingRequired: ["Workbench3.1", "Install3.1"],
+  };
+
+  it("wrongMediaFolder withdraws when the evidence answers for a different release than the plan", () => {
+    const plan = planWith(["Extras3.2"]);
+    const found = ["Workbench3.2", "Fonts", "Locale"];
+
+    expect(wrongMediaFolder(plan, found, STALE_31_EVIDENCE)).toBeNull();
+
+    // The control, and the reason the assertion above has exactly one cause.
+    // The identical emptiness, relabelled with this plan's own release, does
+    // produce the sentence — so what withdrew it is the release check and
+    // not `found`, the refusals, or the emptiness itself.
+    expect(wrongMediaFolder(plan, found, { ...STALE_31_EVIDENCE, release: plan.release })).toBe(
+      "Workbench3.2, Fonts, Locale"
+    );
+  });
+
+  it("says the partial-media sentence, not the false one, while the evidence is a release behind", () => {
+    const plan = planWith(["Extras3.2"]);
+    const found = ["Workbench3.2", "Fonts", "Locale"];
+
+    // Not merely "something else was said": the whole phrase, key and both
+    // parameters. "Says nothing" would have been true here for several
+    // reasons; this state has one.
+    expect(
+      mediaEvidence({
+        plan,
+        found,
+        releaseHolding: RELEASE,
+        release: RELEASE,
+        evidence: STALE_31_EVIDENCE,
+      })
+    ).toEqual({
+      key: "osinstall.evidence.sameRelease",
+      params: { found: "Workbench3.2, Fonts, Locale", missing: "Extras3.2" },
+    });
+
+    // Control again: the same empty evidence, about the release being built,
+    // is the one state where the all-or-nothing sentence is true — and there
+    // this correctly says nothing, because the two never both speak.
+    expect(
+      mediaEvidence({
+        plan,
+        found,
+        releaseHolding: RELEASE,
+        release: RELEASE,
+        evidence: { ...STALE_31_EVIDENCE, release: RELEASE },
+      })
+    ).toBeNull();
+  });
+
+  // The other half of the same window, one render earlier: **both** the plan
+  // and the evidence are still the previous release's, because the two
+  // effects that fetch them are uncoordinated and neither is cleared when the
+  // release changes. They agree with each other, so `wrongMediaFolder`'s own
+  // check cannot see it — and it would then say "none of these disks are ones
+  // this release asks for" about the release the picker has already left.
+  //
+  // Withdrawn whole rather than partly: `missing` is read off the plan, so
+  // the alternative is a sentence naming AmigaOS 3.9's absent disks under
+  // AmigaOS 3.2's name. Two stale artefacts do not make one current sentence.
+  it("says nothing at all while the plan itself is still the previous release's", () => {
+    const stalePlan: InstallPlan = { ...planWith(["AmigaOS3.9"]), release: "AmigaOS 3.9" };
+    const found = ["Workbench3.2", "Fonts", "Locale"];
+    // Evidence held at `null` in **both** arms below, so the only difference
+    // between them is the plan's own release and the `null` has one cause.
+    // It is also the honest state here: on a release switch the evidence
+    // lookup is in flight while the previous plan is still on screen.
+    const args = { found, releaseHolding: RELEASE, release: RELEASE, evidence: null };
+
+    expect(mediaEvidence({ ...args, plan: stalePlan })).toBeNull();
+
+    // The control. Identical in every respect except that the plan is the
+    // release being built — and then there is a sentence, so what silenced
+    // the call above was the plan's release and not the folder or the refusal.
+    expect(mediaEvidence({ ...args, plan: { ...stalePlan, release: RELEASE } })).toEqual({
+      key: "osinstall.evidence.sameRelease",
+      params: { found: "Workbench3.2, Fonts, Locale", missing: "AmigaOS3.9" },
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ART-255 — the Ambiguous folder, which no test in the round constructed
+  // -------------------------------------------------------------------------
+  //
+  // `Workbench3.1` and `AmigaOS3.9` in one folder, building AmigaOS 3.2 —
+  // plus `Fonts` and `Locale`, which AmigaOS 3.2's own recipe also asks for.
+  // The two versioned disks name AmigaOS 3.1 and AmigaOS 3.9, and
+  // `release_holding` declines to choose between them, so it answers `null`
+  // — the same `null` an unknown folder produces. Neither versioned disk is
+  // *this* release's own (AmigaOS 3.2's `distinguishing` for this pile is
+  // empty), so the sentence must be one that is true of both Ambiguous and
+  // Unknown, which is why it no longer states a reason. `Fonts`/`Locale` are
+  // in the pile so `wrongMediaFolder` — which owns the all-or-nothing case
+  // and would otherwise fire here, since it is silent whenever this
+  // release's own evidence is entirely empty — correctly withdraws, leaving
+  // this the state under test.
+  //
+  // **Not `Workbench3.2` and `AmigaOS3.9`, as this fixture originally read**
+  // (ART-259). That pairing is genuinely ambiguous too, but `Workbench3.2` is
+  // AmigaOS 3.2's own distinguishing disk — the fixture was accidentally
+  // exercising `holdsThisReleasesOwnMedia`, not the "neither disk is this
+  // release's own" state ART-255 names. Once ART-257's check is asked before
+  // this one (as it must be, ART-259), that fixture correctly answers
+  // `sameRelease`: the folder really does hold a genuine AmigaOS 3.2 disk,
+  // and saying so is not a guess, whatever else the folder also holds. This
+  // fixture keeps ART-255's own state isolated from that one.
+  it("says the unidentified sentence for a folder naming two other releases, not just an unknown one", () => {
+    const phrase = mediaEvidence({
+      plan: planWith(["Extras3.2"]),
+      found: ["Workbench3.1", "AmigaOS3.9", "Fonts", "Locale"],
+      // Ambiguous, not Unknown — and indistinguishable from here.
+      releaseHolding: null,
+      release: RELEASE,
+      // Neither versioned disk is AmigaOS 3.2's own: no distinguishing.
+      // `Fonts`/`Locale` are shared, not distinguishing, and never settle
+      // identification — but they keep `wrongMediaFolder` from also firing.
+      evidence: evidenceOf([], ["Fonts", "Locale"], ["Workbench3.2", "Extras3.2"]),
+    });
+
+    expect(phrase).toEqual({
+      key: "osinstall.evidence.unidentified",
+      params: { found: "Workbench3.1, AmigaOS3.9, Fonts, Locale" },
+    });
+  });
+
+  // The pairing ART-255's own fixture used before ART-259: genuinely
+  // Ambiguous (two releases named), but one of the two disks really is this
+  // release's own distinguishing media. `sameRelease` is the honest answer
+  // here, not `unidentified` — the claim it makes ("this release's own media
+  // is among what the folder holds") stays true whatever else is in the pile.
+  it("calls an ambiguous folder this release's own once one of its disks genuinely is (ART-259)", () => {
+    const phrase = mediaEvidence({
+      plan: planWith(["Extras3.2"]),
+      found: ["Workbench3.2", "AmigaOS3.9"],
+      releaseHolding: null,
+      release: RELEASE,
+      evidence: evidenceOf(["Workbench3.2"], [], ["Extras3.2"]),
+    });
+
+    expect(phrase).toEqual({
+      key: "osinstall.evidence.sameRelease",
+      params: { found: "Workbench3.2, AmigaOS3.9", missing: "Extras3.2" },
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ART-257 — a based release's inherited media is its own media
+  // -------------------------------------------------------------------------
+  //
+  // The layered release is the one most likely to arrive part-complete, and
+  // it is the one where `identify` and the release being built legitimately
+  // disagree. Every fixture below is the answer the shipped recipes actually
+  // give, pinned on the Rust side by
+  // `identify.rs::a_based_releases_own_evidence_claims_the_base_set`:
+  // `release_holding` of the AmigaOS 3.2 base set is `"AmigaOS 3.2"`, while
+  // `evidence_for("AmigaOS 3.2.2", …)` of the same names claims those disks
+  // as 3.2.2's own `distinguishing` media and names the update disks absent.
+
+  const BASED = "AmigaOS 3.2.2";
+  /** The base set on the shelf, nothing of the update yet. */
+  const BASE_SET = ["Workbench3.2", "Install3.2", "Extras3.2", "Fonts", "Locale"];
+  const BASED_PLAN: InstallPlan = {
+    ...planWith(["Update3.2.2", "Classes3.2.2"]),
+    release: BASED,
+  };
+  const BASED_EVIDENCE: ReleaseEvidence = {
+    release: BASED,
+    distinguishing: ["Workbench3.2", "Install3.2", "Extras3.2"],
+    shared: ["Locale", "Fonts"],
+    missingRequired: ["Update3.2.2", "Classes3.2.2"],
+  };
+
+  it("calls the inherited base set this release's own media, not the base release's", () => {
+    expect(
+      mediaEvidence({
+        plan: BASED_PLAN,
+        found: BASE_SET,
+        // `identify`'s own answer, and it is right: a based release must not
+        // be named off its base's disks alone.
+        releaseHolding: RELEASE,
+        release: BASED,
+        evidence: BASED_EVIDENCE,
+      })
+    ).toEqual({
+      key: "osinstall.evidence.sameRelease",
+      params: {
+        found: "Workbench3.2, Install3.2, Extras3.2, Fonts, Locale",
+        missing: "Update3.2.2, Classes3.2.2",
+      },
+    });
+
+    // The control, one field apart. With none of this release's own
+    // distinguishing media in the pile — the folder really is somebody
+    // else's — the other sentence is still the one said, so what produced
+    // the sentence above was the evidence and not the release names, the
+    // refusals or the folder.
+    expect(
+      mediaEvidence({
+        plan: BASED_PLAN,
+        found: BASE_SET,
+        releaseHolding: RELEASE,
+        release: BASED,
+        evidence: { ...BASED_EVIDENCE, distinguishing: [] },
+      })
+    ).toEqual({
+      key: "osinstall.evidence.otherRelease",
+      params: {
+        found: "Workbench3.2, Install3.2, Extras3.2, Fonts, Locale",
+        release: RELEASE,
+        missing: "Update3.2.2, Classes3.2.2",
+      },
+    });
+  });
+
+  it("will not call a folder somebody else's media without this release's own evidence", () => {
+    // `otherRelease` no longer claims the folder holds none of this
+    // release's own media (M1), but it still must not fire while stale
+    // evidence (ART-254's window, and it is wider here: a switch to a based
+    // release lands with the base release's evidence still held) could yet
+    // turn out to hold this release's own distinguishing media once it
+    // resolves — which would make `sameRelease` the right ending instead.
+    // The per-disk refusals below say what is missing either way.
+    const stale: ReleaseEvidence = { ...BASED_EVIDENCE, release: RELEASE };
+    const args = {
+      plan: BASED_PLAN,
+      found: BASE_SET,
+      releaseHolding: RELEASE,
+      release: BASED,
+    };
+
+    expect(mediaEvidence({ ...args, evidence: stale })).toBeNull();
+    // In flight is the same answer for the same reason.
+    expect(mediaEvidence({ ...args, evidence: null })).toBeNull();
+
+    // The control: the identical evidence, labelled with the release it is
+    // actually about, does produce a sentence — so the silence above has one
+    // cause and it is the release label, not the folder or the refusals.
+    expect(mediaEvidence({ ...args, evidence: BASED_EVIDENCE })?.key).toBe(
+      "osinstall.evidence.sameRelease"
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // ART-259 — ART-257's own check ran after the `releaseHolding === null`
+  // return, so it was unreachable for the one folder it exists to catch.
+  // -------------------------------------------------------------------------
+
+  /**
+   * The update set on the shelf, none of the base yet. Unlike `BASE_SET`
+   * above — where `identify` still names the base release outright — a
+   * based release with **none** of its base present has a non-empty
+   * `missing_required` and is dropped from the named candidates
+   * (`identify.rs`'s own base-subsumption pass), and the update disk names
+   * are nobody else's. So `release_holding` of this exact pile answers
+   * `Unknown`, not `"AmigaOS 3.2"` and not `"AmigaOS 3.2.2"` — this is the
+   * folder the previous fix wave's own reorder bug left unreachable.
+   */
+  const UPDATE_SET = ["Update3.2.2", "Classes3.2.2"];
+  const UPDATE_ONLY_PLAN: InstallPlan = {
+    ...planWith(["Workbench3.2", "Install3.2", "Extras3.2"]),
+    release: BASED,
+  };
+  const UPDATE_ONLY_EVIDENCE: ReleaseEvidence = {
+    release: BASED,
+    distinguishing: ["Update3.2.2", "Classes3.2.2"],
+    shared: [],
+    missingRequired: ["Workbench3.2", "Install3.2", "Extras3.2"],
+  };
+
+  it("calls the update-only folder this release's own media even though identify names no release at all", () => {
+    expect(
+      mediaEvidence({
+        plan: UPDATE_ONLY_PLAN,
+        found: UPDATE_SET,
+        // `identify`'s own answer for this exact pile: Unknown.
+        releaseHolding: null,
+        release: BASED,
+        evidence: UPDATE_ONLY_EVIDENCE,
+      })
+    ).toEqual({
+      key: "osinstall.evidence.sameRelease",
+      params: {
+        found: "Update3.2.2, Classes3.2.2",
+        missing: "Workbench3.2, Install3.2, Extras3.2",
+      },
+    });
+  });
+
+  it("still says unidentified for a folder holding neither this release's base nor its update disks", () => {
+    // `unidentified` must keep every state it is genuinely right for: a pile
+    // with nothing of this release's own `distinguishing` media in it is
+    // still exactly that state, `releaseHolding === null` and nothing else,
+    // whatever the reorder above changed.
+    expect(
+      mediaEvidence({
+        plan: UPDATE_ONLY_PLAN,
+        found: ["Fonts", "Locale"],
+        releaseHolding: null,
+        release: BASED,
+        evidence: {
+          release: BASED,
+          distinguishing: [],
+          shared: ["Fonts", "Locale"],
+          missingRequired: ["Workbench3.2", "Install3.2", "Extras3.2", "Update3.2.2", "Classes3.2.2"],
+        },
+      })
+    ).toEqual({ key: "osinstall.evidence.unidentified", params: { found: "Fonts, Locale" } });
   });
 });
 
