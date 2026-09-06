@@ -11,6 +11,7 @@ import en from "./en.json";
 import { ALL_PROVENANCES, provenancePhrase, igameVerdictPhrase } from "@/lib/gameindex";
 import { kindPhrase as artworkKindPhrase, mediaPhrase } from "@/lib/collectionDetail";
 import { networkBlocker } from "@/components/osbuilder/NetworkPanel";
+import { appearanceBlocker } from "@/components/osbuilder/AppearancePanel";
 import type { Media, IGameState } from "@/lib/gameindex";
 import {
   outcomePhrase,
@@ -791,6 +792,51 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         netmask: "255.255.255.0",
         gateway: "192.168.1.1",
         dns: "192.168.1.1",
+      })
+    ).toBeNull();
+  });
+
+  it("appearanceBlocker: every reason an appearance apply cannot run resolves", () => {
+    const ok = {
+      tree: "E:\\dist",
+      wallpaperOn: true,
+      sourceKind: "already-in-tree" as const,
+      amigaPath: "Sys:Prefs/Presets/Backdrops/default_pal.iff",
+      hostPath: null,
+      screenDepthOn: false,
+      shellDefaultsOn: false,
+    };
+    const blockers = [
+      appearanceBlocker({ ...ok, tree: null }),
+      appearanceBlocker({ ...ok, wallpaperOn: false }),
+      appearanceBlocker({ ...ok, amigaPath: null }),
+      appearanceBlocker({
+        ...ok,
+        sourceKind: "host-picture",
+        amigaPath: null,
+        hostPath: null,
+      }),
+    ];
+    for (const blocker of blockers) {
+      expect(blocker).not.toBeNull();
+      expect(isLeafKey(blocker!.key), blocker!.key).toBe(true);
+    }
+    // Nothing wrong is nothing said.
+    expect(appearanceBlocker(ok)).toBeNull();
+    // Screen depth or shell defaults alone is enough — the wallpaper is not
+    // mandatory just because it is the first section on the screen.
+    expect(
+      appearanceBlocker({ ...ok, wallpaperOn: false, screenDepthOn: true })
+    ).toBeNull();
+    expect(
+      appearanceBlocker({ ...ok, wallpaperOn: false, shellDefaultsOn: true })
+    ).toBeNull();
+    expect(
+      appearanceBlocker({
+        ...ok,
+        sourceKind: "host-picture",
+        amigaPath: null,
+        hostPath: "C:\\wallpaper.png",
       })
     ).toBeNull();
   });

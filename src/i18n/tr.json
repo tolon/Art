@@ -2700,5 +2700,60 @@
       "noDevice": "Yığının bir sürücü adı gerekiyor.",
       "staticIncomplete": "Sabit adres için her alan gerekli; {{field}} boş."
     }
+  },
+  "appearance": {
+    "heading": "Görünüm",
+    "intro": "Bu ağaç üzerinde masaüstü duvar kağıdını, ekran derinliğini ve kabuğun kendi varsayılanlarını ayarlayın — doğrudan sürümün kendi WBPattern.prefs ve ScreenMode.prefs dosyalarına yazılır; bunlar AmigaOS'un kendisinin okuduğu dosyalardır.",
+    "wallpaper": {
+      "enable": "Masaüstü duvar kağıdını değiştir",
+      "whichLabel": "Hangi katman",
+      "which": {
+        "root": "Masaüstü",
+        "drawer": "Çekmece pencereleri",
+        "screen": "Workbench ekranı"
+      },
+      "source": {
+        "existing": "Ağaçta zaten olan bir arka planı kullan",
+        "host": "Bu bilgisayardan bir resim seç"
+      },
+      "backdropLabel": "Arka plan",
+      "backdrop": {
+        "choose": "Bir arka plan seçin…",
+        "none": "Henüz hiçbir şey konmamış."
+      },
+      "pictureLabel": "Resim",
+      "picture": {
+        "none": "Resim seçilmedi",
+        "chooseTitle": "Bir resim seçin",
+        "hint": "Yalnızca PNG veya JPEG."
+      },
+      "colours": "Renkler",
+      "placementLabel": "Yerleşim",
+      "placement": {
+        "tile": "Döşe",
+        "center": "Ortala",
+        "scale": "Ölçekle",
+        "scale-good": "Ölçekle (en iyi kalite)"
+      }
+    },
+    "screen": {
+      "enable": "Ekran derinliğini değiştir",
+      "depth": "Derinlik (bit düzlemi)"
+    },
+    "shell": {
+      "enable": "Kabuğun kendi varsayılanlarını yaz (genişlik, yükseklik, renkler)"
+    },
+    "apply": "Uygula",
+    "applying": "Uygulanıyor…",
+    "done": {
+      "written": "Yazıldı: {{files}}",
+      "backup": "Önceki sürüm şuraya yedeklendi: {{files}}"
+    },
+    "blocked": {
+      "noTree": "Önce bir sistem birimi seçin.",
+      "nothingChosen": "Duvar kağıdını, ekran derinliğini, kabuk varsayılanlarını ya da bir kısmını işaretleyin.",
+      "noBackdropChosen": "Ağaçta zaten olan bir arka plan seçin.",
+      "noPictureChosen": "Bu bilgisayardan bir resim seçin."
+    }
   }
 }
