@@ -2743,15 +2743,20 @@
     "shell": {
       "enable": "Kabuğun kendi varsayılanlarını yaz (genişlik, yükseklik, renkler)"
     },
+    "icons": {
+      "enable": "Workbench'in hiç yerleştirmediği çekmece simgelerini düzenle"
+    },
     "apply": "Uygula",
     "applying": "Uygulanıyor…",
     "done": {
       "written": "Yazıldı: {{files}}",
-      "backup": "Önceki sürüm şuraya yedeklendi: {{files}}"
+      "backup": "Önceki sürüm şuraya yedeklendi: {{files}}",
+      "iconsPlaced": "{{drawers}} çekmecede {{count}} simge yerleştirildi.",
+      "iconsSkipped": "{{count}} simge okunamadı, dokunulmadan bırakıldı: {{files}}"
     },
     "blocked": {
       "noTree": "Önce bir sistem birimi seçin.",
-      "nothingChosen": "Duvar kağıdını, ekran derinliğini, kabuk varsayılanlarını ya da bir kısmını işaretleyin.",
+      "nothingChosen": "Duvar kağıdını, ekran derinliğini, kabuk varsayılanlarını, simge düzenlemeyi ya da bir kısmını işaretleyin.",
       "noBackdropChosen": "Ağaçta zaten olan bir arka plan seçin.",
       "noPictureChosen": "Bu bilgisayardan bir resim seçin."
     }

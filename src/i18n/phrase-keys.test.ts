@@ -805,6 +805,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       hostPath: null,
       screenDepthOn: false,
       shellDefaultsOn: false,
+      arrangeIconsOn: false,
     };
     const blockers = [
       appearanceBlocker({ ...ok, tree: null }),
@@ -830,6 +831,13 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     ).toBeNull();
     expect(
       appearanceBlocker({ ...ok, wallpaperOn: false, shellDefaultsOn: true })
+    ).toBeNull();
+    // Task 8 of the drawer-icons round: the icon arrangement checkbox is its
+    // own capability, sufficient on its own the same way screen depth and
+    // shell defaults already are — ticking only it must not be told "tick
+    // something".
+    expect(
+      appearanceBlocker({ ...ok, wallpaperOn: false, arrangeIconsOn: true })
     ).toBeNull();
     expect(
       appearanceBlocker({

@@ -33,6 +33,11 @@ export interface AppearanceApplyRequest {
   wallpaper: AppearanceWallpaperAssignment | null;
   screenDepth: number | null;
   shellDefaults: boolean;
+  /** `AppearanceRequest::arrange_icons` on the wire (Task 8 of the
+   * drawer-icons round) — lay out every icon the tree's drawers carry that
+   * has not already been positioned by the release itself
+   * (`core::icongrid::arrange`). */
+  arrangeIcons: boolean;
 }
 
 /**
@@ -40,12 +45,21 @@ export interface AppearanceApplyRequest {
  * with. `backups` names where every previous version of a rewritten file
  * went (spec §92: a user told "done" without being told where the previous
  * version went has been given nothing).
+ *
+ * `iconsPlaced`, `drawersArranged` and `iconsSkipped` are Task 8's own
+ * addition: a run that arranged icons but told the user only "done" would be
+ * the same failure CLAUDE.md names — a confident sentence that omits what
+ * did not work. `iconsSkipped` names the icons `core::amigaicon` could not
+ * read, not merely their count.
  */
 export interface AppearanceOutcome {
   written: string[];
   backups: string[];
   picturePlaced: string | null;
   amigaPath: string | null;
+  iconsPlaced: number;
+  drawersArranged: number;
+  iconsSkipped: string[];
 }
 
 /** Every backdrop `tree` already carries under `Prefs/Presets/Backdrops`. */

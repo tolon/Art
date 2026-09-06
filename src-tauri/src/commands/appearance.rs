@@ -181,6 +181,14 @@ pub struct AppearanceOutcomeWire {
     pub backups: Vec<String>,
     pub picture_placed: Option<String>,
     pub amiga_path: Option<String>,
+    /// [`AppearanceOutcome::icons_placed`] on the wire.
+    pub icons_placed: usize,
+    /// [`AppearanceOutcome::drawers_arranged`] on the wire.
+    pub drawers_arranged: usize,
+    /// [`AppearanceOutcome::icons_skipped`] on the wire — named, not merely
+    /// counted, so a malformed icon is not silently dropped (CLAUDE.md: "never
+    /// claim what you did not do").
+    pub icons_skipped: Vec<String>,
 }
 
 impl From<AppearanceOutcome> for AppearanceOutcomeWire {
@@ -198,6 +206,13 @@ impl From<AppearanceOutcome> for AppearanceOutcomeWire {
                 .collect(),
             picture_placed: value.picture_placed.map(|p| p.display().to_string()),
             amiga_path: value.amiga_path,
+            icons_placed: value.icons_placed,
+            drawers_arranged: value.drawers_arranged,
+            icons_skipped: value
+                .icons_skipped
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect(),
         }
     }
 }
@@ -434,15 +449,25 @@ mod tests {
             backups: vec!["b".to_string()],
             picture_placed: Some("c".to_string()),
             amiga_path: Some("Sys:Prefs/Presets/Backdrops/x.iff".to_string()),
+            icons_placed: 3,
+            drawers_arranged: 2,
+            icons_skipped: vec!["Sys:Broken/broken.info".to_string()],
         };
         let value = serde_json::to_value(&outcome).unwrap();
         let keys: std::collections::BTreeSet<String> =
             value.as_object().unwrap().keys().cloned().collect();
-        let expected: std::collections::BTreeSet<String> =
-            ["written", "backups", "picturePlaced", "amigaPath"]
-                .into_iter()
-                .map(str::to_string)
-                .collect();
+        let expected: std::collections::BTreeSet<String> = [
+            "written",
+            "backups",
+            "picturePlaced",
+            "amigaPath",
+            "iconsPlaced",
+            "drawersArranged",
+            "iconsSkipped",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
         assert_eq!(keys, expected);
     }
 
