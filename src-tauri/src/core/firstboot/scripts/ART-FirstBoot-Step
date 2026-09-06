@@ -1,0 +1,18 @@
+.KEY name/A
+.BRA {
+.KET }
+; Runs one first-boot step and reports it. A step says no with Quit 20 (or any
+; code of 5 and above); a step that decides not to run writes its own
+; "skipped <reason>" line first and ends normally.
+FailAt 2000000000
+Echo >>S:FirstBoot.log "step {name} started"
+Execute S:FirstBoot/{name}
+IF WARN
+  Echo >>S:FirstBoot.log "step {name} refused rc=$RC"
+ELSE
+  Echo >>S:FirstBoot.log "step {name} ok"
+  Delete >NIL: S:FirstBoot/{name}
+ENDIF
+IF $ART_Reboot EQ "TRUE"
+  Echo >>S:FirstBoot.log "reboot requested by {name}"
+ENDIF

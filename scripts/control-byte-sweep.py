@@ -101,6 +101,8 @@ GAP_ALLOWED = {
         "a fixture list whose entries carry aligned trailing size comments",
     "src-tauri/src/core/osinstall/mod.rs":
         "a fixture whose protection bits are noted in aligned trailing comments",
+    "src-tauri/src/core/firstboot/scripts.rs":
+        "assertions quoting the mountlists' own aligned 'Key = value' columns",
 }
 
 

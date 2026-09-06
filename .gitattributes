@@ -28,6 +28,13 @@
 *.sql  text eol=lf
 *.sh   text eol=lf
 
+# Fixed AmigaDOS scripts ART compiles in with include_str! (core/firstboot).
+# They carry no extension, so the *.ext rules above never match them, and an
+# AmigaDOS shell reads a CR as part of the line — a checkout that flipped
+# these to CRLF under `core.autocrlf=true` would still compile, but every
+# line the Amiga read would carry a trailing CR into a filename or a value.
+src-tauri/src/core/firstboot/scripts/* text eol=lf
+
 # Amiga and disc images ART reads and writes: a single translated byte is a
 # corrupt image, so these are never text.
 *.adf  binary
