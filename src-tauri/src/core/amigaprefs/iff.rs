@@ -288,4 +288,141 @@ mod tests {
             "the refusal must name the chunk, got: {err}"
         );
     }
+
+    /// Walk `dir`, collecting every `*.prefs` file. Case-insensitive on the
+    /// extension for the same reason `core::amigaicon`'s `collect_info_files`
+    /// is: real AmigaOS media is not consistent about case. Local to this
+    /// one test.
+    fn collect_prefs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_prefs_files(&path, out);
+            } else if path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("prefs"))
+            {
+                out.push(path);
+            }
+        }
+    }
+
+    /// **The prefs codec's real-material oracle.** Every other test in this
+    /// module round-trips a `synthetic_prefs` fixture this same module
+    /// built, which cannot catch a parser and a rebuilder that agree with
+    /// each other and with nothing else — exactly the class of defect
+    /// `CLAUDE.md` names ART-032 .. ART-035 for. This walks a directory of
+    /// **real** AmigaOS preferences files, parses each with [`parse`], and
+    /// asserts `to_bytes()` reproduces the file's own bytes exactly.
+    ///
+    /// A no-op (not a failure) when `ART_PREFS_DIR` is unset, so the
+    /// ordinary suite never touches the owner's own disks:
+    ///
+    /// ```text
+    /// ART_PREFS_DIR="E:\amiga\Amigatolon\os39" \
+    ///   cargo test every_real_prefs_file_round_trips_byte_for_byte -- --ignored --nocapture
+    /// ```
+    ///
+    /// **Not every file that carries a `.prefs` extension is a `FORM`…`PREF`
+    /// container, and that split is measured, not assumed** — the same
+    /// discipline `core::amigaicon`'s icon oracle applies to `ToolTypes`.
+    /// The first run of this test against `E:\amiga\Amigatolon\os39` failed
+    /// 9 of 24: every one of them a third-party tool's own config file that
+    /// merely reuses the `.prefs` extension by convention — `ViNCEd.prefs`
+    /// and `XTerm.Prefs` are `;`-commented plain text, `amidock.prefs`
+    /// begins `AmiDock configur…`, `StringSnip.prefs` is plain text, and
+    /// `deficons.prefs` is a DefIcons-specific binary catalogue that has
+    /// never been `FORM`-wrapped. None of the nine begin with the four
+    /// bytes `FORM`, confirmed by reading them (`od`/`xxd`) before writing
+    /// this comment. Reporting those as "the codec failed to round-trip a
+    /// prefs file" would be exactly the confident-wrong sentence
+    /// `CLAUDE.md`'s "failure that does not crash" section warns against:
+    /// this module's parser was never asked to understand a format it does
+    /// not claim to read. So a file not beginning `FORM` is counted in
+    /// `not_iff_pref` and printed on its own line, never in `failed`.
+    ///
+    /// What **is** unconditional, for every file that does begin `FORM`:
+    /// [`parse`] must succeed and `to_bytes()` must reproduce the file's own
+    /// bytes exactly. A file that claims the container this module reads
+    /// and does not round-trip is not a panic: it is recorded by name in
+    /// `failed`, and the whole test fails once at the end, printing every
+    /// one of them — plus every count, so the numbers that land in
+    /// `docs/STATUS.md` are measured, not guessed.
+    #[test]
+    #[ignore = "needs the owner's own material; set ART_PREFS_DIR"]
+    fn every_real_prefs_file_round_trips_byte_for_byte() {
+        let Ok(dir) = std::env::var("ART_PREFS_DIR") else {
+            return;
+        };
+        let mut entries = Vec::new();
+        collect_prefs_files(std::path::Path::new(&dir), &mut entries);
+        entries.sort();
+
+        let mut total = 0usize;
+        let mut ok = 0usize;
+        let mut not_iff_pref = 0usize;
+        let mut skipped: Vec<String> = Vec::new();
+        let mut failed: Vec<String> = Vec::new();
+        for entry in &entries {
+            let bytes = match std::fs::read(entry) {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    failed.push(format!("{} (could not read: {err})", entry.display()));
+                    continue;
+                }
+            };
+            total += 1;
+
+            if bytes.len() < 4 || &bytes[0..4] != b"FORM" {
+                not_iff_pref += 1;
+                skipped.push(format!(
+                    "{}: does not begin with FORM — not this module's container, \
+                     a third-party tool's own '.prefs' file",
+                    entry.display()
+                ));
+                continue;
+            }
+
+            match parse(&bytes) {
+                Ok(parsed) => {
+                    let rebuilt = parsed.to_bytes();
+                    if rebuilt == bytes {
+                        ok += 1;
+                    } else {
+                        failed.push(format!(
+                            "{}: to_bytes() did not reproduce the file's own bytes \
+                             ({} vs {} bytes)",
+                            entry.display(),
+                            rebuilt.len(),
+                            bytes.len()
+                        ));
+                    }
+                }
+                Err(err) => failed.push(format!(
+                    "{}: begins with FORM but parse failed: {err}",
+                    entry.display()
+                )),
+            }
+        }
+
+        println!(
+            "ART_PREFS_RESULT total={total} ok={ok} not_iff_pref={not_iff_pref} failed={}",
+            failed.len()
+        );
+        for s in &skipped {
+            println!("ART_PREFS_SKIP {s}");
+        }
+        for f in &failed {
+            println!("ART_PREFS_FAIL {f}");
+        }
+        assert!(
+            failed.is_empty(),
+            "{} of {total} real prefs file(s) claiming the FORM/PREF container \
+             did not round-trip byte for byte",
+            failed.len()
+        );
+    }
 }

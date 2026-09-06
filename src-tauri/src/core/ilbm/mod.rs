@@ -413,4 +413,187 @@ mod tests {
             "packing the rows together is the defect this test exists for"
         );
     }
+
+    /// A small deterministic generator — no `rand` dependency for a handful
+    /// of fixture pixels. Not cryptographic; it only needs to look nothing
+    /// like a solid fill or a repeating pattern, so `packbits` cannot
+    /// collapse it into a handful of runs and `scripts/ilbm-oracle-check.py`
+    /// is actually exercising the general decode path.
+    fn lcg_next(state: &mut u32) -> u32 {
+        *state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        *state
+    }
+
+    fn noisy_pixels(width: usize, height: usize, colours: usize, seed: u32) -> Vec<u8> {
+        let mut state = seed;
+        (0..width * height)
+            .map(|_| (lcg_next(&mut state) % colours as u32) as u8)
+            .collect()
+    }
+
+    fn solid_pixels(width: usize, height: usize, index: u8) -> Vec<u8> {
+        vec![index; width * height]
+    }
+
+    /// A palette with `n` distinct, non-grayscale colours — arbitrary but
+    /// deterministic, so a run comparing decoded pixels against a manifest
+    /// has real colour information to be wrong about.
+    fn fixture_palette(n: usize) -> Vec<[u8; 3]> {
+        (0..n)
+            .map(|i| {
+                let t = i as u32;
+                [
+                    ((t * 53 + 17) % 256) as u8,
+                    ((t * 97 + 31) % 256) as u8,
+                    ((t * 149 + 67) % 256) as u8,
+                ]
+            })
+            .collect()
+    }
+
+    /// One named fixture: an image this encoder produces, plus what
+    /// [`write_the_ilbm_oracle_fixtures`] records as the pixels it meant.
+    struct Fixture {
+        name: &'static str,
+        image: Indexed,
+    }
+
+    #[derive(serde::Serialize)]
+    struct ManifestEntry {
+        file: String,
+        width: u32,
+        height: u32,
+        /// Row-major, one `[r, g, b]` per pixel — the RGB this encoder's
+        /// input implies via its own palette, computed here rather than
+        /// re-derived from the encoded bytes, so the oracle script's
+        /// comparison is against what ART *meant*, not against ART's own
+        /// output read back by ART.
+        rgb: Vec<[u8; 3]>,
+    }
+
+    fn oracle_fixtures() -> Vec<Fixture> {
+        vec![
+            Fixture {
+                name: "solid-1plane",
+                image: Indexed {
+                    width: 16,
+                    height: 16,
+                    palette: fixture_palette(2),
+                    pixels: solid_pixels(16, 16, 1),
+                },
+            },
+            Fixture {
+                name: "noisy-1plane",
+                image: Indexed {
+                    width: 16,
+                    height: 16,
+                    palette: fixture_palette(2),
+                    pixels: noisy_pixels(16, 16, 2, 0xC0FF_EE01),
+                },
+            },
+            Fixture {
+                name: "solid-4plane",
+                image: Indexed {
+                    width: 16,
+                    height: 16,
+                    palette: fixture_palette(16),
+                    pixels: solid_pixels(16, 16, 9),
+                },
+            },
+            Fixture {
+                name: "noisy-4plane",
+                image: Indexed {
+                    width: 16,
+                    height: 16,
+                    palette: fixture_palette(16),
+                    pixels: noisy_pixels(16, 16, 16, 0xC0FF_EE02),
+                },
+            },
+            Fixture {
+                name: "solid-8plane",
+                image: Indexed {
+                    width: 16,
+                    height: 16,
+                    palette: fixture_palette(256),
+                    pixels: solid_pixels(16, 16, 200),
+                },
+            },
+            Fixture {
+                name: "noisy-8plane",
+                image: Indexed {
+                    width: 16,
+                    height: 16,
+                    palette: fixture_palette(256),
+                    pixels: noisy_pixels(16, 16, 256, 0xC0FF_EE03),
+                },
+            },
+            // An odd width: 17 pixels needs word-alignment padding
+            // (`plane_row`'s `div_ceil(16)`), which a width that is already
+            // a multiple of 16 never exercises.
+            Fixture {
+                name: "odd-width-17",
+                image: Indexed {
+                    width: 17,
+                    height: 5,
+                    palette: fixture_palette(8),
+                    pixels: noisy_pixels(17, 5, 8, 0xC0FF_EE04),
+                },
+            },
+            // An odd-length CMAP: 3 colours is 9 bytes, exercising the IFF
+            // pad byte on the palette chunk itself, not just BODY.
+            Fixture {
+                name: "odd-cmap-3colours",
+                image: Indexed {
+                    width: 8,
+                    height: 8,
+                    palette: fixture_palette(3),
+                    pixels: noisy_pixels(8, 8, 3, 0xC0FF_EE05),
+                },
+            },
+        ]
+    }
+
+    /// Write every oracle fixture — the `.iff` files plus the manifest of
+    /// pixels they mean — into the directory named by `ART_ILBM_OUT`.
+    ///
+    /// `scripts/ilbm-oracle-check.py` runs this test, decodes each `.iff`
+    /// with ffmpeg's `iff_ilbm` decoder, and compares the result pixel by
+    /// pixel against `manifest.json`. No second encoder exists anywhere in
+    /// this repository — the fixtures are the product's own [`encode`],
+    /// nothing else.
+    #[test]
+    #[ignore = "writes fixtures for scripts/ilbm-oracle-check.py; run explicitly"]
+    fn write_the_ilbm_oracle_fixtures() {
+        let Ok(out_dir) = std::env::var("ART_ILBM_OUT") else {
+            return;
+        };
+        let out_dir = std::path::PathBuf::from(out_dir);
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let mut manifest = Vec::new();
+        for fixture in oracle_fixtures() {
+            let bytes = encode(&fixture.image).unwrap();
+            let file_name = format!("{}.iff", fixture.name);
+            std::fs::write(out_dir.join(&file_name), &bytes).unwrap();
+
+            let rgb = fixture
+                .image
+                .pixels
+                .iter()
+                .map(|&index| fixture.image.palette[index as usize])
+                .collect();
+
+            manifest.push(ManifestEntry {
+                file: file_name,
+                width: fixture.image.width as u32,
+                height: fixture.image.height as u32,
+                rgb,
+            });
+            println!("wrote {}", fixture.name);
+        }
+
+        let json = serde_json::to_string_pretty(&manifest).unwrap();
+        std::fs::write(out_dir.join("manifest.json"), json).unwrap();
+        println!("wrote {} fixtures to {}", manifest.len(), out_dir.display());
+    }
 }
