@@ -57,9 +57,25 @@
 ```rust
 pub struct MediaRow { pub md5: String, pub version: String, pub volume: String,
                       pub name: String, pub source: String, pub sequence: Option<u32> }
-pub fn row_for(md5: &str) -> Option<&'static MediaRow>;
-pub fn rows() -> &'static [MediaRow];
+pub fn row_for(md5: &str) -> CoreResult<Option<&'static MediaRow>>;
+pub fn rows() -> CoreResult<&'static [MediaRow]>;
 ```
+
+**Corrected 2026-09-06, and the error was mine.** The first version of this
+block returned bare `Option` / `&[MediaRow]`, which makes a parse failure
+impossible to report and forces a `panic!`. `core/osinstall/recipe.rs:636`
+records this project having tried exactly that and **reversed it**: *"The first
+version reached for `panic!`/`expect` on a shipped recipe that would not
+parse… That reasoning does not survive the release profile: `panic = "abort"`
+means an abort here takes the whole application down."* `core/distro::profiles`
+returns `CoreResult` for the same reason. Shipped data being wrong is still a
+bug; it must be a bug that produces a refusal a user can read and a process
+that is still running.
+
+Cache the parse **result**, not just the success, so a broken table is reported
+identically on the first call and the thousandth. `CoreError` is not `Clone`,
+so hold the failure as its own text and rebuild a `CoreError::Malformed` from
+it — `recipe.rs`'s doc describes this exact arrangement; copy it.
 
 - [ ] **Step 1: Read the JSON's `$comment` field first.** It states the table's provenance and the two traps (many-to-one; do not re-derive a version). Then read the spec's §2.2.
 - [ ] **Step 2: Write the failing invariant tests** — these guard the *data*, which is what drifts:

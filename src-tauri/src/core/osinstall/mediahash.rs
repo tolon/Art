@@ -29,27 +29,38 @@
 //! ## Loading, and what happens if the shipped JSON is broken
 //!
 //! Same shape as `core/distro`'s registry: a JSON file in this directory,
-//! `include_str!`-ed in, parsed with `serde_json`. Unlike `core/distro`,
-//! [`rows`] and [`row_for`] cannot return a [`CoreError`](crate::core::error::CoreError) —
-//! their signatures are fixed by later tasks that consume them as plain data
-//! (`&'static [MediaRow]`, `Option<&'static MediaRow>`), not a `Result`. So
-//! the table is parsed once, lazily, behind a [`std::sync::OnceLock`], and if
-//! the compiled-in JSON does not parse, the first call **panics** with a
-//! message naming the JSON error.
+//! `include_str!`-ed in, parsed with `serde_json`.
 //!
-//! That is a deliberate choice, not an oversight: the table ships inside the
-//! binary and never changes at runtime, so a malformed table is a mistake
-//! made *before* a release — caught by this module's own
-//! `the_shipped_table_has_exactly_186_rows` test (and the rest of the
-//! invariant suite below) on every `cargo test`, long before it could reach a
-//! user. A runtime `CoreResult` would only give every caller of `rows()` an
-//! error path to handle for a condition that a green test suite already
-//! rules out. Panicking here is the same reasoning `recipe.rs`'s shipped
-//! releases document under "Parsed once, not once per row": the parse
-//! *result* is cached, so a broken table would fail identically on the first
-//! call and the thousandth — it just fails loudly instead of politely, which
-//! is correct for a build-time defect rather than a user's.
+//! [`rows`] and [`row_for`] originally returned plain data —
+//! `&'static [MediaRow]` and `Option<&'static MediaRow>` — with no error arm,
+//! on the reasoning that the table ships inside the binary, never changes at
+//! runtime, and is already guarded by this module's own invariant tests
+//! (`the_shipped_table_has_exactly_186_rows` and the rest below), so a parse
+//! failure could only be a defect caught long before a release reached a
+//! user. On that reasoning, a broken table simply **panicked** the first
+//! time either function ran.
+//!
+//! **That reasoning was wrong, for the same reason `recipe.rs` documents
+//! under "It returns an error and does not panic (fix round 1, F10)".**
+//! `panic = "abort"` in the release profile means a panic here does not stay
+//! contained to one caller — it takes the whole application down. Shipped
+//! data being wrong is still a bug; it should be one that produces a
+//! refusal a user can read and a process that is still running, not a crash.
+//! So both functions now return [`CoreResult`](crate::core::error::CoreResult),
+//! matching `core/distro::profiles()`, which returns a `Result` for exactly
+//! this reason.
+//!
+//! The table is still parsed once, lazily, behind a [`std::sync::OnceLock`]
+//! — but what is cached is the parse **result**, not only the success, so a
+//! broken table is reported identically on the first call and the
+//! thousandth. This is the same arrangement `recipe.rs`'s
+//! `shipped_component_overrides` documents under "Parsed once, not once per
+//! row": `CoreError` is not `Clone`, so the cache holds the failure as its
+//! own text and rebuilds a [`CoreError::Malformed`](crate::core::error::CoreError::Malformed)
+//! from it on every subsequent call, with the original error's text
+//! unchanged.
 
+use crate::core::error::{CoreError, CoreResult};
 use serde::Deserialize;
 use std::sync::OnceLock;
 
@@ -86,24 +97,44 @@ struct MediaTable {
 /// The registry as it ships, compiled into the binary.
 const MEDIA_HASHES_JSON: &str = include_str!("media_hashes.json");
 
-/// Parsed once, on first use. See this module's doc comment for why a parse
-/// failure here panics rather than returning a `Result`.
-fn table() -> &'static [MediaRow] {
-    static TABLE: OnceLock<Vec<MediaRow>> = OnceLock::new();
-    TABLE.get_or_init(|| {
-        let parsed: MediaTable = serde_json::from_str(MEDIA_HASHES_JSON).unwrap_or_else(|e| {
-            panic!(
-                "the shipped install-media hash table does not parse; this is a build-time \
-                 defect, not a user's problem: {e}"
-            )
-        });
-        parsed.media
-    })
+/// Parses a media table from its JSON text. Split out of [`cached`] so the
+/// failure path — otherwise unreachable through the public API, since the
+/// compiled-in JSON always parses — has something to call directly with
+/// malformed input.
+fn parse_table(json: &str) -> Result<Vec<MediaRow>, String> {
+    let parsed: MediaTable = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    Ok(parsed.media)
+}
+
+/// Parses `json` into `cache` on first use and hands back a reference into
+/// whatever is already there on every call after. What is cached is the
+/// parse **result**, not only the success, so a broken table is reported
+/// identically on the first call and the thousandth — see this module's doc
+/// comment. Split out of [`table`] so a test can hand it a private
+/// `OnceLock` and malformed JSON without touching the process-wide table
+/// that every other caller shares.
+fn cached<'a>(
+    cache: &'a OnceLock<Result<Vec<MediaRow>, String>>,
+    json: &str,
+) -> CoreResult<&'a [MediaRow]> {
+    match cache.get_or_init(|| parse_table(json)) {
+        Ok(rows) => Ok(rows),
+        Err(detail) => Err(CoreError::Malformed {
+            format: "install-media hash table".into(),
+            detail: detail.clone(),
+        }),
+    }
+}
+
+/// Parsed once, on first use.
+fn table() -> CoreResult<&'static [MediaRow]> {
+    static TABLE: OnceLock<Result<Vec<MediaRow>, String>> = OnceLock::new();
+    cached(&TABLE, MEDIA_HASHES_JSON)
 }
 
 /// Every row in the shipped table, in file order. Many rows can share a
 /// `volume` — see this module's doc comment on the many-to-one mapping.
-pub fn rows() -> &'static [MediaRow] {
+pub fn rows() -> CoreResult<&'static [MediaRow]> {
     table()
 }
 
@@ -112,12 +143,14 @@ pub fn rows() -> &'static [MediaRow] {
 /// Case-insensitive on the **input** — a user's own hashing tool may emit
 /// uppercase hex — but exact on the **stored** value, which the shipped table
 /// already carries as lowercase (asserted by this module's own invariant
-/// tests). A hash matching no row returns `None`; per §4.3 of the design,
+/// tests). A hash matching no row returns `Ok(None)`; per §4.3 of the design,
 /// that says nothing about the disk's identity and must never be read as a
-/// negative claim.
-pub fn row_for(md5: &str) -> Option<&'static MediaRow> {
+/// negative claim. `Err` means the table itself could not be read, which is
+/// a different situation entirely and must never be collapsed into "no
+/// match".
+pub fn row_for(md5: &str) -> CoreResult<Option<&'static MediaRow>> {
     let needle = md5.to_ascii_lowercase();
-    table().iter().find(|row| row.md5 == needle)
+    Ok(table()?.iter().find(|row| row.md5 == needle))
 }
 
 #[cfg(test)]
@@ -125,14 +158,25 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
+    /// Unwraps [`rows`]'s `CoreResult` — the shipped table always parses, so
+    /// every test above the error-path tests below treats a failure here as
+    /// a hard test bug rather than something to assert about.
+    fn shipped_rows() -> &'static [MediaRow] {
+        rows().expect("the shipped table must parse")
+    }
+
     #[test]
     fn the_shipped_table_has_exactly_186_rows() {
-        assert_eq!(rows().len(), 186, "expected 186 rows in the shipped table");
+        assert_eq!(
+            shipped_rows().len(),
+            186,
+            "expected 186 rows in the shipped table"
+        );
     }
 
     #[test]
     fn every_md5_in_the_table_is_distinct() {
-        let hashes: HashSet<&str> = rows().iter().map(|row| row.md5.as_str()).collect();
+        let hashes: HashSet<&str> = shipped_rows().iter().map(|row| row.md5.as_str()).collect();
         assert_eq!(
             hashes.len(),
             186,
@@ -143,7 +187,7 @@ mod tests {
 
     #[test]
     fn every_md5_is_32_lowercase_hex_characters() {
-        for row in rows() {
+        for row in shipped_rows() {
             assert_eq!(row.md5.len(), 32, "'{}' is not 32 characters long", row.md5);
             assert!(
                 row.md5
@@ -157,7 +201,7 @@ mod tests {
 
     #[test]
     fn every_row_has_its_descriptive_fields_filled_in() {
-        for row in rows() {
+        for row in shipped_rows() {
             assert!(!row.version.is_empty(), "{}: empty version", row.md5);
             assert!(!row.volume.is_empty(), "{}: empty volume", row.md5);
             assert!(!row.name.is_empty(), "{}: empty name", row.md5);
@@ -171,7 +215,8 @@ mod tests {
         // hash → disk table only means something if more than one hash can
         // point at the same disk, and this asserts the actual counts rather
         // than trusting the doc comment above.
-        let count_volume = |volume: &str| rows().iter().filter(|r| r.volume == volume).count();
+        let count_volume =
+            |volume: &str| shipped_rows().iter().filter(|r| r.volume == volume).count();
         assert_eq!(count_volume("Workbench3_1"), 11);
         assert_eq!(count_volume("Install3_1"), 11);
         assert_eq!(count_volume("Locale3_1"), 10);
@@ -182,7 +227,7 @@ mod tests {
 
     #[test]
     fn the_hotfix_pack_disagreement_is_pinned_not_tidied() {
-        let hotfix: Vec<&MediaRow> = rows()
+        let hotfix: Vec<&MediaRow> = shipped_rows()
             .iter()
             .filter(|r| r.source == "Hyperion (3.2.2.1 Hotfix Pack)")
             .collect();
@@ -196,26 +241,95 @@ mod tests {
 
     #[test]
     fn row_for_finds_the_exact_lowercase_hash() {
-        let sample = &rows()[0];
-        let found = row_for(&sample.md5).expect("the exact stored hash must be found");
+        let sample = &shipped_rows()[0];
+        let found = row_for(&sample.md5)
+            .expect("the table must parse")
+            .expect("the exact stored hash must be found");
         assert_eq!(found.md5, sample.md5);
         assert_eq!(found.volume, sample.volume);
     }
 
     #[test]
     fn row_for_is_case_insensitive_on_the_input() {
-        let sample = &rows()[0];
+        let sample = &shipped_rows()[0];
         let upper = sample.md5.to_ascii_uppercase();
         assert_ne!(
             upper, sample.md5,
             "the sample row must actually contain a letter for this test to mean anything"
         );
-        let found = row_for(&upper).expect("an uppercase-hex lookup must still find the row");
+        let found = row_for(&upper)
+            .expect("the table must parse")
+            .expect("an uppercase-hex lookup must still find the row");
         assert_eq!(found.md5, sample.md5);
     }
 
     #[test]
-    fn a_hash_matching_no_row_returns_none() {
-        assert!(row_for("00000000000000000000000000000000").is_none());
+    fn a_hash_matching_no_row_returns_ok_none() {
+        assert!(row_for("00000000000000000000000000000000")
+            .expect("the table must parse")
+            .is_none());
+    }
+
+    // -- The error path: unreachable through the public API, since the
+    // compiled-in JSON always parses, so it is exercised directly against
+    // `parse_table` instead. See this module's doc comment on why a broken
+    // table must be reported rather than panicking.
+
+    #[test]
+    fn a_malformed_table_is_reported_not_panicked() {
+        let result = parse_table("not json at all");
+        assert!(
+            result.is_err(),
+            "malformed JSON must be refused, not accepted"
+        );
+    }
+
+    #[test]
+    fn a_table_missing_the_media_field_is_reported() {
+        // Valid JSON, wrong shape: no top-level `media` array.
+        let result = parse_table(r#"{"$comment": "no media field here"}"#);
+        assert!(
+            result.is_err(),
+            "JSON missing the `media` array must be refused"
+        );
+    }
+
+    #[test]
+    fn well_formed_json_parses_through_the_same_path_the_shipped_table_uses() {
+        let json = r#"{"media": [{"md5": "0123456789abcdef0123456789abcdef", "version": "3.2", "volume": "Workbench3_2", "name": "Test Disk", "source": "test", "sequence": null}]}"#;
+        let rows = parse_table(json).expect("well-formed JSON must parse");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].volume, "Workbench3_2");
+    }
+
+    #[test]
+    fn a_parse_failure_is_cached_not_reparsed_on_the_second_call() {
+        // Exercises `cached` directly against a private `OnceLock`, so this
+        // never touches the process-wide table every other caller shares
+        // (the shipped JSON always parses, so that one never holds an error
+        // in this test binary).
+        //
+        // The second call passes *different* malformed JSON than the first.
+        // If the caching arrangement in `table()` were broken — reparsing on
+        // every call instead of serving the cached result — the second call
+        // would parse the second string on its own and very likely report a
+        // different `serde_json` error (different text, different byte
+        // offset). Getting the *first* call's exact error back on the
+        // second call is only possible if the cache, not a fresh parse,
+        // answered it — which is the specific guarantee this arrangement
+        // exists to give `row_for`/`rows` callers.
+        static CACHE: OnceLock<Result<Vec<MediaRow>, String>> = OnceLock::new();
+        let first = cached(&CACHE, "not json at all").unwrap_err();
+        let second = cached(
+            &CACHE,
+            "{{{ this is a completely different malformed document",
+        )
+        .unwrap_err();
+        assert_eq!(
+            format!("{first}"),
+            format!("{second}"),
+            "the second call must return the first call's cached error, not a fresh parse \
+             of the second (different) input"
+        );
     }
 }
