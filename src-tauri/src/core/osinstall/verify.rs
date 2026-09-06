@@ -645,7 +645,7 @@ const PREFS_SYS_DIR_REL: &str = "Prefs/Env-Archive/Sys";
 /// attempted at all, by design (no prefs found, a path naming an assign
 /// other than `Sys:`, which a distribution tree simply has no way to
 /// resolve, or a `.prefs` file that is not IFF at all — see
-/// [`looks_like_iff_pref`]).
+/// [`iff::looks_like_iff_pref`]).
 ///
 /// **`.prefs` is a filename convention on the Amiga, not a format
 /// guarantee.** A real AmigaOS 3.9 tree's `Env-Archive/Sys` carries ViNCEd,
@@ -653,7 +653,7 @@ const PREFS_SYS_DIR_REL: &str = "Prefs/Env-Archive/Sys";
 /// ones — measured directly (Task 11's own prefs oracle over the owner's own
 /// 3.9 material: 9 of 24 `.prefs` files there are third-party formats). This
 /// function must not fail a tree for carrying one of those; see
-/// [`looks_like_iff_pref`] for how "not IFF at all" is told apart from "IFF,
+/// [`iff::looks_like_iff_pref`] for how "not IFF at all" is told apart from "IFF,
 /// and genuinely broken".
 pub fn check_prefs_paths(tree: &Path) -> CoreResult<Vec<FileVerdict>> {
     let sys_dir = match resolve_ci_optional(tree, PREFS_SYS_DIR_REL)? {
@@ -717,7 +717,7 @@ pub fn check_prefs_paths(tree: &Path) -> CoreResult<Vec<FileVerdict>> {
         // ART's format" apart from "this is ART's format and it is broken" —
         // deciding by evidence rather than by which error `iff::parse`
         // happened to return.
-        if !looks_like_iff_pref(&bytes) {
+        if !iff::looks_like_iff_pref(&bytes) {
             verdicts.push(FileVerdict {
                 path: prefs_rel.clone(),
                 state: CheckState::NotChecked,
@@ -790,28 +790,14 @@ pub fn check_prefs_paths(tree: &Path) -> CoreResult<Vec<FileVerdict>> {
     Ok(verdicts)
 }
 
-/// Whether `bytes` even claims to be an IFF `FORM`…`PREF` container — just
-/// the two magic markers [`iff::parse`] itself checks first (`b"FORM"` at
-/// offset 0, `b"PREF"` at offset 8), read here on the raw bytes *before*
-/// [`iff::parse`] ever runs, without the rest of its own validation.
-///
-/// This is the fix for a real defect: Task 11's prefs oracle, run against
-/// the owner's own AmigaOS 3.9 material, found `Prefs/Env-Archive/Sys`
-/// carrying files such as `amidock.prefs` — which opens with the literal
-/// text `"AmiDock conf"`, not `FORM` — and `wbconfig.prefs`; 9 of 24 real
-/// `.prefs` files there are ViNCEd, XTerm, AmiDock, StringSnip or DefIcons
-/// formats, not IFF at all. Before this sniff, [`check_prefs_paths`] called
-/// [`iff::parse`] on every `.prefs` file unconditionally and reported *any*
-/// parse failure as `Fail` — so a perfectly good 3.9 tree came back as a
-/// failed verification, naming a file that is not ART's format and that
-/// nothing is wrong with. `.prefs` is a filename convention on the Amiga,
-/// not a format guarantee, and this function is what lets
-/// [`check_prefs_paths`] tell "not ART's business" apart from "ART's own
-/// format, genuinely broken" by evidence rather than by which error
-/// [`iff::parse`] happened to return.
-fn looks_like_iff_pref(bytes: &[u8]) -> bool {
-    bytes.len() >= 12 && &bytes[0..4] == b"FORM" && &bytes[8..12] == b"PREF"
-}
+// `looks_like_iff_pref` used to live here as its own copy of the same two
+// magic-marker checks. Fix round 1 (Task 11's real-material oracle review)
+// found that a private copy is how the oracle and this module quietly drift:
+// the oracle's own inline check agreed with this one on every one of the 24
+// real files measured, but not on a `FORM` of some *other* IFF type. The
+// sniff now lives once, in `core::amigaprefs::iff::looks_like_iff_pref`
+// (used below via the `iff` import already in scope), so both callers are
+// the same function rather than two hand-kept-in-sync copies of it.
 
 /// The one verdict for a tree with nothing under [`PREFS_SYS_DIR_REL`] to
 /// check at all — no such directory, or a directory with no `*.prefs` file
@@ -1564,7 +1550,7 @@ mod tests {
 
     /// A genuinely IFF `FORM`/`PREF` file, truncated mid-chunk: the `FORM`
     /// header and `PREF` type at the front are untouched (so
-    /// `looks_like_iff_pref` still says yes), but the bytes the `PTRN`
+    /// `iff::looks_like_iff_pref` still says yes), but the bytes the `PTRN`
     /// chunk's own size field promises do not all follow — the same shape
     /// as a real truncated file, not an invented error. `iff::parse` must
     /// still refuse this one, and `check_prefs_paths` must still call that
@@ -1699,13 +1685,13 @@ mod tests {
     /// this test wrote plain text (`b"not an iff file at all"`) and asserted
     /// `Fail` — which was right under the old, pre-sniff code, but that same
     /// fixture does not open `FORM`/`PREF` at all, so under
-    /// `looks_like_iff_pref` it now correctly lands on the *other* branch
+    /// `iff::looks_like_iff_pref` it now correctly lands on the *other* branch
     /// (`NotChecked`, see `a_prefs_file_that_is_not_iff_at_all_is_not_checked_not_failed`
     /// below). This test was rewritten, not deleted or quietly patched to
     /// pass: it now provokes a *genuinely* IFF `FORM`/`PREF` file that is
     /// truncated mid-chunk, which is the fixture that actually distinguishes
     /// "ART recognised the format and it is broken" from "this was never
-    /// ART's format" — the one thing `looks_like_iff_pref` must not turn
+    /// ART's format" — the one thing `iff::looks_like_iff_pref` must not turn
     /// into a blanket suppression.
     #[test]
     fn a_prefs_file_that_is_form_pref_but_truncated_mid_chunk_is_still_a_fail() {
@@ -1725,7 +1711,7 @@ mod tests {
     /// real AmigaOS 3.9 tree: `amidock.prefs` opens with the literal text
     /// `"AmiDock conf..."`, not `FORM` — one of 9 (of 24) real `.prefs`
     /// files there that are ViNCEd/XTerm/AmiDock/StringSnip/DefIcons
-    /// formats, not IFF at all. Before `looks_like_iff_pref`, this file
+    /// formats, not IFF at all. Before `iff::looks_like_iff_pref`, this file
     /// reached `iff::parse`, failed, and came back `Fail` — a perfectly good
     /// tree reported as a failed verification, naming a file that is not
     /// ART's business and that nothing is wrong with. It must be
@@ -1752,6 +1738,45 @@ mod tests {
         let detail = verdicts[0].detail.as_deref().unwrap_or("");
         assert!(
             detail.contains("amidock.prefs"),
+            "the verdict must name the file: {detail}"
+        );
+    }
+
+    /// **Fix round 1's own defect, pinned as shipped behaviour, not merely
+    /// inherited from `iff::looks_like_iff_pref`.** A `FORM` of some other
+    /// IFF type — a misnamed `.prefs` that is really a picture — is the
+    /// false-positive class this whole follow-up exists to close: before
+    /// this fix, the prefs oracle's own round-trip hook checked only
+    /// `bytes[0..4] != b"FORM"` and would have sent this fixture into
+    /// `iff::parse`, recording it as a failure, while this function already
+    /// correctly called it `NotChecked`. Same shape as
+    /// `a_prefs_file_that_is_not_iff_at_all_is_not_checked_not_failed`
+    /// above, but with a fixture that *does* open `FORM` — proving the
+    /// distinction is `FORM` **and** `PREF` at offset 8, not `FORM` alone.
+    #[test]
+    fn a_form_that_is_not_pref_is_not_checked_not_failed() {
+        let scratch = ScratchDir::new("art-verify-prefs", "form-not-pref");
+        let tree = scratch.path();
+        let sys_dir = tree.join("Prefs").join("Env-Archive").join("Sys");
+        std::fs::create_dir_all(&sys_dir).unwrap();
+        // "FORM" + size + "ILBM" - a misnamed .prefs that is really a picture.
+        let mut bytes = b"FORM".to_vec();
+        bytes.extend_from_slice(&4u32.to_be_bytes());
+        bytes.extend_from_slice(b"ILBM");
+        std::fs::write(sys_dir.join("notreally.prefs"), &bytes).unwrap();
+
+        let verdicts = check_prefs_paths(tree).unwrap();
+
+        assert_eq!(verdicts.len(), 1, "{verdicts:?}");
+        assert_eq!(
+            verdicts[0].state,
+            CheckState::NotChecked,
+            "{:?}",
+            verdicts[0]
+        );
+        let detail = verdicts[0].detail.as_deref().unwrap_or("");
+        assert!(
+            detail.contains("notreally.prefs"),
             "the verdict must name the file: {detail}"
         );
     }

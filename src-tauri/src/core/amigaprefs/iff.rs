@@ -45,6 +45,25 @@ fn be_u32(bytes: &[u8], at: usize) -> CoreResult<u32> {
     Ok(u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]))
 }
 
+/// Whether these bytes even claim to be an IFF `FORM PREF`.
+///
+/// This is deliberately the same two markers [`parse`] checks first (`FORM`
+/// at offset 0, `PREF` at offset 8), exposed so that callers can tell "not
+/// our format at all" from "our format, and malformed" **the same way**
+/// rather than each growing their own copy of the sniff. `.prefs` is a
+/// filename convention on the Amiga, not a format guarantee: a real AmigaOS
+/// 3.9 tree carries `amidock.prefs` beginning with the literal text
+/// `AmiDock conf`, and reporting that as a failure would be a confident,
+/// wrong sentence about somebody else's data — measured directly against
+/// the owner's own 3.9 material, where 9 of 24 real `.prefs` files are
+/// ViNCEd, XTerm, AmiDock, StringSnip or DefIcons formats, none of them IFF
+/// at all. `core::osinstall::verify::check_prefs_paths` and
+/// `every_real_prefs_file_round_trips_byte_for_byte` below both call this
+/// one function rather than keeping their own copies in sync by hand.
+pub(crate) fn looks_like_iff_pref(bytes: &[u8]) -> bool {
+    bytes.len() >= 12 && &bytes[0..4] == b"FORM" && &bytes[8..12] == b"PREF"
+}
+
 /// Parse a `FORM`…`PREF`, indexing every chunk including `PRHD`.
 pub fn parse(bytes: &[u8]) -> CoreResult<PrefsFile> {
     if bytes.len() < 12 {
@@ -257,6 +276,24 @@ mod tests {
         assert!(parse(b"FORM").is_err());
     }
 
+    /// The false-positive class the real-material oracle exists to close:
+    /// a `FORM` of some **other** IFF type — a misnamed `.prefs` that is
+    /// really a picture, say — must be told apart from "our format, and
+    /// malformed" the same way [`looks_like_iff_pref`] tells `core::osinstall`
+    /// apart. `bytes[0..4] != b"FORM"` alone would call this one "not our
+    /// format" correctly by accident; the point of pinning it here is that
+    /// checking `FORM` *and* `PREF` at offset 8 is what actually makes the
+    /// distinction, not merely what happens to agree on this one fixture.
+    #[test]
+    fn a_form_that_is_not_pref_is_not_our_format() {
+        // "FORM" + size + "ILBM" - a misnamed .prefs that is really a picture.
+        let mut bytes = b"FORM".to_vec();
+        bytes.extend_from_slice(&4u32.to_be_bytes());
+        bytes.extend_from_slice(b"ILBM");
+        assert!(!looks_like_iff_pref(&bytes), "FORM alone is not FORM PREF");
+        assert!(parse(&bytes).is_err(), "and parse refuses it too");
+    }
+
     #[test]
     fn a_chunk_running_past_the_end_is_refused_not_clamped() {
         let mut bytes = synthetic_prefs(&[(*b"PTRN", vec![1; 24])]);
@@ -335,22 +372,31 @@ mod tests {
     /// and `XTerm.Prefs` are `;`-commented plain text, `amidock.prefs`
     /// begins `AmiDock configur…`, `StringSnip.prefs` is plain text, and
     /// `deficons.prefs` is a DefIcons-specific binary catalogue that has
-    /// never been `FORM`-wrapped. None of the nine begin with the four
-    /// bytes `FORM`, confirmed by reading them (`od`/`xxd`) before writing
-    /// this comment. Reporting those as "the codec failed to round-trip a
-    /// prefs file" would be exactly the confident-wrong sentence
-    /// `CLAUDE.md`'s "failure that does not crash" section warns against:
-    /// this module's parser was never asked to understand a format it does
-    /// not claim to read. So a file not beginning `FORM` is counted in
-    /// `not_iff_pref` and printed on its own line, never in `failed`.
+    /// never been `FORM`-wrapped. Reporting those as "the codec failed to
+    /// round-trip a prefs file" would be exactly the confident-wrong
+    /// sentence `CLAUDE.md`'s "failure that does not crash" section warns
+    /// against: this module's parser was never asked to understand a format
+    /// it does not claim to read.
     ///
-    /// What **is** unconditional, for every file that does begin `FORM`:
-    /// [`parse`] must succeed and `to_bytes()` must reproduce the file's own
-    /// bytes exactly. A file that claims the container this module reads
-    /// and does not round-trip is not a panic: it is recorded by name in
-    /// `failed`, and the whole test fails once at the end, printing every
-    /// one of them — plus every count, so the numbers that land in
-    /// `docs/STATUS.md` are measured, not guessed.
+    /// **The classification is [`looks_like_iff_pref`], the one function
+    /// `core::osinstall::verify::check_prefs_paths` also calls** — fix
+    /// round 1's own finding was that this test used to check only
+    /// `bytes[0..4] != b"FORM"`, which agrees with `looks_like_iff_pref` on
+    /// every one of the 24 real files here but disagrees on a `FORM` of
+    /// some *other* IFF type (a misnamed `.prefs` that is really a picture,
+    /// say) — `check_prefs_paths` would correctly call that `NotChecked`
+    /// while the old inline check here would have sent it into [`parse`]
+    /// and recorded it as a failure. A file `looks_like_iff_pref` says no to
+    /// is counted in `not_iff_pref` and printed on its own line, never in
+    /// `failed`.
+    ///
+    /// What **is** unconditional, for every file `looks_like_iff_pref` says
+    /// yes to: [`parse`] must succeed and `to_bytes()` must reproduce the
+    /// file's own bytes exactly. A file that claims the container this
+    /// module reads and does not round-trip is not a panic: it is recorded
+    /// by name in `failed`, and the whole test fails once at the end,
+    /// printing every one of them — plus every count, so the numbers that
+    /// land in `docs/STATUS.md` are measured, not guessed.
     #[test]
     #[ignore = "needs the owner's own material; set ART_PREFS_DIR"]
     fn every_real_prefs_file_round_trips_byte_for_byte() {
@@ -376,11 +422,11 @@ mod tests {
             };
             total += 1;
 
-            if bytes.len() < 4 || &bytes[0..4] != b"FORM" {
+            if !looks_like_iff_pref(&bytes) {
                 not_iff_pref += 1;
                 skipped.push(format!(
-                    "{}: does not begin with FORM — not this module's container, \
-                     a third-party tool's own '.prefs' file",
+                    "{}: not a FORM/PREF container — a third-party tool's own \
+                     '.prefs' file",
                     entry.display()
                 ));
                 continue;
