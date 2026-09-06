@@ -457,10 +457,9 @@ struct IconArrangementPlan {
 /// icons: 361 carried the sentinel and 437 were positioned by the release.
 /// **Only** the 361 are ever touched; an icon that already has a position
 /// keeps it byte for byte, and it is still handed to [`icongrid::arrange`]
-/// as a [`icongrid::Cell`] so it occupies a slot in the computed grid —
-/// the newly placed icons land in the *other* cells rather than on top of
-/// it, even though the already-placed icon's own computed placement is
-/// discarded rather than written.
+/// as a [`icongrid::Cell`] so the *computed grid* reserves a slot for it —
+/// but see [`plan_icons_in_dir`]'s own doc for exactly what that does and
+/// does not guarantee against the icon's real, on-screen position.
 ///
 /// The whole tree is walked and planned — every directory, root included —
 /// **before** a single byte is written anywhere (this function does no
@@ -491,6 +490,24 @@ fn plan_icon_arrangement(tree: &Path) -> CoreResult<IconArrangementPlan> {
 /// One directory's worth of [`plan_icon_arrangement`], then its
 /// subdirectories — depth-first, order otherwise unspecified. See that
 /// function's own doc for the scoping rule and the skip-vs-abort split.
+///
+/// **What "occupies a slot" does and does not guarantee.** Every icon in
+/// the directory — placed and unplaced alike — is handed to
+/// [`icongrid::arrange`] as a [`icongrid::Cell`], so an already-placed
+/// icon's size and label really do shape the tidy grid `arrange` computes:
+/// the unplaced icons are laid out into the *other* cells of that grid, not
+/// on top of the placed one's cell. But `icongrid::arrange` is pure
+/// arithmetic over cell sizes (see its own module doc) — it has no concept
+/// of an icon's **real** screen coordinate, and the already-placed icon's
+/// own computed placement in that grid is discarded, never written. Where
+/// that icon's real, on-disk position happens to fall outside the area the
+/// freshly computed grid occupies, nothing here checks for it, and nothing
+/// here guarantees a newly placed icon avoids it. This only prevents two
+/// cells from colliding inside one computed grid; it is not a collision
+/// check against an arbitrary real coordinate elsewhere on screen. Making
+/// that guarantee real — reading every placed icon's actual position and
+/// keeping the grid clear of it — is a design question for a later round,
+/// and one only a real rendered Workbench window can settle.
 fn plan_icons_in_dir(
     dir: &Path,
     tree_root: &Path,
@@ -582,7 +599,15 @@ fn plan_icons_in_dir(
     if !entries.is_empty() && entries.iter().any(|e| !e.already_placed) {
         let cells: Vec<icongrid::Cell> = entries.iter().map(|e| e.cell.clone()).collect();
         let result = icongrid::arrange(&cells, inner_width);
-        let mut any_placed = false;
+        // `icongrid::arrange` returns exactly one placement per input cell
+        // (its own module doc: "a caller can zip a placement straight back
+        // to the icon file it describes") — never fewer — so the outer
+        // `.any(|e| !e.already_placed)` guard above already guarantees at
+        // least one placement below belongs to an unplaced entry. Tracking
+        // "did we actually place one" here would be validation that cannot
+        // fire, so this directory is counted as arranged unconditionally
+        // once that guard has passed.
+        plan.drawers_arranged += 1;
         for placement in &result.placements {
             let entry = &entries[placement.index];
             if entry.already_placed {
@@ -595,10 +620,6 @@ fn plan_icons_in_dir(
                 amigaicon::set_position(&entry.original_bytes, Some((placement.x, placement.y)))?;
             plan.writes.push((entry.icon_path.clone(), new_bytes));
             plan.icons_placed += 1;
-            any_placed = true;
-        }
-        if any_placed {
-            plan.drawers_arranged += 1;
         }
     }
 
@@ -1756,5 +1777,125 @@ mod tests {
              did not"
         );
         assert!(outcome.icons_skipped.is_empty());
+    }
+
+    /// **Task 3 → Task 5 → Task 6, closed.** `Rendered.framed` must reach
+    /// `Cell.framed`, not be defaulted — every other fixture in this file
+    /// goes through `synthetic_icon_sized`, which never attaches a ColorIcon
+    /// `FACE` chunk, so `rendered_size` always falls back to `framed: true`
+    /// and a `Cell.framed` hardcoded to `true` would pass every other test
+    /// here. This one builds a genuinely frameless icon (Task 3's own
+    /// `synthetic_colour_icon`, reused rather than a third hand-rolled
+    /// builder — a `FACE` chunk with the frameless bit set, backed by an
+    /// `IMAG` chunk since `rendered_size` only trusts `FACE` when one is
+    /// present) alongside a genuinely framed one of identical rendered size.
+    ///
+    /// A framed cell pads its footprint by `2*EMBOSS`, a frameless one by
+    /// `EMBOSS` (`icongrid`'s own module doc). "AAAA" (frameless) sorts
+    /// before "BBBB" (framed) and lands in the earlier column, so BBBB's x
+    /// depends on AAAA's own column width — which depends on AAAA's framed
+    /// bit. The expected positions are computed independently with
+    /// `icongrid::arrange` itself, once with the real (mixed) framed values
+    /// and once with both forced framed (simulating a `Cell.framed`
+    /// default-to-true regression), and the two are asserted to differ —
+    /// exactly the amount the emboss rule predicts, since that arithmetic
+    /// lives in and is separately tested by `icongrid` itself — before the
+    /// real, on-disk result is pinned to the correct one.
+    #[test]
+    fn a_frameless_icon_gets_a_narrower_footprint_than_a_framed_one() {
+        use crate::core::amigaicon::render::tests_support::synthetic_colour_icon;
+
+        let scratch = ScratchDir::new("art-appearance-icons", "framed-vs-frameless");
+        let tree = scratch.path().to_path_buf();
+
+        let frameless_icon =
+            amigaicon::set_position(&synthetic_colour_icon(40, 40, 40, 40, true, true), None)
+                .unwrap();
+        let framed_icon =
+            amigaicon::set_position(&synthetic_colour_icon(40, 40, 40, 40, true, false), None)
+                .unwrap();
+        // Confirm the fixtures actually landed on the framed bit this test
+        // means to exercise, not merely "some size".
+        assert!(
+            !amigaicon::render::rendered_size(&frameless_icon)
+                .unwrap()
+                .framed
+        );
+        assert!(
+            amigaicon::render::rendered_size(&framed_icon)
+                .unwrap()
+                .framed
+        );
+        write_icon_entry(&tree, "AAAA", &frameless_icon);
+        write_icon_entry(&tree, "BBBB", &framed_icon);
+
+        let cells_correct = vec![
+            icongrid::Cell {
+                label: "AAAA".to_string(),
+                width: 40,
+                height: 40,
+                is_container: false,
+                framed: false,
+            },
+            icongrid::Cell {
+                label: "BBBB".to_string(),
+                width: 40,
+                height: 40,
+                is_container: false,
+                framed: true,
+            },
+        ];
+        // The regression this test exists to catch: AAAA's own framed bit
+        // lost to a hardcoded default.
+        let cells_if_defaulted = vec![
+            icongrid::Cell {
+                framed: true,
+                ..cells_correct[0].clone()
+            },
+            cells_correct[1].clone(),
+        ];
+        let expected_correct = icongrid::arrange(&cells_correct, icongrid::ROOT_INNER_WIDTH);
+        let expected_if_defaulted =
+            icongrid::arrange(&cells_if_defaulted, icongrid::ROOT_INNER_WIDTH);
+        assert_ne!(
+            expected_correct.placements, expected_if_defaulted.placements,
+            "the fixture must actually distinguish a copied `framed` bit from a defaulted one, \
+             or this test proves nothing"
+        );
+
+        let req = AppearanceRequest {
+            wallpaper: None,
+            screen_depth: None,
+            shell_defaults: false,
+            arrange_icons: true,
+        };
+        apply_appearance(&tree, &req).unwrap();
+
+        let find = |label: &str, result: &icongrid::GridResult, cells: &[icongrid::Cell]| {
+            result
+                .placements
+                .iter()
+                .find(|p| cells[p.index].label == label)
+                .map(|p| (p.x, p.y))
+                .expect("every cell was placed")
+        };
+        let aaaa_pos = amigaicon::position(&std::fs::read(tree.join("AAAA.info")).unwrap())
+            .unwrap()
+            .unwrap();
+        let bbbb_pos = amigaicon::position(&std::fs::read(tree.join("BBBB.info")).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            aaaa_pos,
+            find("AAAA", &expected_correct, &cells_correct),
+            "the frameless icon must land exactly where a genuinely frameless AAAA does"
+        );
+        assert_eq!(
+            bbbb_pos,
+            find("BBBB", &expected_correct, &cells_correct),
+            "the framed icon's own x depends on AAAA's real (narrower) column width — it must \
+             land exactly where AAAA being genuinely frameless puts it, not where a \
+             defaulted-to-framed AAAA would put it"
+        );
     }
 }

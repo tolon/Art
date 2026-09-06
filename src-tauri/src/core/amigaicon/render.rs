@@ -209,30 +209,42 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-/// Fixture building shared by this module's own tests. Extends
+/// Fixture building shared by this module's own tests **and, for
+/// [`synthetic_colour_icon`], by `core::appearance`'s own tests** — see that
+/// module's `a_frameless_icon_gets_a_narrower_footprint_than_a_framed_one`,
+/// which needs a genuinely frameless ColorIcon (backed by an `IMAG` chunk,
+/// the only shape [`rendered_size`] trusts) to prove `Rendered::framed`
+/// reaches `icongrid::Cell::framed` rather than being defaulted. Reusing
+/// this builder rather than a third hand-rolled copy is why it and its
+/// containing module are `pub(crate)` rather than `pub(super)` — extends
 /// [`super::tests_support`] rather than duplicating its `DiskObject` byte
 /// layout — see that module's doc comment for why a second hand-rolled copy
 /// would be a second place for the offsets to drift.
 #[cfg(test)]
-mod tests_support {
+pub(crate) mod tests_support {
     use super::super::tests_support::synthetic_icon;
     use super::super::{OFF_GADGET_HEIGHT, OFF_GADGET_WIDTH};
 
     /// An icon carrying an appended `FORM … ICON` ColorIcon blob whose
     /// `FACE` chunk claims `face_w`x`face_h`, with an `IMAG` chunk following
-    /// it only when `with_imag` is true.
-    pub(super) fn synthetic_colour_icon(
+    /// it only when `with_imag` is true. `frameless` sets the `FACE`
+    /// chunk's flags bit 0 — [`rendered_size`]'s own doc: frameless when
+    /// that bit is set, framed otherwise — and only has any effect when
+    /// `with_imag` is also true, since a `FACE` with no backing `IMAG` is
+    /// not trusted at all (the degenerate MagicWB case).
+    pub(crate) fn synthetic_colour_icon(
         gadget_w: u16,
         gadget_h: u16,
         face_w: u16,
         face_h: u16,
         with_imag: bool,
+        frameless: bool,
     ) -> Vec<u8> {
         let face_payload: [u8; 6] = [
             (face_w.saturating_sub(1)) as u8,
             (face_h.saturating_sub(1)) as u8,
-            0, // Flags: framed (bit 0 clear)
-            0, // Aspect: not read
+            u8::from(frameless), // Flags: bit 0 set means frameless
+            0,                   // Aspect: not read
             0,
             0, // MaxPalBytes: not read
         ];
@@ -294,7 +306,7 @@ mod tests {
         // Measured: art1/Devs/DataTypes.info says 44x44 in the Gadget and
         // 46x46 in FACE - which is why a layout cannot use the Gadget
         // fields.
-        let icon = synthetic_colour_icon(44, 44, 46, 46, true);
+        let icon = synthetic_colour_icon(44, 44, 46, 46, true, false);
         let r = rendered_size(&icon).unwrap();
         assert_eq!((r.width, r.height), (46, 46));
     }
@@ -303,7 +315,7 @@ mod tests {
     fn a_degenerate_face_with_no_imag_is_not_trusted() {
         // MagicWB-era icons claim 256x256 in FACE with no image behind it.
         // Believing that makes one icon eat a whole window.
-        let icon = synthetic_colour_icon(32, 32, 256, 256, false);
+        let icon = synthetic_colour_icon(32, 32, 256, 256, false, false);
         let r = rendered_size(&icon).unwrap();
         assert_eq!(
             (r.width, r.height),
@@ -334,7 +346,7 @@ mod tests {
 
     #[test]
     fn the_result_is_never_smaller_than_the_gadget() {
-        let icon = synthetic_colour_icon(64, 64, 16, 16, true);
+        let icon = synthetic_colour_icon(64, 64, 16, 16, true, false);
         let r = rendered_size(&icon).unwrap();
         assert_eq!((r.width, r.height), (64, 64));
     }
@@ -344,7 +356,7 @@ mod tests {
         // A FACE chunk cut short mid-payload (no IMAG sibling, so it is the
         // last thing in the buffer) must be refused by the chunk walk's own
         // bounds check, not read past.
-        let whole = synthetic_colour_icon(32, 32, 46, 46, false);
+        let whole = synthetic_colour_icon(32, 32, 46, 46, false, false);
         let cut = &whole[..whole.len() - 2];
         assert!(
             rendered_size(cut).is_err(),
