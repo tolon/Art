@@ -89,6 +89,8 @@
 use crate::core::error::{CoreError, CoreResult};
 use std::ops::Range;
 
+pub mod render;
+
 /// `do_Magic` for a classic AmigaOS icon.
 const MAGIC: u16 = 0xE310;
 
