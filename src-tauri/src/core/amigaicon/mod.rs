@@ -48,11 +48,31 @@
 //! end-of-file for two of them and exactly on the start of an appended IFF
 //! `FORM` for the third (research note §8) — that is real evidence, not
 //! recalled documentation. What is **not** independently re-verified here:
-//! the `Image` and `DrawerData` layouts, since this module only needs to
-//! skip them correctly (get their length right), never to read their
-//! fields; and non-ASCII tool type text, which is decoded lossily (see
-//! [`tooltypes`]) rather than refused, because a bad character in a display
-//! string is not the memory-safety hazard a bad length is.
+//! the `Image` layout, since this module only needs to skip it correctly
+//! (get its length right), never to read its fields; and non-ASCII tool
+//! type text, which is decoded lossily (see [`tooltypes`]) rather than
+//! refused, because a bad character in a display string is not the
+//! memory-safety hazard a bad length is.
+//!
+//! ## What was skipped and is now read (measured across 798 real icons)
+//!
+//! The table above already names `do_DrawerData`'s flag field; the fields it
+//! gates were, until this round, skipped-but-unread. They are measured now,
+//! same standard as everything above — real evidence from real icons, not
+//! recalled documentation of the struct:
+//!
+//! | Field | Absolute offset | Shape | What was measured |
+//! |---|---|---|---|
+//! | `Gadget.UserData` | 44 | `u32`, bit 0 read | 798 of 798 real icons have bit 0 set — `DrawerData2` is the normal case, not a special one ([`has_drawer_data2`]) |
+//! | `do_Type` | 48 | `u8` | five values seen: 1 disk (37), 2 drawer (56), 3 tool (196), 4 project (506), 5 garbage (3) ([`IconType`], [`icon_type`]) |
+//! | `do_CurrentX` / `do_CurrentY` | 58 / 62 | `i32` each | 361 of 798 carry [`NO_POSITION`] (`0x80000000`, `i32::MIN`) in both; `(0, 0)` is a real, distinct position — the window's top-left corner, not "unset" ([`position`]) |
+//! | `DrawerData.NewWindow` (left/top/width/height) | 78 (start of the `DrawerData` block itself, when `do_DrawerData` is non-zero) | four `i16`, big-endian | read only when `do_DrawerData` is non-zero; the block's other 48 bytes remain unread ([`DrawerWindow`], [`drawer_window`]) |
+//!
+//! `do_DrawerData`'s block is therefore no longer wholly opaque: its first 8
+//! bytes (the window rectangle) are read by [`drawer_window`]; [`layout`]'s
+//! own block walk still only advances past the fixed 56-byte length,
+//! exactly as before — it does not need the window rectangle to skip the
+//! block correctly.
 //!
 //! ## Every offset is bound-checked before it is indexed
 //!
@@ -82,13 +102,25 @@ const DRAWER_DATA_LEN: usize = 56;
 /// Fixed size of an `Image` block's header, before its pixel data.
 const IMAGE_HEADER_LEN: usize = 20;
 
+const OFF_GADGET_WIDTH: usize = 12;
+const OFF_GADGET_HEIGHT: usize = 14;
 const OFF_GADGET_RENDER: usize = 22;
 const OFF_SELECT_RENDER: usize = 26;
+const OFF_USER_DATA: usize = 44;
+const OFF_TYPE: usize = 48;
 const OFF_DEFAULT_TOOL: usize = 50;
 const OFF_TOOL_TYPES: usize = 54;
+const OFF_CURRENT_X: usize = 58;
+const OFF_CURRENT_Y: usize = 62;
 const OFF_DRAWER_DATA: usize = 66;
 const OFF_TOOL_WINDOW: usize = 70;
 const OFF_STACK_SIZE: usize = 74;
+
+/// `do_CurrentX`/`do_CurrentY`'s sentinel for "the release did not place
+/// this icon" — `0x80000000`, `i32::MIN`. Measured: 361 of 798 real icons
+/// carry it in both coordinates. `(0, 0)` is a real, distinct position (the
+/// window's top-left corner) and must never be read as this sentinel.
+pub const NO_POSITION: i32 = i32::MIN;
 
 fn malformed(detail: impl Into<String>) -> CoreError {
     CoreError::Malformed {
@@ -119,6 +151,19 @@ fn be_u16(bytes: &[u8], at: usize) -> CoreResult<u16> {
         .get(at..end)
         .ok_or_else(|| malformed("truncated icon: a 16-bit field runs past the file"))?;
     Ok(u16::from_be_bytes([slice[0], slice[1]]))
+}
+
+/// Read a big-endian `i16` at `at` — same bound check as [`be_u16`], reread
+/// as signed. `DrawerData.NewWindow`'s left/top/width/height are signed.
+fn be_i16(bytes: &[u8], at: usize) -> CoreResult<i16> {
+    Ok(be_u16(bytes, at)? as i16)
+}
+
+/// Read a big-endian `i32` at `at` — same bound check as [`be_u32`], reread
+/// as signed. `do_CurrentX`/`do_CurrentY` are signed, and [`NO_POSITION`]
+/// (`i32::MIN`) only means anything as a signed comparison.
+fn be_i32(bytes: &[u8], at: usize) -> CoreResult<i32> {
+    Ok(be_u32(bytes, at)? as i32)
 }
 
 /// `pos + len`, checked for overflow and for running past the buffer.
@@ -325,6 +370,107 @@ pub fn stack_size(bytes: &[u8]) -> CoreResult<u32> {
     be_u32(bytes, OFF_STACK_SIZE)
 }
 
+/// `do_Type` — what kind of object this icon represents.
+///
+/// Measured across 798 real icons: five values seen (`Disk` 37, `Drawer` 56,
+/// `Tool` 196, `Project` 506, `Garbage` 3). `Other` carries anything else
+/// (`WBDevice`, `WBKick`, `WBAppIcon` and unused values) rather than
+/// refusing an icon this module has never been shown — the same "preserve,
+/// don't reject the unfamiliar" stance [`tooltypes`] takes for text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IconType {
+    Disk,
+    Drawer,
+    Tool,
+    Project,
+    Garbage,
+    Other(u8),
+}
+
+/// `do_Type` — a fixed field of the header, so this needs no walk past the
+/// magic check. [`check_header`] has already confirmed `bytes.len() >=
+/// HEADER_LEN` (78), and `OFF_TYPE` (48) is within that, so the index below
+/// cannot run past the buffer.
+pub fn icon_type(bytes: &[u8]) -> CoreResult<IconType> {
+    check_header(bytes)?;
+    Ok(match bytes[OFF_TYPE] {
+        1 => IconType::Disk,
+        2 => IconType::Drawer,
+        3 => IconType::Tool,
+        4 => IconType::Project,
+        5 => IconType::Garbage,
+        other => IconType::Other(other),
+    })
+}
+
+/// The icon's desktop position, or `None` when the release left it
+/// unplaced.
+///
+/// `do_CurrentX`/`do_CurrentY` are fixed fields of the header. **Either**
+/// coordinate carrying [`NO_POSITION`] (`0x80000000`, `i32::MIN`) means
+/// "unplaced" — measured against 798 real icons, always in both coordinates
+/// together, but this checks each independently so a corrupt file with only
+/// one sentinel is still reported as unplaced rather than as a real
+/// position with a nonsense half. `(0, 0)` is deliberately **not** treated
+/// as unset: it is the window's top-left corner, a real position a release
+/// can and does choose.
+pub fn position(bytes: &[u8]) -> CoreResult<Option<(i32, i32)>> {
+    check_header(bytes)?;
+    let x = be_i32(bytes, OFF_CURRENT_X)?;
+    let y = be_i32(bytes, OFF_CURRENT_Y)?;
+    if x == NO_POSITION || y == NO_POSITION {
+        Ok(None)
+    } else {
+        Ok(Some((x, y)))
+    }
+}
+
+/// The drawer's own Workbench window rectangle — `DrawerData.NewWindow`'s
+/// first four fields, `i16` each, big-endian.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DrawerWindow {
+    pub left: i16,
+    pub top: i16,
+    pub width: i16,
+    pub height: i16,
+}
+
+/// The drawer's window rectangle, or `None` when `do_DrawerData` is zero —
+/// there is no `DrawerData` block to read it from (a plain `Tool` or
+/// `Project` icon, or a drawer icon whose window was never opened).
+///
+/// When `do_DrawerData` is non-zero, the block is guaranteed present and
+/// [`DRAWER_DATA_LEN`] (56) bytes long — [`layout`]'s own walk depends on
+/// that same guarantee to skip it — so reading the four `i16` fields at its
+/// start (offset [`HEADER_LEN`], the block's own start) needs no additional
+/// length check beyond what [`be_i16`] already does.
+pub fn drawer_window(bytes: &[u8]) -> CoreResult<Option<DrawerWindow>> {
+    check_header(bytes)?;
+    if be_u32(bytes, OFF_DRAWER_DATA)? == 0 {
+        return Ok(None);
+    }
+    let left = be_i16(bytes, HEADER_LEN)?;
+    let top = be_i16(bytes, HEADER_LEN + 2)?;
+    let width = be_i16(bytes, HEADER_LEN + 4)?;
+    let height = be_i16(bytes, HEADER_LEN + 6)?;
+    Ok(Some(DrawerWindow {
+        left,
+        top,
+        width,
+        height,
+    }))
+}
+
+/// The revision bit inside `Gadget.UserData` (bit 0) — set on 798 of 798
+/// real icons measured, so `DrawerData2` is the normal shape, not a special
+/// one. This module does not yet read anything `DrawerData2` itself would
+/// carry; it only reports whether the bit is set.
+pub fn has_drawer_data2(bytes: &[u8]) -> CoreResult<bool> {
+    check_header(bytes)?;
+    let user_data = be_u32(bytes, OFF_USER_DATA)?;
+    Ok(user_data & 1 != 0)
+}
+
 /// Merge `source`'s tool types and stack size into `dest`, keeping every
 /// other byte of `dest` — including the trailing region — untouched.
 ///
@@ -375,7 +521,11 @@ pub fn merge_tooltypes(dest: &[u8], source: &[u8]) -> CoreResult<Vec<u8>> {
 /// the same reason.
 #[cfg(test)]
 pub(crate) mod tests_support {
-    use super::{HEADER_LEN, MAGIC, OFF_STACK_SIZE, OFF_TOOL_TYPES};
+    use super::{
+        DRAWER_DATA_LEN, HEADER_LEN, MAGIC, OFF_CURRENT_X, OFF_CURRENT_Y, OFF_DRAWER_DATA,
+        OFF_GADGET_HEIGHT, OFF_GADGET_WIDTH, OFF_STACK_SIZE, OFF_TOOL_TYPES, OFF_TYPE,
+        OFF_USER_DATA,
+    };
 
     /// Build a minimal, valid `.info` by hand: header, an optional
     /// `ToolTypes` block, then arbitrary trailing bytes (standing in for an
@@ -401,12 +551,62 @@ pub(crate) mod tests_support {
         buf.extend_from_slice(trailing);
         buf
     }
+
+    /// A valid icon carrying an arbitrary `Gadget` width/height, distinct
+    /// from `synthetic_icon`'s always-zero `Gadget` fields — for
+    /// [`super::render`]'s "the plain planar size is the `Gadget` size"
+    /// case, where the exact width must be asserted rather than merely
+    /// nonzero.
+    pub(crate) fn synthetic_icon_sized(width: u16, height: u16) -> Vec<u8> {
+        let mut buf = synthetic_icon(&[], 4096, &[]);
+        buf[OFF_GADGET_WIDTH..OFF_GADGET_WIDTH + 2].copy_from_slice(&width.to_be_bytes());
+        buf[OFF_GADGET_HEIGHT..OFF_GADGET_HEIGHT + 2].copy_from_slice(&height.to_be_bytes());
+        buf
+    }
+
+    /// A valid icon placed at `(x, y)` — pass [`super::NO_POSITION`] for
+    /// either coordinate to build an unplaced icon.
+    pub(crate) fn synthetic_icon_at(x: i32, y: i32) -> Vec<u8> {
+        let mut buf = synthetic_icon(&[], 4096, &[]);
+        buf[OFF_CURRENT_X..OFF_CURRENT_X + 4].copy_from_slice(&x.to_be_bytes());
+        buf[OFF_CURRENT_Y..OFF_CURRENT_Y + 4].copy_from_slice(&y.to_be_bytes());
+        buf
+    }
+
+    /// A valid icon whose `do_Type` is `kind`.
+    pub(crate) fn synthetic_icon_of_type(kind: u8) -> Vec<u8> {
+        let mut buf = synthetic_icon(&[], 4096, &[]);
+        buf[OFF_TYPE] = kind;
+        buf
+    }
+
+    /// A drawer icon carrying a `DrawerData` block: `do_DrawerData` set, the
+    /// window rectangle at its start, and `UserData`'s revision bit set (798
+    /// of 798 real icons measured carry it) — the shape
+    /// [`super::has_drawer_data2`] and [`super::drawer_window`] both read.
+    pub(crate) fn synthetic_drawer_icon(left: i16, top: i16, width: i16, height: i16) -> Vec<u8> {
+        let mut buf = vec![0u8; HEADER_LEN];
+        buf[0..2].copy_from_slice(&MAGIC.to_be_bytes());
+        buf[2..4].copy_from_slice(&1u16.to_be_bytes()); // do_Version
+        buf[OFF_USER_DATA..OFF_USER_DATA + 4].copy_from_slice(&1u32.to_be_bytes());
+        buf[OFF_DRAWER_DATA..OFF_DRAWER_DATA + 4].copy_from_slice(&1u32.to_be_bytes());
+
+        let mut drawer_data = vec![0u8; DRAWER_DATA_LEN];
+        drawer_data[0..2].copy_from_slice(&left.to_be_bytes());
+        drawer_data[2..4].copy_from_slice(&top.to_be_bytes());
+        drawer_data[4..6].copy_from_slice(&width.to_be_bytes());
+        drawer_data[6..8].copy_from_slice(&height.to_be_bytes());
+        buf.extend_from_slice(&drawer_data);
+        buf
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tests_support::synthetic_icon;
+    use tests_support::{
+        synthetic_drawer_icon, synthetic_icon, synthetic_icon_at, synthetic_icon_of_type,
+    };
 
     /// A minimal icon with a `GadgetRender` `Image` whose claimed
     /// dimensions vastly exceed the buffer actually behind them — the shape
@@ -499,6 +699,96 @@ mod tests {
         let mut wrong_magic = synthetic_icon(&[], 0, b"");
         wrong_magic[0..2].copy_from_slice(&0x1234u16.to_be_bytes());
         assert!(layout(&wrong_magic).is_err(), "wrong magic, right length");
+    }
+
+    #[test]
+    fn the_no_position_sentinel_is_0x80000000_not_zero() {
+        // Measured: art1/Fonts/Disk.info carries i32::MIN in do_CurrentX.
+        // A position of (0, 0) is a REAL position - the window's top-left
+        // corner - and must not be read as "unset".
+        let placed = synthetic_icon_at(0, 0);
+        assert_eq!(
+            position(&placed).unwrap(),
+            Some((0, 0)),
+            "(0,0) is a real position"
+        );
+
+        let unplaced = synthetic_icon_at(NO_POSITION, NO_POSITION);
+        assert_eq!(position(&unplaced).unwrap(), None);
+    }
+
+    #[test]
+    fn a_real_position_reads_back_exactly() {
+        // Measured: art1/Devs/DataTypes.info is at 13,4.
+        assert_eq!(position(&synthetic_icon_at(13, 4)).unwrap(), Some((13, 4)));
+    }
+
+    #[test]
+    fn the_five_measured_icon_types_decode() {
+        // Measured across 798 real icons: 1 disk (37), 2 drawer (56),
+        // 3 tool (196), 4 project (506), 5 garbage (3).
+        for (byte, want) in [
+            (1u8, IconType::Disk),
+            (2, IconType::Drawer),
+            (3, IconType::Tool),
+            (4, IconType::Project),
+            (5, IconType::Garbage),
+        ] {
+            assert_eq!(icon_type(&synthetic_icon_of_type(byte)).unwrap(), want);
+        }
+        assert_eq!(
+            icon_type(&synthetic_icon_of_type(9)).unwrap(),
+            IconType::Other(9)
+        );
+    }
+
+    #[test]
+    fn a_drawer_window_reads_only_when_drawer_data_is_present() {
+        // Measured: art1/Devs/DataTypes.info -> 393,126 342x163; the project
+        // icon beside it has do_DrawerData = 0 and no window at all.
+        assert_eq!(
+            drawer_window(&synthetic_drawer_icon(393, 126, 342, 163)).unwrap(),
+            Some(DrawerWindow {
+                left: 393,
+                top: 126,
+                width: 342,
+                height: 163
+            })
+        );
+        assert_eq!(
+            drawer_window(&synthetic_icon(&[], 4096, &[])).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn every_real_icon_measured_is_revision_one() {
+        // 798 of 798. So DrawerData2 is the normal case, not a special one.
+        assert!(has_drawer_data2(&synthetic_drawer_icon(0, 0, 100, 100)).unwrap());
+    }
+
+    #[test]
+    fn a_truncated_icon_is_refused_rather_than_read_past_its_end() {
+        // Truncate a VALID icon. A zero-filled buffer would be refused for
+        // its missing 0xE310 magic rather than for its length, so such a
+        // test passes with every bounds check deleted - a state with more
+        // than one cause, which is the defect this project names.
+        let whole = synthetic_icon_at(13, 4);
+        assert!(
+            icon_type(&whole).is_ok(),
+            "the fixture must be valid to start with"
+        );
+        for len in [12usize, 45, 48, 57, 62, 65] {
+            let cut = &whole[..len];
+            assert!(
+                icon_type(cut).is_err() || len > 48,
+                "icon_type read do_Type out of {len} bytes"
+            );
+            assert!(
+                position(cut).is_err() || len > 65,
+                "position read a coordinate out of {len} bytes"
+            );
+        }
     }
 
     /// Recursively collect every path under `dir` whose extension is
