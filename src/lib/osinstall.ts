@@ -889,10 +889,16 @@ export function mediaIdentityLines(state: MediaIdentityState): MediaIdentityLine
 /**
  * The one line about the pass itself — what ART did, not what it found.
  *
- * `null` when there is nothing to say: a folder with no `.adf`/`.iso`/`.lha`
- * in it at all. `osinstall.media.empty` already owns that sentence and a
- * second one counting the same zero would be this screen contradicting
- * itself.
+ * `null` when there is nothing to say about *how the pass answered* —
+ * `hashed + remembered === 0`, which is two different folders in practice:
+ * one with no `.adf`/`.iso`/`.lha` in it at all (`osinstall.media.empty`
+ * already owns that sentence, and a second one counting the same zero would
+ * be this screen contradicting itself), and one whose every candidate came
+ * back `unreadable` (that sentence is owned per file, above, in
+ * {@link mediaIdentityLines} — nothing here needs to repeat it, and nothing
+ * untrue is said by staying silent). Both share the one condition that
+ * matters to this function: there were zero hashes to report where they came
+ * from.
  *
  * **The identified case states where its answer came from, and that is
  * deliberate.** The hash is cached against `(path, size, mtime)` — the same

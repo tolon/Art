@@ -120,6 +120,7 @@ pub fn hex_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ScratchDir;
 
     /// WHDLoad's `ws_kickcrc` is CRC-16/ARC, and this test states the
     /// parameters it is asserting so a later mismatch can be read as "ART's
@@ -172,27 +173,26 @@ mod tests {
 
     #[test]
     fn file_matches_bytes() {
-        let d = std::env::temp_dir().join(format!("art-hash-{}", crate::core::test_scratch_id()));
-        std::fs::create_dir_all(&d).unwrap();
+        // `ScratchDir`, not a bare `PathBuf` plus a trailing `remove_dir_all`
+        // (M7, fix wave 2) — a trailing statement is skipped exactly when the
+        // test panics, which is when a leak costs most (ART-184: 169,291
+        // directories, ~987 GB, from this same shape).
+        let d = ScratchDir::new("art-hash", "sha256-bytes");
         let p = d.join("data.bin");
         std::fs::write(&p, b"abc").unwrap();
         let from_file = sha256_file(&p).unwrap();
         assert_eq!(from_file, sha256_bytes(b"abc"));
-        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
     fn large_file_does_not_panic() {
         // 1 MiB of data — ensures the streaming path works.
-        let d =
-            std::env::temp_dir().join(format!("art-hash-big-{}", crate::core::test_scratch_id()));
-        std::fs::create_dir_all(&d).unwrap();
+        let d = ScratchDir::new("art-hash", "sha256-big");
         let p = d.join("big.bin");
         let one_mib = vec![0x42u8; 1024 * 1024];
         std::fs::write(&p, &one_mib).unwrap();
         let from_file = sha256_file(&p).unwrap();
         assert_eq!(from_file, sha256_bytes(&one_mib));
-        std::fs::remove_dir_all(&d).ok();
     }
 
     /// RFC 1321, §A.5 ("Test suite") — the empty string, published there as
@@ -213,14 +213,11 @@ mod tests {
 
     #[test]
     fn md5_file_matches_bytes() {
-        let d =
-            std::env::temp_dir().join(format!("art-hash-md5-{}", crate::core::test_scratch_id()));
-        std::fs::create_dir_all(&d).unwrap();
+        let d = ScratchDir::new("art-hash", "md5-bytes");
         let p = d.join("data.bin");
         std::fs::write(&p, b"abc").unwrap();
         let from_file = md5_file(&p).unwrap();
         assert_eq!(from_file, md5_bytes(b"abc"));
-        std::fs::remove_dir_all(&d).ok();
     }
 
     /// Mirrors `large_file_does_not_panic` above, but with varying content
@@ -230,16 +227,11 @@ mod tests {
     /// happening to agree with the whole-file one.
     #[test]
     fn md5_large_file_streams_the_whole_content() {
-        let d = std::env::temp_dir().join(format!(
-            "art-hash-md5-big-{}",
-            crate::core::test_scratch_id()
-        ));
-        std::fs::create_dir_all(&d).unwrap();
+        let d = ScratchDir::new("art-hash", "md5-big");
         let p = d.join("big.bin");
         let one_mib: Vec<u8> = (0..1024 * 1024).map(|i| (i % 256) as u8).collect();
         std::fs::write(&p, &one_mib).unwrap();
         let from_file = md5_file(&p).unwrap();
         assert_eq!(from_file, md5_bytes(&one_mib));
-        std::fs::remove_dir_all(&d).ok();
     }
 }

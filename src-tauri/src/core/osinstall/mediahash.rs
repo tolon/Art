@@ -766,6 +766,45 @@ mod tests {
         );
     }
 
+    /// `scripts/media-table-check.py --emit-confirmed` now appends a check
+    /// rather than replacing the file (M4, fix wave 2), so two runs against
+    /// two different bodies of media can both name the same hash — the
+    /// owner's 3.2 disks re-verified on a later day, say. `parse_confirmed`
+    /// keeps the **first** run's `Confirmation` for a repeated hash, which is
+    /// this test: earlier provenance for a hash must survive a later run that
+    /// happens to re-confirm it, and the later run's *other*, genuinely new
+    /// hash must still come through.
+    #[test]
+    fn two_checks_naming_the_same_hash_keep_the_first_runs_confirmation() {
+        let json = r#"{
+            "checks": [
+                {"checked": "2026-01-01", "against": "first run", "md5": ["aaaa"]},
+                {"checked": "2026-06-01", "against": "second run", "md5": ["AAAA", "bbbb"]}
+            ]
+        }"#;
+        let flattened = parse_confirmed(json).expect("must parse");
+        assert_eq!(
+            flattened.len(),
+            2,
+            "one entry per distinct hash, not per check"
+        );
+
+        let (_, first_hash) = flattened
+            .iter()
+            .find(|(md5, _)| md5 == "aaaa")
+            .expect("the repeated hash must still be present");
+        assert_eq!(
+            first_hash.against, "first run",
+            "the earlier check's provenance must win over the later, repeating one"
+        );
+
+        let (_, second_hash) = flattened
+            .iter()
+            .find(|(md5, _)| md5 == "bbbb")
+            .expect("the second run's own, non-repeated hash must still be recorded");
+        assert_eq!(second_hash.against, "second run");
+    }
+
     #[test]
     fn row_for_finds_the_exact_lowercase_hash() {
         let sample = &shipped_rows()[0];

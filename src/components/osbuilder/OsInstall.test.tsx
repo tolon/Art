@@ -2892,6 +2892,37 @@ describe("one folder field per media layer the release declares (Task 10)", () =
     expect(screen.queryByTestId("layer-wrong-hint-base")).toBeNull();
     expect(screen.queryByTestId("layer-wrong-hint-update-3.2.2")).toBeNull();
   });
+
+  /**
+   * **Two layers pointed at one folder identify it once, not once per layer**
+   * (final-review.md M5, fix wave 2). `identifyFoldersKey` used to be built
+   * from every layer's own folder with no de-duplication, so a user who
+   * pointed both `base` and `update-3.2.2` at the same disks — a plausible
+   * mistake on a screen that shows two fields for one folder of media —
+   * hashed that folder twice and rendered every line twice under the same
+   * `key={line.path}`.
+   *
+   * Asserted as an exact count on both sides, never by presence alone: "one
+   * line" must not be satisfiable by the line simply being absent, and one
+   * call must not be satisfiable by the mock never having been asked at all.
+   */
+  it("identifies a folder once when two layers are pointed at it (M5)", async () => {
+    const SHARED = "E:\\media\\Shared";
+    renderOsInstall({ release: "AmigaOS 3.2.2" });
+    await browseLayerFolder("base", SHARED);
+    await browseLayerFolder("update-3.2.2", SHARED);
+
+    await waitFor(() => expect(identifyMediaMock).toHaveBeenCalledWith(SHARED));
+    // Not one call per layer: the de-duplicated key never asks the shared
+    // folder to be identified twice, however many layers name it.
+    expect(identifyMediaMock.mock.calls.filter((call) => call[0] === SHARED)).toHaveLength(1);
+
+    // And exactly one line for the one file the (mocked) pass reports in
+    // that folder -- two would be the duplicate-key defect rendering both
+    // layers' identical answers.
+    const lines = await screen.findAllByTestId("media-identity-not-in-table");
+    expect(lines).toHaveLength(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

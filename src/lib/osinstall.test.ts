@@ -1816,6 +1816,23 @@ describe("what a content-hash result is allowed to say", () => {
     expect(mediaIdentityLines(identified())).toEqual([]);
   });
 
+  /**
+   * **The same `null` is also reached a second way** (final-review.md M6):
+   * every candidate came back unreadable, so `hashed + remembered` is zero
+   * even though the folder plainly had files in it. `mediaIdentitySummary`'s
+   * own doc comment used to name only the empty-folder cause; this is the
+   * other one, and it must not produce the same silence as "nothing here" —
+   * the per-file `unreadable` lines are the report for this case, which is
+   * why the summary staying silent is correct, not merely untested.
+   */
+  it("also says nothing about the pass itself when every candidate was unreadable — but the per-file lines still report it", () => {
+    const state = identified({ unreadable: ["a.adf", "b.adf"] });
+    expect(mediaIdentitySummary(state)).toBeNull();
+    const lines = mediaIdentityLines(state);
+    expect(lines).toHaveLength(2);
+    expect(lines.every((line) => line.kind === "unreadable")).toBe(true);
+  });
+
   /** Nothing to show before an answer exists — including while one is in
    *  flight, when a stale list from the previous folder would be the worst
    *  of the options. */

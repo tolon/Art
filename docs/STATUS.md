@@ -1114,9 +1114,46 @@ narrative is one line in the [session log](session-log.md), its reasoning is in
   → 2026** leaf keys each catalogue (five new `osinstall.mediaId.*`); `pnpm
   lint` exit 0 unpiped, `cargo fmt --check`, `clippy --all-targets -- -D
   warnings`, and the control-byte, scratch-root and contrast (113/113)
-  sweeps clean. Four remaining Minors (M3–M7 minus these) are a separate
-  wave and are **not** fixed. Report:
+  sweeps clean. Report:
   `.superpowers/sdd/2026-09-06-media-identification-by-hash/fix-wave-1-report.md`.
+- **Fix wave 2 of that same review closed the remaining five findings
+  (M3–M7), so the whole-branch review's list is now closed end to end.**
+  Each was re-checked against the tree first — fix wave 1 touched the same
+  three files these live near — and all five still stood.
+  [ART-266](ISSUES.md#fixed) (M3): "151 of the table's 186 rows" was two
+  literal digits in both catalogues with nothing tying them to the two data
+  files; fixed with a guard rather than interpolation — a new
+  `src/i18n/media-table-counts.test.ts`, on `distro-registry-keys.test.ts`'s
+  own precedent, reads both JSON files directly and fails if the prose and
+  the data disagree. [ART-267](ISSUES.md#fixed) (M4): `--emit-confirmed`
+  always wrote a single check event, discarding an earlier run's record the
+  moment a second one was made — now appends, tested with a real scratch
+  run and a new Rust test for `parse_confirmed`'s previously-untested
+  duplicate-hash branch. [ART-268](ISSUES.md#fixed) (M5): two layers
+  pointed at one folder identified it twice and rendered every line twice
+  under the same React key — fixed by folding the folder list through a
+  `Set`; reverting it reproduced React's own duplicate-key console warning.
+  [ART-269](ISSUES.md#fixed) (M6): `mediaIdentitySummary`'s null case
+  named one cause where it has two — fixed as a comment correction (no
+  untrue sentence resulted from the code), with a new test for the
+  previously-uncovered second cause. [ART-270](ISSUES.md#fixed) (M7): two
+  new MD5 tests leaked their scratch directory on a panic; checking the
+  sha256 tests they copied the pattern from found the same defect
+  predating this round, so all four moved onto `core::ScratchDir`, not only
+  the two named — proven with a controlled two-armed forced-panic
+  experiment rather than a unit test, since nothing asserts "the directory
+  survives a panic" directly. **Measured**: `pnpm test` **1119** passed /
+  **83** files; `cargo test --lib -- --skip artwork` `test result: ok. 2878
+  passed; 0 failed; 50 ignored`; i18n unchanged at **2026** leaf keys each
+  catalogue (no key added — M3's fix is a guard, not a new string); `pnpm
+  lint` exit 0 unpiped, `cargo fmt --check`, `clippy --all-targets -- -D
+  warnings`, and the control-byte, scratch-root, contrast (113/113) and
+  scratch-counter sweeps all clean (the counter sweep's one flagged site is
+  ART-235's pre-existing false positive, in a file this wave never
+  touched). Report:
+  `.superpowers/sdd/2026-09-06-media-identification-by-hash/fix-wave-2-report.md`.
+  **Still on `art-media-hash`, not merged and not pushed** — the round and
+  both fix waves are complete; merging is the owner's decision.
 - **The OS Builder now shows what media was found when it cannot complete a
   build.** The `mediaEvidence` helper renders a line above the refusals list
   saying which of three things is true: this release's own media is among what

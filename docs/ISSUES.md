@@ -800,6 +800,151 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-270** 🔵 ✅ **Two new MD5 tests leaked their scratch directory on a
+panic, and so did the two sha256 tests they copied the pattern from** —
+*found 2026-09-06, whole-branch review of the media-identification round (M7),
+fixed in fix wave 2*
+`src-tauri/src/core/hashing.rs` (all four tests in the module)
+
+`md5_file_matches_bytes` and `md5_large_file_streams_the_whole_content` built
+their scratch directory with `std::env::temp_dir().join(...)` and removed it
+on a trailing statement — skipped exactly when the test panics, which is
+ART-184's own recorded cost (169,291 directories, ~987 GB, one session). The
+finding named only the two new tests; checking the neighbours they copied the
+style from (`file_matches_bytes`, `large_file_does_not_panic`) found the
+identical shape in both, predating this round. A leaked directory from this
+exact defect (`art-hash-md5-big-24592-3`, from an earlier run this same
+session) was still sitting in `D:/tmp/art-tests` before any deliberate
+mutation was run.
+
+**Fixed** by moving all four tests onto `core::ScratchDir`, whose `Drop` runs
+on the panicking path.
+
+**Proven with a controlled, two-armed experiment** (no existing test asserts
+"the directory survives a panic," so this had to be measured rather than
+read): a forced `panic!()` added to one test between directory creation and
+cleanup. With the old pattern, the panic left `art-hash-md5-22068-0` behind
+in `D:/tmp/art-tests`; with `ScratchDir`, the identical forced panic left
+nothing. One variable (the scratch mechanism), both arms reported.
+
+---
+
+**ART-269** 🔵 ✅ **A doc comment named one cause for a state that has two** —
+*found 2026-09-06, whole-branch review of the media-identification round (M6),
+fixed in fix wave 2*
+`src/lib/osinstall.ts::mediaIdentitySummary`
+
+The null case (`hashed + remembered === 0`) was documented as "a folder with
+no `.adf`/`.iso`/`.lha` in it at all." It is also reached when every
+candidate came back `unreadable` — those files count toward neither `hashed`
+nor `remembered`. No untrue sentence resulted either way (the per-file
+`unreadable` lines still render), but a doc naming one of two causes is
+exactly the shape this project's standing trap starts from ("never assert a
+state that has more than one cause").
+
+**Fixed** by rewriting the comment to name both causes and the one condition
+they actually share, rather than the single cause that happened to be true
+when it was written. Since the behaviour itself was already correct, this is
+a documentation fix; the code is unchanged.
+
+**Guarded** by a new test for the previously-uncovered cause: `also says
+nothing about the pass itself when every candidate was unreadable — but the
+per-file lines still report it` (`src/lib/osinstall.test.ts`). Verified live:
+mutated the (otherwise unchanged) function to also require `unreadable.length
+=== 0` before staying silent — a plausible wrong "fix" for the very confusion
+the stale comment invited — and got a rendered `osinstall.mediaId.provenance`
+phrase instead of `null`. Restored, clean.
+
+---
+
+**ART-268** 🔵 ✅ **Two layers pointed at one folder identified it twice and
+rendered every line twice under the same React key** — *found 2026-09-06,
+whole-branch review of the media-identification round (M5), fixed in fix
+wave 2*
+`src/components/osbuilder/OsInstall.tsx::identifyFoldersKey`
+
+`extraMediaFolders` already refuses to add a folder already present; the
+layered path had no equivalent gate; `identifyFoldersKey` folded every
+layer's own folder into one key with no de-duplication. A user who pointed
+`base` and `update-3.2.2` at the same disks — plausible on a screen that
+shows two fields for what is, for that user, one folder of media — hashed it
+twice and rendered every line twice under `key={line.path}`.
+
+**Fixed** by running the filtered folder list through a `Set` before joining
+it into the key, for both the layered and unlayered branches.
+
+**Guarded** by `identifies a folder once when two layers are pointed at it
+(M5)` (`OsInstall.test.tsx`), asserted as an exact count on both sides (one
+call, one rendered line) rather than by presence — a missing line reads as
+"not two" just as easily as a correct single line does. Reverting the fix
+reproduced the real defect exactly, including React's own console warning:
+*"Encountered two children with the same key, `E:\media\Disk1.adf`"*, with
+3 recorded calls where the test expects 1.
+
+---
+
+**ART-267** 🟡 ✅ **`--emit-confirmed` replaced ART's own confirmation record
+instead of adding to it, discarding an earlier run's material the moment a
+second one was made** — *found 2026-09-06, whole-branch review of the
+media-identification round (M4), fixed in fix wave 2*
+`scripts/media-table-check.py::emit_confirmed`,
+`core/osinstall/mediahash.rs::parse_confirmed`
+
+`media_hashes_confirmed.json`'s whole design is a `checks: [...]` list of
+check *events* — date, material, hashes — precisely so several people's media
+can accumulate over time. `emit_confirmed` always wrote a single-element
+list, so confirming a second body of media (the owner's 3.1 set, after the
+3.2 set already on file) silently threw away the first run's record. The
+file's own `$comment` says "do not hand-edit; re-run the check instead," and
+re-running it was exactly what erased the previous run.
+
+**Fixed** by reading the file's existing `checks` list and appending, never
+replacing — tolerant of a missing or malformed file (falls back to empty
+rather than raising, so a real check run is never blocked by a previously
+broken one). Appending rather than prepending matters: `parse_confirmed`
+keeps the *first* check to name a repeated hash, so appending preserves
+"the earliest recorded provenance for a hash wins," which prepending would
+have silently reversed.
+
+The duplicate-hash branch in `parse_confirmed` (the `continue` on a repeated
+md5 across checks) had no test naming it. **Guarded** by
+`two_checks_naming_the_same_hash_keep_the_first_runs_confirmation`
+(`mediahash.rs`). Verified against a real scratch file and the owner's own
+table rows: two `emit_confirmed` calls left 2 check events, both preserved,
+where the old code left 1. Removing `parse_confirmed`'s dedup guard produced
+`` assertion `left == right` failed: one entry per distinct hash, not per
+check\n left: 3\n right: 2 ``; restored, clean.
+
+---
+
+**ART-266** 🔵 ✅ **"151 of the table's 186 rows" was two literal digits in
+two catalogues, tied to nothing that would fail if the data changed** —
+*found 2026-09-06, whole-branch review of the media-identification round
+(M3), fixed in fix wave 2*
+`src/i18n/en.json`, `src/i18n/tr.json` (`osinstall.mediaId.unconfirmed`)
+
+`mediahash.rs`'s own
+`the_shipped_record_confirms_35_of_the_186_rows_and_not_the_other_151` test
+already fails when `media_hashes_confirmed.json` changes — but it names
+itself, not the two catalogue strings, so a person "fixing" that test by
+editing 35/151 to a new pair ships a screen stating the old numbers. Exactly
+the round's own lesson: a claim in the record with nothing holding it up.
+
+**Fixed with a guard, not interpolation** — threading the real counts onto
+the wire would touch a wire-format struct, both TS/Rust types, every
+`MediaIdentification` test fixture, and both catalogues' wording, for a
+number that is the same on every line of a pass rather than a per-file fact.
+Added `src/i18n/media-table-counts.test.ts`, following the exact precedent of
+`distro-registry-keys.test.ts`: reads `media_hashes.json` and
+`media_hashes_confirmed.json` directly, computes the same counts
+`mediahash.rs`'s test computes, and fails unless both catalogues' prose still
+names both numbers as standalone digits.
+
+**Proven**: mutated `en.json`'s "186" to "999" and reran — `AssertionError:
+expected false to be true`. Restored, clean.
+
+---
+
 **ART-265** 🔵 ✅ **Both media-table checks passed with 0 verified, so neither
 could fail on the thing it exists to check** — *found 2026-09-06, whole-branch
 review of the media-identification round (M8)*

@@ -944,14 +944,23 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    *  the remembered listings — so the pass has to run again to say anything
    *  true. */
   const [identifyNonce, setIdentifyNonce] = useState(0);
+  // De-duplicated: two layers pointed at one folder (M5, fix wave 2) must
+  // identify it once, not once per layer. `extraMediaFolders` already
+  // dedupes on add (`addMediaFolder` above); a layered release has no such
+  // gate — two layer fields are two independent remembered keys, and nothing
+  // stops a user pointing both at the same disks. Without this, every file in
+  // that folder was hashed and reported twice, under the same `path`, which
+  // is both wasted work and a duplicate React key at the render site.
   const identifyFoldersKey = !layersKnown
     ? ""
-    : (layers.length > 0
-        ? layers.map((layer) => folderForLayer(layer.id))
-        : [mediaFolder, ...extraMediaFolders]
-      )
-        .filter((folder): folder is string => !!folder)
-        .join("\n");
+    : Array.from(
+        new Set(
+          (layers.length > 0
+            ? layers.map((layer) => folderForLayer(layer.id))
+            : [mediaFolder, ...extraMediaFolders]
+          ).filter((folder): folder is string => !!folder)
+        )
+      ).join("\n");
   useEffect(() => {
     const folders = identifyFoldersKey ? identifyFoldersKey.split("\n") : [];
     if (folders.length === 0) {

@@ -97,6 +97,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   What was identified now stays on screen, and every folder is reported by
   name and by what became of it: identified, could not be read, stopped, or
   never reached.
+- **Pointing two media layers at the same folder no longer lists every disk
+  in it twice.** AmigaOS 3.2.2 asks for a base folder and an update folder
+  separately; pointing both at the same folder — an easy mistake when your
+  disks are not actually split that way — hashed and listed the same disks
+  twice. Each folder is now identified once, however many layers name it.
 
 - **A part-built AmigaOS 3.2.2 now gets the same "what is in this folder" line
   as every other release — and it is not told its own disks belong to
