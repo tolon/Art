@@ -1212,24 +1212,64 @@ describe("mediaEvidence", () => {
   // ART-255 — the Ambiguous folder, which no test in the round constructed
   // -------------------------------------------------------------------------
   //
-  // `Workbench3.2` **and** `AmigaOS3.9` in one folder. Both disks carry a
-  // version of their own; two releases are named and `release_holding`
-  // declines to choose, so it answers `null` — the same `null` an unknown
-  // folder produces. The sentence must therefore be one that is true of
-  // both, which is why it no longer states a reason.
-  it("says the unidentified sentence for a folder naming two releases, not just an unknown one", () => {
+  // `Workbench3.1` and `AmigaOS3.9` in one folder, building AmigaOS 3.2 —
+  // plus `Fonts` and `Locale`, which AmigaOS 3.2's own recipe also asks for.
+  // The two versioned disks name AmigaOS 3.1 and AmigaOS 3.9, and
+  // `release_holding` declines to choose between them, so it answers `null`
+  // — the same `null` an unknown folder produces. Neither versioned disk is
+  // *this* release's own (AmigaOS 3.2's `distinguishing` for this pile is
+  // empty), so the sentence must be one that is true of both Ambiguous and
+  // Unknown, which is why it no longer states a reason. `Fonts`/`Locale` are
+  // in the pile so `wrongMediaFolder` — which owns the all-or-nothing case
+  // and would otherwise fire here, since it is silent whenever this
+  // release's own evidence is entirely empty — correctly withdraws, leaving
+  // this the state under test.
+  //
+  // **Not `Workbench3.2` and `AmigaOS3.9`, as this fixture originally read**
+  // (ART-259). That pairing is genuinely ambiguous too, but `Workbench3.2` is
+  // AmigaOS 3.2's own distinguishing disk — the fixture was accidentally
+  // exercising `holdsThisReleasesOwnMedia`, not the "neither disk is this
+  // release's own" state ART-255 names. Once ART-257's check is asked before
+  // this one (as it must be, ART-259), that fixture correctly answers
+  // `sameRelease`: the folder really does hold a genuine AmigaOS 3.2 disk,
+  // and saying so is not a guess, whatever else the folder also holds. This
+  // fixture keeps ART-255's own state isolated from that one.
+  it("says the unidentified sentence for a folder naming two other releases, not just an unknown one", () => {
+    const phrase = mediaEvidence({
+      plan: planWith(["Extras3.2"]),
+      found: ["Workbench3.1", "AmigaOS3.9", "Fonts", "Locale"],
+      // Ambiguous, not Unknown — and indistinguishable from here.
+      releaseHolding: null,
+      release: RELEASE,
+      // Neither versioned disk is AmigaOS 3.2's own: no distinguishing.
+      // `Fonts`/`Locale` are shared, not distinguishing, and never settle
+      // identification — but they keep `wrongMediaFolder` from also firing.
+      evidence: evidenceOf([], ["Fonts", "Locale"], ["Workbench3.2", "Extras3.2"]),
+    });
+
+    expect(phrase).toEqual({
+      key: "osinstall.evidence.unidentified",
+      params: { found: "Workbench3.1, AmigaOS3.9, Fonts, Locale" },
+    });
+  });
+
+  // The pairing ART-255's own fixture used before ART-259: genuinely
+  // Ambiguous (two releases named), but one of the two disks really is this
+  // release's own distinguishing media. `sameRelease` is the honest answer
+  // here, not `unidentified` — the claim it makes ("this release's own media
+  // is among what the folder holds") stays true whatever else is in the pile.
+  it("calls an ambiguous folder this release's own once one of its disks genuinely is (ART-259)", () => {
     const phrase = mediaEvidence({
       plan: planWith(["Extras3.2"]),
       found: ["Workbench3.2", "AmigaOS3.9"],
-      // Ambiguous, not Unknown — and indistinguishable from here.
       releaseHolding: null,
       release: RELEASE,
       evidence: evidenceOf(["Workbench3.2"], [], ["Extras3.2"]),
     });
 
     expect(phrase).toEqual({
-      key: "osinstall.evidence.unidentified",
-      params: { found: "Workbench3.2, AmigaOS3.9" },
+      key: "osinstall.evidence.sameRelease",
+      params: { found: "Workbench3.2, AmigaOS3.9", missing: "Extras3.2" },
     });
   });
 
@@ -1326,6 +1366,73 @@ describe("mediaEvidence", () => {
     expect(mediaEvidence({ ...args, evidence: BASED_EVIDENCE })?.key).toBe(
       "osinstall.evidence.sameRelease"
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // ART-259 — ART-257's own check ran after the `releaseHolding === null`
+  // return, so it was unreachable for the one folder it exists to catch.
+  // -------------------------------------------------------------------------
+
+  /**
+   * The update set on the shelf, none of the base yet. Unlike `BASE_SET`
+   * above — where `identify` still names the base release outright — a
+   * based release with **none** of its base present has a non-empty
+   * `missing_required` and is dropped from the named candidates
+   * (`identify.rs`'s own base-subsumption pass), and the update disk names
+   * are nobody else's. So `release_holding` of this exact pile answers
+   * `Unknown`, not `"AmigaOS 3.2"` and not `"AmigaOS 3.2.2"` — this is the
+   * folder the previous fix wave's own reorder bug left unreachable.
+   */
+  const UPDATE_SET = ["Update3.2.2", "Classes3.2.2"];
+  const UPDATE_ONLY_PLAN: InstallPlan = {
+    ...planWith(["Workbench3.2", "Install3.2", "Extras3.2"]),
+    release: BASED,
+  };
+  const UPDATE_ONLY_EVIDENCE: ReleaseEvidence = {
+    release: BASED,
+    distinguishing: ["Update3.2.2", "Classes3.2.2"],
+    shared: [],
+    missingRequired: ["Workbench3.2", "Install3.2", "Extras3.2"],
+  };
+
+  it("calls the update-only folder this release's own media even though identify names no release at all", () => {
+    expect(
+      mediaEvidence({
+        plan: UPDATE_ONLY_PLAN,
+        found: UPDATE_SET,
+        // `identify`'s own answer for this exact pile: Unknown.
+        releaseHolding: null,
+        release: BASED,
+        evidence: UPDATE_ONLY_EVIDENCE,
+      })
+    ).toEqual({
+      key: "osinstall.evidence.sameRelease",
+      params: {
+        found: "Update3.2.2, Classes3.2.2",
+        missing: "Workbench3.2, Install3.2, Extras3.2",
+      },
+    });
+  });
+
+  it("still says unidentified for a folder holding neither this release's base nor its update disks", () => {
+    // `unidentified` must keep every state it is genuinely right for: a pile
+    // with nothing of this release's own `distinguishing` media in it is
+    // still exactly that state, `releaseHolding === null` and nothing else,
+    // whatever the reorder above changed.
+    expect(
+      mediaEvidence({
+        plan: UPDATE_ONLY_PLAN,
+        found: ["Fonts", "Locale"],
+        releaseHolding: null,
+        release: BASED,
+        evidence: {
+          release: BASED,
+          distinguishing: [],
+          shared: ["Fonts", "Locale"],
+          missingRequired: ["Workbench3.2", "Install3.2", "Extras3.2", "Update3.2.2", "Classes3.2.2"],
+        },
+      })
+    ).toEqual({ key: "osinstall.evidence.unidentified", params: { found: "Fonts, Locale" } });
   });
 });
 

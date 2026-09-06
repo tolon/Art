@@ -661,6 +661,70 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-259** 🟠 ✅ **ART-257's own evidence check ran after the branch it was
+meant to reach through, so it never ran for the one folder it exists for** —
+*found 2026-09-06, in this fix wave's own re-review of ART-257*
+`src/lib/osinstall.ts::mediaEvidence`
+
+ART-257 taught `mediaEvidence` that a based release's own evidence
+(`holdsThisReleasesOwnMedia`) can call a folder `sameRelease` even when
+`identify` cannot name the release at all. The check was written correctly
+and placed **after** the function's existing `if (releaseHolding === null)
+return unidentified` early return — so for every folder where `identify`
+answers `Unknown`, the function returned before ART-257's own check ever ran.
+
+**The folder this made unreachable.** AmigaOS 3.2.2's media folder holding
+only the *update* disks (`Update3.2.2`, `Classes3.2.2`) and none of the base
+set. `identify` answers `Unknown` for this pile: a based release with none of
+its base present has a non-empty `missing_required` and is dropped from the
+named candidates (`identify.rs`'s base-subsumption pass), and the update disk
+names are nobody else's — so `release_holding` is `None`, not `"AmigaOS
+3.2.2"` and not `"AmigaOS 3.2"`. `evidence_for("AmigaOS 3.2.2", …)` of the
+same names answers `distinguishing: [Update3.2.2, Classes3.2.2]`,
+`missing_required` naming the base disks — genuine evidence this is the
+release's own media — but `releaseHolding === null` fired first and the
+function returned *"This folder holds Update3.2.2, Classes3.2.2, which does
+not settle which release this is"* — false, and the true sentence
+(`sameRelease`, naming the base disks as what's still missing) sat in the
+very next branch down.
+
+**Fixed** by branch order alone, exactly as ART-257 intended: the
+`holdsThisReleasesOwnMedia` check (and `releaseHolding === release`) now runs
+before the `releaseHolding === null` return, not after. No new logic. The
+`unidentified` ending still fires for every state it is genuinely right for
+— a folder with none of this release's own `distinguishing` media in it,
+whatever `releaseHolding` says — because `holdsThisReleasesOwnMedia` is
+`false` there regardless of order.
+
+**One real behaviour change, checked and kept.** ART-255's own Ambiguous
+fixture (`Workbench3.2` and `AmigaOS3.9` together) used `Workbench3.2` —
+which really is AmigaOS 3.2's own distinguishing disk — to stand for "two
+releases named, cannot choose". With the reorder that fixture now answers
+`sameRelease`, not `unidentified`, and that is correct: the claim
+`sameRelease` makes is only "this release's own media is among what the
+folder holds", which stays true whatever else is in the pile. Fix wave 3's
+own report recorded rejecting this exact reorder for this exact reason
+(*"Reordering would have made a folder holding Workbench3.2 and AmigaOS3.9
+say sameRelease, which is true but drops the fact that a foreign disk is
+there"*) — the sentence being true was the point missed. ART-255's fixture
+was replaced with one that isolates its own state (two *other* releases
+named, neither disk this release's own), and a new test pins the corrected
+behaviour for the original pairing.
+
+**Guarded** by `calls the update-only folder this release's own media even
+though identify names no release at all` and `still says unidentified for a
+folder holding neither this release's base nor its update disks`, plus the
+corrected `says the unidentified sentence for a folder naming two other
+releases, not just an unknown one` and the new `calls an ambiguous folder
+this release's own once one of its disks genuinely is`, all in
+`src/lib/osinstall.test.ts`.
+
+**Mutated.** The pre-fix branch order put back (`releaseHolding === null`
+checked first again): `calls the update-only folder…` failed with `expected
+{ key: "osinstall.evidence.sameRelease", … } to deeply equal { key:
+"osinstall.evidence.unidentified", … }`, and `calls an ambiguous folder…`
+failed the same way.
+
 **ART-258** 🟡 ✅ **`sameRelease` called every disk in the folder "the right
 media for this release"** — *found 2026-09-06 by the whole-branch review of
 the refusal-evidence round (M5)*

@@ -1309,12 +1309,20 @@ export function wrongMediaFolder(
  *  - **Identified**, a *different* release, and none of this release's own
  *    media in the pile — `otherRelease`, naming which one, so the user can
  *    tell "wrong folder" from "one disk short".
- *  - **Ambiguous or unknown** — `releaseHolding` is `null` for both
- *    (`recipe::release_holding` collapses them, ART-208's own type), and
- *    since this cannot tell them apart it says the weaker thing rather than
- *    guess: `unidentified`, naming only what is present. Claiming a release
- *    here would be exactly the confident-wrong sentence this project pays
- *    most for.
+ *  - **Ambiguous or unknown, and none of this release's own evidence in the
+ *    pile** — `releaseHolding` is `null` for both (`recipe::release_holding`
+ *    collapses them, ART-208's own type), and since this cannot tell them
+ *    apart it says the weaker thing rather than guess: `unidentified`,
+ *    naming only what is present. Claiming a release here would be exactly
+ *    the confident-wrong sentence this project pays most for.
+ *
+ *    **`releaseHolding === null` is not on its own enough to reach this
+ *    ending** (ART-259). A based release's update-only folder — `identify`
+ *    answers `Unknown` for it, the same as a folder of `Fonts` and `Locale`
+ *    — is the *first* ending above, not this one: this release's own recipe
+ *    claims those disks (`holdsThisReleasesOwnMedia`), and that check runs
+ *    before this one so the sentence said is `sameRelease`, never
+ *    `unidentified`, over media that really is this release's own.
  *
  *    **The sentence states no reason, and that is deliberate** (ART-255).
  *    It used to end *"— some disks carry no version of their own"*, which is
@@ -1376,9 +1384,6 @@ export function mediaEvidence(input: {
   const foundNames = found.join(", ");
   const missingNames = missing.map((refusal) => refusal.volume_name).join(", ");
 
-  if (releaseHolding === null) {
-    return { key: "osinstall.evidence.unidentified", params: { found: foundNames } };
-  }
   /**
    * **A based release's inherited media is its own media** (ART-257).
    *
@@ -1416,6 +1421,19 @@ export function mediaEvidence(input: {
    * it does not: the check requires the evidence to say which release it is
    * about, and `releaseHolding === release` above still stands on its own
    * for every folder `identify` can name outright.
+   *
+   * **This check must run before the `releaseHolding === null` branch below**
+   * (ART-259, caught in this fix wave's own re-review of ART-257). A folder
+   * holding only AmigaOS 3.2.2's *update* disks (`Update3.2.2`,
+   * `Classes3.2.2`) and none of the base set makes `identify` answer
+   * `Unknown` — a based release with none of its base present has a
+   * non-empty `missing_required` and is dropped from the named candidates,
+   * and no other release claims update-disk names — so `releaseHolding` is
+   * `null` for exactly the folder this check exists to recognise. Testing
+   * `releaseHolding === null` first, as the original ART-257 fix did, made
+   * this whole block unreachable for that folder and answered
+   * `unidentified` — *"this folder does not identify a release"* — about a
+   * folder that names update disks nothing else in the catalogue does.
    */
   const checkable = evidence !== null && evidence.release === release;
   const holdsThisReleasesOwnMedia = checkable && evidence.distinguishing.length > 0;
@@ -1424,6 +1442,16 @@ export function mediaEvidence(input: {
       key: "osinstall.evidence.sameRelease",
       params: { found: foundNames, missing: missingNames },
     };
+  }
+  // Reached only once this release's own evidence has already been asked and
+  // has nothing to say (`holdsThisReleasesOwnMedia` is false, or the evidence
+  // cannot answer for this release at all). `releaseHolding === null` here
+  // covers Unknown, Ambiguous, the lookup still in flight and the catch path
+  // alike (ART-255) — none of which this release's own recipe told apart
+  // from any other, so the weaker sentence, naming no release, is the honest
+  // one.
+  if (releaseHolding === null) {
+    return { key: "osinstall.evidence.unidentified", params: { found: foundNames } };
   }
   // `otherRelease` says *"not this release's own"*, and that half of the
   // sentence is a claim about this release's recipe, not about `identify`'s
