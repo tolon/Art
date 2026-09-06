@@ -639,12 +639,22 @@ const PREFS_SYS_DIR_REL: &str = "Prefs/Env-Archive/Sys";
 /// [`CheckState::NotChecked`], never rendered as a pass (module doc's G8
 /// section). Everything else this function finds is a **checked** claim, so
 /// it lands on `Pass` or `Fail`, matching this module's own convention that
-/// an error actually encountered while attempting a check (a prefs file that
-/// will not parse, a chunk that will not decode) is `Fail`, the same as
-/// `verify_ffs_one`'s "its path could not be read" — `NotChecked` is
-/// reserved for a check ART never attempted at all, by design (no prefs
-/// found, or a path naming an assign other than `Sys:`, which a
-/// distribution tree simply has no way to resolve).
+/// an error actually encountered while attempting a check (a `PTRN` chunk
+/// that will not decode) is `Fail`, the same as `verify_ffs_one`'s "its path
+/// could not be read" — `NotChecked` is reserved for a check ART never
+/// attempted at all, by design (no prefs found, a path naming an assign
+/// other than `Sys:`, which a distribution tree simply has no way to
+/// resolve, or a `.prefs` file that is not IFF at all — see
+/// [`looks_like_iff_pref`]).
+///
+/// **`.prefs` is a filename convention on the Amiga, not a format
+/// guarantee.** A real AmigaOS 3.9 tree's `Env-Archive/Sys` carries ViNCEd,
+/// XTerm, AmiDock, StringSnip and DefIcons preferences beside the genuine IFF
+/// ones — measured directly (Task 11's own prefs oracle over the owner's own
+/// 3.9 material: 9 of 24 `.prefs` files there are third-party formats). This
+/// function must not fail a tree for carrying one of those; see
+/// [`looks_like_iff_pref`] for how "not IFF at all" is told apart from "IFF,
+/// and genuinely broken".
 pub fn check_prefs_paths(tree: &Path) -> CoreResult<Vec<FileVerdict>> {
     let sys_dir = match resolve_ci_optional(tree, PREFS_SYS_DIR_REL)? {
         Some(dir) => dir,
@@ -699,14 +709,36 @@ pub fn check_prefs_paths(tree: &Path) -> CoreResult<Vec<FileVerdict>> {
             }
         };
 
+        // `.prefs` is a filename convention on the Amiga, not a format
+        // guarantee — measured on the owner's own AmigaOS 3.9 material: 9 of
+        // 24 `.prefs` files there are ViNCEd, XTerm, AmiDock, StringSnip and
+        // DefIcons formats, none of them IFF at all. Sniffing the two magic
+        // markers *before* calling `iff::parse` is what keeps "this is not
+        // ART's format" apart from "this is ART's format and it is broken" —
+        // deciding by evidence rather than by which error `iff::parse`
+        // happened to return.
+        if !looks_like_iff_pref(&bytes) {
+            verdicts.push(FileVerdict {
+                path: prefs_rel.clone(),
+                state: CheckState::NotChecked,
+                detail: Some(format!(
+                    "'{prefs_rel}' is not an IFF FORM/PREF preferences file — likely a \
+                     different program's own format that happens to share the .prefs \
+                     extension; ART did not examine it"
+                )),
+            });
+            continue;
+        }
+
         let prefs = match iff::parse(&bytes) {
             Ok(prefs) => prefs,
             Err(err) => {
-                // A parse failure is a concrete, checked problem — ART
-                // actually tried to read this file and it is malformed —
-                // not an incapability decided in advance. See this
-                // function's own doc comment: that is `Fail`, matching
-                // `verify_ffs_one`, not a `NotChecked` shrug.
+                // The sniff above already confirmed this file opens
+                // FORM/PREF, so a parse failure here is a concrete, checked
+                // problem — ART recognised the format and it is malformed
+                // (truncated, a bad chunk size, ...) — not an incapability
+                // decided in advance. `Fail`, matching `verify_ffs_one`, not
+                // a `NotChecked` shrug.
                 verdicts.push(fail(
                     &prefs_rel,
                     format!("'{prefs_rel}' does not parse as an IFF prefs file: {err}"),
@@ -756,6 +788,29 @@ pub fn check_prefs_paths(tree: &Path) -> CoreResult<Vec<FileVerdict>> {
         }
     }
     Ok(verdicts)
+}
+
+/// Whether `bytes` even claims to be an IFF `FORM`…`PREF` container — just
+/// the two magic markers [`iff::parse`] itself checks first (`b"FORM"` at
+/// offset 0, `b"PREF"` at offset 8), read here on the raw bytes *before*
+/// [`iff::parse`] ever runs, without the rest of its own validation.
+///
+/// This is the fix for a real defect: Task 11's prefs oracle, run against
+/// the owner's own AmigaOS 3.9 material, found `Prefs/Env-Archive/Sys`
+/// carrying files such as `amidock.prefs` — which opens with the literal
+/// text `"AmiDock conf"`, not `FORM` — and `wbconfig.prefs`; 9 of 24 real
+/// `.prefs` files there are ViNCEd, XTerm, AmiDock, StringSnip or DefIcons
+/// formats, not IFF at all. Before this sniff, [`check_prefs_paths`] called
+/// [`iff::parse`] on every `.prefs` file unconditionally and reported *any*
+/// parse failure as `Fail` — so a perfectly good 3.9 tree came back as a
+/// failed verification, naming a file that is not ART's format and that
+/// nothing is wrong with. `.prefs` is a filename convention on the Amiga,
+/// not a format guarantee, and this function is what lets
+/// [`check_prefs_paths`] tell "not ART's business" apart from "ART's own
+/// format, genuinely broken" by evidence rather than by which error
+/// [`iff::parse`] happened to return.
+fn looks_like_iff_pref(bytes: &[u8]) -> bool {
+    bytes.len() >= 12 && &bytes[0..4] == b"FORM" && &bytes[8..12] == b"PREF"
 }
 
 /// The one verdict for a tree with nothing under [`PREFS_SYS_DIR_REL`] to
@@ -1507,6 +1562,24 @@ mod tests {
         std::fs::write(sys_dir.join("WBPattern.prefs"), bytes).unwrap();
     }
 
+    /// A genuinely IFF `FORM`/`PREF` file, truncated mid-chunk: the `FORM`
+    /// header and `PREF` type at the front are untouched (so
+    /// `looks_like_iff_pref` still says yes), but the bytes the `PTRN`
+    /// chunk's own size field promises do not all follow — the same shape
+    /// as a real truncated file, not an invented error. `iff::parse` must
+    /// still refuse this one, and `check_prefs_paths` must still call that
+    /// refusal `Fail`.
+    fn write_truncated_wbpattern(tree: &Path) {
+        let sys_dir = tree.join("Prefs").join("Env-Archive").join("Sys");
+        std::fs::create_dir_all(&sys_dir).unwrap();
+        let full = crate::core::amigaprefs::iff::tests_support::synthetic_prefs(&[(
+            *b"PTRN",
+            vec![1u8; 24],
+        )]);
+        let truncated = &full[..full.len() - 5];
+        std::fs::write(sys_dir.join("WBPattern.prefs"), truncated).unwrap();
+    }
+
     /// The dist-3.2 orphan, exactly: a `WBPattern.prefs` naming a backdrop
     /// that was never placed in the tree. The verdict must name both the
     /// prefs file and the missing Amiga path, so a user can act on it
@@ -1621,19 +1694,24 @@ mod tests {
         assert!(detail.contains("Work:"), "{detail}");
     }
 
-    /// The last decision the brief left open: a prefs file that does not
-    /// parse at all is a *different* thing from one whose paths do not
-    /// resolve. ART actually tried to read this file and it is malformed —
-    /// a concrete, checked problem, the same as `verify_ffs_one`'s own
-    /// "its path could not be read" — so this is `Fail`, not a `NotChecked`
-    /// shrug over an incapability nobody decided in advance.
+    /// **Real-material follow-up (Task 11's prefs oracle over the owner's
+    /// own AmigaOS 3.9 material, not a fixture).** The original version of
+    /// this test wrote plain text (`b"not an iff file at all"`) and asserted
+    /// `Fail` — which was right under the old, pre-sniff code, but that same
+    /// fixture does not open `FORM`/`PREF` at all, so under
+    /// `looks_like_iff_pref` it now correctly lands on the *other* branch
+    /// (`NotChecked`, see `a_prefs_file_that_is_not_iff_at_all_is_not_checked_not_failed`
+    /// below). This test was rewritten, not deleted or quietly patched to
+    /// pass: it now provokes a *genuinely* IFF `FORM`/`PREF` file that is
+    /// truncated mid-chunk, which is the fixture that actually distinguishes
+    /// "ART recognised the format and it is broken" from "this was never
+    /// ART's format" — the one thing `looks_like_iff_pref` must not turn
+    /// into a blanket suppression.
     #[test]
-    fn a_prefs_file_that_does_not_parse_at_all_is_a_fail_not_a_shrug() {
-        let scratch = ScratchDir::new("art-verify-prefs", "corrupt-prefs");
+    fn a_prefs_file_that_is_form_pref_but_truncated_mid_chunk_is_still_a_fail() {
+        let scratch = ScratchDir::new("art-verify-prefs", "truncated-form-pref");
         let tree = scratch.path();
-        let sys_dir = tree.join("Prefs").join("Env-Archive").join("Sys");
-        std::fs::create_dir_all(&sys_dir).unwrap();
-        std::fs::write(sys_dir.join("WBPattern.prefs"), b"not an iff file at all").unwrap();
+        write_truncated_wbpattern(tree);
 
         let verdicts = check_prefs_paths(tree).unwrap();
 
@@ -1641,6 +1719,73 @@ mod tests {
         assert_eq!(verdicts[0].state, CheckState::Fail, "{:?}", verdicts[0]);
         let detail = verdicts[0].detail.as_deref().unwrap_or("");
         assert!(detail.contains("WBPattern.prefs"), "{detail}");
+    }
+
+    /// The defect itself, from Task 11's own oracle run against the owner's
+    /// real AmigaOS 3.9 tree: `amidock.prefs` opens with the literal text
+    /// `"AmiDock conf..."`, not `FORM` — one of 9 (of 24) real `.prefs`
+    /// files there that are ViNCEd/XTerm/AmiDock/StringSnip/DefIcons
+    /// formats, not IFF at all. Before `looks_like_iff_pref`, this file
+    /// reached `iff::parse`, failed, and came back `Fail` — a perfectly good
+    /// tree reported as a failed verification, naming a file that is not
+    /// ART's business and that nothing is wrong with. It must be
+    /// `NotChecked`, and the detail must name the file.
+    #[test]
+    fn a_prefs_file_that_is_not_iff_at_all_is_not_checked_not_failed() {
+        let scratch = ScratchDir::new("art-verify-prefs", "third-party-format");
+        let tree = scratch.path();
+        let sys_dir = tree.join("Prefs").join("Env-Archive").join("Sys");
+        std::fs::create_dir_all(&sys_dir).unwrap();
+        // The real shape, measured directly: amidock.prefs starts with this
+        // text, not a FORM header.
+        std::fs::write(sys_dir.join("amidock.prefs"), b"AmiDock config file V2.0\n").unwrap();
+
+        let verdicts = check_prefs_paths(tree).unwrap();
+
+        assert_eq!(verdicts.len(), 1, "{verdicts:?}");
+        assert_eq!(
+            verdicts[0].state,
+            CheckState::NotChecked,
+            "{:?}",
+            verdicts[0]
+        );
+        let detail = verdicts[0].detail.as_deref().unwrap_or("");
+        assert!(
+            detail.contains("amidock.prefs"),
+            "the verdict must name the file: {detail}"
+        );
+    }
+
+    /// A tree holding both kinds at once: the new branch must not swallow
+    /// the real work. `amidock.prefs` (not IFF) gets its own `NotChecked`
+    /// verdict and the genuine `WBPattern.prefs` beside it is still checked
+    /// properly — its resolvable backdrop path still reaches `Pass`.
+    #[test]
+    fn a_tree_with_both_a_third_party_prefs_file_and_a_genuine_one_checks_each_correctly() {
+        let scratch = ScratchDir::new("art-verify-prefs", "mixed-prefs");
+        let tree = scratch.path();
+        let sys_dir = tree.join("Prefs").join("Env-Archive").join("Sys");
+        std::fs::create_dir_all(&sys_dir).unwrap();
+        std::fs::write(sys_dir.join("amidock.prefs"), b"AmiDock config file V2.0\n").unwrap();
+        write_wbpattern_picture(tree, "Sys:Prefs/Presets/Backdrops/default_pal.iff");
+        let drawer = tree.join("Prefs").join("Presets").join("Backdrops");
+        std::fs::create_dir_all(&drawer).unwrap();
+        std::fs::write(drawer.join("default_pal.iff"), b"FORM....ILBM").unwrap();
+
+        let verdicts = check_prefs_paths(tree).unwrap();
+
+        assert_eq!(verdicts.len(), 2, "{verdicts:?}");
+        let not_iff = verdicts
+            .iter()
+            .find(|v| v.path.contains("amidock.prefs"))
+            .expect("the third-party prefs file must still get its own verdict");
+        assert_eq!(not_iff.state, CheckState::NotChecked, "{not_iff:?}");
+
+        let backdrop = verdicts
+            .iter()
+            .find(|v| v.path.contains("default_pal.iff"))
+            .expect("the genuine WBPattern.prefs must still be checked, not swallowed");
+        assert_eq!(backdrop.state, CheckState::Pass, "{backdrop:?}");
     }
 
     /// The integration the brief's own wording asks for: `verify_volume`'s
