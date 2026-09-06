@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A built distribution can carry your own wallpaper.** Drop in a PNG or JPEG
+  on the OS Builder's volumes step and it is converted to the ILBM format
+  Workbench actually reads — scaled to fit, its colours reduced to what the
+  screen depth you choose can show — and written into the tree next to the
+  release's own backdrops. Tile, centre or scale, root, drawer or screen: the
+  same three choices AmigaOS itself offers. A release backdrop already in the
+  tree can be picked directly with nothing re-encoded.
+- **The Workbench screen depth and shell defaults are yours to set too.**
+  Screen mode, the default Shell, editor and console size — the tree's own
+  `WBPattern.prefs`, `ScreenMode.prefs` and `Env-Archive` files are edited in
+  place, never regenerated: only the values you set change, and everything
+  else the release shipped in those files — including bytes ART has no field
+  for — passes through untouched.
+- **A tree's own prefs are checked too.** Verify now confirms every backdrop
+  path a prefs file names actually exists on the volume, case-insensitively —
+  and tells you both the prefs file and the missing path when it does not. A
+  file that merely carries a `.prefs` name but is not one of AmigaOS's own IFF
+  preference files (`amidock.prefs` and a few others are plain text) is
+  reported as not checked, never as a false failure.
 - **A WHDLoad collection kept as drawers is catalogued.** If your WHDLoad
   titles are folders — one `.slave` and its data in each, the way whdload.de
   and the big collection archives ship them — the Collection screen now finds
