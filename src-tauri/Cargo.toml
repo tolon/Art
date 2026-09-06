@@ -47,6 +47,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 sha2 = "0.10"
+# Historical-database key only — never ART's integrity hash (that is `sha2`
+# above). `core/osinstall/mediahash.rs` looks up a user's own install disk in
+# a 186-row table keyed by MD5 (adopted from Emu68 Hatcher, MIT); identifying
+# a disk against somebody else's table is not the same job as verifying one
+# of ART's own writes, so this does not replace or compete with SHA256. Same
+# RustCrypto family as `sha2`, same `Digest` trait shape, unpinned the same
+# way. (`md-5` 0.10.6 is already in the lockfile as a transitive dependency
+# of `sqlx`/`tauri-plugin-sql` — this makes it a direct one instead of an
+# undocumented incidental.)
+md-5 = "0.10"
 log = "0.4"
 delharc = { version = "0.8", default-features = false, features = ["std", "lh1", "lz"] }
 

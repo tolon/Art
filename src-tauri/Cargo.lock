@@ -58,6 +58,7 @@ dependencies = [
  "jpeg-decoder",
  "libpfs3",
  "log",
+ "md-5",
  "png 0.17.16",
  "quick-xml",
  "serde",

@@ -21,6 +21,15 @@ ART is built on the following open-source projects:
 - **SQLite** (via `libsqlite3-sys`, bundled by `tauri-plugin-sql`) — public domain
 - **serde / serde_json** — serialization (MIT / Apache-2.0)
 - **sha2** — cryptographic hashing (MIT / Apache-2.0)
+- **md-5** — MD5, used for exactly one job: looking a user's own install disk
+  up in `core/osinstall/media_hashes.json`'s 186-row table of known media
+  (MIT / Apache-2.0; the lookup itself is a following task, this crate only
+  supplies the key). It is the key of somebody else's existing database, not
+  an integrity check — SHA256 (`sha2`, above) remains ART's own hash for
+  verification, duplicates and snapshots, and this does not replace it. Same
+  RustCrypto family as `sha2`, same API shape. Already present in the
+  dependency tree as a transitive dependency of `sqlx`/`tauri-plugin-sql`;
+  this makes it a direct, documented one
 - **thiserror** — error handling (MIT / Apache-2.0)
 - **delharc** — LHA/LZH decompression (MIT / Apache-2.0)
 - **zip** — ZIP reading, deflate only (MIT), with `flate2` (MIT / Apache-2.0),

@@ -1,14 +1,29 @@
 //! File integrity hashing.
 //!
 //! SHA256 is ART's canonical integrity hash (used for duplicate detection,
-//! operation verification, and snapshot metadata). MD5 is available only for
-//! compatibility with historical databases — never as a security primitive.
+//! operation verification, and snapshot metadata) and the only one that
+//! speaks for the *safety* of a write — nothing about MD5 below changes that.
+//!
+//! MD5 exists here for exactly one job: it is the primary key of a table ART
+//! did not build — `core/osinstall/media_hashes.json`'s 186-row list of known
+//! install media, adopted from Emu68 Hatcher (the lookup that reads this
+//! table is a following task; this module only supplies the key it is keyed
+//! on). Identifying a user's own disk against somebody else's database is
+//! not a security decision; it is a
+//! lookup, and the lookup only works if the key is computed the same way the
+//! table's own author computed it. That is MD5, not a choice ART made and not
+//! one it can revisit — "upgrading" [`md5_file`] to SHA256 would silently
+//! break every row in the table rather than make anything safer. Never use
+//! either function in this module as a security primitive, and never use
+//! [`md5_file`]/[`md5_bytes`] anywhere ART needs to know a file has not been
+//! tampered with — that is [`sha256_file`]/[`sha256_bytes`]'s job alone.
 //!
 //! Streams files in chunks so large HDF images do not blow up memory.
 
 use std::io::Read;
 use std::path::Path;
 
+use md5::Md5;
 use sha2::{Digest, Sha256};
 
 use crate::core::error::CoreResult;
@@ -34,6 +49,34 @@ pub fn sha256_file(path: &Path) -> CoreResult<String> {
 /// Compute the SHA256 hex digest of an in-memory byte slice.
 pub fn sha256_bytes(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
+    hasher.update(data);
+    hex_encode(&hasher.finalize())
+}
+
+/// Compute the MD5 hex digest of a file, streaming from disk.
+///
+/// **Table lookup only** — see the module doc. Mirrors [`sha256_file`]'s
+/// chunking exactly, for the same reason: a multi-gigabyte HDF must not be
+/// read into memory whole just to key it into `mediahash.rs`'s table.
+pub fn md5_file(path: &Path) -> CoreResult<String> {
+    let mut f = std::fs::File::open(path)?;
+    let mut hasher = Md5::new();
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex_encode(&hasher.finalize()))
+}
+
+/// Compute the MD5 hex digest of an in-memory byte slice.
+///
+/// **Table lookup only** — see the module doc.
+pub fn md5_bytes(data: &[u8]) -> String {
+    let mut hasher = Md5::new();
     hasher.update(data);
     hex_encode(&hasher.finalize())
 }
@@ -149,6 +192,54 @@ mod tests {
         std::fs::write(&p, &one_mib).unwrap();
         let from_file = sha256_file(&p).unwrap();
         assert_eq!(from_file, sha256_bytes(&one_mib));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// RFC 1321, §A.5 ("Test suite") — the empty string, published there as
+    /// `MD5 ("") = d41d8cd98f00b204e9800998ecf8427e`. Pinned from the RFC
+    /// rather than derived from this module's own output, so a wrong
+    /// implementation of ART's own making cannot pass by agreeing with
+    /// itself.
+    #[test]
+    fn md5_known_vector_empty() {
+        assert_eq!(md5_bytes(b""), "d41d8cd98f00b204e9800998ecf8427e");
+    }
+
+    /// RFC 1321, §A.5 — `MD5 ("abc") = 900150983cd24fb0d6963f7d28e17f72`.
+    #[test]
+    fn md5_known_vector_abc() {
+        assert_eq!(md5_bytes(b"abc"), "900150983cd24fb0d6963f7d28e17f72");
+    }
+
+    #[test]
+    fn md5_file_matches_bytes() {
+        let d =
+            std::env::temp_dir().join(format!("art-hash-md5-{}", crate::core::test_scratch_id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let p = d.join("data.bin");
+        std::fs::write(&p, b"abc").unwrap();
+        let from_file = md5_file(&p).unwrap();
+        assert_eq!(from_file, md5_bytes(b"abc"));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Mirrors `large_file_does_not_panic` above, but with varying content
+    /// (rather than one repeated byte) across more than sixteen 64 KiB
+    /// chunks, so a broken chunk loop that reads only part of the file — the
+    /// defect Task 1 asks to mutate in — changes the digest rather than
+    /// happening to agree with the whole-file one.
+    #[test]
+    fn md5_large_file_streams_the_whole_content() {
+        let d = std::env::temp_dir().join(format!(
+            "art-hash-md5-big-{}",
+            crate::core::test_scratch_id()
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        let p = d.join("big.bin");
+        let one_mib: Vec<u8> = (0..1024 * 1024).map(|i| (i % 256) as u8).collect();
+        std::fs::write(&p, &one_mib).unwrap();
+        let from_file = md5_file(&p).unwrap();
+        assert_eq!(from_file, md5_bytes(&one_mib));
         std::fs::remove_dir_all(&d).ok();
     }
 }
