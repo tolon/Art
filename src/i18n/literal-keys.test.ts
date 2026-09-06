@@ -456,6 +456,13 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // `phrase-keys.test.ts` to enumerate — `dead-keys.test.ts` covers these
     // two instead, since every key both arrays can produce is a literal leaf
     // already present in the catalogue.
-    expect(dynamicCalls).toBe(145);
+    // 145 -> 146 (refusal-evidence round, Task 2: the OS Builder's "Why this
+    // cannot be built yet" section): one. `mediaEvidence` (Task 1) turns the
+    // partial-media state into a `Phrase` and `OsInstall.tsx` renders its key
+    // above the refusals list, the same `Phrase`-off-a-mapper shape as every
+    // other entry on this list; `phrase-keys.test.ts` already enumerates all
+    // three of its variants (added with the helper itself, before this call
+    // site existed).
+    expect(dynamicCalls).toBe(146);
   });
 });

@@ -88,6 +88,7 @@ import {
   groupCollisionsForPreview,
   layerForMedia,
   layersFor,
+  mediaEvidence,
   onOsInstallResult,
   osinstallApply,
   osinstallComponentCollisions,
@@ -1174,7 +1175,12 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const wrongFolder = effectivePlan ? wrongMediaFolder(effectivePlan, foundVolumeNames) : null;
   const [releaseHolding, setReleaseHolding] = useState<string | null>(null);
   useEffect(() => {
-    if (!wrongFolder) {
+    // Looked up whenever the folder holds media, not only for the
+    // all-or-nothing `wrongFolder` sentence above: the ordinary partial
+    // case's own evidence line (`mediaEvidence` below, refusal-evidence
+    // round Task 2) needs the same answer to tell "this release's own
+    // media, some disks short" from "somebody else's media" apart.
+    if (foundVolumeNames.length === 0) {
       setReleaseHolding(null);
       return;
     }
@@ -1192,7 +1198,16 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     return () => {
       cancelled = true;
     };
-  }, [wrongFolder, foundVolumeNames]);
+  }, [foundVolumeNames]);
+  /**
+   * ART-208's follow-on (refusal-evidence round, Task 2). What the folder
+   * holds, for the ordinary partial case the refusals list already names
+   * disk-by-disk — `mediaEvidence` itself refuses to speak over
+   * `wrongMediaFolder`'s own sentence, so the two can never both render.
+   */
+  const mediaEvidenceLine = effectivePlan
+    ? mediaEvidence({ plan: effectivePlan, found: foundVolumeNames, releaseHolding, release })
+    : null;
 
   /**
    * What the plan would really put in `Devs/Keymaps` — the picker's options,
@@ -1723,6 +1738,16 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       {effectivePlan && effectivePlan.refusals.length > 0 && !wrongFolder && (
         <section className="card" style={{ marginBottom: 16 }}>
           <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osinstall.refusals.heading")}</h2>
+          {/* Refusal-evidence round, Task 2: context the list below cannot
+              give on its own — what the folder actually holds. Adds to the
+              per-disk list, never replaces it (`wrongMediaFolder` above owns
+              the all-or-nothing sentence instead, so the two never both
+              show). */}
+          {mediaEvidenceLine && (
+            <p className="faint" style={{ fontSize: 12, margin: "0 0 8px" }}>
+              {t(mediaEvidenceLine.key, mediaEvidenceLine.params)}
+            </p>
+          )}
           <ul className="muted" style={{ fontSize: 12, margin: 0, paddingLeft: 20 }}>
             {effectivePlan.refusals.map((r, i) => {
               const phrase = refusalPhrase(r);

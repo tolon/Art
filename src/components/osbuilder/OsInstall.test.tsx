@@ -124,7 +124,7 @@ vi.mock("@/lib/settings", async (importOriginal) => ({
 }));
 
 const { OsInstall } = await import("@/components/osbuilder/OsInstall");
-const { refusalPhrase } = await import("@/lib/osinstall");
+const { refusalPhrase, mediaEvidence } = await import("@/lib/osinstall");
 const { DEFAULT_SETTINGS } = await import("@/lib/settings");
 
 afterEach(async () => {
@@ -1084,6 +1084,136 @@ describe("a folder that is simply the wrong one (ART-208)", () => {
 
     const phrase = refusalPhrase(WRONG_FOLDER_REFUSALS[0]);
     expect(await screen.findByText(i18n.t(phrase.key, phrase.params))).toBeTruthy();
+  });
+
+  // Refusal-evidence round, Task 2. `mediaEvidence` refuses to speak over
+  // `wrongMediaFolder`'s own sentence (it calls `wrongMediaFolder` directly
+  // rather than re-deriving its conditions) — so the all-or-nothing case
+  // must show exactly one message, never both.
+  it("leaves the all-or-nothing case to its own message", async () => {
+    await renderWrongFolder(null);
+
+    expect(
+      await screen.findByText(i18n.t("osinstall.blocked.wrongFolder", { found: "AmigaOS3.9" }))
+    ).toBeTruthy();
+
+    // The weaker, unidentified-release evidence sentence this same input
+    // would produce for the *partial* case must not also appear here.
+    expect(
+      screen.queryByText(i18n.t("osinstall.evidence.unidentified", { found: "AmigaOS3.9" }))
+    ).toBeNull();
+  });
+});
+
+describe("the folder's own evidence for a partial build (refusal-evidence round, Task 2)", () => {
+  // A component *is* installable (`items` non-empty), one disk the plan
+  // still wants is not in the folder — the ordinary partial case, where the
+  // refusals list already names which disk and this line adds what it
+  // cannot: what the folder itself looks like.
+  const PARTIAL_REFUSALS: RefusalReason[] = [
+    { refusal: "media-missing", component: "extras", volume_name: "Extras3.2" },
+  ];
+
+  async function renderPartialMedia(releaseHolding: string | null) {
+    scanMediaMock.mockReset().mockResolvedValue({
+      outcome: "found",
+      media: [{ path: "E:\\media\\Disk1.adf", volumeName: "Workbench3.2", kind: "floppy" }],
+    } satisfies MediaScanResult);
+    planMock.mockReset().mockResolvedValue({
+      outcome: "planned",
+      plan: {
+        release: "3.2",
+        items: [ITEM_WORKBENCH],
+        refusals: PARTIAL_REFUSALS,
+        totalBytes: ITEM_WORKBENCH.bytes,
+        totalFiles: 1,
+        componentsOn: ["workbench-base", "install-libs", "extras"],
+        mediaPaths: { "Workbench3.2": "E:\\media\\Disk1.adf" },
+        packages: [],
+        packageMedia: {},
+        userStartup: [],
+        activations: [],
+        mediaStamps: {},
+        removals: [],
+        layers: [],
+      },
+    } satisfies PlanResult);
+    releaseForMediaMock.mockReset().mockResolvedValue(releaseHolding);
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(planMock).toHaveBeenCalled());
+  }
+
+  it("shows what the folder holds above the refusals when some disks are missing", async () => {
+    await renderPartialMedia("AmigaOS 3.2");
+
+    const evidence = mediaEvidence({
+      plan: {
+        release: "3.2",
+        items: [ITEM_WORKBENCH],
+        refusals: PARTIAL_REFUSALS,
+        totalBytes: ITEM_WORKBENCH.bytes,
+        totalFiles: 1,
+        componentsOn: ["workbench-base", "install-libs", "extras"],
+        mediaPaths: {},
+        packages: [],
+        packageMedia: {},
+        userStartup: [],
+        activations: [],
+        mediaStamps: {},
+        removals: [],
+        layers: [],
+      },
+      found: ["Workbench3.2"],
+      releaseHolding: "AmigaOS 3.2",
+      release: "AmigaOS 3.2",
+    });
+    if (!evidence) throw new Error("expected mediaEvidence to return a phrase");
+
+    expect(await screen.findByText(i18n.t(evidence.key, evidence.params))).toBeTruthy();
+
+    // Context, not a replacement: the per-disk refusal this line sits above
+    // must still be there.
+    const refusalPhraseText = refusalPhrase(PARTIAL_REFUSALS[0]);
+    expect(
+      screen.getByText(i18n.t(refusalPhraseText.key, refusalPhraseText.params))
+    ).toBeTruthy();
+  });
+
+  it("names the other release when the folder is a different one", async () => {
+    await renderPartialMedia("AmigaOS 3.9");
+
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.evidence.otherRelease", {
+          found: "Workbench3.2",
+          release: "AmigaOS 3.9",
+          missing: "Extras3.2",
+        })
+      )
+    ).toBeTruthy();
+
+    // Still just context — the refusal itself is still named below it.
+    const refusalPhraseText = refusalPhrase(PARTIAL_REFUSALS[0]);
+    expect(
+      screen.getByText(i18n.t(refusalPhraseText.key, refusalPhraseText.params))
+    ).toBeTruthy();
+  });
+
+  it("does not claim a release for a folder that identifies none", async () => {
+    await renderPartialMedia(null);
+
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.evidence.unidentified", { found: "Workbench3.2" })
+      )
+    ).toBeTruthy();
+
+    // The section says what the folder holds, never a release it cannot
+    // actually put a name to.
+    const section = screen.getByText(i18n.t("osinstall.refusals.heading")).closest("section");
+    expect(section?.textContent).not.toContain("AmigaOS 3.2");
+    expect(section?.textContent).not.toContain("AmigaOS 3.9");
   });
 });
 
