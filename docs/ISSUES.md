@@ -53,23 +53,36 @@ dies and the **long** one (2841 tests, 18 s) completes. Duration is not the
 variable. `CLAUDE.md` asks for a refuted elimination to be corrected in place,
 because a confident wrong one costs more than none.
 
-**What is consistent but NOT proven.** Exit 0 with no summary and no `FAILED`
-is what an externally killed process looks like, not a panic. The machine runs
-Trend Micro Maximum Security with Defender's real-time protection off, the
-owner has already observed it reacting to `art_lib`, and the artwork tests
-write image files in quick succession — which fits. **It has not been tested
-with the scanner disabled**, so the cause is a hypothesis, not a finding. Do
-not record it as solved on the strength of the fit.
+**The cause is the antivirus, and it is not an inference — the owner watched
+it happen** (*“antivirus yaptı ben gördüm”*, 2026-09-06). Trend Micro Maximum
+Security is active on this machine, with Defender's real-time protection off,
+and the owner had already seen it react to `art_lib` earlier the same day.
+Exit 0 with no summary and no `FAILED` is what an externally killed process
+looks like rather than a panic, and the artwork tests write image files in
+quick succession, which is what draws the scanner.
+
+This paragraph replaces one that called the cause a hypothesis because the
+scanner had not been switched off to test it. That was the right thing to
+write at the time and the wrong thing to keep: a person at the machine saw the
+event, which is evidence this session could not have produced by reasoning
+about symptoms. **The owner at the screen outranks the controller's
+inference** — six of seven defects in one earlier round were found the same
+way.
 
 **Consequence, and it is the expensive part:** `cargo test` cannot currently be
 quoted honestly on this machine without `--skip artwork`, and an exit code
 cannot tell a completed suite from a killed one. Any number quoted from a full
 run here is suspect unless its `test result:` line is shown.
 
-Next step is machine configuration rather than code: exclude
-`src-tauri/target/` and the test scratch root from the scanner, then re-run
-both arms and record what changed. Until then, quote the `--skip artwork`
-summary and say that is what it is.
+**The fix is machine configuration, not code.** Nothing in `commands::artwork`
+is wrong: every one of its tests passes when run alone. Exclude
+`src-tauri\target\`, the test scratch root (`D:\tmp\art-tests\`, pointed there
+by `src-tauri/.cargo/config.toml`) and `art_lib`'s build output from Trend
+Micro, then re-run both arms and record what changed **as numbers**, so the
+entry closes on a measurement rather than on the symptom going quiet.
+
+Until that is done, quote the `--skip artwork` summary and say that is what it
+is. This entry stays open while the workaround is what the numbers rest on.
 
 
 
