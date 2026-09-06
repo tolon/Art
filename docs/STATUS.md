@@ -1058,7 +1058,7 @@ rediscover the hard way.**
    owner's antivirus kills a full `cargo test --lib` — exit 0, no
    `test result:` line, no `FAILED`. `cargo test --lib -- --skip artwork`
    completes and is the only honest Rust number here until exclusions are added
-   for `src-tauri	arget\`, the test scratch root and `art_lib`'s build
+   for `src-tauri\target\`, the test scratch root and `art_lib`'s build
    output. **An exit code cannot tell a finished suite from a killed one.**
 3. **Next code work is round 5 of the Emu68 Hatcher intake: the first-boot
    mechanism.** The teardown
@@ -1071,7 +1071,7 @@ rediscover the hard way.**
 
 Standing numbers at that point: **83 frontend files / 1119 tests**; Rust
 **2878 passed, 0 failed, 50 ignored** (`--skip artwork`); i18n **2026** leaf
-keys each catalogue; **17 open** entries in [ISSUES.md](ISSUES.md).
+keys each catalogue; **18 open** entries in [ISSUES.md](ISSUES.md) — the newest, [ART-271](ISSUES.md), was found by corrupting this very block and watching the blocking sweep call it clean.
 
 ### Where the work stands (as of 2026-09-06)
 
