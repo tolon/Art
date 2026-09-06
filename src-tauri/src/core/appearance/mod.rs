@@ -64,10 +64,13 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::core::amigaicon;
 use crate::core::amigaprefs::{env, iff, screenmode, wbpattern};
 use crate::core::error::{CoreError, CoreResult};
+use crate::core::icongrid;
 use crate::core::ilbm;
 use crate::core::picture;
+use crate::core::safety::backup::BACKUP_DIR;
 use crate::core::safety::{guarded_write, BackupPolicy};
 
 /// `Prefs/Env-Archive/Sys/WBPattern.prefs`, relative to a distribution
@@ -114,6 +117,12 @@ pub struct AppearanceRequest {
     pub wallpaper: Option<(wbpattern::Which, WallpaperSource, wbpattern::Placement)>,
     pub screen_depth: Option<u16>,
     pub shell_defaults: bool,
+    /// Lay out every icon in the tree whose position is
+    /// [`amigaicon::NO_POSITION`] — the root (`SYS:`, [`icongrid::ROOT_INNER_WIDTH`])
+    /// and every drawer ([`icongrid::DRAWER_INNER_WIDTH`]) alike. An icon the
+    /// release already positioned keeps that position untouched — see
+    /// [`plan_icon_arrangement`]'s own doc for the scoping rule and why.
+    pub arrange_icons: bool,
 }
 
 /// What [`apply_appearance`] actually did, so the caller can tell the user
@@ -131,6 +140,21 @@ pub struct AppearanceOutcome {
     /// The Amiga-side path now written into the `PTRN` chunk, when the
     /// request carried a wallpaper assignment at all.
     pub amiga_path: Option<String>,
+    /// How many icons were newly given a position — always icons that were
+    /// carrying [`amigaicon::NO_POSITION`] before this call. An icon the
+    /// release already positioned is never counted here, no matter how many
+    /// times its drawer was arranged.
+    pub icons_placed: usize,
+    /// How many directories (root or drawer) actually had at least one icon
+    /// newly placed. A directory whose icons were already all positioned is
+    /// not counted — see [`plan_icon_arrangement`]'s own doc.
+    pub drawers_arranged: usize,
+    /// Every `.info` that could not be parsed and was therefore left exactly
+    /// as it was, named rather than silently dropped (CLAUDE.md: "never
+    /// claim what you did not do"). One malformed icon must not cost the
+    /// other icons in its drawer their layout, so this can be non-empty on
+    /// an otherwise successful call.
+    pub icons_skipped: Vec<PathBuf>,
 }
 
 fn malformed_or_missing(rel: &str, root: &Path) -> CoreError {
@@ -399,6 +423,191 @@ fn plan_shell_defaults(tree: &Path) -> CoreResult<Vec<ShellDefaultPlan>> {
     Ok(plans)
 }
 
+/// One entry inside a directory being arranged: the entry's own `.info`
+/// icon path, the icon's original bytes (read once and reused for both the
+/// pre-flight check and the eventual write), whether the release already
+/// placed it, and the [`icongrid::Cell`] [`icongrid::arrange`] sees for it.
+struct IconEntry {
+    icon_path: PathBuf,
+    original_bytes: Vec<u8>,
+    already_placed: bool,
+    cell: icongrid::Cell,
+}
+
+/// A fully validated icon-arrangement plan across the **whole** tree — root
+/// through every drawer — built entirely before [`apply_appearance`] writes
+/// anything. See [`plan_icon_arrangement`] for the walk and the scoping
+/// rule.
+#[derive(Default)]
+struct IconArrangementPlan {
+    /// `(icon path, new bytes)` for every icon whose position was
+    /// [`amigaicon::NO_POSITION`] and has now been given one by
+    /// [`icongrid::arrange`].
+    writes: Vec<(PathBuf, Vec<u8>)>,
+    icons_placed: usize,
+    drawers_arranged: usize,
+    /// A `.info` that failed to parse, named rather than aborting the whole
+    /// run (CLAUDE.md: "never claim what you did not do" — one bad icon must
+    /// not cost the other icons in its drawer their layout).
+    icons_skipped: Vec<PathBuf>,
+}
+
+/// Lay out every icon in `tree` whose position is [`amigaicon::NO_POSITION`]
+/// — the owner's own scoping rule (spec §2.4), measured across 798 real
+/// icons: 361 carried the sentinel and 437 were positioned by the release.
+/// **Only** the 361 are ever touched; an icon that already has a position
+/// keeps it byte for byte, and it is still handed to [`icongrid::arrange`]
+/// as a [`icongrid::Cell`] so it occupies a slot in the computed grid —
+/// the newly placed icons land in the *other* cells rather than on top of
+/// it, even though the already-placed icon's own computed placement is
+/// discarded rather than written.
+///
+/// The whole tree is walked and planned — every directory, root included —
+/// **before** a single byte is written anywhere (this function does no
+/// writing at all): a `.info` that fails to parse is skipped and named in
+/// [`IconArrangementPlan::icons_skipped`] rather than aborting the rest of
+/// its drawer, but a directory ART cannot even *list*, or a `.info` ART
+/// cannot even *read* — a real I/O failure, not a malformed byte layout —
+/// aborts the whole call, because that is not "one bad icon", it is "this
+/// tree cannot be trusted to plan safely".
+///
+/// The tree's own top level is the `SYS:` window and uses
+/// [`icongrid::ROOT_INNER_WIDTH`] — narrower than
+/// [`icongrid::DRAWER_INNER_WIDTH`], because the real window geometry lives
+/// in a `disk.info` ART does not write (see `icongrid`'s own module doc).
+/// Every other directory, at any depth, is an ordinary drawer and uses
+/// [`icongrid::DRAWER_INNER_WIDTH`].
+///
+/// A directory with no icons at all, or one whose icons are all already
+/// placed, is left alone entirely: no [`icongrid::arrange`] call, no write,
+/// no backup, and it does not count towards
+/// [`IconArrangementPlan::drawers_arranged`].
+fn plan_icon_arrangement(tree: &Path) -> CoreResult<IconArrangementPlan> {
+    let mut plan = IconArrangementPlan::default();
+    plan_icons_in_dir(tree, tree, &mut plan)?;
+    Ok(plan)
+}
+
+/// One directory's worth of [`plan_icon_arrangement`], then its
+/// subdirectories — depth-first, order otherwise unspecified. See that
+/// function's own doc for the scoping rule and the skip-vs-abort split.
+fn plan_icons_in_dir(
+    dir: &Path,
+    tree_root: &Path,
+    plan: &mut IconArrangementPlan,
+) -> CoreResult<()> {
+    let inner_width = if dir == tree_root {
+        icongrid::ROOT_INNER_WIDTH
+    } else {
+        icongrid::DRAWER_INNER_WIDTH
+    };
+
+    let mut entries: Vec<IconEntry> = Vec::new();
+    let mut subdirs: Vec<PathBuf> = Vec::new();
+
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let lower = name.to_ascii_lowercase();
+
+        // `.info` files are icons, not entries an icon describes; `.uaem`
+        // sidecars and ART's own backup drawer are not part of the Amiga
+        // side of the tree at all — see `core::volume::write::uaem` and
+        // `core::safety::backup` respectively.
+        if lower.ends_with(".info") || lower.ends_with(".uaem") || name == BACKUP_DIR {
+            continue;
+        }
+
+        let entry_path = entry.path();
+        if file_type.is_dir() {
+            subdirs.push(entry_path);
+        }
+
+        let icon_path = dir.join(format!("{name}.info"));
+        if !icon_path.is_file() {
+            // No icon for this entry at all — nothing this function can lay
+            // out.
+            continue;
+        }
+        // A real read failure here (permissions, a vanished file) is not
+        // "one bad icon" — it is refused by propagating the `Io` error and
+        // aborting the whole plan, per this function's own doc.
+        let bytes = std::fs::read(&icon_path)?;
+
+        let rendered = match amigaicon::render::rendered_size(&bytes) {
+            Ok(r) => r,
+            Err(CoreError::Malformed { .. }) => {
+                plan.icons_skipped.push(icon_path);
+                continue;
+            }
+            Err(err) => return Err(err),
+        };
+        let position = match amigaicon::position(&bytes) {
+            Ok(p) => p,
+            Err(CoreError::Malformed { .. }) => {
+                plan.icons_skipped.push(icon_path);
+                continue;
+            }
+            Err(err) => return Err(err),
+        };
+        let kind = match amigaicon::icon_type(&bytes) {
+            Ok(k) => k,
+            Err(CoreError::Malformed { .. }) => {
+                plan.icons_skipped.push(icon_path);
+                continue;
+            }
+            Err(err) => return Err(err),
+        };
+
+        let cell = icongrid::Cell {
+            label: name,
+            width: rendered.width,
+            height: rendered.height,
+            is_container: matches!(
+                kind,
+                amigaicon::IconType::Drawer | amigaicon::IconType::Disk
+            ),
+            framed: rendered.framed,
+        };
+
+        entries.push(IconEntry {
+            icon_path,
+            original_bytes: bytes,
+            already_placed: position.is_some(),
+            cell,
+        });
+    }
+
+    if !entries.is_empty() && entries.iter().any(|e| !e.already_placed) {
+        let cells: Vec<icongrid::Cell> = entries.iter().map(|e| e.cell.clone()).collect();
+        let result = icongrid::arrange(&cells, inner_width);
+        let mut any_placed = false;
+        for placement in &result.placements {
+            let entry = &entries[placement.index];
+            if entry.already_placed {
+                // Occupies a cell in the computed grid (its size and label
+                // shaped the layout above), but its own real position is
+                // the release's and is never overwritten.
+                continue;
+            }
+            let new_bytes =
+                amigaicon::set_position(&entry.original_bytes, Some((placement.x, placement.y)))?;
+            plan.writes.push((entry.icon_path.clone(), new_bytes));
+            plan.icons_placed += 1;
+            any_placed = true;
+        }
+        if any_placed {
+            plan.drawers_arranged += 1;
+        }
+    }
+
+    for sub in subdirs {
+        plan_icons_in_dir(&sub, tree_root, plan)?;
+    }
+    Ok(())
+}
+
 /// Apply any combination of a wallpaper assignment, a screen depth and the
 /// shell defaults to a distribution tree.
 ///
@@ -423,6 +632,11 @@ pub fn apply_appearance(tree: &Path, req: &AppearanceRequest) -> CoreResult<Appe
         plan_shell_defaults(tree)?
     } else {
         Vec::new()
+    };
+    let icon_plan = if req.arrange_icons {
+        Some(plan_icon_arrangement(tree)?)
+    } else {
+        None
     };
 
     // ---- Commit: nothing above touched disk. ----
@@ -461,6 +675,18 @@ pub fn apply_appearance(tree: &Path, req: &AppearanceRequest) -> CoreResult<Appe
         commit_write(plan.path, &plan.bytes, &mut committed)?;
     }
 
+    let mut icons_placed = 0usize;
+    let mut drawers_arranged = 0usize;
+    let mut icons_skipped = Vec::new();
+    if let Some(plan) = icon_plan {
+        icons_placed = plan.icons_placed;
+        drawers_arranged = plan.drawers_arranged;
+        icons_skipped = plan.icons_skipped;
+        for (path, bytes) in plan.writes {
+            commit_write(path, &bytes, &mut committed)?;
+        }
+    }
+
     let mut written = Vec::with_capacity(committed.len());
     let mut backups = Vec::new();
     for (path, backup) in committed {
@@ -475,6 +701,9 @@ pub fn apply_appearance(tree: &Path, req: &AppearanceRequest) -> CoreResult<Appe
         backups,
         picture_placed,
         amiga_path,
+        icons_placed,
+        drawers_arranged,
+        icons_skipped,
     })
 }
 
@@ -697,6 +926,7 @@ mod tests {
             )),
             screen_depth: None,
             shell_defaults: false,
+            arrange_icons: false,
         };
         apply_appearance(&tree, &req).unwrap();
 
@@ -742,6 +972,7 @@ mod tests {
             )),
             screen_depth: None,
             shell_defaults: false,
+            arrange_icons: false,
         };
         let outcome = apply_appearance(&tree, &req).unwrap();
 
@@ -783,6 +1014,7 @@ mod tests {
             )),
             screen_depth: None,
             shell_defaults: false,
+            arrange_icons: false,
         };
         let outcome = apply_appearance(&tree, &req).unwrap();
 
@@ -814,6 +1046,7 @@ mod tests {
             )),
             screen_depth: None,
             shell_defaults: false,
+            arrange_icons: false,
         };
         apply_appearance(&tree, &req).unwrap();
 
@@ -861,6 +1094,7 @@ mod tests {
             )),
             screen_depth: None,
             shell_defaults: false,
+            arrange_icons: false,
         };
         let err = apply_appearance(&tree, &req).unwrap_err();
         let text = format!("{err}");
@@ -914,6 +1148,7 @@ mod tests {
             )),
             screen_depth: None,
             shell_defaults: false,
+            arrange_icons: false,
         };
         let err = apply_appearance(&tree, &req).unwrap_err();
         let text = format!("{err}");
@@ -938,6 +1173,7 @@ mod tests {
             )),
             screen_depth: None,
             shell_defaults: false,
+            arrange_icons: false,
         };
         let err = apply_appearance(&tree, &req).unwrap_err();
         assert!(format!("{err}").contains("does_not_exist.iff"));
@@ -965,6 +1201,7 @@ mod tests {
             )),
             screen_depth: None,
             shell_defaults: false,
+            arrange_icons: false,
         };
         let outcome = apply_appearance(&tree, &req).unwrap();
         assert!(outcome.picture_placed.is_none(), "nothing new was placed");
@@ -997,6 +1234,7 @@ mod tests {
             )),
             screen_depth: None,
             shell_defaults: false,
+            arrange_icons: false,
         };
         let outcome = apply_appearance(&tree, &req).unwrap_or_else(|err| {
             panic!("an upper-case SYS: assign must resolve like Sys: does: {err}")
@@ -1014,6 +1252,7 @@ mod tests {
             wallpaper: None,
             screen_depth: Some(8),
             shell_defaults: false,
+            arrange_icons: false,
         };
         apply_appearance(&tree, &req).unwrap();
 
@@ -1046,6 +1285,7 @@ mod tests {
             wallpaper: None,
             screen_depth: None,
             shell_defaults: true,
+            arrange_icons: false,
         };
         let outcome = apply_appearance(&tree, &req).unwrap();
         assert_eq!(outcome.written.len(), env::SHELL_DEFAULTS.len());
@@ -1092,6 +1332,7 @@ mod tests {
             )),
             screen_depth: None,
             shell_defaults: false,
+            arrange_icons: false,
         };
         apply_appearance(&tree, &req).unwrap();
 
@@ -1142,6 +1383,7 @@ mod tests {
             )),
             screen_depth: Some(8),
             shell_defaults: false,
+            arrange_icons: false,
         };
 
         let result = apply_appearance(&tree, &req);
@@ -1184,5 +1426,335 @@ mod tests {
             .placement,
             wbpattern::Placement::Center
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Task 6: the icon-arrangement applier — the first real caller of
+    // `core::amigaicon`'s position/type/rendered-size readers and writer
+    // and `core::icongrid::arrange`.
+    // -----------------------------------------------------------------
+
+    /// A minimal valid icon with the given rendered size, placed at
+    /// `position` (or unplaced when `None`) — composed from `amigaicon`'s
+    /// own test fixtures and its own public [`amigaicon::set_position`],
+    /// rather than a second hand-rolled copy of the `DiskObject` byte layout
+    /// (see that module's own doc comment on `tests_support` for why).
+    fn icon_bytes(width: u16, height: u16, position: Option<(i32, i32)>) -> Vec<u8> {
+        let bytes = crate::core::amigaicon::tests_support::synthetic_icon_sized(width, height);
+        amigaicon::set_position(&bytes, position).unwrap()
+    }
+
+    /// Write entry `name` — a plain empty stand-in file; this module never
+    /// reads an entry's own content, only its icon's — and its `.info` icon
+    /// `icon` into `dir`.
+    fn write_icon_entry(dir: &Path, name: &str, icon: &[u8]) {
+        std::fs::write(dir.join(name), b"").unwrap();
+        std::fs::write(dir.join(format!("{name}.info")), icon).unwrap();
+    }
+
+    /// **The round's central guard.** A drawer holding one icon the release
+    /// already placed and one it did not: after arranging, the first is
+    /// still byte-identical (and still reads back at the exact position it
+    /// started at) and the second has been given a position.
+    #[test]
+    fn an_icon_the_release_positioned_is_left_exactly_where_it_was() {
+        let scratch = ScratchDir::new("art-appearance-icons", "already-placed");
+        let tree = scratch.path().to_path_buf();
+        write_icon_entry(&tree, "Placed", &icon_bytes(20, 20, Some((13, 4))));
+        write_icon_entry(&tree, "Unplaced", &icon_bytes(20, 20, None));
+        let placed_before = std::fs::read(tree.join("Placed.info")).unwrap();
+
+        let req = AppearanceRequest {
+            wallpaper: None,
+            screen_depth: None,
+            shell_defaults: false,
+            arrange_icons: true,
+        };
+        let outcome = apply_appearance(&tree, &req).unwrap();
+
+        let placed_after = std::fs::read(tree.join("Placed.info")).unwrap();
+        assert_eq!(
+            placed_after, placed_before,
+            "an icon the release already positioned must be byte-identical after arranging"
+        );
+        assert_eq!(
+            amigaicon::position(&placed_after).unwrap(),
+            Some((13, 4)),
+            "and must still read back at exactly the position it started at"
+        );
+
+        let unplaced_after = std::fs::read(tree.join("Unplaced.info")).unwrap();
+        assert!(
+            amigaicon::position(&unplaced_after).unwrap().is_some(),
+            "the unplaced icon must have been given a position"
+        );
+        assert_eq!(outcome.icons_placed, 1);
+    }
+
+    /// Everything outside the eight position bytes (58..66, matching
+    /// `amigaicon`'s own `setting_a_position_changes_eight_bytes_and_nothing_else`)
+    /// must survive arranging untouched.
+    #[test]
+    fn an_unplaced_icon_gets_a_position_and_nothing_else_changes() {
+        let scratch = ScratchDir::new("art-appearance-icons", "only-position-changes");
+        let tree = scratch.path().to_path_buf();
+        let before = icon_bytes(30, 20, None);
+        write_icon_entry(&tree, "Solo", &before);
+
+        let req = AppearanceRequest {
+            wallpaper: None,
+            screen_depth: None,
+            shell_defaults: false,
+            arrange_icons: true,
+        };
+        apply_appearance(&tree, &req).unwrap();
+
+        let after = std::fs::read(tree.join("Solo.info")).unwrap();
+        assert_eq!(after.len(), before.len(), "no length change");
+        for i in (0..before.len()).filter(|i| !(58..66).contains(i)) {
+            assert_eq!(after[i], before[i], "byte {i} changed and should not have");
+        }
+        assert!(
+            amigaicon::position(&after).unwrap().is_some(),
+            "the icon must have been given a position"
+        );
+    }
+
+    /// No write, no backup, and the outcome counts zero — a drawer where
+    /// every icon is already placed is not rewritten at all.
+    #[test]
+    fn a_drawer_where_every_icon_is_already_placed_is_not_rewritten_at_all() {
+        let scratch = ScratchDir::new("art-appearance-icons", "all-already-placed");
+        let tree = scratch.path().to_path_buf();
+        write_icon_entry(&tree, "A", &icon_bytes(20, 20, Some((5, 5))));
+        write_icon_entry(&tree, "B", &icon_bytes(20, 20, Some((50, 5))));
+        let before_a = std::fs::read(tree.join("A.info")).unwrap();
+        let before_b = std::fs::read(tree.join("B.info")).unwrap();
+
+        let req = AppearanceRequest {
+            wallpaper: None,
+            screen_depth: None,
+            shell_defaults: false,
+            arrange_icons: true,
+        };
+        let outcome = apply_appearance(&tree, &req).unwrap();
+
+        assert_eq!(std::fs::read(tree.join("A.info")).unwrap(), before_a);
+        assert_eq!(std::fs::read(tree.join("B.info")).unwrap(), before_b);
+        assert!(outcome.written.is_empty(), "no write at all");
+        assert!(outcome.backups.is_empty(), "no backup at all");
+        assert_eq!(outcome.icons_placed, 0);
+        assert_eq!(outcome.drawers_arranged, 0);
+        assert!(
+            !tree.join(BACKUP_DIR).exists(),
+            "nothing rewritten means no backup drawer either"
+        );
+    }
+
+    /// The tree's own top level is the `SYS:` window and uses
+    /// `icongrid::ROOT_INNER_WIDTH` (420), narrower than
+    /// `icongrid::DRAWER_INNER_WIDTH` (520) every ordinary drawer gets.
+    /// Six 100x100 icons are enough to make the two budgets choose a
+    /// different column count — confirmed independently below with
+    /// `icongrid::arrange` itself before ever calling `apply_appearance` —
+    /// so an icon's real, on-disk position after arranging the root can be
+    /// pinned to exactly the narrower layout.
+    #[test]
+    fn the_root_uses_the_narrower_budget() {
+        let scratch = ScratchDir::new("art-appearance-icons", "root-narrow-budget");
+        let tree = scratch.path().to_path_buf();
+
+        let names: Vec<String> = (0..6).map(|i| format!("Icon{i}")).collect();
+        for name in &names {
+            write_icon_entry(&tree, name, &icon_bytes(100, 100, None));
+        }
+
+        let cells: Vec<icongrid::Cell> = names
+            .iter()
+            .map(|n| icongrid::Cell {
+                label: n.clone(),
+                width: 100,
+                height: 100,
+                is_container: false,
+                framed: true,
+            })
+            .collect();
+        let at_root = icongrid::arrange(&cells, icongrid::ROOT_INNER_WIDTH);
+        let at_drawer_width = icongrid::arrange(&cells, icongrid::DRAWER_INNER_WIDTH);
+        assert_ne!(
+            at_root.placements, at_drawer_width.placements,
+            "the fixture must actually distinguish the two budgets, or this test proves nothing"
+        );
+
+        let req = AppearanceRequest {
+            wallpaper: None,
+            screen_depth: None,
+            shell_defaults: false,
+            arrange_icons: true,
+        };
+        apply_appearance(&tree, &req).unwrap();
+
+        for name in &names {
+            let bytes = std::fs::read(tree.join(format!("{name}.info"))).unwrap();
+            let pos = amigaicon::position(&bytes).unwrap().unwrap();
+            let expected = at_root
+                .placements
+                .iter()
+                .find(|p| cells[p.index].label == *name)
+                .expect("every cell was placed");
+            assert_eq!(
+                pos,
+                (expected.x, expected.y),
+                "{name} must land where ROOT_INNER_WIDTH puts it, not DRAWER_INNER_WIDTH"
+            );
+        }
+    }
+
+    /// One malformed `.info` must not cost the other icons in its drawer
+    /// their layout — it is skipped and named in the outcome, never claimed
+    /// as done and never allowed to fail the rest of the run.
+    #[test]
+    fn a_malformed_icon_is_skipped_and_named_rather_than_failing_the_whole_run() {
+        let scratch = ScratchDir::new("art-appearance-icons", "malformed-skip");
+        let tree = scratch.path().to_path_buf();
+        write_icon_entry(&tree, "Good1", &icon_bytes(20, 20, None));
+        write_icon_entry(&tree, "Good2", &icon_bytes(20, 20, None));
+        std::fs::write(tree.join("Bad"), b"").unwrap();
+        let bad_icon_path = tree.join("Bad.info");
+        std::fs::write(&bad_icon_path, b"not an amiga icon at all, no magic here").unwrap();
+
+        let req = AppearanceRequest {
+            wallpaper: None,
+            screen_depth: None,
+            shell_defaults: false,
+            arrange_icons: true,
+        };
+        let outcome = apply_appearance(&tree, &req).unwrap();
+
+        assert_eq!(
+            outcome.icons_skipped,
+            vec![bad_icon_path.clone()],
+            "the outcome must name exactly the icon that could not be parsed"
+        );
+        assert_eq!(
+            outcome.icons_placed, 2,
+            "the other two icons must still get positions"
+        );
+        assert!(
+            amigaicon::position(&std::fs::read(tree.join("Good1.info")).unwrap())
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            amigaicon::position(&std::fs::read(tree.join("Good2.info")).unwrap())
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            std::fs::read(&bad_icon_path).unwrap(),
+            b"not an amiga icon at all, no magic here",
+            "the malformed icon itself must be left exactly as it was"
+        );
+    }
+
+    /// **The plan-then-commit guard.** A drawer's own icon is fully arranged
+    /// (in memory) before this walk descends into its sub-drawer, whose one
+    /// icon cannot even be read — opened with no sharing, so the plan hits a
+    /// real I/O failure, not a malformed byte layout, and the whole run must
+    /// abort. A version that wrote each icon's new position to disk as soon
+    /// as `arrange` computed it (rather than deferring every write in the
+    /// tree until the whole plan succeeds) would leave the first drawer's
+    /// icon already rewritten despite the call failing.
+    #[test]
+    fn a_failed_arrange_leaves_every_icon_byte_for_byte_unchanged() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let scratch = ScratchDir::new("art-appearance-icons", "failed-arrange-untouched");
+        let tree = scratch.path().to_path_buf();
+
+        let good_dir = tree.join("GoodDrawer");
+        std::fs::create_dir_all(&good_dir).unwrap();
+        write_icon_entry(&good_dir, "Widget", &icon_bytes(20, 20, None));
+        let widget_before = std::fs::read(good_dir.join("Widget.info")).unwrap();
+
+        // Visited only after GoodDrawer's own icons have already been
+        // arranged: this walk arranges a directory's own entries before
+        // descending into its subdirectories.
+        let bad_dir = good_dir.join("BadSubDrawer");
+        std::fs::create_dir_all(&bad_dir).unwrap();
+        write_icon_entry(&bad_dir, "Blocked", &icon_bytes(20, 20, None));
+        let blocked_icon = bad_dir.join("Blocked.info");
+        let blocked_before = std::fs::read(&blocked_icon).unwrap();
+        let _lock = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&blocked_icon)
+            .unwrap();
+
+        let req = AppearanceRequest {
+            wallpaper: None,
+            screen_depth: None,
+            shell_defaults: false,
+            arrange_icons: true,
+        };
+        let err = apply_appearance(&tree, &req).unwrap_err();
+        drop(_lock);
+
+        assert!(
+            matches!(err, CoreError::Io(_)),
+            "a real read failure must abort as an I/O error, not be swallowed: {err}"
+        );
+        assert_eq!(
+            std::fs::read(good_dir.join("Widget.info")).unwrap(),
+            widget_before,
+            "GoodDrawer's own icon was arranged before the failure further down the tree — it \
+             must still be untouched on disk, because nothing is committed until the whole \
+             tree's plan succeeds"
+        );
+        assert_eq!(
+            std::fs::read(&blocked_icon).unwrap(),
+            blocked_before,
+            "the icon that could not even be read must be untouched too"
+        );
+    }
+
+    /// The outcome's counts are exact: icons already placed do not count as
+    /// placed, and a drawer with nothing newly placed does not count as
+    /// arranged.
+    #[test]
+    fn the_outcome_counts_what_was_actually_placed() {
+        let scratch = ScratchDir::new("art-appearance-icons", "counts");
+        let tree = scratch.path().to_path_buf();
+
+        write_icon_entry(&tree, "RootPlaced", &icon_bytes(20, 20, Some((1, 1))));
+        write_icon_entry(&tree, "RootUnplaced", &icon_bytes(20, 20, None));
+
+        let drawer_a = tree.join("DrawerA");
+        std::fs::create_dir_all(&drawer_a).unwrap();
+        write_icon_entry(&drawer_a, "A1", &icon_bytes(20, 20, None));
+        write_icon_entry(&drawer_a, "A2", &icon_bytes(20, 20, None));
+
+        let drawer_b = tree.join("DrawerB");
+        std::fs::create_dir_all(&drawer_b).unwrap();
+        write_icon_entry(&drawer_b, "B1", &icon_bytes(20, 20, Some((0, 0))));
+
+        let req = AppearanceRequest {
+            wallpaper: None,
+            screen_depth: None,
+            shell_defaults: false,
+            arrange_icons: true,
+        };
+        let outcome = apply_appearance(&tree, &req).unwrap();
+
+        assert_eq!(
+            outcome.icons_placed, 3,
+            "1 at the root (RootUnplaced) + 2 in DrawerA (A1, A2)"
+        );
+        assert_eq!(
+            outcome.drawers_arranged, 2,
+            "the root and DrawerA each got a new placement; DrawerB — already fully placed — \
+             did not"
+        );
+        assert!(outcome.icons_skipped.is_empty());
     }
 }

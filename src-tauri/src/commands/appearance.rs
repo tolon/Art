@@ -141,6 +141,14 @@ pub struct AppearanceApplyRequest {
     pub wallpaper: Option<WireWallpaperAssignment>,
     pub screen_depth: Option<u16>,
     pub shell_defaults: bool,
+    /// [`AppearanceRequest::arrange_icons`] on the wire. `#[serde(default)]`
+    /// so an older frontend build that has never heard of this field still
+    /// deserialises — the same "nothing changes unless the user changes it"
+    /// rule CLAUDE.md states for settings applies to a request shape too: a
+    /// caller that never asked for icon arranging must not start getting it
+    /// for free just because this field exists now.
+    #[serde(default)]
+    pub arrange_icons: bool,
 }
 
 impl From<AppearanceApplyRequest> for AppearanceRequest {
@@ -151,6 +159,7 @@ impl From<AppearanceApplyRequest> for AppearanceRequest {
                 .map(|w| (w.which.into(), w.source.into(), w.placement.into())),
             screen_depth: value.screen_depth,
             shell_defaults: value.shell_defaults,
+            arrange_icons: value.arrange_icons,
         }
     }
 }
@@ -311,6 +320,7 @@ mod tests {
             }),
             screen_depth: None,
             shell_defaults: false,
+            arrange_icons: false,
         };
 
         // The ground truth: `core::appearance::apply_appearance`'s own
@@ -399,6 +409,7 @@ mod tests {
             wallpaper: None,
             screen_depth: Some(8),
             shell_defaults: false,
+            arrange_icons: false,
         };
         let outcome = apply_appearance_request(&tree, request).unwrap();
 
