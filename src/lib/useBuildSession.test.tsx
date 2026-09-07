@@ -31,7 +31,7 @@ function seed(remembered: Record<string, unknown>) {
 }
 
 function Probe() {
-  const { session, setTree, setRom, setCard } = useBuildSession();
+  const { session, setTree, setRom, setCard, setFirstBoot } = useBuildSession();
   return (
     <div>
       <span data-testid="rom">{session.rom.path ?? "(none)"}</span>
@@ -44,7 +44,10 @@ function Probe() {
       <span data-testid="release">{session.release}</span>
       <span data-testid="kind">{session.kind}</span>
       <span data-testid="mediaFolder">{session.media.folder ?? "(none)"}</span>
+      <span data-testid="firstboot-written">{String(session.firstboot.written)}</span>
       <button onClick={() => setTree({ root: "E:\\picked", builtHere: false })}>pick</button>
+      <button onClick={() => setTree({ builtHere: true })}>mark built</button>
+      <button onClick={() => setFirstBoot({ written: true })}>first boot written</button>
     </div>
   );
 }
@@ -131,6 +134,41 @@ describe("useBuildSession", () => {
     rerender(<Identity />);
     expect(seen.length).toBeGreaterThanOrEqual(2);
     expect(seen[0]).toBe(seen[1]);
+  });
+});
+
+describe("first boot's written flag belongs to one tree", () => {
+  // The value moving to a different tree is ART-197's own defect running the
+  // other way round: a screen would say "already written" about a folder
+  // that has never carried a first-boot block.
+  it("resets to false when the tree's root changes", async () => {
+    seed({
+      "buildSession.tree": { root: "E:\\amiga\\dist", builtHere: false },
+      "buildSession.firstboot": { written: true },
+    });
+    render(<Probe />);
+    expect(screen.getByTestId("firstboot-written").textContent).toBe("true");
+
+    await userEvent.click(screen.getByRole("button", { name: "pick" }));
+
+    expect(screen.getByTestId("root").textContent).toBe("E:\\picked");
+    expect(screen.getByTestId("firstboot-written").textContent).toBe("false");
+  });
+
+  // The other arm: a `setTree` call that leaves `root` untouched must not
+  // clobber a flag nothing here is claiming to change.
+  it("survives a setTree call that does not touch the root", async () => {
+    seed({
+      "buildSession.tree": { root: "E:\\amiga\\dist", builtHere: false },
+      "buildSession.firstboot": { written: true },
+    });
+    render(<Probe />);
+
+    await userEvent.click(screen.getByRole("button", { name: "mark built" }));
+
+    expect(screen.getByTestId("builtHere").textContent).toBe("true");
+    expect(screen.getByTestId("root").textContent).toBe("E:\\amiga\\dist");
+    expect(screen.getByTestId("firstboot-written").textContent).toBe("true");
   });
 });
 

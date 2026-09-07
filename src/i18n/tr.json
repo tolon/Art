@@ -702,6 +702,7 @@
       "kaynak": "Kurulum ortamı",
       "paketler": "Güncelleme paketleri",
       "amiga-kurulum": "Amiga'da kur",
+      "ilk-acilis": "Amiga'da ilk açılış",
       "kart": "Kart imajı",
       "birimler": "Birimleri hazırla",
       "asksTree": "Bu adım bir AmigaOS klasörü üzerinde çalışır, henüz seçilmedi. Aşağıdan birini seç ya da önce bir tane kur:",
@@ -2813,6 +2814,38 @@
         "timedOut": "Yeniden çalıştırın ve bu kez emülatör penceresini izleyin. Sonunu hiç yazmayan bir ilk açılış bir adımda durmuş ya da takılmıştır; kopyadaki S/FirstBoot.log hangisi olduğunu söyler.",
         "emulatorClosed": "Yeniden çalıştırın ve pencerenin işini bitirmesine izin verin. ART kalan adımların ne yapacağını söyleyemez, bu yüzden hiçbir yönde bir karar oluşmadı."
       }
+    },
+    "report": {
+      "heading": "İlk açılışın kendi raporu",
+      "system": "{{system}} · {{rpi}} · Kickstart {{kick}}",
+      "fatCopyFailed": "FAT önyükleme bölümüne kopyalama başarısız oldu; dosyalar AmigaDOS tarafında kaldı.",
+      "unknown": "Daha yeni bir ART'tan gelen, atılmayıp taşınan satırlar:",
+      "details": "Ayrıntılar"
+    },
+    "panel": {
+      "heading": "Amiga'da ilk açılış",
+      "intro": "Amiga, ART'ın host tarafından başlatamadığını tamamlar: donanımı algılar, FAT önyükleme bölümünü bağlar ve makinenin kendisinde çalışması gereken paketleri çalıştırır. Bir kez yazın, sonra kartı açıp gerçekleştiğini görün.",
+      "tree": "AmigaOS klasörü",
+      "preview": "İlk açılışın yazacakları",
+      "steps": "Ne yapacağı, sırasıyla",
+      "bytes": "Ağaç yaklaşık {{kb}} KB büyür.",
+      "alreadyWritten": "Bu ağaç zaten bir ilk-açılış bloğu taşıyor. Yeniden yazmak onun yerine geçer.",
+      "write": "İlk açılışı yaz",
+      "writeAgain": "Yeniden yaz",
+      "written": "Ağaca {{count}} dosya yazıldı.",
+      "backup": "S/User-Startup zaten vardı; önceki kopyası {{path}} konumunda saklandı.",
+      "created": "S/User-Startup yoktu; ART onu oluşturdu.",
+      "nothingWritten": "Hiçbir şey yazılmadı.",
+      "rehearse": "WinUAE altında prova et",
+      "rehearseIntro": "Ağacın kendisini değil, bir kopyasını açar ve mekanizmanın çalıştığını kanıtlar: dağıtıcı başlar, her adım bildirir ve blok başarıyla kendini kaldırır. Donanım adımı emülatör altında her zaman atlanır — o yarı yalnızca gerçek makinede kanıtlanır.",
+      "kickstart": "Prova için Kickstart",
+      "winuae": "Ayarlar'da yapılandırılan WinUAE'yi kullanır.",
+      "window": "Prova çalışırken bu masaüstünde bir emülatör penceresi açılacak.",
+      "run": "Prova et",
+      "stop": "Durdur",
+      "running": "Prova ediliyor…",
+      "cancelled": "Provayı durdurdunuz.",
+      "copyKept": "Kopya {{path}} konumunda saklandı."
     }
   }
 }

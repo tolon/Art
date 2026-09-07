@@ -15,6 +15,7 @@ import { OsBuilder, StepHedef } from "@/pages/OsBuilder";
 import {
   StepAmigaKurulum,
   StepBirimler,
+  StepIlkAcilis,
   StepKart,
   StepKaynak,
   StepPaketler,
@@ -88,6 +89,7 @@ export default function App() {
             <Route path="kaynak" element={<StepKaynak />} />
             <Route path="paketler" element={<StepPaketler />} />
             <Route path="amiga-kurulum" element={<StepAmigaKurulum />} />
+            <Route path="ilk-acilis" element={<StepIlkAcilis />} />
             <Route path="kart" element={<StepKart />} />
             <Route path="birimler" element={<StepBirimler />} />
           </Route>

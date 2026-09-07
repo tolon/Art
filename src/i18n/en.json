@@ -702,6 +702,7 @@
       "kaynak": "Install media",
       "paketler": "Update packages",
       "amiga-kurulum": "Install on the Amiga",
+      "ilk-acilis": "First boot on the Amiga",
       "kart": "The card image",
       "birimler": "Prepare volumes",
       "asksTree": "This step works on an AmigaOS folder, and none has been chosen yet. Pick one below, or build one first:",
@@ -2813,6 +2814,38 @@
         "timedOut": "Run it again and watch the emulator window this time. A first boot that never writes its ending has stopped or hung on a step, and the copy's S/FirstBoot.log says which.",
         "emulatorClosed": "Run it again and let the window finish. ART cannot say what the remaining steps would have done, so nothing was decided either way."
       }
+    },
+    "report": {
+      "heading": "First boot's own report",
+      "system": "{{system}} · {{rpi}} · Kickstart {{kick}}",
+      "fatCopyFailed": "Copying onto the FAT boot partition failed; the files stayed on the AmigaDOS side.",
+      "unknown": "Lines from a newer ART, carried rather than dropped:",
+      "details": "Details"
+    },
+    "panel": {
+      "heading": "First boot on the Amiga",
+      "intro": "The Amiga finishes what ART cannot start from the host: it detects the hardware, mounts the FAT boot partition and runs the packages that need to run on the machine itself. Write it once, then boot the card to see it happen.",
+      "tree": "AmigaOS folder",
+      "preview": "What first boot will write",
+      "steps": "What it will do, in order",
+      "bytes": "The tree grows by about {{kb}} KB.",
+      "alreadyWritten": "This tree already carries a first-boot block. Writing again replaces it.",
+      "write": "Write first boot",
+      "writeAgain": "Write again",
+      "written": "{{count}} files written into the tree.",
+      "backup": "S/User-Startup already existed; the previous copy was kept at {{path}}.",
+      "created": "S/User-Startup did not exist; ART created it.",
+      "nothingWritten": "Nothing was written.",
+      "rehearse": "Rehearse under WinUAE",
+      "rehearseIntro": "Boots a copy of the tree, never the tree itself, and proves the mechanism runs: the dispatcher starts, each step reports and the block removes itself on success. The hardware step always skips under an emulator — that half only proves out on the real machine.",
+      "kickstart": "Kickstart for the rehearsal",
+      "winuae": "Uses the WinUAE configured in Settings.",
+      "window": "An emulator window will open on this desktop while the rehearsal runs.",
+      "run": "Rehearse",
+      "stop": "Stop",
+      "running": "Rehearsing…",
+      "cancelled": "You stopped the rehearsal.",
+      "copyKept": "The copy is kept at {{path}}."
     }
   }
 }

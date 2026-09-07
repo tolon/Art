@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_COMPONENTS,
   DEFAULT_CARD,
+  DEFAULT_FIRSTBOOT,
   DEFAULT_MEDIA,
   DEFAULT_PACKAGES,
   type BuildSession,
@@ -19,13 +20,20 @@ function sessionWith(over: Partial<BuildSession> = {}): BuildSession {
     components: DEFAULT_COMPONENTS,
     packages: DEFAULT_PACKAGES,
     card: DEFAULT_CARD,
+    firstboot: DEFAULT_FIRSTBOOT,
     ...over,
   };
 }
 
 describe("stepsFor", () => {
   it("gives the install job its own steps and not the card's", () => {
-    expect(stepsFor("install")).toEqual(["hedef", "kaynak", "paketler", "amiga-kurulum"]);
+    expect(stepsFor("install")).toEqual([
+      "hedef",
+      "kaynak",
+      "paketler",
+      "amiga-kurulum",
+      "ilk-acilis",
+    ]);
   });
 
   it("gives the card job the card step and none of the install's", () => {
@@ -71,6 +79,12 @@ describe("readiness", () => {
     expect(readiness(s, "amiga-kurulum")).toBe("ready");
   });
 
+  it("says first boot must ask without a tree, and is ready with one", () => {
+    expect(readiness(sessionWith(), "ilk-acilis")).toBe("asks");
+    const s = sessionWith({ tree: { root: "E:\\dist", builtHere: false } });
+    expect(readiness(s, "ilk-acilis")).toBe("ready");
+  });
+
   it("never makes the first step ask — it is where a build begins", () => {
     expect(readiness(sessionWith(), "hedef")).toBe("ready");
   });
@@ -111,6 +125,7 @@ describe("readiness, when ART has looked at the folder (ART-199)", () => {
     // step said ready, and the refusal arrived on the button.
     expect(readiness(withTree, "paketler", false)).toBe("wrong-folder");
     expect(readiness(withTree, "amiga-kurulum", false)).toBe("wrong-folder");
+    expect(readiness(withTree, "ilk-acilis", false)).toBe("wrong-folder");
   });
 
   it("is ready once ART has looked and it is a tree", () => {
