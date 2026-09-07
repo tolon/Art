@@ -848,6 +848,21 @@ fn check_one_backdrop_path(
     };
 
     match resolve_ci_optional(tree, rel)? {
+        // ART-245: "was not found" is the honest sentence when nothing
+        // resolves at all, and a different one when something does but is
+        // the wrong kind — a directory sitting where the `PTRN` chunk named
+        // a picture file. Endings stay distinct (CLAUDE.md, "the failure
+        // that does not crash"): a user reading "not found" would go looking
+        // for a file that in fact already exists, one level up.
+        Some(resolved) if resolved.is_dir() => Ok(FileVerdict {
+            path: amiga_path.to_string(),
+            state: CheckState::Fail,
+            detail: Some(format!(
+                "named by '{prefs_rel}'; '{amiga_path}' resolves to a directory under the \
+                 distribution tree ('{}'), not the picture file itself",
+                tree.display()
+            )),
+        }),
         // The detail names what was actually examined rather than leaving it
         // to a document to say (whole-branch review finding I4): this walks
         // the **host distribution tree** `apply()` produced, not the
@@ -1607,6 +1622,50 @@ mod tests {
         assert!(
             detail.contains("WBPattern.prefs"),
             "the verdict must name the prefs file that claimed it: {detail}"
+        );
+        // ART-245: this is the "nothing at that path at all" sentence, and
+        // it must stay distinct from the "wrong kind at that path" one
+        // (`a_backdrop_at_the_right_name_but_the_wrong_kind_says_so` below).
+        assert!(
+            detail.contains("was not found"),
+            "nothing exists at this path -- the verdict must say 'not found', not something a \
+             wrong-kind detail would also satisfy: {detail}"
+        );
+    }
+
+    /// ART-245: the name a `PTRN` chunk claims can resolve to something that
+    /// exists but is the wrong kind -- a directory sitting where the picture
+    /// file was supposed to be. "Was not found" would be false (something IS
+    /// there) and would send a reader looking for a file that, one level up,
+    /// already exists as a directory; the honest sentence names the kind.
+    #[test]
+    fn a_backdrop_at_the_right_name_but_the_wrong_kind_says_so() {
+        let scratch = ScratchDir::new("art-verify-prefs", "wrong-kind-backdrop");
+        let tree = scratch.path();
+        write_wbpattern_picture(tree, "Sys:Prefs/Presets/Backdrops/default_pal.iff");
+        // A directory sitting exactly where the picture file was named.
+        let wrong_kind = tree
+            .join("Prefs")
+            .join("Presets")
+            .join("Backdrops")
+            .join("default_pal.iff");
+        std::fs::create_dir_all(&wrong_kind).unwrap();
+
+        let verdicts = check_prefs_paths(tree).unwrap();
+
+        assert_eq!(verdicts.len(), 1, "{verdicts:?}");
+        let verdict = &verdicts[0];
+        assert_eq!(verdict.state, CheckState::Fail, "{verdict:?}");
+        let detail = verdict.detail.as_deref().unwrap_or("");
+        assert!(
+            detail.contains("directory"),
+            "the verdict must name what is actually wrong -- a directory, not a missing file: \
+             {detail}"
+        );
+        assert!(
+            !detail.contains("was not found"),
+            "something IS there; 'was not found' is the sentence for the other case and would \
+             be false here: {detail}"
         );
     }
 

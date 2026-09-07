@@ -625,25 +625,6 @@ archives who refreshes often, the fix is a size/mtime-keyed skip for an
 archive that has not changed, the same as the file walk already has — not a
 redesign.
 
-**ART-245** 🔵 **A missing backdrop and a wrong-type match at the same name
-read as the same sentence** — *found 2026-09-05/06 during the
-prefs-and-wallpaper round's whole-branch review, filed rather than fixed*
-`src-tauri/src/core/osinstall/verify.rs::check_one_backdrop_path`
-
-The verify check that confirms every `PTRN`-named backdrop path exists in the
-tree (§3.5 of the prefs-and-wallpaper design) reports `Fail` with "was not
-found under this distribution tree" whenever `resolve_ci_optional` returns
-`None` — which it does both when nothing at that path exists at all, and when
-the path resolves to something of the **wrong kind** (a directory sitting
-where a picture file was named). CLAUDE.md's own rule is that a refusal names
-what is missing; "not found" is the right sentence for the first case and the
-wrong one for the second, where the honest sentence is "that name is a
-directory, not the picture file". Not tested for and not exercised on any
-real material seen this round — every measured `PTRN` chunk named a file, not
-a directory — so this is latent rather than observed. Low severity: the
-message is merely less specific than it should be, not wrong about whether
-verification passed.
-
 **ART-246** 🔵 **`verify_volume`'s prefs check has an untested failure path:
 a permission error walking the tree folds into one `Fail` row with no test
 provoking it** — *found 2026-09-05/06 by the prefs-and-wallpaper round's Task
@@ -807,6 +788,42 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-245** 🔵 ✅ **A missing backdrop and a wrong-type match at the same
+name read as the same sentence** — *found 2026-09-05/06 during the
+prefs-and-wallpaper round's whole-branch review, filed rather than fixed*
+`src-tauri/src/core/osinstall/verify.rs::check_one_backdrop_path`
+
+The verify check that confirms every `PTRN`-named backdrop path exists in the
+tree (§3.5 of the prefs-and-wallpaper design) reports `Fail` with "was not
+found under this distribution tree" whenever `resolve_ci_optional` returns
+`None` — which it does both when nothing at that path exists at all, and when
+the path resolves to something of the **wrong kind** (a directory sitting
+where a picture file was named). CLAUDE.md's own rule is that a refusal names
+what is missing; "not found" is the right sentence for the first case and the
+wrong one for the second, where the honest sentence is "that name is a
+directory, not the picture file". Not tested for and not exercised on any
+real material seen this round — every measured `PTRN` chunk named a file, not
+a directory — so this is latent rather than observed. Low severity: the
+message is merely less specific than it should be, not wrong about whether
+verification passed.
+
+**Fixed** 2026-09-07 in `check_one_backdrop_path`: the `Some(_)` arm now
+checks `resolved.is_dir()` first and returns a distinct `Fail` naming the
+directory rather than reusing the "was not found" sentence. Guards: the
+existing `a_backdrop_the_tree_does_not_have_is_reported_by_both_names` now
+also asserts its detail contains `"was not found"`, and a new
+`a_backdrop_at_the_right_name_but_the_wrong_kind_says_so` creates a directory
+at the claimed name and asserts the verdict is `Fail`, names "directory", and
+does *not* contain "was not found" — the two endings stay distinct rather
+than merely both being `Fail`. Mutation: disabled the new `is_dir()` arm
+(`Some(resolved) if false && resolved.is_dir() => unreachable!()`) — the new
+test failed (`left: Pass, right: Fail`, since the wrong-kind path fell
+through to the ordinary `Some(_) => Pass` arm); restored via copy, touched,
+re-diffed against the real fix, both tests passed again.
+`cargo test --lib osinstall::verify::` (whole module): `29 passed; 0 failed`.
+
+---
+
 **ART-260** 🔵 ✅ **`setLayerIdentified({})` writes a fresh object where its
 two neighbours guard with `prev => prev`, and nothing wakes it yet** — *found
 2026-09-06 by the whole-branch review of the refusal-evidence round (M3),
