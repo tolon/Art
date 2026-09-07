@@ -94,6 +94,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   image data, not settings. ART reads these and never writes them: your icons
   are yours.
 
+### Changed
+
+- **ART now looks like a Windows 11 application, in both themes.** The
+  colours are the Fluent tokens Windows itself draws with (Mica background,
+  layer and card fills, the system accent blue), controls are 32 px with
+  Fluent's darker bottom edge, text boxes show focus with an accent underline,
+  and the sidebar is a WinUI navigation pane: 280 px, 36 px items, a 3 px
+  accent bar beside the selected entry, and drawn icons instead of emoji. The
+  Dashboard's quick actions are six Amiga-specific tiles (a two-pane commander,
+  a stack of floppies, a monitor on an A500, a PiStorm card, a floppy going
+  into a drive, a joystick). The File Manager keeps its Total Commander look
+  exactly; Application Size (Ctrl + / Ctrl −) is unchanged; nothing you had
+  set is changed. Where a Fluent value did not meet the contrast rule, that
+  one value was moved a step along Fluent's own ramp and the measured ratio
+  is recorded beside it; the contrast check now measures the badge and
+  message-strip tints ART actually draws (105 pairs, both themes).
+
 ### Fixed
 
 - **Applying a wallpaper, screen depth or icon arrangement no longer freezes

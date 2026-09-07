@@ -127,7 +127,7 @@ export function HexTools() {
                 value={jumpBlockInput}
                 onChange={(e) => setJumpBlockInput(e.target.value)}
                 placeholder={t("hex.jump.placeholder")}
-                style={{ width: 80, padding: "4px 6px", background: "var(--bg)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 4 }}
+                style={{ width: 80, padding: "4px 6px", background: "var(--bg)", color: "var(--text)", borderRadius: 4 }}
               />
               <button
                 className="btn btn-sm"

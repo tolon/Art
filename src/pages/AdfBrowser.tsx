@@ -657,7 +657,6 @@ export function AdfBrowser() {
                     width: "100%",
                     padding: "8px",
                     background: "var(--bg)",
-                    border: "1px solid var(--border)",
                     color: "var(--text)",
                     borderRadius: 4,
                   }}
@@ -675,7 +674,6 @@ export function AdfBrowser() {
                     width: "100%",
                     padding: "8px",
                     background: "var(--bg)",
-                    border: "1px solid var(--border)",
                     color: "var(--text)",
                     borderRadius: 4,
                   }}
@@ -740,7 +738,6 @@ export function AdfBrowser() {
                   width: "100%",
                   padding: "8px",
                   background: "var(--bg)",
-                  border: "1px solid var(--border)",
                   color: "var(--text)",
                   borderRadius: 4,
                 }}
@@ -787,7 +784,6 @@ export function AdfBrowser() {
                   width: "100%",
                   padding: "8px",
                   background: "var(--bg)",
-                  border: "1px solid var(--border)",
                   color: "var(--text)",
                   borderRadius: 4,
                 }}

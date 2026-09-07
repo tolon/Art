@@ -48,51 +48,80 @@ h3 {
 
 /* ---- Shared building blocks ------------------------------------------- */
 
+/* Fluent's own button: 32px at the app's own font size, a 1px border whose
+   bottom edge is a step darker than its sides (WinUI's control-stroke
+   convention — `color-mix` rather than a new token, since a fourth border
+   token is not part of this round's set), no press-scale.
+   `min-height`, not `height`, and no `justify-content: center`: `.btn` is
+   also what `FunctionKeys.tsx` renders each function key as inside the File
+   Manager's `.tc-commander`, whose own header comment states the rule this
+   has to respect — everything below `.tc-font-size` is an `em`, so a 128px
+   Size column or a 32px button fixed in `px` clips the moment
+   `paneFontSize` (`@/lib/dockLayout`, up to 28) grows the text. A fixed
+   `height` clipped an enlarged F-key label; a `justify-content: center`
+   would have re-aligned it against `.tc-fnkey`'s own ellipsis-from-the-tail
+   truncation, which wants the label pinned left, not centred (review round
+   1, findings 1 and 10). */
 .btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 11px;
   border: 1px solid var(--border);
+  border-bottom-color: color-mix(in srgb, var(--border) 65%, black);
   border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
+  background: var(--bg-panel);
   color: var(--text);
-  transition: background 0.12s, border-color 0.12s, transform 0.05s;
+  font: inherit;
+  box-sizing: border-box;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s;
 }
 .btn:hover {
   background: var(--bg-hover);
 }
-.btn:active {
-  transform: scale(0.98);
-}
 .btn-sm {
-  padding: 4px 10px;
+  min-height: 24px;
+  padding: 4px 8px;
   font-size: 12px;
 }
 .btn-primary {
   background: var(--accent);
   color: var(--accent-fg);
   border-color: var(--accent);
+  font-weight: 600;
 }
 .btn-primary:hover {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
 }
+/* A button with nothing to announce — the mode toggle, an icon-only action —
+   carries no fill or border of its own until it is hovered. */
+.btn-subtle {
+  background: transparent;
+  border-color: transparent;
+}
+.btn-subtle:hover {
+  background: var(--bg-hover);
+}
 
-/* A control that cannot be used has to look like it. Without this a disabled
-   primary button keeps its accent fill and reads as ready. */
+/* Fluent's disabled control: a subtle fill and faint text, not a filter over
+   the enabled look — a disabled primary button no longer keeps a dimmed
+   accent fill, it loses the fill entirely (ART-039's rule still holds: it
+   has to look unusable, not merely feel it on click). Higher specificity
+   than `.btn-primary` (two selectors against one) is what makes this win
+   over the accent fill without `!important`. */
 .btn:disabled,
 .btn[aria-disabled="true"] {
-  opacity: 0.45;
+  background: var(--bg-hover);
+  color: var(--text-faint);
+  border-color: transparent;
   cursor: not-allowed;
-  filter: grayscale(0.6);
 }
 .btn:disabled:hover,
 .btn[aria-disabled="true"]:hover {
-  background: var(--bg-elevated);
-}
-.btn-primary:disabled:hover {
-  background: var(--accent);
+  background: var(--bg-hover);
 }
 
 /* Form controls follow the theme — every one of them, not the ones somebody
@@ -109,14 +138,20 @@ h3 {
  * changes. Checkboxes and radios are left to the browser — a background and a
  * border make a mess of them, and `accent-color` is what actually tints them.
  */
+/* Fluent's text box: a plain 1px border on the sides and top, a stronger 1px
+   line along the bottom — the field's own "baseline". Focus turns that
+   bottom line into a 2px accent underline instead of the universal outline
+   ring (`:focus-visible` below), the WinUI TextBox convention; the ring stays
+   for checkbox/radio/buttons, which is what the universal rule is still for. */
 input:where(:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"])),
 select,
 textarea {
-  background: var(--bg);
+  background: var(--bg-panel);
   color: var(--text);
+  border: 1px solid var(--border);
   /* `--border-strong`, not `--border`: a field's edge is what says there is a
      field, so it is held to the 3:1 that a boundary needs (ART-140). */
-  border: 1px solid var(--border-strong);
+  border-bottom: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   padding: 6px 10px;
   font-size: 13px;
@@ -125,8 +160,9 @@ textarea {
 input:where(:not([type="checkbox"]):not([type="radio"])):focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: none;
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 5px;
 }
 input::placeholder,
 textarea::placeholder {
@@ -152,39 +188,94 @@ textarea:disabled {
   background: color-mix(in srgb, var(--warn) 28%, var(--bg-elevated));
 }
 
+/* Fluent's card: no shadow by default — elevation on Windows 11 comes from
+   Mica showing through the border, not a drop shadow under every card. */
 .card {
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 16px;
-  box-shadow: var(--shadow);
 }
 
+/* Fluent's InfoBadge: a 20px pill, 12px 600 weight. `min-height`, and a
+   little vertical padding, not a fixed `height`: `FileManager.tsx` also
+   renders `.badge` as a block message strip carrying a whole sentence
+   (`state.error`, each `state.warnings` entry, "listing truncated", …) with
+   `style={{ display: "block", … }}`, which beats `inline-flex` but not a
+   fixed `height` — a wrapped two- or three-line warning was clipped to one
+   line, its tint stopping short of its own text (review round 1, finding
+   2). */
 .badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
   padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 11px;
+  border-radius: 10px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.03em;
 }
-/* Tint from the mark, words in the text colour: the same colour for both was
-   2.20:1 in the light theme (ART-140). */
+/* The flat status tint, not a computed mix of the mark: `--ok-bg` and its
+   siblings are Fluent's own badge/InfoBar fills (ART-140 is still why words
+   and fill are two separate tokens — the same colour for both was 2.20:1 in
+   the light theme). */
 .badge-ok {
-  background: color-mix(in srgb, var(--ok) 22%, transparent);
+  background: var(--ok-bg);
   color: var(--ok-text);
 }
 .badge-warn {
-  background: color-mix(in srgb, var(--warn) 22%, transparent);
+  background: var(--warn-bg);
   color: var(--warn-text);
 }
 .badge-err {
-  background: color-mix(in srgb, var(--err) 22%, transparent);
+  background: var(--err-bg);
   color: var(--err-text);
 }
 .badge-muted {
   background: var(--bg-hover);
   color: var(--text-muted);
+}
+
+/* Fluent's InfoBar: the block `Refusal.tsx` and the outcome cards should grow
+   into (spec's four distinct endings — succeeded / refused / timed out / the
+   user closed the window — each read a different one), not restyled onto
+   those components this round. */
+.infobar {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+.infobar.ok {
+  background: var(--ok-bg);
+}
+.infobar.warn {
+  background: var(--warn-bg);
+}
+.infobar.err {
+  background: var(--err-bg);
+}
+.infobar.info {
+  background: var(--bg-elevated);
+}
+.infobar svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  margin-top: 2px;
+}
+.infobar.ok svg {
+  color: var(--ok);
+}
+.infobar.warn svg {
+  color: var(--warn);
+}
+.infobar.err svg {
+  color: var(--err);
+}
+.infobar.info svg {
+  color: var(--accent);
 }
 
 .muted {

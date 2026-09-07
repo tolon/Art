@@ -19,7 +19,7 @@ export function TopBar() {
         <span className={`badge ${uxMode === "power" ? "badge-ok" : "badge-muted"}`}>
           {uxMode === "power" ? t("settings.uxPower") : t("settings.uxBeginner")}
         </span>
-        <button className="btn" onClick={toggleMode} title={t("settings.uxMode")}>
+        <button className="btn btn-subtle" onClick={toggleMode} title={t("settings.uxMode")}>
           {uxMode === "power" ? "◐" : "◑"}
         </button>
       </div>

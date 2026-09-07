@@ -19,7 +19,7 @@
    touches. */
 .app-shell {
   display: grid;
-  grid-template-columns: 224px 1fr;
+  grid-template-columns: 280px 1fr;
   zoom: var(--app-zoom, 1);
   height: calc(100vh / var(--app-zoom, 1));
   overflow: hidden;
@@ -63,7 +63,7 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: auto;
-  padding: 24px 28px;
+  padding: 8px 40px 24px 20px;
 }
 
 /* One place decides how wide content gets, so a page never has to. Pages that
@@ -104,11 +104,17 @@
    `Layout.tsx` puts the answer on the shell. The two thresholds are unchanged;
    only the width they are compared against is. */
 .app-shell-narrow {
-  grid-template-columns: 60px 1fr;
+  grid-template-columns: 48px 1fr;
 }
-.app-shell-narrow .sidebar-brand,
+/* The name/version column goes; the accent mark stays, so a collapsed rail
+   still carries the brand rather than a blank strip. */
+.app-shell-narrow .sidebar-brand-text,
 .app-shell-narrow .sidebar-link span:not(.sidebar-icon) {
   display: none;
+}
+.app-shell-narrow .sidebar-brand {
+  padding: 0;
+  justify-content: center;
 }
 .app-shell-narrow .sidebar-link {
   justify-content: center;
@@ -117,18 +123,24 @@
   padding: 16px 14px;
 }
 
+/* Below this the quick-action grid drops to one column — a 280px rail plus
+   a 68px-tall tile leaves too little width for two side by side (review
+   round 1, finding 6: this class was still emitted and asserted after the
+   base grid became 2 columns everywhere, with no rule left reading it). */
 .app-shell-tight .quick-actions {
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: 1fr;
 }
 
 /* ---- Sidebar --------------------------------------------------------- */
 
 .sidebar {
-  background: var(--bg-elevated);
-  border-right: 1px solid var(--border);
+  /* Mica, and no line down the side — the content column is separated from
+     the rail by its own fill (`--bg-panel`/`--bg-elevated` are lighter than
+     Mica in both themes), the way a WinUI NavigationView reads. */
+  background: var(--bg);
   display: flex;
   flex-direction: column;
-  padding: 16px 0;
+  padding: 8px 0;
   /* The same `min-height: auto` trap `.app-main` documents, and the half that
      was missed. The sidebar is the other item in that implicit grid row, so
      with fourteen nav entries its min-content height (~665px) sets the row
@@ -143,48 +155,89 @@
 }
 .sidebar-brand {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 0 18px 18px;
-  border-bottom: 1px solid var(--border);
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  padding: 0 16px 0 20px;
+  flex: none;
 }
-.sidebar-logo {
+.sidebar-mark {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  display: grid;
+  place-items: center;
   font-weight: 700;
-  font-size: 20px;
-  letter-spacing: 0.06em;
-  color: var(--accent);
+  font-size: 11px;
+  flex: none;
+}
+.sidebar-brand-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.sidebar-name {
+  font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sidebar-version {
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 16px;
   color: var(--text-faint);
 }
 .sidebar-nav {
   display: flex;
   flex-direction: column;
-  padding: 12px 8px;
-  gap: 2px;
+  padding: 4px 8px;
+  gap: 4px;
+}
+/* Pins the trailing nav (Ayarlar) to the bottom of the rail. */
+.sidebar-spacer {
+  flex: 1;
 }
 .sidebar-link {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
+  gap: 12px;
+  height: 36px;
+  padding: 0 12px;
   border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  font-size: 13.5px;
-  transition: background 0.1s, color 0.1s;
+  color: var(--text);
+  font-size: 14px;
+  transition: background 0.1s;
 }
 .sidebar-link:hover {
   background: var(--bg-hover);
-  color: var(--text);
 }
+/* Fluent's selected nav item: a fill plus a 3×16px accent bar at the left
+   edge — the bar is the primary cue, the fill only close to the same value
+   as `:hover` since ART carries no dedicated "selected" surface token. */
 .sidebar-link-active {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--text);
+  background: var(--bg-hover);
+}
+.sidebar-link-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--accent);
 }
 .sidebar-icon {
-  width: 18px;
-  text-align: center;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
 }
 
 /* ---- TopBar ---------------------------------------------------------- */
@@ -194,9 +247,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 24px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-elevated);
+  padding: 0 24px 0 20px;
+  background: var(--bg);
 }
 .topbar-title {
   font-size: 13px;
@@ -219,14 +271,18 @@
 
 .quick-actions {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 .quick-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 68px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 14px;
+  padding: 12px 14px;
   text-align: left;
   color: var(--text);
   transition: background 0.1s, border-color 0.1s;
@@ -235,6 +291,21 @@
   background: var(--bg-hover);
   border-color: var(--border-strong);
 }
+.quick-action-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  background: var(--accent-tint);
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--text);
+}
+.quick-action-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
 .quick-action-label {
   display: block;
   font-size: 13px;
@@ -242,8 +313,8 @@
 }
 .quick-action-hint {
   display: block;
-  font-size: 11px;
-  color: var(--text-faint);
+  font-size: 12px;
+  color: var(--text-muted);
   margin-top: 2px;
 }
 

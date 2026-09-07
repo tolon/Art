@@ -502,6 +502,12 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // checkable sentences, never one collapsed into the other.
     // `firstboot.test.ts` pins the mapper directly; `FirstBootReportPanel.
     // test.tsx` renders both non-null variants.
-    expect(dynamicCalls).toBe(158);
+    // 158 -> 159 (Windows 11 look): the dashboard's quick-action tiles now
+    // read a `hintKey` per tile off `QUICK_ACTIONS`, the same dynamic way
+    // `t(qa.key)` beside it already reads the label — the four canvas tiles
+    // that gained a real hint (`nav.files`/`nav.hardDisk`/`nav.osBuilder`/
+    // `nav.whdload`) are catalogue phrases now, not the old literal codes
+    // (ADF/LHA/HDF) or a hint resolved once outside the map.
+    expect(dynamicCalls).toBe(159);
   });
 });
