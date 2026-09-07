@@ -2799,6 +2799,20 @@
     "fat": {
       "available": "FAT önyükleme bölümü EMU68BOOT: olarak bağlanacak (L:fat95 ağaçta var).",
       "unavailable": "FAT önyükleme bölümü bağlanmayacak: ağaçta L:{{needs}} yok. Aminet disk/misc/{{needs}} bunu sağlar; adım o olmadan atlanır."
+    },
+    "rehearsal": {
+      "outcome": {
+        "finished": "Her adım WinUAE altında çalıştı ve blok kendini kaldırdı; kopya silindi.",
+        "stepRefused": "Bir adım reddetti. Amiga'nın kendi günlüğünü okuyabilmeniz için kopya saklandı.",
+        "timedOut": "Kimse yanıt vermedi. Amiga {{seconds}} saniye sonra hâlâ sonunu yazmamıştı, bu yüzden ART başlattığı emülatörü sonlandırdı; kopya saklandı.",
+        "emulatorClosed": "Emülatör penceresi {{seconds}} saniye sonra, ilk açılış sonuna ulaşmadan kapatıldı; kopya saklandı."
+      },
+      "next": {
+        "finished": "Ağacı bir karta yazın. Donanım adımı emülatör altında atlanır ve yalnızca gerçek makinede çalışır.",
+        "stepRefused": "Kopyadaki S/FirstBoot.log dosyasını açın: reddeden adımın kendi satırları nedenini söyler ve adım bir sonraki açılışta yeniden denenecek.",
+        "timedOut": "Yeniden çalıştırın ve bu kez emülatör penceresini izleyin. Sonunu hiç yazmayan bir ilk açılış bir adımda durmuş ya da takılmıştır; kopyadaki S/FirstBoot.log hangisi olduğunu söyler.",
+        "emulatorClosed": "Yeniden çalıştırın ve pencerenin işini bitirmesine izin verin. ART kalan adımların ne yapacağını söyleyemez, bu yüzden hiçbir yönde bir karar oluşmadı."
+      }
     }
   }
 }

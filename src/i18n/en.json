@@ -2799,6 +2799,20 @@
     "fat": {
       "available": "The FAT boot partition will be mounted as EMU68BOOT: (L:fat95 is in the tree).",
       "unavailable": "The FAT boot partition will not be mounted: the tree has no L:{{needs}}. Aminet disk/misc/{{needs}} supplies it; the step skips without it."
+    },
+    "rehearsal": {
+      "outcome": {
+        "finished": "Every step ran under WinUAE and the block removed itself; the copy has been discarded.",
+        "stepRefused": "A step refused. The copy is kept so you can read the Amiga's own log.",
+        "timedOut": "Nobody answered. The Amiga had not written its ending {{seconds}} seconds in, so ART ended the emulator it had started; the copy is kept.",
+        "emulatorClosed": "The emulator window was closed {{seconds}} seconds in, before the first boot had reached its end; the copy is kept."
+      },
+      "next": {
+        "finished": "Write the tree to a card. The hardware step skips under an emulator and runs only on the real machine.",
+        "stepRefused": "Open S/FirstBoot.log in the copy: the refused step's own lines say why, and it will be tried again on the next boot.",
+        "timedOut": "Run it again and watch the emulator window this time. A first boot that never writes its ending has stopped or hung on a step, and the copy's S/FirstBoot.log says which.",
+        "emulatorClosed": "Run it again and let the window finish. ART cannot say what the remaining steps would have done, so nothing was decided either way."
+      }
     }
   }
 }

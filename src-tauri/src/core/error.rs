@@ -188,6 +188,11 @@ pub enum CoreError {
     )]
     FirstBootNotATree { tree: PathBuf },
 
+    /// A command the fixed first-boot scripts run is not in the tree's `C/`.
+    /// Named so the user can fix it with one file rather than told "cannot".
+    #[error("the tree has no C/{command}, which the first boot runs; copy it from the release's own C directory")]
+    FirstBootNeedsCommand { command: String },
+
     /// The input is **well-formed** and larger than a bound ART sets for
     /// itself — ART-158.
     ///
@@ -256,6 +261,7 @@ impl CoreError {
             Self::EscapedNamesNeedNativeCopy { .. } => "ART-ESCAPED-NAME-NEEDS-NATIVE",
             Self::FirstBootHookUnreachable { .. } => "ART-FIRSTBOOT-HOOK-UNREACHABLE",
             Self::FirstBootNotATree { .. } => "ART-FIRSTBOOT-NOT-A-TREE",
+            Self::FirstBootNeedsCommand { .. } => "ART-FIRSTBOOT-NEEDS-COMMAND",
             Self::LimitExceeded { .. } => "ART-LIMIT-EXCEEDED",
         }
     }
@@ -383,6 +389,9 @@ mod tests {
                 file: "S/Startup-Sequence".into(),
             },
             CoreError::FirstBootNotATree { tree: "x".into() },
+            CoreError::FirstBootNeedsCommand {
+                command: "Sort".into(),
+            },
             CoreError::LimitExceeded {
                 subject: "iso9660 walk".into(),
                 detail: "x".into(),

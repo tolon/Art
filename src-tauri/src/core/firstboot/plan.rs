@@ -50,6 +50,13 @@ pub struct FirstBootPlan {
     pub bytes_added: u64,
 }
 
+/// Disk commands (not shell-internal ones) the fixed scripts run. `List`,
+/// `Sort`, `Delete`, `Copy`, `Version`, `Mount` and `Assign` are files in
+/// `C/` on every release; a recipe that dropped one would break the boot.
+pub const NEEDED_COMMANDS: [&str; 7] = [
+    "List", "Sort", "Delete", "Copy", "Version", "Mount", "Assign",
+];
+
 pub fn plan(request: &FirstBootRequest) -> CoreResult<FirstBootPlan> {
     let tree = &request.tree;
     if !tree.join("distribution.json").is_file() {
@@ -58,6 +65,16 @@ pub fn plan(request: &FirstBootRequest) -> CoreResult<FirstBootPlan> {
     let sequence = tree.join("S").join("Startup-Sequence");
     if !calls_user_startup(&sequence)? {
         return Err(CoreError::FirstBootHookUnreachable { file: sequence });
+    }
+    // The dispatcher sorts its run list with C:Sort, because List answers
+    // in the directory's own order (measured reversed under WinUAE,
+    // 2026-09-07). A tree without it would run steps in no order at all.
+    for command in NEEDED_COMMANDS {
+        if !tree.join("C").join(command).is_file() {
+            return Err(CoreError::FirstBootNeedsCommand {
+                command: command.to_string(),
+            });
+        }
     }
 
     let fat_mount = if tree.join("L").join("fat95").is_file() {
@@ -122,7 +139,26 @@ mod tests {
             b"C:SetPatch QUIET\nBindDrivers\nIF EXISTS S:User-Startup\n  Execute S:User-Startup\nENDIF\nC:LoadWB\nEndCLI >NIL:\n",
         )
         .unwrap();
+        fs::create_dir_all(d.join("C")).unwrap();
+        for command in NEEDED_COMMANDS {
+            fs::write(d.join("C").join(command), b"\x00\x00\x03\xf3").unwrap();
+        }
         d
+    }
+
+    /// The refusal names the command, so one copied file fixes it.
+    #[test]
+    fn a_tree_without_c_sort_is_refused_by_name() {
+        let d = tree("nosort");
+        fs::remove_file(d.join("C/Sort")).unwrap();
+        let err = plan(&FirstBootRequest {
+            tree: d.path().to_path_buf(),
+        })
+        .unwrap_err();
+        match err {
+            CoreError::FirstBootNeedsCommand { command } => assert_eq!(command, "Sort"),
+            other => panic!("wrong refusal: {other:?}"),
+        }
     }
 
     #[test]

@@ -143,9 +143,12 @@ import { STEP_IDS, stepLabelKey } from "@/lib/buildSteps";
 import {
   endingPhrase,
   fatMountPhrase,
+  rehearsalNextStepPhrase,
+  rehearsalOutcomePhrase,
   stepOutcomePhrase,
   type Ending,
   type FatMount,
+  type RehearsalOutcome,
   type StepOutcome,
 } from "@/lib/firstboot";
 
@@ -1766,6 +1769,28 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     for (const mount of mounts) {
       const phrase = fatMountPhrase(mount);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("firstboot rehearsal: every ending resolves, and so does its next step", () => {
+    const report = {
+      version: 1,
+      system: null,
+      steps: [],
+      ending: "unfinished" as const,
+      fatCopyFailed: false,
+      rebootRequestedBy: null,
+      unknown: [],
+    };
+    const endings: RehearsalOutcome[] = [
+      { kind: "finished", report },
+      { kind: "step-refused", report },
+      { kind: "timed-out", waited: { secs: 60, nanos: 0 }, report },
+      { kind: "emulator-closed", waited: { secs: 60, nanos: 0 }, report },
+    ];
+    for (const outcome of endings) {
+      expect(isLeafKey(rehearsalOutcomePhrase(outcome).key), outcome.kind).toBe(true);
+      expect(isLeafKey(rehearsalNextStepPhrase(outcome).key), outcome.kind).toBe(true);
     }
   });
 });

@@ -95,6 +95,10 @@ mod tests {
             b"IF EXISTS S:User-Startup\n  Execute S:User-Startup\nENDIF\n",
         )
         .unwrap();
+        fs::create_dir_all(d.join("C")).unwrap();
+        for command in crate::core::firstboot::plan::NEEDED_COMMANDS {
+            fs::write(d.join("C").join(command), b"\x00\x00\x03\xf3").unwrap();
+        }
         d
     }
 

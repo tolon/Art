@@ -1,22 +1,24 @@
 ; ART first boot: which Pi, and the FAT boot partition. Needs L:fat95 for the
 ; mount (Aminet disk/misc/fat95); without it nothing here is attempted.
+; No Quit here: a refusal sets ART_StepRc and skips to the end label.
 FailAt 2000000000
-IF $ART_System EQ "UAE"
+IF ${ART_System} EQ "UAE"
   Echo >>S:FirstBoot.log "step 10-hardware skipped uae"
-  Quit 0
+  Skip end
 ENDIF
 IF NOT EXISTS L:fat95
   Echo >>S:FirstBoot.log "step 10-hardware skipped no-fat95"
-  Quit 0
+  Skip end
 ENDIF
-IF $ART_RpiType EQ "RPi4"
+IF ${ART_RpiType} EQ "RPi4"
   Copy >NIL: SYS:Storage/DOSDrivers/SD0pi4 TO DEVS:DOSDrivers/SD0
 ELSE
   Copy >NIL: SYS:Storage/DOSDrivers/SD0pi3 TO DEVS:DOSDrivers/SD0
 ENDIF
 IF NOT EXISTS DEVS:DOSDrivers/SD0
   Echo >>S:FirstBoot.log "step 10-hardware detail sd0-driver-not-copied"
-  Quit 20
+  Set ART_StepRc 20
+  Skip end
 ENDIF
 Delete >NIL: SYS:Storage/DOSDrivers/SD0pi3 QUIET
 Delete >NIL: SYS:Storage/DOSDrivers/SD0pi4 QUIET
@@ -25,7 +27,9 @@ Mount >NIL: SD0:
 Assign >NIL: EXISTS SD0:
 IF WARN
   Echo >>S:FirstBoot.log "step 10-hardware detail sd0-not-mounted"
-  Quit 20
+  Set ART_StepRc 20
+  Skip end
 ENDIF
 Assign >NIL: EMU68BOOT: SD0:
-Echo >>S:FirstBoot.log "step 10-hardware detail sd0-mounted $ART_RpiType"
+Echo >>S:FirstBoot.log "step 10-hardware detail sd0-mounted ${ART_RpiType}"
+Lab end

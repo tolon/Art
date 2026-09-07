@@ -8,7 +8,9 @@
 // never "failed".
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+import { waitedSeconds, type WireDuration } from "@/lib/amigainstall";
 import type { Phrase } from "@/lib/phrase";
 
 export type FatMount = { kind: "available" } | { kind: "unavailable"; needs: string };
@@ -115,5 +117,126 @@ export function stepOutcomeTone(outcome: StepOutcome): "ok" | "muted" | "warn" |
       return "warn";
     case "unfinished":
       return "err";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rehearsing the first boot under WinUAE
+// ---------------------------------------------------------------------------
+//
+// A rehearsal boots a **copy** of the tree, never the tree. It proves the
+// mechanism — the dispatcher runs, each step reports, the block removes
+// itself — and it can never prove the Pi3/Pi4 hardware branch, because under
+// an emulator `10-hardware` writes `skipped uae` and copies nothing. That
+// half closes on a real card only.
+//
+// Four endings, four sentences, exactly like `amigainstall`'s: "the window
+// was closed" and "nobody answered in time" call for opposite next steps, so
+// collapsing them into "it did not work" is the defect, not a shortcut.
+
+/** How a rehearsal ended. Mirrors `core::amigainstall::rehearse::RehearsalOutcome`,
+ *  whose `kind` tags are kebab-case. Every variant carries the report,
+ *  including the two that did not finish: a run that got partway still told
+ *  the host something. */
+export type RehearsalOutcome =
+  | { kind: "finished"; report: FirstBootReport }
+  | { kind: "step-refused"; report: FirstBootReport }
+  | { kind: "timed-out"; waited: WireDuration; report: FirstBootReport }
+  | { kind: "emulator-closed"; waited: WireDuration; report: FirstBootReport };
+
+/** A finished rehearsal's own answer. `job_id` is snake_case to match every
+ *  other job result in ART. */
+export interface RehearsalResult {
+  job_id: number;
+  outcome: RehearsalOutcome;
+  /** The copy that booted: where it still is when `discarded` is false. */
+  copy: string;
+  /** True only when the copy really was removed. A failed removal reports
+   *  false and keeps the path, because no screen may claim a discard that did
+   *  not happen. */
+  discarded: boolean;
+}
+
+export interface RehearseRequest {
+  tree: string;
+  kickstart: string;
+  profile?: string | null;
+}
+
+/** The event a finished rehearsal's own answer arrives on. */
+export const FIRSTBOOT_REHEARSAL_EVENT = "firstboot-rehearsal-result";
+
+/**
+ * Boot a copy of the tree under WinUAE and read the Amiga's own report.
+ * Returns a job id (§54) — progress on the ordinary `job-progress` event, the
+ * answer on [`FIRSTBOOT_REHEARSAL_EVENT`].
+ *
+ * A tree with no first boot written into it, an unknown machine id and a
+ * missing emulator all reject synchronously, before any job starts.
+ */
+export async function firstbootRehearse(
+  request: RehearseRequest,
+  winuaePath?: string | null
+): Promise<number> {
+  return invoke<number>("firstboot_rehearse", {
+    request,
+    winuaePath: winuaePath ?? null,
+  });
+}
+
+/** Subscribe to finished rehearsals. A cancelled or failed job never sends
+ *  one — the job bar is where those are seen. */
+export async function onFirstBootRehearsalResult(
+  handler: (result: RehearsalResult) => void
+): Promise<UnlistenFn> {
+  return listen<RehearsalResult>(FIRSTBOOT_REHEARSAL_EVENT, (event) => handler(event.payload));
+}
+
+/** What happened, in one sentence — a different key for every ending. */
+export function rehearsalOutcomePhrase(outcome: RehearsalOutcome): Phrase {
+  switch (outcome.kind) {
+    case "finished":
+      return { key: "firstboot.rehearsal.outcome.finished" };
+    case "step-refused":
+      return { key: "firstboot.rehearsal.outcome.stepRefused" };
+    case "timed-out":
+      return {
+        key: "firstboot.rehearsal.outcome.timedOut",
+        params: { seconds: waitedSeconds(outcome.waited) },
+      };
+    case "emulator-closed":
+      return {
+        key: "firstboot.rehearsal.outcome.emulatorClosed",
+        params: { seconds: waitedSeconds(outcome.waited) },
+      };
+  }
+}
+
+/** What to do about it — again one per ending, because the next step is what
+ *  actually differs between them. */
+export function rehearsalNextStepPhrase(outcome: RehearsalOutcome): Phrase {
+  switch (outcome.kind) {
+    case "finished":
+      return { key: "firstboot.rehearsal.next.finished" };
+    case "step-refused":
+      return { key: "firstboot.rehearsal.next.stepRefused" };
+    case "timed-out":
+      return { key: "firstboot.rehearsal.next.timedOut" };
+    case "emulator-closed":
+      return { key: "firstboot.rehearsal.next.emulatorClosed" };
+  }
+}
+
+/** How the rehearsal's report is coloured. Never the only signal — each
+ *  ending already says which it is in words. */
+export function rehearsalTone(outcome: RehearsalOutcome): "ok" | "warn" | "err" {
+  switch (outcome.kind) {
+    case "finished":
+      return "ok";
+    case "step-refused":
+      return "err";
+    case "timed-out":
+    case "emulator-closed":
+      return "warn";
   }
 }

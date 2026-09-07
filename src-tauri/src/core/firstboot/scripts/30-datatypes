@@ -1,10 +1,11 @@
 ; ART first boot: apply 68040 patches to the ak* image datatypes when a
 ; matching -040.pch sits beside each and C:spatch is present. ART ships no
 ; patches; a user who adds them gets them applied.
+; No Quit here: an early exit skips to the end label.
 FailAt 2000000000
 IF NOT EXISTS C:spatch
   Echo >>S:FirstBoot.log "step 30-datatypes skipped no-spatch"
-  Quit 0
+  Skip end
 ENDIF
 SetEnv ART_DtPatched "0"
 IF EXISTS SYS:Classes/DataTypes/akPNG-040.pch
@@ -51,7 +52,8 @@ IF EXISTS SYS:Classes/DataTypes/akTIFF-040.pch
   ENDIF
   Delete >NIL: SYS:Classes/DataTypes/akTIFF-040.pch
 ENDIF
-IF $ART_DtPatched EQ "0"
+IF ${ART_DtPatched} EQ "0"
   Echo >>S:FirstBoot.log "step 30-datatypes skipped no-patches"
 ENDIF
 UnSet ART_DtPatched
+Lab end
