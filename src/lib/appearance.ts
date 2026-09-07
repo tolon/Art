@@ -120,9 +120,22 @@ export async function appearanceApply(
   return invoke<number>("appearance_apply", { tree, request });
 }
 
-/** Subscribe to finished `appearance_apply` jobs. A cancelled or failed job
- *  never sends one — the job bar (and this panel's own progress line) is
- *  where those are seen. */
+/**
+ * Subscribe to finished `appearance_apply` jobs. A cancelled or failed job
+ * never sends one — the job bar (and this panel's own progress line) is
+ * where those are seen.
+ *
+ * Minor (2026-09-07 final review): kept, not called from anywhere today —
+ * `AppearancePanel.tsx` reads the same event through `@/lib/jobs`'s
+ * `awaitJobResult(APPEARANCE_APPLY_EVENT, …)` instead, which already gives
+ * it a `JobId`-scoped promise it can `await` beside `appearanceApply`'s own
+ * return value, rather than a long-lived listener it would have to
+ * remember to unsubscribe. This exists for the same reason
+ * `firstboot.ts::onFirstBootRehearsalResult` does and is equally unused —
+ * a typed listener beside the event constant, matching the shape a caller
+ * that does want a standing subscription (rather than one job's result)
+ * would need, so the two do not have to diverge the day one shows up.
+ */
 export async function onAppearanceApplyResult(
   handler: (result: AppearanceApplyResult) => void
 ): Promise<UnlistenFn> {

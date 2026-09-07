@@ -689,15 +689,22 @@ mod tests {
     use crate::core::volume::write::copy::copy_into_volume;
     use crate::core::volume::write::{FileMeta, VolumeWriter};
     use crate::core::volume::DosType;
+    use crate::core::ScratchDir;
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-whd-core-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    /// Minor (2026-09-07 final review): these nine tests moved here with a
+    /// hand-rolled directory and a trailing `remove_dir_all` — exactly
+    /// ART-184's shape, where the cleanup is skipped precisely when the test
+    /// panics. `ScratchDir`'s `Drop` runs on the panicking path too, so the
+    /// guard is returned alongside the path rather than the path alone
+    /// (`ScratchDir::join` is deliberately not `Deref`, so a bare `PathBuf`
+    /// call site would have to change everywhere `dir` is used as a path;
+    /// returning the tuple keeps every existing `dir.join(..)` call site
+    /// unchanged while the guard's own lifetime stays visible at the call
+    /// site, the same shape `amigainstall/finish.rs::tests::tree` uses).
+    fn scratch(name: &str) -> (ScratchDir, PathBuf) {
+        let guard = ScratchDir::new("art-whd-core", name);
+        let dir = guard.path().to_path_buf();
+        (guard, dir)
     }
 
     /// A wrapped pack laid out on disk, the way an unpacked archive looks.
@@ -712,7 +719,7 @@ mod tests {
 
     #[test]
     fn walking_an_unpacked_archive_finds_the_pack() {
-        let dir = scratch("walk");
+        let (_scratch, dir) = scratch("walk");
         unpacked_pack(&dir);
 
         let entries = walk(&dir).unwrap();
@@ -722,8 +729,6 @@ mod tests {
         assert_eq!(layout.name, "Turrican");
         assert_eq!(layout.icon.as_deref(), Some("Turrican.info"));
         assert_eq!(layout.outside, vec!["Turrican.readme"]);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A `VolumeSession` built entirely from `core` primitives — the write
@@ -1006,7 +1011,7 @@ mod tests {
     /// against the real session.
     #[test]
     fn a_whdload_archive_installs_onto_a_disk_and_reads_back() {
-        let dir = scratch("e2e");
+        let (_scratch, dir) = scratch("e2e");
         let archive = dir.join("Turrican.lha");
         whdload_archive(&archive);
 
@@ -1139,8 +1144,6 @@ mod tests {
             b"title=Turrican\n",
             "ART's own drawer name, for iGame's own launcher to read"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The catalogue-hit half: a pack whose slave bytes and title already
@@ -1162,7 +1165,7 @@ mod tests {
         use crate::core::gameindex::record::{ChipsetRequirement, Fact, Provenance};
         use crate::core::gameindex::store::{CachedEntry, CatalogueRoot, CATALOGUE_SCHEMA};
 
-        let dir = scratch("igame-catalogue-hit");
+        let (_scratch, dir) = scratch("igame-catalogue-hit");
         let slave = crate::core::gameindex::readers::slave::tests_support::build_slave(
             "Turrican",
             "1992 Someone",
@@ -1264,8 +1267,6 @@ mod tests {
         assert!(text.contains("genre=Shoot'em up"), "{text}");
         assert!(text.contains("year=1991"), "{text}");
         assert!(text.contains("chipset=AGA"), "{text}");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The uncatalogued half of the join: a pack ART has never catalogued
@@ -1273,7 +1274,7 @@ mod tests {
     /// what ART actually knows about it.
     #[test]
     fn an_uncatalogued_pack_still_gets_a_title_only_igame_data() {
-        let dir = scratch("igame-no-catalogue");
+        let (_scratch, dir) = scratch("igame-no-catalogue");
         let archive = dir.join("Tag.lha");
         let slave = crate::core::gameindex::readers::slave::tests_support::build_slave(
             "Tag",
@@ -1306,8 +1307,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(outcome.files, 2, "slave and igame.data");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// **I2, from the install path.** A catalogued title over iGame's line
@@ -1319,7 +1318,7 @@ mod tests {
         use crate::core::gameindex::record::{Fact, Provenance};
         use crate::core::gameindex::store::{CachedEntry, CatalogueRoot, CATALOGUE_SCHEMA};
 
-        let dir = scratch("igame-nothing-fits");
+        let (_scratch, dir) = scratch("igame-nothing-fits");
         let slave = crate::core::gameindex::readers::slave::tests_support::build_slave(
             "Turrican",
             "1992 Someone",
@@ -1391,8 +1390,6 @@ mod tests {
             "what did not fit must be named: {:?}",
             outcome.igame_omitted
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A refusal (a pack that is not WHDLoad) refuses before any write — the
@@ -1402,7 +1399,7 @@ mod tests {
     fn a_non_whdload_pack_is_refused_before_any_write() {
         use crate::core::lha::tests::make_lha_with;
 
-        let dir = scratch("e2e-not-whd");
+        let (_scratch, dir) = scratch("e2e-not-whd");
         let archive = dir.join("Docs.lha");
         std::fs::write(
             &archive,
@@ -1438,8 +1435,6 @@ mod tests {
             before,
             "a refused install must never reach the session at all"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The split this task exists for: a plan that cannot find a pack is a
@@ -1447,7 +1442,7 @@ mod tests {
     /// archive ART genuinely cannot read is a fault (`Err`, with one).
     #[test]
     fn a_missing_pack_is_a_refusal_and_a_broken_archive_is_still_an_error() {
-        let dir = scratch("split");
+        let (_scratch, dir) = scratch("split");
 
         let ordinary = dir.join("Docs.lha");
         std::fs::write(
@@ -1484,8 +1479,6 @@ mod tests {
             matches!(err, CoreError::Malformed { .. }),
             "expected a malformed-archive error, got {err:?}"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A pack that will not fit is refused with the numbers, before the disk
@@ -1494,7 +1487,7 @@ mod tests {
     fn a_pack_too_big_for_the_disk_is_refused_with_the_numbers() {
         use crate::core::lha::tests::make_lha_with;
 
-        let dir = scratch("e2e-toobig");
+        let (_scratch, dir) = scratch("e2e-toobig");
         let archive = dir.join("Huge.lha");
         std::fs::write(
             &archive,
@@ -1531,8 +1524,6 @@ mod tests {
         )
         .is_err());
         assert_eq!(std::fs::read(&image).unwrap(), before);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The pack's own block cost, **without** the fix's +2 reservation —
@@ -1577,7 +1568,7 @@ mod tests {
     /// still refuses it.
     #[test]
     fn the_free_space_check_reserves_room_for_igame_data_too() {
-        let dir = scratch("m2-margin");
+        let (_scratch, dir) = scratch("m2-margin");
         let archive = dir.join("Turrican.lha");
         whdload_archive(&archive);
         let image = dir.join("Games.hdf");
@@ -1613,15 +1604,13 @@ mod tests {
              igame.data reservation is the only thing that should refuse this: {exact:?}"
         );
         assert!(exact.refusal.as_ref().unwrap().reason.contains("blocks"));
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Installing the same game twice must not silently write over the first
     /// one — and the refusal has to arrive before anything is touched.
     #[test]
     fn installing_the_same_pack_twice_is_refused_and_changes_nothing() {
-        let dir = scratch("e2e-twice");
+        let (_scratch, dir) = scratch("e2e-twice");
         let archive = dir.join("Turrican.lha");
         whdload_archive(&archive);
 
@@ -1659,8 +1648,6 @@ mod tests {
             after_first,
             "a refused install must leave the image byte-for-byte unchanged"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// §54/§57, and the data-safety rule at the core level: cancelling
@@ -1716,7 +1703,7 @@ mod tests {
             }
         }
 
-        let dir = scratch("e2e-cancel");
+        let (_scratch, dir) = scratch("e2e-cancel");
         let archive = dir.join("Turrican.lha");
         let slave = b"WHDLOADSLAVE\x00\x00\x00\x0a";
         let mut entries: Vec<(String, Vec<u8>)> = vec![
@@ -1771,8 +1758,6 @@ mod tests {
             before,
             "a cancelled/mid-way-failed install must leave the image byte-for-byte unchanged"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Install a pack and leave the disk for `scripts/oracle-check.py`.

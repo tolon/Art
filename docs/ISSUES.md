@@ -906,7 +906,7 @@ failed; 51 ignored; 0 measured; 89 filtered out; finished in 36.81s`.
 **Corrected** 2026-09-07, fix round 1 (batch 5 review): the paragraph above
 described the shipped commit's own state, not the tree as it stands after
 the very next commit, `8142f9e` (ART-244). That commit's
-`archive_fresh_members` (`store.rs:840-853`, `915-931`) added a **second**
+`archive_fresh_members` (`store.rs:858-871`, `915-931`) added a **second**
 stale case this paragraph does not mention: a member still in the archive's
 raw listing, but re-read into a *different* id this run — a real content
 change at the same member, not a transient parse failure. "Dropped as stale
