@@ -50,6 +50,16 @@
           "from": "System",
           "to": "System",
           "kind": "subtree"
+        },
+        {
+          "from": "Utilities",
+          "to": "Utilities",
+          "kind": "subtree"
+        },
+        {
+          "from": "WBStartup",
+          "to": "WBStartup",
+          "kind": "subtree"
         }
       ]
     },

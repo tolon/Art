@@ -96,6 +96,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A built AmigaOS 3.2 tree now carries `Utilities` and `WBStartup`.**
+  `MultiView` — the datatypes viewer AmigaOS uses to open a picture or a text
+  file from Workbench — and the whole `WBStartup` drawer were simply absent
+  from a tree ART built, because the recipe had no rule placing either
+  drawer. Both now come across from the same disk as the system's other root
+  drawers (ART-251).
 - **Stopping the "what are these disks" check no longer reads as ART having
   failed.** Pressing Stop while install media is being identified by content
   used to produce *"ART could not identify these files by content"* — the same

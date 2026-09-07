@@ -953,6 +953,31 @@ mod tests {
         assert!(!base.rules.iter().any(|r| r.to == "L"));
     }
 
+    /// ART-251, measured directly on the owner's own `Workbench3.2.adf` with
+    /// amitools' `xdftool list`: the root carries a `Utilities` drawer
+    /// (`Clock`, `More`, `MultiView`) and a `WBStartup` drawer
+    /// (`AssignWedge.info`), and neither had a `PathRule` anywhere in the
+    /// shipped recipe — a tree ART built therefore had neither drawer at
+    /// all. `workbench-base` is the component that already owns the disk's
+    /// other root drawers (`Prefs`, `System`, `Devs`, …), so these two join
+    /// it as ordinary `Subtree` rules from the same medium.
+    #[test]
+    fn workbench_base_places_utilities_and_wbstartup() {
+        let base = recipe().component("workbench-base").unwrap().clone();
+        assert!(
+            base.rules.iter().any(|r| r.from == "Utilities"
+                && r.to == "Utilities"
+                && r.kind == RuleKind::Subtree),
+            "workbench-base must carry a Subtree rule for Utilities"
+        );
+        assert!(
+            base.rules.iter().any(|r| r.from == "WBStartup"
+                && r.to == "WBStartup"
+                && r.kind == RuleKind::Subtree),
+            "workbench-base must carry a Subtree rule for WBStartup"
+        );
+    }
+
     /// The measurement this whole design rests on.
     #[test]
     fn the_modules_component_takes_loadmodule_and_not_the_rest_of_c() {

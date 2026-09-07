@@ -657,6 +657,24 @@ anything `plan_icons_in_dir` calls today. The warning now lives on
 `set_tooltypes`'s own doc comment (`core/amigaicon/mod.rs`) so a future caller
 reads it where it applies.
 
+Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
+not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
+
+Every module with working logic has now been audited. The remaining `core`
+modules are stubs that only return `NotImplemented` (`recovery.rs`,
+`conversion.rs`, `binary.rs`, `validation.rs`) or hold types with no logic
+(`compatibility.rs`) — see [FEATURES.md](FEATURES.md) for their planned state.
+
+Two areas were reviewed and found sound, and are recorded here so nobody
+re-audits them without reason:
+
+- `core/analysis.rs` — the hex reader clamps both offset and length, and the
+  signature scan guards its window.
+- `core/profile.rs` — preset data only, no parsing of untrusted input.
+
+---
+
+## Fixed
 **ART-251** 🟡 **The AmigaOS 3.2 recipe has no rule for `Utilities` or
 `WBStartup`, so a tree ART builds has neither** — *found 2026-09-06 during
 the drawer-icons round's Task 1, verified independently by the controller*
@@ -678,28 +696,51 @@ attach to in the first place.
 Ruled out of the drawer-icons round on purpose: this is a recipe-content
 question — what an AmigaOS 3.2 install should contain — not an icon-placement
 one, and mixing the two would have made that round's own measurements
-unreadable. Filed here as a real, measured gap rather than left to be
+unreadable. Filed then as a real, measured gap rather than left to be
 rediscovered as a surprise the next time someone opens `Utilities` on a built
 tree and finds it missing.
 
-Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
-not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
+**Fixed** 2026-09-07 on `art-debts`, commit "A built AmigaOS 3.2 tree carries
+Utilities and WBStartup (ART-251)". `workbench-base` — the component that
+already owns the disk's other root drawers (`Prefs`, `System`, `Devs`, …) —
+gained `Utilities` → `Utilities` and `WBStartup` → `WBStartup` as ordinary
+`Subtree` rules from the same `Workbench3.2` medium, beside the ones it
+already had. Re-measured directly on the owner's own `Workbench3.2.adf` with
+amitools' `xdftool list` before writing the fix: the numbers above still
+hold — `Utilities` (`Clock`, `Clock.info`, `More`, `MultiView`,
+`MultiView.info`) and `WBStartup` (`AssignWedge.info`) only.
+`core::osinstall::recipe::tests::workbench_base_places_utilities_and_wbstartup`
+is the new guard (`src-tauri/src/core/osinstall/recipe.rs`); mutated by
+removing the `WBStartup` rule and confirmed it falls, then restored from an
+absolute-path backup. `no_two_components_claim_one_destination_without_declaring_it`
+and the AmigaOS 3.2.2 layer's own two-layer test stayed green — the layered
+recipe's `update-322-system` already carried its own `Utilities`/`WBStartup`
+rules with `overrides: [..., "workbench-base", ...]`, so it needed no change
+of its own.
 
-Every module with working logic has now been audited. The remaining `core`
-modules are stubs that only return `NotImplemented` (`recovery.rs`,
-`conversion.rs`, `binary.rs`, `validation.rs`) or hold types with no logic
-(`compatibility.rs`) — see [FEATURES.md](FEATURES.md) for their planned state.
+Built the real tree twice with `run_the_real_engine_against_the_users_own_media_when_asked`
+(`ART_OSINSTALL_MEDIA` pointed at the owner's own
+`E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF`, `ART_OSINSTALL_ROM` the
+owner's real V40 Kickstart, `ART_OSINSTALL_DEST=E:\amiga\ProjeART\art251-32-before`
+then `...\art251-32` after the fix) — `test result: ok. 1 passed; 0 failed;
+0 ignored; 0 measured; 3095 filtered out`, both runs. Before: no `Utilities`
+or `WBStartup` at all in the built tree. After:
 
-Two areas were reviewed and found sound, and are recorded here so nobody
-re-audits them without reason:
+```
+Utilities/Clock  Utilities/Clock.info  Utilities/More
+Utilities/MultiView  Utilities/MultiView.info
+WBStartup/AssignWedge.info
+```
 
-- `core/analysis.rs` — the hex reader clamps both offset and length, and the
-  signature scan guards its window.
-- `core/profile.rs` — preset data only, no parsing of untrusted input.
+plus the two drawers' own sibling icons at the tree's root, `Utilities.info`
+and `WBStartup.info` (the ART-252 sibling-icon mechanism, which now reaches
+these two for the first time) — root-level `.info` count went from 7 to 9,
+confirmed by a second live run against the 3.2 set's own V47 ROM
+(`AmigaOs 3.2\ROM\kicka1200.rom`) as well as the owner's V40 one, since the
+pinned byte/file/directory totals in
+`core::osinstall::apply::tests::run_the_real_engine_against_the_users_own_media_when_asked`
+are asserted per ROM branch and both were re-measured rather than derived.
 
----
-
-## Fixed
 **ART-274** 🔵 **`core/winuae.rs` spawns an external process from inside
 `core/`, the exact shape the trait rule exists to prevent** — *found
 2026-09-07 by the whole-branch review of `art-firstboot` phases 1–2*

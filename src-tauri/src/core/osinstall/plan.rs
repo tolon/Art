@@ -4596,8 +4596,11 @@ mod plan_tests {
         );
         // Pinned, so a recipe change is a failure somebody looks at rather
         // than a number that quietly follows whatever `plan()` now does.
-        assert_eq!(plan.total_bytes, 44);
-        assert_eq!(files, 11);
+        // Bumped from 44/11 by ART-251: `workbench-base` gained two Subtree
+        // rules (`Utilities`, `WBStartup`), each worth one fixture
+        // placeholder file.
+        assert_eq!(plan.total_bytes, 52);
+        assert_eq!(files, 13);
     }
 
     /// **ART-156.** A directory item's `bytes` never reaches the total, even

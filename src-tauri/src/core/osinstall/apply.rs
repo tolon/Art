@@ -4205,10 +4205,26 @@ mod tests {
         // depends on `modules-a1200`. Directory and medium counts are
         // unchanged, since no new drawer or disk is introduced — only a file
         // beside an existing one.
+        //
+        // **+8 files / +2 directories / +60 914 bytes, both rows,
+        // 2026-09-07** — [ART-251](../../../docs/ISSUES.md): `workbench-base`
+        // gained `Utilities` and `WBStartup` as ordinary `Subtree` rules,
+        // which is exactly the gap the paragraph above named as
+        // pre-existing and not closed by that round. Measured on this same
+        // media set: `Utilities` (`Clock` 14 752, `Clock.info` 599, `More`
+        // 10 236, `MultiView` 32 768, `MultiView.info` 819 — 59 174 bytes)
+        // plus `WBStartup` (`AssignWedge.info` 484) plus the two drawers'
+        // own sibling icons (`Utilities.info` 628, `WBStartup.info` 628,
+        // the same ART-252 mechanism the paragraph above measures) —
+        // 59 174 + 484 + 628 + 628 = 60 914. Two new directories, one per
+        // drawer. Verified in **both** ROM branches directly rather than
+        // derived: the V40 run above and a second run against
+        // `AmigaOs 3.2\ROM\kicka1200.rom` (V47), because neither drawer's
+        // content depends on `modules-a1200`.
         let (want_components, want_media, want_files, want_dirs, want_bytes) = if rom_major < 47 {
-            (29, 28, 4040, 295, 20_054_027)
+            (29, 28, 4048, 297, 20_114_941)
         } else {
-            (28, 27, 4036, 292, 20_004_507)
+            (28, 27, 4044, 294, 20_065_421)
         };
         assert_eq!(
             planned.components_on.len(),
@@ -4246,10 +4262,11 @@ mod tests {
         );
         assert_eq!(
             root_info_files.len(),
-            7,
-            "measured on this media set 2026-09-06 (see the comment above); \
-             a different count means either a recipe change or a regression \
-             in the sibling-icon rule, not something to bump blindly: {root_info_files:?}"
+            9,
+            "measured on this media set 2026-09-07 (see the comment above); \
+             ART-251 added Utilities.info and WBStartup.info to the seven \
+             counted 2026-09-06, so 9 is not something to bump blindly \
+             either: {root_info_files:?}"
         );
 
         let manifest_text = std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap();
