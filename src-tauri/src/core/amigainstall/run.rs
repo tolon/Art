@@ -288,15 +288,11 @@ pub struct RunRequest<'a> {
     /// AROS — an installer that failed under a ROM the user did not choose
     /// would be a failure ART invented.
     pub kickstart_path: &'a Path,
-    /// The emulator ART will start.
-    ///
-    /// **Read by nothing in `core/`.** [`run_with`] takes an
-    /// [`EmulatorLauncher`] directly, and building the real one is a
-    /// process-spawning decision that `core/` may not make (ART-274) — the
-    /// caller builds `tools::winuae_launcher::WinUaeLauncher` from this same
-    /// path itself. The field stays here so a `RunRequest` still says
-    /// everything a run needs in one place.
-    pub winuae_path: &'a Path,
+    // The emulator ART will start is deliberately not a field here. `run_with`
+    // takes an `EmulatorLauncher` directly, and building the real one is a
+    // process-spawning decision that `core/` may not make (ART-274) — the
+    // caller builds `tools::winuae_launcher::WinUaeLauncher` from the user's
+    // configured path itself, before ever constructing a `RunRequest`.
     /// The user's **own** copy of the medium the package's installer verifies,
     /// as a CD image — `None` for a package that requires none.
     ///
@@ -894,7 +890,6 @@ mod tests {
             )
             .unwrap();
             std::fs::write(root.join("kick.rom"), b"rom").unwrap();
-            std::fs::write(root.join("winuae.exe"), b"exe").unwrap();
             Self {
                 root,
                 plan: PlannedRun {
@@ -932,7 +927,6 @@ mod tests {
                 package_volume_dir: Path::new("placeholder"),
                 profile: &self.profile,
                 kickstart_path: Path::new("placeholder"),
-                winuae_path: Path::new("placeholder"),
                 cd_image: None,
                 limits: RunLimits {
                     deadline: Duration::from_secs(60),
@@ -950,8 +944,7 @@ mod tests {
             let tree = $fx.root.join("tree");
             let pkg = $fx.package();
             let kick = $fx.root.join("kick.rom");
-            let exe = $fx.root.join("winuae.exe");
-            (work, tree, pkg, kick, exe)
+            (work, tree, pkg, kick)
         }};
     }
 
@@ -961,14 +954,12 @@ mod tests {
         tree: &'a Path,
         pkg: &'a Path,
         kick: &'a Path,
-        exe: &'a Path,
     ) -> RunRequest<'a> {
         RunRequest {
             work_volume_dir: work,
             tree_dir: tree,
             package_volume_dir: pkg,
             kickstart_path: kick,
-            winuae_path: exe,
             ..base
         }
     }
@@ -983,8 +974,8 @@ mod tests {
     #[test]
     fn a_result_written_while_running_is_read_and_reported() {
         let fx = Fixture::new("happy");
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         let result_file = fx.result_file();
         let clock = TestClock::new(move |n| {
@@ -1013,8 +1004,8 @@ mod tests {
     #[test]
     fn a_run_that_never_reports_times_out_rather_than_failing() {
         let fx = Fixture::new("deadline");
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         let clock = TestClock::idle();
         let launcher = FakeLauncher::new();
@@ -1050,8 +1041,8 @@ mod tests {
     #[test]
     fn a_started_marker_alone_is_not_treated_as_an_outcome() {
         let fx = Fixture::new("started");
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         std::fs::write(fx.result_file(), format!("{MARK_STARTED}\n")).unwrap();
 
@@ -1077,8 +1068,8 @@ mod tests {
     #[test]
     fn a_started_marker_that_becomes_ok_is_reported_as_success() {
         let fx = Fixture::new("started-then-ok");
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         std::fs::write(fx.result_file(), format!("{MARK_STARTED}\n")).unwrap();
 
@@ -1098,8 +1089,8 @@ mod tests {
     #[test]
     fn cancelling_between_polls_terminates_and_reports_cancelled() {
         let fx = Fixture::new("cancel");
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         let clock = TestClock::idle();
         let launcher = FakeLauncher::new();
@@ -1132,8 +1123,8 @@ mod tests {
     #[test]
     fn cancelling_before_the_launch_starts_no_emulator() {
         let fx = Fixture::new("cancel-early");
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         let launcher = FakeLauncher::new();
         let sink = CancelAfter::new(0);
@@ -1152,8 +1143,8 @@ mod tests {
     #[test]
     fn a_failed_marker_is_reported_as_failed_and_not_as_a_timeout() {
         let fx = Fixture::new("failed");
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         let result_file = fx.result_file();
         let clock = TestClock::new(move |n| {
@@ -1173,8 +1164,8 @@ mod tests {
     #[test]
     fn an_answer_on_the_last_poll_beats_the_deadline() {
         let fx = Fixture::new("last-poll");
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let mut request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let mut request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
         request.limits = RunLimits {
             deadline: Duration::from_secs(4),
             poll_interval: Duration::from_secs(2),
@@ -1201,8 +1192,8 @@ mod tests {
     #[test]
     fn an_unrecognised_result_is_not_an_answer() {
         let fx = Fixture::new("partial");
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         std::fs::write(fx.result_file(), b"").unwrap();
         let outcome = run_with(
@@ -1230,8 +1221,8 @@ mod tests {
     #[test]
     fn an_emulator_closed_without_reporting_is_its_own_ending() {
         let fx = Fixture::new("exited");
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         let launcher = FakeLauncher::new();
         let log = Arc::clone(&launcher.log);
@@ -1265,8 +1256,8 @@ mod tests {
     #[test]
     fn a_result_written_just_before_the_emulator_exits_is_still_read() {
         let fx = Fixture::new("exit-race");
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         let result_file = fx.result_file();
         let launcher = FakeLauncher::with_liveness_hook(move |n| {
@@ -1293,8 +1284,8 @@ mod tests {
     #[test]
     fn arts_own_volume_boots_and_the_tree_is_data() {
         let fx = Fixture::new("mounts");
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         let media = media_for(&request).unwrap();
 
@@ -1348,8 +1339,8 @@ mod tests {
     #[test]
     fn the_package_is_mounted_as_its_own_volume_beside_the_other_two() {
         let fx = Fixture::new("three-mounts");
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         let media = media_for(&request).unwrap();
 
@@ -1426,8 +1417,8 @@ mod tests {
     #[test]
     fn the_program_the_plan_names_is_on_the_volume_that_was_mounted() {
         let fx = Fixture::new("program-present");
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         let media = media_for(&request).unwrap();
         let package = media
@@ -1461,9 +1452,9 @@ mod tests {
     #[test]
     fn a_run_whose_package_was_not_unpacked_is_refused_before_launching() {
         let fx = Fixture::new("no-package");
-        let (work, tree, _pkg, kick, exe) = request!(fx);
+        let (work, tree, _pkg, kick) = request!(fx);
         let missing = fx.root.join("never-unpacked");
-        let request = with_paths(fx.request(), &work, &tree, &missing, &kick, &exe);
+        let request = with_paths(fx.request(), &work, &tree, &missing, &kick);
 
         let launcher = FakeLauncher::new();
         let err = run_with(&request, &launcher, &TestClock::idle(), &NoProgress).unwrap_err();
@@ -1485,8 +1476,8 @@ mod tests {
         for hostile in [PACKAGE_DEVICE, "artpkg", "ARTPkg:"] {
             let mut fx = Fixture::new("shadow-package");
             fx.plan.system_volume = hostile.to_string();
-            let (work, tree, pkg, kick, exe) = request!(fx);
-            let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+            let (work, tree, pkg, kick) = request!(fx);
+            let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
             let err = media_for(&request).unwrap_err();
             assert!(
@@ -1511,9 +1502,9 @@ mod tests {
     #[test]
     fn a_run_without_a_licensed_kickstart_is_refused() {
         let fx = Fixture::new("no-kick");
-        let (work, tree, pkg, _kick, exe) = request!(fx);
+        let (work, tree, pkg, _kick) = request!(fx);
         let missing = fx.root.join("nothing-here.rom");
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &missing, &exe);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &missing);
 
         let err = run_with(
             &request,
@@ -1533,9 +1524,9 @@ mod tests {
     #[test]
     fn a_work_volume_with_no_script_is_refused() {
         let fx = Fixture::new("no-script");
-        let (work, tree, pkg, kick, exe) = request!(fx);
+        let (work, tree, pkg, kick) = request!(fx);
         std::fs::remove_file(work.join("S").join("Startup-Sequence")).unwrap();
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         let launcher = FakeLauncher::new();
         let err = run_with(&request, &launcher, &TestClock::idle(), &NoProgress).unwrap_err();
@@ -1558,8 +1549,8 @@ mod tests {
         // Lower case on purpose: AmigaDOS device names are case-insensitive,
         // so a comparison that is not would let this through.
         fx.plan.system_volume = "artwork".to_string();
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         let err = media_for(&request).unwrap_err();
         assert!(
@@ -1583,8 +1574,8 @@ mod tests {
     #[test]
     fn an_io_error_reading_the_result_still_ends_the_emulator() {
         let fx = Fixture::new("read-error");
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         std::fs::create_dir(fx.result_file()).unwrap();
 
@@ -1606,8 +1597,8 @@ mod tests {
     #[test]
     fn an_io_error_checking_the_emulator_still_ends_it() {
         let fx = Fixture::new("liveness-error");
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         let launcher = FakeLauncher::new();
         launcher.log.liveness_fails.store(true, Ordering::Relaxed);
@@ -1631,8 +1622,8 @@ mod tests {
     fn the_trailing_colon_form_of_arts_own_volume_is_refused_as_a_mount() {
         let mut fx = Fixture::new("shadow-colon");
         fx.plan.system_volume = "ARTWork:".to_string();
-        let (work, tree, pkg, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+        let (work, tree, pkg, kick) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
 
         let err = media_for(&request).unwrap_err();
         assert!(

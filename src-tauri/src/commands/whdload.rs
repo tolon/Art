@@ -533,35 +533,62 @@ mod tests {
     /// `if report.cancelled { return Err(CoreError::Cancelled) }` guard in
     /// `CommandVolumeSession::install_drawer` makes this fall.
     ///
-    /// **`StopDuringCopy` is phase-aware, and has to be.** `install_pack` runs
-    /// two per-entry loops that report `Some(total)`: unpacking the archive
-    /// (`extract_with_backend`, `core/archive/extract.rs`) *and* copying into
-    /// the volume (`copy_into_volume`) — both report `done == 0` at their
-    /// first entry and both check `is_cancelled()` between entries. A sink
-    /// armed on a bare `done >= N` fires during the **first** such phase every
-    /// time, because unpacking always runs first — which is a real survivor
-    /// found while building this very test: the original threshold cancelled
-    /// during unpacking, before `CommandVolumeSession` was ever reached, so
-    /// removing its guard changed nothing. Counting phase boundaries (a
-    /// `done == 0` report marks a new one) and arming only once the **second**
-    /// phase is under way is what actually reaches the copy.
+    /// **`StopDuringCopy` anchors on the copy phase's own message, not on
+    /// ordinal position** (leftover from the round that first built this
+    /// test). `install_pack` runs two per-entry loops that report
+    /// `Some(total)`: unpacking the archive (`extract_with_backend`,
+    /// `core/archive/extract.rs`) and then copying into the volume
+    /// (`copy_into_volume`, `core/volume/write/copy.rs`). The first version of
+    /// this test armed on a bare `done >= N` and fired during the **first**
+    /// such phase every time, because unpacking always runs first — a real
+    /// survivor: the threshold cancelled during unpacking, before
+    /// `CommandVolumeSession` was ever reached, so removing its guard changed
+    /// nothing. Counting phase boundaries by ordinal ("the second
+    /// total-bearing phase") fixed that, but the ordinal is borrowed
+    /// knowledge: a third total-bearing phase inserted before the copy would
+    /// silently become "the second phase" and move the cancel there instead.
+    ///
+    /// So the sink now arms on `copy_into_volume`'s own message shape: it
+    /// reports each entry's path *relative to the drawer's own root*
+    /// (`entry.relative` — "Turrican.slave", not "Turrican/Turrican.slave"),
+    /// while the unpack phase reports the archive's own entry names, which for
+    /// this fixture always carry the drawer name as a leading path segment.
+    /// "Turrican.slave" bare is a message only `copy_into_volume` can produce.
+    /// The ordinal phase counter stays as an independent witness — recording
+    /// which phase was current when the message-based arm fired — and the
+    /// assertion below requires that to be phase 2, so a phase inserted ahead
+    /// of the copy fails loudly instead of quietly moving where the cancel
+    /// lands.
     #[test]
     fn a_cancelled_install_through_the_real_session_writes_nothing() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
         struct StopDuringCopy {
             phase: AtomicUsize,
+            armed_phase: AtomicUsize,
             cancel: AtomicBool,
         }
         impl ProgressSink for StopDuringCopy {
-            fn report(&self, done: u64, total: Option<u64>, _message: &str) {
+            fn report(&self, done: u64, total: Option<u64>, message: &str) {
                 if total.is_none() {
                     return;
                 }
                 if done == 0 {
                     self.phase.fetch_add(1, Ordering::SeqCst);
                 }
-                if self.phase.load(Ordering::SeqCst) >= 2 && done >= 2 {
+                // The intrinsic anchor: `copy_into_volume` is the only phase
+                // that ever reports this drawer-relative, prefix-free name
+                // (see the doc comment above). Recorded once, on first match,
+                // so a later report cannot overwrite which phase triggered it.
+                if message == "Turrican.slave" {
+                    let _ = self.armed_phase.compare_exchange(
+                        0,
+                        self.phase.load(Ordering::SeqCst),
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    );
+                }
+                if self.armed_phase.load(Ordering::SeqCst) != 0 {
                     self.cancel.store(true, Ordering::SeqCst);
                 }
             }
@@ -581,6 +608,7 @@ mod tests {
 
         let sink = StopDuringCopy {
             phase: AtomicUsize::new(0),
+            armed_phase: AtomicUsize::new(0),
             cancel: AtomicBool::new(false),
         };
         let err = install_pack(
@@ -605,6 +633,13 @@ mod tests {
             before,
             "a cancelled install through the real with_volume session must leave the \
              image byte-for-byte unchanged"
+        );
+        assert_eq!(
+            sink.armed_phase.load(Ordering::SeqCst),
+            2,
+            "the cancel must fire during the copy phase (phase 2), not wherever the anchor \
+             happened to match — a phase inserted before the copy must move this number, not \
+             the cancel point"
         );
     }
 

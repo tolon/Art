@@ -265,22 +265,9 @@ block — do not stack another on top of it.**
    shifting a foreign card's existing partitions. [ART-250](ISSUES.md) is
    deliberate: `tooltypes()`'s lossy UTF-8 decode is disclosed and counted
    apart, not hidden, and closing it is not scheduled.
-6. **Four minors the whole-branch review found are deliberately still open**,
-   each disclosed where the next reader will find it rather than silently
-   dropped: `install_pack` unpacks its archive twice, once inside `build_plan`
-   and once for itself — inherited from `run_install`, not introduced by this
-   wave, and not in [ISSUES.md](ISSUES.md); the fix and the cost are in
-   `final-review.md`'s Minors section (local-only,
-   `.superpowers/sdd/2026-09-07-debts/`). The two cancel-sink tests added for
-   ART-242 anchor on the *second* total-bearing phase by ordinal, not by
-   identity — a third phase inserted before the copy would silently move the
-   cancel earlier — disclosed in both twins' own doc comments in
-   `core/whdload/install.rs` and `commands/whdload.rs`, not in ISSUES; worth
-   an identity anchor the next time `install_pack` changes. The dead
-   `RunRequest`/`RehearseRequest.winuae_path` field, read by nothing in
-   `core/` any more, **is** in ISSUES — it is disclosed in
-   [ART-274](ISSUES.md#fixed)'s own Fixed paragraph rather than a separate
-   entry. `scripts/control-byte-sweep.py` walks the real filesystem
+6. **One minor the whole-branch review found is deliberately still open**,
+   disclosed where the next reader will find it rather than silently
+   dropped: `scripts/control-byte-sweep.py` walks the real filesystem
    (`Path.rglob`), never `git ls-files`, on purpose — a false positive on
    untracked scratch, never a miss — and that reasoning is now in the
    script's own header, not in ISSUES.
