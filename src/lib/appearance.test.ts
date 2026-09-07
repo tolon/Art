@@ -21,12 +21,7 @@ beforeEach(() => {
   invokeMock.mockReset();
 });
 
-import {
-  appearanceApply,
-  appearanceBackdrops,
-  type AppearanceApplyRequest,
-  type AppearanceOutcome,
-} from "@/lib/appearance";
+import { appearanceApply, appearanceBackdrops, type AppearanceApplyRequest } from "@/lib/appearance";
 
 describe("appearanceBackdrops", () => {
   it("passes the tree argument through unchanged and returns invoke's result", async () => {
@@ -43,8 +38,12 @@ describe("appearanceBackdrops", () => {
   });
 });
 
+// ART-248: `appearance_apply` became a job — `invoke` now resolves with a
+// job id, not the finished outcome. The outcome itself arrives through
+// `onAppearanceApplyResult`/`awaitJobResult` instead, the same split
+// `firstbootRehearse` already established for its own rehearsal job.
 describe("appearanceApply", () => {
-  it("passes tree and request through unchanged and returns invoke's result verbatim", async () => {
+  it("passes tree and request through unchanged and returns the job id invoke resolved", async () => {
     const request: AppearanceApplyRequest = {
       wallpaper: {
         which: "root",
@@ -59,16 +58,7 @@ describe("appearanceApply", () => {
       shellDefaults: true,
       arrangeIcons: true,
     };
-    const outcome: AppearanceOutcome = {
-      written: ["Prefs/Env-Archive/Sys/WBPattern.prefs"],
-      backups: ["Prefs/Env-Archive/Sys/WBPattern.prefs.bak"],
-      picturePlaced: "Prefs/Presets/Backdrops/wallpaper.iff",
-      amigaPath: "Sys:Prefs/Presets/Backdrops/wallpaper.iff",
-      iconsPlaced: 5,
-      drawersArranged: 2,
-      iconsSkipped: [],
-    };
-    invokeMock.mockResolvedValueOnce(outcome);
+    invokeMock.mockResolvedValueOnce(42);
 
     const result = await appearanceApply("E:\\builds\\amigaos32", request);
 
@@ -77,9 +67,9 @@ describe("appearanceApply", () => {
       tree: "E:\\builds\\amigaos32",
       request,
     });
-    // No reshaping: the exact object `invoke` resolved is what the caller
+    // No reshaping: the exact value `invoke` resolved is what the caller
     // gets back.
-    expect(result).toBe(outcome);
+    expect(result).toBe(42);
   });
 
   it("passes an already-in-tree wallpaper source through unchanged", async () => {
@@ -96,15 +86,7 @@ describe("appearanceApply", () => {
       shellDefaults: false,
       arrangeIcons: false,
     };
-    invokeMock.mockResolvedValueOnce({
-      written: [],
-      backups: [],
-      picturePlaced: null,
-      amigaPath: "Sys:Prefs/Presets/Backdrops/Christmas.iff",
-      iconsPlaced: 0,
-      drawersArranged: 0,
-      iconsSkipped: [],
-    });
+    invokeMock.mockResolvedValueOnce(7);
 
     await appearanceApply("E:\\builds\\amigaos32", request);
 

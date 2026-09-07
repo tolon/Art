@@ -2770,6 +2770,10 @@
     },
     "apply": "Apply",
     "applying": "Applying…",
+    "stop": "Stop",
+    "cancelled": "You stopped applying the changes.",
+    "progressStarting": "Working out what needs to change…",
+    "progressPercent": "{{percent}}% — {{done}} of {{total}} files",
     "done": {
       "written": "Wrote {{count}} file(s): {{files}}",
       "nothingWritten": "Nothing needed writing — every icon already had a position, and no wallpaper or shell setting was changed.",

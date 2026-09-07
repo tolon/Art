@@ -554,35 +554,6 @@ archives who refreshes often, the fix is a size/mtime-keyed skip for an
 archive that has not changed, the same as the file walk already has — not a
 redesign.
 
-**ART-248** 🔵 **`appearance_apply` runs the whole wallpaper pipeline
-synchronously on the command thread, with no progress and no cancel** — *found
-2026-09-05/06 during the prefs-and-wallpaper round's whole-branch review,
-filed rather than fixed*
-`src-tauri/src/commands/appearance.rs::appearance_apply`,
-`src-tauri/src/core/appearance/mod.rs::plan_wallpaper`,
-`src-tauri/src/core/picture/quantise.rs`
-
-`commands/appearance.rs::appearance_apply` calls `apply_appearance` directly
-on the Tauri command thread rather than through `core::jobs::spawn_job`, and
-`apply_appearance`'s wallpaper path (`plan_wallpaper`) runs the whole decode →
-scale → quantise → ILBM-encode pipeline inline. `core/picture::quantise` is
-median-cut, O(target_colours × pixels): the scale target comes from the
-tree's own `ScreenMode.prefs` (`screen_size_for_scaling`), so a request
-against an RTG tree at 1920×1080 with 256 colours means on the order of 256
-passes over roughly 2.07 million pixels — with the application window frozen
-for the whole call, no progress shown, and no way to cancel it. §54/§55
-("Background work") already made this call for four other operations in this
-codebase — `commands/layout.rs`, `commands/archives.rs` and `commands/card.rs`
-all move comparably expensive work off the command thread through
-`core::jobs::spawn_job` for exactly this reason. `appearance_apply` was added
-this round without that wrapper. Not yet measured against a real 1920×1080
-picture (every fixture used so far is small), so the actual stall duration on
-real hardware is unknown; the shape of the fix is not — give `plan_wallpaper`
-a `&dyn ProgressSink` the way `core/gameindex::scan_titles_with` does, route
-`appearance_apply` through `spawn_job`, and keep a thin synchronous wrapper
-for callers (tests) that do not need a job, the same split
-`scan_titles`/`scan_titles_with` already uses.
-
 **ART-250** 🟡 **`tooltypes()`'s lossy UTF-8 decode cannot byte-for-byte
 round-trip a NewIcon `IM1=`/`IM2=` tool type** — *found 2026-09-06 by the
 drawer-icons round's icon-oracle run against the owner's own AmigaOS 3.9
@@ -646,6 +617,65 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-248** 🔵 **`appearance_apply` runs the whole wallpaper pipeline
+synchronously on the command thread, with no progress and no cancel** — *found
+2026-09-05/06 during the prefs-and-wallpaper round's whole-branch review,
+filed rather than fixed*
+`src-tauri/src/commands/appearance.rs::appearance_apply`,
+`src-tauri/src/core/appearance/mod.rs::plan_wallpaper`,
+`src-tauri/src/core/picture/quantise.rs`
+
+`commands/appearance.rs::appearance_apply` calls `apply_appearance` directly
+on the Tauri command thread rather than through `core::jobs::spawn_job`, and
+`apply_appearance`'s wallpaper path (`plan_wallpaper`) runs the whole decode →
+scale → quantise → ILBM-encode pipeline inline. `core/picture::quantise` is
+median-cut, O(target_colours × pixels): the scale target comes from the
+tree's own `ScreenMode.prefs` (`screen_size_for_scaling`), so a request
+against an RTG tree at 1920×1080 with 256 colours means on the order of 256
+passes over roughly 2.07 million pixels — with the application window frozen
+for the whole call, no progress shown, and no way to cancel it. §54/§55
+("Background work") already made this call for four other operations in this
+codebase — `commands/layout.rs`, `commands/archives.rs` and `commands/card.rs`
+all move comparably expensive work off the command thread through
+`core::jobs::spawn_job` for exactly this reason. `appearance_apply` was added
+this round without that wrapper. Not yet measured against a real 1920×1080
+picture (every fixture used so far is small), so the actual stall duration on
+real hardware is unknown; the shape of the fix is not — give `plan_wallpaper`
+a `&dyn ProgressSink` the way `core/gameindex::scan_titles_with` does, route
+`appearance_apply` through `spawn_job`, and keep a thin synchronous wrapper
+for callers (tests) that do not need a job, the same split
+`scan_titles`/`scan_titles_with` already uses.
+
+**Fixed** 2026-09-07 on `art-debts` (batch 4). `core::appearance::apply_appearance`
+gained `apply_appearance_with(tree, req, sink: &dyn ProgressSink)`
+(`src-tauri/src/core/appearance/mod.rs`): planning is reported as one
+indefinite phase (`total: None`, never a fake bar), the commit phase then
+reports a real "N of M files" count, and `sink.is_cancelled()` is checked
+between whole committed files — never mid-write, since every write already
+goes through `guarded_write`. A cancellation partway is treated the same way
+a commit-phase I/O failure already was: `CoreError::Cancelled` when nothing
+landed yet, `CoreError::CancelledPartway { files }` with the true count once
+something has, the same split `core::osinstall::apply::apply` already uses.
+`apply_appearance` itself stays the thin `NoProgress` wrapper
+(`scan_titles`/`scan_titles_with`'s own shape). `commands/appearance.rs::appearance_apply`
+now returns a `JobId` through `spawn_job`, with the finished outcome on a new
+`appearance-apply-result` event and the oplog write moved onto the job thread
+through `write_to_path`, mirroring `commands/firstboot.rs::firstboot_rehearse`.
+`src/lib/appearance.ts` gained `onAppearanceApplyResult`/`APPEARANCE_APPLY_EVENT`
+and `appearanceApply` now resolves with a job id; `AppearancePanel.tsx` gained
+a Stop button and a progress line via `awaitJobResult` + `onJobProgress`, with
+a cancelled run rendering its own sentence rather than the error badge.
+Covering tests: `core::appearance::tests::cancelling_between_icon_writes_leaves_written_files_intact_and_the_rest_untouched`
+(pins the real file count in `CancelledPartway` and that every file not yet
+reached is byte-for-byte unchanged — mutated by disabling the cancellation
+check, which the test then failed against, and restored),
+`core::appearance::tests::the_noprogress_wrapper_matches_the_sink_taking_form_byte_for_byte`,
+`commands::appearance::tests::the_apply_result_crosses_the_wire_with_a_snake_case_job_id_and_a_flattened_outcome`,
+and `AppearancePanel.test.tsx`'s `"ART-248: the apply runs as a cancellable
+job"` block (progress line, Stop calling `jobCancel` with the running job's
+own id, and a cancelled run rendering `appearance-cancelled` rather than
+`appearance-error`).
+
 **ART-243** 🟡 **An archive updated in place accumulates ghost records no
 Rescan can clear** — *found 2026-09-05 by the whdload-drawers round-2
 re-review, filed rather than fixed in round 3*

@@ -43,20 +43,25 @@
 //! (also read-only, also unlogged) already follow.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::core::amigaprefs::wbpattern;
 use crate::core::osinstall::apply::some_of;
 
+#[cfg(test)]
+use crate::core::appearance::apply_appearance;
 use crate::core::appearance::{
-    apply_appearance, backdrops_in_tree, AppearanceOutcome, AppearanceRequest, WallpaperSource,
+    apply_appearance_with, backdrops_in_tree, AppearanceOutcome, AppearanceRequest, WallpaperSource,
 };
+use crate::core::jobs::JobId;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::error::AppResult;
 
-use super::oplog::{user_operation, write_result};
+use super::jobs::{spawn_job, JobRegistry};
+use super::oplog::{user_operation, write_to_path};
 
 // ---------------------------------------------------------------------------
 // Wire shapes — request
@@ -238,10 +243,15 @@ pub fn appearance_backdrops(tree: PathBuf) -> AppResult<Vec<String>> {
     Ok(backdrops_in_tree(&tree)?)
 }
 
-/// The whole fallible half of `appearance_apply`, pulled out so it can be
-/// unit-tested without a live `State<JsonlOperationLog>` — the same shape
-/// `commands/osinstall.rs::preview_collisions` already uses for the identical
-/// reason.
+/// The whole fallible half of `appearance_apply`, kept synchronous and
+/// unit-tested here — the same shape `commands/osinstall.rs::preview_collisions`
+/// already uses for the identical reason, and still the fastest way to pin
+/// that a core refusal's sentence reaches the caller unrewritten (ART-060 /
+/// CLAUDE.md). Not what the `appearance_apply` command itself calls any more
+/// (ART-248): the command runs the sink-taking `apply_appearance_with` on a
+/// job thread instead, so this stays on the thin `apply_appearance`/`NoProgress`
+/// wrapper on purpose, the same `scan_titles`/`scan_titles_with` split
+/// `core::gameindex::scan` already uses.
 ///
 /// `core::appearance::apply_appearance` does the actual work — plans every
 /// requested part first, refuses the whole call before writing anything if any
@@ -253,6 +263,7 @@ pub fn appearance_backdrops(tree: PathBuf) -> AppResult<Vec<String>> {
 /// round's error messages name specific files and backup paths a rewrite
 /// would destroy). `apply_appearance`'s `CoreError` reaches `AppError` through
 /// its own `#[from]` conversion (`?`), not a hand-written `map_err`.
+#[cfg(test)]
 fn apply_appearance_request(
     tree: &std::path::Path,
     request: AppearanceApplyRequest,
@@ -262,43 +273,107 @@ fn apply_appearance_request(
     Ok(outcome.into())
 }
 
+/// A finished `appearance_apply` job's own answer. `job_id` stays snake_case
+/// to match every other job result in ART (`RehearsalResult`,
+/// `AmigaInstallResult`); the outcome's own fields are flattened in beside it
+/// rather than nested, so the frontend keeps reading `AppearanceOutcomeWire`'s
+/// familiar camelCase shape.
+#[derive(Debug, Clone, Serialize)]
+pub struct AppearanceApplyResult {
+    pub job_id: JobId,
+    #[serde(flatten)]
+    pub outcome: AppearanceOutcomeWire,
+}
+
+/// The event a finished `appearance_apply` job's own answer arrives on.
+pub const APPEARANCE_APPLY_EVENT: &str = "appearance-apply-result";
+
 /// Apply a wallpaper, a screen depth, and/or the shell defaults to `tree`.
-/// See [`apply_appearance_request`] for what this actually does; this command
-/// only adds the logging half. See the module doc for why this is logged at
-/// all.
+///
+/// **ART-248: a job, not a command-thread call.** The wallpaper path alone
+/// can mean a median-cut quantise pass over a couple of million pixels
+/// (`core::picture::quantise`, O(colours × pixels)) and arranging icons
+/// across a 3.9-scale tree can commit hundreds of small files — §54/§55
+/// already made this call for `commands/layout.rs`, `commands/archives.rs`
+/// and `commands/card.rs`, and this command was the one added without that
+/// wrapper. Returns a `JobId` immediately; progress arrives on the ordinary
+/// `job-progress` event (`core::appearance::apply_appearance_with` reports a
+/// real "N of M files" count once planning has finished, never a fixed-width
+/// bar for the indefinite planning phase before it — CLAUDE.md), and the
+/// finished outcome on [`APPEARANCE_APPLY_EVENT`]. A cancelled run never
+/// reaches that event at all — the job bar's own `Cancelled` state is the
+/// only place it is reported, the same split `firstboot_rehearse` already
+/// uses.
+///
+/// The oplog write happens on the job thread through `write_to_path`, same as
+/// `firstboot_rehearse` — a background job cannot carry a Tauri `State`
+/// across the thread boundary. See the module doc for why this is logged at
+/// all, and never rewrites, wraps or prettifies a core refusal's own sentence
+/// (ART-060).
 #[tauri::command]
 pub fn appearance_apply(
     tree: PathBuf,
     request: AppearanceApplyRequest,
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
     oplog: State<'_, JsonlOperationLog>,
-) -> AppResult<AppearanceOutcomeWire> {
-    let result = apply_appearance_request(&tree, request);
+) -> AppResult<JobId> {
+    let log_path = oplog.path().to_path_buf();
+    let emit_app = app.clone();
+    let for_log = tree.display().to_string();
 
-    write_result(
-        &oplog,
-        user_operation("Apply appearance to distribution tree")
-            .destination(tree.display().to_string()),
-        &result,
-        |record, outcome: &AppearanceOutcomeWire| {
-            // C5 (final whole-branch review): capped the same way a package
-            // refusal naming up to 211 real files already is
-            // (`core::osinstall::apply::some_of`) — arranging icons across a
-            // 3.9-scale tree can commit hundreds of `.info` files in one
-            // call, and joining every one of them into a single log line is
-            // as unusable on disk as it is on screen.
-            let record = record.detail("Written", some_of(&outcome.written));
-            let record = if outcome.backups.is_empty() {
-                record
-            } else {
-                record
-                    .backup(outcome.backups.first().cloned())
-                    .detail("Backups", some_of(&outcome.backups))
+    let id = spawn_job(
+        &app,
+        Arc::clone(&registry),
+        "Applying appearance to distribution tree",
+        move |job_id, progress| {
+            let core_request: AppearanceRequest = request.into();
+            let result = apply_appearance_with(&tree, &core_request, progress)
+                .map(AppearanceOutcomeWire::from);
+
+            // §53. Best-effort, and never able to fail the operation it
+            // describes.
+            let record =
+                user_operation("Apply appearance to distribution tree").destination(for_log);
+            let record = match &result {
+                Ok(outcome) => {
+                    // C5 (final whole-branch review): capped the same way a
+                    // package refusal naming up to 211 real files already is
+                    // (`core::osinstall::apply::some_of`) — arranging icons
+                    // across a 3.9-scale tree can commit hundreds of `.info`
+                    // files in one call, and joining every one of them into a
+                    // single log line is as unusable on disk as it is on
+                    // screen.
+                    let record = record.detail("Written", some_of(&outcome.written));
+                    let record = if outcome.backups.is_empty() {
+                        record
+                    } else {
+                        record
+                            .backup(outcome.backups.first().cloned())
+                            .detail("Backups", some_of(&outcome.backups))
+                    };
+                    record.outcome(OperationOutcome::verified(true))
+                }
+                // Covers a genuine failure and a cancellation alike — the
+                // same shape `firstboot_rehearse`'s own `perform` uses, and
+                // for the same reason: a cancellation partway is not
+                // different in kind from a commit-phase I/O failure, and
+                // both already leave real files behind that the record
+                // should not pretend never happened.
+                Err(err) => record.failed(err),
             };
-            record.outcome(OperationOutcome::verified(true))
+            write_to_path(&log_path, &record);
+
+            let outcome = result?;
+            let _ = emit_app.emit(
+                APPEARANCE_APPLY_EVENT,
+                AppearanceApplyResult { job_id, outcome },
+            );
+            Ok(())
         },
     );
 
-    result
+    Ok(id)
 }
 
 #[cfg(test)]
@@ -513,5 +588,37 @@ mod tests {
             }
             other => panic!("expected HostPicture, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------
+    // ART-248: the job result's own wire shape. `job_id` stays snake_case —
+    // `jobs.ts` matches on it, same as `RehearsalResult` — while the
+    // outcome's own fields sit flattened in beside it rather than nested, so
+    // `src/lib/appearance.ts` keeps reading the same `AppearanceOutcome`
+    // shape it always has.
+    // -----------------------------------------------------------------
+    #[test]
+    fn the_apply_result_crosses_the_wire_with_a_snake_case_job_id_and_a_flattened_outcome() {
+        let result = AppearanceApplyResult {
+            job_id: 3,
+            outcome: AppearanceOutcomeWire {
+                written: vec!["a".to_string()],
+                backups: vec![],
+                picture_placed: None,
+                amiga_path: Some("Sys:Prefs/Presets/Backdrops/x.iff".to_string()),
+                icons_placed: 0,
+                drawers_arranged: 0,
+                icons_skipped: vec![],
+            },
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["job_id"], 3, "jobs.ts matches on job_id");
+        assert!(json.get("jobId").is_none(), "and never on jobId");
+        assert_eq!(json["written"][0], "a");
+        assert_eq!(json["amigaPath"], "Sys:Prefs/Presets/Backdrops/x.iff");
+        assert!(
+            json.get("outcome").is_none(),
+            "the outcome is flattened in, not nested under its own key"
+        );
     }
 }

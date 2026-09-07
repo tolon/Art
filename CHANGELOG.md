@@ -96,6 +96,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Applying a wallpaper, screen depth or icon arrangement no longer freezes
+  the window, and can be stopped.** ART now reports progress while it works
+  and a Stop button appears; stopping partway leaves whatever had already
+  been written on disk and says so — it never reports a stop as a failure
+  (ART-248).
 - **A built AmigaOS 3.2 tree now carries `Utilities` and `WBStartup`.**
   `MultiView` — the datatypes viewer AmigaOS uses to open a picture or a text
   file from Workbench — and the whole `WBStartup` drawer were simply absent
