@@ -184,9 +184,18 @@ beforeEach(() => {
   packagesMock.mockResolvedValue(PACKAGES);
   previewMock.mockResolvedValue(preview());
   runMock.mockResolvedValue(7);
-  // The ordinary answer: whatever is in the field is the selected package's
-  // own archive. Individual tests override this to exercise ART-277's hint.
-  classifyMock.mockResolvedValue({ kind: "the-package", topLevel: [] });
+  // The ordinary answer: an archive named like the real UAE fix is the
+  // update archive, everything else is the package's own — path-aware
+  // rather than a single constant, so a fixture that puts the real
+  // `BoingBag39-1-UAE.lha` in the overlay field (as the shipped run does)
+  // classifies correctly regardless of which field asked. Individual tests
+  // override this to exercise ART-277's own blockers.
+  classifyMock.mockImplementation(async (path: string) => ({
+    kind: path.includes("UAE") ? "the-update-archive" : "the-package",
+    topLevel: [],
+    expectedMedia: null,
+    expectedOverlays: [],
+  }));
   onJobProgressMock.mockImplementation(async (handler: (p: JobProgress) => void) => {
     report = handler;
     return () => {};
@@ -845,14 +854,20 @@ describe("ART-277: switching the selected package does not carry its archives", 
     });
   });
 
-  it("a wrong-package archive disables Run and says which package it belongs to", async () => {
+  it("a wrong-package archive disables Run and the confirm checkbox, and names which package it belongs to in the blockers list", async () => {
+    // ART-277 review, Medium 2: the reason renders where the button is —
+    // the `blockers` box, directly above the checkbox — not in a second box
+    // beside the field, which is the same "aynı uyarı tek ekranda 2 tane"
+    // mistake ART-202 already named on this exact screen.
     classifyMock.mockImplementation(async (path: string) =>
       path === "D:/pkg/BoingBag39-2.lha"
         ? {
             kind: "another-package:boingbag-39-2",
             topLevel: ["BoingBag3.9-2", "BoingBag3.9-2.info"],
+            expectedMedia: null,
+            expectedOverlays: [],
           }
-        : { kind: "the-package", topLevel: [] }
+        : { kind: "the-package", topLevel: [], expectedMedia: null, expectedOverlays: [] }
     );
     useSettingsStore.setState((state) => ({
       settings: {
@@ -870,18 +885,69 @@ describe("ART-277: switching the selected package does not carry its archives", 
     }));
     render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
 
-    const hint = await screen.findByTestId("amiga-archive-hint");
-    expect(hint.textContent).toContain("BoingBag 3.9-2");
-    expect(hint.textContent).toContain("BoingBag 3.9-1");
+    const blockers = await screen.findByTestId("amiga-install-blockers");
+    expect(blockers.textContent).toContain("BoingBag 3.9-2");
+    expect(blockers.textContent).toContain("BoingBag 3.9-1");
 
-    await screen.findByTestId("amiga-install-preview");
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("checkbox"));
+    // The checkbox itself is disabled — not merely left untouched at "run
+    // stays disabled" while a person could still tick "I understand" over a
+    // request that could never succeed.
+    expect(screen.getByRole("checkbox").hasAttribute("disabled")).toBe(true);
     expect(
       screen.getByRole("button", { name: i18n.t("osinstall.amigaInstall.run") }).hasAttribute(
         "disabled"
       )
     ).toBe(true);
     expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("names another package's own update archive, and a shared Packages-step archive, without ever saying 'select' a package this screen does not offer", async () => {
+    // ART-277 review, Major 2 and Medium 1: `other-artefact` (a match this
+    // screen cannot select, or one two release packages share) and
+    // `another-packages-update-archive` (a real match, but the *update*
+    // archive of a different package).
+    classifyMock.mockImplementation(async (path: string) => {
+      if (path === "D:/pkg/BoingBag39-1-UAE.lha") {
+        return {
+          kind: "another-packages-update-archive:boingbag-39-1",
+          topLevel: ["BoingBag3.9-1-UAE"],
+          expectedMedia: null,
+          expectedOverlays: [],
+        };
+      }
+      if (path === "D:/pkg/Locale3.9.lha") {
+        return {
+          kind: "other-artefact:Locale3.9",
+          topLevel: ["Locale3.9", "Locale3.9.info"],
+          expectedMedia: "BoingBag3.9-2",
+          expectedOverlays: [],
+        };
+      }
+      return { kind: "the-package", topLevel: [], expectedMedia: null, expectedOverlays: [] };
+    });
+    useSettingsStore.setState((state) => ({
+      settings: {
+        ...state.settings,
+        winuaePath: "C:/Program Files/WinUAE/winuae64.exe",
+        remembered: {
+          "amigaInstall.package": "boingbag-39-2",
+          "amigaInstall.archive.boingbag-39-2": "D:/pkg/Locale3.9.lha",
+          "amigaInstall.overlayArchive.boingbag-39-2": "D:/pkg/BoingBag39-1-UAE.lha",
+          "amigaInstall.kickstart": "D:/roms/kick31.rom",
+        },
+      },
+    }));
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+
+    const blockers = await screen.findByTestId("amiga-install-blockers");
+    // The shared/unselectable artefact names itself and what this field
+    // wants — never an id the radio does not offer.
+    expect(blockers.textContent).toContain("Locale3.9");
+    expect(blockers.textContent).toContain("BoingBag3.9-2");
+    // The other package's *update* archive is named as that, not folded
+    // into "select BoingBag 3.9-1" (which would be the wrong archive to ask
+    // for) nor into silence.
+    expect(blockers.textContent).toContain("BoingBag 3.9-1");
+    expect(screen.getByRole("checkbox").hasAttribute("disabled")).toBe(true);
   });
 });

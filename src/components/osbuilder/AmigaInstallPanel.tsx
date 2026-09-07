@@ -78,9 +78,7 @@ import {
   amigaInstallPreview,
   amigaInstallRun,
   amigainstallClassifyArchive,
-  anotherPackageId,
-  archiveFieldHint,
-  isWrongPackageArchive,
+  archiveFieldBlockerPhrase,
   onAmigaInstallResult,
   outcomeNextStepPhrase,
   outcomePhrase,
@@ -389,14 +387,16 @@ export function AmigaInstallPanel({
   // `compose` refuses it a moment later. Two effects, one per field, because
   // the two fields ask two different questions of the same file — the
   // package's own field expects `"the-package"`, the second field expects
-  // `"the-update-archive"` — and `archiveFieldHint` reads which is which.
+  // `"the-update-archive"` — and `archiveFieldBlockerPhrase` reads which is
+  // which. Scoped to `release` (ART-277 review, Major 2): the same list the
+  // radio below actually offers.
   useEffect(() => {
     if (!archive || !packageId) {
       setArchiveClassification(null);
       return;
     }
     let cancelled = false;
-    amigainstallClassifyArchive(archive, packageId)
+    amigainstallClassifyArchive(archive, packageId, release)
       .then((answer) => {
         if (!cancelled) setArchiveClassification(answer);
       })
@@ -406,7 +406,7 @@ export function AmigaInstallPanel({
     return () => {
       cancelled = true;
     };
-  }, [archive, packageId]);
+  }, [archive, packageId, release]);
 
   useEffect(() => {
     if (!overlayArchive || !packageId) {
@@ -414,7 +414,7 @@ export function AmigaInstallPanel({
       return;
     }
     let cancelled = false;
-    amigainstallClassifyArchive(overlayArchive, packageId)
+    amigainstallClassifyArchive(overlayArchive, packageId, release)
       .then((answer) => {
         if (!cancelled) setOverlayClassification(answer);
       })
@@ -424,7 +424,7 @@ export function AmigaInstallPanel({
     return () => {
       cancelled = true;
     };
-  }, [overlayArchive, packageId]);
+  }, [overlayArchive, packageId, release]);
 
   // §92's PREVIEW: read-only, recomputed whenever the request changes, and
   // the place every refusal lands — `compose` is shared with the run, so a
@@ -574,27 +574,37 @@ export function AmigaInstallPanel({
 
   const runnable = (catalogue ?? []).filter((p) => p.amigaInstallable);
   const nameOf = (id: string) => catalogue?.find((p) => p.id === id)?.name ?? id;
-  // ART-277. Named beside the field the classification is about, the moment
-  // the file was chosen — never only after the round trip through Rust's
-  // `compose` refusal.
+  // ART-277. Asked the moment the file was chosen — never only after the
+  // round trip through Rust's `compose` refusal — and rendered as an entry
+  // in `blockers` below, directly above the confirm checkbox and the Run
+  // button, rather than in a second box beside the field: ART-202's own
+  // lesson, from this exact screen, is that a reason Run is dead has to say
+  // so where the button is (review Medium 2).
   const selectedPackageName = packageId ? nameOf(packageId) : "";
-  const archiveOtherId = anotherPackageId(archiveClassification);
-  const overlayOtherId = anotherPackageId(overlayClassification);
-  const archiveHint = archiveFieldHint(
+  const archiveBlocker = archiveFieldBlockerPhrase(
     archiveClassification,
     "package",
+    archive ?? "",
     selectedPackageName,
-    archiveOtherId ? nameOf(archiveOtherId) : null
+    nameOf
   );
-  const overlayHint = archiveFieldHint(
+  const overlayBlocker = archiveFieldBlockerPhrase(
     overlayClassification,
     "overlay",
+    overlayArchive ?? "",
     selectedPackageName,
-    overlayOtherId ? nameOf(overlayOtherId) : null
+    nameOf
   );
-  const wrongPackageArchive =
-    isWrongPackageArchive(archiveClassification) || isWrongPackageArchive(overlayClassification);
-  const blockers = preview ? readinessBlockers(preview) : [];
+  // One mechanism disables Run and the confirm checkbox: `blockers.length >
+  // 0` (review Medium 2 — a second, separate `wrongPackageArchive` boolean
+  // used to disable Run alone, so the checkbox could still be ticked over a
+  // request that could never succeed and Run would die with no reason
+  // rendered anywhere near it).
+  const blockers = [
+    ...(preview ? readinessBlockers(preview) : []),
+    ...(archiveBlocker ? [archiveBlocker] : []),
+    ...(overlayBlocker ? [overlayBlocker] : []),
+  ];
   const overlayAdvice = preview ? overlayAdvicePhrase(preview) : null;
   const pct = progress ? fraction(progress) : null;
   const outcome = result ? outcomePhrase(result.outcome) : null;
@@ -702,17 +712,6 @@ export function AmigaInstallPanel({
           choose={t("common.browse")}
           hint={t("osinstall.amigaInstall.archive.hint")}
         />
-        {/* ART-277: which package this archive actually belongs to, asked
-            the moment it was picked — before Run, not after a refusal. */}
-        {archiveHint && (
-          <p
-            className="badge badge-warn"
-            data-testid="amiga-archive-hint"
-            style={{ display: "block", padding: "6px 12px", fontSize: 12, margin: "-6px 0 12px" }}
-          >
-            {t(archiveHint.key, archiveHint.params)}
-          </p>
-        )}
         <Field
           label={t("osinstall.amigaInstall.overlayArchive.label")}
           value={overlayArchive}
@@ -728,15 +727,6 @@ export function AmigaInstallPanel({
           clear={overlayArchive ? t("common.clear") : undefined}
           onClear={overlayArchive ? () => setOverlayArchive(null) : undefined}
         />
-        {overlayHint && (
-          <p
-            className="badge badge-warn"
-            data-testid="amiga-overlay-hint"
-            style={{ display: "block", padding: "6px 12px", fontSize: 12, margin: "-6px 0 12px" }}
-          >
-            {t(overlayHint.key, overlayHint.params)}
-          </p>
-        )}
         <Field
           label={t("osinstall.amigaInstall.kickstart.label")}
           value={kickstart}
@@ -981,7 +971,7 @@ export function AmigaInstallPanel({
         <button
           className="btn btn-primary"
           onClick={() => void runInstall()}
-          disabled={busy || !confirmed || !preview || blockers.length > 0 || wrongPackageArchive}
+          disabled={busy || !confirmed || !preview || blockers.length > 0}
         >
           {t(busy ? "osinstall.amigaInstall.running" : "osinstall.amigaInstall.run")}
         </button>

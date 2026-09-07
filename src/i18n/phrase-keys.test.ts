@@ -118,7 +118,7 @@ import {
   type RefusalReason as OsInstallRefusalReason,
 } from "@/lib/osinstall";
 import {
-  archiveFieldHint,
+  archiveFieldBlockerPhrase,
   outcomeNextStepPhrase as amigaNextStepPhrase,
   outcomePhrase as amigaOutcomePhrase,
   overlayAdvicePhrase,
@@ -239,26 +239,56 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     }
 
     // ART-277: which package a picked archive really belongs to. Both
-    // fields, and all three non-null shapes `archiveFieldHint` can answer.
-    const anotherPackage: ArchiveClassification = {
-      kind: "another-package:boingbag-39-2",
-      topLevel: ["BoingBag3.9-2", "BoingBag3.9-2.info"],
-    };
-    const theUpdateArchive: ArchiveClassification = {
-      kind: "the-update-archive",
-      topLevel: ["BoingBag3.9-1-UAE"],
-    };
-    const thePackage: ArchiveClassification = { kind: "the-package", topLevel: ["BoingBag3.9-1"] };
+    // fields, and every non-null shape `archiveFieldBlockerPhrase` can
+    // answer — including the two the review round added (Major 2's
+    // `other-artefact`, Medium 1's `another-packages-update-archive`).
+    const archiveClassification = (
+      kind: ArchiveClassification["kind"],
+      over: Partial<ArchiveClassification> = {}
+    ): ArchiveClassification => ({
+      kind,
+      topLevel: [],
+      expectedMedia: null,
+      expectedOverlays: [],
+      ...over,
+    });
+    const otherName = () => "BoingBag 3.9-2";
+    const phrasesFor = (
+      classification: ArchiveClassification,
+      field: "package" | "overlay"
+    ) => archiveFieldBlockerPhrase(classification, field, "D:/pkg/x.lha", "BoingBag 3.9-1", otherName);
+
     expect(
       resolvesAtRuntime(
-        archiveFieldHint(anotherPackage, "package", "BoingBag 3.9-1", "BoingBag 3.9-2")!.key
+        phrasesFor(archiveClassification("another-package:boingbag-39-2"), "package")!.key
       )
     ).toBe(true);
     expect(
-      resolvesAtRuntime(archiveFieldHint(theUpdateArchive, "package", "BoingBag 3.9-1", null)!.key)
+      resolvesAtRuntime(
+        phrasesFor(
+          archiveClassification("another-packages-update-archive:boingbag-39-1"),
+          "overlay"
+        )!.key
+      )
     ).toBe(true);
     expect(
-      resolvesAtRuntime(archiveFieldHint(thePackage, "overlay", "BoingBag 3.9-1", null)!.key)
+      resolvesAtRuntime(
+        phrasesFor(
+          archiveClassification("other-artefact:Locale3.9", { expectedMedia: "BoingBag3.9-1" }),
+          "package"
+        )!.key
+      )
+    ).toBe(true);
+    expect(
+      resolvesAtRuntime(
+        phrasesFor(archiveClassification("other-artefact:Locale3.9"), "overlay")!.key
+      )
+    ).toBe(true);
+    expect(
+      resolvesAtRuntime(phrasesFor(archiveClassification("the-update-archive"), "package")!.key)
+    ).toBe(true);
+    expect(
+      resolvesAtRuntime(phrasesFor(archiveClassification("the-package"), "overlay")!.key)
     ).toBe(true);
   });
 

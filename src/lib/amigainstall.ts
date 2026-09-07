@@ -234,42 +234,89 @@ export async function amigaInstallRun(
  * its listing alone; nothing is unpacked and the encrypted payload an update
  * archive might carry is never opened.
  *
- * `kind` is one of four shapes: `"the-package"` (the selected package's own
+ * `kind` is one of six shapes: `"the-package"` (the selected package's own
  * archive), `"the-update-archive"` (the selected package's own second
- * archive), `` `another-package:${id}` `` (another catalogued package's own
- * archive — the archive is real, the package selected is not the one it
- * belongs to), or `"unknown"` (ART recognises neither — accepted without
- * comment, since Rust still validates the real thing at `compose`).
+ * archive), `` `another-package:${id}` `` (another release package's own
+ * archive, and one this screen's radio actually offers), ``
+ * `another-packages-update-archive:${id}` `` (that other package's *own*
+ * update archive, not its package archive), ``
+ * `other-artefact:${topLevelName}` `` (the archive names something real —
+ * either two or more release packages share that identity and ART will
+ * never pick one of them arbitrarily, or the one package that does claim it
+ * is not one this screen can run at all), or `"unknown"` (ART recognises
+ * none of the above — accepted without comment, since Rust still validates
+ * the real thing at `compose`).
  */
 export interface ArchiveClassification {
-  kind: "the-package" | "the-update-archive" | "unknown" | `another-package:${string}`;
+  kind:
+    | "the-package"
+    | "the-update-archive"
+    | "unknown"
+    | `another-package:${string}`
+    | `another-packages-update-archive:${string}`
+    | `other-artefact:${string}`;
   /** What the archive's own listing carries at its top level — a drawer and,
    *  usually, its sibling `.info` icon. Shown when ART cannot say more. */
   topLevel: string[];
+  /** The **selected** package's own `media` — what the package field itself
+   *  expects. `null` when the selected id is not a package this release
+   *  ships. `PackageSummary` never carries a recipe's `media`, which is why
+   *  this travels with the answer rather than being looked up again. */
+  expectedMedia: string | null;
+  /** The selected package's own declared overlay drawers — what the
+   *  update-archive field expects. Empty for a package that declares none. */
+  expectedOverlays: string[];
 }
 
-/** Ask Rust what an archive is, against the package currently selected.
- *  Read-only and lenient: an archive ART cannot make sense of answers
- *  `"unknown"` rather than rejecting the promise — this is asked on every
- *  file pick, and a query must not turn "I could not tell" into an error the
- *  user cannot get past. */
+/** Ask Rust what an archive is, against the package currently selected and
+ *  the release currently being built — the same list the radio offers
+ *  (ART-277 review, Major 2: naming a package from a *different* release, or
+ *  one this screen does not even list, is an instruction the user cannot
+ *  act on here). Read-only and lenient: an archive ART cannot make sense of
+ *  answers `"unknown"` rather than rejecting the promise — this is asked on
+ *  every file pick, and a query must not turn "I could not tell" into an
+ *  error the user cannot get past. */
 export async function amigainstallClassifyArchive(
   path: string,
-  packageId: string
+  packageId: string,
+  release: string
 ): Promise<ArchiveClassification> {
   return invoke<ArchiveClassification>("amigainstall_classify_archive", {
     path,
     packageId,
+    release,
   });
 }
 
-/** The other catalogued package's id, out of a `` `another-package:${id}` ``
- *  classification — `null` for every other kind. */
-export function anotherPackageId(classification: ArchiveClassification | null): string | null {
+/** [`ArchiveClassification.kind`], taken apart into something a `switch` can
+ *  read — every shape it can be, spelled out rather than parsed again at
+ *  every call site. */
+export type ParsedClassification =
+  | { kind: "the-package" }
+  | { kind: "the-update-archive" }
+  | { kind: "unknown" }
+  | { kind: "another-package"; id: string }
+  | { kind: "another-packages-update-archive"; id: string }
+  | { kind: "other-artefact"; media: string };
+
+export function parseClassification(
+  classification: ArchiveClassification | null
+): ParsedClassification | null {
   if (!classification) return null;
-  return classification.kind.startsWith("another-package:")
-    ? classification.kind.slice("another-package:".length)
-    : null;
+  const { kind } = classification;
+  if (kind === "the-package" || kind === "the-update-archive" || kind === "unknown") {
+    return { kind };
+  }
+  if (kind.startsWith("another-packages-update-archive:")) {
+    return { kind: "another-packages-update-archive", id: kind.slice("another-packages-update-archive:".length) };
+  }
+  if (kind.startsWith("another-package:")) {
+    return { kind: "another-package", id: kind.slice("another-package:".length) };
+  }
+  if (kind.startsWith("other-artefact:")) {
+    return { kind: "other-artefact", media: kind.slice("other-artefact:".length) };
+  }
+  return { kind: "unknown" };
 }
 
 /**
@@ -454,48 +501,6 @@ export function overlayAdvicePhrase(preview: AmigaInstallPreview): Phrase | null
  * Empty means every one of the three things ART cannot supply itself (the
  * user's own Kickstart, the package's own archives, an emulator) is there.
  */
-/**
- * The hint next to an archive field, once Rust has classified it — ART-277.
- *
- * `field` says which slot this classification is for: `"package"` is the
- * package's own archive field, `"overlay"` the second/update-archive field.
- * The three outcomes the panel shows: a wrong package entirely (named by
- * `otherName`), the right package's own archive in the wrong field, or
- * nothing — an archive ART does not recognise, or one that is exactly right,
- * is accepted silently, because Rust still validates the real thing at
- * `compose` and inventing a warning here for "unknown" would be a confident
- * guess about a file this function cannot actually place.
- */
-export function archiveFieldHint(
-  classification: ArchiveClassification | null,
-  field: "package" | "overlay",
-  selectedName: string,
-  otherName: string | null
-): Phrase | null {
-  if (!classification) return null;
-  const other = anotherPackageId(classification);
-  if (other !== null) {
-    return {
-      key: "osinstall.amigaInstall.classify.anotherPackage",
-      params: { other: otherName ?? other, selected: selectedName },
-    };
-  }
-  if (field === "package" && classification.kind === "the-update-archive") {
-    return { key: "osinstall.amigaInstall.classify.wrongFieldOverlay" };
-  }
-  if (field === "overlay" && classification.kind === "the-package") {
-    return { key: "osinstall.amigaInstall.classify.wrongFieldPackage" };
-  }
-  return null;
-}
-
-/** Whether this field's classification is another catalogued package's own
- *  archive — CLAUDE.md: nothing changes unless the user changes it, so ART
- *  does not clear the field itself; it disables Run until the user does. */
-export function isWrongPackageArchive(classification: ArchiveClassification | null): boolean {
-  return anotherPackageId(classification) !== null;
-}
-
 export function readinessBlockers(preview: AmigaInstallPreview): Phrase[] {
   const blockers: Phrase[] = [];
   if (!preview.packageArchivesPresent) {
@@ -514,4 +519,80 @@ export function readinessBlockers(preview: AmigaInstallPreview): Phrase[] {
     blockers.push({ key: "osinstall.amigaInstall.blocker.noEmulator" });
   }
   return blockers;
+}
+
+/**
+ * What an archive field's own classification means for Run — ART-277,
+ * folded into ART-277 review's Medium 2 fix.
+ *
+ * `field` says which slot this classification is for: `"package"` is the
+ * package's own archive field, `"overlay"` the second/update-archive field.
+ * A `Phrase` here is meant to be pushed into the **same** `readinessBlockers`
+ * list the preview's own blockers render in — directly above the confirm
+ * checkbox and the Run button — rather than shown a second time beside the
+ * field. ART-202's own lesson, from this exact screen: a reason Run is dead
+ * has to say so where the button is, and the first attempt at this said it
+ * only beside the field, a screen's height away.
+ *
+ * Four outcomes:
+ * - **Another release package's own archive**, or its own update archive
+ *   (Medium 1) — named by `otherName`, telling the user to select that
+ *   package instead, because this screen's radio actually offers it.
+ * - **Something real ART cannot offer a selection for** — two or more
+ *   release packages share this identity (ART-276's own shape, reached from
+ *   a different door: never resolved by guessing), or the one package that
+ *   does claim it is not Amiga-installable at all (`other-artefact`, ART-277
+ *   review's Major 2 fix). Named by what it is and what this field expects,
+ *   never by an id the user cannot act on here.
+ * - **This package's own archive, in the wrong field** — `the-package` in
+ *   the *overlay* field (Major 1: the mirror of the update archive already
+ *   caught by the equivalent case at the other end, which Rust's own preview
+ *   refuses on its own) and `the-update-archive` in the *package* field.
+ * - **Nothing** — an archive ART does not recognise, or one that is exactly
+ *   right, is accepted silently: Rust still validates the real thing at
+ *   `compose`, and inventing a warning for "unknown" would be a confident
+ *   guess about a file this function cannot actually place.
+ */
+export function archiveFieldBlockerPhrase(
+  classification: ArchiveClassification | null,
+  field: "package" | "overlay",
+  path: string,
+  selectedName: string,
+  otherName: (id: string) => string
+): Phrase | null {
+  const parsed = parseClassification(classification);
+  if (!parsed) return null;
+  switch (parsed.kind) {
+    case "another-package":
+      return {
+        key: "osinstall.amigaInstall.classify.anotherPackage",
+        params: { other: otherName(parsed.id), selected: selectedName },
+      };
+    case "another-packages-update-archive":
+      return {
+        key: "osinstall.amigaInstall.classify.anotherPackagesUpdateArchive",
+        params: { other: otherName(parsed.id), selected: selectedName },
+      };
+    case "other-artefact": {
+      const expected =
+        field === "package"
+          ? (classification?.expectedMedia ?? null)
+          : (classification?.expectedOverlays.join(" or ") ?? null) || null;
+      return expected
+        ? {
+            key: "osinstall.amigaInstall.classify.otherArtefact",
+            params: { path, media: parsed.media, selected: selectedName, expected },
+          }
+        : {
+            key: "osinstall.amigaInstall.classify.otherArtefactGeneric",
+            params: { path, media: parsed.media },
+          };
+    }
+    case "the-package":
+      return field === "overlay" ? { key: "osinstall.amigaInstall.classify.wrongFieldPackage" } : null;
+    case "the-update-archive":
+      return field === "package" ? { key: "osinstall.amigaInstall.classify.wrongFieldOverlay" } : null;
+    default:
+      return null;
+  }
 }

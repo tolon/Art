@@ -508,12 +508,16 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // that gained a real hint (`nav.files`/`nav.hardDisk`/`nav.osBuilder`/
     // `nav.whdload`) are catalogue phrases now, not the old literal codes
     // (ADF/LHA/HDF) or a hint resolved once outside the map.
-    // 159 -> 161 (ART-277): two. `AmigaInstallPanel.tsx` renders
-    // `archiveFieldHint`'s answer beside each archive field — the same
-    // `Phrase`-off-a-mapper shape as every other ending list on this file,
-    // and for the same reason: "this is another package's own archive" and
-    // "this belongs in the other field" are different, checkable sentences.
-    // `phrase-keys.test.ts` resolves all three non-null shapes.
-    expect(dynamicCalls).toBe(161);
+    // 159 -> 161 -> 159 (ART-277, fix round 1). The first round rendered
+    // `archiveFieldHint`'s answer in its own box beside each archive field —
+    // two dynamic call sites. The review's Medium 2 moved that sentence into
+    // the existing `blockers` list instead (rendered once, above the confirm
+    // checkbox, through the `t(blocker.key, blocker.params)` call site that
+    // was already here) — ART-202's own lesson, from this exact screen, that
+    // a reason Run is dead has to say so where the button is rather than in
+    // a second box beside the field. Net zero new call sites; the two the
+    // first round added are gone. `phrase-keys.test.ts` still resolves every
+    // shape `archiveFieldBlockerPhrase` can answer.
+    expect(dynamicCalls).toBe(159);
   });
 });

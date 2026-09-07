@@ -134,13 +134,12 @@ describe("the four endings reach the frontend", () => {
 
 import {
   amigaInstallArchiveKey,
-  anotherPackageId,
-  archiveFieldHint,
-  isWrongPackageArchive,
+  archiveFieldBlockerPhrase,
   outcomeNextStepPhrase,
   outcomePhrase,
   outcomeTone,
   overlayAdvicePhrase,
+  parseClassification,
   readinessBlockers,
   settlementPhrase,
   waitedSeconds,
@@ -313,87 +312,149 @@ describe("amigaInstallArchiveKey", () => {
   });
 });
 
-describe("anotherPackageId", () => {
+/** A minimal, valid `ArchiveClassification` with the given `kind` — every
+ *  test below cares about `kind` alone unless it says otherwise. */
+function classification(
+  kind: ArchiveClassification["kind"],
+  over: Partial<ArchiveClassification> = {}
+): ArchiveClassification {
+  return { kind, topLevel: [], expectedMedia: null, expectedOverlays: [], ...over };
+}
+
+describe("parseClassification", () => {
   it("reads the id out of an another-package classification", () => {
-    expect(
-      anotherPackageId({ kind: "another-package:boingbag-39-2", topLevel: [] })
-    ).toBe("boingbag-39-2");
+    expect(parseClassification(classification("another-package:boingbag-39-2"))).toEqual({
+      kind: "another-package",
+      id: "boingbag-39-2",
+    });
   });
 
-  it("is null for every other kind, and for no classification at all", () => {
-    expect(anotherPackageId({ kind: "the-package", topLevel: [] })).toBeNull();
-    expect(anotherPackageId({ kind: "the-update-archive", topLevel: [] })).toBeNull();
-    expect(anotherPackageId({ kind: "unknown", topLevel: [] })).toBeNull();
-    expect(anotherPackageId(null)).toBeNull();
+  it("reads the id out of an another-packages-update-archive classification", () => {
+    expect(
+      parseClassification(classification("another-packages-update-archive:boingbag-39-1"))
+    ).toEqual({ kind: "another-packages-update-archive", id: "boingbag-39-1" });
+  });
+
+  it("reads the media out of an other-artefact classification", () => {
+    expect(parseClassification(classification("other-artefact:Locale3.9"))).toEqual({
+      kind: "other-artefact",
+      media: "Locale3.9",
+    });
+  });
+
+  it("passes the three plain kinds through unchanged, and null through null", () => {
+    expect(parseClassification(classification("the-package"))).toEqual({ kind: "the-package" });
+    expect(parseClassification(classification("the-update-archive"))).toEqual({
+      kind: "the-update-archive",
+    });
+    expect(parseClassification(classification("unknown"))).toEqual({ kind: "unknown" });
+    expect(parseClassification(null)).toBeNull();
   });
 });
 
-describe("archiveFieldHint", () => {
-  const anotherPackage: ArchiveClassification = {
-    kind: "another-package:boingbag-39-2",
-    topLevel: ["BoingBag3.9-2", "BoingBag3.9-2.info"],
-  };
+describe("archiveFieldBlockerPhrase", () => {
+  const otherName = (id: string) => (id === "boingbag-39-2" ? "BoingBag 3.9-2" : id);
 
-  it("names both packages when the archive is recognisably another package's own", () => {
-    const hint = archiveFieldHint(anotherPackage, "package", "BoingBag 3.9-1", "BoingBag 3.9-2");
-    expect(hint).toEqual({
+  it("names both packages when the archive is recognisably another release package's own", () => {
+    const c = classification("another-package:boingbag-39-2");
+    const phrase = archiveFieldBlockerPhrase(c, "package", "D:/pkg/x.lha", "BoingBag 3.9-1", otherName);
+    expect(phrase).toEqual({
       key: "osinstall.amigaInstall.classify.anotherPackage",
       params: { other: "BoingBag 3.9-2", selected: "BoingBag 3.9-1" },
     });
     // And the same regardless of which field it sits in — a wrong package is
     // wrong wherever it was put.
-    expect(archiveFieldHint(anotherPackage, "overlay", "BoingBag 3.9-1", "BoingBag 3.9-2")).toEqual(
-      hint
-    );
+    expect(
+      archiveFieldBlockerPhrase(c, "overlay", "D:/pkg/x.lha", "BoingBag 3.9-1", otherName)
+    ).toEqual(phrase);
+  });
+
+  it("says it is that package's own update archive, not its own archive", () => {
+    const c = classification("another-packages-update-archive:boingbag-39-2");
+    const phrase = archiveFieldBlockerPhrase(c, "overlay", "D:/pkg/x.lha", "BoingBag 3.9-1", otherName);
+    expect(phrase).toEqual({
+      key: "osinstall.amigaInstall.classify.anotherPackagesUpdateArchive",
+      params: { other: "BoingBag 3.9-2", selected: "BoingBag 3.9-1" },
+    });
+  });
+
+  it("names the shared artefact and what this field expects, when the selected package declares it", () => {
+    const c = classification("other-artefact:Locale3.9", { expectedMedia: "BoingBag3.9-1" });
+    const phrase = archiveFieldBlockerPhrase(c, "package", "D:/pkg/Locale3.9.lha", "BoingBag 3.9-1", otherName);
+    expect(phrase).toEqual({
+      key: "osinstall.amigaInstall.classify.otherArtefact",
+      params: {
+        path: "D:/pkg/Locale3.9.lha",
+        media: "Locale3.9",
+        selected: "BoingBag 3.9-1",
+        expected: "BoingBag3.9-1",
+      },
+    });
+  });
+
+  it("falls back to a generic sentence when the field expects nothing in particular", () => {
+    // The overlay field, for a selected package that declares no overlay at
+    // all — `expectedOverlays` is empty, so there is nothing to name.
+    const c = classification("other-artefact:Locale3.9", { expectedOverlays: [] });
+    const phrase = archiveFieldBlockerPhrase(c, "overlay", "D:/pkg/Locale3.9.lha", "BoingBag 3.9-2", otherName);
+    expect(phrase).toEqual({
+      key: "osinstall.amigaInstall.classify.otherArtefactGeneric",
+      params: { path: "D:/pkg/Locale3.9.lha", media: "Locale3.9" },
+    });
   });
 
   it("says the update archive belongs in the second field when it is in the first", () => {
-    const hint = archiveFieldHint(
-      { kind: "the-update-archive", topLevel: ["BoingBag3.9-1-UAE"] },
+    const phrase = archiveFieldBlockerPhrase(
+      classification("the-update-archive"),
       "package",
+      "D:/pkg/x.lha",
       "BoingBag 3.9-1",
-      null
+      otherName
     );
-    expect(hint?.key).toBe("osinstall.amigaInstall.classify.wrongFieldOverlay");
+    expect(phrase?.key).toBe("osinstall.amigaInstall.classify.wrongFieldOverlay");
   });
 
   it("says the package's own archive belongs in the first field when it is in the second", () => {
-    const hint = archiveFieldHint(
-      { kind: "the-package", topLevel: ["BoingBag3.9-1"] },
+    const phrase = archiveFieldBlockerPhrase(
+      classification("the-package"),
       "overlay",
+      "D:/pkg/x.lha",
       "BoingBag 3.9-1",
-      null
+      otherName
     );
-    expect(hint?.key).toBe("osinstall.amigaInstall.classify.wrongFieldPackage");
+    expect(phrase?.key).toBe("osinstall.amigaInstall.classify.wrongFieldPackage");
   });
 
   it("says nothing for the right archive in the right field, or an unrecognised one", () => {
     expect(
-      archiveFieldHint({ kind: "the-package", topLevel: [] }, "package", "BoingBag 3.9-1", null)
-    ).toBeNull();
-    expect(
-      archiveFieldHint(
-        { kind: "the-update-archive", topLevel: [] },
-        "overlay",
+      archiveFieldBlockerPhrase(
+        classification("the-package"),
+        "package",
+        "D:/pkg/x.lha",
         "BoingBag 3.9-1",
-        null
+        otherName
       )
     ).toBeNull();
     expect(
-      archiveFieldHint({ kind: "unknown", topLevel: [] }, "package", "BoingBag 3.9-1", null)
+      archiveFieldBlockerPhrase(
+        classification("the-update-archive"),
+        "overlay",
+        "D:/pkg/x.lha",
+        "BoingBag 3.9-1",
+        otherName
+      )
     ).toBeNull();
-    expect(archiveFieldHint(null, "package", "BoingBag 3.9-1", null)).toBeNull();
-  });
-});
-
-describe("isWrongPackageArchive", () => {
-  it("is true only for another catalogued package's own archive", () => {
     expect(
-      isWrongPackageArchive({ kind: "another-package:boingbag-39-2", topLevel: [] })
-    ).toBe(true);
-    expect(isWrongPackageArchive({ kind: "the-package", topLevel: [] })).toBe(false);
-    expect(isWrongPackageArchive({ kind: "the-update-archive", topLevel: [] })).toBe(false);
-    expect(isWrongPackageArchive({ kind: "unknown", topLevel: [] })).toBe(false);
-    expect(isWrongPackageArchive(null)).toBe(false);
+      archiveFieldBlockerPhrase(
+        classification("unknown"),
+        "package",
+        "D:/pkg/x.lha",
+        "BoingBag 3.9-1",
+        otherName
+      )
+    ).toBeNull();
+    expect(
+      archiveFieldBlockerPhrase(null, "package", "D:/pkg/x.lha", "BoingBag 3.9-1", otherName)
+    ).toBeNull();
   });
 });
