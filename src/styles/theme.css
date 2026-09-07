@@ -29,9 +29,10 @@
  * - `--accent-text` / `--ok-text` / `--warn-text` / `--err-text` — the same
  *   meaning **as text**, and the only one that may be used for words. Where
  *   the mark itself already clears 4.5:1 as text (against every surface, and
- *   as ink on its own 22%-tint badge), the `-text` token is the mark
- *   unchanged. Where it does not, the `-text` token is the mark's own hue
- *   moved in lightness until it does — see the deviations below.
+ *   as ink on `--ok-bg`/`--warn-bg`/`--err-bg`, the flat tint behind its own
+ *   badge/InfoBar), the `-text` token is the mark unchanged. Where it does
+ *   not, the `-text` token is the mark's own hue moved in lightness until it
+ *   does — see the deviations below.
  *
  * `scripts/contrast-check.py` reads this file, computes every pair ART
  * actually renders, and fails if one drops below its threshold — run it
@@ -41,19 +42,21 @@
 /*
  * ## Deviations from the Fluent token verbatim, measured rather than guessed
  *
- * Six Fluent values, read straight off the published ramp, failed
+ * Eight Fluent values, read straight off the published ramp, failed
  * `contrast-check.py` against surfaces this round adds (`--bg-hover`, chosen
  * below) or against all four surfaces rather than the one usually shown in a
  * style guide. Each was moved to the nearest point on its own hue/ramp that
- * clears every surface, with the measured minimum ratio recorded (the
- * governing surface is `--bg-panel` for light text on dark grounds, and
- * `--bg-hover` for dark text/borders on light grounds — `--bg-hover` is the
- * darkest of the light theme's four surfaces, so it is the hardest one for
- * anything dark-on-light to clear).
+ * clears every surface, with the measured minimum ratio recorded. `--bg-hover`
+ * is the governing (hardest) surface for on-surface text/boundaries in
+ * **both** themes, for opposite reasons: it is the lightest of the dark
+ * theme's four surfaces (`#333333`, review round 1's finding 3 — see below)
+ * and the darkest of the light theme's four (`#EAEAEA`).
  *
  * - **Dark `--text-faint`**: Fluent's TextFillColorTertiary is `#8B8B8B`,
- *   which is only 4.10:1 on `--bg-panel` (needs 4.5). Moved to `#999999` —
- *   4.90:1 on `--bg-panel`, the governing surface.
+ *   4.10:1 on `--bg-panel` (needs 4.5) even before `--bg-hover` widened to
+ *   `#333333`; against that surface `#999999` (the first move) is only
+ *   4.43:1. Moved to `#9C9C9C` — 4.60:1 on `--bg-hover`, the governing
+ *   surface (5.09:1 on `--bg-panel`).
  * - **Light `--text-faint`**: TextFillColorTertiary is `#8A8A8A`, 3.11:1 on
  *   `--bg-hover` (needs 4.5) — the brief's own flagged case, and worse than
  *   it first looks: `#767676`, the value that clears the *panel* surface
@@ -63,24 +66,32 @@
  *   2.87:1 on `--bg-hover` as a boundary (needs 3.0). Moved to `#808080` —
  *   3.28:1 on `--bg-hover`.
  * - **Dark `--ok-text` / `--err-text`**: the mark itself (`#6CCB5F`,
- *   `#FF99A4`) is 4.10–4.39:1 as text on `--bg-panel` and inside its own 22%
- *   badge tint over `--bg-panel` — short of 4.5 both ways. Lightened along
- *   the same hue to `#73CE67` (4.57:1 text, 4.61:1 in-badge, `--bg-panel`)
- *   and `#FF9EA9` (4.55:1 text, 4.55:1 in-badge, `--bg-panel`). Dark
- *   `--warn-text` needed no change: `#FCE100` is 5.85:1 in its own badge on
- *   `--bg-panel` already.
+ *   `#FF99A4`) is 4.10–4.39:1 as text on `--bg-panel` — short of 4.5.
+ *   Lightened along the same hue to `#73CE67` and `#FF9EA9`: 6.47:1 /
+ *   6.45:1 as plain text on `--bg-hover` (the governing surface once it
+ *   widened), and 5.79:1 / 6.85:1 as ink on `--ok-bg` / `--err-bg`, the flat
+ *   tint that actually sits behind a badge or InfoBar today. Dark
+ *   `--warn-text` needed no change: `#FCE100` is 9.03:1 on `--warn-bg`
+ *   already.
  * - **Light `--ok-text` / `--warn-text` / `--err-text`**: the marks
- *   (`#0F7B0F`, `#9D5D00`, `#C42B1C`) are 3.29–3.85:1 as text/in-badge on
- *   `--bg-hover` — well short. Darkened along the same hue to `#0C640C`
- *   (4.56:1 in-badge, `--bg-hover`), `#7E4B00` (4.55:1 in-badge,
- *   `--bg-hover`) and `#9F2317` (4.58:1 in-badge, `--bg-hover`). Light
- *   `--accent-text` needed no change: `#005FB8` clears 5.24:1 on every
- *   surface including `--bg-hover`.
+ *   (`#0F7B0F`, `#9D5D00`, `#C42B1C`) are 3.29–3.85:1 as text on
+ *   `--bg-hover` — well short. Darkened along the same hue to `#0C640C`,
+ *   `#7E4B00` and `#9F2317`: 6.14:1 / 6.03:1 / 6.40:1 as plain text on
+ *   `--bg-hover`, and 6.46:1 / 6.60:1 / 6.52:1 as ink on `--ok-bg` /
+ *   `--warn-bg` / `--err-bg`. Light `--accent-text` needed no change:
+ *   `#005FB8` clears 5.24:1 on every surface including `--bg-hover`.
  *
  * `--bg-hover`: Fluent gives two candidate values per theme
- * (SubtleFillColorSecondary/Tertiary). `gen.py`'s own canvas applies the
- * Secondary value on `:hover` (Tertiary is defined but never drawn), so that
- * is the one used here: `#2A2A2A` dark, `#EAEAEA` light.
+ * (SubtleFillColorSecondary/Tertiary). Light uses Secondary (`#EAEAEA`),
+ * the value `gen.py`'s own canvas applies on `:hover` (Tertiary is defined
+ * there but never drawn). **Dark uses Tertiary (`#333333`) instead of
+ * Secondary** (`#2A2A2A`, the first pass's choice, matching the canvas the
+ * same way): Secondary composites to `#2A2A2A`, which is 1.03:1 against
+ * `--bg-panel` and 1.04:1 against `--bg-elevated` — a hover fill, and a
+ * disabled `.btn`'s fill, that was indistinguishable from the surface behind
+ * it on two of the app's three most common grounds (review round 1's finding
+ * 3). Tertiary is 1.11–1.29:1 against all three, visibly different on every
+ * one, at the cost of `--bg-hover` becoming the governing surface above.
  */
 
 :root,
@@ -88,14 +99,18 @@
   --bg: #202020;
   --bg-elevated: #272727;
   --bg-panel: #2c2c2c;
-  --bg-hover: #2a2a2a;
+  /* Deviation: Fluent's Secondary value #2a2a2a is 1.03:1 against --bg-panel
+     — invisible as a hover/disabled fill there. Tertiary instead. See note
+     above. */
+  --bg-hover: #333333;
   --border: #1d1d1d;
   --border-strong: #9a9a9a;
 
   --text: #ffffff;
   --text-muted: #cfcfcf;
-  /* Deviation: Fluent's #8b8b8b is 4.10:1 on --bg-panel. See note above. */
-  --text-faint: #999999;
+  /* Deviation: Fluent's #8b8b8b is 4.10:1 on --bg-panel, and 4.43:1 on the
+     widened --bg-hover above. See note above. */
+  --text-faint: #9c9c9c;
 
   /* Windows' own default system accent (default blue) */
   --accent: #60cdff;

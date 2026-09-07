@@ -19,11 +19,23 @@ prints the ratio. It fails when one drops below its threshold.
 * **Body text on every surface** — 4.5:1, WCAG AA for text under 18.66px
   bold / 24px regular. ART's screens are 11-13px, so AA is the floor and not
   the target.
-* **A status colour as text on a tint of itself** — the badge case, and the one
-  that was broken. `.badge-ok` is `color-mix(in srgb, var(--ok) 22%,
-  transparent)` behind `var(--ok-text)`, so the ground is the tint composited
-  over whichever surface the badge sits on.
+* **A status colour as text on its own flat tint** — `.badge-ok` and
+  `.infobar.ok` fill with `var(--ok-bg)` (and `--warn-bg` / `--err-bg`)
+  behind `var(--ok-text)` and its siblings, at 4.5:1. This used to be
+  modelled as `color-mix(in srgb, var(--ok) 22%, transparent)` composited
+  over each of the four surfaces — a rendering `global.css` stopped drawing
+  when `.badge-*` moved to the flat tint tokens (review round 1, finding 4);
+  checking a composite that is no longer on screen is a copy of a shape the
+  source abandoned, not a check of it, so this reads the same flat pair the
+  CSS does instead.
+* **Plain text on the tint tokens themselves** — `--text` on `--ok-bg` /
+  `--warn-bg` / `--err-bg` / `--accent-tint` at 4.5:1: the sentence beside an
+  InfoBar's icon, and the label beside a dashboard quick-action's icon, both
+  sit directly on a tint rather than on one of the four main surfaces.
 * **White on the primary button** — `--accent-fg` on `--accent`, 4.5:1.
+* **An icon on its own tint** — `--accent` on `--accent-tint`, 3:1 (WCAG
+  1.4.11 non-text): the InfoBar and quick-action icons are graphics, not
+  words, so the boundary threshold applies, not the text one.
 * **A boundary that has to be seen to be used** — `--border-strong`, which
   form controls and the drop zone draw with, at 3:1 (WCAG 1.4.11 non-text).
 
@@ -62,12 +74,27 @@ TEXT_ON_SURFACES = {
     "--err-text": 4.5,
 }
 
-# A badge: `color-mix(in srgb, <mark> 22%, transparent)` behind <text>.
-BADGES = [("--ok", "--ok-text"), ("--warn", "--warn-text"), ("--err", "--err-text")]
-BADGE_TINT = 0.22
+# A status colour as text on its own flat tint: `.badge-ok` / `.infobar.ok`
+# fill with `--ok-bg` behind `--ok-text`, and so on — the actual rendering,
+# not a composite nothing draws (see the module docstring, finding 4).
+TINT_PAIRS = [
+    ("--ok-bg", "--ok-text"),
+    ("--warn-bg", "--warn-text"),
+    ("--err-bg", "--err-text"),
+]
 
-# `.btn-primary` and `.btn-warn`: a fill with a label on it.
-FILLS = [("--accent-fg", "--accent", 4.5)]
+# The same four tints, as grounds for plain `--text` — an InfoBar's sentence
+# or a quick-action's label, sitting directly on the tint rather than on one
+# of the four main surfaces.
+TINTS = ["--ok-bg", "--warn-bg", "--err-bg", "--accent-tint"]
+
+# `.btn-primary` and `.btn-warn`: a fill with a label on it. Also the
+# InfoBar/quick-action icon on its own tint — a non-text boundary, so it is
+# held to 3:1 rather than 4.5.
+FILLS = [
+    ("--accent-fg", "--accent", 4.5),
+    ("--accent", "--accent-tint", 3.0),
+]
 
 # Boundaries that identify a control (WCAG 1.4.11).
 BOUNDARIES = [("--border-strong", 3.0)]
@@ -190,11 +217,6 @@ def contrast(a: tuple[float, ...], b: tuple[float, ...]) -> float:
     return (lighter + 0.05) / (darker + 0.05)
 
 
-def over(fg: tuple[float, ...], bg: tuple[float, ...], alpha: float) -> tuple[float, ...]:
-    """`color-mix(in srgb, fg <alpha>%, transparent)` composited onto bg."""
-    return tuple(fg[i] * alpha + bg[i] * (1 - alpha) for i in range(3))
-
-
 def check(theme: str, tokens: dict[str, str]) -> list[tuple[str, float, float]]:
     """Every pair, as (description, measured, required)."""
     results: list[tuple[str, float, float]] = []
@@ -209,16 +231,15 @@ def check(theme: str, tokens: dict[str, str]) -> list[tuple[str, float, float]]:
                 )
             )
 
-    for mark, ink in BADGES:
-        for surface in SURFACES:
-            tint = over(rgb(tokens[mark]), rgb(tokens[surface]), BADGE_TINT)
-            results.append(
-                (
-                    f"{ink} on {mark} badge over {surface}",
-                    contrast(rgb(tokens[ink]), tint),
-                    4.5,
-                )
-            )
+    for bg, ink in TINT_PAIRS:
+        results.append(
+            (f"{ink} on {bg}", contrast(rgb(tokens[ink]), rgb(tokens[bg])), 4.5)
+        )
+
+    for tint in TINTS:
+        results.append(
+            (f"--text on {tint}", contrast(rgb(tokens["--text"]), rgb(tokens[tint])), 4.5)
+        )
 
     for label, fill, required in FILLS:
         results.append(
