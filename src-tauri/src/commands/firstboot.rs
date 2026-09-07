@@ -76,13 +76,12 @@ pub fn firstboot_write(tree: String, oplog: State<'_, JsonlOperationLog>) -> App
 
 /// §9: read a card's first-boot report back — what the Amiga said the last
 /// time it actually booted, straight off the card image. No card operation,
-/// no boot, just files already there. `card` is never opened for writing.
+/// no boot, just files already there. `path` is never opened for writing.
 ///
-/// **Task 10 only reads the FAT boot partition's copy** (`art-firstboot.log`).
-/// The Amiga volume's own copy, which spec §9 says wins where both exist,
-/// lands in task 10b as its own commit — until then this never answers
-/// [`crate::core::firstboot::cardread::ReportSource::AmigaVolume`], only
-/// `Fat` or `None`.
+/// The Amiga volume's own copy wins where both it and the FAT boot
+/// partition's copy exist (spec §9) — see
+/// [`crate::core::firstboot::cardread::read_card_report`] for the fallback
+/// order.
 #[tauri::command]
 pub fn card_firstboot_report(path: String) -> AppResult<CardFirstBootReport> {
     Ok(read_card_report(Path::new(path.trim()))?)

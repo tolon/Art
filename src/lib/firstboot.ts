@@ -75,14 +75,13 @@ export async function firstbootWrite(tree: string): Promise<FirstBootWritten> {
 }
 
 // ---------------------------------------------------------------------------
-// Reading a card's first-boot report back (§9, tasks 10/10b)
+// Reading a card's first-boot report back (§9)
 // ---------------------------------------------------------------------------
 //
 // Where the report actually came from. `"amiga-volume"` is the copy spec §9
-// says wins where both exist; task 10 lands `"fat"`/`"none"` only — the
-// backend never answers `"amiga-volume"` until task 10b, but the type
-// carries all three from the start so this wrapper does not change shape
-// between the two commits.
+// says wins where both exist; `"fat"` is the fallback for a Windows user who
+// cannot otherwise read PFS3 or FFS; `"none"` means the card has not booted
+// the first-boot block yet — not an error.
 export type ReportSource = "fat" | "amiga-volume" | "none";
 
 export interface CardFirstBootReport {
