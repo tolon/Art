@@ -265,13 +265,9 @@ block — do not stack another on top of it.**
    shifting a foreign card's existing partitions. [ART-250](ISSUES.md) is
    deliberate: `tooltypes()`'s lossy UTF-8 decode is disclosed and counted
    apart, not hidden, and closing it is not scheduled.
-6. **Four minors the whole-branch review found are deliberately still open**,
+6. **Three minors the whole-branch review found are deliberately still open**,
    each disclosed where the next reader will find it rather than silently
-   dropped: `install_pack` unpacks its archive twice, once inside `build_plan`
-   and once for itself — inherited from `run_install`, not introduced by this
-   wave, and not in [ISSUES.md](ISSUES.md); the fix and the cost are in
-   `final-review.md`'s Minors section (local-only,
-   `.superpowers/sdd/2026-09-07-debts/`). The two cancel-sink tests added for
+   dropped. The two cancel-sink tests added for
    ART-242 anchor on the *second* total-bearing phase by ordinal, not by
    identity — a third phase inserted before the copy would silently move the
    cancel earlier — disclosed in both twins' own doc comments in

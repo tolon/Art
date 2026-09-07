@@ -40,7 +40,7 @@ use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::lha::open_archive;
 use crate::core::lha::whdload::{detect_whdload, WhdloadVerdict};
-use crate::core::sources::install::unpack_for_install;
+use crate::core::sources::install::{unpack_for_install, Scratch};
 use crate::core::volume::mount::{mount, scan_image, VolumeEntry};
 use crate::core::volume::write::copy::{CopyReport, CopySource, HostFolder};
 use crate::core::volume::write::plan::{plan_copy, CopyPlan, SourceEntry};
@@ -166,6 +166,12 @@ pub trait VolumeSession {
 // ---------------------------------------------------------------------------
 
 /// What installing `archive` into a volume would do. Writes nothing.
+///
+/// Unpacks the archive once, to a scratch directory that is discarded when
+/// this returns. [`install_pack`] needs that same unpacked tree a moment
+/// later to actually copy from — see [`build_plan_with_scratch`], which this
+/// is now a thin wrapper over, for why a second call here would be the
+/// leftover double extraction rather than a fresh one.
 pub fn build_plan(
     archive: &Path,
     image: &Path,
@@ -173,14 +179,45 @@ pub fn build_plan(
     dir_block: u32,
     scratch_root: &Path,
 ) -> CoreResult<WhdloadPlan> {
+    let (plan, _scratch) = build_plan_with_scratch(
+        archive,
+        image,
+        volume_index,
+        dir_block,
+        scratch_root,
+        &crate::core::jobs::NoProgress,
+    )?;
+    Ok(plan)
+}
+
+/// [`build_plan`]'s own body, plus the unpacked archive it would otherwise
+/// throw away.
+///
+/// The archive used to be unpacked twice for one install: once here (called
+/// from `install_pack` to re-plan against the disk's *current* state) and
+/// once more by `install_pack` itself to actually copy from. Both unpacks
+/// produce the identical tree from the identical archive, so the second one
+/// bought nothing but the time to decompress a package a second time. This
+/// keeps the plan's own unpack alive and hands it back — `Some(scratch)` when
+/// there was a pack worth keeping it for, `None` when `analyse` found none
+/// (the refusal path never reaches a write, so there is nothing worth
+/// carrying an extra temp directory for). `install_pack` is the only other
+/// caller; `build_plan` keeps its own contract by discarding what comes back.
+fn build_plan_with_scratch(
+    archive: &Path,
+    image: &Path,
+    volume_index: usize,
+    dir_block: u32,
+    scratch_root: &Path,
+    sink: &dyn ProgressSink,
+) -> CoreResult<(WhdloadPlan, Option<Scratch>)> {
     // The verdict comes from the archive's own entry list, before anything is
     // unpacked — a package ART is not confident about should not cost the user
     // a decompression first.
     let info = open_archive(archive)?;
     let verdict = detect_whdload(&info.entries);
 
-    let (scratch, unpack_skipped) =
-        unpack_for_install(archive, scratch_root, &crate::core::jobs::NoProgress)?;
+    let (scratch, unpack_skipped) = unpack_for_install(archive, scratch_root, sink)?;
     let entries = walk(scratch.path())?;
 
     // `analyse` failing here means the archive unpacked fine but holds no
@@ -193,37 +230,41 @@ pub fn build_plan(
     let layout = match analyse(&entries) {
         Ok(layout) => layout,
         Err(CoreError::InvalidInput(reason)) => {
-            return Ok(WhdloadPlan {
-                verdict,
-                layout: PackLayout {
-                    root: String::new(),
-                    name: String::new(),
-                    slave: String::new(),
-                    icon: None,
-                    outside: Vec::new(),
-                    needs_installer: false,
+            return Ok((
+                WhdloadPlan {
+                    verdict,
+                    layout: PackLayout {
+                        root: String::new(),
+                        name: String::new(),
+                        slave: String::new(),
+                        icon: None,
+                        outside: Vec::new(),
+                        needs_installer: false,
+                    },
+                    drawer: String::new(),
+                    volume_name: String::new(),
+                    cost: CopyPlan {
+                        files: 0,
+                        directories: 0,
+                        total_bytes: 0,
+                        blocks_needed: 0,
+                        blocks_free: 0,
+                        block_size: 0,
+                        name_problems: Vec::new(),
+                        collisions: Vec::new(),
+                        split_icons: Vec::new(),
+                    },
+                    name_taken: false,
+                    // The one refusal a hand copy actually answers: ART found
+                    // no pack, but the archive still holds files the user may
+                    // want.
+                    refusal: Some(WhdloadRefusal::with(
+                        reason,
+                        "You can still copy it by hand from the Files screen.",
+                    )),
                 },
-                drawer: String::new(),
-                volume_name: String::new(),
-                cost: CopyPlan {
-                    files: 0,
-                    directories: 0,
-                    total_bytes: 0,
-                    blocks_needed: 0,
-                    blocks_free: 0,
-                    block_size: 0,
-                    name_problems: Vec::new(),
-                    collisions: Vec::new(),
-                    split_icons: Vec::new(),
-                },
-                name_taken: false,
-                // The one refusal a hand copy actually answers: ART found no
-                // pack, but the archive still holds files the user may want.
-                refusal: Some(WhdloadRefusal::with(
-                    reason,
-                    "You can still copy it by hand from the Files screen.",
-                )),
-            });
+                None,
+            ));
         }
         // Any other error out of `analyse` (there is none today, but the
         // match stays exhaustive on purpose) is a real fault, not an answer
@@ -303,15 +344,18 @@ pub fn build_plan(
 
     let refusal = refuse(&verdict, &layout, &cost, name_taken, &unpack_skipped);
 
-    Ok(WhdloadPlan {
-        verdict,
-        drawer: format!("{volume_name}:{}", layout.name),
-        volume_name,
-        layout,
-        cost,
-        name_taken,
-        refusal,
-    })
+    Ok((
+        WhdloadPlan {
+            verdict,
+            drawer: format!("{volume_name}:{}", layout.name),
+            volume_name,
+            layout,
+            cost,
+            name_taken,
+            refusal,
+        },
+        Some(scratch),
+    ))
 }
 
 /// Find the volume at `index` inside `image`.
@@ -476,12 +520,18 @@ fn walk_into(base: &Path, relative: &str, depth: usize, out: &mut Vec<Entry>) ->
 // Installing
 // ---------------------------------------------------------------------------
 
-/// Unpack, re-plan, and write — all three in one volume session.
+/// Re-plan, unpack once, and write — all in one volume session.
 ///
 /// The plan is rebuilt here rather than carried from the UI. A plan the user
 /// looked at five minutes ago describes a disk that may have changed since,
 /// and installing against a stale one is how a "there is room" turns into a
-/// half-written game.
+/// half-written game. Re-planning still means unpacking the archive — the
+/// cost is re-run against the disk's *current* state — but that unpack is the
+/// same one the actual copy reads from: [`build_plan_with_scratch`] hands its
+/// scratch directory back rather than this function unpacking a second time
+/// (the leftover this fixes; the two used to disagree about nothing, because
+/// they extracted the identical archive into two different directories and
+/// read only one of them).
 ///
 /// The actual volume write goes through `session` ([`VolumeSession`]) — see
 /// its doc, and the module doc, for why that boundary exists rather than a
@@ -498,7 +548,8 @@ pub fn install_pack(
     sink: &dyn ProgressSink,
 ) -> CoreResult<WhdloadOutcome> {
     sink.report(0, None, "Checking the package");
-    let plan = build_plan(archive, image, volume_index, parent, scratch_root)?;
+    let (plan, scratch) =
+        build_plan_with_scratch(archive, image, volume_index, parent, scratch_root, sink)?;
     if !plan.can_install() {
         return Err(CoreError::SafetyRefused(
             plan.refusal
@@ -506,9 +557,12 @@ pub fn install_pack(
                 .unwrap_or_else(|| "ART will not install this".into()),
         ));
     }
-
-    sink.report(0, None, "Unpacking");
-    let (scratch, _) = unpack_for_install(archive, scratch_root, sink)?;
+    // `build_plan_with_scratch` only ever returns `None` on the refusal path
+    // (no pack found), and that refusal was just handled above — an
+    // installable plan always found a pack, and finding one always keeps the
+    // scratch directory it was found in.
+    let scratch =
+        scratch.expect("an installable plan always keeps the scratch directory it was built from");
     let layout = plan.layout;
 
     let pack_root = if layout.root.is_empty() {
@@ -1647,6 +1701,74 @@ mod tests {
             std::fs::read(&image).unwrap(),
             after_first,
             "a refused install must leave the image byte-for-byte unchanged"
+        );
+    }
+
+    /// The leftover this batch fixes: `install_pack` used to call
+    /// `build_plan` to re-plan against the disk's current state, which
+    /// unpacked the archive into its own scratch directory and then threw it
+    /// away, and then unpacked the same archive a *second* time to actually
+    /// copy from. `build_plan_with_scratch` now hands that first unpack back
+    /// instead of discarding it, so a single install unpacks the archive
+    /// exactly once.
+    ///
+    /// Proved by counting, not by reading the source: `extract_with_backend`
+    /// (`core/archive/extract.rs`) reports the archive's own entry name for
+    /// every file it writes to the scratch directory, and this fixture's
+    /// slave is named uniquely within it (`Turrican/Turrican.slave`) — a name
+    /// `copy_into_volume` never reports, since it reports paths relative to
+    /// the drawer's own root instead (`Turrican.slave`, no prefix; see the
+    /// cancel-sink tests above for the same distinction put to a different
+    /// use). Counting how many times that one message is reported counts how
+    /// many times the archive was actually unpacked to disk, independent of
+    /// `pick_volume`/`mount`'s own bookkeeping or anything else `install_pack`
+    /// happens to report along the way.
+    ///
+    /// **Mutation:** re-inserting the removed second extraction (`let (scratch,
+    /// _) = unpack_for_install(archive, scratch_root, sink)?;` right after the
+    /// plan, mirroring the code this replaced) makes the count 2 and this
+    /// assertion fall.
+    #[test]
+    fn install_pack_unpacks_the_archive_exactly_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountUnpacks(AtomicUsize);
+        impl ProgressSink for CountUnpacks {
+            fn report(&self, _done: u64, _total: Option<u64>, message: &str) {
+                if message == "Turrican/Turrican.slave" {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+            fn is_cancelled(&self) -> bool {
+                false
+            }
+        }
+
+        let (_scratch, dir) = scratch("count-unpack");
+        let archive = dir.join("Turrican.lha");
+        whdload_archive(&archive);
+
+        let image = dir.join("Games.hdf");
+        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
+        std::fs::write(&image, &bytes).unwrap();
+
+        let sink = CountUnpacks(AtomicUsize::new(0));
+        install_pack(
+            &archive,
+            &image,
+            0,
+            0,
+            &std::env::temp_dir(),
+            &std::env::temp_dir(),
+            &TestVolumeSession,
+            &sink,
+        )
+        .unwrap();
+
+        assert_eq!(
+            sink.0.load(Ordering::SeqCst),
+            1,
+            "the archive must be unpacked exactly once per install"
         );
     }
 
