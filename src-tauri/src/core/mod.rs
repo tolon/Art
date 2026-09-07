@@ -177,12 +177,14 @@ mod independence {
     }
 
     /// Replace every byte inside a string literal — plain `"…"` or raw
-    /// `r"…"` / `r#"…"#` / `r##"…"##`… of any hash count — with a space, so
+    /// `r"…"` / `r#"…"#` / `r##"…"##`… of any hash count — a `//` line
+    /// comment, a nested `/* … */` block comment, or a char literal (`'x'`,
+    /// `'\''`, `'"'`, `'\n'`, `'\u{2603}'`) — with a space, so
     /// [`test_regions`]'s brace matching below can never mistake a `}` that
-    /// is really just data for the end of a real Rust block. A multi-line
-    /// literal is handled the same as a single-line one: only the newline
-    /// bytes inside a stripped span are kept as-is, so line numbers and
-    /// every other line's own leading indentation stay exactly what they
+    /// is really just data, or commentary, for the end of a real Rust block.
+    /// A multi-line span is handled the same as a single-line one: only the
+    /// newline bytes inside a stripped span are kept as-is, so line numbers
+    /// and every other line's own leading indentation stay exactly what they
     /// were — [`test_regions`] can keep indexing by line number afterwards
     /// without knowing anything changed.
     ///
@@ -196,12 +198,21 @@ mod independence {
     /// the need for that workaround rather than merely working around it
     /// again.
     ///
-    /// Deliberately not a full Rust lexer: it does not track character
-    /// literals, byte strings or comments, because a `}` sitting inside one
-    /// of those is not a failure mode this guard has ever actually hit —
-    /// only a string literal has (a WinUAE `.uae` line or an AmigaDOS script
-    /// assembled with `format!`, see `tools::winuae_launcher`'s own
-    /// `real_version_hook`; and now this file's own fixture).
+    /// **I1 (2026-09-07 final review).** This module's own doc used to claim
+    /// "only a string literal has ever actually tripped this guard" and
+    /// deliberately left comments and char literals untracked on that
+    /// premise. Measured against the real tree, that premise was false: an
+    /// unpaired `"` inside a `//` comment (719 such comment lines in
+    /// `core/` at the time) or a `'"'` char literal opens exactly the same
+    /// kind of phantom span a bare string quote does — `amigainstall/
+    /// finish.rs`'s own module doc has one at line 28 (`` `refuse_shell_
+    /// metacharacters` refuses `"` *because a quote `` — the backtick-quoted
+    /// `"` has no partner on that line), and it alone was enough to blank
+    /// this file's `#[cfg(test)]` attribute and leave `test_regions` with
+    /// zero regions for a file that plainly has a test module. Comments and
+    /// char literals are stripped for exactly the reason strings already
+    /// were: so `test_regions`'s indent-based brace matching is asked of the
+    /// *code*, never of prose or data that merely looks like it.
     fn strip_string_literals(text: &str) -> String {
         let chars: Vec<char> = text.chars().collect();
         let mut out = String::with_capacity(text.len());
@@ -293,6 +304,117 @@ mod independence {
                         }
                     }
                 }
+                continue;
+            }
+
+            // A `//` line comment runs to the end of the line — never past
+            // it, so a `#[cfg(test)]` attribute on the next line is
+            // untouched.
+            if c == '/' && chars.get(i + 1) == Some(&'/') {
+                out.push(' ');
+                out.push(' ');
+                i += 2;
+                while let Some(&ch) = chars.get(i) {
+                    if ch == '\n' {
+                        break;
+                    }
+                    out.push(' ');
+                    i += 1;
+                }
+                continue;
+            }
+
+            // A `/* … */` block comment, nested as Rust itself allows —
+            // `depth` tracks how many unclosed openers are in scope so an
+            // inner `/* */` pair does not end the outer one early.
+            if c == '/' && chars.get(i + 1) == Some(&'*') {
+                out.push(' ');
+                out.push(' ');
+                i += 2;
+                let mut depth = 1usize;
+                while depth > 0 {
+                    match chars.get(i) {
+                        None => break,
+                        Some('*') if chars.get(i + 1) == Some(&'/') => {
+                            out.push(' ');
+                            out.push(' ');
+                            i += 2;
+                            depth -= 1;
+                        }
+                        Some('/') if chars.get(i + 1) == Some(&'*') => {
+                            out.push(' ');
+                            out.push(' ');
+                            i += 2;
+                            depth += 1;
+                        }
+                        Some('\n') => {
+                            out.push('\n');
+                            i += 1;
+                        }
+                        Some(_) => {
+                            out.push(' ');
+                            i += 1;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // A char literal: `'x'`, an escape (`'\''`, `'"'`, `'\n'`,
+            // `'\xNN'`, `'\u{…}'`), or neither — a lifetime (`'a`,
+            // `'static`), which this deliberately leaves alone by falling
+            // through and re-scanning the quote as ordinary text one
+            // character at a time, since a lifetime is never followed by an
+            // immediate closing `'`.
+            if c == '\'' {
+                if chars.get(i + 1) == Some(&'\\') {
+                    let mut j = i + 2;
+                    match chars.get(j) {
+                        Some('u') => {
+                            j += 1;
+                            if chars.get(j) == Some(&'{') {
+                                j += 1;
+                                while matches!(chars.get(j), Some(ch) if *ch != '}') {
+                                    j += 1;
+                                }
+                                if chars.get(j) == Some(&'}') {
+                                    j += 1;
+                                }
+                            }
+                        }
+                        Some('x') => {
+                            j += 1;
+                            for _ in 0..2 {
+                                if chars.get(j).is_some_and(|ch| ch.is_ascii_hexdigit()) {
+                                    j += 1;
+                                }
+                            }
+                        }
+                        Some(_) => {
+                            j += 1;
+                        }
+                        None => {}
+                    }
+                    if chars.get(j) == Some(&'\'') {
+                        for &ch in &chars[i..=j] {
+                            out.push(if ch == '\n' { '\n' } else { ' ' });
+                        }
+                        i = j + 1;
+                        continue;
+                    }
+                    // Not a valid escape after all — fall through and treat
+                    // the opening quote as ordinary text.
+                } else if let Some(&next) = chars.get(i + 1) {
+                    if next != '\'' && chars.get(i + 2) == Some(&'\'') {
+                        for &ch in &chars[i..=i + 2] {
+                            out.push(if ch == '\n' { '\n' } else { ' ' });
+                        }
+                        i += 3;
+                        continue;
+                    }
+                }
+                out.push(c);
+                i += 1;
                 continue;
             }
 
@@ -672,6 +794,52 @@ fn production_after() -> u32 {
              (CLAUDE.md, \"The core independence rule\"; ART-274) says the spawn belongs \
              in tools/, not here:\n{}",
             offenders.join("\n")
+        );
+    }
+
+    /// I1 (2026-09-07 final review). `strip_string_literals` used to track
+    /// only string literals, so a stray, unpaired `"` inside a `//` comment
+    /// or a `'"'` char literal opened a phantom span that could blank a
+    /// file's own `#[cfg(test)]` attribute line — leaving `test_regions`
+    /// with zero regions for a file that plainly has a test module. That is
+    /// the safe direction (the whole file then reads as production, so
+    /// nothing escapes as a false negative) but it means
+    /// [`core_never_spawns_a_process_outside_a_test`] cannot actually read
+    /// two of the 204 files it claims to check, and the mirror mistake — a
+    /// blanked closing `}` extending a region *over* real production code —
+    /// is the genuine fail-open this test exists to close off.
+    ///
+    /// Mutate by reverting `strip_string_literals` to track only plain and
+    /// raw string literals (drop the `//`, `/* */` and char-literal
+    /// branches): this fails, naming
+    /// `src/core/amigainstall/finish.rs` and `src/core/gameindex/cleanup.rs`
+    /// — both have a `#[cfg(test)]` attribute and, with the old stripper, a
+    /// module-doc `"` (`finish.rs` line 28: `` `refuse_shell_metacharacters`
+    /// refuses `"` *because a quote ``) or a char literal that opens an
+    /// unclosed span reaching past it. Restore the comment/char-literal
+    /// handling and this passes again.
+    #[test]
+    fn every_file_with_a_cfg_test_attribute_yields_at_least_one_region() {
+        let mut blind = Vec::new();
+        for path in core_files() {
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
+            if !text.lines().any(|l| l.trim() == "#[cfg(test)]") {
+                continue;
+            }
+            let lines: Vec<&str> = text.lines().collect();
+            let regions = test_regions(&path.display().to_string(), &lines);
+            if regions.is_empty() {
+                blind.push(path.display().to_string());
+            }
+        }
+        assert!(
+            blind.is_empty(),
+            "these core/ files carry a #[cfg(test)] attribute but strip_string_literals \
+             found zero regions in them — a stray quote inside a comment or a char \
+             literal opened a span that blanked the attribute itself, so the guard \
+             cannot read these files at all: {}",
+            blind.join(", ")
         );
     }
 }
