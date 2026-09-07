@@ -55,6 +55,7 @@
 
 pub mod finish;
 pub mod packagevol;
+pub mod rehearse;
 pub mod run;
 pub mod stage;
 pub mod workvol;
