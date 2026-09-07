@@ -477,4 +477,207 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // ---- `CommandVolumeSession`, the real one ----
+    //
+    // Fix round 1 (review of ART-242's own move): `CommandVolumeSession` was
+    // instantiated only inside `whdload_install`'s `spawn_job` closure and
+    // exercised by no test. `core::whdload::install::tests::TestVolumeSession`
+    // proves `install_pack`'s own plumbing, but it is a *different*
+    // implementation — an in-memory `VecDevice` committed with a bare
+    // `std::fs::write` — and says nothing about this one, which runs through
+    // the real `with_volume` (real write-strategy selection, real
+    // backup/atomic-write, real journal). Before ART-242's move,
+    // `a_cancelled_run_install_writes_nothing_and_does_not_report_success`
+    // drove exactly this cancellation guard through that real path; these two
+    // tests are its direct analogue, restored against the code that replaced
+    // it.
+
+    /// A real `.lha` holding a real WHDLoad pack, sized so a cancellation
+    /// sink has room to fire partway through the copy rather than before it
+    /// starts. Local to this file rather than reused from
+    /// `core::whdload::install::tests` — these tests are specifically about
+    /// `CommandVolumeSession`, not the core engine's own plumbing.
+    fn cancellable_whdload_archive(path: &Path) {
+        use crate::core::lha::tests::make_lha_with;
+
+        let mut entries: Vec<(String, Vec<u8>)> = vec![
+            (
+                "Turrican/Turrican.slave".into(),
+                b"WHDLOADSLAVE\x00\x00\x00\x0a".to_vec(),
+            ),
+            (
+                "Turrican/Turrican".into(),
+                b"host executable bytes".to_vec(),
+            ),
+            ("Turrican/data/level1.bin".into(), vec![7u8; 4000]),
+        ];
+        for index in 0..6 {
+            entries.push((
+                format!("Turrican/Extra{index}.dat"),
+                vec![b'a' + index as u8; 64],
+            ));
+        }
+        entries.push(("Turrican.info".into(), b"\xe3\x10\x00\x01icon".to_vec()));
+        let borrowed: Vec<(&str, &[u8])> = entries
+            .iter()
+            .map(|(name, data)| (name.as_str(), data.as_slice()))
+            .collect();
+        std::fs::write(path, make_lha_with(&borrowed)).unwrap();
+    }
+
+    /// §54/§57 and the data-safety rule, through the **real** session this
+    /// time. Cancelling partway through the copy must leave the image
+    /// byte-for-byte unchanged (hashed — compared byte for byte — before and
+    /// after) and must not report success. Deleting the
+    /// `if report.cancelled { return Err(CoreError::Cancelled) }` guard in
+    /// `CommandVolumeSession::install_drawer` makes this fall.
+    ///
+    /// **`StopDuringCopy` is phase-aware, and has to be.** `install_pack` runs
+    /// two per-entry loops that report `Some(total)`: unpacking the archive
+    /// (`extract_with_backend`, `core/archive/extract.rs`) *and* copying into
+    /// the volume (`copy_into_volume`) — both report `done == 0` at their
+    /// first entry and both check `is_cancelled()` between entries. A sink
+    /// armed on a bare `done >= N` fires during the **first** such phase every
+    /// time, because unpacking always runs first — which is a real survivor
+    /// found while building this very test: the original threshold cancelled
+    /// during unpacking, before `CommandVolumeSession` was ever reached, so
+    /// removing its guard changed nothing. Counting phase boundaries (a
+    /// `done == 0` report marks a new one) and arming only once the **second**
+    /// phase is under way is what actually reaches the copy.
+    #[test]
+    fn a_cancelled_install_through_the_real_session_writes_nothing() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        struct StopDuringCopy {
+            phase: AtomicUsize,
+            cancel: AtomicBool,
+        }
+        impl ProgressSink for StopDuringCopy {
+            fn report(&self, done: u64, total: Option<u64>, _message: &str) {
+                if total.is_none() {
+                    return;
+                }
+                if done == 0 {
+                    self.phase.fetch_add(1, Ordering::SeqCst);
+                }
+                if self.phase.load(Ordering::SeqCst) >= 2 && done >= 2 {
+                    self.cancel.store(true, Ordering::SeqCst);
+                }
+            }
+            fn is_cancelled(&self) -> bool {
+                self.cancel.load(Ordering::SeqCst)
+            }
+        }
+
+        let dir = crate::core::ScratchDir::new("art-whd-cmd", "cancel");
+        let archive = dir.join("Turrican.lha");
+        cancellable_whdload_archive(&archive);
+
+        let image = dir.join("Games.hdf");
+        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
+        std::fs::write(&image, &bytes).unwrap();
+        let before = std::fs::read(&image).unwrap();
+
+        let sink = StopDuringCopy {
+            phase: AtomicUsize::new(0),
+            cancel: AtomicBool::new(false),
+        };
+        let err = install_pack(
+            &archive,
+            &image,
+            0,
+            0,
+            dir.path(),
+            dir.path(),
+            &CommandVolumeSession,
+            &sink,
+        )
+        .expect_err("a cancelled install through the real session must not report success");
+
+        assert_eq!(
+            err.code(),
+            "ART-CANCELLED",
+            "the job must end Cancelled, not Completed: {err}"
+        );
+        assert_eq!(
+            std::fs::read(&image).unwrap(),
+            before,
+            "a cancelled install through the real with_volume session must leave the \
+             image byte-for-byte unchanged"
+        );
+    }
+
+    /// The happy path through the same real session, once — so `with_volume`
+    /// itself (write-strategy selection, backup, atomic commit) is exercised
+    /// end to end by this file, not only by the core engine's own
+    /// `TestVolumeSession` double.
+    #[test]
+    fn install_pack_through_the_real_session_installs_and_reads_back() {
+        use crate::core::lha::tests::make_lha_with;
+
+        let dir = crate::core::ScratchDir::new("art-whd-cmd", "happy");
+        let archive = dir.join("Turrican.lha");
+        std::fs::write(
+            &archive,
+            make_lha_with(&[
+                ("Turrican/Turrican.slave", b"WHDLOADSLAVE\x00\x00\x00\x0a"),
+                ("Turrican/Turrican", b"host executable bytes"),
+                ("Turrican/data/level1.bin", &vec![7u8; 4000]),
+                ("Turrican.info", b"\xe3\x10\x00\x01icon"),
+            ]),
+        )
+        .unwrap();
+
+        let image = dir.join("Games.hdf");
+        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
+        std::fs::write(&image, &bytes).unwrap();
+
+        let outcome = install_pack(
+            &archive,
+            &image,
+            0,
+            0,
+            dir.path(),
+            dir.path(),
+            &CommandVolumeSession,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(
+            outcome.files, 4,
+            "slave, executable, one data file, and igame.data (uncatalogued, title only)"
+        );
+        assert_eq!(
+            outcome.verified, outcome.files,
+            "every file is read back out of the disk"
+        );
+        assert!(outcome.icon_installed);
+        assert!(
+            outcome.backup.is_some(),
+            "the real session backs up a floppy-sized image before replacing it"
+        );
+
+        let entry = super::super::volume_write::pick_volume(&image, 0).unwrap();
+        let (device, geometry) = mount(&image, &entry).unwrap();
+        let set = crate::core::volume::write::layout::BlockSet::new(geometry.block_size);
+        let root = crate::core::volume::write::dir::entries_in(
+            &device,
+            &set,
+            &geometry,
+            geometry.root_block,
+        )
+        .unwrap();
+        let drawer = root
+            .iter()
+            .find(|found| found.name == "Turrican")
+            .expect("the drawer must be on the disk");
+        assert!(drawer.is_dir);
+        assert!(
+            root.iter()
+                .any(|found| found.name == "Turrican.info" && !found.is_dir),
+            "the icon must sit beside the drawer, read back through the real session"
+        );
+    }
 }

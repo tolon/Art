@@ -324,6 +324,10 @@ pub fn build_plan(
 /// there.
 fn pick_volume(image: &Path, index: usize) -> CoreResult<VolumeEntry> {
     let found = scan_image(image)?;
+    // This message is duplicated in `commands/volume_write.rs::pick` — keep
+    // the two in sync if either wording changes; a user hitting one should
+    // not read a different sentence than one hitting the other for the same
+    // mistake.
     found.volumes.get(index).cloned().ok_or_else(|| {
         CoreError::InvalidInput(format!(
             "this image has no volume {index} ({} found)",
@@ -1672,22 +1676,43 @@ mod tests {
     /// `TestVolumeSession`'s own commit step — deleting the guard inside
     /// `TestVolumeSession::install_drawer` makes this test fail rather than
     /// leaving it trivially green (see the mutation note on `install_pack`).
+    ///
+    /// **`StopDuringCopy` is phase-aware, and has to be** (found during
+    /// ART-242 fix round 1, while adding the command-layer analogue of this
+    /// test). `install_pack` runs two per-entry loops that report
+    /// `Some(total)`: unpacking the archive (`extract_with_backend`) and then
+    /// copying into the volume (`copy_into_volume`) — both report `done == 0`
+    /// at their first entry. A sink armed on a bare `done >= N` cancels during
+    /// the **first** such phase every time, since unpacking always runs
+    /// first: that was this test's own original shape, and it is a survivor
+    /// — it never actually reached `TestVolumeSession` at all, so a guard
+    /// removed there changed nothing (confirmed by re-running the ART-242
+    /// mutation with the old sink: this test stayed green). Counting phase
+    /// boundaries and arming only once the second phase is under way is what
+    /// actually reaches the copy.
     #[test]
     fn a_cancelled_install_writes_nothing_and_does_not_report_success() {
         use crate::core::lha::tests::make_lha_with;
-        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-        /// Cancels once the copy into the volume is a couple of files in —
-        /// the user hitting Stop halfway through, not before it started.
-        struct StopDuringCopy(AtomicBool);
+        struct StopDuringCopy {
+            phase: AtomicUsize,
+            cancel: AtomicBool,
+        }
         impl ProgressSink for StopDuringCopy {
             fn report(&self, done: u64, total: Option<u64>, _message: &str) {
-                if total.is_some() && done >= 2 {
-                    self.0.store(true, Ordering::SeqCst);
+                if total.is_none() {
+                    return;
+                }
+                if done == 0 {
+                    self.phase.fetch_add(1, Ordering::SeqCst);
+                }
+                if self.phase.load(Ordering::SeqCst) >= 2 && done >= 2 {
+                    self.cancel.store(true, Ordering::SeqCst);
                 }
             }
             fn is_cancelled(&self) -> bool {
-                self.0.load(Ordering::SeqCst)
+                self.cancel.load(Ordering::SeqCst)
             }
         }
 
@@ -1720,7 +1745,10 @@ mod tests {
         std::fs::write(&image, &bytes).unwrap();
         let before = std::fs::read(&image).unwrap();
 
-        let sink = StopDuringCopy(AtomicBool::new(false));
+        let sink = StopDuringCopy {
+            phase: AtomicUsize::new(0),
+            cancel: AtomicBool::new(false),
+        };
         let err = install_pack(
             &archive,
             &image,
