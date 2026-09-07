@@ -49,15 +49,12 @@ pub struct RehearseRequest<'a> {
     pub profile: &'a AmigaProfile,
     /// The user's own licensed Kickstart. Never shipped by ART.
     pub kickstart_path: &'a Path,
-    /// The emulator ART will start.
-    ///
-    /// **Read by nothing in `core/`.** [`rehearse_with`] takes an
-    /// `EmulatorLauncher` directly, and building the real one is a
-    /// process-spawning decision that `core/` may not make (ART-274) — the
-    /// caller builds `tools::winuae_launcher::WinUaeLauncher` from this same
-    /// path itself. The field stays here so a `RehearseRequest` still says
-    /// everything a rehearsal needs in one place.
-    pub winuae_path: &'a Path,
+    // The emulator ART will start is deliberately not a field here.
+    // `rehearse_with` takes an `EmulatorLauncher` directly, and building the
+    // real one is a process-spawning decision that `core/` may not make
+    // (ART-274) — the caller builds `tools::winuae_launcher::WinUaeLauncher`
+    // from the user's configured path itself, before ever constructing a
+    // `RehearseRequest`.
     pub limits: RunLimits,
 }
 
@@ -275,7 +272,6 @@ mod tests {
             scratch_root: scratch,
             profile,
             kickstart_path: rom,
-            winuae_path: rom, // unused by rehearse_with
             limits: RunLimits {
                 deadline: Duration::from_secs(10),
                 poll_interval: Duration::from_millis(1),

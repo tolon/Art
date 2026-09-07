@@ -265,13 +265,9 @@ block — do not stack another on top of it.**
    shifting a foreign card's existing partitions. [ART-250](ISSUES.md) is
    deliberate: `tooltypes()`'s lossy UTF-8 decode is disclosed and counted
    apart, not hidden, and closing it is not scheduled.
-6. **Two minors the whole-branch review found are deliberately still open**,
-   each disclosed where the next reader will find it rather than silently
-   dropped. The dead
-   `RunRequest`/`RehearseRequest.winuae_path` field, read by nothing in
-   `core/` any more, **is** in ISSUES — it is disclosed in
-   [ART-274](ISSUES.md#fixed)'s own Fixed paragraph rather than a separate
-   entry. `scripts/control-byte-sweep.py` walks the real filesystem
+6. **One minor the whole-branch review found is deliberately still open**,
+   disclosed where the next reader will find it rather than silently
+   dropped: `scripts/control-byte-sweep.py` walks the real filesystem
    (`Path.rglob`), never `git ls-files`, on purpose — a false positive on
    untracked scratch, never a miss — and that reasoning is now in the
    script's own header, not in ISSUES.

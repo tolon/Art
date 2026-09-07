@@ -977,7 +977,6 @@ fn install(
             scratch_root,
             profile,
             kickstart_path: kickstart,
-            winuae_path: emulator,
             cd_image: composed.medium.as_ref().map(|m| m.path.as_path()),
             limits: RunLimits::default(),
         };
@@ -2214,7 +2213,6 @@ mod tests {
             package_volume_dir: &package,
             profile: &profile,
             kickstart_path: &kickstart,
-            winuae_path: Path::new("winuae64.exe"),
             cd_image: Some(&disc),
             limits: RunLimits::default(),
         })

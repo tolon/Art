@@ -173,7 +173,6 @@ fn perform(
         scratch_root,
         profile,
         kickstart_path: kickstart,
-        winuae_path: emulator,
         limits: RunLimits::default(),
     };
 
@@ -537,7 +536,6 @@ mod tests {
                 scratch_root: scratch.path(),
                 profile: &profile,
                 kickstart_path: &rom,
-                winuae_path: &winuae,
                 limits: RunLimits::default(),
             },
             &launcher,
