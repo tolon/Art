@@ -279,6 +279,26 @@ pub fn verify_volume(
     manifest: &DistributionManifest,
     dist_root: &Path,
 ) -> CoreResult<VerifyReport> {
+    verify_volume_with(image, slot, index, manifest, dist_root, check_prefs_paths)
+}
+
+/// [`verify_volume`], with the distribution tree's own prefs check
+/// injectable — the same small-seam shape the emulator tests inject a clock
+/// through (ART-246), not a trait: this has exactly one production caller
+/// ([`verify_volume`] itself) and one test caller, so a plain closure
+/// parameter is the whole seam. What it buys: the `Err` arm below —
+/// `check_prefs_paths` failing outright, a real-world cause being a
+/// permission error partway through the directory walk — can be exercised
+/// with an injected [`std::io::ErrorKind::PermissionDenied`] rather than
+/// only argued about.
+fn verify_volume_with(
+    image: &Path,
+    slot: Option<usize>,
+    index: usize,
+    manifest: &DistributionManifest,
+    dist_root: &Path,
+    prefs_check: impl Fn(&Path) -> CoreResult<Vec<FileVerdict>>,
+) -> CoreResult<VerifyReport> {
     let card = read_card(image)?;
     let area = area_for_slot(&card, slot)?;
     let part = partition_by_index(area, index)?;
@@ -310,7 +330,7 @@ pub fn verify_volume(
             .collect(),
     };
 
-    match check_prefs_paths(dist_root) {
+    match prefs_check(dist_root) {
         Ok(prefs_verdicts) => files.extend(prefs_verdicts),
         Err(err) => files.push(fail(
             PREFS_SYS_DIR_REL,
@@ -1956,6 +1976,50 @@ mod tests {
             report.failed, 1,
             "the manifest's own file still passes; only the tree's own prefs claim fails: {:?}",
             report.files
+        );
+    }
+
+    /// ART-246: `check_prefs_paths` failing outright — a real-world cause is
+    /// a permission error partway through the directory walk — must fold
+    /// into one named `Fail` row rather than costing the caller every
+    /// volume-based verdict already computed. Provoked with an injected
+    /// `std::io::ErrorKind::PermissionDenied` through [`verify_volume_with`]
+    /// rather than a real unreadable directory, which `ScratchDir`'s own
+    /// `Drop` cannot reliably clean up (the same tradeoff the entry itself
+    /// disclosed).
+    #[test]
+    fn a_permission_error_walking_prefs_folds_into_one_named_fail_row() {
+        let (image, manifest, tree) = written_volume();
+
+        let report = verify_volume_with(&image, None, 1, &manifest, &tree, |_dist_root| {
+            Err(CoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "access is denied",
+            )))
+        })
+        .unwrap();
+
+        // The volume-based verdicts survive: the manifest's own file still
+        // passes, exactly as `verify_volumes_report_folds_in_the_trees_own_prefs_check`
+        // establishes for the ordinary case.
+        assert!(
+            report
+                .files
+                .iter()
+                .any(|f| f.path.contains("LoadModule") && f.state == CheckState::Pass),
+            "a prefs-check failure must not discard verdicts already computed: {:?}",
+            report.files
+        );
+        let prefs_row = report
+            .files
+            .iter()
+            .find(|f| f.path == PREFS_SYS_DIR_REL)
+            .unwrap_or_else(|| panic!("no row named the prefs check at all: {:?}", report.files));
+        assert_eq!(prefs_row.state, CheckState::Fail, "{prefs_row:?}");
+        let detail = prefs_row.detail.as_deref().unwrap_or("");
+        assert!(
+            detail.contains("access is denied"),
+            "the row must name the actual error, not a generic sentence: {detail}"
         );
     }
 }

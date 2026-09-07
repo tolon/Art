@@ -625,28 +625,6 @@ archives who refreshes often, the fix is a size/mtime-keyed skip for an
 archive that has not changed, the same as the file walk already has — not a
 redesign.
 
-**ART-246** 🔵 **`verify_volume`'s prefs check has an untested failure path:
-a permission error walking the tree folds into one `Fail` row with no test
-provoking it** — *found 2026-09-05/06 by the prefs-and-wallpaper round's Task
-8 review, disclosed rather than faked*
-`src-tauri/src/core/osinstall/verify.rs::verify_volume` (the
-`check_prefs_paths(dist_root)` `Err` arm)
-
-When `check_prefs_paths` cannot walk the distribution tree's `Prefs/`
-directory at all — a real-world cause is a permission error partway through a
-directory walk — `verify_volume` folds that into a single `Fail` row naming
-the error rather than failing the whole report. The fold itself is
-reasonable and matches the file's existing `DosFamily::Other` pattern of
-turning an inability to look into a named verdict rather than a silent
-`Ok`. What is missing is a test that provokes a *real* OS-level permission
-error mid-walk rather than a constructed `CoreError`, the same standard
-Task 7's partial-commit fix was held to in this round. Provoking one
-portably (a directory made unreadable, then restored, without leaving the
-test suite's own scratch in a state `Drop` cannot clean up) is genuinely
-awkward, which is why it was disclosed rather than attempted under time
-pressure at the end of a twelve-task round. Low severity: the branch is
-defensive coding for a case that is plausible but has not been observed.
-
 **ART-248** 🔵 **`appearance_apply` runs the whole wallpaper pipeline
 synchronously on the command thread, with no progress and no cancel** — *found
 2026-09-05/06 during the prefs-and-wallpaper round's whole-branch review,
@@ -764,6 +742,50 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-246** 🔵 ✅ **`verify_volume`'s prefs check has an untested failure
+path: a permission error walking the tree folds into one `Fail` row with no
+test provoking it** — *found 2026-09-05/06 by the prefs-and-wallpaper
+round's Task 8 review, disclosed rather than faked*
+`src-tauri/src/core/osinstall/verify.rs::verify_volume` (the
+`check_prefs_paths(dist_root)` `Err` arm)
+
+When `check_prefs_paths` cannot walk the distribution tree's `Prefs/`
+directory at all — a real-world cause is a permission error partway through a
+directory walk — `verify_volume` folds that into a single `Fail` row naming
+the error rather than failing the whole report. The fold itself is
+reasonable and matches the file's existing `DosFamily::Other` pattern of
+turning an inability to look into a named verdict rather than a silent
+`Ok`. What is missing is a test that provokes a *real* OS-level permission
+error mid-walk rather than a constructed `CoreError`, the same standard
+Task 7's partial-commit fix was held to in this round. Provoking one
+portably (a directory made unreadable, then restored, without leaving the
+test suite's own scratch in a state `Drop` cannot clean up) is genuinely
+awkward, which is why it was disclosed rather than attempted under time
+pressure at the end of a twelve-task round. Low severity: the branch is
+defensive coding for a case that is plausible but has not been observed.
+
+**Fixed** 2026-09-07, by the seam the batch-1 brief asked for rather than a
+real unreadable directory: `verify_volume` now delegates to a private
+`verify_volume_with(..., prefs_check: impl Fn(&Path) -> CoreResult<Vec<FileVerdict>>)`,
+the same `_with`-suffixed shape `core::gameindex::scan_titles`/
+`scan_titles_with` already use for an injectable seam, and the public
+`verify_volume` is unchanged (single production call site,
+`commands/osinstall.rs`, untouched). This is the "small closure" the entry's
+own "more than a local seam?" question asked about, and it turned out not to
+need more. Test:
+`a_permission_error_walking_prefs_folds_into_one_named_fail_row`, injecting
+`CoreError::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, ...))`
+through the closure and asserting both that the volume-based verdicts survive
+(the manifest's own file still `Pass`es) and that the prefs row is `Fail`
+naming the actual error text. Mutation: swallowed the injected error instead
+of folding it in (`if let Ok(...) = prefs_check(...) { ... }`, dropping the
+`Err` arm entirely) — the test failed ("no row named the prefs check at
+all"); restored via copy, touched, re-diffed against the real fix, and the
+test passed again. `cargo test --lib osinstall::verify::` (whole module):
+`29 passed; 0 failed`.
+
+---
+
 **ART-247** 🔵 ✅ **A PNG decode arm the `png` crate's own `EXPAND` transform
 should make unreachable has no test of its own** — *found 2026-09-05/06
 during the prefs-and-wallpaper round's Task 6, disclosed with a traced
