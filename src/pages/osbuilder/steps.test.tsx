@@ -40,6 +40,11 @@ vi.mock("@/components/osbuilder/AmigaInstallPanel", () => ({
     <div data-testid="amiga">{treeRoot ?? "(no tree)"}</div>
   ),
 }));
+vi.mock("@/components/osbuilder/FirstBootPanel", () => ({
+  FirstBootPanel: ({ treeRoot }: { treeRoot: string | null }) => (
+    <div data-testid="firstboot">{treeRoot ?? "(no tree)"}</div>
+  ),
+}));
 vi.mock("@/components/osbuilder/CardBuilder", () => ({
   CardBuilder: () => <div data-testid="card" />,
 }));
@@ -60,9 +65,8 @@ vi.mock("@/components/osbuilder/OsInstall", () => ({
 const { useSettingsStore } = await import("@/stores/settingsStore");
 const { DEFAULT_SETTINGS } = await import("@/lib/settings");
 const { OsBuilder } = await import("@/pages/OsBuilder");
-const { StepPaketler, StepAmigaKurulum, StepKaynak, StepKart, StepBirimler } = await import(
-  "@/pages/osbuilder/steps"
-);
+const { StepPaketler, StepAmigaKurulum, StepIlkAcilis, StepKaynak, StepKart, StepBirimler } =
+  await import("@/pages/osbuilder/steps");
 
 function seed(remembered: Record<string, unknown>) {
   useSettingsStore.setState({
@@ -79,6 +83,7 @@ function renderAt(path: string, state?: unknown) {
           <Route path="kaynak" element={<StepKaynak />} />
           <Route path="paketler" element={<StepPaketler />} />
           <Route path="amiga-kurulum" element={<StepAmigaKurulum />} />
+          <Route path="ilk-acilis" element={<StepIlkAcilis />} />
           <Route path="kart" element={<StepKart />} />
           <Route path="birimler" element={<StepBirimler />} />
         </Route>
@@ -155,8 +160,8 @@ describe("the progress strip", () => {
     });
     renderAt("/os-builder/paketler");
 
-    // `install` has four steps and no card step.
-    expect(screen.getAllByRole("link").length).toBe(4);
+    // `install` has five steps and no card step.
+    expect(screen.getAllByRole("link").length).toBe(5);
     expect(screen.queryByTestId("card")).toBeNull();
     expect(screen.getByRole("link", { name: /Update packages/i })).toBeTruthy();
     expect(screen.queryByRole("link", { name: /card image/i })).toBeNull();

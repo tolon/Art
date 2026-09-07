@@ -702,6 +702,7 @@
       "kaynak": "Install media",
       "paketler": "Update packages",
       "amiga-kurulum": "Install on the Amiga",
+      "ilk-acilis": "First boot on the Amiga",
       "kart": "The card image",
       "birimler": "Prepare volumes",
       "asksTree": "This step works on an AmigaOS folder, and none has been chosen yet. Pick one below, or build one first:",
@@ -2781,6 +2782,77 @@
       "nothingChosen": "Tick the wallpaper, the screen depth, the shell defaults, the icon arrangement, or some of them.",
       "noBackdropChosen": "Choose a backdrop already in the tree.",
       "noPictureChosen": "Choose a picture on this PC."
+    }
+  },
+  "firstboot": {
+    "step": {
+      "ok": "Done",
+      "skipped": "Skipped: {{reason}}",
+      "refused": "Refused (code {{rc}}); it will be tried again on the next boot",
+      "refusedPlain": "Refused; it will be tried again on the next boot",
+      "unfinished": "Started and never finished; the Amiga stopped or hung on this step"
+    },
+    "ending": {
+      "notBooted": "This card has not been booted on an Amiga yet.",
+      "unfinished": "The first boot began and did not reach its end.",
+      "doneAll": "Every first-boot step has run.",
+      "donePartial": "The first boot ran; some steps are still waiting for the next boot."
+    },
+    "fat": {
+      "available": "The FAT boot partition will be mounted as EMU68BOOT: (L:fat95 is in the tree).",
+      "unavailable": "The FAT boot partition will not be mounted: the tree has no L:{{needs}}. Aminet disk/misc/{{needs}} supplies it; the step skips without it."
+    },
+    "rehearsal": {
+      "outcome": {
+        "finished": "Every step ran under WinUAE and the block removed itself.",
+        "stepRefused": "A step refused. The copy is kept so you can read the Amiga's own log.",
+        "timedOut": "Nobody answered. The Amiga had not written its ending {{seconds}} seconds in, so ART ended the emulator it had started; the copy is kept.",
+        "emulatorClosed": "The emulator window was closed {{seconds}} seconds in, before the first boot had reached its end; the copy is kept."
+      },
+      "next": {
+        "finished": "Write the tree to a card. The hardware step skips under an emulator and runs only on the real machine.",
+        "stepRefused": "Open S/FirstBoot.log in the copy: the refused step's own lines say why, and it will be tried again on the next boot.",
+        "timedOut": "Run it again and watch the emulator window this time. A first boot that never writes its ending has stopped or hung on a step, and the copy's S/FirstBoot.log says which.",
+        "emulatorClosed": "Run it again and let the window finish. ART cannot say what the remaining steps would have done, so nothing was decided either way."
+      }
+    },
+    "report": {
+      "heading": "First boot's own report",
+      "system": "{{system}} · {{rpi}} · Kickstart {{kick}}",
+      "source": {
+        "fat": "Read from the FAT boot partition's own copy (art-firstboot.log).",
+        "amigaVolume": "Read from the Amiga volume's own copy (S/FirstBoot.log)."
+      },
+      "fatCopyFailed": "Copying onto the FAT boot partition failed; the files stayed on the AmigaDOS side.",
+      "unknown": "Lines from a newer ART, carried rather than dropped:",
+      "details": "Details",
+      "readFailed": "This card's first-boot report could not be read:"
+    },
+    "panel": {
+      "heading": "First boot on the Amiga",
+      "intro": "The Amiga finishes what ART cannot start from the host: it detects the hardware, mounts the FAT boot partition and runs the packages that need to run on the machine itself. Write it once, then boot the card to see it happen.",
+      "tree": "AmigaOS folder",
+      "preview": "What first boot will write",
+      "steps": "What it will do, in order",
+      "bytes": "The tree grows by about {{kb}} KB.",
+      "alreadyWritten": "This tree already carries a first-boot block. Writing again replaces it.",
+      "write": "Write first boot",
+      "writeAgain": "Write again",
+      "written": "{{count}} files written into the tree.",
+      "backup": "S/User-Startup already existed; the previous copy was kept at {{path}}.",
+      "created": "S/User-Startup did not exist; ART created it.",
+      "nothingWritten": "Nothing was written.",
+      "rehearse": "Rehearse under WinUAE",
+      "rehearseIntro": "Boots a copy of the tree, never the tree itself, and proves the mechanism runs: the dispatcher starts, each step reports and the block removes itself on success. The hardware step always skips under an emulator — that half only proves out on the real machine.",
+      "kickstart": "Kickstart for the rehearsal",
+      "winuae": "Uses the WinUAE configured in Settings.",
+      "window": "An emulator window will open on this desktop while the rehearsal runs.",
+      "run": "Rehearse",
+      "stop": "Stop",
+      "running": "Rehearsing…",
+      "cancelled": "You stopped the rehearsal.",
+      "copyKept": "The copy is kept at {{path}}.",
+      "copyDiscarded": "The copy has been discarded."
     }
   }
 }

@@ -702,6 +702,7 @@
       "kaynak": "Kurulum ortamı",
       "paketler": "Güncelleme paketleri",
       "amiga-kurulum": "Amiga'da kur",
+      "ilk-acilis": "Amiga'da ilk açılış",
       "kart": "Kart imajı",
       "birimler": "Birimleri hazırla",
       "asksTree": "Bu adım bir AmigaOS klasörü üzerinde çalışır, henüz seçilmedi. Aşağıdan birini seç ya da önce bir tane kur:",
@@ -2781,6 +2782,77 @@
       "nothingChosen": "Duvar kağıdını, ekran derinliğini, kabuk varsayılanlarını, simge düzenlemeyi ya da bir kısmını işaretleyin.",
       "noBackdropChosen": "Ağaçta zaten olan bir arka plan seçin.",
       "noPictureChosen": "Bu bilgisayardan bir resim seçin."
+    }
+  },
+  "firstboot": {
+    "step": {
+      "ok": "Tamamlandı",
+      "skipped": "Atlandı: {{reason}}",
+      "refused": "Reddedildi (kod {{rc}}); bir sonraki açılışta yeniden denenecek",
+      "refusedPlain": "Reddedildi; bir sonraki açılışta yeniden denenecek",
+      "unfinished": "Başladı ama hiç bitmedi; Amiga bu adımda durdu ya da takıldı"
+    },
+    "ending": {
+      "notBooted": "Bu kart henüz bir Amiga'da açılmadı.",
+      "unfinished": "İlk açılış başladı ama sonuna ulaşmadı.",
+      "doneAll": "İlk açılışın her adımı çalıştı.",
+      "donePartial": "İlk açılış çalıştı; bazı adımlar hâlâ bir sonraki açılışı bekliyor."
+    },
+    "fat": {
+      "available": "FAT önyükleme bölümü EMU68BOOT: olarak bağlanacak (L:fat95 ağaçta var).",
+      "unavailable": "FAT önyükleme bölümü bağlanmayacak: ağaçta L:{{needs}} yok. Aminet disk/misc/{{needs}} bunu sağlar; adım o olmadan atlanır."
+    },
+    "rehearsal": {
+      "outcome": {
+        "finished": "Her adım WinUAE altında çalıştı ve blok kendini kaldırdı.",
+        "stepRefused": "Bir adım reddetti. Amiga'nın kendi günlüğünü okuyabilmeniz için kopya saklandı.",
+        "timedOut": "Kimse yanıt vermedi. Amiga {{seconds}} saniye sonra hâlâ sonunu yazmamıştı, bu yüzden ART başlattığı emülatörü sonlandırdı; kopya saklandı.",
+        "emulatorClosed": "Emülatör penceresi {{seconds}} saniye sonra, ilk açılış sonuna ulaşmadan kapatıldı; kopya saklandı."
+      },
+      "next": {
+        "finished": "Ağacı bir karta yazın. Donanım adımı emülatör altında atlanır ve yalnızca gerçek makinede çalışır.",
+        "stepRefused": "Kopyadaki S/FirstBoot.log dosyasını açın: reddeden adımın kendi satırları nedenini söyler ve adım bir sonraki açılışta yeniden denenecek.",
+        "timedOut": "Yeniden çalıştırın ve bu kez emülatör penceresini izleyin. Sonunu hiç yazmayan bir ilk açılış bir adımda durmuş ya da takılmıştır; kopyadaki S/FirstBoot.log hangisi olduğunu söyler.",
+        "emulatorClosed": "Yeniden çalıştırın ve pencerenin işini bitirmesine izin verin. ART kalan adımların ne yapacağını söyleyemez, bu yüzden hiçbir yönde bir karar oluşmadı."
+      }
+    },
+    "report": {
+      "heading": "İlk açılışın kendi raporu",
+      "system": "{{system}} · {{rpi}} · Kickstart {{kick}}",
+      "source": {
+        "fat": "FAT önyükleme bölümünün kendi kopyasından okundu (art-firstboot.log).",
+        "amigaVolume": "Amiga biriminin kendi kopyasından okundu (S/FirstBoot.log)."
+      },
+      "fatCopyFailed": "FAT önyükleme bölümüne kopyalama başarısız oldu; dosyalar AmigaDOS tarafında kaldı.",
+      "unknown": "Daha yeni bir ART'tan gelen, atılmayıp taşınan satırlar:",
+      "details": "Ayrıntılar",
+      "readFailed": "Bu kartın ilk açılış raporu okunamadı:"
+    },
+    "panel": {
+      "heading": "Amiga'da ilk açılış",
+      "intro": "Amiga, ART'ın host tarafından başlatamadığını tamamlar: donanımı algılar, FAT önyükleme bölümünü bağlar ve makinenin kendisinde çalışması gereken paketleri çalıştırır. Bir kez yazın, sonra kartı açıp gerçekleştiğini görün.",
+      "tree": "AmigaOS klasörü",
+      "preview": "İlk açılışın yazacakları",
+      "steps": "Ne yapacağı, sırasıyla",
+      "bytes": "Ağaç yaklaşık {{kb}} KB büyür.",
+      "alreadyWritten": "Bu ağaç zaten bir ilk-açılış bloğu taşıyor. Yeniden yazmak onun yerine geçer.",
+      "write": "İlk açılışı yaz",
+      "writeAgain": "Yeniden yaz",
+      "written": "Ağaca {{count}} dosya yazıldı.",
+      "backup": "S/User-Startup zaten vardı; önceki kopyası {{path}} konumunda saklandı.",
+      "created": "S/User-Startup yoktu; ART onu oluşturdu.",
+      "nothingWritten": "Hiçbir şey yazılmadı.",
+      "rehearse": "WinUAE altında prova et",
+      "rehearseIntro": "Ağacın kendisini değil, bir kopyasını açar ve mekanizmanın çalıştığını kanıtlar: dağıtıcı başlar, her adım bildirir ve blok başarıyla kendini kaldırır. Donanım adımı emülatör altında her zaman atlanır — o yarı yalnızca gerçek makinede kanıtlanır.",
+      "kickstart": "Prova için Kickstart",
+      "winuae": "Ayarlar'da yapılandırılan WinUAE'yi kullanır.",
+      "window": "Prova çalışırken bu masaüstünde bir emülatör penceresi açılacak.",
+      "run": "Prova et",
+      "stop": "Durdur",
+      "running": "Prova ediliyor…",
+      "cancelled": "Provayı durdurdunuz.",
+      "copyKept": "Kopya {{path}} konumunda saklandı.",
+      "copyDiscarded": "Kopya silindi."
     }
   }
 }

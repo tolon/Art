@@ -22,6 +22,7 @@ import { useBuildSession } from "@/lib/useBuildSession";
 import { AmigaInstallPanel } from "@/components/osbuilder/AmigaInstallPanel";
 import { AppearancePanel } from "@/components/osbuilder/AppearancePanel";
 import { CardBuilder } from "@/components/osbuilder/CardBuilder";
+import { FirstBootPanel } from "@/components/osbuilder/FirstBootPanel";
 import { OsInstall } from "@/components/osbuilder/OsInstall";
 import { PackagePanel } from "@/components/osbuilder/PackagePanel";
 import { NetworkPanel } from "@/components/osbuilder/NetworkPanel";
@@ -140,6 +141,22 @@ export function StepAmigaKurulum() {
         onTreeRootChange={(root) => setTree({ root, builtHere: false })}
         packageFolder={session.packages.folder}
         release={session.release}
+      />
+    </>
+  );
+}
+
+export function StepIlkAcilis() {
+  const { session, setTree } = useBuildSession();
+  const isTree = useTreeCheck(session.tree.root);
+  const state = readiness(session, "ilk-acilis", isTree);
+  return (
+    <>
+      {state === "asks" && <Asks />}
+      {state === "wrong-folder" && <WrongFolder />}
+      <FirstBootPanel
+        treeRoot={session.tree.root}
+        onTreeRootChange={(root) => setTree({ root, builtHere: false })}
       />
     </>
   );

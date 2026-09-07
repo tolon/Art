@@ -596,7 +596,14 @@ fn poll_until_ending(
 /// no deadline to measure against, so the UI shows an unbounded indicator
 /// rather than a bar that is always full.
 fn deadline_units(request: &RunRequest) -> Option<u64> {
-    let secs = request.limits.deadline.as_secs();
+    deadline_secs(&request.limits)
+}
+
+/// Same computation as [`deadline_units`], taken directly from [`RunLimits`]
+/// rather than a whole [`RunRequest`] — [`super::rehearse`] has limits but no
+/// [`PlannedRun`] to build one of those around.
+pub(crate) fn deadline_secs(limits: &RunLimits) -> Option<u64> {
+    let secs = limits.deadline.as_secs();
     (secs > 0).then_some(secs)
 }
 
@@ -613,7 +620,7 @@ fn deadline_units(request: &RunRequest) -> Option<u64> {
 /// Failing to terminate is reported and swallowed: the run has its answer
 /// already, and losing it because the process was gone a moment earlier than
 /// expected would be the report ART owes the user thrown away for nothing.
-fn end_session(session: &mut dyn EmulatorSession, sink: &dyn ProgressSink) {
+pub(crate) fn end_session(session: &mut dyn EmulatorSession, sink: &dyn ProgressSink) {
     let pid = session.pid();
     if let Err(err) = session.terminate() {
         sink.report(
@@ -668,21 +675,18 @@ fn read_outcome(result_file: &Path) -> CoreResult<Option<RunOutcome>> {
     })
 }
 
+/// Test doubles shared by this module's own tests and by
+/// [`super::rehearse`]'s: a rehearsal launches through the same
+/// [`EmulatorLauncher`]/[`Clock`] seam as an ordinary run, and must not open a
+/// window on the owner's desktop any more than this module's tests may.
+/// `pub(crate)` rather than private so `rehearse`'s test module can `use
+/// fakes::*;` instead of keeping a second copy that could drift from this one.
 #[cfg(test)]
-mod tests {
+pub(crate) mod fakes {
     use super::*;
-    use crate::core::amigainstall::RESULT_FILE;
-    use crate::core::jobs::{CancelToken, NoProgress};
+    use crate::core::jobs::CancelToken;
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
-
-    /// ART-184: the directory removes itself on `Drop`, so a panicking test
-    /// cleans up too. The previous shape returned a bare `PathBuf` with no
-    /// guard at all, and was measured leaking eighteen directories per run of
-    /// this module alone — in code written *after* ART-184 was filed.
-    fn scratch(tag: &str) -> crate::core::ScratchDir {
-        crate::core::ScratchDir::new("art-amigainstall-run", tag)
-    }
 
     /// A clock that never waits.
     ///
@@ -691,14 +695,14 @@ mod tests {
     /// scheduler happened to do. `on_sleep` is how a test plays the Amiga:
     /// it writes the result file between two polls, which is precisely the
     /// live-write the design measured.
-    struct TestClock {
+    pub(crate) struct TestClock {
         elapsed: Mutex<Duration>,
         sleeps: AtomicU32,
         on_sleep: Box<dyn Fn(u32) + Send + Sync>,
     }
 
     impl TestClock {
-        fn new(on_sleep: impl Fn(u32) + Send + Sync + 'static) -> Self {
+        pub(crate) fn new(on_sleep: impl Fn(u32) + Send + Sync + 'static) -> Self {
             Self {
                 elapsed: Mutex::new(Duration::ZERO),
                 sleeps: AtomicU32::new(0),
@@ -706,11 +710,11 @@ mod tests {
             }
         }
 
-        fn idle() -> Self {
+        pub(crate) fn idle() -> Self {
             Self::new(|_| {})
         }
 
-        fn sleeps(&self) -> u32 {
+        pub(crate) fn sleeps(&self) -> u32 {
             self.sleeps.load(Ordering::Relaxed)
         }
     }
@@ -728,14 +732,14 @@ mod tests {
     }
 
     /// What the fake emulator did, readable after the run.
-    struct SessionLog {
-        running: AtomicBool,
-        terminated: Mutex<Vec<u32>>,
-        launched_with: Mutex<Vec<String>>,
-        liveness_checks: AtomicU32,
+    pub(crate) struct SessionLog {
+        pub(crate) running: AtomicBool,
+        pub(crate) terminated: Mutex<Vec<u32>>,
+        pub(crate) launched_with: Mutex<Vec<String>>,
+        pub(crate) liveness_checks: AtomicU32,
         /// When set, `is_running` returns `Err` instead of an answer — the
         /// transient I/O failure that used to orphan the emulator.
-        liveness_fails: AtomicBool,
+        pub(crate) liveness_fails: AtomicBool,
         /// Run at the start of each liveness check, given the number of checks
         /// so far.
         ///
@@ -749,7 +753,7 @@ mod tests {
     }
 
     impl SessionLog {
-        fn new(on_liveness: impl Fn(u32) + Send + Sync + 'static) -> Self {
+        pub(crate) fn new(on_liveness: impl Fn(u32) + Send + Sync + 'static) -> Self {
             Self {
                 running: AtomicBool::new(true),
                 terminated: Mutex::new(Vec::new()),
@@ -761,7 +765,7 @@ mod tests {
         }
     }
 
-    struct FakeSession {
+    pub(crate) struct FakeSession {
         pid: u32,
         log: Arc<SessionLog>,
     }
@@ -792,21 +796,43 @@ mod tests {
     /// A launcher that starts nothing. No emulator window ever opens for a
     /// test in this file, which is a requirement of this round and not a
     /// convenience: the owner is sitting at the machine.
-    struct FakeLauncher {
-        pid: u32,
-        log: Arc<SessionLog>,
+    pub(crate) struct FakeLauncher {
+        pub(crate) pid: u32,
+        pub(crate) log: Arc<SessionLog>,
     }
 
     impl FakeLauncher {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             Self::with_liveness_hook(|_| {})
         }
 
-        fn with_liveness_hook(on_liveness: impl Fn(u32) + Send + Sync + 'static) -> Self {
+        pub(crate) fn with_liveness_hook(
+            on_liveness: impl Fn(u32) + Send + Sync + 'static,
+        ) -> Self {
             Self {
                 pid: 4242,
                 log: Arc::new(SessionLog::new(on_liveness)),
             }
+        }
+
+        /// A session that reports running until [`EmulatorSession::terminate`]
+        /// is called — the ordinary fake, named for what a rehearsal test
+        /// reads at the call site rather than for its mechanism.
+        pub(crate) fn running_forever() -> Self {
+            Self::new()
+        }
+
+        /// A session whose very first liveness check already reports gone —
+        /// the owner closing the window before anything was written.
+        pub(crate) fn exits_immediately() -> Self {
+            let launcher = Self::new();
+            launcher.log.running.store(false, Ordering::Relaxed);
+            launcher
+        }
+
+        /// How many times [`EmulatorLauncher::launch`] was actually called.
+        pub(crate) fn launches(&self) -> usize {
+            self.log.launched_with.lock().unwrap().len()
         }
     }
 
@@ -824,15 +850,17 @@ mod tests {
         }
     }
 
-    /// A sink that stops the run after `after` cancellation checks.
-    struct CancelAfter {
+    /// A sink that stops the run after `after` cancellation checks. With
+    /// `after == 0` the very first check already reports cancelled — a stop
+    /// requested before anything launched.
+    pub(crate) struct CancelAfter {
         checks: AtomicU32,
         after: u32,
         token: CancelToken,
     }
 
     impl CancelAfter {
-        fn new(after: u32) -> Self {
+        pub(crate) fn new(after: u32) -> Self {
             Self {
                 checks: AtomicU32::new(0),
                 after,
@@ -851,6 +879,24 @@ mod tests {
             }
             self.token.is_cancelled()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fakes::{CancelAfter, FakeLauncher, TestClock};
+    use super::*;
+    use crate::core::amigainstall::RESULT_FILE;
+    use crate::core::jobs::NoProgress;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    /// ART-184: the directory removes itself on `Drop`, so a panicking test
+    /// cleans up too. The previous shape returned a bare `PathBuf` with no
+    /// guard at all, and was measured leaking eighteen directories per run of
+    /// this module alone — in code written *after* ART-184 was filed.
+    fn scratch(tag: &str) -> crate::core::ScratchDir {
+        crate::core::ScratchDir::new("art-amigainstall-run", tag)
     }
 
     /// A whole run's worth of directories and files, with nothing running.

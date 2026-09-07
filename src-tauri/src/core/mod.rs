@@ -26,6 +26,7 @@ pub mod dirsize;
 pub mod distro;
 pub mod error;
 pub mod fat32;
+pub mod firstboot;
 pub mod gameindex;
 pub mod gotek;
 pub mod hashing;

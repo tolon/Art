@@ -37,6 +37,7 @@ export const STEP_IDS = [
   "kaynak",
   "paketler",
   "amiga-kurulum",
+  "ilk-acilis",
   "kart",
   "birimler",
 ] as const;
@@ -66,7 +67,7 @@ export type Readiness = "ready" | "asks" | "wrong-folder";
 export function stepsFor(kind: BuildKind): StepId[] {
   switch (kind) {
     case "install":
-      return ["hedef", "kaynak", "paketler", "amiga-kurulum"];
+      return ["hedef", "kaynak", "paketler", "amiga-kurulum", "ilk-acilis"];
     case "boot-card":
       return ["hedef", "kart"];
     case "prepare-volumes":
@@ -102,6 +103,7 @@ export function readiness(
   switch (step) {
     case "paketler":
     case "amiga-kurulum":
+    case "ilk-acilis":
       // No folder beats a bad one. "Pick one" is the useful sentence, and
       // "that is not a tree" said about nothing would be nonsense.
       if (!hasTree(session)) return "asks";

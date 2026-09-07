@@ -25,6 +25,48 @@ pass — filed and closed together rather than sitting in Open in between.
 ---
 
 ## Open
+**ART-274** 🔵 **`core/winuae.rs` spawns an external process from inside
+`core/`, the exact shape the trait rule exists to prevent** — *found
+2026-09-07 by the whole-branch review of `art-firstboot` phases 1–2*
+`src-tauri/src/core/winuae.rs` · `src-tauri/src/core/amigainstall/run.rs` ·
+`src-tauri/src/core/amigainstall/rehearse.rs`
+
+CLAUDE.md's "The core independence rule" is explicit: `core/` is
+`std` + a short, named list of crates, and a module that needs something
+platform-specific — device enumeration, launching WinUAE — exposes a
+**trait**, with the implementation living outside `core/`. `VolumeFormatter`
+(`core/preload/mod.rs`, implemented in `tools/hst_imager.rs`) and
+`HostRecycler` (`core/hostfs.rs`, implemented in `tools/recycle_bin.rs`) are
+the two live instances of that shape. `core/winuae.rs` is not: it launches
+`winuae64.exe` directly, from inside `core/`, with no trait between the
+decision to open the emulator and the process spawn that does it.
+
+This did not start with `art-firstboot`. `core::amigainstall::run` has called
+`core::winuae` since the AmigaOS-install-under-WinUAE round, and this branch
+made it worse in the ordinary way a precedent gets worse: `core::amigainstall::rehearse`
+(the first-boot rehearsal engine) is a **second** consumer of the same
+un-abstracted call, added without anyone re-deciding whether the shape was
+still acceptable. Two consumers is a pattern one review away from being read
+as sanctioned; a third would make it one.
+
+**How it fails for a user: it does not, yet.** This is not a defect in
+`art-firstboot`'s own behaviour — `rehearse.rs` inherited an existing
+violation rather than introducing a new kind of one, and nothing here is
+reported to have produced a wrong sentence on screen. The cost is the one the
+trait rule is written against: `core/` is meant to stay unit-testable without
+a real WinUAE install and promotable to a standalone crate without carrying
+Windows-process-spawning code along, and `core/winuae.rs` as it stands
+already breaks both of those promises for anything that imports it.
+
+**The fix, not built in this round:** an `EmulatorLauncher`-style trait
+declared in `core/` (the decision — which executable, which arguments, when
+to give up waiting) with the actual process spawn implemented outside it, in
+`tools/`, exactly as `VolumeFormatter`/`tools/hst_imager.rs` already do for
+volume formatting. `core::amigainstall::run` and `core::amigainstall::rehearse`
+would both take the trait rather than calling `core::winuae` directly, the
+same way both call sites already take other platform boundaries as traits
+rather than concrete implementations.
+
 **ART-271** 🟠 **`control-byte-sweep.py` does not look for the one
 control byte CLAUDE.md's own incident report names first** — *found
 2026-09-06 by reproducing the accident live while writing STATUS.md*
@@ -345,6 +387,17 @@ re-upload. The owner's decision forbids a bypass; obtaining somebody else's is
 the same bypass with an extra step, and the measurement above says it would
 buy nothing.
 
+**The Amiga-side path now has two vehicles, added 2026-09-07 (round 5,
+first-boot phases 1–2, `art-firstboot`).** The 2026-08-21 paragraph above is
+`core/amigainstall` launching WinUAE unattended and running a package's own
+`Updater` inside it. Round 5 built the second: a `run` action for the
+first-boot mechanism (`core/firstboot`, `S/FirstBoot/50-pkg-<id>`), planned
+for phase 4 and not yet built — phases 1–2 land the dispatcher, the steps and
+the report only. This entry stays open as the host-placement entry it is:
+neither vehicle places a BoingBag's files from the host, and
+`host_placement_block: "encrypted-payload"` is unchanged. What has widened is
+where the Amiga-side alternative can run — WinUAE today, a real machine once
+phase 4 exists.
 
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
@@ -840,6 +893,82 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-273** 🔵 ✅ **The first-boot dispatcher tried to delete itself on `done
+all`, and AmigaDOS refused: the file was still being executed** — *found
+2026-09-07 by the gated rehearsal on the owner's own 3.2 tree (task 8 of the
+first-boot round), fixed the same day*
+`src-tauri/src/core/firstboot/scripts/ART-FirstBoot`
+
+Spec §4.2 item 5 said "delete `S:ART-FirstBoot` only on `done all`", and the
+script did exactly that. Measured after a clean `done all` under WinUAE:
+`dispatcher still present after done all: true`. A script cannot delete
+itself while the shell is reading it, so every boot after the first would
+have run the dispatcher again against an empty step directory and appended
+another `done all` — a log that says the first boot finished four times is
+the confident-wrong class, one line per boot.
+
+**Fixed** by making the finished state "`S:FirstBoot/` is gone" rather than
+"the dispatcher is gone": `done all` removes the step directory and the
+wrapper, the dispatcher's first line is `IF NOT EXISTS S:FirstBoot` → `Skip
+end`, and it never names itself in a `Delete`. Guard:
+`a_finished_first_boot_removes_the_step_directory_and_the_dispatcher_stays_inert`
+(the text) and the assertion added to `rehearse_the_real_tree_when_asked`
+(the tree, after the boot). Measured on the third real run: the directory
+was gone, the dispatcher was still there, and the test passed on that.
+
+---
+
+**ART-272** 🔵 ✅ **The fixed first-boot scripts were written from recalled
+AmigaDOS and could not run past their first step under a real shell** —
+*found 2026-09-07 by the first real rehearsal (task 8), fixed the same day
+after one instrumented boot*
+`src-tauri/src/core/firstboot/scripts/*` (all five scripts),
+`src-tauri/src/core/firstboot/plan.rs`
+
+Seven tasks of tests were green against scripts that had never been executed.
+The first boot of the owner's 3.2 tree under WinUAE produced a four-line log
+— `system $ART_System $ART_RpiType kick $ART_Kick`, then only `30-datatypes`
+started and skipped, then nothing, no `done` — and the emulator sat there
+until it was closed 364 s later. One instrumented boot
+(`.superpowers/sdd/2026-09-07-firstboot-phase-1-2/task-8-dbg1.txt`, local)
+measured three separate defects at once, each of which alone would have
+broken the mechanism:
+
+1. **`$ART_System` does not expand; `${ART_System}` does.** Every variable
+   read in every script was the bare form, so every `IF … EQ` compared a
+   literal and the `system` line reported nothing. `$ARTSys` and `$ARTLocal`
+   expanded — a bare name with an underscore is the case that fails.
+2. **`Quit` inside an `Execute`d script ends every script above it.** The
+   steps left with `Quit 0` and refused with `Quit 20` (spec §4.2 item 4);
+   the first step's `Quit` ended the wrapper, the generated run list and the
+   dispatcher in one stroke. Emu68 Hatcher's own steps never `Quit`.
+3. **`List` answers in the directory's own order, not by name.** Measured
+   `30, 20, 10`. "Sorted by name" in §4.2 item 4 was an assumption, and it
+   is no truer on FFS or PFS3 than under WinUAE.
+
+**Fixed**: every read is `${name}`; no script `Quit`s — a step leaves through
+`Skip end`/`Lab end` and refuses by `Set ART_StepRc 20`, which the wrapper
+resets before the step and reads after it; the run list goes through
+`C:Sort` before it is executed, and `plan` refuses a tree without `C/Sort`
+(or `List`, `Delete`, `Copy`, `Version`, `Mount`, `Assign`) by name
+(`FirstBootNeedsCommand`, `ART-FIRSTBOOT-NEEDS-COMMAND`). The wrapper's key
+brackets became `[]` so `${ART_StepRc}` inside it is not taken for a key.
+Guards over the text: `every_variable_read_is_braced`, `no_script_ever_quits`,
+`dispatcher_sorts_the_run_list_before_executing_it`,
+`every_step_that_skips_carries_its_end_label`,
+`step_wrapper_uses_square_key_brackets`, `a_tree_without_c_sort_is_refused_by_name`.
+Guard over the world: `rehearse_the_real_tree_when_asked`, which now passes
+on the owner's tree — `system UAE none kick 3.2`, three steps in order,
+`done all`, `Finished`, 18 s. The refusal path was measured separately with a
+synthetic refusing step (`task-8-dbg2-fixed.txt`, local): `refused rc=20`,
+file kept, `done partial`.
+
+Not proven by any of this: the Pi3/Pi4 branch of `10-hardware`, which under
+UAE writes `skipped uae` and touches nothing. That closes on a real card only
+(spec §8).
+
+---
+
 **ART-270** 🔵 ✅ **Two new MD5 tests leaked their scratch directory on a
 panic, and so did the two sha256 tests they copied the pattern from** —
 *found 2026-09-06, whole-branch review of the media-identification round (M7),
@@ -9302,6 +9431,10 @@ composing, not merely coexisting), `::a_level_one_entry_with_no_directory_header
 `::an_absolute_name_survives_assembly_too` (the two wrong drafts, pinned so
 neither can come back). New fixture `make_level1_lha`, built byte-exact from
 the level-1 layout.
+
+**2026-09-07:** this decode is what a first-boot `unpack` step (phase 4 of
+round 5, not yet built) will hand an Amiga's own archiver — see
+`.superpowers/sdd/2026-09-07-firstboot/`.
 
 **ART-164** ✅ **`core::iso`'s test scratch directory can be shared by two
 threads, so *any* test in the module can read another's fixture — first

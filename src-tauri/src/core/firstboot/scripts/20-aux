@@ -1,0 +1,27 @@
+; ART first boot: AmigaOS 3.9's serial-port DOSDriver is stored as _AUX,
+; because AUX is a reserved name on the host that built this tree. A card
+; ART wrote already carries it as AUX (core/preload/amiga_names.rs); this
+; step is for a tree that reached the Amiga some other way.
+; No Quit here: a refusal sets ART_StepRc and skips to the end label.
+FailAt 2000000000
+IF ${ART_System} EQ "UAE"
+  Echo >>S:FirstBoot.log "step 20-aux skipped uae"
+  Skip end
+ENDIF
+IF NOT ${ART_Kick} EQ "3.9"
+  Echo >>S:FirstBoot.log "step 20-aux skipped not-3.9"
+  Skip end
+ENDIF
+IF NOT EXISTS SYS:Storage/DOSDrivers/_AUX
+  Echo >>S:FirstBoot.log "step 20-aux skipped already-aux"
+  Skip end
+ENDIF
+Rename >NIL: SYS:Storage/DOSDrivers/_AUX SYS:Storage/DOSDrivers/AUX
+IF WARN
+  Set ART_StepRc 20
+  Skip end
+ENDIF
+IF EXISTS SYS:Storage/DOSDrivers/_AUX.info
+  Rename >NIL: SYS:Storage/DOSDrivers/_AUX.info SYS:Storage/DOSDrivers/AUX.info
+ENDIF
+Lab end

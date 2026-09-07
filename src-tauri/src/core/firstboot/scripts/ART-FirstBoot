@@ -1,0 +1,99 @@
+; ART first boot. Runs every file in S:FirstBoot/ once, in name order, and
+; writes one line per event to S:FirstBoot.log. Dispatched from S:User-Startup.
+; Written by ART; see docs/superpowers/specs/2026-09-07-firstboot-design.md.
+;
+; Three rules, each measured under WinUAE on 2026-09-07 rather than assumed:
+; every variable is read as ${name}, because the bare dollar form did not
+; expand and the braced one did; nothing here or in a step ever Quits, because a
+; Quit inside an Execute ends every script above it as well; and the run
+; list goes through Sort, because List answers in the directory's own order.
+FailAt 2000000000
+; A finished first boot removes S:FirstBoot/ (the directory), not this file:
+; a script cannot delete itself while it runs (measured, 2026-09-07). With
+; the directory gone there is nothing to do and nothing to report.
+IF NOT EXISTS S:FirstBoot
+  Skip end
+ENDIF
+IF NOT EXISTS S:FirstBoot.log
+  Echo >S:FirstBoot.log "art-firstboot 1"
+ENDIF
+
+; Which machine. The brcm-* device probes are how Emu68 itself is told apart
+; from an emulator; under WinUAE neither device exists.
+SetEnv ART_System "UAE"
+SetEnv ART_RpiType "none"
+Version >NIL: brcm-emmc.device
+IF NOT FAIL
+  SetEnv ART_System "PiStorm"
+  SetEnv ART_RpiType "RPi4"
+ELSE
+  Version >NIL: brcm-sdhc.device
+  IF NOT FAIL
+    SetEnv ART_System "PiStorm"
+    SetEnv ART_RpiType "RPi3"
+  ENDIF
+ENDIF
+
+; Which AmigaOS. exec 47 is 3.2; a 3.9 runs on a 3.1 ROM with workbench.library 45 from disk.
+SetEnv ART_Kick "3.1"
+Version >NIL: exec.library VERSION 47
+IF NOT WARN
+  SetEnv ART_Kick "3.2"
+ELSE
+  Version >NIL: workbench.library VERSION 45
+  IF NOT WARN
+    SetEnv ART_Kick "3.9"
+  ENDIF
+ENDIF
+Echo >>S:FirstBoot.log "system ${ART_System} ${ART_RpiType} kick ${ART_Kick}"
+
+; The banner flag is copied per boot and cleared at once, so a run that stops
+; halfway does not present itself as the first boot again.
+SetEnv ART_FirstBootBanner "FALSE"
+IF EXISTS ENV:ART_FirstBoot
+  IF ${ART_FirstBoot} EQ "TRUE"
+    SetEnv ART_FirstBootBanner "TRUE"
+    Echo >ENVARC:ART_FirstBoot "FALSE"
+    SetEnv ART_FirstBoot "FALSE"
+  ENDIF
+ENDIF
+SetEnv ART_Reboot "FALSE"
+
+; One line per step, generated because AmigaDOS has no loop of its own, and
+; sorted because List does not: it answered 30, 20, 10 under WinUAE.
+IF EXISTS S:FirstBoot
+  List >T:ART-FirstBoot-Run S:FirstBoot PAT=~(#?.info) FILES LFORMAT="Execute S:ART-FirstBoot-Step *"%n*""
+  IF EXISTS T:ART-FirstBoot-Run
+    Sort T:ART-FirstBoot-Run T:ART-FirstBoot-Sorted
+    Execute T:ART-FirstBoot-Sorted
+    Delete >NIL: T:ART-FirstBoot-Run T:ART-FirstBoot-Sorted
+  ENDIF
+ENDIF
+
+; Ending. Any file still in S:FirstBoot/ flips the flag; the directory decides.
+SetEnv ART_AllDone "TRUE"
+IF EXISTS S:FirstBoot
+  List >T:ART-FirstBoot-Left S:FirstBoot PAT=~(#?.info) FILES LFORMAT="SetEnv ART_AllDone *"FALSE*""
+  IF EXISTS T:ART-FirstBoot-Left
+    Execute T:ART-FirstBoot-Left
+    Delete >NIL: T:ART-FirstBoot-Left
+  ENDIF
+ENDIF
+IF ${ART_AllDone} EQ "TRUE"
+  Echo >>S:FirstBoot.log "done all"
+  Delete >NIL: S:FirstBoot ALL QUIET
+  Delete >NIL: S:ART-FirstBoot-Step QUIET
+ELSE
+  Echo >>S:FirstBoot.log "done partial"
+ENDIF
+UnSet ART_AllDone
+
+; The FAT copy is secondary: Windows can show it, the Amiga never waits for it.
+Assign >NIL: EXISTS SD0:
+IF NOT WARN
+  Copy >NIL: S:FirstBoot.log TO SD0:art-firstboot.log
+  IF WARN
+    Echo >>S:FirstBoot.log "copy-to-fat failed"
+  ENDIF
+ENDIF
+Lab end

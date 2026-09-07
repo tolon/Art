@@ -480,6 +480,28 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // for it: a pass that ends on folder 2 of 3 has three different things
     // to say and collapsing them is the defect the round is named for.
     // `phrase-keys.test.ts` enumerates all four variants.
-    expect(dynamicCalls).toBe(149);
+    // 149 -> 157 (first-boot round, Task 9: the OS Builder's first-boot step
+    // and its report panel): eight. `FirstBootPanel.tsx` reads five keys off
+    // a mapper or a two-way choice — `fatMountPhrase` (the FAT-mount line),
+    // `rehearsalOutcomePhrase` and `rehearsalNextStepPhrase` (the rehearsal's
+    // own ending and next step, the same `Phrase`-off-a-mapper shape as every
+    // other ending list on this file), and two ternaries over a fixed pair of
+    // literal keys — write/writeAgain and run/running — the same shape as the
+    // show/hide and write/writing pairs already on this list.
+    // `FirstBootReportPanel.tsx` adds three: `endingPhrase` rendered once on
+    // the not-booted early return and once on the full report (two call
+    // sites, one mapper), and `stepOutcomePhrase` for each step's own row —
+    // the four-ending and four-outcome shapes CLAUDE.md's "endings stay
+    // distinct" rule exists for. `phrase-keys.test.ts` enumerates every
+    // variant `@/lib/firstboot` exports.
+    // 157 -> 158 (first-boot round, Task 11: the card screen's report panel
+    // gains `source`): one. `FirstBootReportPanel.tsx` renders
+    // `reportSourcePhrase(source)` — the same `Phrase`-off-a-mapper shape as
+    // `endingPhrase` beside it, and for the same reason: "read from the
+    // Amiga volume" and "read from the FAT partition" are two different,
+    // checkable sentences, never one collapsed into the other.
+    // `firstboot.test.ts` pins the mapper directly; `FirstBootReportPanel.
+    // test.tsx` renders both non-null variants.
+    expect(dynamicCalls).toBe(158);
   });
 });

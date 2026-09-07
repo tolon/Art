@@ -140,6 +140,19 @@ import {
   type MountNote,
 } from "@/lib/launch";
 import { STEP_IDS, stepLabelKey } from "@/lib/buildSteps";
+import {
+  endingPhrase,
+  fatMountPhrase,
+  rehearsalNextStepPhrase,
+  rehearsalOutcomePhrase,
+  reportSourcePhrase,
+  stepOutcomePhrase,
+  type Ending,
+  type FatMount,
+  type RehearsalOutcome,
+  type ReportSource,
+  type StepOutcome,
+} from "@/lib/firstboot";
 
 /** Whether `dotted` (e.g. "whdload.outcome.installed") names a string leaf. */
 function isLeafKey(dotted: string): boolean {
@@ -1729,6 +1742,73 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     // strip whatever kind is being built.
     for (const step of STEP_IDS) {
       expect(resolvesAtRuntime(stepLabelKey(step)), step).toBe(true);
+    }
+  });
+
+  it("stepOutcomePhrase: every StepOutcome kind resolves", () => {
+    const outcomes: StepOutcome[] = [
+      { kind: "ok" },
+      { kind: "skipped", reason: "not-3.9" },
+      { kind: "refused", rc: 20 },
+      { kind: "unfinished" },
+    ];
+    for (const outcome of outcomes) {
+      const phrase = stepOutcomePhrase(outcome);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("stepOutcomePhrase: beginner mode's refusal variant resolves too (I4, final review)", () => {
+    const phrase = stepOutcomePhrase({ kind: "refused", rc: 20 }, { beginner: true });
+    expect(phrase.key).toBe("firstboot.step.refusedPlain");
+    expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+  });
+
+  it("endingPhrase: every Ending resolves", () => {
+    const endings: Ending[] = ["not-booted", "unfinished", "done-all", "done-partial"];
+    for (const ending of endings) {
+      const phrase = endingPhrase(ending);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("fatMountPhrase: both FatMount kinds resolve", () => {
+    const mounts: FatMount[] = [{ kind: "available" }, { kind: "unavailable", needs: "fat95" }];
+    for (const mount of mounts) {
+      const phrase = fatMountPhrase(mount);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("reportSourcePhrase: both real sources resolve; 'none' has no key to check", () => {
+    const sources: ReportSource[] = ["fat", "amiga-volume"];
+    for (const source of sources) {
+      const phrase = reportSourcePhrase(source);
+      expect(phrase, source).not.toBeNull();
+      expect(isLeafKey(phrase!.key), phrase!.key).toBe(true);
+    }
+    expect(reportSourcePhrase("none")).toBeNull();
+  });
+
+  it("firstboot rehearsal: every ending resolves, and so does its next step", () => {
+    const report = {
+      version: 1,
+      system: null,
+      steps: [],
+      ending: "unfinished" as const,
+      fatCopyFailed: false,
+      rebootRequestedBy: null,
+      unknown: [],
+    };
+    const endings: RehearsalOutcome[] = [
+      { kind: "finished", report },
+      { kind: "step-refused", report },
+      { kind: "timed-out", waited: { secs: 60, nanos: 0 }, report },
+      { kind: "emulator-closed", waited: { secs: 60, nanos: 0 }, report },
+    ];
+    for (const outcome of endings) {
+      expect(isLeafKey(rehearsalOutcomePhrase(outcome).key), outcome.kind).toBe(true);
+      expect(isLeafKey(rehearsalNextStepPhrase(outcome).key), outcome.kind).toBe(true);
     }
   });
 });

@@ -1,0 +1,59 @@
+; ART first boot: apply 68040 patches to the ak* image datatypes when a
+; matching -040.pch sits beside each and C:spatch is present. ART ships no
+; patches; a user who adds them gets them applied.
+; No Quit here: an early exit skips to the end label.
+FailAt 2000000000
+IF NOT EXISTS C:spatch
+  Echo >>S:FirstBoot.log "step 30-datatypes skipped no-spatch"
+  Skip end
+ENDIF
+SetEnv ART_DtPatched "0"
+IF EXISTS SYS:Classes/DataTypes/akPNG-040.pch
+  IF EXISTS SYS:Classes/DataTypes/akPNG.datatype
+    C:spatch >NIL: -oSYS:Classes/DataTypes/akPNG.datatype.new -pSYS:Classes/DataTypes/akPNG-040.pch SYS:Classes/DataTypes/akPNG.datatype
+    IF EXISTS SYS:Classes/DataTypes/akPNG.datatype.new
+      Delete >NIL: SYS:Classes/DataTypes/akPNG.datatype
+      Rename >NIL: SYS:Classes/DataTypes/akPNG.datatype.new SYS:Classes/DataTypes/akPNG.datatype
+      SetEnv ART_DtPatched "1"
+    ENDIF
+  ENDIF
+  Delete >NIL: SYS:Classes/DataTypes/akPNG-040.pch
+ENDIF
+IF EXISTS SYS:Classes/DataTypes/akGIF-040.pch
+  IF EXISTS SYS:Classes/DataTypes/akGIF.datatype
+    C:spatch >NIL: -oSYS:Classes/DataTypes/akGIF.datatype.new -pSYS:Classes/DataTypes/akGIF-040.pch SYS:Classes/DataTypes/akGIF.datatype
+    IF EXISTS SYS:Classes/DataTypes/akGIF.datatype.new
+      Delete >NIL: SYS:Classes/DataTypes/akGIF.datatype
+      Rename >NIL: SYS:Classes/DataTypes/akGIF.datatype.new SYS:Classes/DataTypes/akGIF.datatype
+      SetEnv ART_DtPatched "1"
+    ENDIF
+  ENDIF
+  Delete >NIL: SYS:Classes/DataTypes/akGIF-040.pch
+ENDIF
+IF EXISTS SYS:Classes/DataTypes/akJFIF-040.pch
+  IF EXISTS SYS:Classes/DataTypes/akJFIF.datatype
+    C:spatch >NIL: -oSYS:Classes/DataTypes/akJFIF.datatype.new -pSYS:Classes/DataTypes/akJFIF-040.pch SYS:Classes/DataTypes/akJFIF.datatype
+    IF EXISTS SYS:Classes/DataTypes/akJFIF.datatype.new
+      Delete >NIL: SYS:Classes/DataTypes/akJFIF.datatype
+      Rename >NIL: SYS:Classes/DataTypes/akJFIF.datatype.new SYS:Classes/DataTypes/akJFIF.datatype
+      SetEnv ART_DtPatched "1"
+    ENDIF
+  ENDIF
+  Delete >NIL: SYS:Classes/DataTypes/akJFIF-040.pch
+ENDIF
+IF EXISTS SYS:Classes/DataTypes/akTIFF-040.pch
+  IF EXISTS SYS:Classes/DataTypes/akTIFF.datatype
+    C:spatch >NIL: -oSYS:Classes/DataTypes/akTIFF.datatype.new -pSYS:Classes/DataTypes/akTIFF-040.pch SYS:Classes/DataTypes/akTIFF.datatype
+    IF EXISTS SYS:Classes/DataTypes/akTIFF.datatype.new
+      Delete >NIL: SYS:Classes/DataTypes/akTIFF.datatype
+      Rename >NIL: SYS:Classes/DataTypes/akTIFF.datatype.new SYS:Classes/DataTypes/akTIFF.datatype
+      SetEnv ART_DtPatched "1"
+    ENDIF
+  ENDIF
+  Delete >NIL: SYS:Classes/DataTypes/akTIFF-040.pch
+ENDIF
+IF ${ART_DtPatched} EQ "0"
+  Echo >>S:FirstBoot.log "step 30-datatypes skipped no-patches"
+ENDIF
+UnSet ART_DtPatched
+Lab end

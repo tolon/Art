@@ -742,7 +742,7 @@ fn describe_applied(step: &finish::AppliedStep) -> String {
 }
 
 /// The machine the installer runs on.
-fn profile_for(id: Option<&str>) -> CoreResult<AmigaProfile> {
+pub(crate) fn profile_for(id: Option<&str>) -> CoreResult<AmigaProfile> {
     let wanted = id
         .map(str::trim)
         .filter(|s| !s.is_empty())

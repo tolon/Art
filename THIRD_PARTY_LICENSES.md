@@ -125,6 +125,11 @@ ART ships one table it did not measure itself:
   that distinction, confirmed versus merely adopted, is ART's own and is not
   in Hatcher's table.
 
+- **`src-tauri/src/core/firstboot/scripts/SD0pi3`** and **`SD0pi4`** — the two
+  DOSDriver mountlists for Emu68's FAT boot partition. Adopted, not measured
+  by ART, from [`rootrootde/emu68hatcher`](https://github.com/rootrootde/emu68hatcher)
+  (**MIT**), commit `3f38b22`, without changing a value.
+
 ## External tools (not bundled)
 
 ART may invoke user-installed external tools. These are **not distributed**

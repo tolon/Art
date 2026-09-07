@@ -1,0 +1,22 @@
+.KEY name/A
+.BRA [
+.KET ]
+; Runs one first-boot step and reports it. A step says no by setting the
+; shell variable ART_StepRc to 20 (or any code of 5 and above) and skipping
+; to its own end; it never Quits, because a Quit inside an Execute ends every
+; script above it too (measured under WinUAE, 2026-09-07). A step that
+; decides not to run writes its own "skipped <reason>" line first and ends
+; normally. The key brackets are [] so that ${ART_StepRc} below is left to the shell.
+FailAt 2000000000
+Set ART_StepRc 0
+Echo >>S:FirstBoot.log "step [name] started"
+Execute S:FirstBoot/[name]
+IF NOT ${ART_StepRc} EQ "0"
+  Echo >>S:FirstBoot.log "step [name] refused rc=${ART_StepRc}"
+ELSE
+  Echo >>S:FirstBoot.log "step [name] ok"
+  Delete >NIL: S:FirstBoot/[name]
+ENDIF
+IF ${ART_Reboot} EQ "TRUE"
+  Echo >>S:FirstBoot.log "reboot requested by [name]"
+ENDIF

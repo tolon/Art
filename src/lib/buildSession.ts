@@ -87,6 +87,20 @@ export interface CardChoice {
 }
 
 /**
+ * Whether first boot has been written into this build's tree.
+ *
+ * One value, not two panels each remembering their own — the same shape as
+ * `CardChoice` and for the same reason. It belongs to **one tree**, so
+ * `useBuildSession.setTree` resets it to `false` whenever the tree's `root`
+ * changes: carrying "written" across to a different folder would be ART-197's
+ * defect running the other way, telling a screen that a first-boot block
+ * exists on a tree that has never seen one.
+ */
+export interface FirstBootChoice {
+  written: boolean;
+}
+
+/**
  * One build, as the steps see it.
  *
  * Wave 1 carries what wave 1 wires. `amigaInstall`, `card` and `output` join
@@ -102,6 +116,7 @@ export interface BuildSession {
   components: ComponentChoice;
   packages: PackageChoice;
   card: CardChoice;
+  firstboot: FirstBootChoice;
 }
 
 /** Where each section persists inside `settings.remembered`. */
@@ -113,6 +128,7 @@ export const SESSION_KEYS = {
   tree: "buildSession.tree",
   packages: "buildSession.packages",
   card: "buildSession.card",
+  firstboot: "buildSession.firstboot",
   /** Per release, for the reason `rememberedComponentKey` exists: a component
    *  id means something only inside the recipe that declares it. */
   components: (release: InstallRelease): string => `buildSession.components.${release}`,
@@ -187,11 +203,16 @@ export const CARD_SPEC: { [K in keyof CardChoice]: Guard<CardChoice[K]> } = {
   image: isTextOrNothing,
 };
 
+export const FIRSTBOOT_SPEC: { [K in keyof FirstBootChoice]: Guard<FirstBootChoice[K]> } = {
+  written: isFlag,
+};
+
 export const DEFAULT_TREE: TreeChoice = { root: null, builtHere: false };
 export const DEFAULT_MEDIA: MediaChoice = { folder: null, reuseScan: true };
 export const DEFAULT_COMPONENTS: ComponentChoice = { chosen: [], excludedConditional: [] };
 export const DEFAULT_PACKAGES: PackageChoice = { folder: null, chosen: [] };
 export const DEFAULT_CARD: CardChoice = { image: null };
+export const DEFAULT_FIRSTBOOT: FirstBootChoice = { written: false };
 
 function bagOf(store: unknown): Record<string, unknown> {
   return typeof store === "object" && store !== null && !Array.isArray(store)

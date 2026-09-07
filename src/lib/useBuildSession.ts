@@ -22,8 +22,10 @@ import { useCallback, useMemo } from "react";
 import {
   CARD_SPEC,
   COMPONENT_SPEC,
+  DEFAULT_FIRSTBOOT,
   DEFAULT_MEDIA,
   DEFAULT_PACKAGES,
+  FIRSTBOOT_SPEC,
   LEGACY_KEYS,
   MEDIA_SPEC,
   PACKAGE_SPEC,
@@ -39,6 +41,7 @@ import {
   type BuildSession,
   type CardChoice,
   type ComponentChoice,
+  type FirstBootChoice,
   type MediaChoice,
   type PackageChoice,
   type TreeChoice,
@@ -60,6 +63,10 @@ export interface BuildSessionApi {
   /** The card this build writes and then prepares — one value for both steps
    *  (ART-197's remaining duplicate). */
   setCard: (image: string | null) => void;
+  /** Whether first boot has been written into the build's tree. `setTree`
+   *  resets this to `false` on its own whenever `root` changes — see
+   *  `FirstBootChoice`'s own comment. */
+  setFirstBoot: (change: Partial<FirstBootChoice>) => void;
 }
 
 export function useBuildSession(): BuildSessionApi {
@@ -91,7 +98,7 @@ export function useBuildSession(): BuildSessionApi {
 
   // The migration, in one line: an absent `buildSession.tree` falls back to
   // whichever legacy key the user's own history put a folder in.
-  const [tree, setTree] = useRememberedShape<TreeChoice>(SESSION_KEYS.tree, TREE_SPEC, {
+  const [tree, setTreeShape] = useRememberedShape<TreeChoice>(SESSION_KEYS.tree, TREE_SPEC, {
     root: seedTreeRoot(bag),
     builtHere: false,
   });
@@ -121,15 +128,37 @@ export function useBuildSession(): BuildSessionApi {
     image: seedCardImage(bag),
   });
 
+  // No legacy key: first boot did not exist before this round, so there is
+  // nothing to migrate — a plain constant default, like `DEFAULT_MEDIA`.
+  const [firstboot, setFirstBoot] = useRememberedShape<FirstBootChoice>(
+    SESSION_KEYS.firstboot,
+    FIRSTBOOT_SPEC,
+    DEFAULT_FIRSTBOOT
+  );
+
   const setRom = useCallback((path: string | null) => setRomShape({ path }), [setRomShape]);
   const setCard = useCallback(
     (image: string | null) => setCardShape({ image }),
     [setCardShape]
   );
 
+  // First boot belongs to **one tree** (see `FirstBootChoice`'s own comment).
+  // A change that sets `root` clears `written` on the same tick, so a screen
+  // can never read "already written" about a folder that has never carried
+  // one — ART-197's own defect, running the other way round.
+  const setTree = useCallback(
+    (change: Partial<TreeChoice>) => {
+      if (change.root !== undefined && change.root !== tree.root) {
+        setFirstBoot({ written: false });
+      }
+      setTreeShape(change);
+    },
+    [setTreeShape, tree.root, setFirstBoot]
+  );
+
   const session = useMemo<BuildSession>(
-    () => ({ kind, media, rom, release, tree, components, packages, card }),
-    [kind, media, rom, release, tree, components, packages, card]
+    () => ({ kind, media, rom, release, tree, components, packages, card, firstboot }),
+    [kind, media, rom, release, tree, components, packages, card, firstboot]
   );
 
   return {
@@ -142,5 +171,6 @@ export function useBuildSession(): BuildSessionApi {
     setComponents,
     setPackages,
     setCard,
+    setFirstBoot,
   };
 }

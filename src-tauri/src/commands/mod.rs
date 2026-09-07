@@ -17,6 +17,7 @@ pub mod cbm;
 pub mod checkout;
 pub mod distro;
 pub mod dragdrop;
+pub mod firstboot;
 pub mod gameindex;
 pub mod gotek;
 pub mod hdf;
