@@ -28,13 +28,13 @@ PASS forward on faith.
 | **Last updated** | 2026-09-07 — round 5 of the Emu68 Hatcher intake (first boot on the Amiga, phases 1–2) merged to `main` as `1cb5ce1` and pushed. The debt-clearing wave (13 defects closed, seven batches plus a whole-branch review and its fix wave) was **merged to `main` as `94c2bdc` the same evening**, and its three deferred leftovers as `bb91547` (`art-leftovers`, four commits: one extraction in `install_pack`, cancel sinks anchored on the copy phase's own message, the dead `winuae_path` field gone, an `expect` turned into a refusal), both the owner's decision; both branches are deleted and `main` is unpushed until the owner has built and tested it. Per-round detail is the [session log](session-log.md) |
 | **Version** | **0.9.0**, released 2026-09-04. The number lives in three files (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`) and `release.yml` refuses a tag that disagrees with them. Deliberately not 1.0: the bar is a card ART built, flashed and booting a real A500 — not a bigger feature count |
 | **`main` / `origin`** | Identical at `32651c9`, pushed 2026-09-07 (`git rev-parse main origin/main`; the push was `722a8c5..32651c9`). No live phase branch. CI run 34116056492 on that commit — the first CI has seen of rounds 3, 4 and 5 — **passed** (`Build & Test (Windows x64): success`, 2026-09-07 11:44 UTC, `gh run view 34116056492`); everything on `main` above it — the docs commits and the debt wave's merge `94c2bdc` — is **unpushed** (`git log --oneline origin/main..main`), by the owner's choice: build and test first, then push |
-| **Tests — Rust** | `cd src-tauri && cargo test --lib -- --skip artwork` on the merged `main` (`bb91547`, after the leftovers merge), 2026-09-07: `test result: ok. 2973 passed; 0 failed; 51 ignored; 0 measured; 89 filtered out; finished in 42.26s` (2971 at `94c2bdc` (and twice on the branch head before the merge, 40.37 s and 33.52 s). **`--skip artwork` is the only honest number here** until [ART-261](ISSUES.md)'s antivirus exclusions land — a full `cargo test --lib` dies mid-run with exit 0 and no summary. **Quote the `test result:` line, never the exit code**, and run the suite twice before merging ([ART-059](ISSUES.md#fixed)). The 51 ignored are the real-material hooks, env-gated and run by hand — command lines below |
+| **Tests — Rust** | `cd src-tauri && cargo test --lib` — the **full** suite, no `--skip` — on the merged `main` (`7825549`), 2026-09-07 evening, after the owner installed the antivirus exclusions, run twice: `test result: ok. 3062 passed; 0 failed; 51 ignored; 0 measured; 0 filtered out; finished in 41.36s`, then `... finished in 43.90s`. That closes [ART-261](ISSUES.md#fixed): the 89 `artwork` tests that used to kill the harness run and pass, and the summary line prints. (With `--skip artwork` the same tree gave 2973, and 2971 at `94c2bdc`.) **Quote the `test result:` line, never the exit code**, and run the suite twice before merging ([ART-059](ISSUES.md#fixed)). The 51 ignored are the real-material hooks, env-gated and run by hand — command lines below |
 | **Tests — frontend** | `pnpm test` on the merged `main` (`94c2bdc`), 2026-09-07: `Test Files 87 passed (87)`, `Tests 1194 passed (1194)` |
 | **Lint, format, clippy** | Clean on the merged `main`, 2026-09-07: `pnpm lint` (run unpiped — a pipe reports `tail`'s status, not `tsc`'s), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` |
 | **Sweeps** | Re-run 2026-09-07 on the merged `main` (control-byte) and on the branch head `e46062a` (the rest), all clean: `scripts/control-byte-sweep.py` — clean, and now also catches a stray mid-line TAB inside tracked text, not only one that swallows a line continuation ([ART-271](ISSUES.md#fixed)); `scripts/scratch-root-sweep.py` — clean, 8 named exceptions; `scripts/contrast-check.py --quiet` — **113/113** pairs, both themes. `scripts/scratch-counter-sweep.py`: `already had a counter: 25`, `needing a counter: 0` — the false positive on a pid hashed with the thread id is gone ([ART-235](ISSUES.md#fixed)) |
 | **Build** | The last full `pnpm tauri build` was the 0.9.0 bundle, 2026-09-04 (5m 47s) — `Amiga Retro Toolkit_0.9.0_x64_en-US.msi` and `_x64-setup.exe`, **not code-signed**, which the README says rather than leaving to SmartScreen. Not re-run since |
 | **i18n** | `src/i18n/en.json` and `tr.json`: **2082** leaf keys each, counted 2026-09-07 on the branch head and unchanged by the merge. Parity — key sets, empty values, interpolation variables — is enforced by `pnpm test`, so count them rather than quoting this |
-| **Open defects** | **6** on `main` after the debt-wave merge (`94c2bdc`), counted 2026-09-07 with `awk '/^## Open/{f=1} /^## Fixed/{f=0} f' docs/ISSUES.md \| grep -c '^\*\*ART-'` — newest is [ART-261](ISSUES.md). Thirteen closed across the whole debt-clearing wave (19 open before it, 6 after): ART-271, ART-235, ART-260, ART-245, ART-247, ART-246, ART-274, ART-251, ART-248, ART-241, ART-243, ART-244, ART-242. Before the wave: 19 |
+| **Open defects** | **5** on `main`, counted 2026-09-07 evening with `awk '/^## Open/{f=1} /^## Fixed/{f=0} f' docs/ISSUES.md \| grep -c '^\*\*ART-'` — [ART-261](ISSUES.md#fixed) closed the same evening when the owner installed the antivirus exclusions and the full suite printed its summary twice. Thirteen closed across the debt-clearing wave (19 open before it, 6 after, 5 now): ART-271, ART-235, ART-260, ART-245, ART-247, ART-246, ART-274, ART-251, ART-248, ART-241, ART-243, ART-244, ART-242. Before the wave: 19 |
 | **Feature rows** | **216 marked rows** in [FEATURES.md](FEATURES.md) — **159 green, 26 amber, 21 not started, 6 stubs, 4 deferred to v2** — counted 2026-09-07, one marker per table row, taken from the first cell in that row that is exactly a State marker. **State the method with the number**: counting marker *cells* instead gives a different figure, and an earlier count of "233 rows" left behind no method and cannot now be reproduced |
 | **amitools oracle** | 53 checks, both directions (`scripts/oracle-check.py`, blocking in CI) — including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
 | **Kickstart table** | 154 dumps (`core/rom/remus.rs::REMUS_ROMS`, counted 2026-09-07), generated from amitools' Remus split database and re-verified against it on every CI run (`scripts/rom-table-check.py`, [ART-104](ISSUES.md#fixed)). Licensed Amiga Forever ROMs are first-class input ([ART-128](ISSUES.md#fixed)): decoded with the `rom.key` beside them, then identified like any dump |
@@ -56,7 +56,7 @@ pnpm lint                                              # TypeScript (run unpiped
 pnpm test                                              # frontend unit tests (i18n parity, phrase keys)
 cd src-tauri && cargo fmt --check                      # formatting
 cd src-tauri && cargo clippy --all-targets -- -D warnings
-cd src-tauri && cargo test --lib -- --skip artwork     # twice — ART-059; --skip artwork per ART-261
+cd src-tauri && cargo test --lib                       # the full suite, twice — ART-059 (ART-261 is closed)
 pip install amitools && python scripts/oracle-check.py # independent cross-check
 python scripts/iso-oracle-check.py                     # the disc reader vs 7-Zip (needs 7z; not in CI)
 python scripts/fat-oracle-check.py                     # the card's boot partition vs 7-Zip (needs 7z; not in CI)
@@ -109,9 +109,10 @@ cd src-tauri && ART_OSINSTALL_DEST="E:\amiga\ProjeART\dist-3.2" \
 
 # ART-159's two language components, against the disc they were read off.
 # Died mid-run four times in four on 2026-09-06 — exit 0, no `test result:`
-# line, always at 561 of 2391 files. ART-261 names the cause (the scanner
-# reacting to `art_lib`), so a clean run here is still owed rather than had:
-# exclude src-tauri\target\ and D:\tmp\art-tests\ from the scanner first.
+# line, always at 561 of 2391 files. ART-261 named the cause (the scanner
+# reacting to `art_lib`); the exclusions landed 2026-09-07 evening and the
+# full suite now completes, so a clean run of THIS hook is possible and still
+# owed — it has not been re-run since.
 cd src-tauri && ART_159_ISO="E:\amiga\Amigatolon\iso\AmigaOS39.iso" \
   ART_159_DEST="E:\amiga\ProjeART\art159-tree" \
   cargo test --release build_the_real_39_language_components_when_asked -- --nocapture --ignored
@@ -252,9 +253,7 @@ block — do not stack another on top of it.**
    `final-review.md` and `final-fix-report.md` cover the review and its
    fixes).
 5. **What is left open on the debt-clearing wave's own list is not code, and
-   each is open for a different reason.** [ART-261](ISSUES.md) — the owner's
-   antivirus kills a full `cargo test --lib`, a machine-configuration problem
-   this repository cannot fix from inside itself. [ART-166](ISSUES.md) — a
+   each is open for a different reason.** [ART-166](ISSUES.md) — a
    BoingBag's payload is a password-encrypted ZIP whose password lives on an
    Amiga; the way past it is external (run the package's own installer on an
    Amiga), not a host-side bypass, which the owner has ruled out writing.
@@ -271,11 +270,12 @@ block — do not stack another on top of it.**
    (`Path.rglob`), never `git ls-files`, on purpose — a false positive on
    untracked scratch, never a miss — and that reasoning is now in the
    script's own header, not in ISSUES.
-7. **ART-261 still changes how you quote a Rust number.** The owner's antivirus kills a full `cargo test --lib`
-   — exit 0, no `test result:` line, no `FAILED`. `cargo test --lib -- --skip
-   artwork` is the only honest Rust number here until exclusions are added
-   for `src-tauri\target\`, the test scratch root and `art_lib`'s build
-   output. An exit code cannot tell a finished suite from a killed one.
+7. **ART-261 is closed: the full `cargo test --lib` completes on this
+   machine again** (3062 passed, twice, 2026-09-07 evening, after the owner
+   installed the antivirus exclusions). The rule it produced stays: an exit
+   code cannot tell a finished suite from a killed one — quote the
+   `test result:` line. The ART-159 language-components hook, which died
+   under the same scanner, is now runnable and has not been re-run yet.
 
 ### Where the work stands
 

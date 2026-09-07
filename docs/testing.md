@@ -344,9 +344,11 @@ antivirus was interfering with `rustup.exe`, so the harness was being killed
 mid-run and the shell saw a clean exit. Run again with the interference gone and
 the suite reported **2626 passed, 0 failed, 42 ignored** in 32.65 s.
 
-So **locally, `cargo test` may not be the command to quote from.** On the
-owner's machine `cargo test --lib -- --skip artwork` is the only honest Rust
-number until the antivirus exclusions land ([ART-261](ISSUES.md)).
+For most of 2026-09 the owner's machine could not run the full suite at all:
+`cargo test --lib -- --skip artwork` was the only honest Rust number until the
+antivirus exclusions landed on 2026-09-07 and the full suite printed its
+summary twice (3062 passed; [ART-261](ISSUES.md#fixed)). The lesson outlived
+the defect: a suite that stops without a `test result:` line has not run.
 
 **Quote the `test result:` line, never the exit code.** An exit code cannot tell
 a finished suite from a killed one, and "green" is exactly what a truncated run
