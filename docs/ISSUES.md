@@ -531,35 +531,6 @@ Nothing here is broken today: `run_install` works, is tested, and its
 catalogue join is itself tested and mutation-verified. What is missing is the
 layer that should hold this logic.
 
-**ART-243** 🟡 **An archive updated in place accumulates ghost records no
-Rescan can clear** — *found 2026-09-05 by the whdload-drawers round-2
-re-review, filed rather than fixed in round 3*
-`src-tauri/src/core/gameindex/store.rs::refresh_root` (the `missing`
-reconciliation)
-
-Round 2 fixed the reverse problem: one drawer's slave going bad while its
-archive's sibling drawer still reads fine must not silently delete the bad
-one, because every `Media::WhdloadArchive` record shares one `CachedEntry.path`
-— the archive's own — and "this path is present" says nothing about *this
-particular* drawer inside it. The fix special-cases `WhdloadArchive` in the
-`missing` filter so it is kept whenever its own id was not found again this
-run, regardless of path. That same special case means path presence is now
-**never** consulted for an archived record, in either direction: if the user
-edits the archive itself — removes a drawer, or replaces
-`WHDLoadDemos100.lha` with a smaller, newer one — the removed drawer's old
-record is checked only against "was this id found again this run," never
-against "does the archive that named it still hold it," so it is kept
-forever, through every Rescan, until the whole root is removed and re-added.
-A catalogue is meant to be a library that self-heals under Rescan, and an
-archive edited in place is the one shape it will not.
-
-Not fixed in this round: closing it correctly is not "flip the priority
-back" — that reintroduces round 2's own bug. The right shape likely keys the
-reconciliation on **(archive path, id)** pairs recomputed for every archive
-still readable this run, rather than id alone across all archives at once,
-but that is a real design question and deserves its own look rather than a
-rushed fix inside a round already closing three other things.
-
 **ART-244** 🔵 **Update mode re-reads every archive candidate on every
 refresh, on an argued rather than measured basis** — *found 2026-09-05 during
 the whdload-drawers round-2 wiring*
@@ -675,6 +646,68 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-243** 🟡 **An archive updated in place accumulates ghost records no
+Rescan can clear** — *found 2026-09-05 by the whdload-drawers round-2
+re-review, filed rather than fixed in round 3*
+`src-tauri/src/core/gameindex/store.rs::refresh_root` (the `missing`
+reconciliation)
+
+Round 2 fixed the reverse problem: one drawer's slave going bad while its
+archive's sibling drawer still reads fine must not silently delete the bad
+one, because every `Media::WhdloadArchive` record shares one `CachedEntry.path`
+— the archive's own — and "this path is present" says nothing about *this
+particular* drawer inside it. The fix special-cases `WhdloadArchive` in the
+`missing` filter so it is kept whenever its own id was not found again this
+run, regardless of path. That same special case means path presence is now
+**never** consulted for an archived record, in either direction: if the user
+edits the archive itself — removes a drawer, or replaces
+`WHDLoadDemos100.lha` with a smaller, newer one — the removed drawer's old
+record is checked only against "was this id found again this run," never
+against "does the archive that named it still hold it," so it is kept
+forever, through every Rescan, until the whole root is removed and re-added.
+A catalogue is meant to be a library that self-heals under Rescan, and an
+archive edited in place is the one shape it will not.
+
+Not fixed in round 3: closing it correctly is not "flip the priority
+back" — that reintroduces round 2's own bug. The right shape likely keys the
+reconciliation on **(archive path, id)** pairs recomputed for every archive
+still readable this run, rather than id alone across all archives at once,
+but that is a real design question and deserves its own look rather than a
+rushed fix inside a round already closing three other things.
+
+**Fixed** 2026-09-07 on `art-debts` (batch 5). The id-pairs shape sketched
+above turns out to reintroduce round 2's own bug on its own: an archive
+"still readable this run" whose *sibling* drawer merely fails to parse this
+run (round 2's own case) looks identical, by id alone, to a title genuinely
+removed from the archive — both are "this id was not found again." The fix
+actually landed is one level finer: `archive_member_names` (new,
+`store.rs`) opens the archive a second time — the same cheap seek-only
+`entries()` walk `readers::lhadrawer`'s own module doc measures, never a
+decompress — and lists its **raw** member names, regardless of whether they
+parse. A `WhdloadArchive` record whose id was not found again this run is
+now kept as `missing` only if its own archive-internal member
+(`inner`/`slave`) is *still one of those raw names* (round 2's case,
+unchanged) or the archive could not be opened at all this run (unplugged,
+moved — also unchanged); it is dropped as stale only when the member itself
+is genuinely gone from the archive's own listing. Two new tests:
+`a_title_removed_from_a_rewritten_archive_is_cleared_by_rescan` (an archive
+rewritten with one of two titles genuinely absent — Rescan clears the ghost,
+the survivor keeps its id) and
+`an_archive_this_run_cannot_open_keeps_its_records_as_missing` (a planted
+record pointing at an archive that was never written this run — kept, as
+before). The existing
+`one_bad_drawer_in_an_archive_is_kept_not_deleted_when_its_sibling_still_reads`
+(round 2's own guard) stays green unmodified — the member-presence check is
+what keeps a present-but-unparseable drawer from being swept up with a
+genuinely removed one. Mutated by reverting the `WhdloadArchive` branch to
+round 2's unconditional `return true`: the new ghost-clearing test fell (37
+passed, 1 failed) while both the unreachable-archive test and round 2's own
+sibling test stayed green, confirming the mutation isolated exactly the
+intended behaviour; restored by re-applying the same edit rather than
+`git checkout --`.
+`cargo test --lib -- --skip artwork` — `test result: ok. 2961 passed; 0
+failed; 51 ignored; 0 measured; 89 filtered out; finished in 36.81s`.
+
 **ART-251** 🟡 **The AmigaOS 3.2 recipe has no rule for `Utilities` or
 `WBStartup`, so a tree ART builds has neither** — *found 2026-09-06 during
 the drawer-icons round's Task 1, verified independently by the controller*

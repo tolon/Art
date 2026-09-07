@@ -102,6 +102,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from a tree ART built, because the recipe had no rule placing either
   drawer. Both now come across from the same disk as the system's other root
   drawers (ART-251).
+- **Rescanning a WHDLoad collection now clears a title that was genuinely
+  removed from an archive it lived in.** A rescan used to keep every title
+  read from an archive forever, even after the title's own entry was gone
+  from a rewritten or replaced archive, so the catalogue could accumulate
+  titles nothing on disk still holds. A rescan now clears exactly those; a
+  title whose drive is unplugged, or whose archive cannot be opened at all
+  this run, is still kept (ART-243).
 - **Stopping the "what are these disks" check no longer reads as ART having
   failed.** Pressing Stop while install media is being identified by content
   used to produce *"ART could not identify these files by content"* — the same
