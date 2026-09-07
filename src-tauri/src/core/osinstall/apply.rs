@@ -1756,18 +1756,35 @@ pub fn add_package_staging_in(
         )));
     }
 
-    // A name already meaning something else in this tree would make
-    // `built_from` ambiguous about which medium a file came out of.
+    // Two components sharing one medium is ordinary — the recipe's own
+    // doc comment on `recipes/packages/locale-39-turkish.json` says so:
+    // "media says which archive, and the rules say which part of it" —
+    // so a second component id under a `media` string already in this
+    // tree is not by itself a problem (ART-276). The real ambiguity is
+    // narrower: the same *volume name* meaning two *different* archives
+    // at different points in this tree's life, which would leave
+    // `built_from`'s one `{volume_name, sha256}` slot per name unable to
+    // say which archive a file actually came out of. `built_from` is
+    // exactly the fact that answers this, so it is what gets asked,
+    // never `manifest.files` (whose `component` differs by design
+    // whenever a second package legitimately shares the first one's
+    // medium).
+    let sha256 = sha256_file(archive)?;
     if let Some(clash) = manifest
-        .files
+        .built_from
         .iter()
-        .find(|file| file.media == package.media && file.component != package.id)
+        .find(|record| record.volume_name == package.media)
     {
-        return Err(CoreError::InvalidInput(format!(
-            "'{}' already names the medium component '{}' was installed from in this tree — ART \
-             will not add a package under a name that already means something else",
-            package.media, clash.component
-        )));
+        if clash.sha256 != sha256 {
+            return Err(CoreError::InvalidInput(format!(
+                "'{}' in this tree came from a different archive (sha256 {}…) than '{}' (sha256 {}…) \
+                 — ART will not add a package under a medium name that already means another file",
+                package.media,
+                &clash.sha256[..12.min(clash.sha256.len())],
+                archive.display(),
+                &sha256[..12.min(sha256.len())],
+            )));
+        }
     }
 
     let mut refusals = Vec::new();
@@ -1817,7 +1834,6 @@ pub fn add_package_staging_in(
         )));
     }
 
-    let sha256 = sha256_file(archive)?;
     let mut sources: BTreeMap<String, Box<dyn MediaSource>> = BTreeMap::new();
     sources.insert(package.media.clone(), source);
 
@@ -5995,6 +6011,165 @@ mod tests {
             "got {err}"
         );
         assert_eq!(tree_contents(&root), before);
+    }
+
+    /// A component that lands under `SharedMedium`, at `from` — used to
+    /// build the ART-276 fixtures below, where two components legitimately
+    /// share one `media` string the way `locale-39` and
+    /// `locale-39-turkish` do off the real `Locale3.9` archive.
+    fn shared_medium_package(id: &str, from: &str) -> crate::core::osinstall::package::Package {
+        let component = crate::core::osinstall::Component {
+            activate: vec![],
+            id: id.to_string(),
+            media: "SharedMedium".to_string(),
+            rules: vec![crate::core::osinstall::PathRule {
+                from: from.to_string(),
+                to: from.to_string(),
+                kind: crate::core::osinstall::RuleKind::Subtree,
+            }],
+            required: false,
+            condition: None,
+            overrides: Vec::new(),
+            user_startup: Vec::new(),
+            exclusive_group: None,
+            label_key: None,
+            layer: None,
+            available: true,
+            removes: Vec::new(),
+        };
+        crate::core::osinstall::package::Package {
+            id: id.to_string(),
+            releases: vec!["Test OS".to_string()],
+            name: id.to_string(),
+            media: "SharedMedium".to_string(),
+            member: None,
+            distinguished_by: None,
+            amiga_installer: None,
+            requires: Vec::new(),
+            requires_components: Vec::new(),
+            host_placement_block: None,
+            component,
+        }
+    }
+
+    /// One archive under the volume name `SharedMedium` holding both
+    /// components' own parts — `A` for the first, `B` for the second — so
+    /// each package's own rule resolves against the *same* file.
+    fn shared_medium_archive(folder: &Path, file_name: &str) -> PathBuf {
+        let path = folder.join(file_name);
+        std::fs::write(
+            &path,
+            crate::core::archive::zip::tests::make_zip_with(&[
+                ("SharedMedium/A/File1", b"first component" as &[u8]),
+                ("SharedMedium/B/File2", b"second component"),
+            ]),
+        )
+        .unwrap();
+        path
+    }
+
+    /// **ART-276.** `locale-39` and `locale-39-turkish` both declare
+    /// `"media": "Locale3.9"` on purpose (`recipes/packages/locale-39-turkish.json`'s
+    /// own doc comment: "Two packages sharing one medium is ordinary: `media`
+    /// says which archive, and the rules say which part of it"). Before this
+    /// fix, adding the second component refused on the first `manifest.files`
+    /// entry the first component wrote, because that check compared
+    /// `component` identity rather than asking whether the archive was the
+    /// same. Two different component ids taking their own slice of the same
+    /// archive must both land.
+    #[test]
+    fn two_components_sharing_one_medium_are_both_accepted_when_the_archive_is_the_same() {
+        let (dir, media, packages) = package_dirs("shared-medium-same-archive");
+        let root = dir.join("dist");
+
+        let base_only = install_request(&media, &packages, &root, &[]);
+        apply(&planned_over(&base_only), &root, &NoProgress).unwrap();
+
+        let archive = shared_medium_archive(&packages, "shared.zip");
+
+        add_package(
+            &root,
+            &shared_medium_package("shared-a", "A"),
+            &archive,
+            &NoProgress,
+        )
+        .unwrap();
+        add_package(
+            &root,
+            &shared_medium_package("shared-b", "B"),
+            &archive,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert!(root.join("A").join("File1").is_file());
+        assert!(root.join("B").join("File2").is_file());
+
+        let manifest = read_manifest(&root);
+        let shared: Vec<_> = manifest
+            .built_from
+            .iter()
+            .filter(|record| record.volume_name == "SharedMedium")
+            .collect();
+        assert_eq!(
+            shared.len(),
+            1,
+            "one archive, one built_from record, regardless of how many components share it: {shared:?}"
+        );
+    }
+
+    /// The other half of ART-276: the same medium *name* really can mean two
+    /// different archives at different points in a tree's life, and that is
+    /// the genuine ambiguity the old check was trying (and failing) to
+    /// catch. The refusal names both hashes, not a component id, because the
+    /// component-identity story is exactly the wrong explanation here.
+    #[test]
+    fn a_second_archive_under_the_same_medium_name_is_refused_and_names_both_hashes() {
+        let (dir, media, packages) = package_dirs("shared-medium-different-archive");
+        let root = dir.join("dist");
+
+        let base_only = install_request(&media, &packages, &root, &[]);
+        apply(&planned_over(&base_only), &root, &NoProgress).unwrap();
+
+        let first = shared_medium_archive(&packages, "first.zip");
+        add_package(
+            &root,
+            &shared_medium_package("shared-a", "A"),
+            &first,
+            &NoProgress,
+        )
+        .unwrap();
+
+        // Same volume name, at least one different byte.
+        let second = packages.join("second.zip");
+        std::fs::write(
+            &second,
+            crate::core::archive::zip::tests::make_zip_with(&[
+                ("SharedMedium/A/File1", b"first component" as &[u8]),
+                ("SharedMedium/B/File2", b"a different second component"),
+            ]),
+        )
+        .unwrap();
+
+        let first_sha = sha256_file(&first).unwrap();
+        let second_sha = sha256_file(&second).unwrap();
+        assert_ne!(first_sha, second_sha, "the fixture must actually differ");
+
+        let err = add_package(
+            &root,
+            &shared_medium_package("shared-b", "B"),
+            &second,
+            &NoProgress,
+        )
+        .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidInput(_)), "got {err:?}");
+        let msg = err.to_string();
+        assert!(msg.contains("SharedMedium"), "{msg}");
+        assert!(msg.contains(&first_sha[..12]), "{msg}");
+        assert!(msg.contains(&second_sha[..12]), "{msg}");
+
+        // Refused before anything is written for this second archive.
+        assert!(!root.join("B").join("File2").is_file());
     }
 
     /// A rule the archive cannot satisfy is refused before a byte is
