@@ -117,11 +117,16 @@ export function shellWidth(viewportWidth: number, zoomPercent: number): number {
  * to icons.
  *
  * The number is the one the design already agreed on in `layout.css`; only the
- * width it is compared against has changed.
+ * width it is compared against has changed. It is a **window-size** breakpoint
+ * inherited unchanged from the old `@media (max-width: 1000px)` rule ART-101
+ * replaced, not a figure derived from the sidebar's own width — so the
+ * Windows 11 look's 224px → 280px rail (`layout.css`) does not move it either;
+ * it stays 1000.
  */
 export const SIDEBAR_ICONS_BELOW = 1000;
 
-/** Below this the quick-action grid drops to two columns. */
+/** Below this the quick-action grid drops to one column
+ * (`.app-shell-tight .quick-actions`, `layout.css`). */
 export const QUICK_ACTIONS_STACK_BELOW = 760;
 
 /**

@@ -123,6 +123,14 @@
   padding: 16px 14px;
 }
 
+/* Below this the quick-action grid drops to one column — a 280px rail plus
+   a 68px-tall tile leaves too little width for two side by side (review
+   round 1, finding 6: this class was still emitted and asserted after the
+   base grid became 2 columns everywhere, with no rule left reading it). */
+.app-shell-tight .quick-actions {
+  grid-template-columns: 1fr;
+}
+
 /* ---- Sidebar --------------------------------------------------------- */
 
 .sidebar {
