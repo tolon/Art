@@ -1758,6 +1758,12 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     }
   });
 
+  it("stepOutcomePhrase: beginner mode's refusal variant resolves too (I4, final review)", () => {
+    const phrase = stepOutcomePhrase({ kind: "refused", rc: 20 }, { beginner: true });
+    expect(phrase.key).toBe("firstboot.step.refusedPlain");
+    expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+  });
+
   it("endingPhrase: every Ending resolves", () => {
     const endings: Ending[] = ["not-booted", "unfinished", "done-all", "done-partial"];
     for (const ending of endings) {

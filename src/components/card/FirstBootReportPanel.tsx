@@ -10,6 +10,15 @@
 // underneath any of them to show. `stepOutcomeTone` colours a row, but the
 // wording from `stepOutcomePhrase` is what actually says what happened; the
 // tone rides beside it as `data-tone`, never replacing the sentence.
+//
+// **Beginner mode hides the AmigaDOS noise, not the outcome** (spec §9;
+// I4, final review). `details` (raw script lines), `unknown` (lines a newer
+// ART would carry) and a refusal's `rc=` return code are all script-internal
+// detail meant for someone who would recognise a `frobnicate 3` line — they
+// are gated on `power` here, the same way `FirstBootPanel` already gates the
+// tree-path column and the written-file list. What is never hidden is *that*
+// a step was refused: `stepOutcomePhrase`'s beginner variant still says so,
+// in one sentence, without the code underneath it.
 
 import { useTranslation } from "react-i18next";
 
@@ -83,7 +92,7 @@ export function FirstBootReportPanel({ report, source }: FirstBootReportPanelPro
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12 }}>
           <tbody>
             {report.steps.map((step, at) => {
-              const outcome = stepOutcomePhrase(step.outcome);
+              const outcome = stepOutcomePhrase(step.outcome, { beginner: !power });
               const tone = stepOutcomeTone(step.outcome);
               return (
                 <tr
@@ -124,7 +133,7 @@ export function FirstBootReportPanel({ report, source }: FirstBootReportPanelPro
         </p>
       )}
 
-      {report.unknown.length > 0 && (
+      {power && report.unknown.length > 0 && (
         <div data-testid="firstboot-report-unknown" style={{ fontSize: 11 }}>
           <p className="faint" style={{ margin: "0 0 4px" }}>
             {t("firstboot.report.unknown")}

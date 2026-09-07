@@ -95,14 +95,20 @@ export async function cardFirstBootReport(path: string): Promise<CardFirstBootRe
   return invoke<CardFirstBootReport>("card_firstboot_report", { path });
 }
 
-export function stepOutcomePhrase(outcome: StepOutcome): Phrase {
+/** `beginner: true` drops the AmigaDOS-facing detail spec §9 says a beginner
+ *  should not see — here, the `rc=` return code inside a refusal's own
+ *  sentence (I4, final review: `FirstBootReportPanel` already hides `details`
+ *  and `unknown` in beginner mode; this closes the third leak). */
+export function stepOutcomePhrase(outcome: StepOutcome, opts?: { beginner?: boolean }): Phrase {
   switch (outcome.kind) {
     case "ok":
       return { key: "firstboot.step.ok" };
     case "skipped":
       return { key: "firstboot.step.skipped", params: { reason: outcome.reason } };
     case "refused":
-      return { key: "firstboot.step.refused", params: { rc: outcome.rc } };
+      return opts?.beginner
+        ? { key: "firstboot.step.refusedPlain" }
+        : { key: "firstboot.step.refused", params: { rc: outcome.rc } };
     case "unfinished":
       return { key: "firstboot.step.unfinished" };
   }

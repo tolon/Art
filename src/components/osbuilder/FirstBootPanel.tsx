@@ -92,6 +92,16 @@ export function FirstBootPanel({ treeRoot, onTreeRootChange }: FirstBootPanelPro
   const [rehearsalError, setRehearsalError] = useState<string | null>(null);
   const [rehearsalCancelled, setRehearsalCancelled] = useState(false);
 
+  // I3 (final review): `runRehearsal`'s `await` outlives the render it
+  // started in, so the closure's own `treeRoot` is fixed at call time and
+  // cannot tell a resolution "the user has since picked a different folder".
+  // A ref updated on every render carries the current value into that later
+  // moment; `runRehearsal` compares it against the tree it was launched for
+  // and drops a stale result rather than rendering tree A's outcome under
+  // tree B's fresh preview.
+  const treeRootRef = useRef(treeRoot);
+  treeRootRef.current = treeRoot;
+
   // §92's PREVIEW: read-only, and where a tree that is not a first-boot
   // candidate is refused — before either button exists to press.
   useEffect(() => {
@@ -105,6 +115,12 @@ export function FirstBootPanel({ treeRoot, onTreeRootChange }: FirstBootPanelPro
     setRehearsalResult(null);
     setRehearsalError(null);
     setRehearsalCancelled(false);
+    // An in-flight rehearsal belongs to the tree it was started against too:
+    // clear the running state so the button re-enables for the new tree
+    // rather than staying disabled for a job whose result this screen is
+    // about to discard.
+    setRehearsing(false);
+    rehearsalJob.current = null;
     if (!treeRoot) {
       setPreview(null);
       setPreviewRefusal(null);
@@ -169,6 +185,11 @@ export function FirstBootPanel({ treeRoot, onTreeRootChange }: FirstBootPanelPro
 
   async function runRehearsal() {
     if (!treeRoot || !kickstart) return;
+    // Captured once, at launch — compared against `treeRootRef.current` (the
+    // latest render's value) when the job settles, so a resolution that
+    // arrives after the user has picked a different folder is dropped rather
+    // than rendered under it (I3, final review).
+    const forTree = treeRoot;
     setRehearsing(true);
     setRehearsalError(null);
     setRehearsalCancelled(false);
@@ -183,16 +204,20 @@ export function FirstBootPanel({ treeRoot, onTreeRootChange }: FirstBootPanelPro
         },
         (payload) => payload
       );
+      if (treeRootRef.current !== forTree) return;
       setRehearsalResult(result);
     } catch (e) {
+      if (treeRootRef.current !== forTree) return;
       if (isJobCancellation(e)) {
         setRehearsalCancelled(true);
       } else {
         setRehearsalError(errorText(t, e));
       }
     } finally {
-      setRehearsing(false);
-      rehearsalJob.current = null;
+      if (treeRootRef.current === forTree) {
+        setRehearsing(false);
+        rehearsalJob.current = null;
+      }
     }
   }
 
@@ -401,14 +426,14 @@ export function FirstBootPanel({ treeRoot, onTreeRootChange }: FirstBootPanelPro
             {t(nextStep.key, nextStep.params)}
           </p>
           <FirstBootReportPanel report={rehearsalResult.outcome.report} />
-          {!rehearsalResult.discarded && (
-            <p
-              data-testid="firstboot-rehearsal-copy"
-              style={{ margin: "8px 0 0", wordBreak: "break-all" }}
-            >
-              {t("firstboot.panel.copyKept", { path: rehearsalResult.copy })}
-            </p>
-          )}
+          <p
+            data-testid="firstboot-rehearsal-copy"
+            style={{ margin: "8px 0 0", wordBreak: "break-all" }}
+          >
+            {rehearsalResult.discarded
+              ? t("firstboot.panel.copyDiscarded")
+              : t("firstboot.panel.copyKept", { path: rehearsalResult.copy })}
+          </p>
         </div>
       )}
     </section>

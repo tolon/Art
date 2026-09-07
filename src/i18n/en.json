@@ -2789,6 +2789,7 @@
       "ok": "Done",
       "skipped": "Skipped: {{reason}}",
       "refused": "Refused (code {{rc}}); it will be tried again on the next boot",
+      "refusedPlain": "Refused; it will be tried again on the next boot",
       "unfinished": "Started and never finished; the Amiga stopped or hung on this step"
     },
     "ending": {
@@ -2803,7 +2804,7 @@
     },
     "rehearsal": {
       "outcome": {
-        "finished": "Every step ran under WinUAE and the block removed itself; the copy has been discarded.",
+        "finished": "Every step ran under WinUAE and the block removed itself.",
         "stepRefused": "A step refused. The copy is kept so you can read the Amiga's own log.",
         "timedOut": "Nobody answered. The Amiga had not written its ending {{seconds}} seconds in, so ART ended the emulator it had started; the copy is kept.",
         "emulatorClosed": "The emulator window was closed {{seconds}} seconds in, before the first boot had reached its end; the copy is kept."
@@ -2850,7 +2851,8 @@
       "stop": "Stop",
       "running": "Rehearsing…",
       "cancelled": "You stopped the rehearsal.",
-      "copyKept": "The copy is kept at {{path}}."
+      "copyKept": "The copy is kept at {{path}}.",
+      "copyDiscarded": "The copy has been discarded."
     }
   }
 }

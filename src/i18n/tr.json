@@ -2789,6 +2789,7 @@
       "ok": "Tamamlandı",
       "skipped": "Atlandı: {{reason}}",
       "refused": "Reddedildi (kod {{rc}}); bir sonraki açılışta yeniden denenecek",
+      "refusedPlain": "Reddedildi; bir sonraki açılışta yeniden denenecek",
       "unfinished": "Başladı ama hiç bitmedi; Amiga bu adımda durdu ya da takıldı"
     },
     "ending": {
@@ -2803,7 +2804,7 @@
     },
     "rehearsal": {
       "outcome": {
-        "finished": "Her adım WinUAE altında çalıştı ve blok kendini kaldırdı; kopya silindi.",
+        "finished": "Her adım WinUAE altında çalıştı ve blok kendini kaldırdı.",
         "stepRefused": "Bir adım reddetti. Amiga'nın kendi günlüğünü okuyabilmeniz için kopya saklandı.",
         "timedOut": "Kimse yanıt vermedi. Amiga {{seconds}} saniye sonra hâlâ sonunu yazmamıştı, bu yüzden ART başlattığı emülatörü sonlandırdı; kopya saklandı.",
         "emulatorClosed": "Emülatör penceresi {{seconds}} saniye sonra, ilk açılış sonuna ulaşmadan kapatıldı; kopya saklandı."
@@ -2850,7 +2851,8 @@
       "stop": "Durdur",
       "running": "Prova ediliyor…",
       "cancelled": "Provayı durdurdunuz.",
-      "copyKept": "Kopya {{path}} konumunda saklandı."
+      "copyKept": "Kopya {{path}} konumunda saklandı.",
+      "copyDiscarded": "Kopya silindi."
     }
   }
 }

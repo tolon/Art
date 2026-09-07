@@ -58,7 +58,11 @@ describe("what the Amiga said it detected", () => {
 });
 
 describe("one row per step, wording and colour together", () => {
-  it("says what happened to each step, in words", () => {
+  // The default fixture is beginner mode (settingsStore's own default —
+  // `afterEach` restores it after every test in this file). Spec §9 keeps a
+  // refusal's `rc=` return code out of a beginner's sentence (I4, final
+  // review), so the row says a step was refused without the code underneath.
+  it("says what happened to each step, in words, without the rc a beginner would not read", () => {
     render(<FirstBootReportPanel report={report()} />);
     const rows = screen.getAllByTestId("firstboot-report-step");
     expect(rows).toHaveLength(3);
@@ -67,6 +71,14 @@ describe("one row per step, wording and colour together", () => {
     expect(rows[1].textContent).toContain("20-aux");
     expect(rows[1].textContent).toContain(i18n.t("firstboot.step.skipped", { reason: "not-3.9" }));
     expect(rows[2].textContent).toContain("50-pkg-boingbag-39-1");
+    expect(rows[2].textContent).toContain(i18n.t("firstboot.step.refusedPlain"));
+    expect(rows[2].textContent).not.toContain("20");
+  });
+
+  it("names the rc in power mode, where the AmigaDOS detail belongs", () => {
+    useSettingsStore.setState((state) => ({ settings: { ...state.settings, uxMode: "power" } }));
+    render(<FirstBootReportPanel report={report()} />);
+    const rows = screen.getAllByTestId("firstboot-report-step");
     expect(rows[2].textContent).toContain(i18n.t("firstboot.step.refused", { rc: 20 }));
   });
 
@@ -106,13 +118,23 @@ describe("the ending, and the two things that ride beside it", () => {
     expect(screen.queryByTestId("firstboot-report-fat-copy-failed")).toBeNull();
   });
 
-  it("carries a line from a newer ART verbatim, under its own heading", () => {
+  // `unknown` carries lines a newer ART would recognise and this one does
+  // not — raw AmigaDOS text, exactly the noise spec §9 keeps off a
+  // beginner's screen (I4, final review). Power mode is where it belongs.
+  it("carries a line from a newer ART verbatim, under its own heading, in power mode", () => {
+    useSettingsStore.setState((state) => ({ settings: { ...state.settings, uxMode: "power" } }));
     render(<FirstBootReportPanel report={report({ unknown: ["frobnicate 3"] })} />);
     const unknown = screen.getByTestId("firstboot-report-unknown");
     expect(unknown.textContent).toContain("frobnicate 3");
   });
 
-  it("says nothing about unknown lines when there are none", () => {
+  it("hides unknown lines in beginner mode even when the report carries some", () => {
+    render(<FirstBootReportPanel report={report({ unknown: ["frobnicate 3"] })} />);
+    expect(screen.queryByTestId("firstboot-report-unknown")).toBeNull();
+  });
+
+  it("says nothing about unknown lines when there are none, in power mode either", () => {
+    useSettingsStore.setState((state) => ({ settings: { ...state.settings, uxMode: "power" } }));
     render(<FirstBootReportPanel report={report({ unknown: [] })} />);
     expect(screen.queryByTestId("firstboot-report-unknown")).toBeNull();
   });

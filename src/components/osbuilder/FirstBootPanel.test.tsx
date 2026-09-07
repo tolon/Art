@@ -14,7 +14,7 @@
 // nothing rendering nothing, and nothing collapsing two endings, could pass.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import i18n from "i18next";
 
@@ -263,6 +263,33 @@ describe("the four rehearsal endings stay four sentences on screen", () => {
     const copy = await screen.findByTestId("firstboot-rehearsal-copy");
     expect(copy.textContent).toContain("D:/amiga/os39.rehearsal");
   });
+
+  // C1: the Rust side deliberately reports `discarded: false` when the
+  // discard itself failed after a *finished* rehearsal — the one ending
+  // whose own sentence used to claim the discard regardless of what the
+  // core reported. This fixture is the case the vacuous one above never
+  // produced: `finished` paired with `discarded: false`.
+  it("does not claim a discard for a finished rehearsal when the core kept the copy", async () => {
+    await runRehearsal();
+    resolveRehearsal!({
+      job_id: 42,
+      outcome: { kind: "finished", report: REPORT },
+      copy: "D:/amiga/os39.rehearsal",
+      discarded: false,
+    });
+    const outcomeShown = await screen.findByTestId("firstboot-rehearsal-outcome");
+    expect(outcomeShown.textContent).toBe(i18n.t("firstboot.rehearsal.outcome.finished"));
+    expect(outcomeShown.textContent).not.toContain("discard");
+
+    const copy = await screen.findByTestId("firstboot-rehearsal-copy");
+    expect(copy.textContent).toBe(
+      i18n.t("firstboot.panel.copyKept", { path: "D:/amiga/os39.rehearsal" })
+    );
+    expect(copy.textContent).not.toBe(i18n.t("firstboot.panel.copyDiscarded"));
+
+    const card = screen.getByTestId("firstboot-rehearsal-report");
+    expect(card.textContent).not.toContain(i18n.t("firstboot.panel.copyDiscarded"));
+  });
 });
 
 describe("stopping a rehearsal", () => {
@@ -303,6 +330,11 @@ describe("changing the tree clears a stale rehearsal", () => {
       discarded: true,
     });
     await screen.findByTestId("firstboot-rehearsal-outcome");
+    // The copy line now renders for every outcome, discarded or not (C1), so
+    // this assertion is real: it was on screen for tree A before the switch,
+    // proving the absence below comes from clearing on the tree change and
+    // not from a fixture that never rendered the element in the first place.
+    expect(screen.getByTestId("firstboot-rehearsal-copy")).toBeTruthy();
 
     rerender(<FirstBootPanel treeRoot="D:/amiga/os40" onTreeRootChange={() => {}} />);
 
@@ -310,6 +342,47 @@ describe("changing the tree clears a stale rehearsal", () => {
     expect(screen.queryByTestId("firstboot-rehearsal-outcome")).toBeNull();
     expect(screen.queryByTestId("firstboot-rehearsal-report")).toBeNull();
     expect(screen.queryByTestId("firstboot-rehearsal-copy")).toBeNull();
+  });
+
+  // I3, final review: the fix above (this describe block's first test) closes
+  // the case where the tree changes *after* a result is already on screen.
+  // It does not by itself close the case where the tree changes *while a
+  // rehearsal is still in flight* — that result resolves later and must not
+  // land under the new tree's fresh preview.
+  it("drops a rehearsal's result if it resolves only after the tree has since changed", async () => {
+    const { rerender } = render(
+      <FirstBootPanel treeRoot="D:/amiga/os39" onTreeRootChange={() => {}} />
+    );
+    await screen.findByTestId("firstboot-preview");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: i18n.t("firstboot.panel.run") }));
+    await waitFor(() => expect(rehearseMock).toHaveBeenCalled());
+
+    // The user picks a different folder before tree A's rehearsal has answered.
+    rerender(<FirstBootPanel treeRoot="D:/amiga/os40" onTreeRootChange={() => {}} />);
+    await waitFor(() => expect(previewMock).toHaveBeenLastCalledWith("D:/amiga/os40"));
+    // The button is usable again for tree B rather than stuck on "Rehearsing…"
+    // for a job that belongs to tree A.
+    expect(screen.getByRole("button", { name: i18n.t("firstboot.panel.run") })).toBeTruthy();
+
+    // Tree A's rehearsal answers only now.
+    await act(async () => {
+      resolveRehearsal!({
+        job_id: 42,
+        outcome: { kind: "finished", report: REPORT },
+        copy: "D:/amiga/os39.rehearsal",
+        discarded: true,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("firstboot-rehearsal-outcome")).toBeNull();
+    expect(screen.queryByTestId("firstboot-rehearsal-report")).toBeNull();
+    expect(screen.queryByTestId("firstboot-rehearsal-copy")).toBeNull();
+    // Still usable — a dropped stale result must not leave the button
+    // disabled behind it either.
+    expect(screen.getByRole("button", { name: i18n.t("firstboot.panel.run") })).toBeTruthy();
   });
 });
 
