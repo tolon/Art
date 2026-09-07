@@ -53,6 +53,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::error::{CoreError, CoreResult};
 
+/// The install half of §82 — unpack, re-plan, catalogue-join and write.
+/// See its module doc for why it is a separate file and what ART-242 moved
+/// there.
+pub mod install;
+
 /// How deep ART looks for a slave.
 ///
 /// A pack is a drawer with a slave in it, occasionally one level down. Past

@@ -453,53 +453,6 @@ owner has also read the Workbench menus of a Turkish tree ART built, which is
 a different claim — that is AmigaOS rendering ART's *output*, not ART's own
 interface.)
 
-**ART-242** 🔵 **WHDLoad's one-click install writes and joins directly in
-`commands/whdload.rs`, with no `core`-level "install a pack" function to call
-instead** — *found 2026-09-05 by the whdload-drawers Task 5 fix-round review*
-`src-tauri/src/commands/whdload.rs::run_install` (and its new
-`igame_data_for_pack` helper)
-
-CLAUDE.md's rule for `commands/*.rs`: "thin adapters only: deserialize args,
-call core, serialize back." `run_install` is not that — it unpacks the
-archive, works out the pack layout, looks the pack up in the game catalogue
-by its content-derived identity, builds the `IGameData` to write, calls
-`core::gameindex::igame::write_beside`, and drives the Stage W volume writer,
-all inline in the command layer. Task 5 (write `igame.data` beside a slave in
-a tree ART built) added to that rather than fixing it: `igame_data_for_pack`'s
-catalogue join is exactly the technical complexity CLAUDE.md says belongs in
-`core/`, and it now sits in `commands/` beside everything else that already
-did.
-
-The architecturally correct fix is a `core`-level "install a WHDLoad pack"
-function — trait-shaped the way `VolumeFormatter`/`MirrorClient`/`HostRecycler`
-are, since the actual disk write already goes through `core::volume::write`
-and the actual archive unpack through `core::sources::install`, both already
-core-level — with `commands/whdload.rs` reduced to the thin adapter the rule
-asks for. That is a round of its own, not a fix inside Task 5's two-file scope
-(`core/gameindex/igame.rs` and "wherever the install lays a pack down").
-
-Two homes were tried and measured before filing this rather than fixing it:
-
-- **`core::layout::apply.rs`** — the OS Builder's own staging-tree
-  materialiser, and the only other place that consumes
-  `core::whdload::analyse`/`PackLayout`. Writing `igame.data` into a placed
-  drawer there was tried and measured to break
-  `core::layout::presence::presence_of`'s byte-for-byte comparison against the
-  archive (ART-177's resume machinery): a re-plan saw `Different` instead of
-  `IconMissing` for a drawer identical to the archive except for the one file
-  `igame.data` added, and
-  `a_resumed_apply_restores_an_icon_the_first_run_never_wrote` failed under
-  the attempt. Teaching that invariant to ignore `igame.data` specifically is
-  a second module's worth of change on its own.
-- **`core::whdload` itself** — has no install function of any kind; `analyse`
-  and `launch_options` are its only two exports, both pure and read-only.
-  There is nowhere in it to add this without turning it into the very engine
-  this entry says does not exist yet.
-
-Nothing here is broken today: `run_install` works, is tested, and its
-catalogue join is itself tested and mutation-verified. What is missing is the
-layer that should hold this logic.
-
 **ART-250** 🟡 **`tooltypes()`'s lossy UTF-8 decode cannot byte-for-byte
 round-trip a NewIcon `IM1=`/`IM2=` tool type** — *found 2026-09-06 by the
 drawer-icons round's icon-oracle run against the owner's own AmigaOS 3.9
@@ -563,6 +516,125 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-242** 🔵 **WHDLoad's one-click install writes and joins directly in
+`commands/whdload.rs`, with no `core`-level "install a pack" function to call
+instead** — *found 2026-09-05 by the whdload-drawers Task 5 fix-round review*
+`src-tauri/src/commands/whdload.rs::run_install` (and its new
+`igame_data_for_pack` helper)
+
+CLAUDE.md's rule for `commands/*.rs`: "thin adapters only: deserialize args,
+call core, serialize back." `run_install` is not that — it unpacks the
+archive, works out the pack layout, looks the pack up in the game catalogue
+by its content-derived identity, builds the `IGameData` to write, calls
+`core::gameindex::igame::write_beside`, and drives the Stage W volume writer,
+all inline in the command layer. Task 5 (write `igame.data` beside a slave in
+a tree ART built) added to that rather than fixing it: `igame_data_for_pack`'s
+catalogue join is exactly the technical complexity CLAUDE.md says belongs in
+`core/`, and it now sits in `commands/` beside everything else that already
+did.
+
+The architecturally correct fix is a `core`-level "install a WHDLoad pack"
+function — trait-shaped the way `VolumeFormatter`/`MirrorClient`/`HostRecycler`
+are, since the actual disk write already goes through `core::volume::write`
+and the actual archive unpack through `core::sources::install`, both already
+core-level — with `commands/whdload.rs` reduced to the thin adapter the rule
+asks for. That is a round of its own, not a fix inside Task 5's two-file scope
+(`core/gameindex/igame.rs` and "wherever the install lays a pack down").
+
+Two homes were tried and measured before filing this rather than fixing it:
+
+- **`core::layout::apply.rs`** — the OS Builder's own staging-tree
+  materialiser, and the only other place that consumes
+  `core::whdload::analyse`/`PackLayout`. Writing `igame.data` into a placed
+  drawer there was tried and measured to break
+  `core::layout::presence::presence_of`'s byte-for-byte comparison against the
+  archive (ART-177's resume machinery): a re-plan saw `Different` instead of
+  `IconMissing` for a drawer identical to the archive except for the one file
+  `igame.data` added, and
+  `a_resumed_apply_restores_an_icon_the_first_run_never_wrote` failed under
+  the attempt. Teaching that invariant to ignore `igame.data` specifically is
+  a second module's worth of change on its own.
+- **`core::whdload` itself** — has no install function of any kind; `analyse`
+  and `launch_options` are its only two exports, both pure and read-only.
+  There is nowhere in it to add this without turning it into the very engine
+  this entry says does not exist yet.
+
+Nothing here is broken today: `run_install` works, is tested, and its
+catalogue join is itself tested and mutation-verified. What is missing is the
+layer that should hold this logic.
+
+**Fixed** 2026-09-07 on `art-debts` (batch 6, "The WHDLoad one-click install is
+a core function"). `run_install`'s whole body — the re-plan, the unpack, the
+`igame_data_for_pack` catalogue join and the drawer/icon write — moved to
+`core::whdload::install::install_pack`, alongside `build_plan`/`refuse` (which
+`install_pack` itself calls, so they had to move too — a lower `core` module
+cannot call back into `commands/`). `commands/whdload.rs::whdload_install` is
+now the thin adapter the rule asks for: resolve the job's paths, call
+`install_pack`, serialize the result and emit the event; `whdload_plan` calls
+`build_plan` the same way.
+
+The one boundary this round did **not** cross, and said so rather than
+quietly working around it: the actual disk write still goes through
+`commands/volume_write.rs::with_volume` (the session/backup/write-strategy
+machinery), which stays a command-layer helper — moving *that* is the round
+of its own this entry itself named, still not this one. So `install_pack`
+takes a new `core::whdload::install::VolumeSession` trait object rather than
+calling `with_volume` directly — the fourth live instance of the
+trait-in-`core`, implementation-outside-it shape (`MirrorClient`,
+`VolumeFormatter`, `HostRecycler` are the other three). `commands/whdload.rs`
+implements it (`CommandVolumeSession`, wrapping `with_volume` exactly as
+`run_install` used to inline it); the core module's own tests implement it a
+second way (`TestVolumeSession`, built only from `core` primitives —
+`VolumeWriter` over an in-memory `VecDevice`, committed to the file only on
+success) precisely so the core tests below do not depend on `commands/` either.
+
+**Wire pinned before the move, and unchanged by it** —
+`commands::whdload::tests::the_install_result_event_keeps_its_wire_shape` and
+`..::the_plan_result_keeps_its_wire_shape` serialize `WhdloadResult`/`WhdloadPlan`
+to JSON literals matching `src/lib/whdload.ts` field for field; both were green
+against the pre-move code and stayed green after. `pnpm lint` and `pnpm test`
+(1194 tests, 87 files) were run anyway per the round's own instructions and
+were untouched, as expected for a move that does not touch the frontend.
+
+**New core-level tests**, `core::whdload::install::tests`: the full
+`build_plan → install_pack` path installs a pack and reads the drawer, its
+contents and its icon back off the disk
+(`a_whdload_archive_installs_onto_a_disk_and_reads_back`); the catalogue join
+produces the fuller record, not just the drawer's own name
+(`a_catalogued_pack_gets_its_igame_data_from_the_catalogue_record`); a
+non-WHDLoad archive refuses before the `VolumeSession` is ever touched
+(`a_non_whdload_pack_is_refused_before_any_write`); and cancelling mid-copy
+both ends the job `Cancelled` and leaves the image byte-for-byte identical,
+hashed (compared) before and after
+(`a_cancelled_install_writes_nothing_and_does_not_report_success` — this one
+test carries both the mid-way-failure and the cancellation requirement, because
+in this engine they are the same failure mode: nothing "mid-way" can fail after
+`build_plan`'s own refusal checks pass except the copy being stopped). The
+thirteen `build_plan`/`refuse` unit tests and the two `with_volume`-only tests
+(`an_install_creates_the_drawer_its_contents_and_its_icon`,
+`a_whole_install_backs_the_image_up_once`, which never called `run_install`)
+moved or stayed with the same split. 50 whdload tests total, same count before
+and after the move.
+
+**Mutation, and what fell.** `install_pack` was edited to skip
+`session.install_drawer` entirely, in-tree, and fabricate a zeroed
+`CopyReport`. Five tests fell:
+`a_whdload_archive_installs_onto_a_disk_and_reads_back`,
+`a_catalogued_pack_gets_its_igame_data_from_the_catalogue_record`,
+`an_uncatalogued_pack_still_gets_a_title_only_igame_data`,
+`a_catalogued_title_too_long_for_igame_writes_no_empty_file` and
+`installing_the_same_pack_twice_is_refused_and_changes_nothing` (the last
+because a "successful" install that wrote nothing no longer collides with
+itself on the second run). Restored from an absolute-path copy in the
+scratchpad (`shutil.copyfile`-equivalent, then `touch`'d per CLAUDE.md's own
+warning about `cargo` seeing a mutated build as newer), not `git checkout --`.
+
+**Verified**, all runs on `art-debts`: `cargo fmt --check` clean;
+`cargo clippy --all-targets -- -D warnings` clean; `cargo test --lib -- --skip
+artwork` **2968 passed, 0 failed, 51 ignored** twice in a row, before and after
+the mutation round-trip; `pnpm lint` and `pnpm test` (1194 passed) clean;
+`scripts/control-byte-sweep.py` clean.
+
 **ART-241** 🔵 **Field hints, errors and outcome text sit beside a control, not
 associated with it** — *found 2026-09-05 by the bounded accessibility sweep
 ART-237 itself called for*
