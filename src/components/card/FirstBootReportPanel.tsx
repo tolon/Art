@@ -47,6 +47,21 @@ const TONE_CLASS: Record<string, string> = {
   err: "badge-err",
 };
 
+/**
+ * The heading a rendered report and `HardDiskStudio`'s own "the read failed
+ * outright" card both need (leftover round). Pulled out because the two used
+ * to carry their own copy of the same paragraph, one file apart, with
+ * nothing keeping them in sync but a person noticing.
+ */
+export function FirstBootReportHeading() {
+  const { t } = useTranslation();
+  return (
+    <p className="muted" style={{ fontSize: 12, fontWeight: 600, margin: "0 0 6px" }}>
+      {t("firstboot.report.heading")}
+    </p>
+  );
+}
+
 export function FirstBootReportPanel({ report, source }: FirstBootReportPanelProps) {
   const { t } = useTranslation();
   const power = usePowerMode();
@@ -65,9 +80,7 @@ export function FirstBootReportPanel({ report, source }: FirstBootReportPanelPro
 
   return (
     <div data-testid="firstboot-report" className="card" style={{ padding: "8px 10px" }}>
-      <p className="muted" style={{ fontSize: 12, fontWeight: 600, margin: "0 0 6px" }}>
-        {t("firstboot.report.heading")}
-      </p>
+      <FirstBootReportHeading />
 
       {sourcePhrase && (
         <p data-testid="firstboot-report-source" className="faint" style={{ fontSize: 11, margin: "0 0 8px" }}>

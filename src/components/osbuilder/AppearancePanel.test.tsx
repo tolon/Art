@@ -17,14 +17,34 @@ import userEvent from "@testing-library/user-event";
 
 import i18n from "@/i18n";
 import { useSettingsStore } from "@/stores/settingsStore";
+import type { AppearanceOutcome } from "@/lib/appearance";
+import type { JobProgress } from "@/lib/jobs";
 
 const applyMock = vi.hoisted(() => vi.fn());
 const backdropsMock = vi.hoisted(() => vi.fn());
+const awaitJobResultMock = vi.hoisted(() => vi.fn());
+const jobCancelMock = vi.hoisted(() => vi.fn());
+const onJobProgressMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/appearance", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/appearance")>()),
   appearanceApply: applyMock,
   appearanceBackdrops: backdropsMock,
+}));
+
+// ART-248: `appearanceApply` now only starts the job (it resolves with a job
+// id) and the outcome arrives through `awaitJobResult` — the same seam
+// `FirstBootPanel.test.tsx` mocks for its own rehearsal job. `isJobCancellation`
+// stays real, the same reason: it is a pure predicate and the whole point of
+// the "stopped, not an error" test below is that the panel's own use of it is
+// correct. `fraction` and `subscribeSafely` stay real for the identical
+// reason — they are pure, and the progress test is exercising the panel's
+// real use of them.
+vi.mock("@/lib/jobs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/jobs")>()),
+  awaitJobResult: awaitJobResultMock,
+  jobCancel: jobCancelMock,
+  onJobProgress: onJobProgressMock,
 }));
 
 vi.mock("@/lib/settings", async (importOriginal) => ({
@@ -35,6 +55,7 @@ vi.mock("@/lib/settings", async (importOriginal) => ({
 
 const { AppearancePanel } = await import("@/components/osbuilder/AppearancePanel");
 const { DEFAULT_SETTINGS } = await import("@/lib/settings");
+const { JOB_CANCELLED_MESSAGE } = await import("@/lib/jobs");
 
 const TREE = "E:\\amiga\\dist-3.2";
 
@@ -51,17 +72,45 @@ function seedStore(remembered: Record<string, unknown> = {}) {
   });
 }
 
+const DEFAULT_OUTCOME: AppearanceOutcome = {
+  written: ["Prefs/Env-Archive/Sys/WBPattern.prefs"],
+  backups: [],
+  picturePlaced: null,
+  amigaPath: "Sys:Prefs/Presets/Backdrops/default_pal.iff",
+  iconsPlaced: 0,
+  drawersArranged: 0,
+  iconsSkipped: [],
+};
+
+/** What the job's own `awaitJobResult` promise settles with, by default —
+ *  overridden per test either by reassigning this before clicking Apply, or
+ *  by a one-off `awaitJobResultMock.mockImplementationOnce(...)` for a
+ *  rejection (an error or a cancellation). */
+let currentOutcome: AppearanceOutcome = DEFAULT_OUTCOME;
+
+/** The one live `onJobProgress` handler, so a test can deliver a progress
+ *  update the way the backend would — the same shape
+ *  `AmigaInstallPanel.test.tsx` uses for its own job channel. */
+let report: ((progress: JobProgress) => void) | null = null;
+
 beforeEach(() => {
   useSettingsStore.setState({ loaded: false, settings: DEFAULT_SETTINGS });
   backdropsMock.mockReset().mockResolvedValue([]);
-  applyMock.mockReset().mockResolvedValue({
-    written: ["Prefs/Env-Archive/Sys/WBPattern.prefs"],
-    backups: [],
-    picturePlaced: null,
-    amigaPath: "Sys:Prefs/Presets/Backdrops/default_pal.iff",
-    iconsPlaced: 0,
-    drawersArranged: 0,
-    iconsSkipped: [],
+  applyMock.mockReset().mockResolvedValue(1);
+  currentOutcome = DEFAULT_OUTCOME;
+  report = null;
+  jobCancelMock.mockReset().mockResolvedValue(true);
+  onJobProgressMock.mockReset().mockImplementation(async (handler: (p: JobProgress) => void) => {
+    report = handler;
+    return () => {};
+  });
+  // `awaitJobResult`'s own contract: it calls `start` itself (which is what
+  // actually invokes `appearanceApply` and sets the panel's own job id) and
+  // hands back a promise this default resolves with `currentOutcome` — the
+  // same shape `FirstBootPanel.test.tsx`'s own `awaitJobResultMock` uses.
+  awaitJobResultMock.mockReset().mockImplementation((_event: string, start: () => Promise<number>) => {
+    void start();
+    return Promise.resolve(currentOutcome);
   });
 });
 
@@ -117,12 +166,20 @@ describe("what it refuses, and where the sentence is", () => {
   it("shows the refusal text when a picture is neither PNG nor JPEG, exactly as core wrote it", async () => {
     // The real sentence `core::picture::decode` produces, with the real
     // trailer `AppError::user_message` appends — never reworded on this side
-    // (ART-060).
-    applyMock.mockRejectedValue(
-      new Error(
-        "malformed picture: ART can turn a PNG or a JPEG into a wallpaper; this file is " +
-          "neither\n\nError ID: ART-FORMAT-MALFORMED"
-      )
+    // (ART-060). ART-248: this refusal now happens inside the job (planning
+    // runs on the job thread), so it arrives as `awaitJobResult`'s own
+    // rejection, not `appearanceApply`'s — the initial `invoke` still
+    // resolves with a job id.
+    awaitJobResultMock.mockImplementationOnce(
+      (_event: string, start: () => Promise<number>) => {
+        void start();
+        return Promise.reject(
+          new Error(
+            "malformed picture: ART can turn a PNG or a JPEG into a wallpaper; this file is " +
+              "neither\n\nError ID: ART-FORMAT-MALFORMED"
+          )
+        );
+      }
     );
     seedStore();
     render(<AppearancePanel />);
@@ -214,7 +271,7 @@ describe("a choice survives a remount", () => {
 describe("what a successful apply says", () => {
   it("names where the previous version's backup went", async () => {
     backdropsMock.mockResolvedValue(["default_pal.iff"]);
-    applyMock.mockResolvedValue({
+    currentOutcome = {
       written: ["Prefs/Env-Archive/Sys/WBPattern.prefs"],
       backups: ["Prefs/Env-Archive/Sys/WBPattern.prefs.bak.1"],
       picturePlaced: null,
@@ -222,7 +279,7 @@ describe("what a successful apply says", () => {
       iconsPlaced: 0,
       drawersArranged: 0,
       iconsSkipped: [],
-    });
+    };
     seedStore();
     render(<AppearancePanel />);
     await enableWallpaper();
@@ -237,7 +294,7 @@ describe("what a successful apply says", () => {
 
   it("says nothing about a backup when nothing existed to back up", async () => {
     backdropsMock.mockResolvedValue(["default_pal.iff"]);
-    applyMock.mockResolvedValue({
+    currentOutcome = {
       written: ["Prefs/Env-Archive/Sys/WBPattern.prefs"],
       backups: [],
       picturePlaced: null,
@@ -245,7 +302,7 @@ describe("what a successful apply says", () => {
       iconsPlaced: 0,
       drawersArranged: 0,
       iconsSkipped: [],
-    });
+    };
     seedStore();
     render(<AppearancePanel />);
     await enableWallpaper();
@@ -335,7 +392,7 @@ describe("what reaches the wire", () => {
 
 describe("what a successful icon arrangement says", () => {
   it("says how many icons were placed after a successful run, by number", async () => {
-    applyMock.mockResolvedValue({
+    currentOutcome = {
       written: ["Utilities.info"],
       backups: [],
       picturePlaced: null,
@@ -343,7 +400,7 @@ describe("what a successful icon arrangement says", () => {
       iconsPlaced: 7,
       drawersArranged: 3,
       iconsSkipped: [],
-    });
+    };
     seedStore();
     render(<AppearancePanel />);
     await userEvent.click(
@@ -360,7 +417,7 @@ describe("what a successful icon arrangement says", () => {
   });
 
   it("names the icon that could not be read, rather than silently dropping it", async () => {
-    applyMock.mockResolvedValue({
+    currentOutcome = {
       written: [],
       backups: [],
       picturePlaced: null,
@@ -368,7 +425,7 @@ describe("what a successful icon arrangement says", () => {
       iconsPlaced: 2,
       drawersArranged: 1,
       iconsSkipped: ["E:\\amiga\\dist-3.2\\Utilities\\Bad.info"],
-    });
+    };
     seedStore();
     render(<AppearancePanel />);
     await userEvent.click(
@@ -388,7 +445,7 @@ describe("what a successful icon arrangement says", () => {
     // names. A directory with nothing to place commits nothing at all
     // (`core::appearance::plan_icon_arrangement`'s own doc), so `written`,
     // `iconsPlaced` and `drawersArranged` are all zero here.
-    applyMock.mockResolvedValue({
+    currentOutcome = {
       written: [],
       backups: [],
       picturePlaced: null,
@@ -396,7 +453,7 @@ describe("what a successful icon arrangement says", () => {
       iconsPlaced: 0,
       drawersArranged: 0,
       iconsSkipped: [],
-    });
+    };
     seedStore();
     render(<AppearancePanel />);
     await userEvent.click(
@@ -408,6 +465,86 @@ describe("what a successful icon arrangement says", () => {
     expect(nothing.textContent).toBeTruthy();
     expect(screen.queryByTestId("appearance-icons-placed")).toBeNull();
     expect(screen.queryByTestId("appearance-icons-skipped")).toBeNull();
+  });
+});
+
+describe("ART-248: the apply runs as a cancellable job", () => {
+  it("shows a progress line once the job reports, naming a real count", async () => {
+    // The job never settles in this test — `awaitJobResultMock` is
+    // overridden with a promise nothing resolves, the same shape
+    // `AmigaInstallPanel.test.tsx` uses to hold a job "running" so its own
+    // progress channel can be exercised.
+    awaitJobResultMock.mockImplementationOnce(
+      (_event: string, start: () => Promise<number>) => {
+        void start();
+        return new Promise(() => {});
+      }
+    );
+    seedStore();
+    render(<AppearancePanel />);
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /arrange the drawer icons/i })
+    );
+    await userEvent.click(screen.getByRole("button", { name: /apply/i }));
+    await waitFor(() => expect(applyMock).toHaveBeenCalled());
+
+    report!({
+      id: 1,
+      title: "Applying appearance to distribution tree",
+      done: 3,
+      total: 6,
+      message: "Utilities.info",
+      state: { state: "running" },
+    });
+
+    const progress = await screen.findByTestId("appearance-progress");
+    // A count, not a fixed-width bar with no information (CLAUDE.md).
+    expect(progress.textContent).toContain("3");
+    expect(progress.textContent).toContain("6");
+    expect(progress.textContent).toContain("Utilities.info");
+  });
+
+  it("calls jobCancel with the running job's own id when Stop is pressed", async () => {
+    awaitJobResultMock.mockImplementationOnce(
+      (_event: string, start: () => Promise<number>) => {
+        void start();
+        return new Promise(() => {});
+      }
+    );
+    applyMock.mockReset().mockResolvedValue(9);
+    seedStore();
+    render(<AppearancePanel />);
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /arrange the drawer icons/i })
+    );
+    await userEvent.click(screen.getByRole("button", { name: /apply/i }));
+    await waitFor(() => expect(applyMock).toHaveBeenCalled());
+
+    await userEvent.click(screen.getByRole("button", { name: /stop/i }));
+    expect(jobCancelMock).toHaveBeenCalledWith(9);
+  });
+
+  it("renders a stopped sentence rather than an error when the job is cancelled", async () => {
+    // `isJobCancellation` is real in this suite — this proves the panel's
+    // own use of it, not the predicate itself.
+    awaitJobResultMock.mockImplementationOnce(
+      (_event: string, start: () => Promise<number>) => {
+        void start();
+        return Promise.reject(new Error(JOB_CANCELLED_MESSAGE));
+      }
+    );
+    seedStore();
+    render(<AppearancePanel />);
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /arrange the drawer icons/i })
+    );
+    await userEvent.click(screen.getByRole("button", { name: /apply/i }));
+
+    const cancelled = await screen.findByTestId("appearance-cancelled");
+    expect(cancelled.textContent).toBeTruthy();
+    // Endings stay distinct (CLAUDE.md): the user's own stop is not the
+    // error sentence, and the two must never render together.
+    expect(screen.queryByTestId("appearance-error")).toBeNull();
   });
 });
 

@@ -515,6 +515,29 @@ pub fn file_key(path: &Path) -> Option<(u64, i64)> {
     Some((meta.len(), mtime as i64))
 }
 
+/// Every raw member name an archive holds, right now — not which of them
+/// parse into a title, just which entries exist. `None` when the archive
+/// cannot even be opened this run (gone, unplugged, or genuinely
+/// unreadable): that is the "missing" case, the same as any other
+/// unreachable-this-run title. `Some` even when the archive turns out to
+/// hold nothing.
+///
+/// Same cost profile `readers::lhadrawer`'s own module doc measures for
+/// `read_archive_drawers`: `entries()` seeks header to header rather than
+/// decompressing anything, which is what makes calling it a second time here
+/// (ART-243, below) cheap enough not to matter.
+fn archive_member_names(path: &Path) -> Option<std::collections::BTreeSet<String>> {
+    let mut backend = crate::core::archive::open(path).ok()?;
+    let entries = backend.entries().ok()?;
+    Some(
+        entries
+            .into_iter()
+            .filter(|entry| !entry.is_dir)
+            .map(|entry| entry.name)
+            .collect(),
+    )
+}
+
 /// Read a root again, reusing what can be reused.
 ///
 /// Never deletes an entry whose file has gone: a catalogue is a library, not a
@@ -570,6 +593,20 @@ pub fn refresh_root(
         .cloned()
         .map(|entry| (entry.path.clone(), entry))
         .collect();
+    // ART-244: the same "several rows, one path" grouping the missing-
+    // reconciliation below needs, built once here for the archive cache-hit
+    // check just after `files`' own. A plain `BTreeMap<String, CachedEntry>`
+    // (`cached`, above) would keep only the last drawer of a multi-drawer
+    // archive — the same reason that map is never used for archives either.
+    let mut previous_by_archive_path: BTreeMap<String, Vec<&CachedEntry>> = BTreeMap::new();
+    for entry in &previous {
+        if matches!(entry.record.media, Media::WhdloadArchive { .. }) {
+            previous_by_archive_path
+                .entry(entry.path.clone())
+                .or_default()
+                .push(entry);
+        }
+    }
 
     progress.report(0, None, "Looking for titles…");
     let files = collect_indexable(root);
@@ -605,14 +642,73 @@ pub fn refresh_root(
         }
     }
 
-    // Drawers and archives are never cache-hits, in either mode: a drawer's
-    // slave is kilobytes and `read_archive_drawers` seeks header to header
-    // rather than decompressing (its own doc), so the cache machinery above —
+    // Drawers are never cache-hits, in either mode: a drawer's slave is
+    // kilobytes, cheap enough on its own that the cache machinery above —
     // built to skip re-hashing multi-megabyte hardfiles — buys nothing here.
-    // An archive holding several drawers also does not fit that machinery's
-    // one-cached-entry-per-path model: several `CachedEntry` rows share one
-    // archive path (see the reconciliation below, which knows this).
-    let total = (to_read.len() + drawers.len() + archives.len()) as u64;
+    //
+    // Archives **are** cache-hits in `Update` mode, since ART-244: measured
+    // directly against the owner's own 663 MB, 893-drawer
+    // `WHDLoadDemos100.lha` (`readers::lhadrawer::tests::real_archive_scan_is_fast`,
+    // `ART_LHA_ARCHIVE`-gated), one archive alone costs 1.6-3.1 s to
+    // re-read — nowhere near free, even though `read_archive_drawers`
+    // genuinely does seek header to header rather than decompress the
+    // archive as a whole (its own doc comment). The reads that *are*
+    // decompressed — one per slave candidate, kilobytes each, but hundreds
+    // of them in a large collection archive — add up to real, user-felt
+    // time on every refresh, changed or not. Skipped the same way the file
+    // walk already skips an unchanged file: an archive whose size and mtime
+    // still match every `CachedEntry` row it produced last time is not
+    // reopened at all — see `archives_to_scan`, just below — which is what
+    // makes the missing-reconciliation's `archive_paths_needing_check`
+    // above never even consider a cache-hit archive: every one of its ids
+    // was just carried into `reuse` unchanged, so `found_ids` already has
+    // them.
+    //
+    // An archive holding several drawers still does not fit `cached`'s
+    // one-entry-per-path model — several `CachedEntry` rows share one
+    // archive path — which is why this is checked against
+    // `previous_by_archive_path` instead, grouped, not through `cached`.
+    //
+    // **Named risk, inherited from the plain-file cache above, not new
+    // here.** `file_key`'s mtime is milliseconds, but the *filesystem*'s own
+    // clock can be coarser: FAT32/exFAT (a common collection-drive format)
+    // stores mtime at 2-second granularity, and a timestamp-preserving copy
+    // can leave the mtime completely unchanged. An archive rewritten with
+    // the same byte length inside one such tick would be skipped here —
+    // and, identically, a plain file changed the same way already skips the
+    // file loop above; this is not a new hole ART-244 opened. No mtime-
+    // proximity guard ("treat an mtime within 2 s of the previous scan's
+    // own time as changed anyway") was added: `core` has no clock of its
+    // own and `scanned_at` is only what the caller happened to supply, so
+    // a guard here would compare against a value this module cannot trust
+    // to be a real wall-clock reading; and the failure mode is self-healing
+    // rather than silent, since `Rescan` always ignores this cache entirely
+    // and a later change with a *different* mtime or size is caught the
+    // ordinary way. Content-hashing every archive to close this precisely
+    // is the cost ART-244 exists to avoid — see the timing above.
+    let mut archives_to_scan: Vec<PathBuf> = Vec::new();
+    for archive_path in &archives {
+        let key = archive_path.to_string_lossy().to_string();
+        let cache_hit = (mode == Refresh::Update)
+            .then(|| previous_by_archive_path.get(&key))
+            .flatten()
+            .filter(|group| {
+                !group.is_empty()
+                    && file_key(archive_path).is_some_and(|(size, mtime_ms)| {
+                        group.iter().all(|entry| {
+                            entry.size == size
+                                && entry.mtime_ms == mtime_ms
+                                && entry.record.schema == GAMEINDEX_SCHEMA
+                        })
+                    })
+            });
+        match cache_hit {
+            Some(group) => reuse.extend(group.iter().map(|entry| (*entry).clone())),
+            None => archives_to_scan.push(archive_path.clone()),
+        }
+    }
+
+    let total = (to_read.len() + drawers.len() + archives_to_scan.len()) as u64;
     let mut fresh: Vec<CachedEntry> = Vec::new();
     let mut done: u64 = 0;
     for (path, size, mtime_ms) in to_read {
@@ -669,7 +765,7 @@ pub fn refresh_root(
         }
     }
 
-    for archive_path in &archives {
+    for archive_path in &archives_to_scan {
         if progress.is_cancelled() {
             return Err(crate::core::jobs::cancelled_error());
         }
@@ -729,6 +825,51 @@ pub fn refresh_root(
         .chain(fresh.iter())
         .map(|entry| entry.record.id.clone())
         .collect();
+    // ART-243: which `WhdloadArchive` records need the finer check below —
+    // their id was not found again this run at all. Built only for the
+    // archives that actually have something to lose: an archive with
+    // nothing stale in it is never reopened just for this.
+    let archive_paths_needing_check: std::collections::BTreeSet<String> = previous
+        .iter()
+        .filter(|entry| {
+            matches!(entry.record.media, Media::WhdloadArchive { .. })
+                && !found_ids.contains(&entry.record.id)
+        })
+        .map(|entry| entry.path.clone())
+        .collect();
+    let archive_members: BTreeMap<String, Option<std::collections::BTreeSet<String>>> =
+        archive_paths_needing_check
+            .into_iter()
+            .map(|path| {
+                let members = archive_member_names(Path::new(&path));
+                (path, members)
+            })
+            .collect();
+    // Content-derived ids change when a member's *content* changes, even
+    // when the member itself never moved — so "this id was not found" and
+    // "this member was not re-read" are different questions. Without this,
+    // a member successfully re-parsed into a *different* id this run (real
+    // content change, not a transient failure) would pass the "still in the
+    // archive's own listing" check above and be kept as `missing` forever,
+    // sitting duplicated beside the fresh record for the same member.
+    // `fresh` only, deliberately: `reuse` entries are cache-hit archives
+    // that were never reopened this run, so they say nothing about what a
+    // *re-read* just produced.
+    let archive_fresh_members: BTreeMap<String, std::collections::BTreeSet<String>> = {
+        let mut map: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+        for entry in &fresh {
+            if let Media::WhdloadArchive { inner, slave, .. } = &entry.record.media {
+                let member = if inner.is_empty() {
+                    slave.clone()
+                } else {
+                    format!("{inner}/{slave}")
+                };
+                map.entry(entry.path.clone()).or_default().insert(member);
+            }
+        }
+        map
+    };
+
     let missing: Vec<CachedEntry> = previous
         .into_iter()
         .filter(|entry| {
@@ -740,13 +881,46 @@ pub fn refresh_root(
             // `WhdloadArchive` is the one shape where several `CachedEntry`
             // rows share a single path — the archive's own. "This path is
             // present" says nothing about *this particular* drawer inside
-            // it: a sibling drawer answering fine this run must not paper
-            // over one that failed to read, or a transient failure on one
-            // drawer in a 893-drawer archive would silently delete it
-            // instead of keeping it the way every other unreadable-this-run
-            // title is kept.
-            if matches!(entry.record.media, Media::WhdloadArchive { .. }) {
-                return true;
+            // it — but "this exact member is still in the archive's own
+            // listing" does (ART-243). A sibling drawer that merely fails
+            // to *parse* this run (round 2's case: a transient failure on
+            // one drawer in an 893-drawer archive) must not be papered
+            // over by treating "member still there" the same as "member
+            // gone" — that would delete it, which round 2 was written to
+            // stop. But a member genuinely no longer in the archive's own
+            // listing — a title removed, or the archive rewritten smaller —
+            // really is stale, not missing, and Rescan must be able to
+            // clear it: that never happened before this fix, because "id
+            // not found this run" could not tell the two cases apart.
+            if let Media::WhdloadArchive { inner, slave, .. } = &entry.record.media {
+                let member = if inner.is_empty() {
+                    slave.clone()
+                } else {
+                    format!("{inner}/{slave}")
+                };
+                return match archive_members.get(&entry.path) {
+                    // Not reachable this run at all — unplugged, moved,
+                    // simply gone. Same treatment as every other
+                    // unreadable-this-run title: kept.
+                    Some(None) | None => true,
+                    Some(Some(names)) => {
+                        if !names.contains(&member) {
+                            // No longer one of the archive's own entries at
+                            // all: genuinely removed. Stale.
+                            return false;
+                        }
+                        // Still there. If this run's re-read actually
+                        // produced *a* record for this exact member — any
+                        // id, since content-derived ids move when content
+                        // does — the old record is superseded, not merely
+                        // unlucky this run: stale. If it did not (round 2's
+                        // case: present but failed to parse, ambiguous, or
+                        // otherwise skipped), it is kept as missing.
+                        !archive_fresh_members
+                            .get(&entry.path)
+                            .is_some_and(|members| members.contains(&member))
+                    }
+                };
             }
             !present.contains(&entry.path)
         })
@@ -970,6 +1144,115 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// **ART-244.** The archive half of the same cache the file loop already
+    /// has: measured directly against the owner's own 663 MB, 893-drawer
+    /// `WHDLoadDemos100.lha`
+    /// (`readers::lhadrawer::tests::real_archive_scan_is_fast`), a single
+    /// archive costs 1.6-3.1 s to re-read even though nothing in it changed
+    /// — `read_archive_drawers` seeks header to header rather than
+    /// decompressing the archive as a whole, but the slave candidates it
+    /// *does* decompress, hundreds of them in a large collection archive,
+    /// add up to real time on every `Update` refresh. A sentinel record is
+    /// planted with the archive's real size and mtime but a title its own
+    /// content could never produce; if `SENTINEL` survives, the archive was
+    /// answered from the cache, not reopened.
+    #[test]
+    fn an_unchanged_archive_is_not_reopened_on_update() {
+        use crate::core::gameindex::readers::slave::tests_support::build_slave;
+
+        let dir = scratch("archive-cache-hit");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let archive = root.join("Demos.lha");
+        std::fs::write(
+            &archive,
+            crate::core::lha::tests::make_lha_with(&[(
+                "Demos/Real/Real.Slave",
+                build_slave("RealTitle", "1992 Someone", 16).as_slice(),
+            )]),
+        )
+        .unwrap();
+        let (size, mtime_ms) = file_key(&archive).unwrap();
+
+        let mut sentinel = a_record("SENTINEL");
+        sentinel.media = Media::WhdloadArchive {
+            file: "Demos.lha".into(),
+            inner: "Demos/Real".into(),
+            slave: "Real.Slave".into(),
+        };
+        plant(
+            &dir,
+            &root,
+            CachedEntry {
+                path: archive.to_string_lossy().into(),
+                size,
+                mtime_ms,
+                record: sentinel,
+            },
+            GAMEINDEX_SCHEMA,
+        );
+
+        let after = refresh_root(&dir, &root, Refresh::Update, None, &NoProgress).unwrap();
+        assert_eq!(after.entries.len(), 1, "{:?}", after.entries);
+        assert_eq!(
+            after.entries[0].record.title.value, "SENTINEL",
+            "the archive was reopened on Update even though its size and \
+             mtime had not changed"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **ART-244's other half.** An archive whose size no longer matches
+    /// what was stored is reopened, the same shape
+    /// `a_changed_file_is_read_again` pins for a plain file — the cache-hit
+    /// check above must not become "never re-read an archive at all".
+    #[test]
+    fn a_touched_archive_is_reopened_on_update() {
+        use crate::core::gameindex::readers::slave::tests_support::build_slave;
+
+        let dir = scratch("archive-cache-miss");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let archive = root.join("Demos.lha");
+        std::fs::write(
+            &archive,
+            crate::core::lha::tests::make_lha_with(&[(
+                "Demos/Real/Real.Slave",
+                build_slave("RealTitle", "1992 Someone", 16).as_slice(),
+            )]),
+        )
+        .unwrap();
+        let (_, mtime_ms) = file_key(&archive).unwrap();
+
+        let mut sentinel = a_record("SENTINEL");
+        sentinel.media = Media::WhdloadArchive {
+            file: "Demos.lha".into(),
+            inner: "Demos/Real".into(),
+            slave: "Real.Slave".into(),
+        };
+        plant(
+            &dir,
+            &root,
+            CachedEntry {
+                path: archive.to_string_lossy().into(),
+                size: 1, // does not match the archive's real size
+                mtime_ms,
+                record: sentinel,
+            },
+            GAMEINDEX_SCHEMA,
+        );
+
+        let after = refresh_root(&dir, &root, Refresh::Update, None, &NoProgress).unwrap();
+        assert_eq!(after.entries.len(), 1, "{:?}", after.entries);
+        assert_eq!(
+            after.entries[0].record.title.value, "RealTitle",
+            "a changed archive must be reopened, not answered from the cache"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// **Rescan ignores the cache.** Same planted sentinel, and this time it
     /// must be gone.
     #[test]
@@ -1145,6 +1428,125 @@ mod tests {
         );
         assert!(titles.contains(&"Good"), "{titles:?}");
         assert!(titles.contains(&"Bad"), "{titles:?}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **ART-243.** An archive rewritten in place with one of its two titles
+    /// genuinely removed — its member gone from the archive's own listing,
+    /// not merely failing to parse — must lose that title's record on the
+    /// next Rescan. Round 2's fix (the test above) kept every
+    /// `WhdloadArchive` record whenever its id was not found again this run,
+    /// which meant "removed from the archive" and "archive unreadable this
+    /// run" were treated identically: neither one ever cleared, and a
+    /// catalogue that is supposed to self-heal under Rescan would not for
+    /// this one shape. This is the failing-then-fixed half; the other half —
+    /// keeping it as `missing` when the archive genuinely cannot be opened
+    /// this run — is
+    /// `an_archive_this_run_cannot_open_keeps_its_records_as_missing`, below.
+    #[test]
+    fn a_title_removed_from_a_rewritten_archive_is_cleared_by_rescan() {
+        use crate::core::gameindex::readers::slave::tests_support::build_slave;
+
+        let dir = scratch("archive-ghost");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let archive = root.join("Demos.lha");
+
+        std::fs::write(
+            &archive,
+            crate::core::lha::tests::make_lha_with(&[
+                (
+                    "Demos/Keep/Keep.Slave",
+                    build_slave("Keep", "1992 Someone", 16).as_slice(),
+                ),
+                (
+                    "Demos/Gone/Gone.Slave",
+                    build_slave("Gone", "1992 Someone", 16).as_slice(),
+                ),
+            ]),
+        )
+        .unwrap();
+
+        let first = refresh_root(&dir, &root, Refresh::Rescan, None, &NoProgress).unwrap();
+        assert_eq!(first.entries.len(), 2, "{:?}", first.entries);
+        let keep_id = first
+            .entries
+            .iter()
+            .find(|e| e.record.title.value == "Keep")
+            .expect("Keep must have been catalogued")
+            .record
+            .id
+            .clone();
+
+        // Rewrite the archive with "Gone" genuinely absent — not corrupted,
+        // simply not one of its entries any more.
+        std::fs::write(
+            &archive,
+            crate::core::lha::tests::make_lha_with(&[(
+                "Demos/Keep/Keep.Slave",
+                build_slave("Keep", "1992 Someone", 16).as_slice(),
+            )]),
+        )
+        .unwrap();
+
+        let after = refresh_root(&dir, &root, Refresh::Rescan, None, &NoProgress).unwrap();
+        let titles: Vec<&str> = after
+            .entries
+            .iter()
+            .map(|e| e.record.title.value.as_str())
+            .collect();
+        assert_eq!(
+            titles,
+            vec!["Keep"],
+            "Gone's member is no longer in the archive at all, so its ghost \
+             record must be cleared by Rescan: {titles:?}"
+        );
+        assert_eq!(
+            after.entries[0].record.id, keep_id,
+            "the surviving title keeps its own id"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **ART-243's other half.** An archive record whose file cannot be
+    /// opened this run at all — unplugged drive, moved, simply gone — is
+    /// kept as `missing`, exactly as before the fix above. Telling this
+    /// apart from a title genuinely removed from a *reachable* archive is
+    /// the whole of ART-243: both used to be indistinguishable ("id not
+    /// found this run"), and this is the case that must **not** start
+    /// getting cleared along with it.
+    #[test]
+    fn an_archive_this_run_cannot_open_keeps_its_records_as_missing() {
+        let dir = scratch("archive-unreachable");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+
+        // Never written: the archive is not there this run, the same shape
+        // an unplugged drive or a moved file takes.
+        let ghost_path = root.join("Unplugged.lha");
+        let mut record = a_record("Gone Archive Title");
+        record.media = Media::WhdloadArchive {
+            file: "Unplugged.lha".into(),
+            inner: "Demos/Gone".into(),
+            slave: "Gone.Slave".into(),
+        };
+        plant(
+            &dir,
+            &root,
+            CachedEntry {
+                path: ghost_path.to_string_lossy().into(),
+                size: 100,
+                mtime_ms: 1,
+                record,
+            },
+            GAMEINDEX_SCHEMA,
+        );
+
+        let after = refresh_root(&dir, &root, Refresh::Rescan, None, &NoProgress).unwrap();
+        assert_eq!(after.entries.len(), 1, "{:?}", after.entries);
+        assert_eq!(after.entries[0].record.title.value, "Gone Archive Title");
 
         std::fs::remove_dir_all(&dir).ok();
     }

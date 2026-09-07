@@ -38,6 +38,15 @@ So both allow-lists are **per file, with a reason**, exactly like
 `scripts/scratch-root-sweep.py`. Adding a file is a decision somebody writes
 down, not a switch. An allow-listed file is still not a blind spot for a byte
 that is never data.
+
+This walks the real filesystem (`Path.rglob`), never `git ls-files` — on
+purpose. `git ls-files` would make the sweep blind to a file that has been
+written but not yet staged, which is exactly when a mangled path is most
+likely to exist: both real incidents above (2026-08-12, 2026-08-23) were
+caught by a human reading a file, not by CI, and a working-tree file nobody
+has `git add`ed yet is no less capable of carrying a BEL byte than a
+committed one. The cost is the safer direction only — an untracked scratch
+file can trip a false positive — never a miss.
 """
 
 from __future__ import annotations
@@ -73,10 +82,16 @@ ALLOWED = {
 }
 
 # Never data here. BEL is what a heredoc turns `\a` into; the rest are the same
-# accident with a different letter (`\b`, `\v`, `\f`, `\e`).
+# accident with a different letter (`\b`, `\v`, `\f`, `\e`) -- and, per
+# ART-271, `\t` itself: `E:\amiga\test\art-...` lost its backslashes through a
+# heredoc and the `\t` in `\test` came out as a literal TAB. TAB is handled
+# separately below because, unlike the others, it is also *legitimate*
+# indentation almost everywhere -- see the mid-line check in
+# `control_offenders`.
 NEVER_DATA = {
     0x07: r"BEL (a heredoc ate a `\a`)",
     0x08: r"BS (`\b`)",
+    0x09: r"TAB, mid-line (a heredoc ate a `\t` inside a path)",
     0x0B: r"VT (`\v`)",
     0x0C: r"FF (`\f`)",
     0x1B: r"ESC (`\e`)",
@@ -121,16 +136,34 @@ def control_offenders() -> list[tuple[str, int, int, str]]:
             continue
         allowed = rel in ALLOWED
         lines = text.splitlines()
+        # A file that indents with tabs anywhere uses TAB as ordinary
+        # whitespace throughout, so it is not swept for the mid-line shape
+        # below at all -- that is the "deliberate alignment" case, the same
+        # per-file escape hatch GAP_ALLOWED gives the space-run check.
+        uses_tab_indent = any(line.startswith("\t") for line in lines)
         for i, ch in enumerate(text):
             code = ord(ch)
-            if code >= 32 or ch in "\n\t":
+            if code == 0x09:
+                # A leading tab -- start of line, or right after other
+                # indentation whitespace -- is ordinary indentation and
+                # always allowed. The shape a heredoc-swallowed `\t` actually
+                # produces is different: mid-line, immediately after a
+                # non-whitespace character (CLAUDE.md's own incident:
+                # `src-tauri\target\` arrived as `src-tauri` + TAB +
+                # `arget\`). Flagging every legitimate tab would drown the
+                # sweep within a week, which is why only that shape counts.
+                if uses_tab_indent or i == 0 or text[i - 1] in " \t\n":
+                    continue
+            elif code >= 32 or ch == "\n":
                 continue
-            # An allow-listed file attests to DosType data. 0x07 is genuinely
-            # ambiguous -- it is BEL and it is `DOS\7` -- so there it is taken
-            # as data. Every other never-data byte is still reported, so the
-            # entry does not turn the file into a blind spot.
-            if allowed and (code not in NEVER_DATA or code == 0x07):
-                continue
+            else:
+                # An allow-listed file attests to DosType data. 0x07 is
+                # genuinely ambiguous -- it is BEL and it is `DOS\7` -- so
+                # there it is taken as data. Every other never-data byte is
+                # still reported, so the entry does not turn the file into a
+                # blind spot.
+                if allowed and (code not in NEVER_DATA or code == 0x07):
+                    continue
             line_no = text.count("\n", 0, i) + 1
             line = lines[line_no - 1] if line_no <= len(lines) else ""
             found.append((rel, line_no, code, line.strip()[:120]))

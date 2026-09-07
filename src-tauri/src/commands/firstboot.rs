@@ -27,8 +27,8 @@ use tauri::{AppHandle, Emitter, State};
 use super::amigainstall::profile_for;
 use super::jobs::{spawn_job, JobRegistry};
 use super::oplog::{user_operation, write_result, write_to_path};
-use crate::core::amigainstall::rehearse::{rehearse, RehearsalOutcome, RehearseRequest};
-use crate::core::amigainstall::run::RunLimits;
+use crate::core::amigainstall::rehearse::{rehearse_with, RehearsalOutcome, RehearseRequest};
+use crate::core::amigainstall::run::{RealClock, RunLimits};
 use crate::core::amigainstall::stage::stage_with;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::firstboot::cardread::{read_card_report, CardFirstBootReport};
@@ -40,6 +40,7 @@ use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::profile::AmigaProfile;
 use crate::core::winuae::detect_winuae;
 use crate::error::{AppError, AppResult};
+use crate::tools::winuae_launcher::WinUaeLauncher;
 
 /// §92 PREVIEW: what a first boot would run. Writes nothing.
 #[tauri::command]
@@ -176,7 +177,11 @@ fn perform(
         limits: RunLimits::default(),
     };
 
-    match rehearse(&request, sink) {
+    // Built here, not in `core/`: constructing the real launcher is a
+    // process-spawning decision, and `core/amigainstall::rehearse` may not
+    // make it (ART-274) — it takes an `EmulatorLauncher` directly instead.
+    let launcher = WinUaeLauncher::new(emulator, scratch_root);
+    match rehearse_with(&request, &launcher, &RealClock::new(), sink) {
         // The one ending where the copy has told us everything it can.
         Ok(outcome @ RehearsalOutcome::Finished { .. }) => match staged.discard() {
             Ok(()) => Ok(Rehearsed {
@@ -212,7 +217,23 @@ fn perform(
         // keep — the same decision `amigainstall::perform` makes, and the one
         // path where a copy goes without an outcome having been reported.
         Err(CoreError::Cancelled) => {
-            let _ = staged.discard();
+            // Leftover round: this used to swallow a failed discard with
+            // `let _ = staged.discard()`. The same rule the `Finished` arm's
+            // own discard failure already follows above applies here too —
+            // never claim a discard that did not happen, and a discard that
+            // is never even reported is exactly that, by omission: the copy
+            // is still on disk and nothing on screen says where.
+            if let Err(err) = staged.discard() {
+                sink.report(
+                    0,
+                    None,
+                    &format!(
+                        "the rehearsal was cancelled, but the copy at {} could not be removed: \
+                         {err}",
+                        copy.display()
+                    ),
+                );
+            }
             Err(CoreError::Cancelled)
         }
         // An error part way is not nothing: whatever the Amiga wrote before
@@ -509,7 +530,8 @@ mod tests {
         let written = write(&planned).expect("writing the first boot into the copy");
         println!("wrote {} files", written.files.len());
 
-        let outcome = rehearse(
+        let launcher = WinUaeLauncher::new(&winuae, scratch.path());
+        let outcome = rehearse_with(
             &RehearseRequest {
                 tree_copy: &copy,
                 scratch_root: scratch.path(),
@@ -518,6 +540,8 @@ mod tests {
                 winuae_path: &winuae,
                 limits: RunLimits::default(),
             },
+            &launcher,
+            &RealClock::new(),
             &NoProgress,
         )
         .expect("the rehearsal itself");

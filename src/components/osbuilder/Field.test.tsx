@@ -78,3 +78,83 @@ describe("Field", () => {
     expect(screen.getByRole("button", { name: "Browse…" })).toBeInstanceOf(HTMLButtonElement);
   });
 });
+
+// ART-241: `hint` used to sit as a plain sibling `<p>` after the row, never
+// wired to the row's own control through `aria-describedby` — a screen
+// reader user who reached the Browse button by Tab heard only its own name.
+// These are the mutation guard: dropping the attribute (or the hint's own
+// `id`) must fail one of them.
+describe("Field associates its hint and any externally supplied paragraph with its control", () => {
+  it("the choose button's aria-describedby names the hint paragraph's own id", () => {
+    render(
+      <Field
+        label="AmigaOS install media folder"
+        value={null}
+        empty="None chosen"
+        choose="Browse…"
+        onChoose={() => {}}
+        hint="PNG or JPEG only."
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "Browse…" });
+    const hint = screen.getByText("PNG or JPEG only.");
+    expect(hint.id).toBeTruthy();
+    expect(button.getAttribute("aria-describedby")).toBe(hint.id);
+  });
+
+  it("also names an id passed through describedBy — an external paragraph this component did not render", () => {
+    render(
+      <>
+        <Field
+          label="Kickstart ROM"
+          value={null}
+          empty="No ROM chosen"
+          choose="Browse…"
+          onChoose={() => {}}
+          describedBy="rom-identified"
+        />
+        <p id="rom-identified">Identified: Kickstart 3.1, A1200</p>
+      </>,
+    );
+
+    const button = screen.getByRole("button", { name: "Browse…" });
+    expect(button.getAttribute("aria-describedby")).toBe("rom-identified");
+  });
+
+  it("names both, space-separated, when a hint and a describedBy id are both present", () => {
+    render(
+      <>
+        <Field
+          label="Kickstart ROM"
+          value={null}
+          empty="No ROM chosen"
+          choose="Browse…"
+          onChoose={() => {}}
+          hint="Reads the ROM's own header."
+          describedBy="rom-identified"
+        />
+        <p id="rom-identified">Identified: Kickstart 3.1, A1200</p>
+      </>,
+    );
+
+    const button = screen.getByRole("button", { name: "Browse…" });
+    const hint = screen.getByText("Reads the ROM's own header.");
+    expect(button.getAttribute("aria-describedby")).toBe(`${hint.id} rom-identified`);
+  });
+
+  it("carries no aria-describedby at all when there is neither a hint nor a describedBy id", () => {
+    render(
+      <Field
+        label="AmigaOS install media folder"
+        value={null}
+        empty="None chosen"
+        choose="Browse…"
+        onChoose={() => {}}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "Browse…" });
+    expect(button.hasAttribute("aria-describedby")).toBe(false);
+  });
+});

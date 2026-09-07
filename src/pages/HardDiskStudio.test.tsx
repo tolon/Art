@@ -14,6 +14,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import i18n from "i18next";
 
 import "@/i18n";
 import { resetOpenObjects } from "@/stores/openObjectStore";
@@ -116,5 +117,11 @@ describe("the card screen's first-boot report", () => {
     expect(screen.queryByTestId("firstboot-report")).toBeNull();
     // The card table this task must not disturb is still on screen.
     expect(screen.getByText("💳", { exact: false })).toBeTruthy();
+    // Leftover round: this page used to carry its own copy of the same
+    // heading `FirstBootReportPanel` renders for a successful read, one file
+    // apart, with nothing keeping the two in sync but a person noticing.
+    // Both now render `FirstBootReportHeading`, so the exact same text
+    // appears here even though this card never mounts the panel itself.
+    expect(screen.getByText(i18n.t("firstboot.report.heading"))).toBeTruthy();
   });
 });

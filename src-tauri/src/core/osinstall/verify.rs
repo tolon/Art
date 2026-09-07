@@ -279,6 +279,26 @@ pub fn verify_volume(
     manifest: &DistributionManifest,
     dist_root: &Path,
 ) -> CoreResult<VerifyReport> {
+    verify_volume_with(image, slot, index, manifest, dist_root, check_prefs_paths)
+}
+
+/// [`verify_volume`], with the distribution tree's own prefs check
+/// injectable — the same small-seam shape the emulator tests inject a clock
+/// through (ART-246), not a trait: this has exactly one production caller
+/// ([`verify_volume`] itself) and one test caller, so a plain closure
+/// parameter is the whole seam. What it buys: the `Err` arm below —
+/// `check_prefs_paths` failing outright, a real-world cause being a
+/// permission error partway through the directory walk — can be exercised
+/// with an injected [`std::io::ErrorKind::PermissionDenied`] rather than
+/// only argued about.
+fn verify_volume_with(
+    image: &Path,
+    slot: Option<usize>,
+    index: usize,
+    manifest: &DistributionManifest,
+    dist_root: &Path,
+    prefs_check: impl Fn(&Path) -> CoreResult<Vec<FileVerdict>>,
+) -> CoreResult<VerifyReport> {
     let card = read_card(image)?;
     let area = area_for_slot(&card, slot)?;
     let part = partition_by_index(area, index)?;
@@ -310,7 +330,7 @@ pub fn verify_volume(
             .collect(),
     };
 
-    match check_prefs_paths(dist_root) {
+    match prefs_check(dist_root) {
         Ok(prefs_verdicts) => files.extend(prefs_verdicts),
         Err(err) => files.push(fail(
             PREFS_SYS_DIR_REL,
@@ -848,6 +868,21 @@ fn check_one_backdrop_path(
     };
 
     match resolve_ci_optional(tree, rel)? {
+        // ART-245: "was not found" is the honest sentence when nothing
+        // resolves at all, and a different one when something does but is
+        // the wrong kind — a directory sitting where the `PTRN` chunk named
+        // a picture file. Endings stay distinct (CLAUDE.md, "the failure
+        // that does not crash"): a user reading "not found" would go looking
+        // for a file that in fact already exists, one level up.
+        Some(resolved) if resolved.is_dir() => Ok(FileVerdict {
+            path: amiga_path.to_string(),
+            state: CheckState::Fail,
+            detail: Some(format!(
+                "named by '{prefs_rel}'; '{amiga_path}' resolves to a directory under the \
+                 distribution tree ('{}'), not the picture file itself",
+                tree.display()
+            )),
+        }),
         // The detail names what was actually examined rather than leaving it
         // to a document to say (whole-branch review finding I4): this walks
         // the **host distribution tree** `apply()` produced, not the
@@ -1608,6 +1643,50 @@ mod tests {
             detail.contains("WBPattern.prefs"),
             "the verdict must name the prefs file that claimed it: {detail}"
         );
+        // ART-245: this is the "nothing at that path at all" sentence, and
+        // it must stay distinct from the "wrong kind at that path" one
+        // (`a_backdrop_at_the_right_name_but_the_wrong_kind_says_so` below).
+        assert!(
+            detail.contains("was not found"),
+            "nothing exists at this path -- the verdict must say 'not found', not something a \
+             wrong-kind detail would also satisfy: {detail}"
+        );
+    }
+
+    /// ART-245: the name a `PTRN` chunk claims can resolve to something that
+    /// exists but is the wrong kind -- a directory sitting where the picture
+    /// file was supposed to be. "Was not found" would be false (something IS
+    /// there) and would send a reader looking for a file that, one level up,
+    /// already exists as a directory; the honest sentence names the kind.
+    #[test]
+    fn a_backdrop_at_the_right_name_but_the_wrong_kind_says_so() {
+        let scratch = ScratchDir::new("art-verify-prefs", "wrong-kind-backdrop");
+        let tree = scratch.path();
+        write_wbpattern_picture(tree, "Sys:Prefs/Presets/Backdrops/default_pal.iff");
+        // A directory sitting exactly where the picture file was named.
+        let wrong_kind = tree
+            .join("Prefs")
+            .join("Presets")
+            .join("Backdrops")
+            .join("default_pal.iff");
+        std::fs::create_dir_all(&wrong_kind).unwrap();
+
+        let verdicts = check_prefs_paths(tree).unwrap();
+
+        assert_eq!(verdicts.len(), 1, "{verdicts:?}");
+        let verdict = &verdicts[0];
+        assert_eq!(verdict.state, CheckState::Fail, "{verdict:?}");
+        let detail = verdict.detail.as_deref().unwrap_or("");
+        assert!(
+            detail.contains("directory"),
+            "the verdict must name what is actually wrong -- a directory, not a missing file: \
+             {detail}"
+        );
+        assert!(
+            !detail.contains("was not found"),
+            "something IS there; 'was not found' is the sentence for the other case and would \
+             be false here: {detail}"
+        );
     }
 
     /// AmigaDOS is case-insensitive; the host is not. A tree holding
@@ -1897,6 +1976,50 @@ mod tests {
             report.failed, 1,
             "the manifest's own file still passes; only the tree's own prefs claim fails: {:?}",
             report.files
+        );
+    }
+
+    /// ART-246: `check_prefs_paths` failing outright — a real-world cause is
+    /// a permission error partway through the directory walk — must fold
+    /// into one named `Fail` row rather than costing the caller every
+    /// volume-based verdict already computed. Provoked with an injected
+    /// `std::io::ErrorKind::PermissionDenied` through [`verify_volume_with`]
+    /// rather than a real unreadable directory, which `ScratchDir`'s own
+    /// `Drop` cannot reliably clean up (the same tradeoff the entry itself
+    /// disclosed).
+    #[test]
+    fn a_permission_error_walking_prefs_folds_into_one_named_fail_row() {
+        let (image, manifest, tree) = written_volume();
+
+        let report = verify_volume_with(&image, None, 1, &manifest, &tree, |_dist_root| {
+            Err(CoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "access is denied",
+            )))
+        })
+        .unwrap();
+
+        // The volume-based verdicts survive: the manifest's own file still
+        // passes, exactly as `verify_volumes_report_folds_in_the_trees_own_prefs_check`
+        // establishes for the ordinary case.
+        assert!(
+            report
+                .files
+                .iter()
+                .any(|f| f.path.contains("LoadModule") && f.state == CheckState::Pass),
+            "a prefs-check failure must not discard verdicts already computed: {:?}",
+            report.files
+        );
+        let prefs_row = report
+            .files
+            .iter()
+            .find(|f| f.path == PREFS_SYS_DIR_REL)
+            .unwrap_or_else(|| panic!("no row named the prefs check at all: {:?}", report.files));
+        assert_eq!(prefs_row.state, CheckState::Fail, "{prefs_row:?}");
+        let detail = prefs_row.detail.as_deref().unwrap_or("");
+        assert!(
+            detail.contains("access is denied"),
+            "the row must name the actual error, not a generic sentence: {detail}"
         );
     }
 }

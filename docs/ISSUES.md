@@ -25,89 +25,6 @@ pass — filed and closed together rather than sitting in Open in between.
 ---
 
 ## Open
-**ART-274** 🔵 **`core/winuae.rs` spawns an external process from inside
-`core/`, the exact shape the trait rule exists to prevent** — *found
-2026-09-07 by the whole-branch review of `art-firstboot` phases 1–2*
-`src-tauri/src/core/winuae.rs` · `src-tauri/src/core/amigainstall/run.rs` ·
-`src-tauri/src/core/amigainstall/rehearse.rs`
-
-CLAUDE.md's "The core independence rule" is explicit: `core/` is
-`std` + a short, named list of crates, and a module that needs something
-platform-specific — device enumeration, launching WinUAE — exposes a
-**trait**, with the implementation living outside `core/`. `VolumeFormatter`
-(`core/preload/mod.rs`, implemented in `tools/hst_imager.rs`) and
-`HostRecycler` (`core/hostfs.rs`, implemented in `tools/recycle_bin.rs`) are
-the two live instances of that shape. `core/winuae.rs` is not: it launches
-`winuae64.exe` directly, from inside `core/`, with no trait between the
-decision to open the emulator and the process spawn that does it.
-
-This did not start with `art-firstboot`. `core::amigainstall::run` has called
-`core::winuae` since the AmigaOS-install-under-WinUAE round, and this branch
-made it worse in the ordinary way a precedent gets worse: `core::amigainstall::rehearse`
-(the first-boot rehearsal engine) is a **second** consumer of the same
-un-abstracted call, added without anyone re-deciding whether the shape was
-still acceptable. Two consumers is a pattern one review away from being read
-as sanctioned; a third would make it one.
-
-**How it fails for a user: it does not, yet.** This is not a defect in
-`art-firstboot`'s own behaviour — `rehearse.rs` inherited an existing
-violation rather than introducing a new kind of one, and nothing here is
-reported to have produced a wrong sentence on screen. The cost is the one the
-trait rule is written against: `core/` is meant to stay unit-testable without
-a real WinUAE install and promotable to a standalone crate without carrying
-Windows-process-spawning code along, and `core/winuae.rs` as it stands
-already breaks both of those promises for anything that imports it.
-
-**The fix, not built in this round:** an `EmulatorLauncher`-style trait
-declared in `core/` (the decision — which executable, which arguments, when
-to give up waiting) with the actual process spawn implemented outside it, in
-`tools/`, exactly as `VolumeFormatter`/`tools/hst_imager.rs` already do for
-volume formatting. `core::amigainstall::run` and `core::amigainstall::rehearse`
-would both take the trait rather than calling `core::winuae` directly, the
-same way both call sites already take other platform boundaries as traits
-rather than concrete implementations.
-
-**ART-271** 🟠 **`control-byte-sweep.py` does not look for the one
-control byte CLAUDE.md's own incident report names first** — *found
-2026-09-06 by reproducing the accident live while writing STATUS.md*
-`scripts/control-byte-sweep.py`
-
-`NEVER_DATA` lists BEL (`\a`), BS (`\b`), VT (`\v`), FF (`\f`) and ESC (`\e`).
-**TAB (`\t`, 0x09) is not in it.**
-
-The omission is defensible on its face — a tab is legitimate in plenty of
-files, and flagging every one would drown the sweep. But `CLAUDE.md`'s own
-account of the accident this script exists to catch reads:
-
-> *A Windows path in a `<<'EOF'` block loses its backslash escapes — `E:\amiga`
-> arrives as `E:` plus a BEL byte, **`\test\art-…` as a TAB and a BEL**.*
-
-So the project has already met this corruption in its TAB form, and the guard
-written for it does not look for that form.
-
-**Demonstrated, not argued.** Writing the "Start here" block into
-`docs/STATUS.md` through a heredoc turned `src-tauri\target\` into
-`src-tauri` + TAB + `arget\`. The sweep reported **clean before and after** the
-corruption, and clean again after the repair — three runs, one of them over a
-file that was demonstrably wrong. The text was fixed by hand; the guard is what
-this entry is about.
-
-**The fix is not "flag every TAB".** That would fire on legitimate indentation
-everywhere and the sweep would be turned off within a week, which is worse than
-the gap. The targeted shape: a TAB that appears **mid-line, immediately after a
-non-whitespace character**, in a file whose other lines do not use tabs for
-indentation — which is what a swallowed `\t` looks like and what real
-indentation never does. Sharpen it against this exact case, and put the defect
-back to watch it fail, because a guard added without that is the same defect one
-level up.
-
-**Worth noting for whoever takes it:** this is the third time in one session
-that a guard turned out not to guard what it was named for. That is not a
-coincidence about this script; it is what happens to a check nobody has
-mutated.
-
-
-
 **ART-261** 🟠 **`cargo test --lib` reports exit 0 with no `test result:`
 line whenever `commands::artwork` runs, and passes cleanly without it** —
 *found 2026-09-06 by round 4's Task 1, localised the same day by a two-armed
@@ -536,54 +453,69 @@ owner has also read the Workbench menus of a Turkish tree ART built, which is
 a different claim — that is AmigaOS rendering ART's *output*, not ART's own
 interface.)
 
-**ART-235** 🔵 **The test-scratch sweep reports a site that is not a defect**
-*found 2026-09-04 by re-running the sweeps during a documentation pass*
-`scripts/scratch-counter-sweep.py`
+**ART-250** 🟡 **`tooltypes()`'s lossy UTF-8 decode cannot byte-for-byte
+round-trip a NewIcon `IM1=`/`IM2=` tool type** — *found 2026-09-06 by the
+drawer-icons round's icon-oracle run against the owner's own AmigaOS 3.9
+material*
+`src-tauri/src/core/amigaicon/mod.rs::{tooltypes, set_tooltypes}`
 
-`scratch-counter-sweep.py` reports **1** site "needing a counter":
-`commands/osinstall.rs::staging_is_removed_however_the_preview_ends`. That
-helper keys its prefix on the **thread id** as well as the process id — which
-is [ART-182](#fixed)'s own fix and is unique within the process, exactly what
-the sweep exists to require — but the sweep recognises only an atomic counter,
-so it reports the right shape as a wrong one.
+`tooltypes` decodes a `ToolTypes` entry with `String::from_utf8_lossy` rather
+than refusing on invalid UTF-8 — deliberately, because real AmigaDOS text is
+Latin-1, not UTF-8, and a non-ASCII tool type (a `PUBSCREEN` name, say) is
+exactly the case that choice is for. NewIcon's `IM1=`/`IM2=` tool types are a
+different case: their pixel-encoding bytes legitimately run past `0x7F` and
+are not accidental Latin-1 text at all, just bytes that happen not to be valid
+UTF-8 on their own. Decoding one replaces the offending byte(s) with
+`U+FFFD`, and re-encoding that back to UTF-8 does not reproduce the original
+bytes — the round-trip grows the file rather than reproducing it.
 
-Nothing is broken; what is damaged is the guard. STATUS.md's Tests row said
-this sweep "reports zero", and a zero that is really a one-with-an-excuse
-trains a reader to skim past the next real finding. Either teach the sweep the
-thread-id shape or convert that one helper to the counter — the first is
-better, because the thread-id keying is the *stronger* of the two here.
+**Measured, not theoretical**: 69 of the owner's own 798 real `.info` icons
+carry a NewIcon tool type that trips this. `scripts/icon-oracle-check.py`
+counts them in their own `lossy_tooltypes` bucket, never folded into
+`failed`, and holds them to a weaker but still real invariant — the *text*
+`tooltypes` reads back from a rewritten file must still equal the text that
+was written, even though the underlying bytes cannot be. Text identity holds
+for all 69; byte identity does not, and nothing here claims otherwise.
 
-**ART-241** 🔵 **Field hints, errors and outcome text sit beside a control, not
-associated with it** — *found 2026-09-05 by the bounded accessibility sweep
-ART-237 itself called for*
-`src/components/osbuilder/Field.tsx` (the `hint` prop), `src/components/osbuilder/OsInstall.tsx`
-(the layer wrong-hint, ROM error/identified and media-scan-outcome paragraphs)
+Left open: fixing it means `tooltypes`/`set_tooltypes` carrying raw bytes
+instead of `String` for a NewIcon-shaped entry, which is a real change to a
+public shape three round's worth of code now depends on, not a one-line fix.
+No tree ART builds writes new NewIcon tool types today.
 
-Every `<Field>` that carries a `hint`, and every ad-hoc status paragraph the
-media step renders beside one (`layer-wrong-hint-*`, `osinstall.rom.unreadable`,
-`osinstall.rom.identified`, the `mediaScan` outcome lines), sits as a plain
-sibling `<p>` after the row — never wired to the row's own button through
-`aria-describedby`. A sighted user reads the two side by side; a screen reader
-user who reaches the Browse button by Tab hears only its own name and has to
-go hunting forward in the page to find out whether there is a warning or a
-confirmation attached to it at all.
+**Corrected 2026-09-06, by the final whole-branch review**: an earlier version
+of this entry said the loss is felt when a NewIcon-carrying icon "is rewritten
+by `set_tooltypes`, `set_position`, `set_window` or `set_show_all_files`" —
+naming all four of this module's writers. Only one of them can trip it.
+`set_position`, `set_window` and `set_show_all_files` all `bytes.to_vec()` and
+overwrite a fixed, disjoint range of the file; none of them reads or rewrites
+the `ToolTypes` block at all, and the icon oracle proves this byte-for-byte
+across all 798 real icons, the 69 lossy ones included — `set_position` alone
+is what this round's `core/appearance::plan_icons_in_dir` actually calls on a
+NewIcon-carrying icon, and it changes eight bytes at offset 58, nowhere near
+`ToolTypes`. **Only `set_tooltypes` can lose bytes, and only when fed the
+output of `tooltypes()`** — the shape `merge_tooltypes`'s own callers use, not
+anything `plan_icons_in_dir` calls today. The warning now lives on
+`set_tooltypes`'s own doc comment (`core/amigaicon/mod.rs`) so a future caller
+reads it where it applies.
 
-Filed rather than fixed here, for the same reason ART-237 itself was — but not
-because a stable id is hard to make: `React.useId()` answers that inside
-`Field` with no prop change at all, and any entry that argued otherwise would
-send the next reader looking for a harder fix than the one actually needed.
-The real reason is scope. `hint` is a prop on the **shared** `Field` component,
-passed at call sites this sweep never audited (`CardBuilder`, `VolumePreload`,
-`PackagePanel` and others) — wiring `Field`'s own `hint` up correctly and
-stopping there would still leave every one of those callers unexamined. And
-the media step's own worst instances are not `Field`'s `hint` at all: the
-layer wrong-hint, the ROM error/identified lines and the `mediaScan` outcome
-paragraphs are ad-hoc `<p>` elements rendered **outside** `Field` entirely, so
-`Field`'s own fix would not reach them regardless of how it wired `hint` up.
-A correct fix is an id-threading pass over all of these — inside `Field` and
-out — not a change confined to one component. Bounded to what the media step
-actually renders; a wider sweep of every other `Field` caller is still owed.
+Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
+not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
+Every module with working logic has now been audited. The remaining `core`
+modules are stubs that only return `NotImplemented` (`recovery.rs`,
+`conversion.rs`, `binary.rs`, `validation.rs`) or hold types with no logic
+(`compatibility.rs`) — see [FEATURES.md](FEATURES.md) for their planned state.
+
+Two areas were reviewed and found sound, and are recorded here so nobody
+re-audits them without reason:
+
+- `core/analysis.rs` — the hex reader clamps both offset and length, and the
+  signature scan guards its window.
+- `core/profile.rs` — preset data only, no parsing of untrusted input.
+
+---
+
+## Fixed
 **ART-242** 🔵 **WHDLoad's one-click install writes and joins directly in
 `commands/whdload.rs`, with no `core`-level "install a pack" function to call
 instead** — *found 2026-09-05 by the whdload-drawers Task 5 fix-round review*
@@ -631,122 +563,136 @@ Nothing here is broken today: `run_install` works, is tested, and its
 catalogue join is itself tested and mutation-verified. What is missing is the
 layer that should hold this logic.
 
-**ART-243** 🟡 **An archive updated in place accumulates ghost records no
-Rescan can clear** — *found 2026-09-05 by the whdload-drawers round-2
-re-review, filed rather than fixed in round 3*
-`src-tauri/src/core/gameindex/store.rs::refresh_root` (the `missing`
-reconciliation)
+**Fixed** 2026-09-07 on `art-debts` (batch 6, "The WHDLoad one-click install is
+a core function"). `run_install`'s whole body — the re-plan, the unpack, the
+`igame_data_for_pack` catalogue join and the drawer/icon write — moved to
+`core::whdload::install::install_pack`, alongside `build_plan`/`refuse` (which
+`install_pack` itself calls, so they had to move too — a lower `core` module
+cannot call back into `commands/`). `commands/whdload.rs::whdload_install` is
+now the thin adapter the rule asks for: resolve the job's paths, call
+`install_pack`, serialize the result and emit the event; `whdload_plan` calls
+`build_plan` the same way.
 
-Round 2 fixed the reverse problem: one drawer's slave going bad while its
-archive's sibling drawer still reads fine must not silently delete the bad
-one, because every `Media::WhdloadArchive` record shares one `CachedEntry.path`
-— the archive's own — and "this path is present" says nothing about *this
-particular* drawer inside it. The fix special-cases `WhdloadArchive` in the
-`missing` filter so it is kept whenever its own id was not found again this
-run, regardless of path. That same special case means path presence is now
-**never** consulted for an archived record, in either direction: if the user
-edits the archive itself — removes a drawer, or replaces
-`WHDLoadDemos100.lha` with a smaller, newer one — the removed drawer's old
-record is checked only against "was this id found again this run," never
-against "does the archive that named it still hold it," so it is kept
-forever, through every Rescan, until the whole root is removed and re-added.
-A catalogue is meant to be a library that self-heals under Rescan, and an
-archive edited in place is the one shape it will not.
+The one boundary this round did **not** cross, and said so rather than
+quietly working around it: the actual disk write still goes through
+`commands/volume_write.rs::with_volume` (the session/backup/write-strategy
+machinery), which stays a command-layer helper — moving *that* is the round
+of its own this entry itself named, still not this one. So `install_pack`
+takes a new `core::whdload::install::VolumeSession` trait object rather than
+calling `with_volume` directly — the fourth live instance of the
+trait-in-`core`, implementation-outside-it shape (`MirrorClient`,
+`VolumeFormatter`, `HostRecycler` are the other three). `commands/whdload.rs`
+implements it (`CommandVolumeSession`, wrapping `with_volume` exactly as
+`run_install` used to inline it); the core module's own tests implement it a
+second way (`TestVolumeSession`, built only from `core` primitives —
+`VolumeWriter` over an in-memory `VecDevice`, committed to the file only on
+success) precisely so the core tests below do not depend on `commands/` either.
 
-Not fixed in this round: closing it correctly is not "flip the priority
-back" — that reintroduces round 2's own bug. The right shape likely keys the
-reconciliation on **(archive path, id)** pairs recomputed for every archive
-still readable this run, rather than id alone across all archives at once,
-but that is a real design question and deserves its own look rather than a
-rushed fix inside a round already closing three other things.
+**Wire pinned before the move, and unchanged by it** —
+`commands::whdload::tests::the_install_result_event_keeps_its_wire_shape` and
+`..::the_plan_result_keeps_its_wire_shape` serialize `WhdloadResult`/`WhdloadPlan`
+to JSON literals matching `src/lib/whdload.ts` field for field; both were green
+against the pre-move code and stayed green after. `pnpm lint` and `pnpm test`
+(1194 tests, 87 files) were run anyway per the round's own instructions and
+were untouched, as expected for a move that does not touch the frontend.
 
-**ART-244** 🔵 **Update mode re-reads every archive candidate on every
-refresh, on an argued rather than measured basis** — *found 2026-09-05 during
-the whdload-drawers round-2 wiring*
-`src-tauri/src/core/gameindex/store.rs::refresh_root`,
-`core/gameindex/readers/lhadrawer.rs`
+**New core-level tests**, `core::whdload::install::tests`: the full
+`build_plan → install_pack` path installs a pack and reads the drawer, its
+contents and its icon back off the disk
+(`a_whdload_archive_installs_onto_a_disk_and_reads_back`); the catalogue join
+produces the fuller record, not just the drawer's own name
+(`a_catalogued_pack_gets_its_igame_data_from_the_catalogue_record`); a
+non-WHDLoad archive refuses before the `VolumeSession` is ever touched
+(`a_non_whdload_pack_is_refused_before_any_write`); and cancelling mid-copy
+both ends the job `Cancelled` and leaves the image byte-for-byte identical,
+hashed (compared) before and after
+(`a_cancelled_install_writes_nothing_and_does_not_report_success` — this one
+test carries both the mid-way-failure and the cancellation requirement, because
+in this engine they are the same failure mode: nothing "mid-way" can fail after
+`build_plan`'s own refusal checks pass except the copy being stopped). The
+thirteen `build_plan`/`refuse` unit tests and the two `with_volume`-only tests
+(`an_install_creates_the_drawer_its_contents_and_its_icon`,
+`a_whole_install_backs_the_image_up_once`, which never called `run_install`)
+moved or stayed with the same split. 50 whdload tests total, same count before
+and after the move.
 
-`refresh_root` treats every archive candidate as always-fresh in both
-`Refresh::Update` and `Refresh::Rescan` — the doc comment's own reasoning is
-that `read_archive_drawers` "seeks header to header rather than
-decompressing" (`readers::lhadrawer`'s own module doc) and is therefore cheap
-enough that the cache-reuse machinery built to skip re-hashing multi-megabyte
-hardfiles buys nothing here. That reasoning was never measured against the
-one archive it is actually about:
-`readers::lhadrawer::tests::real_archive_scan_is_fast` is `#[ignore]`d,
-env-gated on `ART_LHA_ARCHIVE`, and prints its own timing rather than
-asserting it — exactly the hook that would turn "seeks header to header, so
-it's cheap" from an argument into a number. Until that is run against the
-owner's own 663 MB, 8858-entry archive on an `Update`-mode refresh, this is
-unverified: if it turns out to cost real time for a user with several such
-archives who refreshes often, the fix is a size/mtime-keyed skip for an
-archive that has not changed, the same as the file walk already has — not a
-redesign.
+**Mutation, and what fell.** `install_pack` was edited to skip
+`session.install_drawer` entirely, in-tree, and fabricate a zeroed
+`CopyReport`. Five tests fell:
+`a_whdload_archive_installs_onto_a_disk_and_reads_back`,
+`a_catalogued_pack_gets_its_igame_data_from_the_catalogue_record`,
+`an_uncatalogued_pack_still_gets_a_title_only_igame_data`,
+`a_catalogued_title_too_long_for_igame_writes_no_empty_file` and
+`installing_the_same_pack_twice_is_refused_and_changes_nothing` (the last
+because a "successful" install that wrote nothing no longer collides with
+itself on the second run). Restored from an absolute-path copy in the
+scratchpad (`shutil.copyfile`-equivalent, then `touch`'d per CLAUDE.md's own
+warning about `cargo` seeing a mutated build as newer), not `git checkout --`.
 
-**ART-245** 🔵 **A missing backdrop and a wrong-type match at the same name
-read as the same sentence** — *found 2026-09-05/06 during the
-prefs-and-wallpaper round's whole-branch review, filed rather than fixed*
-`src-tauri/src/core/osinstall/verify.rs::check_one_backdrop_path`
+**Verified**, all runs on `art-debts`: `cargo fmt --check` clean;
+`cargo clippy --all-targets -- -D warnings` clean; `cargo test --lib -- --skip
+artwork` **2968 passed, 0 failed, 51 ignored** twice in a row, before and after
+the mutation round-trip; `pnpm lint` and `pnpm test` (1194 passed) clean;
+`scripts/control-byte-sweep.py` clean.
 
-The verify check that confirms every `PTRN`-named backdrop path exists in the
-tree (§3.5 of the prefs-and-wallpaper design) reports `Fail` with "was not
-found under this distribution tree" whenever `resolve_ci_optional` returns
-`None` — which it does both when nothing at that path exists at all, and when
-the path resolves to something of the **wrong kind** (a directory sitting
-where a picture file was named). CLAUDE.md's own rule is that a refusal names
-what is missing; "not found" is the right sentence for the first case and the
-wrong one for the second, where the honest sentence is "that name is a
-directory, not the picture file". Not tested for and not exercised on any
-real material seen this round — every measured `PTRN` chunk named a file, not
-a directory — so this is latent rather than observed. Low severity: the
-message is merely less specific than it should be, not wrong about whether
-verification passed.
+**ART-241** 🔵 **Field hints, errors and outcome text sit beside a control, not
+associated with it** — *found 2026-09-05 by the bounded accessibility sweep
+ART-237 itself called for*
+`src/components/osbuilder/Field.tsx` (the `hint` prop), `src/components/osbuilder/OsInstall.tsx`
+(the layer wrong-hint, ROM error/identified and media-scan-outcome paragraphs)
 
-**ART-246** 🔵 **`verify_volume`'s prefs check has an untested failure path:
-a permission error walking the tree folds into one `Fail` row with no test
-provoking it** — *found 2026-09-05/06 by the prefs-and-wallpaper round's Task
-8 review, disclosed rather than faked*
-`src-tauri/src/core/osinstall/verify.rs::verify_volume` (the
-`check_prefs_paths(dist_root)` `Err` arm)
+Every `<Field>` that carries a `hint`, and every ad-hoc status paragraph the
+media step renders beside one (`layer-wrong-hint-*`, `osinstall.rom.unreadable`,
+`osinstall.rom.identified`, the `mediaScan` outcome lines), sits as a plain
+sibling `<p>` after the row — never wired to the row's own button through
+`aria-describedby`. A sighted user reads the two side by side; a screen reader
+user who reaches the Browse button by Tab hears only its own name and has to
+go hunting forward in the page to find out whether there is a warning or a
+confirmation attached to it at all.
 
-When `check_prefs_paths` cannot walk the distribution tree's `Prefs/`
-directory at all — a real-world cause is a permission error partway through a
-directory walk — `verify_volume` folds that into a single `Fail` row naming
-the error rather than failing the whole report. The fold itself is
-reasonable and matches the file's existing `DosFamily::Other` pattern of
-turning an inability to look into a named verdict rather than a silent
-`Ok`. What is missing is a test that provokes a *real* OS-level permission
-error mid-walk rather than a constructed `CoreError`, the same standard
-Task 7's partial-commit fix was held to in this round. Provoking one
-portably (a directory made unreadable, then restored, without leaving the
-test suite's own scratch in a state `Drop` cannot clean up) is genuinely
-awkward, which is why it was disclosed rather than attempted under time
-pressure at the end of a twelve-task round. Low severity: the branch is
-defensive coding for a case that is plausible but has not been observed.
+Filed rather than fixed here, for the same reason ART-237 itself was — but not
+because a stable id is hard to make: `React.useId()` answers that inside
+`Field` with no prop change at all, and any entry that argued otherwise would
+send the next reader looking for a harder fix than the one actually needed.
+The real reason is scope. `hint` is a prop on the **shared** `Field` component,
+passed at call sites this sweep never audited (`CardBuilder`, `VolumePreload`,
+`PackagePanel` and others) — wiring `Field`'s own `hint` up correctly and
+stopping there would still leave every one of those callers unexamined. And
+the media step's own worst instances are not `Field`'s `hint` at all: the
+layer wrong-hint, the ROM error/identified lines and the `mediaScan` outcome
+paragraphs are ad-hoc `<p>` elements rendered **outside** `Field` entirely, so
+`Field`'s own fix would not reach them regardless of how it wired `hint` up.
+A correct fix is an id-threading pass over all of these — inside `Field` and
+out — not a change confined to one component. Bounded to what the media step
+actually renders; a wider sweep of every other `Field` caller is still owed.
 
-**ART-247** 🔵 **A PNG decode arm the `png` crate's own `EXPAND` transform
-should make unreachable has no test of its own** — *found 2026-09-05/06
-during the prefs-and-wallpaper round's Task 6, disclosed with a traced
-unreachability argument rather than asserted*
-`src-tauri/src/core/picture/mod.rs::decode` (the `png::ColorType::Indexed`
-arm)
-
-`core/picture::decode` sets `Transformations::EXPAND` on the PNG reader,
-which the crate documents as always turning a palette (indexed) image into
-`Rgb` or `Rgba` before `next_frame` returns — so the `ColorType::Indexed` arm
-of the match on the decoded frame's colour type should never run for any PNG
-this decoder can produce. Per this round's own rule (recorded in CLAUDE.md,
-"the failure that does not crash" / unreachable-code section): this is
-unreachable because of a **third party's current behaviour** on
-attacker-supplied bytes, not because of ART's own arithmetic, so it correctly
-stays a runtime `CoreError::Malformed` refusal rather than a `debug_assert!`
-that would compile out in release and let a future `png` upgrade turn a
-silently-misread palette image into a confident-wrong result. What is
-missing is a test — no PNG fixture has been found or constructed that
-reaches this arm, because reaching it would mean the crate's own documented
-guarantee is already broken, which is precisely why one has not been forced.
-Low severity: the arm cannot be exercised without first finding the
-third-party defect it exists to catch.
+**Fixed** 2026-09-07 on `art-debts` (batch 4). `Field` (`src/components/osbuilder/Field.tsx`)
+gained a `React.useId()`-based `hintId`, put on the hint paragraph and
+referenced from the choose button's `aria-describedby` — every existing
+caller that already passes `hint` gets this for free, with no call-site
+change at all, which is what closes the "callers this sweep never audited"
+half of the concern above for the `hint` prop specifically. A new optional
+`describedBy` prop lets a caller name an id rendered **outside** `Field`
+(space-separated alongside the hint's own id when both are present), for
+exactly the three ad-hoc paragraphs this entry named: `OsInstall.tsx`'s
+per-layer `layer-wrong-hint-{id}` now carries that id itself and is passed
+through `describedBy`; the ROM field is described by
+`osinstall-rom-identified` or `osinstall-rom-unreadable`, whichever renders
+(mutually exclusive); and the unlayered media `Field` is described by
+whichever of `osinstall-media-unreadable`/`osinstall-media-empty`/`osinstall-media-found`
+renders. **Still bounded, on purpose**: a layered release's media-scan
+outcome describes every layer's folder together, so it is not wired to any
+one of several per-layer fields — there is no single relationship to state
+without inventing one that is not actually there — and the wider sweep of
+every other `Field` call site's own ad-hoc paragraphs (`CardBuilder`,
+`VolumePreload`, `PackagePanel` and others) beyond `hint` itself is still
+owed, exactly as this entry originally scoped it. Covering tests:
+`Field.test.tsx`'s `"Field associates its hint and any externally supplied
+paragraph with its control"` block (hint alone, `describedBy` alone, both
+together space-separated, neither) and `OsInstall.test.tsx`'s `"ART-241: the
+ROM field's Browse button is described by its own outcome paragraph"` block
+— mutated by dropping the `aria-describedby` attribute entirely, which all
+seven of those failed against, then restored.
 
 **ART-248** 🔵 **`appearance_apply` runs the whole wallpaper pipeline
 synchronously on the command thread, with no progress and no cancel** — *found
@@ -777,50 +723,201 @@ a `&dyn ProgressSink` the way `core/gameindex::scan_titles_with` does, route
 for callers (tests) that do not need a job, the same split
 `scan_titles`/`scan_titles_with` already uses.
 
-**ART-250** 🟡 **`tooltypes()`'s lossy UTF-8 decode cannot byte-for-byte
-round-trip a NewIcon `IM1=`/`IM2=` tool type** — *found 2026-09-06 by the
-drawer-icons round's icon-oracle run against the owner's own AmigaOS 3.9
-material*
-`src-tauri/src/core/amigaicon/mod.rs::{tooltypes, set_tooltypes}`
+**Fixed** 2026-09-07 on `art-debts` (batch 4). `core::appearance::apply_appearance`
+gained `apply_appearance_with(tree, req, sink: &dyn ProgressSink)`
+(`src-tauri/src/core/appearance/mod.rs`): planning is reported as one
+indefinite phase (`total: None`, never a fake bar), the commit phase then
+reports a real "N of M files" count, and `sink.is_cancelled()` is checked
+between whole committed files — never mid-write, since every write already
+goes through `guarded_write`. A cancellation partway is treated the same way
+a commit-phase I/O failure already was: `CoreError::Cancelled` when nothing
+landed yet, `CoreError::CancelledPartway { files }` with the true count once
+something has, the same split `core::osinstall::apply::apply` already uses.
+`apply_appearance` itself stays the thin `NoProgress` wrapper
+(`scan_titles`/`scan_titles_with`'s own shape). `commands/appearance.rs::appearance_apply`
+now returns a `JobId` through `spawn_job`, with the finished outcome on a new
+`appearance-apply-result` event and the oplog write moved onto the job thread
+through `write_to_path`, mirroring `commands/firstboot.rs::firstboot_rehearse`.
+`src/lib/appearance.ts` gained `onAppearanceApplyResult`/`APPEARANCE_APPLY_EVENT`
+and `appearanceApply` now resolves with a job id; `AppearancePanel.tsx` gained
+a Stop button and a progress line via `awaitJobResult` + `onJobProgress`, with
+a cancelled run rendering its own sentence rather than the error badge.
+Covering tests: `core::appearance::tests::cancelling_between_icon_writes_leaves_written_files_intact_and_the_rest_untouched`
+(pins the real file count in `CancelledPartway` and that every file not yet
+reached is byte-for-byte unchanged — mutated by disabling the cancellation
+check, which the test then failed against, and restored),
+`core::appearance::tests::the_noprogress_wrapper_matches_the_sink_taking_form_byte_for_byte`,
+`commands::appearance::tests::the_apply_result_crosses_the_wire_with_a_snake_case_job_id_and_a_flattened_outcome`,
+and `AppearancePanel.test.tsx`'s `"ART-248: the apply runs as a cancellable
+job"` block (progress line, Stop calling `jobCancel` with the running job's
+own id, and a cancelled run rendering `appearance-cancelled` rather than
+`appearance-error`).
 
-`tooltypes` decodes a `ToolTypes` entry with `String::from_utf8_lossy` rather
-than refusing on invalid UTF-8 — deliberately, because real AmigaDOS text is
-Latin-1, not UTF-8, and a non-ASCII tool type (a `PUBSCREEN` name, say) is
-exactly the case that choice is for. NewIcon's `IM1=`/`IM2=` tool types are a
-different case: their pixel-encoding bytes legitimately run past `0x7F` and
-are not accidental Latin-1 text at all, just bytes that happen not to be valid
-UTF-8 on their own. Decoding one replaces the offending byte(s) with
-`U+FFFD`, and re-encoding that back to UTF-8 does not reproduce the original
-bytes — the round-trip grows the file rather than reproducing it.
+**ART-244** 🔵 **Update mode re-reads every archive candidate on every
+refresh, on an argued rather than measured basis** — *found 2026-09-05 during
+the whdload-drawers round-2 wiring*
+`src-tauri/src/core/gameindex/store.rs::refresh_root`,
+`core/gameindex/readers/lhadrawer.rs`
 
-**Measured, not theoretical**: 69 of the owner's own 798 real `.info` icons
-carry a NewIcon tool type that trips this. `scripts/icon-oracle-check.py`
-counts them in their own `lossy_tooltypes` bucket, never folded into
-`failed`, and holds them to a weaker but still real invariant — the *text*
-`tooltypes` reads back from a rewritten file must still equal the text that
-was written, even though the underlying bytes cannot be. Text identity holds
-for all 69; byte identity does not, and nothing here claims otherwise.
+`refresh_root` treats every archive candidate as always-fresh in both
+`Refresh::Update` and `Refresh::Rescan` — the doc comment's own reasoning is
+that `read_archive_drawers` "seeks header to header rather than
+decompressing" (`readers::lhadrawer`'s own module doc) and is therefore cheap
+enough that the cache-reuse machinery built to skip re-hashing multi-megabyte
+hardfiles buys nothing here. That reasoning was never measured against the
+one archive it is actually about:
+`readers::lhadrawer::tests::real_archive_scan_is_fast` is `#[ignore]`d,
+env-gated on `ART_LHA_ARCHIVE`, and prints its own timing rather than
+asserting it — exactly the hook that would turn "seeks header to header, so
+it's cheap" from an argument into a number. Until that is run against the
+owner's own 663 MB, 8858-entry archive on an `Update`-mode refresh, this is
+unverified: if it turns out to cost real time for a user with several such
+archives who refreshes often, the fix is a size/mtime-keyed skip for an
+archive that has not changed, the same as the file walk already has — not a
+redesign.
 
-Left open: fixing it means `tooltypes`/`set_tooltypes` carrying raw bytes
-instead of `String` for a NewIcon-shaped entry, which is a real change to a
-public shape three round's worth of code now depends on, not a one-line fix.
-No tree ART builds writes new NewIcon tool types today.
+**Measured** 2026-09-07 on `art-debts` (batch 5), before designing anything
+(CLAUDE.md, "Research before design"):
+`ART_LHA_ARCHIVE="E:\amiga\Amigatolon\paketler\WHDLoadDemos100.lha" cargo test
+--lib real_archive_scan_is_fast -- --ignored --nocapture` against the real
+663 MB, 893-drawer archive (not the 8858-*entry* count the entry above
+guessed at — 8858 archive entries, 893 of them slaves) —
+`ART_LHA_RESULT drawers=893 elapsed_ms=3118` cold, then `elapsed_ms=1631` and
+`elapsed_ms=1600` on two immediate re-runs (warm OS file cache). Not under a
+second for 200 archives — it is over a second for **one**, every single time
+`refresh_root` runs in `Update` mode, changed or not. The "seeks header to
+header, not decompress the archive as a whole" half of the doc comment holds
+— confirmed by the timing itself, since 663 MB in 1.6-3.1 s is nowhere near
+what decompressing that much would cost — but the reads that *are*
+decompressed (one per slave candidate, kilobytes each, 893 of them here) add
+up to real, user-felt time regardless.
 
-**Corrected 2026-09-06, by the final whole-branch review**: an earlier version
-of this entry said the loss is felt when a NewIcon-carrying icon "is rewritten
-by `set_tooltypes`, `set_position`, `set_window` or `set_show_all_files`" —
-naming all four of this module's writers. Only one of them can trip it.
-`set_position`, `set_window` and `set_show_all_files` all `bytes.to_vec()` and
-overwrite a fixed, disjoint range of the file; none of them reads or rewrites
-the `ToolTypes` block at all, and the icon oracle proves this byte-for-byte
-across all 798 real icons, the 69 lossy ones included — `set_position` alone
-is what this round's `core/appearance::plan_icons_in_dir` actually calls on a
-NewIcon-carrying icon, and it changes eight bytes at offset 58, nowhere near
-`ToolTypes`. **Only `set_tooltypes` can lose bytes, and only when fed the
-output of `tooltypes()`** — the shape `merge_tooltypes`'s own callers use, not
-anything `plan_icons_in_dir` calls today. The warning now lives on
-`set_tooltypes`'s own doc comment (`core/amigaicon/mod.rs`) so a future caller
-reads it where it applies.
+**Fixed** 2026-09-07 on `art-debts` (batch 5), same commit as the
+measurement above. `refresh_root` gained an archive-level cache for
+`Refresh::Update`, the same size+mtime shape the file walk already had:
+`previous_by_archive_path` groups the previous run's `CachedEntry` rows by
+archive path (several rows share one path, so this cannot go through the
+single-entry-per-path `cached` map the file walk uses), and an archive whose
+current size and mtime still match every one of its own rows is never
+reopened at all — its rows are carried into `reuse` unchanged. Two new
+tests: `an_unchanged_archive_is_not_reopened_on_update` (a sentinel record
+planted at the archive's real size/mtime survives untouched, proving the
+archive was not reparsed) and `a_touched_archive_is_reopened_on_update` (a
+mismatched size forces a real reopen, proving the cache is not "never
+re-read again"). Mutated by forcing every archive through the read path
+regardless of the cache-hit check: the unchanged-archive test fell (39
+passed, 1 failed) while the touched-archive test and every other test
+stayed green; restored by re-applying the fix rather than `git checkout --`.
+**Named risk, disclosed rather than fixed:** the skip trusts `file_key`'s
+millisecond mtime, but a FAT32/exFAT collection drive's own clock is
+2-second granularity and a timestamp-preserving copy can leave the mtime
+unchanged entirely, so an archive rewritten with the same byte length inside
+one such tick is skipped — inherited unchanged from the plain-file cache
+this mirrors, not a new hole; no mtime-proximity guard was added, because
+`core` has no clock of its own to compare against and `Rescan` (which
+ignores this cache) is the existing escape hatch.
+
+Implementing this exposed a real edge in the ART-243 fix landed just before
+it (not a separate defect filed on its own, since it never reached anyone —
+caught by `a_touched_archive_is_reopened_on_update` itself before it was
+committed): content-derived ids change when a member's *content* changes
+even though the member itself never moved, so "this id was not found again"
+and "this member was not re-read" are different questions. Checking only
+"is the member still in the archive's listing" (ART-243's first cut) kept a
+superseded old record forever, duplicated beside the freshly re-parsed one
+at the same member. `archive_fresh_members` (new, same commit) tracks which
+members this run's archive reads actually produced *a* record for — any id
+— and a previous record is now dropped as stale when its member was
+re-read into something this run, kept as missing only when it was not
+(round 2's own sibling-failure case, still covered by the existing
+`one_bad_drawer_in_an_archive_is_kept_not_deleted_when_its_sibling_still_reads`,
+which stayed green through this change unmodified).
+
+`ART_LHA_ARCHIVE`'s reproduce line is now in
+[STATUS.md](STATUS.md)'s `#[ignore]`d-hooks block; the test's own name and
+skip sentence (`eprintln!("ART_LHA_ARCHIVE is not set")`) already said what
+it measures and did not need changing.
+
+`cargo test --lib -- --skip artwork` — `test result: ok. 2963 passed; 0
+failed; 51 ignored; 0 measured; 89 filtered out; finished in 35.56s`.
+
+**ART-243** 🟡 **An archive updated in place accumulates ghost records no
+Rescan can clear** — *found 2026-09-05 by the whdload-drawers round-2
+re-review, filed rather than fixed in round 3*
+`src-tauri/src/core/gameindex/store.rs::refresh_root` (the `missing`
+reconciliation)
+
+Round 2 fixed the reverse problem: one drawer's slave going bad while its
+archive's sibling drawer still reads fine must not silently delete the bad
+one, because every `Media::WhdloadArchive` record shares one `CachedEntry.path`
+— the archive's own — and "this path is present" says nothing about *this
+particular* drawer inside it. The fix special-cases `WhdloadArchive` in the
+`missing` filter so it is kept whenever its own id was not found again this
+run, regardless of path. That same special case means path presence is now
+**never** consulted for an archived record, in either direction: if the user
+edits the archive itself — removes a drawer, or replaces
+`WHDLoadDemos100.lha` with a smaller, newer one — the removed drawer's old
+record is checked only against "was this id found again this run," never
+against "does the archive that named it still hold it," so it is kept
+forever, through every Rescan, until the whole root is removed and re-added.
+A catalogue is meant to be a library that self-heals under Rescan, and an
+archive edited in place is the one shape it will not.
+
+Not fixed in round 3: closing it correctly is not "flip the priority
+back" — that reintroduces round 2's own bug. The right shape likely keys the
+reconciliation on **(archive path, id)** pairs recomputed for every archive
+still readable this run, rather than id alone across all archives at once,
+but that is a real design question and deserves its own look rather than a
+rushed fix inside a round already closing three other things.
+
+**Fixed** 2026-09-07 on `art-debts` (batch 5). The id-pairs shape sketched
+above turns out to reintroduce round 2's own bug on its own: an archive
+"still readable this run" whose *sibling* drawer merely fails to parse this
+run (round 2's own case) looks identical, by id alone, to a title genuinely
+removed from the archive — both are "this id was not found again." The fix
+actually landed is one level finer: `archive_member_names` (new,
+`store.rs`) opens the archive a second time — the same cheap seek-only
+`entries()` walk `readers::lhadrawer`'s own module doc measures, never a
+decompress — and lists its **raw** member names, regardless of whether they
+parse. A `WhdloadArchive` record whose id was not found again this run is
+now kept as `missing` only if its own archive-internal member
+(`inner`/`slave`) is *still one of those raw names* (round 2's case,
+unchanged) or the archive could not be opened at all this run (unplugged,
+moved — also unchanged); it is dropped as stale when the member is
+genuinely gone from the archive's own listing. Two new tests:
+`a_title_removed_from_a_rewritten_archive_is_cleared_by_rescan` (an archive
+rewritten with one of two titles genuinely absent — Rescan clears the ghost,
+the survivor keeps its id) and
+`an_archive_this_run_cannot_open_keeps_its_records_as_missing` (a planted
+record pointing at an archive that was never written this run — kept, as
+before). The existing
+`one_bad_drawer_in_an_archive_is_kept_not_deleted_when_its_sibling_still_reads`
+(round 2's own guard) stays green unmodified — the member-presence check is
+what keeps a present-but-unparseable drawer from being swept up with a
+genuinely removed one. Mutated by reverting the `WhdloadArchive` branch to
+round 2's unconditional `return true`: the new ghost-clearing test fell (37
+passed, 1 failed) while both the unreachable-archive test and round 2's own
+sibling test stayed green, confirming the mutation isolated exactly the
+intended behaviour; restored by re-applying the same edit rather than
+`git checkout --`.
+`cargo test --lib -- --skip artwork` — `test result: ok. 2961 passed; 0
+failed; 51 ignored; 0 measured; 89 filtered out; finished in 36.81s`.
+
+**Corrected** 2026-09-07, fix round 1 (batch 5 review): the paragraph above
+described the shipped commit's own state, not the tree as it stands after
+the very next commit, `8142f9e` (ART-244). That commit's
+`archive_fresh_members` (`store.rs:858-871`, `915-931`) added a **second**
+stale case this paragraph does not mention: a member still in the archive's
+raw listing, but re-read into a *different* id this run — a real content
+change at the same member, not a transient parse failure. "Dropped as stale
+only when the member itself is genuinely gone from the archive's own
+listing" is therefore no longer the whole rule; a record is now dropped as
+stale when the member is gone **or** when this run's read of that member
+produced a record (any id), and kept as missing only when the member is
+present but produced nothing this run (round 2's case, still unchanged). See
+ART-244's own "Fixed" paragraph, above, for the full account and the test
+that found the gap
+(`a_touched_archive_is_reopened_on_update`).
 
 **ART-251** 🟡 **The AmigaOS 3.2 recipe has no rule for `Utilities` or
 `WBStartup`, so a tree ART builds has neither** — *found 2026-09-06 during
@@ -843,12 +940,272 @@ attach to in the first place.
 Ruled out of the drawer-icons round on purpose: this is a recipe-content
 question — what an AmigaOS 3.2 install should contain — not an icon-placement
 one, and mixing the two would have made that round's own measurements
-unreadable. Filed here as a real, measured gap rather than left to be
+unreadable. Filed then as a real, measured gap rather than left to be
 rediscovered as a surprise the next time someone opens `Utilities` on a built
 tree and finds it missing.
 
-**ART-260** 🔵 **`setLayerIdentified({})` writes a fresh object where its two
-neighbours guard with `prev => prev`, and nothing wakes it yet** — *found
+**Fixed** 2026-09-07 on `art-debts`, commit "A built AmigaOS 3.2 tree carries
+Utilities and WBStartup (ART-251)". `workbench-base` — the component that
+already owns the disk's other root drawers (`Prefs`, `System`, `Devs`, …) —
+gained `Utilities` → `Utilities` and `WBStartup` → `WBStartup` as ordinary
+`Subtree` rules from the same `Workbench3.2` medium, beside the ones it
+already had. Re-measured directly on the owner's own `Workbench3.2.adf` with
+amitools' `xdftool list` before writing the fix: the numbers above still
+hold — `Utilities` (`Clock`, `Clock.info`, `More`, `MultiView`,
+`MultiView.info`) and `WBStartup` (`AssignWedge.info`) only.
+`core::osinstall::recipe::tests::workbench_base_places_utilities_and_wbstartup`
+is the new guard (`src-tauri/src/core/osinstall/recipe.rs`); mutated by
+removing the `WBStartup` rule and confirmed it falls, then restored from an
+absolute-path backup. `no_two_components_claim_one_destination_without_declaring_it`
+and the AmigaOS 3.2.2 layer's own two-layer test stayed green — the layered
+recipe's `update-322-system` already carried its own `Utilities`/`WBStartup`
+rules with `overrides: [..., "workbench-base", ...]`, so it needed no change
+of its own.
+
+Built the real tree twice with `run_the_real_engine_against_the_users_own_media_when_asked`
+(`ART_OSINSTALL_MEDIA` pointed at the owner's own
+`E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF`, `ART_OSINSTALL_ROM` the
+owner's real V40 Kickstart, `ART_OSINSTALL_DEST=E:\amiga\ProjeART\art251-32-before`
+then `...\art251-32` after the fix) — `test result: ok. 1 passed; 0 failed;
+0 ignored; 0 measured; 3095 filtered out`, both runs. Before: no `Utilities`
+or `WBStartup` at all in the built tree. After:
+
+```
+Utilities/Clock  Utilities/Clock.info  Utilities/More
+Utilities/MultiView  Utilities/MultiView.info
+WBStartup/AssignWedge.info
+```
+
+plus the two drawers' own sibling icons at the tree's root, `Utilities.info`
+and `WBStartup.info` (the ART-252 sibling-icon mechanism, which now reaches
+these two for the first time) — root-level `.info` count went from 7 to 9,
+confirmed by a second live run against the 3.2 set's own V47 ROM
+(`AmigaOs 3.2\ROM\kicka1200.rom`) as well as the owner's V40 one, since the
+pinned byte/file/directory totals in
+`core::osinstall::apply::tests::run_the_real_engine_against_the_users_own_media_when_asked`
+are asserted per ROM branch and both were re-measured rather than derived.
+
+**ART-274** 🔵 **`core/winuae.rs` spawns an external process from inside
+`core/`, the exact shape the trait rule exists to prevent** — *found
+2026-09-07 by the whole-branch review of `art-firstboot` phases 1–2*
+`src-tauri/src/core/winuae.rs` · `src-tauri/src/core/amigainstall/run.rs` ·
+`src-tauri/src/core/amigainstall/rehearse.rs`
+
+CLAUDE.md's "The core independence rule" is explicit: `core/` is
+`std` + a short, named list of crates, and a module that needs something
+platform-specific — device enumeration, launching WinUAE — exposes a
+**trait**, with the implementation living outside `core/`. `VolumeFormatter`
+(`core/preload/mod.rs`, implemented in `tools/hst_imager.rs`) and
+`HostRecycler` (`core/hostfs.rs`, implemented in `tools/recycle_bin.rs`) are
+the two live instances of that shape. `core/winuae.rs` is not: it launches
+`winuae64.exe` directly, from inside `core/`, with no trait between the
+decision to open the emulator and the process spawn that does it.
+
+This did not start with `art-firstboot`. `core::amigainstall::run` has called
+`core::winuae` since the AmigaOS-install-under-WinUAE round, and this branch
+made it worse in the ordinary way a precedent gets worse: `core::amigainstall::rehearse`
+(the first-boot rehearsal engine) is a **second** consumer of the same
+un-abstracted call, added without anyone re-deciding whether the shape was
+still acceptable. Two consumers is a pattern one review away from being read
+as sanctioned; a third would make it one.
+
+**How it fails for a user: it does not, yet.** This is not a defect in
+`art-firstboot`'s own behaviour — `rehearse.rs` inherited an existing
+violation rather than introducing a new kind of one, and nothing here is
+reported to have produced a wrong sentence on screen. The cost is the one the
+trait rule is written against: `core/` is meant to stay unit-testable without
+a real WinUAE install and promotable to a standalone crate without carrying
+Windows-process-spawning code along, and `core/winuae.rs` as it stands
+already breaks both of those promises for anything that imports it.
+
+**Fixed** 2026-09-07 on `art-debts`, commit "The emulator spawn leaves core/
+(ART-274)", the same shape `VolumeFormatter`/`tools/hst_imager.rs` already
+have. `core::amigainstall::run::EmulatorLauncher`/`EmulatorSession` (and
+`Clock`/`RealClock`) stay declared in `core/amigainstall/run.rs` unchanged;
+the real implementation — `WinUaeLauncher`, its `WinUaeSession` newtype, and
+every `std::process` use (`WinUaeProcess`, `launch_winuae_process`,
+`launch_winuae`, `launch_winuae_inner`) — moved out to the new
+`src-tauri/src/tools/winuae_launcher.rs`. The two thin wrappers that used to
+pick the real launcher from inside `core/` (`run::run`, `rehearse::rehearse`)
+are deleted rather than left as stubs, because building a `WinUaeLauncher` is
+itself the process-spawning decision `core/` may not make — every caller now
+constructs `tools::winuae_launcher::WinUaeLauncher` itself and calls
+`run_with`/`rehearse_with` directly: `commands/amigainstall.rs::install`,
+`commands/firstboot.rs::perform` and its gated
+`rehearse_the_real_tree_when_asked` hook, and the two direct callers of the
+free `launch_winuae` function, `commands/launch.rs` (Play) and
+`commands/winuae.rs` (WinUAE Studio's manual launch). The two `#[ignore]`d
+real-material hooks that used to live in `core/winuae.rs`
+(`boot_a_distribution_tree_when_asked`, `ask_a_tree_its_version_when_asked`)
+moved with the code they exercise, unchanged, into
+`tools::winuae_launcher::real_boot_hook`/`real_version_hook`.
+`RunRequest`/`RehearseRequest` keep their `winuae_path` field — removing it
+would have touched the 22 `with_paths(...)` call sites in `run.rs`'s own test
+module for no behavioural gain, so it stays, read by nothing in `core/`
+any more, and its doc comment says so.
+
+The guard is a new test, not a script, per the round's own preference for one
+that runs in CI without a separate tool:
+`core::independence::core_never_spawns_a_process_outside_a_test`
+(`src-tauri/src/core/mod.rs`). It walks the real `src/core/**/*.rs` tree —
+not a fixture, same reason `osinstall::package`'s
+`every_package_json_file_on_disk_is_wired_into_shipped_json` does — and fails
+on a `Command::new(` outside a `#[cfg(test)]`-covered region, using indent
+matching rather than brace counting to find that region's end (a brace
+counter misreads the literal `{`/`}` inside a `.uae` line or an AmigaDOS
+script assembled with `format!`, both of which this crate's own test hooks
+carry; `cargo fmt --check` is blocking in CI, so a block's closing brace is
+reliably aligned with the line that opened it). **Mutated**: a
+`std::process::Command::new("winuae64.exe").spawn()` line was put back inside
+`generate_uae_config` in `core/winuae.rs`, above its `#[cfg(test)] mod tests`
+— the guard failed, naming that exact file and line; the file was restored
+from a `cp`'d backup and `touch`ed (not `shutil.move`/plain overwrite, per
+the mtime trap this project has paid for before) and the guard passed again.
+`cargo test --lib -- --skip artwork` run twice: **`test result: ok. 2954
+passed; 0 failed; 51 ignored`** both times, `finished in 32.15s` and `34.76s`.
+`cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` both
+clean.
+
+**What `grep -rn "std::process\|Command::new" src-tauri/src/core/` still
+shows, and why none of it is a violation**: `std::process::id()` in eight
+files (`amigainstall/stage.rs`, `detect.rs`, `dirsize.rs`, `cbm/t64.rs`,
+`cbm/d64.rs`, `layout/apply.rs`, `iso/mod.rs`, `preload/native.rs`,
+`sources/install.rs`, `volume/write/copy.rs`) reads the current process's own
+pid for a unique scratch/staging name — plain `std`, no platform API, not a
+spawn, and pre-existing (`core/mod.rs`'s own `test_scratch_id` doc already
+describes the pattern); `core/volume/journal.rs`'s two `Command::new(&exe)`
+calls (crash-recovery tests that re-invoke the test binary itself to prove a
+kill mid-write recovers) are inside `#[cfg(test)]`, confirmed before this fix
+and unchanged by it; the rest are this entry's own prose, in doc comments,
+describing the move. The substantive claim — no production `core/` code
+spawns a process — is what the new guard test checks structurally, not the
+raw grep.
+
+**ART-246** 🔵 ✅ **`verify_volume`'s prefs check has an untested failure
+path: a permission error walking the tree folds into one `Fail` row with no
+test provoking it** — *found 2026-09-05/06 by the prefs-and-wallpaper
+round's Task 8 review, disclosed rather than faked*
+`src-tauri/src/core/osinstall/verify.rs::verify_volume` (the
+`check_prefs_paths(dist_root)` `Err` arm)
+
+When `check_prefs_paths` cannot walk the distribution tree's `Prefs/`
+directory at all — a real-world cause is a permission error partway through a
+directory walk — `verify_volume` folds that into a single `Fail` row naming
+the error rather than failing the whole report. The fold itself is
+reasonable and matches the file's existing `DosFamily::Other` pattern of
+turning an inability to look into a named verdict rather than a silent
+`Ok`. What is missing is a test that provokes a *real* OS-level permission
+error mid-walk rather than a constructed `CoreError`, the same standard
+Task 7's partial-commit fix was held to in this round. Provoking one
+portably (a directory made unreadable, then restored, without leaving the
+test suite's own scratch in a state `Drop` cannot clean up) is genuinely
+awkward, which is why it was disclosed rather than attempted under time
+pressure at the end of a twelve-task round. Low severity: the branch is
+defensive coding for a case that is plausible but has not been observed.
+
+**Fixed** 2026-09-07, by the seam the batch-1 brief asked for rather than a
+real unreadable directory: `verify_volume` now delegates to a private
+`verify_volume_with(..., prefs_check: impl Fn(&Path) -> CoreResult<Vec<FileVerdict>>)`,
+the same `_with`-suffixed shape `core::gameindex::scan_titles`/
+`scan_titles_with` already use for an injectable seam, and the public
+`verify_volume` is unchanged (single production call site,
+`commands/osinstall.rs`, untouched). This is the "small closure" the entry's
+own "more than a local seam?" question asked about, and it turned out not to
+need more. Test:
+`a_permission_error_walking_prefs_folds_into_one_named_fail_row`, injecting
+`CoreError::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, ...))`
+through the closure and asserting both that the volume-based verdicts survive
+(the manifest's own file still `Pass`es) and that the prefs row is `Fail`
+naming the actual error text. Mutation: swallowed the injected error instead
+of folding it in (`if let Ok(...) = prefs_check(...) { ... }`, dropping the
+`Err` arm entirely) — the test failed ("no row named the prefs check at
+all"); restored via copy, touched, re-diffed against the real fix, and the
+test passed again. `cargo test --lib osinstall::verify::` (whole module):
+`29 passed; 0 failed`.
+
+---
+
+**ART-247** 🔵 ✅ **A PNG decode arm the `png` crate's own `EXPAND` transform
+should make unreachable has no test of its own** — *found 2026-09-05/06
+during the prefs-and-wallpaper round's Task 6, disclosed with a traced
+unreachability argument rather than asserted*
+`src-tauri/src/core/picture/mod.rs::decode` (the `png::ColorType::Indexed`
+arm)
+
+`core/picture::decode` sets `Transformations::EXPAND` on the PNG reader,
+which the crate documents as always turning a palette (indexed) image into
+`Rgb` or `Rgba` before `next_frame` returns — so the `ColorType::Indexed` arm
+of the match on the decoded frame's colour type should never run for any PNG
+this decoder can produce. Per this round's own rule (recorded in CLAUDE.md,
+"the failure that does not crash" / unreachable-code section): this is
+unreachable because of a **third party's current behaviour** on
+attacker-supplied bytes, not because of ART's own arithmetic, so it correctly
+stays a runtime `CoreError::Malformed` refusal rather than a `debug_assert!`
+that would compile out in release and let a future `png` upgrade turn a
+silently-misread palette image into a confident-wrong result. What is
+missing is a test — no PNG fixture has been found or constructed that
+reaches this arm, because reaching it would mean the crate's own documented
+guarantee is already broken, which is precisely why one has not been forced.
+Low severity: the arm cannot be exercised without first finding the
+third-party defect it exists to catch.
+
+**Fixed** 2026-09-07: the arm stays (the entry's own argument for keeping it
+a runtime refusal rather than a `debug_assert!` is correct and unchanged),
+but its logic is now reachable *directly* rather than only through a full PNG
+decode. The match on `frame.color_type` was split out of `decode_png` into a
+new `rgb_pixels_for(color_type: png::ColorType, data: &[u8])`, which does not
+know or care that `Transformations::EXPAND` is what keeps a real decode from
+ever calling it with `Indexed` — so a test can call it with `Indexed` itself
+without needing the `png` crate's own documented guarantee to already be
+broken. Test:
+`an_indexed_color_type_is_refused_by_name_rather_than_guessed_at`, calling
+`rgb_pixels_for(png::ColorType::Indexed, &[0u8; 4])` directly and asserting
+the refusal names "indexed". Mutation: changed the refusal's own message to
+a marker string — the test failed (its own assertion, "the refusal must name
+what went wrong", caught the missing word); restored via copy, touched,
+re-diffed against the real fix, and the test passed again.
+`cargo test --lib picture::tests`: `10 passed; 0 failed`.
+
+---
+
+**ART-245** 🔵 ✅ **A missing backdrop and a wrong-type match at the same
+name read as the same sentence** — *found 2026-09-05/06 during the
+prefs-and-wallpaper round's whole-branch review, filed rather than fixed*
+`src-tauri/src/core/osinstall/verify.rs::check_one_backdrop_path`
+
+The verify check that confirms every `PTRN`-named backdrop path exists in the
+tree (§3.5 of the prefs-and-wallpaper design) reports `Fail` with "was not
+found under this distribution tree" whenever `resolve_ci_optional` returns
+`None` — which it does both when nothing at that path exists at all, and when
+the path resolves to something of the **wrong kind** (a directory sitting
+where a picture file was named). CLAUDE.md's own rule is that a refusal names
+what is missing; "not found" is the right sentence for the first case and the
+wrong one for the second, where the honest sentence is "that name is a
+directory, not the picture file". Not tested for and not exercised on any
+real material seen this round — every measured `PTRN` chunk named a file, not
+a directory — so this is latent rather than observed. Low severity: the
+message is merely less specific than it should be, not wrong about whether
+verification passed.
+
+**Fixed** 2026-09-07 in `check_one_backdrop_path`: the `Some(_)` arm now
+checks `resolved.is_dir()` first and returns a distinct `Fail` naming the
+directory rather than reusing the "was not found" sentence. Guards: the
+existing `a_backdrop_the_tree_does_not_have_is_reported_by_both_names` now
+also asserts its detail contains `"was not found"`, and a new
+`a_backdrop_at_the_right_name_but_the_wrong_kind_says_so` creates a directory
+at the claimed name and asserts the verdict is `Fail`, names "directory", and
+does *not* contain "was not found" — the two endings stay distinct rather
+than merely both being `Fail`. Mutation: disabled the new `is_dir()` arm
+(`Some(resolved) if false && resolved.is_dir() => unreachable!()`) — the new
+test failed (`left: Pass, right: Fail`, since the wrong-kind path fell
+through to the ordinary `Some(_) => Pass` arm); restored via copy, touched,
+re-diffed against the real fix, both tests passed again.
+`cargo test --lib osinstall::verify::` (whole module): `29 passed; 0 failed`.
+
+---
+
+**ART-260** 🔵 ✅ **`setLayerIdentified({})` writes a fresh object where its
+two neighbours guard with `prev => prev`, and nothing wakes it yet** — *found
 2026-09-06 by the whole-branch review of the refusal-evidence round (M3),
 filed rather than fixed by fix wave 5's own brief*
 `src/components/osbuilder/OsInstall.tsx:493`
@@ -875,24 +1232,108 @@ observed bug is how this project has hurt itself before. Add the same
 `prev => prev` guard the day a real dependency on `layerIdentified` is added,
 not before.
 
-Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
-not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
-
-Every module with working logic has now been audited. The remaining `core`
-modules are stubs that only return `NotImplemented` (`recovery.rs`,
-`conversion.rs`, `binary.rs`, `validation.rs`) or hold types with no logic
-(`compatibility.rs`) — see [FEATURES.md](FEATURES.md) for their planned state.
-
-Two areas were reviewed and found sound, and are recorded here so nobody
-re-audits them without reason:
-
-- `core/analysis.rs` — the hex reader clamps both offset and length, and the
-  signature scan guards its window.
-- `core/profile.rs` — preset data only, no parsing of untrusted input.
+**Fixed** 2026-09-07 in `src/components/osbuilder/OsInstall.tsx`: the three
+duplicate inline guards (`layerScans`, `layerIdentified`, `extraScans`) now
+share one exported helper, `resetIfEmpty`, so `setLayerIdentified` carries
+the same no-op-preserves-identity guard its neighbours always had. Guard:
+`resetIfEmpty (ART-260) > keeps the same object identity across a no-op
+reset` in `src/components/osbuilder/OsInstall.test.tsx` (plus a sibling test
+that a genuinely non-empty record still resets to a fresh `{}`). Mutation:
+made `resetIfEmpty` return a fresh `{}` unconditionally — the identity test
+failed (`expected {} to be {} // Object.is equality`); the file was restored
+from a copy (verified via `git diff --stat`, then re-diffed against the real
+fix) and the test passed again. `pnpm lint` and `pnpm test` both clean
+afterwards (`Test Files 87 passed (87)`, `Tests 1180 passed (1180)`).
 
 ---
 
-## Fixed
+**ART-235** 🔵 ✅ **The test-scratch sweep reports a site that is not a
+defect** *found 2026-09-04 by re-running the sweeps during a documentation
+pass*
+`scripts/scratch-counter-sweep.py`
+
+`scratch-counter-sweep.py` reports **1** site "needing a counter":
+`commands/osinstall.rs::staging_is_removed_however_the_preview_ends`. That
+helper keys its prefix on the **thread id** as well as the process id — which
+is [ART-182](#fixed)'s own fix and is unique within the process, exactly what
+the sweep exists to require — but the sweep recognises only an atomic counter,
+so it reports the right shape as a wrong one.
+
+Nothing is broken; what is damaged is the guard. STATUS.md's Tests row said
+this sweep "reports zero", and a zero that is really a one-with-an-excuse
+trains a reader to skim past the next real finding. Either teach the sweep the
+thread-id shape or convert that one helper to the counter — the first is
+better, because the thread-id keying is the *stronger* of the two here.
+
+**Fixed** 2026-09-07 in `scripts/scratch-counter-sweep.py`: a site is now also
+"already safe" when its enclosing `fn` hashes `std::thread::current().id()`
+alongside the pid, so `commands/osinstall.rs::staging_is_removed_however_the_preview_ends`'s
+own `staging_dirs()` helper is recognised rather than reported as needing a
+counter. Ran clean: `already had a counter: 25`, `needing a counter: 0`.
+Mutation: stripped the `std::thread::current().id().hash(...)` keying from
+that helper's prefix, leaving only the pid — the sweep reported
+`needing a counter: 1` again; the helper was restored (verified byte-identical
+by `git diff --stat`) and the sweep returned to `needing a counter: 0`.
+`docs/STATUS.md`'s Sweeps row updated to match. No test file changes: this
+item fixes the sweep script itself, whose "test" is its own reported count
+under the mutation above.
+
+---
+
+**ART-271** 🟠 ✅ **`control-byte-sweep.py` does not look for the one
+control byte CLAUDE.md's own incident report names first** — *found
+2026-09-06 by reproducing the accident live while writing STATUS.md*
+`scripts/control-byte-sweep.py`
+
+`NEVER_DATA` lists BEL (`\a`), BS (`\b`), VT (`\v`), FF (`\f`) and ESC (`\e`).
+**TAB (`\t`, 0x09) is not in it.**
+
+The omission is defensible on its face — a tab is legitimate in plenty of
+files, and flagging every one would drown the sweep. But `CLAUDE.md`'s own
+account of the accident this script exists to catch reads:
+
+> *A Windows path in a `<<'EOF'` block loses its backslash escapes — `E:\amiga`
+> arrives as `E:` plus a BEL byte, **`\test\art-…` as a TAB and a BEL**.*
+
+So the project has already met this corruption in its TAB form, and the guard
+written for it does not look for that form.
+
+**Demonstrated, not argued.** Writing the "Start here" block into
+`docs/STATUS.md` through a heredoc turned `src-tauri\target\` into
+`src-tauri` + TAB + `arget\`. The sweep reported **clean before and after** the
+corruption, and clean again after the repair — three runs, one of them over a
+file that was demonstrably wrong. The text was fixed by hand; the guard is what
+this entry is about.
+
+**The fix is not "flag every TAB".** That would fire on legitimate indentation
+everywhere and the sweep would be turned off within a week, which is worse than
+the gap. The targeted shape: a TAB that appears **mid-line, immediately after a
+non-whitespace character**, in a file whose other lines do not use tabs for
+indentation — which is what a swallowed `\t` looks like and what real
+indentation never does. Sharpen it against this exact case, and put the defect
+back to watch it fail, because a guard added without that is the same defect one
+level up.
+
+**Worth noting for whoever takes it:** this is the third time in one session
+that a guard turned out not to guard what it was named for. That is not a
+coincidence about this script; it is what happens to a check nobody has
+mutated.
+
+**Fixed** 2026-09-07 in `scripts/control-byte-sweep.py`: `NEVER_DATA` now
+carries `0x09`, and `control_offenders()` flags a TAB only when it is
+mid-line, right after a non-whitespace character, in a file that does not
+indent with tabs elsewhere — the exact shape the incident produced, so
+legitimate indentation stays silent. Proven live rather than by assertion: a
+throwaway probe file (`src-tauri` + TAB + `arget\`, the exact bytes the
+`docs/STATUS.md` accident produced) made the sweep exit 1 naming the TAB by
+line; deleting the probe brought the sweep back to
+`control-byte sweep: clean - 7 file(s) allow-listed for AmigaDOS DosType data
+and 7 for deliberate alignment; no stray control bytes and no lost line
+continuations anywhere else`. Commit: see `git log` for the ART-271 subject
+on `art-debts`.
+
+---
+
 **ART-273** 🔵 ✅ **The first-boot dispatcher tried to delete itself on `done
 all`, and AmigaDOS refused: the file was still being executed** — *found
 2026-09-07 by the gated rehearsal on the owner's own 3.2 tree (task 8 of the

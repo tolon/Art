@@ -79,7 +79,7 @@ use serde::Serialize;
 
 use crate::core::card::{read_card, AmigaArea, CardImage};
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::fat32::{read_root_file, ReadOnly, Region};
+use crate::core::fat32::{read_root_file, ReadOnly, Region, MAX_ROOT_FILE_BYTES};
 use crate::core::preload::native::{family_of, from_pfs3, partition_region, DosFamily};
 use crate::core::rdb::ParsedPartition;
 use crate::core::volume::device::FileRegion;
@@ -91,11 +91,14 @@ use super::report::{parse_bytes, FirstBootReport};
 use super::{FAT_REPORT_NAME, REPORT_PATH};
 
 /// A first-boot report is a few hundred bytes. Anything past this on either
-/// side of the card is refused rather than read — the same rule
-/// `fat32::MAX_ROOT_FILE_BYTES` applies to the FAT copy, and for the same
-/// reason: a card is untrusted input, and a length field taken from it is
-/// never trusted enough to drive an unbounded allocation.
-const MAX_REPORT_BYTES: u64 = 1 << 20;
+/// side of the card is refused rather than read — literally
+/// `fat32::MAX_ROOT_FILE_BYTES` (leftover round: the two used to duplicate
+/// the same `1 << 20` by value, which is exactly how the two limits could
+/// have drifted apart without either side noticing), and the reason is the
+/// same reason that constant exists: a card is untrusted input, and a length
+/// field taken from it is never trusted enough to drive an unbounded
+/// allocation.
+const MAX_REPORT_BYTES: u64 = MAX_ROOT_FILE_BYTES;
 
 /// Where the report [`read_card_report`] returned actually came from.
 ///
@@ -226,9 +229,14 @@ fn amiga_report(card: &CardImage) -> CoreResult<Option<Vec<u8>>> {
                 Ok(Some(bytes)) => return Ok(Some(bytes)),
                 Ok(None) => continue,
                 Err(err) => {
+                    // 1-based in the sentence, matching how the card screen
+                    // numbers areas (`HardDiskStudio.tsx`'s
+                    // `t("hardDisk.card.disk", { n: index + 1 })`) — the
+                    // loop index itself stays 0-based, since it is also used
+                    // to index `card.areas`.
                     log::warn!(
-                        "first-boot report: area {area_index} partition '{}' ({}) could not \
-                         be read: {err}",
+                        "first-boot report: area {} partition '{}' ({}) could not be read: {err}",
+                        area_index + 1,
                         part.drive_name,
                         dos.label(),
                     );
@@ -252,7 +260,8 @@ fn amiga_report(card: &CardImage) -> CoreResult<Option<Vec<u8>>> {
             format: "card".into(),
             detail: format!(
                 "the Amiga volume's own first-boot report could not be checked: area \
-                 {area_index} partition '{name}': {err}"
+                 {} partition '{name}': {err}",
+                area_index + 1
             ),
         }),
     }
@@ -285,14 +294,46 @@ fn window_is_all_zero(bytes: &[u8]) -> bool {
 /// to find the `disktype` magic it insists on. One sector, never more: this
 /// is a probe, not a mount, and a partition's own length is not trusted to
 /// size it.
+///
+/// **Bounded in position, not only in size (leftover round).** `at` is an
+/// absolute offset into the whole card file, computed from `partition_offset`
+/// alone — reading exactly one sector there is bounded in *size*, but nothing
+/// before this fix checked that the sector actually falls *inside*
+/// `partition_length`. `libpfs3::ondisk::ROOTBLOCK` is a small fixed sector
+/// index (2), not one that scales with a volume's size, so a partition
+/// shorter than three sectors — implausible from ART's own writer, entirely
+/// plausible from an RDB some other tool wrote — would have this probe read
+/// bytes belonging to whatever sits next on the card (another partition, or
+/// past the file), still `Ok`, and hand a foreign partition's bytes back as
+/// if they were this one's. Refused before the read now, the same
+/// `checked_add`-then-contain discipline `core/security::path::safe_join`
+/// uses for an archive entry's own claimed offset.
 fn pfs3_rootblock_probe(
     path: &Path,
     partition_offset: u64,
+    partition_length: u64,
 ) -> CoreResult<[u8; libpfs3::ondisk::SECTOR_SIZE as usize]> {
     use std::io::{Read, Seek, SeekFrom};
     let sector_bytes = libpfs3::ondisk::SECTOR_SIZE as u64;
+    let sector_start = libpfs3::ondisk::ROOTBLOCK * sector_bytes;
+    let sector_end =
+        sector_start
+            .checked_add(sector_bytes)
+            .ok_or_else(|| CoreError::Malformed {
+                format: "card".into(),
+                detail: "the PFS3 rootblock's address overflows a 64-bit offset".into(),
+            })?;
+    if sector_end > partition_length {
+        return Err(CoreError::Malformed {
+            format: "card".into(),
+            detail: format!(
+                "this partition is {partition_length} bytes, too short to hold the PFS3 \
+                 rootblock sector at offset {sector_start}"
+            ),
+        });
+    }
     let at = partition_offset
-        .checked_add(libpfs3::ondisk::ROOTBLOCK * sector_bytes)
+        .checked_add(sector_start)
         .ok_or_else(|| CoreError::Malformed {
             format: "card".into(),
             detail: "the PFS3 rootblock's address overflows a 64-bit offset".into(),
@@ -330,14 +371,14 @@ fn pfs3_report(
     area: &AmigaArea,
     part: &ParsedPartition,
 ) -> CoreResult<Option<Vec<u8>>> {
-    let (offset, _length, _block_size) = partition_region(area, part)?;
+    let (offset, length, _block_size) = partition_region(area, part)?;
 
     // I1, final review: a partition `core/card/build.rs` has declared and
     // typed but `core/preload` has not yet formatted has an all-zero
     // rootblock sector — not a `disktype` `PFS_TYPES` recognises, but not
     // corruption either. Treat it as the ordinary miss it is before asking
     // `Volume::open` to mount it at all.
-    if window_is_all_zero(&pfs3_rootblock_probe(path, offset)?) {
+    if window_is_all_zero(&pfs3_rootblock_probe(path, offset, length)?) {
         log::debug!(
             "first-boot report: partition '{}' (pfs3) has no filesystem written yet (unformatted)",
             part.drive_name
@@ -396,27 +437,46 @@ fn ffs_report(
         return Ok(None);
     }
 
+    // Leftover round: `REPORT_PATH` is `"S/FirstBoot.log"`, two segments, and
+    // the loop below used to check `is_dir` only once, after the *last*
+    // segment resolved — so an intermediate segment (`S`) that turned out to
+    // be a *file*, not a drawer, was walked into exactly like a directory:
+    // the next `dir::find_entry` call would read that file's own header
+    // block as if it were a directory's hash table. Checked per segment now,
+    // the same way `pfs3_report` treats a file where a drawer belongs — a
+    // clean `Ok(None)` miss, never a directory read off a block that
+    // is not one.
+    let segments: Vec<&str> = REPORT_PATH.split('/').collect();
     let mut current = geometry.root_block;
-    let mut is_dir = true; // the root itself is a directory
-    for segment in REPORT_PATH.split('/') {
-        match dir::find_entry(&region, &set, &geometry, current, segment)? {
-            Some(entry) => {
-                current = entry.block;
-                is_dir = entry.is_dir;
+    for (i, segment) in segments.iter().enumerate() {
+        let Some(entry) = dir::find_entry(&region, &set, &geometry, current, segment)? else {
+            return Ok(None);
+        };
+        let is_last = i + 1 == segments.len();
+        if is_last {
+            // A directory named like the report is not the report.
+            if entry.is_dir {
+                return Ok(None);
             }
-            None => return Ok(None),
+        } else if !entry.is_dir {
+            // An intermediate segment that is a file, not a drawer, cannot
+            // be walked into any further.
+            return Ok(None);
         }
-    }
-    // A directory named like the report is not the report — the same check
-    // `pfs3_report` makes on `entry.is_dir()`.
-    if is_dir {
-        return Ok(None);
+        current = entry.block;
     }
 
     // Peeked before `file::read_file` reads the whole thing, the same reason
     // `fat32::read_root_file` checks a length before allocating for it: a
     // report is a few hundred bytes, and a length field off the card is never
-    // trusted enough on its own to drive an allocation.
+    // trusted enough on its own to drive an allocation. This means
+    // `current`'s header block is read twice — once here, once more inside
+    // `file::read_file` below — and that duplication is deliberate (leftover
+    // round): `file::read_file` has no way to be handed a size budget from
+    // outside, so the only way to refuse an oversized file *before*
+    // allocating for its content is to look at the header ourselves first.
+    // A second small block read is cheap; an unbounded allocation from an
+    // untrusted card is not.
     let header = set.view(&region, current)?;
     let size = layout::get_u32(&header, layout::BYTE_SIZE_OFFSET)? as u64;
     if size > MAX_REPORT_BYTES {
@@ -568,6 +628,32 @@ mod tests {
         tree
     }
 
+    /// A host folder carrying a plain **file** named `S` at its root, rather
+    /// than the `S` drawer `tree_with_report` builds — the leftover-round
+    /// shape: `REPORT_PATH`'s own first segment resolving to a file, not a
+    /// directory, so there is nothing under it to walk into.
+    ///
+    /// The file's one 512-byte data block carries a crafted value at
+    /// `layout::NEXT_HASH_OFFSET` (496) — the exact byte offset
+    /// `dir::entries_in` reads a hash chain's "next" pointer from. This is
+    /// what makes the guard provable rather than merely plausible: if
+    /// `ffs_report` ever again walks into `S` as though it were a
+    /// directory, `entries_in` reads this file's own content at that offset
+    /// as a block number, finds it (`0xFFFFFFFF`) far outside the volume,
+    /// and returns `Err` — turning "not booted" into a spurious "could not
+    /// be checked". With the guard in place, `S`'s content is never looked
+    /// at as anything but file data, and this byte is never read as a block
+    /// number at all.
+    fn tree_with_s_as_a_file(dir: &std::path::Path) -> std::path::PathBuf {
+        let tree = dir.join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        let mut contents = vec![0u8; 512];
+        contents[layout::NEXT_HASH_OFFSET..layout::NEXT_HASH_OFFSET + 4]
+            .copy_from_slice(&0xFFFF_FFFFu32.to_be_bytes());
+        std::fs::write(tree.join("S"), &contents).unwrap();
+        tree
+    }
+
     /// Overwrite one partition's root block with garbage, directly — a real
     /// corruption, not a mocked error. `read_card` and `partition_region` are
     /// used to find the exact bytes to hit, the same way production code
@@ -640,6 +726,35 @@ mod tests {
         assert_eq!(found.report.ending, super::super::report::Ending::DoneAll);
     }
 
+    /// **Leftover round.** `pfs3_rootblock_probe` was bounded in *size* (one
+    /// sector, never more) but not in *position* — nothing checked that the
+    /// sector actually falls inside the partition before reading it. A
+    /// synthetic file stands in for a full card here: `libpfs3::ondisk::
+    /// ROOTBLOCK` is a small fixed sector index (2), and the smallest
+    /// partition the RDB/HDF pipeline's own writer can build is far larger
+    /// than the ~1.5 KB this needs to demonstrate.
+    #[test]
+    fn a_partition_shorter_than_the_rootblock_offset_is_refused_not_misread() {
+        let dir = ScratchDir::new("art-firstboot-cardread", "pfs3-short-partition");
+        let path = dir.path().join("card.img");
+        // Long enough that an unchecked read past a too-short "partition"
+        // would still land inside the file (and so silently succeed) rather
+        // than fail for the unrelated reason of running off the file's own
+        // end.
+        std::fs::write(&path, vec![0xAAu8; 8192]).unwrap();
+
+        let sector_bytes = libpfs3::ondisk::SECTOR_SIZE as u64;
+        let needed = (libpfs3::ondisk::ROOTBLOCK + 1) * sector_bytes;
+        let too_short = needed - 1;
+
+        let err = pfs3_rootblock_probe(&path, 0, too_short).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("too short"),
+            "the refusal must name why: {text}"
+        );
+    }
+
     #[test]
     fn a_formatted_amiga_volume_with_neither_copy_is_not_booted() {
         let dir = ScratchDir::new("art-firstboot-cardread", "neither-copy");
@@ -708,6 +823,14 @@ mod tests {
             text.contains("DH0"),
             "the refusal must name the partition: {text}"
         );
+        // Leftover round: 1-based, matching how the card screen numbers
+        // areas (`HardDiskStudio.tsx`'s `n: index + 1`) — this is the only
+        // area on a plain HDF (no MBR), so it must read "area 1", never the
+        // internal 0-based loop index.
+        assert!(
+            text.contains("area 1"),
+            "the area number must be 1-based, matching the card screen: {text}"
+        );
     }
 
     /// The other half: a failure on one partition must not stop the search.
@@ -763,6 +886,31 @@ mod tests {
 
         let tree = dir.path().join("tree");
         std::fs::create_dir_all(tree.join("S/FirstBoot.log")).unwrap(); // a directory
+        NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        let found = read_card_report(&image).unwrap();
+        assert_eq!(found.source, ReportSource::None);
+        assert_eq!(found.report.ending, super::super::report::Ending::NotBooted);
+    }
+
+    /// **Leftover round.** `REPORT_PATH`'s own first segment (`S`) resolving
+    /// to a plain file rather than a drawer must not be walked into — the
+    /// old code checked `is_dir` only after the *last* segment, so this used
+    /// to hand `dir::find_entry` a file's own header block and ask it to
+    /// read that as a directory's hash table. A clean miss now, the same
+    /// `NotBooted` ending any other "nothing here yet" produces, never a
+    /// crash or a misread.
+    #[test]
+    fn an_intermediate_segment_that_is_a_file_is_not_walked_into() {
+        let dir = ScratchDir::new("art-firstboot-cardread", "ffs-s-is-file");
+        let image = card_with_partition(dir.path(), AmigaHardDiskFs::FfsStandard, 8);
+        NativeFormatter
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+
+        let tree = tree_with_s_as_a_file(dir.path());
         NativeFormatter
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();

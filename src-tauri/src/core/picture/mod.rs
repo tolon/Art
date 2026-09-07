@@ -233,7 +233,26 @@ fn decode_png(bytes: &[u8]) -> CoreResult<Rgb> {
     }
 
     let data = &buf[..frame.buffer_size()];
-    let pixels: Vec<[u8; 3]> = match frame.color_type {
+    let pixels = rgb_pixels_for(frame.color_type, data)?;
+
+    Ok(Rgb {
+        width: width as u16,
+        height: height as u16,
+        pixels,
+    })
+}
+
+/// Turn one decoded PNG frame's raw sample bytes into `[u8; 3]` pixels.
+///
+/// Split out of `decode_png` so the `ColorType::Indexed` arm — unreachable
+/// through `decode_png` itself, see its own doc comment — can be exercised
+/// directly rather than only argued about: [`rgb_pixels_for`] does not know
+/// or care that `Transformations::EXPAND` is what keeps a real decode from
+/// ever calling it with `Indexed`, so a test can call it with `Indexed`
+/// itself without needing the `png` crate's own documented guarantee to
+/// already be broken.
+fn rgb_pixels_for(color_type: png::ColorType, data: &[u8]) -> CoreResult<Vec<[u8; 3]>> {
+    Ok(match color_type {
         png::ColorType::Rgb => data.as_chunks::<3>().0.to_vec(),
         png::ColorType::Rgba => data
             .as_chunks::<4>()
@@ -249,24 +268,21 @@ fn decode_png(bytes: &[u8]) -> CoreResult<Rgb> {
             .map(|c| [c[0], c[0], c[0]])
             .collect(),
         png::ColorType::Indexed => {
-            // `Transformations::EXPAND` above always turns a palette image
-            // into Rgb or Rgba before `next_frame` returns (that is the
-            // documented behaviour of the flag), so this arm is not
-            // reachable from any PNG this decoder can produce. It still
-            // returns a refusal rather than `unreachable!()`: if that
-            // library guarantee is ever wrong, ART should say so rather
-            // than crash on, or silently misread, a user's file.
+            // `Transformations::EXPAND`, set by `decode_png` before it ever
+            // calls this function, always turns a palette image into Rgb or
+            // Rgba before `next_frame` returns (that is the documented
+            // behaviour of the flag), so this arm is not reachable from any
+            // PNG `decode_png` itself can produce — see
+            // `an_indexed_color_type_is_refused_by_name_rather_than_guessed_at`
+            // below for how it is exercised anyway. It still returns a
+            // refusal rather than `unreachable!()`: if that library
+            // guarantee is ever wrong, ART should say so rather than crash
+            // on, or silently misread, a user's file.
             return Err(malformed(
                 "PNG",
                 "an indexed PNG reached ART's RGB conversion step still carrying palette indices",
             ));
         }
-    };
-
-    Ok(Rgb {
-        width: width as u16,
-        height: height as u16,
-        pixels,
     })
 }
 
@@ -613,6 +629,22 @@ mod tests {
         assert!(
             text.contains(&MAX_DECODED_BYTES.to_string()),
             "the refusal must name ART's decoded-image budget, got: {text}"
+        );
+    }
+
+    /// ART-247: the `ColorType::Indexed` arm of [`rgb_pixels_for`] cannot be
+    /// reached through a real PNG decode — `Transformations::EXPAND` always
+    /// turns a palette image into `Rgb`/`Rgba` first — so this calls the
+    /// extracted helper directly rather than trying to force the `png`
+    /// crate's own documented guarantee to fail.
+    #[test]
+    fn an_indexed_color_type_is_refused_by_name_rather_than_guessed_at() {
+        let err = rgb_pixels_for(png::ColorType::Indexed, &[0u8; 4]).unwrap_err();
+        let text = format!("{err}");
+        assert!(
+            text.contains("indexed"),
+            "the refusal must name what went wrong rather than silently misreading a palette \
+             image: {text}"
         );
     }
 

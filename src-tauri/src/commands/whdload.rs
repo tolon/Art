@@ -34,105 +34,18 @@ use tauri::{AppHandle, Emitter, State};
 use super::jobs::{spawn_job, JobRegistry};
 use super::oplog::{user_operation, write_to_path};
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::jobs::{JobId, NoProgress, ProgressSink};
-use crate::core::lha::whdload::{detect_whdload, WhdloadVerdict};
-use crate::core::lha::{open_archive, OverwritePolicy};
+use crate::core::jobs::{JobId, ProgressSink};
+use crate::core::lha::OverwritePolicy;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
-use crate::core::sources::install::unpack_for_install;
-use crate::core::volume::mount::mount;
 use crate::core::volume::write::copy::{copy_into_volume, CopyReport, HostFolder};
-use crate::core::volume::write::plan::{plan_copy, CopyPlan, SourceEntry};
 use crate::core::volume::write::FileMeta;
-use crate::core::whdload::{analyse, Entry, PackLayout};
+use crate::core::whdload::install::{
+    build_plan, install_pack, VolumeSession, WhdloadOutcome, WhdloadPlan,
+};
 use crate::error::AppResult;
 
 /// The event a finished install arrives on.
 pub const WHDLOAD_EVENT: &str = "whdload-result";
-
-/// Everything the user should see before deciding.
-#[derive(Debug, Clone, Serialize)]
-pub struct WhdloadPlan {
-    /// What ART thinks this archive is, and how sure it is (§14, §34).
-    pub verdict: WhdloadVerdict,
-    /// Where the pack is inside the archive.
-    pub layout: PackLayout,
-    /// The drawer that will be created, as it will appear on the Amiga.
-    pub drawer: String,
-    /// The volume it will land on.
-    pub volume_name: String,
-    /// What it costs and what will not work.
-    pub cost: CopyPlan,
-    /// True when the destination already holds a drawer of that name.
-    pub name_taken: bool,
-    /// Why ART will not run this install, or `None` when it will.
-    ///
-    /// Never null when the install is refused, so the UI never has to invent a
-    /// message.
-    pub refusal: Option<WhdloadRefusal>,
-}
-
-/// Why ART will not run an install, and what the user can do about it.
-///
-/// The remedy travels with the reason rather than being a fixed sentence in
-/// the panel: only one of these refusals is fixed by copying the archive by
-/// hand, and telling someone whose disk is full — or whose archive needs an
-/// Amiga to install itself — to do that is advice that cannot work.
-#[derive(Debug, Clone, Serialize)]
-pub struct WhdloadRefusal {
-    /// Why not, in complete sentences. Carries no `ART-*` identifier: a
-    /// refusal is an answer, not a fault (§68).
-    pub reason: String,
-    /// What to do instead, when there is something else to do. `None` when the
-    /// reason already says it — repeating it would read as two suggestions.
-    pub suggestion: Option<String>,
-}
-
-impl WhdloadRefusal {
-    /// A reason whose own sentence already carries the remedy.
-    fn plain(reason: impl Into<String>) -> Self {
-        Self {
-            reason: reason.into(),
-            suggestion: None,
-        }
-    }
-
-    fn with(reason: impl Into<String>, suggestion: impl Into<String>) -> Self {
-        Self {
-            reason: reason.into(),
-            suggestion: Some(suggestion.into()),
-        }
-    }
-}
-
-impl WhdloadPlan {
-    fn can_install(&self) -> bool {
-        self.refusal.is_none()
-    }
-}
-
-/// What the install did.
-#[derive(Debug, Clone, Serialize)]
-pub struct WhdloadOutcome {
-    pub drawer: String,
-    pub files: usize,
-    pub directories: usize,
-    pub bytes: u64,
-    /// Files read back out of the volume and checked. Equals `files`.
-    pub verified: usize,
-    /// True when the pack's `.info` landed beside the drawer, so the game is
-    /// visible on Workbench.
-    pub icon_installed: bool,
-    /// Anything left behind, with the reason. Never silent.
-    pub skipped: Vec<String>,
-    /// What ART knew about this title but could not fit into `igame.data` —
-    /// a title too long for iGame's line, most often. Empty when nothing was
-    /// left out, and empty (not an error) when nothing was written at all
-    /// because ART had no route to write it — this is best-effort metadata,
-    /// never a reason to call an otherwise-successful install a failure.
-    pub igame_omitted: Vec<String>,
-    /// Where the previous image went, for the whole-file strategy.
-    pub backup: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -167,295 +80,73 @@ pub fn whdload_plan(
     )?)
 }
 
-fn build_plan(
-    archive: &Path,
-    image: &Path,
-    volume_index: usize,
-    dir_block: u32,
-    scratch_root: &Path,
-) -> CoreResult<WhdloadPlan> {
-    // The verdict comes from the archive's own entry list, before anything is
-    // unpacked — a package ART is not confident about should not cost the user
-    // a decompression first.
-    let info = open_archive(archive)?;
-    let verdict = detect_whdload(&info.entries);
-
-    let (scratch, unpack_skipped) = unpack_for_install(archive, scratch_root, &NoProgress)?;
-    let entries = walk(scratch.path())?;
-
-    // `analyse` failing here means the archive unpacked fine but holds no
-    // WHDLoad pack — that is an answer about the archive, not a fault in ART
-    // (§68's identifiers are for faults). There is no drawer to name and
-    // nothing to cost, so the plan reports the refusal with those fields at
-    // their honest empty/zero rather than guessing at a layout that was never
-    // found. `volume_name` is left blank too: reading it would mean mounting
-    // the disk for a refusal that has nothing to do with the disk.
-    let layout = match analyse(&entries) {
-        Ok(layout) => layout,
-        Err(CoreError::InvalidInput(reason)) => {
-            return Ok(WhdloadPlan {
-                verdict,
-                layout: PackLayout {
-                    root: String::new(),
-                    name: String::new(),
-                    slave: String::new(),
-                    icon: None,
-                    outside: Vec::new(),
-                    needs_installer: false,
-                },
-                drawer: String::new(),
-                volume_name: String::new(),
-                cost: CopyPlan {
-                    files: 0,
-                    directories: 0,
-                    total_bytes: 0,
-                    blocks_needed: 0,
-                    blocks_free: 0,
-                    block_size: 0,
-                    name_problems: Vec::new(),
-                    collisions: Vec::new(),
-                    split_icons: Vec::new(),
-                },
-                name_taken: false,
-                // The one refusal a hand copy actually answers: ART found no
-                // pack, but the archive still holds files the user may want.
-                refusal: Some(WhdloadRefusal::with(
-                    reason,
-                    "You can still copy it by hand from the Files screen.",
-                )),
-            });
-        }
-        // Any other error out of `analyse` (there is none today, but the
-        // match stays exhaustive on purpose) is a real fault, not an answer
-        // about the archive — it keeps its identifier and reaches the error
-        // banner.
-        Err(other) => return Err(other),
-    };
-
-    let pack_root = if layout.root.is_empty() {
-        scratch.path().to_path_buf()
-    } else {
-        crate::core::security::path::safe_join(scratch.path(), &layout.root).map_err(|err| {
-            CoreError::SafetyRefused(format!(
-                "the pack's folder is not inside the archive: {err}"
-            ))
-        })?
-    };
-
-    // The cost of the drawer's contents, plus the drawer itself and its icon.
-    let folder = HostFolder::new(&pack_root, true);
-    let mut sources: Vec<SourceEntry> = {
-        use crate::core::volume::write::copy::CopySource;
-        folder.entries()?
-    };
-    sources.push(SourceEntry {
-        relative: layout.name.clone(),
-        is_dir: true,
-        bytes: 0,
-    });
-    if let Some(icon) = &layout.icon {
-        sources.push(SourceEntry {
-            relative: layout.icon_name(),
-            is_dir: false,
-            bytes: std::fs::metadata(scratch.path().join(icon))
-                .map(|meta| meta.len())
-                .unwrap_or(0),
-        });
-    }
-
-    let entry = super::volume_write::pick_volume(image, volume_index)?;
-    let (device, geometry) = mount(image, &entry)?;
-    let dir = if dir_block == 0 {
-        geometry.root_block
-    } else {
-        dir_block
-    };
-
-    let set = crate::core::volume::write::layout::BlockSet::new(geometry.block_size);
-    let existing: Vec<String> =
-        crate::core::volume::write::dir::entries_in(&device, &set, &geometry, dir)?
-            .into_iter()
-            .map(|found| found.name)
-            .collect();
-
-    let name_taken = existing
-        .iter()
-        .any(|name| name.eq_ignore_ascii_case(&layout.name));
-
-    let mut cost = plan_copy(&device, &geometry, &sources, &existing)?;
-    // Anything the extractor refused belongs in the same report as everything
-    // else the user is about to decide on.
-    cost.name_problems
-        .retain(|problem| !problem.relative.is_empty());
-
-    // M2: `run_install` writes `igame.data` into the pack's own drawer
-    // alongside everything counted above, but nothing above ever measured
-    // it — the archive never carries this file, so no `SourceEntry` names
-    // it. A rendered file is a few dozen bytes, but AmigaDOS allocates whole
-    // blocks: a header block plus at least one data block (the same
-    // reasoning `igame::free_bytes_in_hardfile`'s own doc uses). Reserved
-    // here as a small, fixed margin rather than by rendering the real file
-    // early — that would mean plumbing the catalogue lookup into a planning
-    // path that has no need of it otherwise, for two blocks out of what is
-    // usually thousands. On a volume with room to spare this changes
-    // nothing; on one within two blocks of the edge, it is the difference
-    // between a preview that lied and one that did not.
-    cost.blocks_needed += 2;
-
-    let volume_name = read_volume_name(&device, &geometry).unwrap_or_else(|| entry.name.clone());
-
-    let refusal = refuse(&verdict, &layout, &cost, name_taken, &unpack_skipped);
-
-    Ok(WhdloadPlan {
-        verdict,
-        drawer: format!("{volume_name}:{}", layout.name),
-        volume_name,
-        layout,
-        cost,
-        name_taken,
-        refusal,
-    })
-}
-
-/// Why ART will not run this install, in the user's words.
-///
-/// Each of these is a case where going ahead would produce something that
-/// looks installed and does not work — which is worse than a refusal, because
-/// the user finds out later and somewhere else.
-fn refuse(
-    verdict: &WhdloadVerdict,
-    layout: &PackLayout,
-    cost: &CopyPlan,
-    name_taken: bool,
-    unpack_skipped: &[String],
-) -> Option<WhdloadRefusal> {
-    use crate::core::workflow::types::Confidence;
-
-    if matches!(verdict.confidence, Confidence::Low | Confidence::Unknown) {
-        return Some(WhdloadRefusal::plain(format!(
-            "ART is not confident this is a WHDLoad package ({}). {} \
-             Install it by hand from the Files screen if you know it is one.",
-            describe_confidence(verdict.confidence),
-            verdict.notes
-        )));
-    }
-
-    if layout.needs_installer {
-        return Some(WhdloadRefusal::plain(
-            "This archive holds an Install script, which means the game has not been \
-             installed yet. Running it needs an Amiga — install it in WinUAE first, then \
-             bring the finished drawer back here.",
-        ));
-    }
-
-    if name_taken {
-        return Some(WhdloadRefusal::plain(format!(
-            "'{}' is already on that volume. Rename or remove it first — ART will not \
-             write a game over one that is already there.",
-            layout.name
-        )));
-    }
-
-    if cost.blocks_needed > cost.blocks_free {
-        return Some(WhdloadRefusal::with(
-            format!(
-                "This needs {} blocks and {} are free.",
-                cost.blocks_needed, cost.blocks_free
-            ),
-            "Free some space on that volume, or choose another partition — copying it \
-             by hand would run out of room in the same place.",
-        ));
-    }
-
-    if !cost.name_problems.is_empty() {
-        return Some(WhdloadRefusal::plain(format!(
-            "{} name(s) in this package are ones AmigaDOS cannot store. Installing it \
-             under different names would give you a game whose files no longer match \
-             what its slave looks for.",
-            cost.name_problems.len()
-        )));
-    }
-
-    if !unpack_skipped.is_empty() {
-        return Some(WhdloadRefusal::with(
-            format!(
-                "The archive did not unpack completely ({}). Installing part of a game \
-                 produces one that does not start.",
-                unpack_skipped.first().cloned().unwrap_or_default()
-            ),
-            "Download the package again — an archive that unpacks short usually \
-             arrived damaged.",
-        ));
-    }
-
-    None
-}
-
-fn describe_confidence(confidence: crate::core::workflow::types::Confidence) -> &'static str {
-    use crate::core::workflow::types::Confidence;
-    match confidence {
-        Confidence::High => "high confidence",
-        Confidence::Medium => "medium confidence",
-        Confidence::Low => "low confidence",
-        Confidence::Unknown => "no WHDLoad markers found",
-    }
-}
-
-fn read_volume_name(
-    device: &dyn crate::core::volume::BlockDevice,
-    geometry: &crate::core::volume::VolumeGeometry,
-) -> Option<String> {
-    let block = crate::core::volume::read_block_vec(device, geometry.root_block).ok()?;
-    let root = crate::core::adf::blocks::RootBlock::parse(&block).ok()?;
-    (!root.volume_name.is_empty()).then_some(root.volume_name)
-}
-
-/// Everything under `root`, as relative paths.
-fn walk(root: &Path) -> CoreResult<Vec<Entry>> {
-    let mut out = Vec::new();
-    walk_into(root, "", 0, &mut out)?;
-    Ok(out)
-}
-
-fn walk_into(base: &Path, relative: &str, depth: usize, out: &mut Vec<Entry>) -> CoreResult<()> {
-    use crate::core::volume::write::copy::MAX_COPY_DEPTH;
-
-    if depth > MAX_COPY_DEPTH || out.len() >= crate::core::whdload::MAX_ENTRIES {
-        return Ok(());
-    }
-
-    let here = if relative.is_empty() {
-        base.to_path_buf()
-    } else {
-        crate::core::security::path::safe_join(base, relative).map_err(|err| {
-            CoreError::SafetyRefused(format!("'{relative}' escapes the unpacked archive: {err}"))
-        })?
-    };
-
-    for entry in std::fs::read_dir(&here)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        let child = if relative.is_empty() {
-            name
-        } else {
-            format!("{relative}/{name}")
-        };
-
-        let kind = entry.file_type()?;
-        if kind.is_dir() {
-            out.push(Entry::dir(&child));
-            walk_into(base, &child, depth + 1, out)?;
-        } else if kind.is_file() {
-            out.push(Entry::file(&child));
-        }
-    }
-
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Installing
 // ---------------------------------------------------------------------------
+
+/// The [`VolumeSession`] `core::whdload::install` writes through outside of
+/// tests — ART-242's live instance of the trait-in-`core`,
+/// implementation-outside-it shape (`MirrorClient`, `VolumeFormatter`,
+/// `HostRecycler` are the other three). `commands/volume_write.rs::with_volume`
+/// is the session/backup machinery: one volume opened, backed up once and
+/// committed once for the whole install, whichever write strategy the image's
+/// size calls for. It stays a command-layer helper (moving it is a round of
+/// its own), so this is the thin seam that lets `core::whdload::install` use
+/// it without depending on it directly.
+struct CommandVolumeSession;
+
+impl VolumeSession for CommandVolumeSession {
+    fn install_drawer(
+        &self,
+        image: &Path,
+        volume_index: usize,
+        parent: u32,
+        drawer_name: &str,
+        folder: &HostFolder,
+        icon: Option<(&str, &[u8])>,
+        sink: &dyn ProgressSink,
+    ) -> CoreResult<(CopyReport, bool, Option<String>)> {
+        let ((report, icon_installed), _strategy, committed) = super::volume_write::with_volume(
+            image,
+            volume_index,
+            move |writer| -> CoreResult<(CopyReport, bool)> {
+                let drawer = writer.make_dir(parent, drawer_name)?.block.ok_or_else(|| {
+                    CoreError::Malformed {
+                        format: "volume".into(),
+                        detail: "the drawer was created but ART lost track of it".into(),
+                    }
+                })?;
+
+                let report = copy_into_volume(writer, drawer, folder, OverwritePolicy::Skip, sink)?;
+                if report.cancelled {
+                    // §54/§57: a WHDLoad pack missing files it never got to
+                    // copy is not a partial success, it is a broken,
+                    // non-bootable result. Returning here — before the icon
+                    // is written and before this closure returns — is what
+                    // keeps the whole-file strategy from ever reaching
+                    // `commit_whole_file` for it, and what keeps `spawn_job`
+                    // from logging this install verified.
+                    return Err(CoreError::Cancelled);
+                }
+
+                // The icon goes **beside** the drawer, not inside it. Inside,
+                // it describes nothing and the game stays invisible on
+                // Workbench.
+                let installed = match icon {
+                    Some((name, bytes)) => {
+                        writer.add_file(parent, name, bytes, FileMeta::default())?;
+                        true
+                    }
+                    None => false,
+                };
+
+                Ok((report, installed))
+            },
+        )?;
+
+        Ok((report, icon_installed, committed.backup))
+    }
+}
 
 /// Install a WHDLoad package onto a volume. Returns a job id (§54).
 #[tauri::command]
@@ -493,13 +184,14 @@ pub fn whdload_install(
     let catalogue_dir = super::gameindex::catalogue_dir(&app);
 
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
-        let outcome = run_install(
+        let outcome = install_pack(
             &archive_path,
             &image_path,
             volume_index,
             parent,
             &scratch_root,
             &catalogue_dir,
+            &CommandVolumeSession,
             progress,
         );
 
@@ -534,231 +226,135 @@ pub fn whdload_install(
     Ok(id)
 }
 
-/// Unpack, re-plan, and write — all three in one volume session.
-///
-/// The plan is rebuilt here rather than carried from the UI. A plan the user
-/// looked at five minutes ago describes a disk that may have changed since,
-/// and installing against a stale one is how a "there is room" turns into a
-/// half-written game.
-fn run_install(
-    archive: &Path,
-    image: &Path,
-    volume_index: usize,
-    parent: u32,
-    scratch_root: &Path,
-    catalogue_dir: &Path,
-    sink: &dyn ProgressSink,
-) -> CoreResult<WhdloadOutcome> {
-    sink.report(0, None, "Checking the package");
-    let plan = build_plan(archive, image, volume_index, parent, scratch_root)?;
-    if !plan.can_install() {
-        return Err(CoreError::SafetyRefused(
-            plan.refusal
-                .map(|refusal| refusal.reason)
-                .unwrap_or_else(|| "ART will not install this".into()),
-        ));
-    }
-
-    sink.report(0, None, "Unpacking");
-    let (scratch, _) = unpack_for_install(archive, scratch_root, sink)?;
-    let layout = plan.layout;
-
-    let pack_root = if layout.root.is_empty() {
-        scratch.path().to_path_buf()
-    } else {
-        crate::core::security::path::safe_join(scratch.path(), &layout.root).map_err(|err| {
-            CoreError::SafetyRefused(format!(
-                "the pack's folder is not inside the archive: {err}"
-            ))
-        })?
-    };
-
-    // iGame's own launcher reads a small file from the same directory as the
-    // slave, and this drawer is one ART made moments ago by unpacking the
-    // archive — the "no ceremony" default path, because nothing of the
-    // user's is being touched. Written into `pack_root` *before* the folder
-    // below is walked, so it rides along with everything else `copy_into_volume`
-    // places into the drawer, the same way any other file the archive shipped
-    // would.
-    //
-    // `igame_data_for_pack` looks the pack up in the user's own catalogue by
-    // its content-derived identity and returns the fuller record when there
-    // is one — a pack ART has never catalogued yields a title-only file
-    // instead, and that is not a defect (see the function's own doc).
-    //
-    // Best-effort and disclosed rather than tested: a failure anywhere in
-    // that lookup, or in the write itself, must not turn an
-    // otherwise-successful install into a reported failure over a file
-    // WHDLoad itself never reads. `BackupPolicy::NONE` because this drawer is
-    // one ART unpacked moments ago — nothing of the user's exists yet to
-    // preserve.
-    //
-    // I2: what did not fit is carried into the outcome rather than dropped —
-    // a title too long for iGame's line used to produce an *empty*
-    // `igame.data` that this install then counted and reported as written and
-    // verified, about a file that said nothing. `write_beside` itself now
-    // refuses to write that empty file at all (`WriteOutcome::NothingFit`),
-    // so the file simply will not be among what `copy_into_volume` finds
-    // below — no separate accounting needed here for that half of the fix.
-    let igame_data = igame_data_for_pack(&pack_root, catalogue_dir, &layout.name);
-    let igame_omitted = match crate::core::gameindex::igame::write_beside(
-        &pack_root,
-        &igame_data,
-        crate::core::safety::BackupPolicy::NONE,
-    ) {
-        Ok(written) => crate::core::gameindex::igame::notable_omissions(&written.omitted),
-        // `BackupPolicy::NONE` above means `failure.backup` is always `None`
-        // on this path — nothing of the user's is being touched, so there is
-        // never anything to preserve — but the field still flows through
-        // rather than being silently dropped, the same as every other caller.
-        Err(failure) => {
-            log::debug!(
-                "whdload: could not write igame.data beside '{}': {}",
-                layout.name,
-                failure.error
-            );
-            Vec::new()
-        }
-    };
-
-    // Sidecars on: the archive may carry `.uaem` files, and a slave's bits are
-    // the difference between a game that starts and one that does not (§7.2).
-    let folder = HostFolder::new(&pack_root, true);
-    let icon_bytes = layout
-        .icon
-        .as_ref()
-        .map(|icon| std::fs::read(scratch.path().join(icon)))
-        .transpose()?;
-
-    let drawer_name = layout.name.clone();
-    let icon_name = layout.icon_name();
-
-    // One session, so the whole install is one backup rather than three
-    // generations of the same image (§1).
-    let ((report, icon_installed), _strategy, committed) = super::volume_write::with_volume(
-        image,
-        volume_index,
-        move |writer| -> CoreResult<(CopyReport, bool)> {
-            let drawer = writer
-                .make_dir(parent, &drawer_name)?
-                .block
-                .ok_or_else(|| CoreError::Malformed {
-                    format: "volume".into(),
-                    detail: "the drawer was created but ART lost track of it".into(),
-                })?;
-
-            let report = copy_into_volume(writer, drawer, &folder, OverwritePolicy::Skip, sink)?;
-            if report.cancelled {
-                // §54/§57: a WHDLoad pack missing files it never got to copy
-                // is not a partial success, it is a broken, non-bootable
-                // result. Returning here — before the icon is written and
-                // before this closure returns — is what keeps the whole-file
-                // strategy from ever reaching `commit_whole_file` for it, and
-                // what keeps `spawn_job` from logging this install verified.
-                return Err(CoreError::Cancelled);
-            }
-
-            // The icon goes **beside** the drawer, not inside it. Inside, it
-            // describes nothing and the game stays invisible on Workbench.
-            let installed = match icon_bytes {
-                Some(bytes) => {
-                    writer.add_file(parent, &icon_name, &bytes, FileMeta::default())?;
-                    true
-                }
-                None => false,
-            };
-
-            Ok((report, installed))
-        },
-    )?;
-
-    Ok(WhdloadOutcome {
-        drawer: plan.drawer,
-        files: report.files_copied,
-        directories: report.directories_created,
-        bytes: report.bytes_copied,
-        verified: report.files_verified,
-        icon_installed,
-        skipped: report.skipped,
-        igame_omitted,
-        backup: committed.backup,
-    })
-}
-
-/// The `igame.data` a freshly-unpacked pack should carry — "the catalogue
-/// record that named it," in the plan's own words.
-///
-/// **Why this is a real join and not a guess.** A `GameRecord`'s identity is
-/// content-derived (`record::derive_id(title, sha256-of-slave-bytes)`), never
-/// path-derived, so it does not matter *how* this exact pack was catalogued
-/// before today — as an unpacked drawer (`readers::drawer`) or still sitting
-/// inside an archive (`readers::lhadrawer`) — both hash the slave's own bytes
-/// (`lhadrawer` bounds its read to 2 MB; a real WHDLoad slave is kilobytes,
-/// so the bound is never the difference) and derive the same id from the same
-/// title. Calling `readers::drawer::read_drawer` on the pack this install
-/// just unpacked, rather than re-deriving that id by hand a second time,
-/// means this join breaks on the same day the identity rule does — not a day
-/// later, from a second copy of it going quietly out of step.
-///
-/// **No match is not a defect.** A pack ART has never catalogued — most
-/// WHDLoad archives on a first install — yields a title-only file, because
-/// that is exactly what ART knows about it. The same fallback covers any
-/// failure along the way (the pack cannot be read back as a drawer, the
-/// catalogue cannot be loaded): a metadata lookup must never turn an
-/// otherwise-successful install into a reported failure.
-///
-/// **`players` is always `None`.** Not a gap in the join: `GameRecord` has no
-/// player-count field anywhere in ART's catalogue today, so there is nothing
-/// for any lookup to find.
-fn igame_data_for_pack(
-    pack_root: &Path,
-    catalogue_dir: &Path,
-    fallback_title: &str,
-) -> crate::core::gameindex::igame::IGameData {
-    use crate::core::gameindex::igame::IGameData;
-    use crate::core::gameindex::readers::drawer::read_drawer;
-    use crate::core::gameindex::store;
-
-    let fallback = || IGameData {
-        title: Some(fallback_title.to_string()),
-        ..Default::default()
-    };
-
-    let Ok(Some(fresh)) = read_drawer(pack_root) else {
-        return fallback();
-    };
-    let Ok(roots) = store::load(catalogue_dir) else {
-        return fallback();
-    };
-    let Some(catalogued) = roots
-        .iter()
-        .flat_map(|root| root.entries.iter())
-        .map(|entry| &entry.record)
-        .find(|record| record.id == fresh.id)
-    else {
-        return fallback();
-    };
-
-    IGameData {
-        title: Some(catalogued.title.value.clone()),
-        chipset: catalogued
-            .chipset
-            .as_ref()
-            .map(|fact| fact.value.display_name().to_string()),
-        genre: catalogued.genre.as_ref().map(|fact| fact.value.clone()),
-        year: catalogued.year.as_ref().map(|fact| fact.value),
-        players: None,
-        exe: None,
-    }
-}
-
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::jobs::NoProgress;
     use crate::core::volume::fixture::ffs_volume;
+    use crate::core::volume::mount::mount;
     use crate::core::volume::DosType;
+    use crate::core::whdload::install::WhdloadRefusal;
+
+    /// The wire, in the exact shape `src/lib/whdload.ts` reads (ART-242).
+    ///
+    /// `run_install`'s body is about to move into `core::whdload::install`.
+    /// Nothing about what the frontend receives may change in that move: the
+    /// event's `kind`/`job_id`/`outcome` tag shape, and every field
+    /// `WhdloadOutcome` carries. Written as JSON literals rather than built
+    /// from the Rust types and read back, so a field renamed or re-typed on
+    /// either side of the move shows up here rather than only in the two
+    /// sides silently agreeing with each other.
+    #[test]
+    fn the_install_result_event_keeps_its_wire_shape() {
+        let result = WhdloadResult::Installed {
+            job_id: 7,
+            outcome: WhdloadOutcome {
+                drawer: "Games:Turrican".into(),
+                files: 3,
+                directories: 1,
+                bytes: 4321,
+                verified: 3,
+                icon_installed: true,
+                skipped: vec!["Extra.dat (name too long)".into()],
+                igame_omitted: vec!["title (too long for igame.data)".into()],
+                backup: Some("Games.hdf.bak-1".into()),
+            },
+        };
+
+        let value = serde_json::to_value(&result).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "kind": "installed",
+                "job_id": 7,
+                "outcome": {
+                    "drawer": "Games:Turrican",
+                    "files": 3,
+                    "directories": 1,
+                    "bytes": 4321,
+                    "verified": 3,
+                    "icon_installed": true,
+                    "skipped": ["Extra.dat (name too long)"],
+                    "igame_omitted": ["title (too long for igame.data)"],
+                    "backup": "Games.hdf.bak-1"
+                }
+            }),
+            "src/lib/whdload.ts::WhdloadResult/WhdloadOutcome must match this field for field"
+        );
+    }
+
+    /// The plan's wire, the other half of what the frontend reads before it
+    /// ever calls install (`whdloadPlan` in `src/lib/whdload.ts`). `refusal`
+    /// serializes to `null`, never an absent field, because `hasPack()` and
+    /// the panel both branch on it being present.
+    ///
+    /// Built from the public struct literals rather than `build_plan`'s own
+    /// `verdict()`/`layout()`/`cost()` test helpers (those moved to
+    /// `core::whdload::install`'s own test module with the rest of
+    /// `build_plan`/`refuse`) — the wire shape is what this pins, not how a
+    /// plan gets produced.
+    #[test]
+    fn the_plan_result_keeps_its_wire_shape() {
+        use crate::core::lha::whdload::WhdloadVerdict;
+        use crate::core::volume::write::plan::CopyPlan;
+        use crate::core::whdload::PackLayout;
+
+        let plan = WhdloadPlan {
+            verdict: WhdloadVerdict {
+                confidence: crate::core::workflow::types::Confidence::High,
+                slave: Some("Game/Game.slave".into()),
+                executable: Some("Game/Game".into()),
+                has_data_dir: true,
+                has_icon: true,
+                notes: "test".into(),
+            },
+            layout: PackLayout {
+                root: "Game".into(),
+                name: "Game".into(),
+                slave: "Game/Game.slave".into(),
+                icon: Some("Game.info".into()),
+                outside: Vec::new(),
+                needs_installer: false,
+            },
+            drawer: "Games:Game".into(),
+            volume_name: "Games".into(),
+            cost: CopyPlan {
+                files: 3,
+                directories: 1,
+                total_bytes: 4000,
+                blocks_needed: 10,
+                blocks_free: 1000,
+                block_size: 512,
+                name_problems: Vec::new(),
+                collisions: Vec::new(),
+                split_icons: Vec::new(),
+            },
+            name_taken: false,
+            refusal: None,
+        };
+
+        let value = serde_json::to_value(&plan).unwrap();
+        assert_eq!(value["refusal"], serde_json::Value::Null);
+        assert_eq!(value["drawer"], "Games:Game");
+        assert_eq!(value["name_taken"], false);
+        assert_eq!(value["layout"]["name"], "Game");
+        assert_eq!(value["cost"]["blocks_needed"], 10);
+
+        // `WhdloadRefusal`'s own wire shape, from its public fields — the
+        // private `plain`/`with` constructors stayed with `refuse()` in
+        // `core::whdload::install`.
+        let refused = WhdloadRefusal {
+            reason: "no room".into(),
+            suggestion: Some("free some up".into()),
+        };
+        let refused_value = serde_json::to_value(&refused).unwrap();
+        assert_eq!(
+            refused_value,
+            serde_json::json!({ "reason": "no room", "suggestion": "free some up" })
+        );
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir =
@@ -776,22 +372,6 @@ mod tests {
         std::fs::write(root.join("Turrican/data/level1.bin"), vec![7u8; 4000]).unwrap();
         std::fs::write(root.join("Turrican.info"), b"icon bytes").unwrap();
         std::fs::write(root.join("Turrican.readme"), b"about this pack").unwrap();
-    }
-
-    #[test]
-    fn walking_an_unpacked_archive_finds_the_pack() {
-        let dir = scratch("walk");
-        unpacked_pack(&dir);
-
-        let entries = walk(&dir).unwrap();
-        let layout = analyse(&entries).unwrap();
-
-        assert_eq!(layout.root, "Turrican");
-        assert_eq!(layout.name, "Turrican");
-        assert_eq!(layout.icon.as_deref(), Some("Turrican.info"));
-        assert_eq!(layout.outside, vec!["Turrican.readme"]);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The whole point of §82's arrow: the drawer, its contents and its icon
@@ -898,579 +478,34 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // ---- §82, end to end ----
+    // ---- `CommandVolumeSession`, the real one ----
+    //
+    // Fix round 1 (review of ART-242's own move): `CommandVolumeSession` was
+    // instantiated only inside `whdload_install`'s `spawn_job` closure and
+    // exercised by no test. `core::whdload::install::tests::TestVolumeSession`
+    // proves `install_pack`'s own plumbing, but it is a *different*
+    // implementation — an in-memory `VecDevice` committed with a bare
+    // `std::fs::write` — and says nothing about this one, which runs through
+    // the real `with_volume` (real write-strategy selection, real
+    // backup/atomic-write, real journal). Before ART-242's move,
+    // `a_cancelled_run_install_writes_nothing_and_does_not_report_success`
+    // drove exactly this cancellation guard through that real path; these two
+    // tests are its direct analogue, restored against the code that replaced
+    // it.
 
-    /// A real `.lha` holding a real WHDLoad pack, on disk.
-    ///
-    /// Level-0 stored entries with `/` in the names, which is how an Amiga
-    /// archive carries a folder — the same fixture shape the LHA tests use.
-    fn whdload_archive(path: &Path) {
+    /// A real `.lha` holding a real WHDLoad pack, sized so a cancellation
+    /// sink has room to fire partway through the copy rather than before it
+    /// starts. Local to this file rather than reused from
+    /// `core::whdload::install::tests` — these tests are specifically about
+    /// `CommandVolumeSession`, not the core engine's own plumbing.
+    fn cancellable_whdload_archive(path: &Path) {
         use crate::core::lha::tests::make_lha_with;
 
-        let slave = b"WHDLOADSLAVE\x00\x00\x00\x0a";
-        let executable = b"host executable bytes";
-        let level = vec![7u8; 4000];
-        let icon = b"\xe3\x10\x00\x01icon";
-
-        let bytes = make_lha_with(&[
-            ("Turrican/Turrican.slave", slave),
-            ("Turrican/Turrican", executable),
-            ("Turrican/data/level1.bin", &level),
-            ("Turrican.info", icon),
-            ("Turrican.readme", b"about this pack"),
-        ]);
-        std::fs::write(path, bytes).unwrap();
-    }
-
-    /// The whole of §82 in one test:
-    ///
-    /// ```text
-    /// Game.lha → WHDLoad detected → Install to HDF → Backup → Apply → Verify
-    /// ```
-    ///
-    /// Nothing here reaches inside the install. It hands over an archive and a
-    /// disk, and then reads the disk back to see what actually landed.
-    #[test]
-    fn a_whdload_archive_installs_onto_a_disk_and_reads_back() {
-        let dir = scratch("e2e");
-        let archive = dir.join("Turrican.lha");
-        whdload_archive(&archive);
-
-        let image = dir.join("Games.hdf");
-        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
-        std::fs::write(&image, &bytes).unwrap();
-        let before = std::fs::read(&image).unwrap();
-
-        // ---- the plan, which must write nothing ----
-        let plan = build_plan(&archive, &image, 0, 0, &std::env::temp_dir()).unwrap();
-        assert_eq!(
-            std::fs::read(&image).unwrap(),
-            before,
-            "planning must not touch the image"
-        );
-        assert!(
-            plan.refusal.is_none(),
-            "a well-formed pack that fits should be installable: {:?}",
-            plan.refusal
-        );
-        assert_eq!(plan.layout.name, "Turrican");
-        assert_eq!(plan.layout.icon.as_deref(), Some("Turrican.info"));
-        assert_eq!(
-            plan.layout.outside,
-            vec!["Turrican.readme"],
-            "the readme is not part of the game"
-        );
-        assert!(plan.drawer.ends_with(":Turrican"), "{}", plan.drawer);
-
-        // ---- the install ----
-        let outcome = run_install(
-            &archive,
-            &image,
-            0,
-            0,
-            &std::env::temp_dir(),
-            &std::env::temp_dir(),
-            &NoProgress,
-        )
-        .unwrap();
-
-        assert_eq!(
-            outcome.files, 4,
-            "slave, executable, one data file, and igame.data"
-        );
-        assert_eq!(
-            outcome.verified, outcome.files,
-            "every file is read back out of the disk"
-        );
-        assert!(outcome.icon_installed);
-        assert!(outcome.skipped.is_empty(), "{:?}", outcome.skipped);
-        assert!(
-            outcome.backup.is_some(),
-            "a floppy-sized image is backed up before it is replaced"
-        );
-
-        // ---- what is actually on the disk ----
-        let entry = super::super::volume_write::pick_volume(&image, 0).unwrap();
-        let (device, geometry) = mount(&image, &entry).unwrap();
-        let set = crate::core::volume::write::layout::BlockSet::new(geometry.block_size);
-
-        let root = crate::core::volume::write::dir::entries_in(
-            &device,
-            &set,
-            &geometry,
-            geometry.root_block,
-        )
-        .unwrap();
-
-        let drawer = root
-            .iter()
-            .find(|found| found.name == "Turrican")
-            .expect("the drawer must be on the disk");
-        assert!(drawer.is_dir);
-
-        // The icon beside the drawer, not inside it. Inside, it describes
-        // nothing and the game stays invisible on Workbench.
-        assert!(
-            root.iter()
-                .any(|found| found.name == "Turrican.info" && !found.is_dir),
-            "the icon must sit beside the drawer: {:?}",
-            root.iter().map(|f| &f.name).collect::<Vec<_>>()
-        );
-
-        // The readme must NOT be there: it is not part of the game.
-        assert!(
-            !root.iter().any(|found| found.name == "Turrican.readme"),
-            "the readme is not part of the game and must not be installed"
-        );
-
-        let inside =
-            crate::core::volume::write::dir::entries_in(&device, &set, &geometry, drawer.block)
-                .unwrap();
-
-        let slave = inside
-            .iter()
-            .find(|found| found.name == "Turrican.slave")
-            .expect("the slave must be in the drawer");
-        assert_eq!(
-            crate::core::volume::write::file::read_file(&device, &set, &geometry, slave.block)
-                .unwrap(),
-            b"WHDLOADSLAVE\x00\x00\x00\x0a",
-            "the slave's bytes must survive the whole trip"
-        );
-
-        let data = inside
-            .iter()
-            .find(|found| found.name == "data" && found.is_dir)
-            .expect("the data drawer must be in the pack");
-        let level =
-            crate::core::volume::write::dir::entries_in(&device, &set, &geometry, data.block)
-                .unwrap();
-        assert_eq!(level.len(), 1);
-        assert_eq!(
-            crate::core::volume::write::file::read_file(&device, &set, &geometry, level[0].block)
-                .unwrap()
-                .len(),
-            4000,
-            "a nested data file must arrive whole"
-        );
-
-        // The no-ceremony default path: iGame's own file, beside the slave in
-        // the drawer that landed on the disk — not a copy left behind in the
-        // scratch unpack. This archive was never catalogued (no catalogue_dir
-        // seeded for this test), so this doubles as half of the "no match"
-        // case: `igame_data_for_pack`'s fallback, exercised end to end.
-        let igame = inside
-            .iter()
-            .find(|found| found.name == crate::core::gameindex::igame::FILE_NAME)
-            .expect("igame.data must be beside the slave in the installed drawer");
-        assert_eq!(
-            crate::core::volume::write::file::read_file(&device, &set, &geometry, igame.block)
-                .unwrap(),
-            b"title=Turrican\n",
-            "ART's own drawer name, for iGame's own launcher to read"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// The other half of the "no match" case, standing on its own: a pack ART
-    /// has never catalogued still installs cleanly and still gets an
-    /// `igame.data`, carrying only what ART actually knows about it. Not a
-    /// defect — `igame_data_for_pack`'s own doc says so.
-    #[test]
-    fn an_uncatalogued_pack_still_gets_a_title_only_igame_data() {
-        let dir = scratch("igame-no-catalogue");
-        let archive = dir.join("Tag.lha");
-        let slave = crate::core::gameindex::readers::slave::tests_support::build_slave(
-            "Tag",
-            "1993 Someone",
-            16,
-        );
-        std::fs::write(
-            &archive,
-            crate::core::lha::tests::make_lha_with(&[("Tag/Tag.slave", &slave)]),
-        )
-        .unwrap();
-
-        let image = dir.join("Games.hdf");
-        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
-        std::fs::write(&image, &bytes).unwrap();
-
-        // A catalogue directory that has never seen this pack — the ordinary
-        // first-install case.
-        let catalogue_dir = dir.join("catalogue");
-
-        let outcome = run_install(
-            &archive,
-            &image,
-            0,
-            0,
-            &std::env::temp_dir(),
-            &catalogue_dir,
-            &NoProgress,
-        )
-        .unwrap();
-        assert_eq!(outcome.files, 2, "slave and igame.data");
-
-        let entry = super::super::volume_write::pick_volume(&image, 0).unwrap();
-        let (device, geometry) = mount(&image, &entry).unwrap();
-        let set = crate::core::volume::write::layout::BlockSet::new(geometry.block_size);
-        let drawer = crate::core::volume::write::dir::entries_in(
-            &device,
-            &set,
-            &geometry,
-            geometry.root_block,
-        )
-        .unwrap()
-        .into_iter()
-        .find(|found| found.name == "Tag")
-        .expect("the drawer must be on the disk");
-        let igame =
-            crate::core::volume::write::dir::entries_in(&device, &set, &geometry, drawer.block)
-                .unwrap()
-                .into_iter()
-                .find(|found| found.name == crate::core::gameindex::igame::FILE_NAME)
-                .expect("igame.data must still be written when nothing catalogued this pack");
-        assert_eq!(
-            crate::core::volume::write::file::read_file(&device, &set, &geometry, igame.block)
-                .unwrap(),
-            b"title=Tag\n",
-            "ART wrote exactly what it had — the drawer's own name — and nothing more"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// The catalogue-hit half: a pack whose slave bytes and title already
-    /// match a record in the user's own catalogue gets that record's fuller
-    /// facts, not just the drawer's own name.
-    ///
-    /// `read_drawer` is called on a stand-in directory carrying the exact
-    /// same slave bytes to get the exact content-derived id production code
-    /// will compute — the same function, not a hand-rederived hash, so the
-    /// test cannot drift from what `igame_data_for_pack` actually does. The
-    /// catalogue is then seeded with a record sharing that id but carrying a
-    /// genre, a year and a chipset no WHDLoad slave header ever states, plus
-    /// a title a user typed by hand — proving the join is what supplied
-    /// them, not a second read of the slave.
-    #[test]
-    fn a_catalogued_pack_gets_its_igame_data_from_the_catalogue_record() {
-        use crate::core::gameindex::readers::drawer::read_drawer;
-        use crate::core::gameindex::record::{ChipsetRequirement, Fact, Provenance};
-        use crate::core::gameindex::store::{CachedEntry, CatalogueRoot, CATALOGUE_SCHEMA};
-
-        let dir = scratch("igame-catalogue-hit");
-        let slave = crate::core::gameindex::readers::slave::tests_support::build_slave(
-            "Turrican",
-            "1992 Someone",
-            16,
-        );
-
-        let archive = dir.join("Turrican.lha");
-        std::fs::write(
-            &archive,
-            crate::core::lha::tests::make_lha_with(&[("Turrican/Turrican.slave", &slave)]),
-        )
-        .unwrap();
-
-        // The same content, read the same way production code will read it,
-        // to get the real id — never hand-derived.
-        let probe_dir = dir.join("probe").join("Turrican");
-        std::fs::create_dir_all(&probe_dir).unwrap();
-        std::fs::write(probe_dir.join("Turrican.slave"), &slave).unwrap();
-        let fresh = read_drawer(&probe_dir).unwrap().expect("this is a title");
-
-        let catalogue_dir = dir.join("catalogue");
-        let collection_root = dir.join("collection");
-        std::fs::create_dir_all(&collection_root).unwrap();
-        let root_key = collection_root.to_string_lossy().into_owned();
-        crate::core::gameindex::store::add_root(&catalogue_dir, Path::new(&root_key)).unwrap();
-        let mut record = fresh.clone();
-        record.title = Fact::new(
-            "Turrican II: Definitive Edition".into(),
-            Provenance::UserEdit,
-        );
-        record.genre = Some(Fact::new("Shoot'em up".into(), Provenance::UserEdit));
-        record.year = Some(Fact::new(1991, Provenance::UserEdit));
-        record.chipset = Some(Fact::new(ChipsetRequirement::Aga, Provenance::UserEdit));
-        crate::core::gameindex::store::write_root(
-            &catalogue_dir,
-            &CatalogueRoot {
-                schema: CATALOGUE_SCHEMA,
-                root: root_key,
-                scanned_at: None,
-                index_schema: crate::core::gameindex::record::GAMEINDEX_SCHEMA,
-                entries: vec![CachedEntry {
-                    path: probe_dir
-                        .join("Turrican.slave")
-                        .to_string_lossy()
-                        .into_owned(),
-                    size: 0,
-                    mtime_ms: 0,
-                    record,
-                }],
-            },
-        )
-        .unwrap();
-
-        let image = dir.join("Games.hdf");
-        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
-        std::fs::write(&image, &bytes).unwrap();
-
-        run_install(
-            &archive,
-            &image,
-            0,
-            0,
-            &std::env::temp_dir(),
-            &catalogue_dir,
-            &NoProgress,
-        )
-        .unwrap();
-
-        let entry = super::super::volume_write::pick_volume(&image, 0).unwrap();
-        let (device, geometry) = mount(&image, &entry).unwrap();
-        let set = crate::core::volume::write::layout::BlockSet::new(geometry.block_size);
-        let drawer = crate::core::volume::write::dir::entries_in(
-            &device,
-            &set,
-            &geometry,
-            geometry.root_block,
-        )
-        .unwrap()
-        .into_iter()
-        .find(|found| found.name == "Turrican")
-        .expect("the drawer must be on the disk");
-        let igame =
-            crate::core::volume::write::dir::entries_in(&device, &set, &geometry, drawer.block)
-                .unwrap()
-                .into_iter()
-                .find(|found| found.name == crate::core::gameindex::igame::FILE_NAME)
-                .expect("igame.data must be beside the slave");
-        let text = String::from_utf8(
-            crate::core::volume::write::file::read_file(&device, &set, &geometry, igame.block)
-                .unwrap(),
-        )
-        .unwrap();
-
-        assert!(
-            text.contains("title=Turrican II: Definitive Edition"),
-            "the catalogue's own title, not the slave's or the drawer's: {text}"
-        );
-        assert!(text.contains("genre=Shoot'em up"), "{text}");
-        assert!(text.contains("year=1991"), "{text}");
-        assert!(text.contains("chipset=AGA"), "{text}");
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// **I2, from the install path.** A catalogued title over iGame's line
-    /// length, with nothing else known about it, must not produce an empty
-    /// `igame.data` counted as a written, verified file. Uses the same
-    /// catalogue-hit machinery as the test above, but with a title long
-    /// enough that nothing survives `render` at all — genre/year/chipset are
-    /// left `None` deliberately, so the file would be completely empty
-    /// without this fix rather than merely missing one field.
-    #[test]
-    fn a_catalogued_title_too_long_for_igame_writes_no_empty_file() {
-        use crate::core::gameindex::readers::drawer::read_drawer;
-        use crate::core::gameindex::record::{Fact, Provenance};
-        use crate::core::gameindex::store::{CachedEntry, CatalogueRoot, CATALOGUE_SCHEMA};
-
-        let dir = scratch("igame-nothing-fits");
-        let slave = crate::core::gameindex::readers::slave::tests_support::build_slave(
-            "Turrican",
-            "1992 Someone",
-            16,
-        );
-
-        let archive = dir.join("Turrican.lha");
-        std::fs::write(
-            &archive,
-            crate::core::lha::tests::make_lha_with(&[("Turrican/Turrican.slave", &slave)]),
-        )
-        .unwrap();
-
-        let probe_dir = dir.join("probe").join("Turrican");
-        std::fs::create_dir_all(&probe_dir).unwrap();
-        std::fs::write(probe_dir.join("Turrican.slave"), &slave).unwrap();
-        let fresh = read_drawer(&probe_dir).unwrap().expect("this is a title");
-
-        let catalogue_dir = dir.join("catalogue");
-        let collection_root = dir.join("collection");
-        std::fs::create_dir_all(&collection_root).unwrap();
-        let root_key = collection_root.to_string_lossy().into_owned();
-        crate::core::gameindex::store::add_root(&catalogue_dir, Path::new(&root_key)).unwrap();
-        let mut record = fresh.clone();
-        // The AmigaDOS drawer name ("Turrican") stays short — a user override
-        // has no such limit, and this is exactly how one could get this long.
-        record.title = Fact::new("T".repeat(80), Provenance::UserEdit);
-        // The fixture slave states a copyright ("1992 Someone"), which
-        // `read_drawer` turns into a year fact; left in place, `year=1992`
-        // would still fit and igame.data would still be written (just
-        // missing its title). Nulled so nothing at all survives, which is
-        // what this test is actually about.
-        record.year = None;
-        crate::core::gameindex::store::write_root(
-            &catalogue_dir,
-            &CatalogueRoot {
-                schema: CATALOGUE_SCHEMA,
-                root: root_key,
-                scanned_at: None,
-                index_schema: crate::core::gameindex::record::GAMEINDEX_SCHEMA,
-                entries: vec![CachedEntry {
-                    path: probe_dir
-                        .join("Turrican.slave")
-                        .to_string_lossy()
-                        .into_owned(),
-                    size: 0,
-                    mtime_ms: 0,
-                    record,
-                }],
-            },
-        )
-        .unwrap();
-
-        let image = dir.join("Games.hdf");
-        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
-        std::fs::write(&image, &bytes).unwrap();
-
-        let outcome = run_install(
-            &archive,
-            &image,
-            0,
-            0,
-            &std::env::temp_dir(),
-            &catalogue_dir,
-            &NoProgress,
-        )
-        .unwrap();
-
-        assert_eq!(
-            outcome.files, 1,
-            "the slave only — no igame.data with nothing in it counted as a file"
-        );
-        assert!(
-            outcome.igame_omitted.iter().any(|o| o.contains("title")),
-            "what did not fit must be named: {:?}",
-            outcome.igame_omitted
-        );
-
-        let entry = super::super::volume_write::pick_volume(&image, 0).unwrap();
-        let (device, geometry) = mount(&image, &entry).unwrap();
-        let set = crate::core::volume::write::layout::BlockSet::new(geometry.block_size);
-        let drawer = crate::core::volume::write::dir::entries_in(
-            &device,
-            &set,
-            &geometry,
-            geometry.root_block,
-        )
-        .unwrap()
-        .into_iter()
-        .find(|found| found.name == "Turrican")
-        .expect("the drawer must be on the disk");
-        let inside =
-            crate::core::volume::write::dir::entries_in(&device, &set, &geometry, drawer.block)
-                .unwrap();
-        assert!(
-            !inside
-                .iter()
-                .any(|found| found.name == crate::core::gameindex::igame::FILE_NAME),
-            "no igame.data at all — not an empty one — when nothing fit: {:?}",
-            inside.iter().map(|f| &f.name).collect::<Vec<_>>()
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Installing the same game twice must not silently write over the first
-    /// one — and the refusal has to arrive before anything is touched.
-    #[test]
-    fn installing_the_same_pack_twice_is_refused_and_changes_nothing() {
-        let dir = scratch("e2e-twice");
-        let archive = dir.join("Turrican.lha");
-        whdload_archive(&archive);
-
-        let image = dir.join("Games.hdf");
-        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
-        std::fs::write(&image, &bytes).unwrap();
-
-        run_install(
-            &archive,
-            &image,
-            0,
-            0,
-            &std::env::temp_dir(),
-            &std::env::temp_dir(),
-            &NoProgress,
-        )
-        .unwrap();
-        let after_first = std::fs::read(&image).unwrap();
-
-        let err = run_install(
-            &archive,
-            &image,
-            0,
-            0,
-            &std::env::temp_dir(),
-            &std::env::temp_dir(),
-            &NoProgress,
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("already on that volume"), "{err}");
-        assert_eq!(
-            std::fs::read(&image).unwrap(),
-            after_first,
-            "a refused install must leave the image byte-for-byte unchanged"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// §54/§57, for the flagship §82 installer this time, not its Aminet
-    /// siblings: cancelling one-click WHDLoad install must install *nothing*.
-    ///
-    /// `copy_into_volume` stops between files and reports how many landed,
-    /// which is right for a general-purpose copy — an install is not that.
-    /// Half a WHDLoad pack is a game that will not start, and reporting it as
-    /// a finished install would be worse than any error. The image's bytes
-    /// are captured before and compared after, because an `Err` on its own
-    /// would not prove the half-written package never reached the file — and
-    /// this drives `run_install` itself, not `copy_into_volume`, so deleting
-    /// the guard inside its `with_volume` closure makes this test fail rather
-    /// than leaving it trivially green.
-    #[test]
-    fn a_cancelled_run_install_writes_nothing_and_does_not_report_success() {
-        use crate::core::lha::tests::make_lha_with;
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        /// Cancels once the copy into the volume is a couple of files in —
-        /// the user hitting Stop halfway through, not before it started.
-        ///
-        /// The two stages are told apart by their `total`: unpacking reports
-        /// a running count with no total, while `copy_into_volume` reports
-        /// "index of total". Keying on that rather than on a call count keeps
-        /// the test aimed at the stage it is about.
-        struct StopDuringCopy(AtomicBool);
-        impl ProgressSink for StopDuringCopy {
-            fn report(&self, done: u64, total: Option<u64>, _message: &str) {
-                if total.is_some() && done >= 2 {
-                    self.0.store(true, Ordering::SeqCst);
-                }
-            }
-            fn is_cancelled(&self) -> bool {
-                self.0.load(Ordering::SeqCst)
-            }
-        }
-
-        let dir = scratch("e2e-cancel");
-        let archive = dir.join("Turrican.lha");
-        // More filler than the plain fixture so the copy has room to be
-        // stopped partway through rather than finishing before the sink
-        // ever sees a second file.
-        let slave = b"WHDLOADSLAVE\x00\x00\x00\x0a";
         let mut entries: Vec<(String, Vec<u8>)> = vec![
-            ("Turrican/Turrican.slave".into(), slave.to_vec()),
+            (
+                "Turrican/Turrican.slave".into(),
+                b"WHDLOADSLAVE\x00\x00\x00\x0a".to_vec(),
+            ),
             (
                 "Turrican/Turrican".into(),
                 b"host executable bytes".to_vec(),
@@ -1488,152 +523,108 @@ mod tests {
             .iter()
             .map(|(name, data)| (name.as_str(), data.as_slice()))
             .collect();
-        std::fs::write(&archive, make_lha_with(&borrowed)).unwrap();
+        std::fs::write(path, make_lha_with(&borrowed)).unwrap();
+    }
+
+    /// §54/§57 and the data-safety rule, through the **real** session this
+    /// time. Cancelling partway through the copy must leave the image
+    /// byte-for-byte unchanged (hashed — compared byte for byte — before and
+    /// after) and must not report success. Deleting the
+    /// `if report.cancelled { return Err(CoreError::Cancelled) }` guard in
+    /// `CommandVolumeSession::install_drawer` makes this fall.
+    ///
+    /// **`StopDuringCopy` is phase-aware, and has to be.** `install_pack` runs
+    /// two per-entry loops that report `Some(total)`: unpacking the archive
+    /// (`extract_with_backend`, `core/archive/extract.rs`) *and* copying into
+    /// the volume (`copy_into_volume`) — both report `done == 0` at their
+    /// first entry and both check `is_cancelled()` between entries. A sink
+    /// armed on a bare `done >= N` fires during the **first** such phase every
+    /// time, because unpacking always runs first — which is a real survivor
+    /// found while building this very test: the original threshold cancelled
+    /// during unpacking, before `CommandVolumeSession` was ever reached, so
+    /// removing its guard changed nothing. Counting phase boundaries (a
+    /// `done == 0` report marks a new one) and arming only once the **second**
+    /// phase is under way is what actually reaches the copy.
+    #[test]
+    fn a_cancelled_install_through_the_real_session_writes_nothing() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        struct StopDuringCopy {
+            phase: AtomicUsize,
+            cancel: AtomicBool,
+        }
+        impl ProgressSink for StopDuringCopy {
+            fn report(&self, done: u64, total: Option<u64>, _message: &str) {
+                if total.is_none() {
+                    return;
+                }
+                if done == 0 {
+                    self.phase.fetch_add(1, Ordering::SeqCst);
+                }
+                if self.phase.load(Ordering::SeqCst) >= 2 && done >= 2 {
+                    self.cancel.store(true, Ordering::SeqCst);
+                }
+            }
+            fn is_cancelled(&self) -> bool {
+                self.cancel.load(Ordering::SeqCst)
+            }
+        }
+
+        let dir = crate::core::ScratchDir::new("art-whd-cmd", "cancel");
+        let archive = dir.join("Turrican.lha");
+        cancellable_whdload_archive(&archive);
 
         let image = dir.join("Games.hdf");
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         std::fs::write(&image, &bytes).unwrap();
         let before = std::fs::read(&image).unwrap();
 
-        let sink = StopDuringCopy(AtomicBool::new(false));
-        let err = run_install(
+        let sink = StopDuringCopy {
+            phase: AtomicUsize::new(0),
+            cancel: AtomicBool::new(false),
+        };
+        let err = install_pack(
             &archive,
             &image,
             0,
             0,
-            &std::env::temp_dir(),
-            &std::env::temp_dir(),
+            dir.path(),
+            dir.path(),
+            &CommandVolumeSession,
             &sink,
         )
-        .expect_err("a cancelled install must not come back as a successful one");
+        .expect_err("a cancelled install through the real session must not report success");
 
         assert_eq!(
             err.code(),
             "ART-CANCELLED",
-            "the job must end Cancelled, not Completed, so spawn_job reports it \
-             that way instead of logging a verified install: {err}"
+            "the job must end Cancelled, not Completed: {err}"
         );
         assert_eq!(
             std::fs::read(&image).unwrap(),
             before,
-            "a cancelled install must leave the image byte-for-byte unchanged"
+            "a cancelled install through the real with_volume session must leave the \
+             image byte-for-byte unchanged"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// An archive with no slave in it is not a WHDLoad package, and copying an
-    /// arbitrary folder onto someone's hard disk is not what they clicked.
+    /// The happy path through the same real session, once — so `with_volume`
+    /// itself (write-strategy selection, backup, atomic commit) is exercised
+    /// end to end by this file, not only by the core engine's own
+    /// `TestVolumeSession` double.
     #[test]
-    fn an_ordinary_archive_is_refused_before_anything_is_written() {
+    fn install_pack_through_the_real_session_installs_and_reads_back() {
         use crate::core::lha::tests::make_lha_with;
 
-        let dir = scratch("e2e-not-whd");
-        let archive = dir.join("Docs.lha");
-        std::fs::write(
-            &archive,
-            make_lha_with(&[("Docs/readme.txt", b"just some documents")]),
-        )
-        .unwrap();
-
-        let image = dir.join("Games.hdf");
-        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
-        std::fs::write(&image, &bytes).unwrap();
-        let before = std::fs::read(&image).unwrap();
-
-        // Not a fault: the plan builds fine and reports why ART will not
-        // install it — a genuinely broken archive is the one that still
-        // throws, see `a_missing_pack_is_a_refusal_and_a_broken_archive_is_still_an_error`.
-        let plan = build_plan(&archive, &image, 0, 0, &std::env::temp_dir()).unwrap();
-        assert!(
-            plan.refusal.is_some(),
-            "an archive with no slave must be refused, not errored"
-        );
-        assert!(run_install(
-            &archive,
-            &image,
-            0,
-            0,
-            &std::env::temp_dir(),
-            &std::env::temp_dir(),
-            &NoProgress
-        )
-        .is_err());
-        assert_eq!(std::fs::read(&image).unwrap(), before);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// The split this task exists for: a plan that cannot find a pack is a
-    /// refusal (data, `Ok` with `refusal` set, no `ART-*` identifier), while an
-    /// archive ART genuinely cannot read is a fault (`Err`, with one). Both
-    /// reach `build_plan` the same way — as a `.lha` path — so this is the
-    /// contract that must hold for every future caller, not just the UI.
-    #[test]
-    fn a_missing_pack_is_a_refusal_and_a_broken_archive_is_still_an_error() {
-        let dir = scratch("split");
-
-        // No `.slave` anywhere: a real archive, nothing wrong with it, it is
-        // simply not a WHDLoad package. `build_plan` must succeed and say so.
-        let ordinary = dir.join("Docs.lha");
-        std::fs::write(
-            &ordinary,
-            crate::core::lha::tests::make_lha_with(&[("Docs/readme.txt", b"just documents")]),
-        )
-        .unwrap();
-
-        let image = dir.join("Games.hdf");
-        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
-        std::fs::write(&image, &bytes).unwrap();
-
-        let plan = build_plan(&ordinary, &image, 0, 0, &std::env::temp_dir())
-            .expect("a plan without a pack is still a plan, not an error");
-        let refusal = plan
-            .refusal
-            .expect("no .slave in the archive must be reported as a refusal");
-        assert!(refusal.reason.contains("not a WHDLoad pack"), "{refusal:?}");
-        assert!(
-            !refusal.reason.contains("ART-"),
-            "a refusal carries no error identifier: {refusal:?}"
-        );
-        // This is the one refusal a hand copy answers, so it is the one that
-        // carries that suggestion — the panel no longer says it unconditionally.
-        assert_eq!(
-            refusal.suggestion.as_deref(),
-            Some("You can still copy it by hand from the Files screen.")
-        );
-
-        // A corrupt archive is a different question entirely: ART could not
-        // even read it, which is a fault and must keep throwing with its
-        // identifier so it reaches the red banner, not the amber one.
-        let broken = dir.join("Broken.lha");
-        std::fs::write(&broken, b"not an lha file at all").unwrap();
-
-        let err = build_plan(&broken, &image, 0, 0, &std::env::temp_dir())
-            .expect_err("an unreadable archive must still be a real error");
-        assert!(
-            matches!(err, CoreError::Malformed { .. }),
-            "expected a malformed-archive error, got {err:?}"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A pack that will not fit is refused with the numbers, before the disk is
-    /// touched — not discovered half way through.
-    #[test]
-    fn a_pack_too_big_for_the_disk_is_refused_with_the_numbers() {
-        use crate::core::lha::tests::make_lha_with;
-
-        let dir = scratch("e2e-toobig");
-        let archive = dir.join("Huge.lha");
+        let dir = crate::core::ScratchDir::new("art-whd-cmd", "happy");
+        let archive = dir.join("Turrican.lha");
         std::fs::write(
             &archive,
             make_lha_with(&[
-                ("Huge/Huge.slave", b"WHDLOADSLAVE"),
-                ("Huge/Huge", b"host"),
-                ("Huge/data/blob.bin", &vec![3u8; 1_400_000]),
-                ("Huge.info", b"icon"),
+                ("Turrican/Turrican.slave", b"WHDLOADSLAVE\x00\x00\x00\x0a"),
+                ("Turrican/Turrican", b"host executable bytes"),
+                ("Turrican/data/level1.bin", &vec![7u8; 4000]),
+                ("Turrican.info", b"\xe3\x10\x00\x01icon"),
             ]),
         )
         .unwrap();
@@ -1641,326 +632,52 @@ mod tests {
         let image = dir.join("Games.hdf");
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         std::fs::write(&image, &bytes).unwrap();
-        let before = std::fs::read(&image).unwrap();
 
-        let plan = build_plan(&archive, &image, 0, 0, &std::env::temp_dir()).unwrap();
-        let refusal = plan
-            .refusal
-            .expect("a pack that does not fit must be refused");
-        assert!(refusal.reason.contains("blocks"), "{refusal:?}");
-        assert!(refusal.reason.contains("are free"), "{refusal:?}");
-
-        assert!(run_install(
+        let outcome = install_pack(
             &archive,
             &image,
             0,
             0,
-            &std::env::temp_dir(),
-            &std::env::temp_dir(),
-            &NoProgress
-        )
-        .is_err());
-        assert_eq!(std::fs::read(&image).unwrap(), before);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// The pack's own block cost, **without** the fix's +2 reservation —
-    /// mirrors `build_plan` up to (not including) the line under test, so it
-    /// gives an answer that does not move when that line is mutated away.
-    /// Used only by the test below; production code has exactly one copy of
-    /// this computation, in `build_plan` itself.
-    fn raw_pack_cost(archive: &Path, image: &Path) -> CopyPlan {
-        let info = open_archive(archive).unwrap();
-        let _ = detect_whdload(&info.entries);
-        let (scratch, _) = unpack_for_install(archive, &std::env::temp_dir(), &NoProgress).unwrap();
-        let entries = walk(scratch.path()).unwrap();
-        let layout = analyse(&entries).unwrap();
-        let pack_root = if layout.root.is_empty() {
-            scratch.path().to_path_buf()
-        } else {
-            crate::core::security::path::safe_join(scratch.path(), &layout.root).unwrap()
-        };
-        let folder = HostFolder::new(&pack_root, true);
-        let mut sources: Vec<SourceEntry> = {
-            use crate::core::volume::write::copy::CopySource;
-            folder.entries().unwrap()
-        };
-        sources.push(SourceEntry {
-            relative: layout.name.clone(),
-            is_dir: true,
-            bytes: 0,
-        });
-        if let Some(icon) = &layout.icon {
-            sources.push(SourceEntry {
-                relative: layout.icon_name(),
-                is_dir: false,
-                bytes: std::fs::metadata(scratch.path().join(icon))
-                    .map(|meta| meta.len())
-                    .unwrap_or(0),
-            });
-        }
-        let entry = super::super::volume_write::pick_volume(image, 0).unwrap();
-        let (device, geometry) = mount(image, &entry).unwrap();
-        plan_copy(&device, &geometry, &sources, &[]).unwrap()
-    }
-
-    /// **M2.** `igame.data` is written into the pack's own drawer, but
-    /// `build_plan`'s cost never measured it — nothing in the archive names
-    /// it, so no `SourceEntry` ever carried its size. Finds the exact volume
-    /// size whose free space matches the pack's own **raw** cost — enough for
-    /// the archive's own files, and not one block more — and asserts
-    /// `build_plan` still refuses it. `raw_pack_cost` gives the boundary
-    /// independently of the fix, so this fails if the reservation is ever
-    /// removed rather than merely proving an arbitrarily-small disk is
-    /// refused (that is `a_pack_too_big_for_the_disk_is_refused_with_the_numbers`'s
-    /// own test).
-    #[test]
-    fn the_free_space_check_reserves_room_for_igame_data_too() {
-        let dir = scratch("m2-margin");
-        let archive = dir.join("Turrican.lha");
-        whdload_archive(&archive);
-        let image = dir.join("Games.hdf");
-
-        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
-        std::fs::write(&image, &bytes).unwrap();
-        let raw_needed = raw_pack_cost(&archive, &image).blocks_needed;
-
-        let plan_at = |total_blocks: u32| -> WhdloadPlan {
-            let (bytes, _) = ffs_volume(total_blocks, DosType::new(*b"DOS\x01"));
-            std::fs::write(&image, &bytes).unwrap();
-            build_plan(&archive, &image, 0, 0, &std::env::temp_dir()).unwrap()
-        };
-
-        // Binary search for the smallest volume whose free space reaches the
-        // pack's raw need. `lo` is known too small; `hi` is comfortably big.
-        let (mut lo, mut hi) = (8u32, 1760u32);
-        while lo + 1 < hi {
-            let mid = lo + (hi - lo) / 2;
-            if plan_at(mid).cost.blocks_free >= raw_needed {
-                hi = mid;
-            } else {
-                lo = mid;
-            }
-        }
-        let exact = plan_at(hi);
-        assert_eq!(
-            exact.cost.blocks_free, raw_needed,
-            "expected the search to land exactly on the raw need (free space moves by one \
-             block per total_blocks near this size)"
-        );
-        assert!(
-            exact.refusal.is_some(),
-            "there is room for the pack's own files and nothing else — the two-block \
-             igame.data reservation is the only thing that should refuse this: {exact:?}"
-        );
-        assert!(exact.refusal.as_ref().unwrap().reason.contains("blocks"));
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// Install a pack and leave the disk for `scripts/oracle-check.py`.
-    ///
-    /// The claim §82 makes is that the game is *installed* — not that ART can
-    /// read back what ART wrote. Only an outside implementation can say
-    /// whether the drawer, its contents and its icon are where AmigaOS looks
-    /// for them, which is the difference between a game that appears on
-    /// Workbench and one that does not.
-    #[test]
-    fn export_whdload_install_for_oracle_when_asked() {
-        let Ok(dest) = std::env::var("ART_WHD_OUT") else {
-            return;
-        };
-        let dest = PathBuf::from(dest);
-
-        let dir = dest.parent().unwrap_or(Path::new(".")).to_path_buf();
-        std::fs::create_dir_all(&dir).unwrap();
-
-        let archive = dir.join("art-whd-oracle.lha");
-        whdload_archive(&archive);
-
-        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
-        std::fs::write(&dest, &bytes).unwrap();
-
-        run_install(
-            &archive,
-            &dest,
-            0,
-            0,
-            &std::env::temp_dir(),
-            &std::env::temp_dir(),
+            dir.path(),
+            dir.path(),
+            &CommandVolumeSession,
             &NoProgress,
         )
         .unwrap();
-        let _ = std::fs::remove_file(&archive);
-    }
 
-    // ---- refusals ----
+        assert_eq!(
+            outcome.files, 4,
+            "slave, executable, one data file, and igame.data (uncatalogued, title only)"
+        );
+        assert_eq!(
+            outcome.verified, outcome.files,
+            "every file is read back out of the disk"
+        );
+        assert!(outcome.icon_installed);
+        assert!(
+            outcome.backup.is_some(),
+            "the real session backs up a floppy-sized image before replacing it"
+        );
 
-    fn verdict(confidence: crate::core::workflow::types::Confidence) -> WhdloadVerdict {
-        WhdloadVerdict {
-            confidence,
-            slave: Some("Game/Game.slave".into()),
-            executable: Some("Game/Game".into()),
-            has_data_dir: true,
-            has_icon: true,
-            notes: "test".into(),
-        }
-    }
-
-    fn layout() -> PackLayout {
-        PackLayout {
-            root: "Game".into(),
-            name: "Game".into(),
-            slave: "Game/Game.slave".into(),
-            icon: Some("Game.info".into()),
-            outside: Vec::new(),
-            needs_installer: false,
-        }
-    }
-
-    fn cost(needed: usize, free: usize) -> CopyPlan {
-        CopyPlan {
-            files: 3,
-            directories: 1,
-            total_bytes: 4000,
-            blocks_needed: needed,
-            blocks_free: free,
-            block_size: 512,
-            name_problems: Vec::new(),
-            collisions: Vec::new(),
-            split_icons: Vec::new(),
-        }
-    }
-
-    /// §14 and §34: an uncertain detection is never acted on as if it were a
-    /// fact. Copying an arbitrary folder onto a hard disk because it *might*
-    /// be a game is not a one-click feature, it is a mess to clean up.
-    #[test]
-    fn a_low_confidence_detection_is_refused_with_the_reason() {
-        use crate::core::workflow::types::Confidence;
-
-        let reason = refuse(
-            &verdict(Confidence::Low),
-            &layout(),
-            &cost(10, 1000),
-            false,
-            &[],
+        let entry = super::super::volume_write::pick_volume(&image, 0).unwrap();
+        let (device, geometry) = mount(&image, &entry).unwrap();
+        let set = crate::core::volume::write::layout::BlockSet::new(geometry.block_size);
+        let root = crate::core::volume::write::dir::entries_in(
+            &device,
+            &set,
+            &geometry,
+            geometry.root_block,
         )
-        .expect("a low-confidence detection must be refused")
-        .reason;
-
-        assert!(reason.contains("not confident"), "{reason}");
-        assert!(reason.contains("by hand"), "and offers the alternative");
-    }
-
-    #[test]
-    fn a_confident_detection_with_room_is_allowed() {
-        use crate::core::workflow::types::Confidence;
-
-        assert!(refuse(
-            &verdict(Confidence::High),
-            &layout(),
-            &cost(10, 1000),
-            false,
-            &[]
-        )
-        .is_none());
-    }
-
-    /// A source pack needs an Amiga to install itself. Copying its raw disk
-    /// images into a drawer produces something that looks installed and does
-    /// not start.
-    #[test]
-    fn an_archive_needing_its_installer_is_refused() {
-        use crate::core::workflow::types::Confidence;
-
-        let mut needs = layout();
-        needs.needs_installer = true;
-
-        let reason = refuse(
-            &verdict(Confidence::High),
-            &needs,
-            &cost(10, 1000),
-            false,
-            &[],
-        )
-        .expect("a source pack must be refused")
-        .reason;
-        assert!(reason.contains("Install script"), "{reason}");
-        assert!(reason.contains("WinUAE"), "and says what to do instead");
-    }
-
-    /// Writing a game over one that is already there is not something a
-    /// one-click button gets to decide.
-    #[test]
-    fn a_name_already_on_the_volume_is_refused() {
-        use crate::core::workflow::types::Confidence;
-
-        let reason = refuse(
-            &verdict(Confidence::High),
-            &layout(),
-            &cost(10, 1000),
-            true,
-            &[],
-        )
-        .expect("a taken name must be refused")
-        .reason;
-        assert!(reason.contains("already on that volume"), "{reason}");
-    }
-
-    #[test]
-    fn a_pack_that_does_not_fit_is_refused_with_the_numbers() {
-        use crate::core::workflow::types::Confidence;
-
-        let reason = refuse(
-            &verdict(Confidence::High),
-            &layout(),
-            &cost(5000, 100),
-            false,
-            &[],
-        )
-        .expect("a pack that does not fit must be refused")
-        .reason;
-        assert!(reason.contains("5000 blocks"), "{reason}");
-        assert!(reason.contains("100 are free"), "{reason}");
-    }
-
-    /// A slave looks for its files by name. Installing them under names ART
-    /// invented gives a game that starts and then cannot find anything.
-    #[test]
-    fn names_amigados_cannot_store_refuse_the_install() {
-        use crate::core::volume::write::plan::NameProblem;
-        use crate::core::workflow::types::Confidence;
-
-        let mut costs = cost(10, 1000);
-        costs.name_problems.push(NameProblem {
-            relative: "Game/a-very-long-name-indeed-far-too-long".into(),
-            name: "a-very-long-name-indeed-far-too-long".into(),
-            reason: "too long".into(),
-            suggestion: Some("a-very-long-name-indeed-far-to".into()),
-        });
-
-        let reason = refuse(&verdict(Confidence::High), &layout(), &costs, false, &[])
-            .expect("unstorable names must refuse the install")
-            .reason;
-        assert!(reason.contains("no longer match"), "{reason}");
-    }
-
-    /// Half a game is not a game.
-    #[test]
-    fn an_archive_that_did_not_unpack_completely_is_refused() {
-        use crate::core::workflow::types::Confidence;
-
-        let reason = refuse(
-            &verdict(Confidence::High),
-            &layout(),
-            &cost(10, 1000),
-            false,
-            &["Game/data/big.bin (too large)".into()],
-        )
-        .expect("an incomplete unpack must be refused")
-        .reason;
-        assert!(reason.contains("did not unpack completely"), "{reason}");
+        .unwrap();
+        let drawer = root
+            .iter()
+            .find(|found| found.name == "Turrican")
+            .expect("the drawer must be on the disk");
+        assert!(drawer.is_dir);
+        assert!(
+            root.iter()
+                .any(|found| found.name == "Turrican.info" && !found.is_dir),
+            "the icon must sit beside the drawer, read back through the real session"
+        );
     }
 }

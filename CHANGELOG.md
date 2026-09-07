@@ -96,6 +96,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Applying a wallpaper, screen depth or icon arrangement no longer freezes
+  the window, and can be stopped.** ART now reports progress while it works
+  and a Stop button appears; stopping partway leaves whatever had already
+  been written on disk and says so — it never reports a stop as a failure
+  (ART-248).
+- **The OS Builder's media step now tells a screen reader which field a hint
+  or an outcome belongs to, not just a sighted user reading them side by
+  side.** A field's hint, and the media step's own layer, ROM and scan-result
+  messages, used to sit as a plain paragraph next to the row they describe
+  with nothing wiring the two together, so a screen reader user tabbing to
+  the Browse button heard only its name and had to go hunting for whether a
+  warning or a confirmation was attached to it at all (ART-241).
+- **A built AmigaOS 3.2 tree now carries `Utilities` and `WBStartup`.**
+  `MultiView` — the datatypes viewer AmigaOS uses to open a picture or a text
+  file from Workbench — and the whole `WBStartup` drawer were simply absent
+  from a tree ART built, because the recipe had no rule placing either
+  drawer. Both now come across from the same disk as the system's other root
+  drawers (ART-251).
+- **Rescanning a WHDLoad collection now clears a title that was genuinely
+  removed from an archive it lived in.** A rescan used to keep every title
+  read from an archive forever, even after the title's own entry was gone
+  from a rewritten or replaced archive, so the catalogue could accumulate
+  titles nothing on disk still holds. A rescan now clears exactly those; a
+  title whose drive is unplugged, or whose archive cannot be opened at all
+  this run, is still kept (ART-243).
+- **Updating a WHDLoad collection no longer reopens every archive it holds
+  on every single refresh.** Measured against a real 663 MB collection
+  archive: over a second just for that one archive, every time, whether
+  anything in it had changed or not. An archive whose size and mtime have
+  not changed since the last read is no longer reopened at all — the same
+  shortcut ART already took for plain files (ART-244).
 - **Stopping the "what are these disks" check no longer reads as ART having
   failed.** Pressing Stop while install media is being identified by content
   used to produce *"ART could not identify these files by content"* — the same
@@ -188,9 +219,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   being copied with everything inside them but not their own icon, so a real
   Workbench window showed the disk as empty even though every file was there.
   Each such drawer now arrives with its icon alongside it, the way the release
-  media itself carries it. `Utilities` and `WBStartup` still do not appear at
-  all — the 3.2 recipe has no rule for either one yet, icon or otherwise
-  (ART-251) — so this does not yet close the drawer-icon gap completely.
+  media itself carries it. `Utilities` and `WBStartup` did not appear at all
+  at the time — the 3.2 recipe had no rule for either one, icon or otherwise
+  — so this did not yet close the drawer-icon gap completely; both now arrive
+  too, icon included, now that ART-251 is fixed (above).
 - **A WHDLoad archive with one unreadable drawer no longer costs you the rest.**
   One bad slave used to abandon the whole scan; now that drawer is skipped by
   name and the other 892 are catalogued.

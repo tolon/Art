@@ -17,10 +17,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use super::run::{
-    deadline_secs, end_session, Clock, EmulatorLauncher, EmulatorSession, RealClock, RunLimits,
-    WinUaeLauncher,
-};
+use super::run::{deadline_secs, end_session, Clock, EmulatorLauncher, EmulatorSession, RunLimits};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::firstboot::report::{parse_bytes, Ending, FirstBootReport, StepOutcome};
 use crate::core::firstboot::REPORT_PATH;
@@ -52,8 +49,14 @@ pub struct RehearseRequest<'a> {
     pub profile: &'a AmigaProfile,
     /// The user's own licensed Kickstart. Never shipped by ART.
     pub kickstart_path: &'a Path,
-    /// The emulator ART will start. Unused by [`rehearse_with`], which is
-    /// given a launcher directly.
+    /// The emulator ART will start.
+    ///
+    /// **Read by nothing in `core/`.** [`rehearse_with`] takes an
+    /// `EmulatorLauncher` directly, and building the real one is a
+    /// process-spawning decision that `core/` may not make (ART-274) — the
+    /// caller builds `tools::winuae_launcher::WinUaeLauncher` from this same
+    /// path itself. The field stays here so a `RehearseRequest` still says
+    /// everything a rehearsal needs in one place.
     pub winuae_path: &'a Path,
     pub limits: RunLimits,
 }
@@ -114,19 +117,14 @@ pub fn media_for(request: &RehearseRequest) -> CoreResult<LaunchMedia> {
     })
 }
 
-/// Rehearse the tree copy's first boot on the Amiga side.
-///
-/// The thin wrapper: a real WinUAE and a real clock. Everything it does
-/// beyond choosing those two is in [`rehearse_with`].
-pub fn rehearse(
-    request: &RehearseRequest,
-    sink: &dyn ProgressSink,
-) -> CoreResult<RehearsalOutcome> {
-    let launcher = WinUaeLauncher::new(request.winuae_path, request.scratch_root);
-    rehearse_with(request, &launcher, &RealClock::new(), sink)
-}
-
 /// The rehearsal, with its emulator and its clock supplied.
+///
+/// There is no thin `rehearse()` wrapper choosing a real `WinUaeLauncher`
+/// any more (ART-274): building one is a process-spawning decision, so it
+/// belongs in `tools::winuae_launcher`, and `core/` may not make it. Every
+/// caller — `commands/firstboot.rs`'s command and its gated real-material
+/// hook alike — constructs `tools::winuae_launcher::WinUaeLauncher` itself
+/// and calls this directly with it and a `core::amigainstall::run::RealClock`.
 ///
 /// Returns [`CoreError::Cancelled`] when the user stopped it — cancellation is
 /// not a fifth outcome, because a rehearsal that was stopped produced no

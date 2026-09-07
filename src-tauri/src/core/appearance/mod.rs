@@ -69,6 +69,7 @@ use crate::core::amigaprefs::{env, iff, screenmode, wbpattern};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::icongrid;
 use crate::core::ilbm;
+use crate::core::jobs::{NoProgress, ProgressSink};
 use crate::core::picture;
 use crate::core::safety::backup::BACKUP_DIR;
 use crate::core::safety::{guarded_write, BackupPolicy};
@@ -630,6 +631,15 @@ fn plan_icons_in_dir(
 }
 
 /// Apply any combination of a wallpaper assignment, a screen depth and the
+/// shell defaults to a distribution tree. The thin, synchronous form — see
+/// [`apply_appearance_with`] for the one that reports progress and honours
+/// cancellation (ART-248), the same `scan_titles`/`scan_titles_with` split
+/// `core::gameindex::scan` already uses.
+pub fn apply_appearance(tree: &Path, req: &AppearanceRequest) -> CoreResult<AppearanceOutcome> {
+    apply_appearance_with(tree, req, &NoProgress)
+}
+
+/// Apply any combination of a wallpaper assignment, a screen depth and the
 /// shell defaults to a distribution tree.
 ///
 /// Every fallible step — resolving a path, decoding a picture, checking a
@@ -645,8 +655,28 @@ fn plan_icons_in_dir(
 /// a multi-gigabyte image). A refusal at any point therefore leaves the
 /// whole tree — every prefs file, every backdrop, every icon — exactly as
 /// it was; only the *kept generations* differ by which kind of file it is.
-pub fn apply_appearance(tree: &Path, req: &AppearanceRequest) -> CoreResult<AppearanceOutcome> {
+///
+/// **ART-248: cancellation.** Planning is reported as one indefinite phase
+/// (its size is not known until it finishes, so `total` stays `None` —
+/// CLAUDE.md: never a fixed-width bar for an unknown total). Once every plan
+/// exists, the number of files the commit phase will write **is** known, so
+/// `sink.report` carries a real total from here on and `sink.is_cancelled()`
+/// is checked **between** whole committed files, never mid-write — every
+/// write already goes through [`guarded_write`], which is atomic on its own.
+/// A commit-phase cancellation is not different in kind from a commit-phase
+/// I/O failure, which this function already could leave partial (see
+/// `committed` below and [`partial_commit_error`]): a plain
+/// [`CoreError::Cancelled`] is returned when nothing has landed yet, and
+/// [`CoreError::CancelledPartway`] naming the real count once at least one
+/// file has — the same split `core::osinstall::apply::apply` already uses
+/// for the identical reason.
+pub fn apply_appearance_with(
+    tree: &Path,
+    req: &AppearanceRequest,
+    sink: &dyn ProgressSink,
+) -> CoreResult<AppearanceOutcome> {
     // ---- Plan: everything that can fail happens here. ----
+    sink.report(0, None, "Working out what needs to change…");
     let wallpaper_plan = match &req.wallpaper {
         Some((which, source, placement)) => Some(plan_wallpaper(tree, *which, source, *placement)?),
         None => None,
@@ -678,38 +708,65 @@ pub fn apply_appearance(tree: &Path, req: &AppearanceRequest) -> CoreResult<Appe
     let mut picture_placed = None;
     let mut amiga_path = None;
 
+    // Known now — every plan above either exists or does not, and an icon
+    // plan already knows exactly how many files it will touch.
+    let total: u64 = wallpaper_plan
+        .as_ref()
+        .map_or(0, |p| 1 + p.picture.is_some() as u64)
+        + screen_plan.as_ref().map_or(0, |_| 1)
+        + shell_plans.len() as u64
+        + icon_plan.as_ref().map_or(0, |p| p.writes.len() as u64);
+    let mut done: u64 = 0;
+    sink.report(0, Some(total), "Applying the appearance changes…");
+
     if let Some(plan) = wallpaper_plan {
         if let Some((picture_path, bytes)) = plan.picture {
+            check_cancelled(sink, &committed)?;
             if let Some(parent) = picture_path.parent() {
                 commit_mkdir(parent, &committed)?;
             }
+            let message = picture_path.display().to_string();
             commit_write(
                 picture_path.clone(),
                 &bytes,
                 BackupPolicy::CONFIG,
                 &mut committed,
             )?;
+            done += 1;
+            sink.report(done, Some(total), &message);
             picture_placed = Some(picture_path);
         }
 
+        check_cancelled(sink, &committed)?;
+        let message = plan.prefs_path.display().to_string();
         commit_write(
             plan.prefs_path,
             &plan.prefs_bytes,
             BackupPolicy::CONFIG,
             &mut committed,
         )?;
+        done += 1;
+        sink.report(done, Some(total), &message);
         amiga_path = Some(plan.amiga_path);
     }
 
     if let Some(plan) = screen_plan {
+        check_cancelled(sink, &committed)?;
+        let message = plan.path.display().to_string();
         commit_write(plan.path, &plan.bytes, BackupPolicy::CONFIG, &mut committed)?;
+        done += 1;
+        sink.report(done, Some(total), &message);
     }
 
     for plan in shell_plans {
+        check_cancelled(sink, &committed)?;
         if let Some(parent) = plan.path.parent() {
             commit_mkdir(parent, &committed)?;
         }
+        let message = plan.path.display().to_string();
         commit_write(plan.path, &plan.bytes, BackupPolicy::CONFIG, &mut committed)?;
+        done += 1;
+        sink.report(done, Some(total), &message);
     }
 
     let mut icons_placed = 0usize;
@@ -720,6 +777,7 @@ pub fn apply_appearance(tree: &Path, req: &AppearanceRequest) -> CoreResult<Appe
         drawers_arranged = plan.drawers_arranged;
         icons_skipped = plan.icons_skipped;
         for (path, bytes) in plan.writes {
+            check_cancelled(sink, &committed)?;
             // C6 (final whole-branch review): every icon write used to go
             // through the same `BackupPolicy::CONFIG` as a hand-tuned prefs
             // file. A prefs write is one file, rarely touched; arranging
@@ -733,7 +791,10 @@ pub fn apply_appearance(tree: &Path, req: &AppearanceRequest) -> CoreResult<Appe
             // edited themselves — the same cost/value question
             // `BackupPolicy::LARGE_IMAGE` already answers "no" to for a
             // multi-gigabyte image, opted out of the same way here.
+            let message = path.display().to_string();
             commit_write(path, &bytes, BackupPolicy::NONE, &mut committed)?;
+            done += 1;
+            sink.report(done, Some(total), &message);
         }
     }
 
@@ -754,6 +815,27 @@ pub fn apply_appearance(tree: &Path, req: &AppearanceRequest) -> CoreResult<Appe
         icons_placed,
         drawers_arranged,
         icons_skipped,
+    })
+}
+
+/// [`ProgressSink::is_cancelled`], turned into the right flavour of
+/// [`CoreError`] — a plain [`CoreError::Cancelled`] when nothing has
+/// committed yet, [`CoreError::CancelledPartway`] naming the real count once
+/// at least one file has. Checked **between** whole committed files only,
+/// never mid-write — see [`apply_appearance_with`]'s own doc comment.
+fn check_cancelled(
+    sink: &dyn ProgressSink,
+    committed: &[(PathBuf, Option<PathBuf>)],
+) -> CoreResult<()> {
+    if !sink.is_cancelled() {
+        return Ok(());
+    }
+    Err(if committed.is_empty() {
+        CoreError::Cancelled
+    } else {
+        CoreError::CancelledPartway {
+            files: committed.len() as u64,
+        }
     })
 }
 
@@ -1986,6 +2068,166 @@ mod tests {
             "the framed icon's own x depends on AAAA's real (narrower) column width — it must \
              land exactly where AAAA being genuinely frameless puts it, not where a \
              defaulted-to-framed AAAA would put it"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // ART-248: `apply_appearance` becomes a job — `apply_appearance_with`
+    // reports progress and honours cancellation between whole units of
+    // work (one committed file each), never mid-write.
+    // -----------------------------------------------------------------
+
+    use crate::core::jobs::{CancelToken, ProgressSink};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Cancels once `report` has been called more than `after` times — the
+    /// same shape `core::gameindex::scan::tests::the_scan_stops_when_asked`
+    /// and `core::osinstall::apply`'s own fixtures use.
+    struct CancelAfter {
+        seen: AtomicU64,
+        after: u64,
+        token: CancelToken,
+    }
+
+    impl ProgressSink for CancelAfter {
+        fn report(&self, _done: u64, _total: Option<u64>, _message: &str) {
+            if self.seen.fetch_add(1, Ordering::SeqCst) > self.after {
+                self.token.cancel();
+            }
+        }
+        fn is_cancelled(&self) -> bool {
+            self.token.is_cancelled()
+        }
+    }
+
+    /// The central guard for ART-248: cancelling partway through arranging
+    /// icons leaves the icons already written with a real position, leaves
+    /// every icon not yet reached exactly as it was (still unplaced), and
+    /// reports `CancelledPartway` with the true count — not a bare
+    /// `Cancelled` that could not tell "stopped before anything landed" from
+    /// "stopped after three of six".
+    #[test]
+    fn cancelling_between_icon_writes_leaves_written_files_intact_and_the_rest_untouched() {
+        let scratch = ScratchDir::new("art-appearance-icons", "cancel-partway");
+        let tree = scratch.path().to_path_buf();
+        let names = ["Aaa", "Bbb", "Ccc", "Ddd", "Eee", "Fff"];
+        for name in names {
+            write_icon_entry(&tree, name, &icon_bytes(20, 20, None));
+        }
+        let before: Vec<Vec<u8>> = names
+            .iter()
+            .map(|name| std::fs::read(tree.join(format!("{name}.info"))).unwrap())
+            .collect();
+
+        let req = AppearanceRequest {
+            wallpaper: None,
+            screen_depth: None,
+            shell_defaults: false,
+            arrange_icons: true,
+        };
+        // `report` is called once for the indefinite planning phase, once
+        // for the definite "applying" start, and then once per committed
+        // file — cancelling after 2 reports past that leaves some icons
+        // written and some not, which is the only case this test can prove
+        // anything with.
+        let sink = CancelAfter {
+            seen: AtomicU64::new(0),
+            after: 3,
+            token: CancelToken::default(),
+        };
+        let err = apply_appearance_with(&tree, &req, &sink).unwrap_err();
+
+        let files = match err {
+            CoreError::CancelledPartway { files } => files,
+            other => panic!("expected CancelledPartway with a real count, got {other:?}"),
+        };
+        assert!(files > 0, "the sink cancelled after some files landed");
+        assert!(
+            files < names.len() as u64,
+            "and before all of them did, or this test proves nothing"
+        );
+
+        let mut written = 0u64;
+        for (name, original) in names.iter().zip(before.iter()) {
+            let after = std::fs::read(tree.join(format!("{name}.info"))).unwrap();
+            if amigaicon::position(&after).unwrap().is_some() {
+                written += 1;
+            } else {
+                assert_eq!(
+                    &after, original,
+                    "{name} was never reached and must be byte-for-byte unchanged"
+                );
+            }
+        }
+        assert_eq!(
+            written, files,
+            "the count in CancelledPartway must match how many icons actually landed"
+        );
+    }
+
+    /// The thin wrapper produces the identical tree `apply_appearance_with`
+    /// does when nothing ever cancels — the same split
+    /// `core::gameindex::scan_titles`/`scan_titles_with` already uses, and
+    /// the reason existing callers (every other test in this module) are
+    /// unaffected by ART-248's job wiring.
+    #[test]
+    fn the_noprogress_wrapper_matches_the_sink_taking_form_byte_for_byte() {
+        let (_scratch_a, tree_a) = build_tree("wrapper-parity-a");
+        let (_scratch_b, tree_b) = build_tree("wrapper-parity-b");
+        let picture_a = write_picture(&tree_a, "wallpaper.png");
+        let picture_b = write_picture(&tree_b, "wallpaper.png");
+
+        let req_a = AppearanceRequest {
+            wallpaper: Some((
+                wbpattern::Which::Root,
+                WallpaperSource::HostPicture {
+                    path: picture_a,
+                    colours: 8,
+                },
+                wbpattern::Placement::ScaleGood,
+            )),
+            screen_depth: Some(6),
+            shell_defaults: true,
+            arrange_icons: false,
+        };
+        let req_b = AppearanceRequest {
+            wallpaper: Some((
+                wbpattern::Which::Root,
+                WallpaperSource::HostPicture {
+                    path: picture_b,
+                    colours: 8,
+                },
+                wbpattern::Placement::ScaleGood,
+            )),
+            screen_depth: Some(6),
+            shell_defaults: true,
+            arrange_icons: false,
+        };
+
+        apply_appearance(&tree_a, &req_a).unwrap();
+        apply_appearance_with(&tree_b, &req_b, &crate::core::jobs::NoProgress).unwrap();
+
+        assert_eq!(
+            std::fs::read(wbpattern_path(&tree_a)).unwrap(),
+            std::fs::read(wbpattern_path(&tree_b)).unwrap()
+        );
+        assert_eq!(
+            std::fs::read(screenmode_path(&tree_a)).unwrap(),
+            std::fs::read(screenmode_path(&tree_b)).unwrap()
+        );
+        let backdrop_a = tree_a
+            .join("Prefs")
+            .join("Presets")
+            .join("Backdrops")
+            .join("wallpaper.iff");
+        let backdrop_b = tree_b
+            .join("Prefs")
+            .join("Presets")
+            .join("Backdrops")
+            .join("wallpaper.iff");
+        assert_eq!(
+            std::fs::read(backdrop_a).unwrap(),
+            std::fs::read(backdrop_b).unwrap()
         );
     }
 }

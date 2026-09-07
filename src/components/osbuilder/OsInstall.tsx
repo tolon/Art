@@ -177,6 +177,19 @@ function groupByComponent(plan: InstallPlan): { component: string; items: Instal
 export type DroppedMedia = { path: string; arrivalKey: string } | null;
 
 /**
+ * Keeps the same object identity across a no-op reset (ART-260):
+ * `layerScans`, `layerIdentified` and `extraScans` all clear to `{}` when
+ * there is nothing left to hold, and a fresh `{}` every settled render would
+ * be a new identity for nothing. Harmless while nothing reads the record
+ * itself as a dependency — but that is exactly the shape ART-178/ART-195
+ * were, so every one of the three resets goes through this rather than its
+ * own inline `{}`.
+ */
+export function resetIfEmpty<T>(prev: Record<string, T>): Record<string, T> {
+  return Object.keys(prev).length === 0 ? prev : {};
+}
+
+/**
  * How far the install has got, beside the button that started it.
  *
  * Three things, and each is there because its absence was the complaint:
@@ -458,7 +471,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       // `foundVolumeNames` is memoized on this one too (ART-257): a fresh
       // `{}` per run is a new identity for nothing, and the two evidence
       // lookups downstream would be asked again for it (ART-178/ART-195).
-      setLayerScans((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+      setLayerScans(resetIfEmpty);
       return;
     }
     let cancelled = false;
@@ -503,7 +516,10 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const [layerIdentified, setLayerIdentified] = useState<Record<string, string | null>>({});
   useEffect(() => {
     if (layers.length === 0) {
-      setLayerIdentified({});
+      // Same guard as `layerScans` and `extraScans` (ART-260): keep the
+      // previous object when it is already empty, so a no-op reset does not
+      // manufacture a fresh identity for nothing.
+      setLayerIdentified(resetIfEmpty);
       return;
     }
     let cancelled = false;
@@ -1061,7 +1077,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       // memoized on this — ART-178/ART-195 were exactly a per-render identity
       // driving an effect, and the evidence lookup below is one of those
       // effects.
-      setExtraScans((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+      setExtraScans(resetIfEmpty);
       return;
     }
     let cancelled = false;
@@ -1692,6 +1708,25 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     }
   }
 
+  // ART-241: which of the three media-scan outcome paragraphs below will
+  // actually render, computed once here rather than three times, so the
+  // single unlayered `Field` further down can name it through
+  // `describedBy` — the sweep's third finding, alongside the layer
+  // wrong-hint and the ROM error/identified lines. Bounded to the unlayered
+  // case on purpose: a layered release's media-scan outcome describes every
+  // layer's folder together, and there is no single `Field` among several
+  // that it is *this* row's own answer rather than another's — associating
+  // it with one arbitrarily would claim a relationship that is not actually
+  // there.
+  const mediaScanOutcomeId =
+    mediaScan?.outcome === "folder-unreadable"
+      ? "osinstall-media-unreadable"
+      : mediaScan?.outcome === "found" && foundVolumeNames.length === 0
+        ? "osinstall-media-empty"
+        : foundVolumeNames.length > 0
+          ? "osinstall-media-found"
+          : undefined;
+
   return (
     <>
       <section className="card" style={{ marginBottom: 16 }}>
@@ -1726,6 +1761,11 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           // render them at all (see the module doc comment on `layers`).
           layers.map((layer) => {
             const hint = wrongLayerHint(layer);
+            // ART-241: the id this paragraph is named by when it renders —
+            // `Field`'s Browse button reads it through `describedBy` so a
+            // screen reader user hears the warning without hunting forward
+            // in the page for it.
+            const hintId = `layer-wrong-hint-${layer.id}`;
             return (
               <div key={layer.id}>
                 <Field
@@ -1736,12 +1776,14 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
                   onChoose={() => void chooseLayerFolder(layer)}
                   choose={t("common.browse")}
                   testId={`layer-field-${layer.id}`}
+                  describedBy={hint ? hintId : undefined}
                 />
                 {hint && (
                   <p
+                    id={hintId}
                     className="badge badge-err"
                     style={{ fontSize: 11, margin: "-8px 0 12px", display: "inline-block" }}
-                    data-testid={`layer-wrong-hint-${layer.id}`}
+                    data-testid={hintId}
                   >
                     {hint}
                   </p>
@@ -1759,6 +1801,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
               onChoose={() => void chooseMediaFolder()}
               choose={t("common.browse")}
               testId="osinstall-media-field"
+              describedBy={mediaScanOutcomeId}
             />
             {extraMediaFolders.map((folder) => (
               <div
@@ -1798,7 +1841,11 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           </>
         )}
         {mediaScan?.outcome === "folder-unreadable" && (
-          <p className="badge badge-err" style={{ fontSize: 11, margin: "0 0 12px", display: "inline-block" }}>
+          <p
+            id="osinstall-media-unreadable"
+            className="badge badge-err"
+            style={{ fontSize: 11, margin: "0 0 12px", display: "inline-block" }}
+          >
             {t("osinstall.media.unreadable")}
           </p>
         )}
@@ -1811,12 +1858,12 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           makes it right.
         */}
         {mediaScan?.outcome === "found" && foundVolumeNames.length === 0 && (
-          <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
+          <p id="osinstall-media-empty" className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
             {t("osinstall.media.empty")}
           </p>
         )}
         {foundVolumeNames.length > 0 && (
-          <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
+          <p id="osinstall-media-found" className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
             {t("osinstall.media.found", {
               count: foundVolumeNames.length,
               names: foundVolumeNames.join(", "),
@@ -1934,14 +1981,26 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           onChoose={() => void chooseRom()}
           choose={t("common.browse")}
           hint={t("osinstall.rom.hint")}
+          testId="osinstall-rom-field"
+          // ART-241: the Browse button is described by whichever of the two
+          // paragraphs below actually renders — `romError` and `rom` are
+          // mutually exclusive (a ROM is either unreadable or identified,
+          // never both), so exactly one id or none applies.
+          describedBy={
+            romError ? "osinstall-rom-unreadable" : rom ? "osinstall-rom-identified" : undefined
+          }
         />
         {romError && (
-          <p className="badge badge-err" style={{ fontSize: 11, margin: "0 0 12px", display: "inline-block" }}>
+          <p
+            id="osinstall-rom-unreadable"
+            className="badge badge-err"
+            style={{ fontSize: 11, margin: "0 0 12px", display: "inline-block" }}
+          >
             {t("osinstall.rom.unreadable")}
           </p>
         )}
         {rom && (
-          <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
+          <p id="osinstall-rom-identified" className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
             {t("osinstall.rom.identified", { rom: rom.name })}
           </p>
         )}

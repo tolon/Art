@@ -32,7 +32,7 @@ import { useRemembered } from "@/lib/useRemembered";
 import { useOpenObject } from "@/stores/openObjectStore";
 import { errorText } from "@/lib/errorText";
 import { cardFirstBootReport, type CardFirstBootReport } from "@/lib/firstboot";
-import { FirstBootReportPanel } from "@/components/card/FirstBootReportPanel";
+import { FirstBootReportHeading, FirstBootReportPanel } from "@/components/card/FirstBootReportPanel";
 
 /** The filesystems the wizard offers. A remembered value that is not one of
  *  them — an older ART's, or a hand-edited file's — falls back rather than
@@ -555,9 +555,7 @@ export function HardDiskStudio() {
           {firstBoot && <FirstBootReportPanel report={firstBoot.report} source={firstBoot.source} />}
           {firstBootError && (
             <section className="card">
-              <p className="muted" style={{ fontSize: 12, fontWeight: 600, margin: "0 0 6px" }}>
-                {t("firstboot.report.heading")}
-              </p>
+              <FirstBootReportHeading />
               <p
                 data-testid="firstboot-report-error"
                 className="badge badge-err"

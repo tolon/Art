@@ -33,20 +33,31 @@
 // wrote is a file inside the tree, and the next thing that reads it is
 // AmigaOS itself, not another step of this wizard).
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
 import {
+  APPEARANCE_APPLY_EVENT,
   appearanceApply,
   appearanceBackdrops,
   someOf,
+  type AppearanceApplyResult,
   type AppearanceOutcome,
   type AppearancePlacement,
   type AppearanceWallpaperSource,
   type AppearanceWhich,
 } from "@/lib/appearance";
 import { errorText } from "@/lib/errorText";
+import {
+  awaitJobResult,
+  fraction,
+  isJobCancellation,
+  jobCancel,
+  onJobProgress,
+  subscribeSafely,
+  type JobProgress,
+} from "@/lib/jobs";
 import { isFlag, isOneOf, isTextOrNothing, isWholeNumberBetween } from "@/lib/remembered";
 import { useBuildSession } from "@/lib/useBuildSession";
 import { useRemembered } from "@/lib/useRemembered";
@@ -182,9 +193,24 @@ export function AppearancePanel() {
   );
 
   const [backdrops, setBackdrops] = useState<string[]>([]);
+  const applyJob = useRef<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<JobProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [cancelled, setCancelled] = useState(false);
   const [done, setDone] = useState<AppearanceOutcome | null>(null);
+
+  // The job's own progress (ART-248). `job-progress` is application-wide, so
+  // every update is checked against this panel's own job id first — the
+  // same shape `AmigaInstallPanel` already uses for its own long-running job.
+  useEffect(() => {
+    return subscribeSafely(() =>
+      onJobProgress((update) => {
+        if (update.id !== applyJob.current) return;
+        setProgress(update);
+      })
+    );
+  }, []);
 
   // Only what the tree actually carries — never a fixed list. A release that
   // has never had a picture placed on it lists nothing, and that emptiness
@@ -232,6 +258,8 @@ export function AppearancePanel() {
     setBusy(true);
     setError(null);
     setDone(null);
+    setCancelled(false);
+    setProgress(null);
     try {
       let source: AppearanceWallpaperSource | null = null;
       if (wallpaperOn) {
@@ -240,22 +268,44 @@ export function AppearancePanel() {
             ? { kind: "already-in-tree", amigaPath: amigaPath as string }
             : { kind: "host-picture", path: hostPath as string, colours };
       }
-      const outcome = await appearanceApply(tree, {
-        wallpaper: wallpaperOn && source ? { which, source, placement } : null,
-        screenDepth: screenDepthOn ? screenDepth : null,
-        shellDefaults: shellDefaultsOn,
-        arrangeIcons: arrangeIconsOn,
-      });
+      const outcome = await awaitJobResult<AppearanceApplyResult, AppearanceOutcome>(
+        APPEARANCE_APPLY_EVENT,
+        async () => {
+          const id = await appearanceApply(tree, {
+            wallpaper: wallpaperOn && source ? { which, source, placement } : null,
+            screenDepth: screenDepthOn ? screenDepth : null,
+            shellDefaults: shellDefaultsOn,
+            arrangeIcons: arrangeIconsOn,
+          });
+          applyJob.current = id;
+          return id;
+        },
+        (payload) => payload
+      );
       setDone(outcome);
     } catch (e) {
-      // Verbatim, on purpose (ART-060): `errorText` renders whatever core
-      // wrote, English and all — this round's own sentences name the exact
-      // file and backup path a rewrite would destroy.
-      setError(errorText(t, e));
+      // Endings stay distinct (CLAUDE.md): the user stopping the job and
+      // ART refusing it are two different sentences with two different next
+      // steps, never collapsed into one "did not succeed".
+      if (isJobCancellation(e)) {
+        setCancelled(true);
+      } else {
+        // Verbatim, on purpose (ART-060): `errorText` renders whatever core
+        // wrote, English and all — this round's own sentences name the
+        // exact file and backup path a rewrite would destroy.
+        setError(errorText(t, e));
+      }
     } finally {
       setBusy(false);
+      applyJob.current = null;
     }
   }
+
+  function stopApply() {
+    if (applyJob.current !== null) void jobCancel(applyJob.current);
+  }
+
+  const pct = progress ? fraction(progress) : null;
 
   return (
     <section className="card" style={{ marginBottom: 16 }} data-testid="appearance-panel">
@@ -464,6 +514,19 @@ export function AppearancePanel() {
         </p>
       )}
 
+      {/* ART-248: the user's own ending, not an error — collapsing this
+          into `error` would be exactly the sentence CLAUDE.md warns against
+          ("Endings stay distinct"). */}
+      {cancelled && (
+        <p
+          data-testid="appearance-cancelled"
+          className="badge badge-warn"
+          style={{ display: "block", fontSize: 11, padding: "4px 8px", marginBottom: 8 }}
+        >
+          {t("appearance.cancelled")}
+        </p>
+      )}
+
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <button
           className="btn btn-primary"
@@ -473,12 +536,37 @@ export function AppearancePanel() {
         >
           {t(busy ? "appearance.applying" : "appearance.apply")}
         </button>
+        {busy && (
+          <button className="btn" onClick={stopApply}>
+            {t("appearance.stop")}
+          </button>
+        )}
         {blocker && (
           <span className="muted" style={{ fontSize: 11 }}>
             {t(blocker.key, blocker.params)}
           </span>
         )}
       </div>
+
+      {/* A count, never a fixed-width bar for an unknown total (CLAUDE.md):
+          the planning phase reports no total at all, and only once it
+          finishes does the commit phase know how many files it will write. */}
+      {busy && (
+        <p className="faint" data-testid="appearance-progress" style={{ fontSize: 11, marginTop: 6 }}>
+          {pct === null
+            ? t("appearance.progressStarting")
+            : t("appearance.progressPercent", {
+                percent: Math.round(pct * 100),
+                done: progress?.done ?? 0,
+                total: progress?.total ?? 0,
+              })}
+          {progress?.message?.trim() ? (
+            <span data-testid="appearance-progress-phase" style={{ marginLeft: 8 }}>
+              {progress.message}
+            </span>
+          ) : null}
+        </p>
+      )}
 
       {done && (
         <div

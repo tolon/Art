@@ -6,6 +6,7 @@
 // types), and nothing here reshapes what core computed.
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** `wbpattern::Which` on the wire. */
 export type AppearanceWhich = "root" | "drawer" | "screen";
@@ -84,14 +85,59 @@ export async function appearanceBackdrops(tree: string): Promise<string[]> {
 }
 
 /**
+ * `commands/appearance.rs::AppearanceApplyResult` on the wire — a finished
+ * `appearance_apply` job's own answer (ART-248). `job_id` stays snake_case,
+ * matching every other job result in ART (`RehearsalResult`,
+ * `AmigaInstallResult`); the rest is `AppearanceOutcome` itself, flattened in
+ * beside it by the Rust side rather than nested.
+ */
+export interface AppearanceApplyResult extends AppearanceOutcome {
+  job_id: number;
+}
+
+/** The event a finished `appearance_apply` job's own answer arrives on. */
+export const APPEARANCE_APPLY_EVENT = "appearance-apply-result";
+
+/**
  * Apply a wallpaper, a screen depth, and/or the shell defaults to `tree`.
  * Core plans every requested part before writing anything and refuses the
  * whole call if any part cannot be done — see
  * `core::appearance::apply_appearance`'s own doc comment.
+ *
+ * **ART-248: a job, not a plain promise for the outcome.** The wallpaper
+ * path alone can mean a median-cut quantise pass over a couple of million
+ * pixels, and arranging icons across a 3.9-scale tree can commit hundreds of
+ * small files — long enough that §54/§55 apply. Returns a job id
+ * immediately; progress arrives on the ordinary `job-progress` event and the
+ * finished outcome on [`APPEARANCE_APPLY_EVENT`] — see
+ * [`onAppearanceApplyResult`] and `@/lib/jobs`'s `awaitJobResult`, the same
+ * shape `firstbootRehearse`/`onFirstBootRehearsalResult` already use.
  */
 export async function appearanceApply(
   tree: string,
   request: AppearanceApplyRequest
-): Promise<AppearanceOutcome> {
-  return invoke<AppearanceOutcome>("appearance_apply", { tree, request });
+): Promise<number> {
+  return invoke<number>("appearance_apply", { tree, request });
+}
+
+/**
+ * Subscribe to finished `appearance_apply` jobs. A cancelled or failed job
+ * never sends one — the job bar (and this panel's own progress line) is
+ * where those are seen.
+ *
+ * Minor (2026-09-07 final review): kept, not called from anywhere today —
+ * `AppearancePanel.tsx` reads the same event through `@/lib/jobs`'s
+ * `awaitJobResult(APPEARANCE_APPLY_EVENT, …)` instead, which already gives
+ * it a `JobId`-scoped promise it can `await` beside `appearanceApply`'s own
+ * return value, rather than a long-lived listener it would have to
+ * remember to unsubscribe. This exists for the same reason
+ * `firstboot.ts::onFirstBootRehearsalResult` does and is equally unused —
+ * a typed listener beside the event constant, matching the shape a caller
+ * that does want a standing subscription (rather than one job's result)
+ * would need, so the two do not have to diverge the day one shows up.
+ */
+export async function onAppearanceApplyResult(
+  handler: (result: AppearanceApplyResult) => void
+): Promise<UnlistenFn> {
+  return listen<AppearanceApplyResult>(APPEARANCE_APPLY_EVENT, (event) => handler(event.payload));
 }

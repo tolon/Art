@@ -2,7 +2,7 @@
 //
 // A plain presentational read of `S:FirstBoot.log`'s parsed shape (Task 9 of
 // the first-boot round; Task 11 mounts this on the card screen with a
-// `source` prop this test does not cover).
+// `source` prop, covered below in "which copy was read").
 //
 // Endings stay distinct (CLAUDE.md): the wording carries which ending it is,
 // and colour is never the only signal — every assertion below checks the
@@ -183,5 +183,29 @@ describe("a card that has never been booted", () => {
     expect(screen.queryAllByTestId("firstboot-report-step")).toHaveLength(0);
     expect(screen.queryByTestId("firstboot-report-system")).toBeNull();
     expect(screen.queryByTestId("firstboot-report-table")).toBeNull();
+  });
+
+  // Leftover round: the realistic pairing -- a card that has never booted
+  // the first-boot block has never written a report anywhere either, so
+  // `read_card_report` answers `ReportSource::None` alongside
+  // `Ending::NotBooted`. Both testids stay covered separately above; this
+  // is the one test that exercises them together, the shape the card
+  // screen actually renders for an untouched card.
+  it("shows only the not-booted sentence when source is none too", () => {
+    render(
+      <FirstBootReportPanel
+        report={report({
+          system: null,
+          steps: [],
+          ending: "not-booted",
+          unknown: [],
+        })}
+        source="none"
+      />
+    );
+    expect(screen.getByTestId("firstboot-report-ending").textContent).toBe(
+      i18n.t("firstboot.ending.notBooted")
+    );
+    expect(screen.queryByTestId("firstboot-report-source")).toBeNull();
   });
 });
