@@ -251,7 +251,7 @@ per-defect state is [ISSUES.md](ISSUES.md), per-round narrative is the
   distribution image.
 - **v0.9.0 is out and in the community's hands.** Reading what came back is
   still the first thing a session does — issues on the repository, and whatever
-  the owner was told directly. A report that went *well* counts: the nine gaps
+  the owner was told directly. A report that went *well* counts: the ten gaps
   the README lists are unverified in both directions. Nothing had come back as
   of 2026-09-05: no issues, three release downloads.
 

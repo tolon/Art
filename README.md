@@ -17,7 +17,7 @@ drag-and-drop-driven application.
 
 **0.9.0 is out, and it is asking for testers.**
 [Download it](https://github.com/tolon/Art/releases/latest), try it on your own
-Amiga files, and tell it what it got wrong — the nine things that still need
+Amiga files, and tell it what it got wrong — the ten things that still need
 someone other than the author are listed under
 [What still needs testing](#what-still-needs-testing), each with what to run
 and what a good or a bad result looks like. **A result that went well is worth
@@ -124,6 +124,11 @@ described rather than browsed — a TAP is a sampled tape signal with no
 directory in it.
 
 ## Status
+
+**0.9.0**, measured on `main` on **2026-09-07**: **2948** Rust tests and **1178** frontend
+tests passing, **2078** interface strings in each language, **19** open defects. Every one of
+those numbers, and the command that produced it, is in
+[docs/STATUS.md](docs/STATUS.md) — count them there rather than trusting this paragraph.
 
 The application builds and runs on Windows 10/11 x64. Working today: DD/HD
 floppy images and hard-disk (RDB/HDF) partitions — read, write, create and
@@ -246,6 +251,34 @@ Three refusals come with it, and each names what to do next:
 
 One boundary, said plainly: the panel for this screen has never been driven by
 a person. Every run above went through the engine's own test hook.
+
+**And the Amiga can finish its own setup, the first time it starts.** Turn the
+first-boot step on and the tree ART builds carries a small AmigaDOS program that
+runs itself on that machine's first boot: a dispatcher that works out what it is
+running on — a real PiStorm board or an emulator, and which Kickstart — then runs
+a short, fixed list of steps (`10-hardware`, `20-aux`, `30-datatypes`), skips the
+ones that do not apply to this machine rather than failing them, writes what it
+did to `S/FirstBoot.log`, and removes itself when it is done. ART reads that
+report back **off the card** afterwards — from the Amiga volume's own copy where
+there is one, and the FAT partition's secondary copy otherwise, across FAT32, FFS
+and PFS3 — so the card-preparation screen can say whether a card has been booted
+yet and what happened when it was.
+
+It was proved by **rehearsal under WinUAE against the owner's own AmigaOS 3.2
+tree**: every step ran, the boot finished in 18 s, the step directory was gone
+afterwards, and the refusal path was measured separately. That one rehearsal
+found two real defects that seven tasks of green tests had not — a bare `$name`
+does not expand in an AmigaDOS script ([ART-272](docs/ISSUES.md#fixed)), and a
+script cannot delete itself while AmigaDOS is executing it
+([ART-273](docs/ISSUES.md#fixed)).
+
+**What is not proven, said here rather than discovered later:** this is phases 1
+and 2 of four. The **Pi3/Pi4 branch of `10-hardware`** — `fat95`, `SD0:`,
+`EMU68BOOT:` — has never run, because under an emulator it writes `skipped uae`
+and measuring it needs a real card. The reboot itself and the package steps
+(phases 3 and 4) are not built. And the FFS and PFS3 read-back paths have so far
+only read volumes ART itself wrote, which proves the code runs, not that the
+bytes match what a real Amiga's own dispatcher writes.
 
 **Content-first detection**: what a file *is* comes from its bytes, not its
 name, so an `.img` holding a floppy is a floppy and a `.dat` holding an LHA
@@ -424,6 +457,17 @@ see"** — what to run, and what a good or bad result looks like:
    starts and the Amiga volumes ask to be formatted or mount. **Bad:**
    anything else — and the image health check's report is the first thing to
    send. **This is the project's 1.0 bar**, not a bigger version number.
+10. **First boot on a real machine, and the report read back off the card.**
+    The first-boot program has only ever run under WinUAE, where the whole
+    Pi3/Pi4 branch of its hardware step writes `skipped uae` and is therefore
+    unmeasured. Build a tree with the first-boot step turned on, put it on a
+    card, boot the Amiga, then bring the card back to ART and open the
+    card-preparation screen. **Good:** the machine sets itself up unattended,
+    the screen shows the same report the Amiga wrote — with the hardware step
+    reporting a real board rather than `skipped uae` — and the step directory is
+    gone from the tree. **Bad:** a step that refuses on real hardware where it
+    passed under emulation, a report ART cannot read back off FFS or PFS3, or a
+    first boot that leaves its own machinery behind on the volume.
 
 Found something? File it the way every other defect in this project is
 filed — see [docs/ISSUES.md](docs/ISSUES.md) for the format, and
@@ -581,7 +625,17 @@ trait and the implementation lives outside — three of them: `MirrorClient` (th
 network), `VolumeFormatter` (launching an external imager) and `HostRecycler`
 (the Windows Recycle Bin). `src-tauri/src/net/` is the only place in ART that
 opens a connection. This keeps the core unit-testable and leaves a future CLI shell
-open. See [docs/architecture.md](docs/architecture.md).
+open.
+
+- [docs/architecture.md](docs/architecture.md) — the layers, the traits, the
+  volume writer's two strategies, the card and OS-install models, and the rules
+  each of them is built on.
+- [docs/security-model.md](docs/security-model.md) — hostile input, the
+  data-safety pipeline, and where ART is allowed to fetch from.
+- [docs/lessons.md](docs/lessons.md) — the incidents those rules were bought
+  with, dated, each ending with the rule it produced.
+- [docs/testing.md](docs/testing.md) — the test strategy, the external oracles,
+  and what a test has to survive before it counts as a guard.
 
 ## License
 

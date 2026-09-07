@@ -41,6 +41,93 @@ Two categories are mandatory for any change that touches user data:
 Regression tests for fixed defects are named in [ISSUES.md](ISSUES.md); a fix
 without a named test is not considered fixed.
 
+**Run the Rust suite more than once before merging.** `net/`'s test server had a
+race that lost roughly one full-suite run in five
+([ART-059](ISSUES.md#fixed)); a blocking CI that fails at random trains people
+to re-run until green, which is how a real failure gets waved through.
+
+## A test is not a guard until the defect has been put back
+
+A test that has never been seen to fail is a claim, not a guard. **Seventeen
+tests in one round passed against the very defect they were written for.** Real
+examples from that round:
+
+- a test named for refusing symlinks that was green because the machine cannot
+  *create* one;
+- a boot-priority test comparing a constant with itself;
+- three that asserted only `is_err()` and so passed on a different refusal than
+  the one they were named for;
+- a refusal test that searched for two substrings separately, where a weaker
+  sentence contained both.
+
+**Mutate every guard that matters and report what fell.** Say plainly when one
+survives — a disclosed survivor is worth more than a clean table.
+
+### A survivor is one of two things, and they need opposite answers
+
+Either the guard is weak, or the *mutation* was the wrong one for it. Both
+happened on **2026-08-24**:
+
+- Extracting an archive into a subdirectory left "unpacking produced no files"
+  green — the mutation changed *where*, not *whether*, so the right one (extract
+  nothing) was run instead, and it fell. **The mutation was wrong.**
+- "Build is disabled when the split is refused" survived removing the refusal
+  entirely, because the state was true anyway: no plan existed yet. **The guard
+  was wrong**, and it was fixed rather than written down as a survivor.
+
+Ask which before recording it.
+
+### Never assert a state that has more than one cause
+
+"The button is disabled" was true in two separate rounds for a *second* reason —
+nothing had been previewed yet — so removing the thing under test left every test
+green. Twice in two days: the refused two-system split, and a failed
+volume-table proposal silently falling back to the two-field pair, which would
+have built a different card than the screen showed.
+
+**Assert the specific sentence.** Where the state itself is the point, first put
+the screen in a condition where only the thing under test can produce it.
+
+### A test that reads a table instead of the file is a copy, and copies drift
+
+`scripts/contrast-check.py` measured the two-ring selection indicator out of its
+own table. Reverting the source to a single ring changed neither the set of
+colours in the file nor the table, so the script went on measuring a ring that
+was no longer drawn.
+
+Where the *arrangement* matters and cannot be parsed, **require the literal in
+the source**. Same family as `scripts/rom-table-check.py`, which re-derives the
+Kickstart table from amitools' Remus data rather than trusting the copy.
+
+### Anything timing-dependent gets an invariant, not a wait
+
+[ART-182](ISSUES.md#fixed) failed three runs in six on one machine and none in
+six on another, so "it passes" proved nothing.
+
+Make the clock or the launcher injectable and assert the property the race
+violates: `temp_path_at` freezes the clock, and the emulator tests do zero real
+waiting.
+
+## Mutating a file safely
+
+A mutation run edits a file that is not yours to lose. Two traps, both paid for:
+
+- **Back the file up by absolute path, and never restore with
+  `git checkout -- <file>`.** On 2026-09-07 a mutation on `src/lib/firstboot.ts`
+  was "restored" that way while the file carried 123 uncommitted lines, and the
+  checkout put it back to `HEAD`. The backup `cp` had already failed silently
+  because a `cd` from an earlier command had stuck to the shell. Start from the
+  repository root with an absolute `cd`, copy to the scratchpad by absolute
+  path, and restore from that copy —
+  [lessons.md § Shell traps](lessons.md#shell-traps).
+- **Restore with `shutil.copyfile`, not `shutil.move`.** `move` carries the
+  backup's *older* modification time, so cargo sees nothing newer than what it
+  already built and the next `cargo test` runs the **mutated** binary against
+  unmutated source. On 2026-08-24 that showed up as a guard failing on an
+  assertion its own source plainly satisfies — a confusing five minutes rather
+  than a wrong result, since each mutation was itself compiled from a freshly
+  written file. `touch` the file after restoring it, or use `copyfile`.
+
 ## What must be tested, per format
 
 The phase numbers this section used to carry ("Phase 1 — ADF + LHA") are the
@@ -109,6 +196,11 @@ Fixture plan (built up per phase):
 - synthetic Amiga executable (Hunk header only)
 - WHDLoad structure (slave + exe + data dir)
 
+**The checked-in `test/` directory is the deliberate exception** to the tempdir
+rule: synthetic images ART itself wrote, kept because they were carried to real
+hardware — `test/art-bootable-test.adf` booted an A500 from a Gotek. Outputs the
+user is meant to try go there, not into a git-ignored scratch folder.
+
 ## External oracle
 
 ART's own test suite cannot catch a format mistake that its reader and
@@ -169,6 +261,58 @@ It was cancelled (2026-08-11) because it assumed licensed media reliably to
 hand. A volunteer with a real CD32 or AmigaOS disc is still welcome; nothing
 claims it has happened.
 
+### The other oracle scripts
+
+None of these is in CI, and none ships a fixture. Run the one whose module you
+moved:
+
+| Script | What it checks against | Needs |
+|---|---|---|
+| `iso-oracle-check.py` | the disc reader vs 7-Zip | `7z` |
+| `fat-oracle-check.py` | the card's FAT32 boot partition vs 7-Zip | `7z` |
+| `pfs3-oracle-check.py` | PFS3, both directions, vs hst-imager | `hst.imager.exe` |
+| `vhd-oracle-check.py` | the dynamic VHD writer vs Microsoft's `Get-VHD` | Hyper-V PowerShell |
+| `icon-oracle-check.py DIR` | every `.info` on real install media, round-tripped through `core/amigaicon` | `xdftool` |
+| `ilbm-oracle-check.py` | the ByteRun1 encoder vs ffmpeg, and real `.prefs` containers | `ffmpeg` |
+| `media-table-check.py DIR` | the install-media hash table vs the owner's own ADFs | real media |
+| `catalogue-check.py` | every shipped bundle path vs Aminet itself | the network |
+| `zoom-check.py`, `osbuilder-strip-check.py` | the shell's real widths, and the OS Builder's step strip | `pnpm dev` |
+
+Alongside them are the **censuses** — `iso-susp-census.py`,
+`lha-header-census.py`, `lha-package-identity.py`, `make-c64-fixture.py` — kept
+as scripts so an answer about real material can be re-run rather than
+re-trusted.
+
+## Real material and the ignored hooks
+
+**`#[ignore]`d Rust tests are the other half of the outside checks**, and they
+are not optional extras: they are where ART meets material nobody here wrote.
+`cargo test -- --ignored` lists them. Most take an environment variable naming
+real material — `ART_OSINSTALL_DEST`, `ART_CARD_OUT`, `ART_REAL_HARDFILE` — and
+run read-only against the owner's own disks. Every command line is in
+[STATUS.md](STATUS.md)'s reproduce block.
+
+Three are worth knowing by name, because each proves something ART's own
+assertions cannot:
+
+- **`build_the_real_322_tree_when_asked`** (`ART_322_BASE`, `ART_322_UPDATE`,
+  `ART_322_ROM`, `ART_322_DEST`) builds AmigaOS 3.2.2 from the owner's own base
+  and update media and then **asks the tree what it is** rather than asserting
+  it: `Prefs/Env-Archive/Versions/Release` is written by the release itself, so
+  the claim comes from a file Hyperion wrote and not from ART's own dropdown.
+- **`round_trip_every_icon_in_a_folder_when_asked`** (`ART_ICON_DIR`) is the
+  Rust half of the icon oracle; `scripts/icon-oracle-check.py` drives it.
+- **`rehearse_the_real_tree_when_asked`** (`ART_FIRSTBOOT_TREE`,
+  `ART_FIRSTBOOT_ROM`, `ART_WINUAE`, in `commands/firstboot.rs`) is the one test
+  in ART that opens WinUAE against the owner's own material. It copies the tree,
+  writes the first boot into the copy, boots it, and asks the Amiga's own
+  `S/FirstBoot.log` for the answer — which is how ART-272 and ART-273 were
+  found. It never touches the tree it is pointed at, and a failure keeps the
+  copy and prints where it is.
+
+Being gated is the point: they need licensed material, so they cannot run in CI
+and must never be made to pass by shipping a fixture of somebody's ROM.
+
 ## CI
 
 GitHub Actions runs on every push (Windows x64):
@@ -188,12 +332,26 @@ cargo deny check                       # licence + advisory audit
 pnpm tauri build                       # full production build
 ```
 
-**Locally, `cargo test` may not be the command to quote from.** On the owner's
-machine an antivirus kills a full `cargo test --lib` mid-run — exit 0, no
-`test result:` line, no failure — so `cargo test --lib -- --skip artwork` is
-the only honest Rust number there until the exclusions land
-([ART-261](ISSUES.md)). **Quote the `test result:` line, never the exit code**:
-an exit code cannot tell a finished suite from a killed one.
+### Quoting a test run
+
+**A test run is finished when it says `test result:`, not when it exits 0.**
+
+On **2026-09-04** `cargo test` printed *"running 2668 tests"*, then about
+seventy `... ok` lines, then stopped — **no summary line, no failure, exit code
+0** — four times in a row, and identically whether the output went to a pipe or
+straight to a file. The cause was outside the repository: the machine's
+antivirus was interfering with `rustup.exe`, so the harness was being killed
+mid-run and the shell saw a clean exit. Run again with the interference gone and
+the suite reported **2626 passed, 0 failed, 42 ignored** in 32.65 s.
+
+So **locally, `cargo test` may not be the command to quote from.** On the
+owner's machine `cargo test --lib -- --skip artwork` is the only honest Rust
+number until the antivirus exclusions land ([ART-261](ISSUES.md)).
+
+**Quote the `test result:` line, never the exit code.** An exit code cannot tell
+a finished suite from a killed one, and "green" is exactly what a truncated run
+looks like. The current numbers, and the command that produced them, are in
+[STATUS.md](STATUS.md)'s Snapshot.
 
 Clippy runs with `-D warnings` and is **blocking on purpose**: it previously
 ran with `continue-on-error`, and that hid a real correctness bug for months

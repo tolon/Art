@@ -17,6 +17,52 @@ operation classification, and the data-safety pipeline.
 | Unsafe external process execution | Whitelist tool paths; validate arguments; never pass user input unsanitized. |
 | Accidental raw-device writes | Never write to raw devices without explicit device selection + double confirmation. |
 
+## Two safety modules, different threats
+
+The two module names are easy to confuse and they defend opposite things.
+**`core/security/` defends ART against hostile input; `core/safety/` defends the
+user's existing data against ART itself.** Both are choke points — do not
+bypass either.
+
+### `core/security/` — hostile input
+
+**`core/security/path.rs::safe_join()` is the only way to turn an archive entry
+name into a destination path.** It normalizes `\` and `/`, rejects absolute
+paths, `..`, `RootDir` and Windows prefixes, and then re-checks containment
+against the destination root. Extraction, a `.uaem` sidecar, a checkout's temp
+path — all of them go through it.
+
+Three rules travel with it:
+
+- **Bound every read.** Never allocate from an unchecked length field; use
+  `checked_add` on running totals, so a header claiming four gigabytes fails a
+  comparison rather than an allocation.
+- **Never read a whole card or a whole large image to answer a small question.**
+  `read_card` takes an 8 MB window per area; `open_hdf` reads a 1 MB window and
+  takes the size from metadata. A gigabyte-scale file that has to fit in memory
+  before it can be identified is a denial of service the user supplied
+  themselves.
+- **Launch external tools with structured argv, never a shell string** assembled
+  from a file name — the editor a checkout opens included.
+
+### `core/safety/` — the user's data
+
+Every write goes through it:
+
+- **`atomic_write(path, bytes)`** — temp file in the same directory ->
+  `sync_all` -> rename. Never call `std::fs::write` on a user file directly; a
+  truncated ADF or HDF is a destroyed one.
+- **`guarded_write(path, bytes, policy)`** — backup, then atomic write. It
+  returns the backup path, which commands surface to the UI
+  (`MutationOutcome`, `GotekSaveOutcome`, ...) so the user is always told where
+  the previous version went.
+- **`BackupPolicy::{DISK_IMAGE, CONFIG, LARGE_IMAGE, NONE}`** — 3 generations
+  for ADFs, 5 for config files, off for multi-gigabyte HDFs (that is the
+  Snapshot Manager's job).
+
+**Creating a file is `SAFE_CREATE`**: refuse when the target already exists
+rather than replacing it.
+
 ## Destructive-operation classification
 
 Every workflow carries a `Safety` tag (see `core/workflow/types.rs`). The UI
@@ -109,6 +155,22 @@ are legal to create on Windows and impossible to open afterwards.
 
 External programs are launched with structured argv, never a shell string
 assembled from a file name — the editor a checkout opens included.
+
+## Where ART may fetch from
+
+`core/sources/mirror.rs` declares the `MirrorClient` trait **and every rule
+about where ART may fetch from**. A request is always *constructed* from a
+configured `Mirror` plus a validated repository path, so **there is no function
+anywhere in ART that fetches a caller-supplied URL.**
+
+That rule lives in `core/` on purpose. §41.5.7 promises "configured mirrors,
+never arbitrary URLs", and the promise is worthless if the check lives in the AI
+layer that is supposed to be constrained by it.
+
+ART fetches index files and packages, never HTML, so nothing scrapes. The
+transport that carries it out is `src-tauri/src/net/`, and nothing else in ART
+may open a connection — see
+[architecture.md § Where the network lives](architecture.md#where-the-network-lives).
 
 ## Raw-device operations
 

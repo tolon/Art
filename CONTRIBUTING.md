@@ -14,14 +14,17 @@ pnpm, MSVC Build Tools).
 2. Pick an issue from [docs/ISSUES.md](docs/ISSUES.md), or open one to discuss
    a change. **If you are looking for where help is wanted right now**, see
    [README.md § What still needs testing](README.md#what-still-needs-testing)
-   — **nine** concrete gaps, each with what to run and what a good or bad
+   — **ten** concrete gaps, each with what to run and what a good or bad
    result looks like. Five are Play scenarios; two need a person at a screen
-   (the Amiga-side install panel and the Aminet studio); and two need real
-   hardware — a card carrying two AmigaOS environments, and a PiStorm card ART
-   built, flashed and booted (the bar for 1.0). Trying one of these and
-   reporting back
-   (good or bad) is as useful as a code change.
-3. Branch from `main`.
+   (the Amiga-side install panel and the Aminet studio); and three need real
+   hardware — a card carrying two AmigaOS environments, a PiStorm card ART
+   built, flashed and booted (the bar for 1.0), and a first boot on a real
+   machine with its report read back off the card. Trying one of these and
+   reporting back (good or bad) is as useful as a code change.
+3. Branch from `main`. **Short-lived branches named for the issue they close**
+   (`art-204-config-sections`), merged with `--no-ff` and deleted afterwards, is
+   the shape every branch here has used since 2026-08-22. `main` is what is
+   released; a phase's work lives on its own branch until the phase closes.
 4. Follow the stage plan — **do not implement future-stage features** until the
    current one is stable. [docs/roadmap.md](docs/roadmap.md) defines what each
    phase contains; STATUS.md defines the order.
@@ -79,6 +82,19 @@ Adding or changing a UI string:
 
 Use clear, imperative-mood commit messages (e.g. "Add ADF bootblock validation").
 Reference issues when relevant.
+
+Two mechanics, both paid for once — see
+[docs/lessons.md](docs/lessons.md#shell-traps):
+
+- **Check the branch before you commit**: `git branch --show-current`. A second
+  agent or a background task can move the working tree under you, and a
+  `git push origin main` will happily report success with none of your work on
+  `main`. Give a concurrent worker a `git worktree` rather than letting it
+  change branches under the checkout.
+- **Write the message to a file and use `git commit -F <file>`.** Inside a
+  double-quoted shell string, backticks run as command substitution and the
+  quotes are eaten; a message containing `` `to` `` and `` `from` `` has been
+  committed here with those words missing.
 
 ## Licensing
 

@@ -167,7 +167,44 @@ command-layer concern, which is where it belongs in this codebase — the same
 place `run_with_fallback` decides which formatter runs. `core/rom/pairing.rs`
 and `commands/preload.rs::rom_pairing_for` are the worked example.
 
+`commands/*.rs` are thin adapters only: deserialize the arguments, call core,
+serialize the result back. Business logic that ends up there is business logic
+in the wrong layer.
+
+## Error types
+
+Two levels, deliberately separate. `core::CoreError` (`thiserror`, no Tauri) is
+wrapped by `error::AppError`, which serializes to its `Display` string, so the
+frontend always receives a readable sentence rather than a discriminant.
+
+**Never surface a raw OS code to the UI.** Technical detail goes to the log; the
+user gets a sentence and an `ART-*` identifier. The identifier registry is
+`CoreError::code()` — see
+[security-model.md § Error reporting](security-model.md#error-reporting).
+
+## Where the network lives
+
+`src-tauri/src/net/` is the transport, and **nothing else in ART may open a
+connection**. It is blocking `ureq`, pinned `=3.2.1`; downloads already run on
+job threads, so an async runtime would buy nothing.
+
+`gzip` is deliberately off. Transparent decompression would make the bytes ART
+writes differ from the bytes the server counted, breaking both the resume offset
+and the size gate.
+
+What ART is *allowed* to ask for is not decided here: the policy — a request is
+always constructed from a configured `Mirror` plus a validated repository path,
+never from a caller-supplied URL — lives in `core/sources/mirror.rs` and is
+written down in
+[security-model.md § Where ART may fetch from](security-model.md#where-art-may-fetch-from).
+
 ## Data flow: the DROP pipeline
+
+Drag and drop is architectural, not a convenience. There is exactly **one**
+global webview listener, registered in `components/layout/Layout.tsx` via
+`lib/dnd.ts`. Per-module drop systems are not allowed: a second listener means
+two answers to "what did the user just drop", and only one of them reaches the
+panel.
 
 ```
 USER drops a file
@@ -200,6 +237,11 @@ Frontend onDragDropEvent  ──paths──▶  invoke('analyze_paths')
       ▼
 Frontend renders "What can I do?" panel
 ```
+
+`Detection { category, format_hint, confidence, size, is_dir }` is what crosses
+the boundary. `FormatCategory` serializes as kebab-case strings —
+`floppy-image`, `harddisk-image`, `archive`, `rom`, `directory`, `unknown` — so
+the TypeScript side matches on those literals and not on a numeric tag.
 
 The execute half of the pipeline is in place for operations that modify data:
 `core/safety` performs `BACKUP → APPLY` atomically and the volume writer's
@@ -267,6 +309,31 @@ blocks lazily mid-write cannot provide it — which is why operations assemble a
 `Journalled::begin`. That single check is the whole safety property: a block
 ART cannot undo is a block ART will not touch.
 
+`commands/volume_write.rs::with_volume()` is the intended shape on the
+`WholeFile` side: `read -> mutate -> validate -> backup -> commit`. Validation
+happens on the in-memory result **before** anything reaches disk; the backup and
+the atomic replace are `core/safety`'s job, described in
+[security-model.md § Two safety modules](security-model.md#two-safety-modules-different-threats).
+
+### One writer for OFS and FFS, two crates for everything else
+
+`core/volume/` is ART's **own** filesystem writer and the only one for OFS and
+FFS. It goes through a `BlockDevice` rather than a raw image buffer, so DD
+floppies, HD floppies and hard-disk partitions are the same code path with
+different geometry.
+
+Two other filesystems are written, both through a crate and neither through
+`core/volume`:
+
+- **PFS3** via `libpfs3` (`core/preload/native.rs`) — the volume format a real
+  PiStorm card carries.
+- **FAT32** via `fatfs` (`core/fat32.rs`) — the PiStorm card's boot partition,
+  and the one filesystem ART creates that is not an Amiga one.
+
+**The root block is always computed** — `VolumeGeometry::root_block_for(total_blocks)`
+— and never read from the boot block. A real AmigaDOS boot block has 68000 code
+where a reader looking for a pointer would find one.
+
 ### Journal recovery is a mount-time step
 
 `panic = "abort"` means an out-of-range index kills the process outright,
@@ -296,15 +363,27 @@ pub trait Workflow: Send + Sync {
 ```
 
 The catalogue of workflows lives in one place, `core/workflow/builtin.rs`;
-`lib.rs::build_engine()` simply registers everything it declares. The engine
-turns a detection into an ordered candidate list and a set of recommendations.
+`lib.rs::build_engine()` simply calls `register_all` and registers everything it
+declares. The engine turns a detection into an ordered candidate list and a set
+of recommendations.
+
+**Add a new action to the catalogue, not to `build_engine`.** The tests that
+guard routing — `workflows_do_not_cross_formats`,
+`every_recognised_format_has_a_recommendation`,
+`every_workflow_route_is_a_real_app_route` — all read from the catalogue, so an
+action registered anywhere else is an unguarded one.
 
 `WorkflowInfo::kind` splits actions in two:
 
-- `Navigate { route }` — the UI opens that route with the object loaded. Most
-  actions are this, and `run()` deliberately refuses: opening a studio is not
-  engine work, so routing knowledge stays out of React.
+- `Navigate { route }` — the UI opens that route with the object's path in
+  router state. Most actions are this, and `run()` deliberately refuses (the
+  trait default): opening a studio is not engine work, so routing knowledge
+  stays out of React. Routes in `builtin.rs::route` must match the
+  `<Route path=...>` values in `src/App.tsx`, and a test enforces it.
 - `Execute` — the engine performs the work and returns a `WorkflowOutcome`.
+  Reached through the `run_workflow` command, **which refuses anything that is
+  not `Safety::ReadOnly`**: a data-changing action must go through its studio's
+  preview/backup/verify flow (spec §92), never straight off the drop panel.
 
 Actions that are planned but not implemented are still registered, with
 `available: false`, so they surface as "Coming Later" instead of silently
@@ -321,8 +400,15 @@ core independence rule:
   into `job-progress` events, and owns the registry the UI queries.
 
 Cancellation is cooperative: an operation only observes the flag **between whole
-units of work**. Together with `core/safety` that means stopping can leave work
-unfinished, but never a half-written file.
+units of work**, never mid-write. Together with `core/safety` that means
+stopping can leave work unfinished, but never a half-written file. Return
+`CoreError::Cancelled` when you stop; the runner turns it into a `Cancelled` job
+state rather than an error.
+
+A core function that can be long takes `&dyn ProgressSink` and keeps a thin
+wrapper passing `NoProgress`, so callers who do not need a job are unaffected —
+`scan_titles` / `scan_titles_with` (`core/gameindex/scan.rs`) is the shape to
+copy.
 
 ## Operation log
 
@@ -332,8 +418,14 @@ on failure the error ID (§68). `core/oplog` defines the record and an
 `OperationLog` trait; the JSON Lines implementation writes beside the
 application log.
 
+A command that changes user data takes `oplog: State<'_, JsonlOperationLog>` and
+goes through `write_result` in `commands/oplog.rs`; `commands/adf.rs` is the
+worked example.
+
 Recording is best-effort by design — a failure to log must never turn a
-successful write into a reported failure.
+successful write into a reported failure. Failures are recorded too, with the
+error's `ART-*` id from `CoreError::code()`. Those ids are user-facing: treat
+them as stable.
 
 ## Safety classification
 
@@ -352,12 +444,324 @@ See [security-model.md](security-model.md) for the full policy.
 ## State management
 
 - **Tauri `State`**: long-lived engine objects (`WorkflowEngine`).
-- **SQLite**: relational data (`settings`, `recent_files`, `jobs`). The title
-  catalogue is **not** here — `core/gameindex/store.rs` keeps it as one JSON
-  file per scanned root, because it is rebuilt from a folder scan rather than
-  queried relationally.
-- **JSON store**: key/value preferences (`theme`, `uxMode`, `winuaePath`).
-- **Zustand**: live UI state mirroring the persisted stores.
+- **SQLite** (`sqlite:art.db`, `tauri-plugin-sql`): relational data
+  (`settings`, `recent_files`, `jobs`). Migrations live in
+  `src-tauri/migrations/`, are declared in `lib.rs`, and run lazily on the
+  frontend's first `Database.load`. **Never edit a released migration** — add a
+  new file. The title catalogue is **not** here — `core/gameindex/store.rs`
+  keeps it as one JSON file per scanned root, because it is rebuilt from a
+  folder scan rather than queried relationally.
+- **JSON store** (`tauri-plugin-store`, `settings.json`): key/value preferences
+  (`theme`, `uxMode`, `language`, paths).
+- **Zustand** (`src/stores/`): live UI state mirroring the persisted stores.
+
+A new command goes in **both** `invoke_handler![]` in `lib.rs` and a typed
+wrapper in `src/lib/*.ts`; the frontend never calls `invoke` directly from a
+component. New plugin permissions go in `src-tauri/capabilities/default.json`.
+
+The frontend uses `HashRouter` (routes in `App.tsx`) and the `@/*` alias, which
+is declared in **both** `tsconfig.json` and `vite.config.ts` — keep the two in
+sync.
+
+## Where scratch goes, and where a deleted file goes
+
+Two rules about the host's own disks, both of them the user's ruling rather than
+a convenience.
+
+**Every staging site goes through one root** (`src-tauri/src/scratch.rs`,
+ART-196; `scripts/scratch-root-sweep.py` is blocking in CI). Preview
+extractions, install staging, unpacked packages, the emulator's launch
+configuration: none of them may call `std::env::temp_dir()` for themselves.
+
+`core/` never chooses where to stage. A core function that needs somewhere to
+work **takes the directory**, and the command layer hands it the one this module
+resolved. The default is the platform temp dir, so nothing changes for a user
+who never opens the setting; but **a chosen root that is not usable is a
+refusal, never a fallback** (`AppError::ScratchUnavailable`), because silently
+staging on `C:` after the user said "not `C:`" is the confident-and-wrong class
+of defect this project pays most for. Repointing the root moves and deletes
+nothing.
+
+**A file removed from the user's own disk goes to the Windows Recycle Bin**
+(`core/hostfs.rs` -> `tools/recycle_bin.rs`, ART-080). ART invents no recovery
+mechanism of its own and uses the one place the user already knows to look.
+
+And unlike `core::volume::write::delete_many`, which is all-or-nothing because a
+disk image has a journal, **a host filesystem has none**: twelve files recycled
+one by one are twelve completed operations that a thirteenth failure cannot
+undo. So the outcome is reported **per entry**, by name and by result, and no
+screen claims otherwise.
+
+## Bounds checking in the ADF core
+
+Block numbers arrive from the frontend (`dirBlock`, `headerBlock`) and from
+corrupt images. The release profile sets `panic = "abort"`, so an out-of-range
+index kills the entire application. **Never index the image directly.** Which
+helper depends on which side you are on:
+
+- **Reading a whole image** (`core/adf`, validation) — `blocks::block_slice` and
+  `blocks::read_u32_at`. They compute the offset with `checked_mul`, verify
+  containment, and turn a bad number into a `CoreError`.
+- **Writing** (`core/volume/write`) — `BlockSet` in `layout.rs`. It stages
+  blocks in a `BTreeMap` rather than slicing a buffer, so there is nothing to
+  index out of range. The old whole-image mutators (`block_slice_mut`,
+  `write_u32_at`) were deleted along with `core/adf/mutate.rs`; do not
+  reintroduce that shape.
+
+Chain walks — hash buckets, file extension blocks — need a step limit. A
+malformed image can loop forever.
+
+## A card is a list of disks, not a disk
+
+Learnt from two real PiStorm cards, not from a document
+([sd2-card-layout.md](sd2-card-layout.md)). An SD card written for Emu68 is an
+**MBR** with a FAT32 primary and one to three `0x76` primaries, and the m68k
+side sees each `0x76` area as a **separate hard drive** — so each carries its
+**own RDB, at a byte offset inside the card**, never at offset 0.
+
+- `core/mbr.rs` reads the four primary entries and nothing else; no MBR at all
+  means one area at offset 0, which is what a plain HDF is. It **writes** one
+  too (`plan_card` / `write_mbr`), and the defaults there are measured off the
+  two real cards rather than chosen — including that an Amiga disk at byte zero
+  is not expressible, which is how SD-0's unit-0 rule is enforced.
+- `core/card/mod.rs` models the card as `Vec<AmigaArea>`. Its two methods exist
+  because of ART-097: `file_systems()` unions the drivers across **all** areas,
+  and `partitions_missing_driver()` asks against that union. A card whose second
+  RDB carries the FFS driver and whose first carries PFS3 boots fine; asking one
+  RDB in isolation reported fifteen working partitions as broken.
+- RDB block numbers inside an area are relative to the **area base**. Both
+  halves of that are built: writing *into* a volume at an offset was ART-043,
+  and laying an RDB *at* one is `core/card/build.rs`.
+
+**Never read a whole card**: `read_card` takes an 8 MB window per area.
+
+Building one (`core/card/build.rs`, `core/card/payload.rs`, `core/fat32.rs`) has
+three rules of its own:
+
+- **Nothing may reach past its partition.** `fat32::Region` maps offset zero to
+  the boot partition's first byte and *refuses* a write past its last, because
+  the Amiga's first RDB begins where that partition ends.
+- **Say what the release says.** The Emu68 archive's own `config.txt` names the
+  kernel it boots — `Emu68-pistorm.gz`, not the `Emu68.img` ART used to write
+  over it (ART-103) — and the archive's name means different boards in the two
+  release lines (ART-091). Neither is ART's to guess; both are checked against
+  the files actually being placed.
+- **A card is verified by something that is not ART.**
+  `scripts/fat-oracle-check.py` reads the boot partition with 7-Zip, which is
+  how `fatfs`'s two directory defects were found (ART-102).
+
+## Installing an OS: a component is a set of paths
+
+`core/osinstall/` (`recipe.rs`, `source.rs`, `scan.rs`, `plan.rs`, `apply.rs`,
+`startup.rs`, `verify.rs`) turns the user's own AmigaOS install media into a
+populated system volume, without running the Amiga Installer.
+
+It does not do this disk by disk. `ModulesA1200_3.2.adf` holds fourteen commands
+in `C/`, and **thirteen are older copies of commands `Workbench3.2` already
+carries** — copying the whole disk onto `SYS:` would downgrade thirteen commands
+in order to install one new one (`LoadModule`).
+
+So a **component** is a named set of `PathRule`s (`from` on the media, `to` on
+the tree, `File` or `Subtree`), not "copy this disk". Recipes are **data** —
+`core/osinstall/recipes/amigaos-3.2.json` — so a future release (3.9,
+CaffeineOS) adds a JSON file, not a code path. No two components may claim the
+same destination without one declaring an `overrides` relationship, and a test
+enforces that over the shipped recipe.
+
+The engine's product is a **distribution tree**, not a volume: a host folder that
+is the finished system volume file for file, an Amiga-metadata `.uaem` sidecar
+beside each one, and a `distribution.json` at the root recording which component
+and which media every file came from. That record is what makes a later
+component add or remove possible, and what lets the whole engine run in a
+tempdir with no volume, no driver and no external binary at all. Putting the
+tree onto an actual card is `core/preload`'s job.
+
+### Which distributions ART knows about is data
+
+`core/distro/`'s registry is a JSON file compiled in with `include_str!` —
+reviewable in a diff and unable to grow a code path of its own.
+
+**ART never downloads a distro image**: no URL list, no fetch button. The
+`homepage` field is where the *user* goes, and ART then accepts the local file
+they came back with. That is a legal line, not a preference.
+
+### What a catalogued title is called is sourced
+
+`core/gameindex` keeps the distinction in the type rather than in a comment: an
+`.rp9` manifest and a WHDLoad slave's header **state** a title; a filename and a
+drawer name only **suggest** one (`Lotus3HD` and `Moonstone Install` are drawers
+for games called *Lotus 3* and *Moonstone*). The screen then marks a suggestion
+as guessed rather than presenting it as a fact.
+
+Same rule as "ask the artefact", one layer down. `core/artwork` reads
+`core::gameindex::record` types and **must never be imported by
+`core/gameindex`**: joining a title to its picture is a command-layer job, the
+same shape as `core/rom/pairing.rs` above.
+
+## Two ways to write a PiStorm volume
+
+`core/preload::VolumeFormatter` (`probe`, `import_filesystem`,
+`format_partition`, `copy_in`) has two implementations: `tools/hst_imager.rs`,
+which launches `hst.imager.exe` and therefore lives outside `core/`, and
+`core/preload/native.rs`, which launches nothing — PFS3 through `libpfs3`, FFS
+through ART's own `core/volume/write`.
+
+**Native is the default and `hst-imager` is a named fallback, chosen per
+operation, never per run.** `commands/preload.rs::run_with_fallback` tries the
+native path first for every step of a plan and only reaches a configured
+`hst-imager` for two known, typed capability gaps:
+
+- non-ASCII AmigaDOS names on a PFS3 volume, which `libpfs3` 0.1.3 cannot
+  round-trip (`CoreError::NonAsciiPfs3Names`, ART-113);
+- embedding a filesystem driver into a *foreign* card's existing RDB in place,
+  which ART's own RDB writer cannot do without risking silently shifting every
+  partition after the first (`CoreError::ForeignRdbEmbedNotSupported`, ART-117).
+
+Both are refused **before a single byte is written**, which is what makes
+retrying on the other tool safe. The fallback is never silent: every step's
+result carries which tool ran it and, when it was not the default, why — logged
+and shown on the confirmation screen before the destructive step runs, not only
+afterwards in the result panel.
+
+## AmigaDOS compatibility
+
+`hash::name_hash(name, international)` must match `adfGetHashValue` exactly,
+**including the `& 0x7ff` mask applied after every character**. Dropping it
+produces images ART can read back but that AmigaDOS and WinUAE cannot. Reference
+values are pinned in tests. The `international` flag comes from the volume's
+bootblock, never assumed.
+
+### AmigaDOS scripts ART writes
+
+`core/firstboot/scripts/` is AmigaDOS text ART puts on a user's system volume and
+the Amiga executes on its first boot. Every rule below was **measured under
+WinUAE on 2026-09-07**, after seven tasks of green tests had passed against
+scripts that stopped at their first step on a real shell
+([ART-272](ISSUES.md)/[ART-273](ISSUES.md)):
+
+- **Read a variable as `${name}`, never `$name`.** `$ART_System` did not expand
+  and `${ART_System}` did; a bare name with an underscore is the case that
+  fails. `every_variable_read_is_braced` scans every script for a `$` not
+  followed by `{`.
+- **Never `Quit`.** A `Quit` inside an `Execute`d script ends every script above
+  it — the wrapper, the generated run list and the dispatcher all went with the
+  first step's `Quit 0`. A step leaves through `Skip end` / `Lab end` and refuses
+  by `Set ART_StepRc 20`, which the wrapper resets before the step and reads
+  after. `no_script_ever_quits` guards it.
+- **`List` does not sort.** It answered `30, 20, 10`; the run list goes through
+  `C:Sort` before it executes, and `plan` refuses a tree missing any of the
+  eight disk commands the scripts run (`NEEDED_COMMANDS`).
+- **A script cannot delete itself while it runs.** The finished state is "the
+  step directory is gone", never "the dispatcher is gone".
+- A `.KEY` script's brackets are `[]`, because `${...}` inside a `{}`-bracketed
+  script is taken for a key. Scripts are ASCII with LF endings and pinned by
+  SHA-256 (`every_fixed_file_hash_is_pinned`): an edit lands only with its pin.
+
+The guards read the text; the proof is the gated real boot
+(`rehearse_the_real_tree_when_asked`, see
+[testing.md § Real material](testing.md#real-material-and-the-ignored-hooks)).
+Emu68 Hatcher's own scripts, which run on real hardware, follow the same rules.
+
+## Config files are user data
+
+**Never regenerate a user's config file from scratch.** `FF.CFG` (FlashFloppy),
+`config.txt` and `cmdline.txt` (Raspberry Pi) are hand-tuned and carry dozens of
+settings ART knows nothing about.
+
+Each generator takes an `existing: Option<&str>` and **edits in place**: managed
+keys are rewritten, and everything else — comments, ordering, unknown keys —
+passes through verbatim. Regenerating `cmdline.txt` drops `root=` and the Pi
+stops booting. Spec §39 and §40 both mandate this.
+
+When adding a managed key, add it to the module's `managed_*` list rather than
+writing it directly.
+
+## The UI layer's own rules
+
+### Beginner and Power User mode
+
+`usePowerMode()` (`src/lib/uxmode.ts`) decides what the UI shows. Beginner mode
+hides the raw-data studios, the Advanced action group and block-level numbers
+(§47, §48).
+
+It **only hides**. Never disable an operation based on the mode, and never
+change what ART does.
+
+### Nothing changes unless the user changes it
+
+The user's rule, and it holds for **every** feature, not just Settings: no
+choice ART offers may reset itself between runs. A studio's last folder, a pane's
+sort order, a filter, a window's Application Size — if the user set it, it comes
+back.
+
+- `src/lib/remembered.ts` is the one way to do it. `recall`/`recallInto` read a
+  persisted value **through a guard** (`isOneOf`, `isWholeNumberBetween`,
+  `nullOr`), so a hand-edited or stale settings file falls back to the default
+  instead of putting a bad value on screen.
+- The read is asynchronous and the user is not. `settingsStore` tracks which
+  keys the user has touched this run and refuses to let a late-landing read
+  overwrite them — ART-089 was that bug from the other side, and a setting that
+  changes without the user changing it is the one outcome this rule forbids.
+- **Application Size** (`src/lib/appZoom.ts`, Ctrl +/-/0) exists because most of
+  the people using this are over fifty. It is a first-class setting, not an
+  accessibility afterthought; new screens inherit it from the shell and must not
+  fight it with fixed pixel heights.
+
+### The OS Builder is a wizard, and one value carries the build
+
+`/os-builder` is a shell — a progress strip over an `<Outlet/>` — with the steps
+as **real sub-routes** (`hedef`, `kaynak`, `paketler`, `amiga-kurulum`, `kart`,
+`birimler`), so back/forward and a jump to a step work at the router level.
+`src/lib/buildSteps.ts` says which steps a build kind has and whether one can
+act; it is pure and returns i18n **keys**.
+
+**The build's own values live in one place** (`src/lib/buildSession.ts` +
+`useBuildSession.ts`), and the reason is ART-197: the folder ART *wrote* and the
+folder the next step *operated on* were two remembered keys joined by nothing,
+so a user who had just watched ART write 1915 files was asked to go and find
+them.
+
+It is a **typed facade over `settingsStore`**, not a second store. A parallel
+store would have to re-answer ART-089 (a load landing after the user acted) and
+ART-178/ART-195 (a fresh identity per render driving effects into a loop), plus
+the guards. Legacy keys are read once, never written again and never deleted, so
+a rollback still finds them.
+
+**What the facade owns — narrowed 2026-09-05 to match the tree.** A value the
+build *produces*, or one that has to survive from the step that writes it to a
+later step that reads it, goes in the facade: that pair is what ART-197 was. A
+value a single step **asks for and consumes in the same render** does not — the
+media folders are the standing example, and the layered-release round added the
+per-layer ones the same way, after checking that ART-197's failure cannot reach
+them. Three media fields now persist outside the facade.
+
+When you are unsure which kind a value is, one question decides it: **can the
+value ART wrote and the value the next step operates on drift apart?** If yes it
+belongs in the facade, whatever it looks like.
+
+### Strings: two catalogues, and `src/lib` never renders one
+
+`react-i18next`, English **and Turkish** (`src/i18n/en.json`, `tr.json`). Add or
+change a key in **both files in the same commit** — `pnpm test` fails the build
+if the key sets differ, a value is empty, or an interpolation variable present in
+one is missing from the other. The live key count is in
+[STATUS.md](STATUS.md); count them rather than quoting a number from prose.
+
+`src/lib/*` is pure TypeScript with no i18next singleton, so a helper that builds
+a message returns a `Phrase { key, params? }` and the *component* calls
+`t(phrase.key, phrase.params)`.
+
+The three helpers that cannot finish their own sentence return `PartialPhrase<K>`
+(`src/lib/phrase.ts`), whose `params` type is poisoned so that passing it
+straight to `t()` fails to compile — i18next renders a missing variable as a
+literal `{{now}}` on screen, and that is the bug the type exists to catch.
+Nothing in the build catches a `Phrase` pointing at a key nobody added either,
+so `src/i18n/phrase-keys.test.ts` enumerates every variant of every such mapper
+and asserts it resolves to a real leaf.
+
+Rust-side strings (`CoreError` messages, `WhdloadRefusal.reason` /
+`.suggestion`) are not in this system yet and stay English whatever the chosen
+language — ART-060.
 
 ## Why not a Cargo workspace?
 
