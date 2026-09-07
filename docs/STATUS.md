@@ -27,7 +27,7 @@ PASS forward on faith.
 |---|---|
 | **Last updated** | 2026-09-07 — round 5 of the Emu68 Hatcher intake (first boot on the Amiga, phases 1–2) merged to `main` as `1cb5ce1` and pushed. The debt-clearing wave (13 defects closed, seven batches plus a whole-branch review and its fix wave) was **merged to `main` as `94c2bdc` the same evening**, and its three deferred leftovers as `bb91547` (`art-leftovers`, four commits: one extraction in `install_pack`, cancel sinks anchored on the copy phase's own message, the dead `winuae_path` field gone, an `expect` turned into a refusal), both the owner's decision; both branches are deleted and `main` is unpushed until the owner has built and tested it. Per-round detail is the [session log](session-log.md) |
 | **Version** | **0.9.0**, released 2026-09-04. The number lives in three files (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`) and `release.yml` refuses a tag that disagrees with them. Deliberately not 1.0: the bar is a card ART built, flashed and booting a real A500 — not a bigger feature count |
-| **`main` / `origin`** | Identical at `32651c9`, pushed 2026-09-07 (`git rev-parse main origin/main`; the push was `722a8c5..32651c9`). No live phase branch. CI run 34116056492 on that commit — the first CI has seen of rounds 3, 4 and 5 — **passed** (`Build & Test (Windows x64): success`, 2026-09-07 11:44 UTC, `gh run view 34116056492`); everything on `main` above it — the docs commits and the debt wave's merge `94c2bdc` — is **unpushed** (`git log --oneline origin/main..main`), by the owner's choice: build and test first, then push |
+| **`main` / `origin`** | Identical at `76eac3d`, pushed 2026-09-07 evening (`32651c9..76eac3d`, 38 commits: the debt wave's merge `94c2bdc`, its leftovers `bb91547`, the document prune and split, ART-261's closure). No live phase branch. CI run **34151589760** on `76eac3d` **passed** (`Build & Test (Windows x64): success`, 2026-09-07 18:46 UTC, `gh run view 34151589760`); the morning's run 34116056492 on `32651c9` had passed too. Anything committed after `76eac3d` is docs-only and unpushed until the owner says |
 | **Tests — Rust** | `cd src-tauri && cargo test --lib` — the **full** suite, no `--skip` — on the merged `main` (`7825549`), 2026-09-07 evening, after the owner installed the antivirus exclusions, run twice: `test result: ok. 3062 passed; 0 failed; 51 ignored; 0 measured; 0 filtered out; finished in 41.36s`, then `... finished in 43.90s`. That closes [ART-261](ISSUES.md#fixed): the 89 `artwork` tests that used to kill the harness run and pass, and the summary line prints. (With `--skip artwork` the same tree gave 2973, and 2971 at `94c2bdc`.) **Quote the `test result:` line, never the exit code**, and run the suite twice before merging ([ART-059](ISSUES.md#fixed)). The 51 ignored are the real-material hooks, env-gated and run by hand — command lines below |
 | **Tests — frontend** | `pnpm test` on the merged `main` (`94c2bdc`), 2026-09-07: `Test Files 87 passed (87)`, `Tests 1194 passed (1194)` |
 | **Lint, format, clippy** | Clean on the merged `main`, 2026-09-07: `pnpm lint` (run unpiped — a pipe reports `tail`'s status, not `tsc`'s), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` |
@@ -196,15 +196,14 @@ block — do not stack another on top of it.**
 
 ### Start here (2026-09-07)
 
-1. **`main` is pushed and CI is green on it.** The push was
-   `722a8c5..32651c9`, and GitHub Actions run **34116056492** on `32651c9` —
-   the first run to see rounds 3, 4 and 5, which had been merged locally —
-   passed (`Build & Test (Windows x64): success`, 2026-09-07 11:44 UTC).
-   Local lint, fmt, clippy, both suites and the three blocking sweeps were
-   clean on the same tree. Everything on `main` above `32651c9` — the docs
-   commits and the debt wave's merge — is **unpushed**: the owner builds
-   and tests first, and pushing is theirs (`git log --oneline
-   origin/main..main` says how much).
+1. **`main` is pushed and CI is green on it.** The evening push was
+   `32651c9..76eac3d` (the debt wave, its leftovers, the document prune and
+   split, ART-261 closed), and GitHub Actions run **34151589760** on
+   `76eac3d` passed (`Build & Test (Windows x64): success`, 2026-09-07
+   18:46 UTC), as the morning's run on `32651c9` had. Local lint, fmt,
+   clippy, both suites (full `cargo test --lib`, 3062) and the blocking
+   sweeps were clean on the same tree. Anything on `main` after `76eac3d`
+   is docs-only and unpushed until the owner says so.
 2. **Round 5 of the Emu68 Hatcher intake — first boot on the Amiga — has
    phases 1 and 2 merged** (`1cb5ce1`, `--no-ff`, branch deleted). What it
    built is two [FEATURES.md](FEATURES.md) rows and one
