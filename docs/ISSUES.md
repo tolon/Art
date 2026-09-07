@@ -736,6 +736,14 @@ re-read again"). Mutated by forcing every archive through the read path
 regardless of the cache-hit check: the unchanged-archive test fell (39
 passed, 1 failed) while the touched-archive test and every other test
 stayed green; restored by re-applying the fix rather than `git checkout --`.
+**Named risk, disclosed rather than fixed:** the skip trusts `file_key`'s
+millisecond mtime, but a FAT32/exFAT collection drive's own clock is
+2-second granularity and a timestamp-preserving copy can leave the mtime
+unchanged entirely, so an archive rewritten with the same byte length inside
+one such tick is skipped — inherited unchanged from the plain-file cache
+this mirrors, not a new hole; no mtime-proximity guard was added, because
+`core` has no clock of its own to compare against and `Rescan` (which
+ignores this cache) is the existing escape hatch.
 
 Implementing this exposed a real edge in the ART-243 fix landed just before
 it (not a separate defect filed on its own, since it never reached anyone —
@@ -803,8 +811,8 @@ parse. A `WhdloadArchive` record whose id was not found again this run is
 now kept as `missing` only if its own archive-internal member
 (`inner`/`slave`) is *still one of those raw names* (round 2's case,
 unchanged) or the archive could not be opened at all this run (unplugged,
-moved — also unchanged); it is dropped as stale only when the member itself
-is genuinely gone from the archive's own listing. Two new tests:
+moved — also unchanged); it is dropped as stale when the member is
+genuinely gone from the archive's own listing. Two new tests:
 `a_title_removed_from_a_rewritten_archive_is_cleared_by_rescan` (an archive
 rewritten with one of two titles genuinely absent — Rescan clears the ghost,
 the survivor keeps its id) and
@@ -822,6 +830,22 @@ intended behaviour; restored by re-applying the same edit rather than
 `git checkout --`.
 `cargo test --lib -- --skip artwork` — `test result: ok. 2961 passed; 0
 failed; 51 ignored; 0 measured; 89 filtered out; finished in 36.81s`.
+
+**Corrected** 2026-09-07, fix round 1 (batch 5 review): the paragraph above
+described the shipped commit's own state, not the tree as it stands after
+the very next commit, `8142f9e` (ART-244). That commit's
+`archive_fresh_members` (`store.rs:840-853`, `915-931`) added a **second**
+stale case this paragraph does not mention: a member still in the archive's
+raw listing, but re-read into a *different* id this run — a real content
+change at the same member, not a transient parse failure. "Dropped as stale
+only when the member itself is genuinely gone from the archive's own
+listing" is therefore no longer the whole rule; a record is now dropped as
+stale when the member is gone **or** when this run's read of that member
+produced a record (any id), and kept as missing only when the member is
+present but produced nothing this run (round 2's case, still unchanged). See
+ART-244's own "Fixed" paragraph, above, for the full account and the test
+that found the gap
+(`a_touched_archive_is_reopened_on_update`).
 
 **ART-251** 🟡 **The AmigaOS 3.2 recipe has no rule for `Utilities` or
 `WBStartup`, so a tree ART builds has neither** — *found 2026-09-06 during

@@ -668,6 +668,24 @@ pub fn refresh_root(
     // one-entry-per-path model — several `CachedEntry` rows share one
     // archive path — which is why this is checked against
     // `previous_by_archive_path` instead, grouped, not through `cached`.
+    //
+    // **Named risk, inherited from the plain-file cache above, not new
+    // here.** `file_key`'s mtime is milliseconds, but the *filesystem*'s own
+    // clock can be coarser: FAT32/exFAT (a common collection-drive format)
+    // stores mtime at 2-second granularity, and a timestamp-preserving copy
+    // can leave the mtime completely unchanged. An archive rewritten with
+    // the same byte length inside one such tick would be skipped here —
+    // and, identically, a plain file changed the same way already skips the
+    // file loop above; this is not a new hole ART-244 opened. No mtime-
+    // proximity guard ("treat an mtime within 2 s of the previous scan's
+    // own time as changed anyway") was added: `core` has no clock of its
+    // own and `scanned_at` is only what the caller happened to supply, so
+    // a guard here would compare against a value this module cannot trust
+    // to be a real wall-clock reading; and the failure mode is self-healing
+    // rather than silent, since `Rescan` always ignores this cache entirely
+    // and a later change with a *different* mtime or size is caught the
+    // ordinary way. Content-hashing every archive to close this precisely
+    // is the cost ART-244 exists to avoid — see the timing above.
     let mut archives_to_scan: Vec<PathBuf> = Vec::new();
     for archive_path in &archives {
         let key = archive_path.to_string_lossy().to_string();
