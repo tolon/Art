@@ -1,9 +1,16 @@
 /*
- * ART theme — dark by default, with a light alternative.
+ * ART theme — Windows 11 / Fluent 2, dark by default with a light alternative.
  *
- * Visual direction (spec §61): modern + professional + Amiga-aware.
- * Subtle Amiga nods only — a single accent (Amiga copper-blue) and the
- * checkmark-of-twelve nothingness. No fake CRT, no neon, no pixel fonts.
+ * Visual direction (owner-approved design canvas, 2026-09-07): every value
+ * below is a published WinUI 3 / Fluent 2 token — Mica background, card
+ * fills, the system accent blue, InfoBar/InfoBadge status colours — not a
+ * colour chosen by eye. The generator that produced the approved canvas is
+ * the source of truth for the mapping (`gen.py`'s `THEMES` dict, kept outside
+ * this repository per the session's brief).
+ *
+ * The custom property NAMES are unchanged from the previous (Amiga
+ * copper-blue) theme — every screen that reads `--bg`, `--accent`,
+ * `--ok-text` and so on keeps working; only the values move to Fluent's.
  */
 
 /*
@@ -11,122 +18,156 @@
  *
  * A colour that works as a **fill** does not work as **text on a tint of
  * itself**, and ART was using one token for both. `.badge-ok` puts
- * `color: var(--ok)` on a background that is 22% of `var(--ok)` — measured,
- * that is 2.20:1 in the light theme, where readable text needs 4.5:1. Every
- * status badge in the program was affected, in both themes.
- *
- * So each meaning has two tokens:
+ * `color: var(--ok)` on a background that is a tint of `var(--ok)` — for some
+ * combinations that drops well under the 4.5:1 a badge's text needs. So each
+ * meaning has two tokens:
  *
  * - `--accent` / `--ok` / `--warn` / `--err` — the **mark**: fills, borders,
- *   `accent-color`, the tint behind a badge. These carry the identity and are
- *   unchanged in the dark theme.
+ *   the tint behind a badge or InfoBar. These are Fluent's own mark colours
+ *   (SystemFillColorSuccess/Caution/Critical, the system accent) and are used
+ *   verbatim.
  * - `--accent-text` / `--ok-text` / `--warn-text` / `--err-text` — the same
- *   meaning **as text**, and the only one that may be used for words. Each is
- *   the mark's own hue, moved in lightness until it clears 4.5:1 against all
- *   four surfaces *and* against its own badge tint on each of them.
+ *   meaning **as text**, and the only one that may be used for words. Where
+ *   the mark itself already clears 4.5:1 as text (against every surface, and
+ *   as ink on its own 22%-tint badge), the `-text` token is the mark
+ *   unchanged. Where it does not, the `-text` token is the mark's own hue
+ *   moved in lightness until it does — see the deviations below.
  *
- * The values below are not chosen by eye. `scripts/contrast-check.py` reads
- * this file, computes every pair ART actually renders, and fails if one drops
- * below its threshold — run it after touching anything here.
+ * `scripts/contrast-check.py` reads this file, computes every pair ART
+ * actually renders, and fails if one drops below its threshold — run it
+ * after touching anything here.
+ */
+
+/*
+ * ## Deviations from the Fluent token verbatim, measured rather than guessed
+ *
+ * Six Fluent values, read straight off the published ramp, failed
+ * `contrast-check.py` against surfaces this round adds (`--bg-hover`, chosen
+ * below) or against all four surfaces rather than the one usually shown in a
+ * style guide. Each was moved to the nearest point on its own hue/ramp that
+ * clears every surface, with the measured minimum ratio recorded (the
+ * governing surface is `--bg-panel` for light text on dark grounds, and
+ * `--bg-hover` for dark text/borders on light grounds — `--bg-hover` is the
+ * darkest of the light theme's four surfaces, so it is the hardest one for
+ * anything dark-on-light to clear).
+ *
+ * - **Dark `--text-faint`**: Fluent's TextFillColorTertiary is `#8B8B8B`,
+ *   which is only 4.10:1 on `--bg-panel` (needs 4.5). Moved to `#999999` —
+ *   4.90:1 on `--bg-panel`, the governing surface.
+ * - **Light `--text-faint`**: TextFillColorTertiary is `#8A8A8A`, 3.11:1 on
+ *   `--bg-hover` (needs 4.5) — the brief's own flagged case, and worse than
+ *   it first looks: `#767676`, the value that clears the *panel* surface
+ *   alone, is still only 3.78:1 on `--bg-hover`. Moved further, to `#666666`
+ *   — 4.77:1 on `--bg-hover`.
+ * - **Light `--border-strong`**: ControlStrongStrokeColorDefault is `#8A8A8A`,
+ *   2.87:1 on `--bg-hover` as a boundary (needs 3.0). Moved to `#808080` —
+ *   3.28:1 on `--bg-hover`.
+ * - **Dark `--ok-text` / `--err-text`**: the mark itself (`#6CCB5F`,
+ *   `#FF99A4`) is 4.10–4.39:1 as text on `--bg-panel` and inside its own 22%
+ *   badge tint over `--bg-panel` — short of 4.5 both ways. Lightened along
+ *   the same hue to `#73CE67` (4.57:1 text, 4.61:1 in-badge, `--bg-panel`)
+ *   and `#FF9EA9` (4.55:1 text, 4.55:1 in-badge, `--bg-panel`). Dark
+ *   `--warn-text` needed no change: `#FCE100` is 5.85:1 in its own badge on
+ *   `--bg-panel` already.
+ * - **Light `--ok-text` / `--warn-text` / `--err-text`**: the marks
+ *   (`#0F7B0F`, `#9D5D00`, `#C42B1C`) are 3.29–3.85:1 as text/in-badge on
+ *   `--bg-hover` — well short. Darkened along the same hue to `#0C640C`
+ *   (4.56:1 in-badge, `--bg-hover`), `#7E4B00` (4.55:1 in-badge,
+ *   `--bg-hover`) and `#9F2317` (4.58:1 in-badge, `--bg-hover`). Light
+ *   `--accent-text` needed no change: `#005FB8` clears 5.24:1 on every
+ *   surface including `--bg-hover`.
+ *
+ * `--bg-hover`: Fluent gives two candidate values per theme
+ * (SubtleFillColorSecondary/Tertiary). `gen.py`'s own canvas applies the
+ * Secondary value on `:hover` (Tertiary is defined but never drawn), so that
+ * is the one used here: `#2A2A2A` dark, `#EAEAEA` light.
  */
 
 :root,
 .theme-dark {
-  --bg: #1a1d23;
-  --bg-elevated: #21252d;
-  --bg-panel: #272c35;
-  --bg-hover: #2f3540;
-  --border: #353b46;
-  /* 3:1 against every surface — the threshold for a boundary that has to be
-     seen to be used (an input's edge, the drop zone's dashed frame). */
-  --border-strong: #768297;
+  --bg: #202020;
+  --bg-elevated: #272727;
+  --bg-panel: #2c2c2c;
+  --bg-hover: #2a2a2a;
+  --border: #1d1d1d;
+  --border-strong: #9a9a9a;
 
-  --text: #e6e9ef;
-  /* Three readable levels rather than two readable and one decorative: muted
-     6.5:1 and faint 4.6:1 at worst, against the lightest surface they land
-     on. Faint used to be 2.58:1 on a hovered row — and what it carries is
-     file paths, which is the line a user reads when something is wrong. */
-  --text-muted: #b6bdc8;
-  --text-faint: #989eab;
+  --text: #ffffff;
+  --text-muted: #cfcfcf;
+  /* Deviation: Fluent's #8b8b8b is 4.10:1 on --bg-panel. See note above. */
+  --text-faint: #999999;
 
-  /* Amiga copper-blue accent */
-  --accent: #3aa9c9;
-  --accent-hover: #4db8d6;
-  --accent-fg: #0e1b22;
+  /* Windows' own default system accent (default blue) */
+  --accent: #60cdff;
+  --accent-hover: #4cc2ff;
+  --accent-fg: #000000;
 
-  /* Status colors */
-  --ok: #4caf7d;
-  --warn: #d6a838;
-  --err: #d65a5a;
+  /* Status colors — Fluent SystemFillColorSuccess/Caution/Critical */
+  --ok: #6ccb5f;
+  --warn: #fce100;
+  --err: #ff99a4;
 
-  /* The same meanings as text. See the note above. */
-  --accent-text: #7ec7dc;
-  --ok-text: #86cba8;
-  --warn-text: #e0be69;
-  --err-text: #e79f9f;
+  /* The same meanings as text. See the two notes above. */
+  --accent-text: #60cdff;
+  /* Deviation: lightened from the mark #6ccb5f. See note above. */
+  --ok-text: #73ce67;
+  --warn-text: #fce100;
+  /* Deviation: lightened from the mark #ff99a4. See note above. */
+  --err-text: #ff9ea9;
 
-  --shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  /* Badge / InfoBar tints, new this round — the flat fill behind a status
+     badge or InfoBar, distinct from the mark itself (which also fills a
+     progress bar, an accent border, etc.). */
+  --ok-bg: #393d1b;
+  --warn-bg: #433519;
+  --err-bg: #442726;
+  --accent-tint: #1f3a48;
+
+  --shadow: 0 8px 16px rgba(0, 0, 0, 0.26);
   --radius: 8px;
   --radius-sm: 4px;
 }
 
 /*
- * Light: **paper, not paper-white.**
- *
- * The first human look at this theme said it plainly — too bright to read.
- * Three of its four surfaces were `#ffffff`, so a full-screen window was one
- * flat sheet of maximum-luminance white with nothing to give it depth: the eye
- * works against the background instead of reading what is on it, and the
- * borders that were supposed to separate things had nothing to separate them
- * from.
- *
- * The fix is not "less light". It is **a range**: a page a little darker than
- * its panels, panels a little darker than white, and borders strong enough to
- * be seen against them. Same idea the dark theme already uses, in the other
- * direction.
+ * Light: Windows 11's own light theme values, not a lightened copy of the
+ * dark one — Mica `#F3F3F3`, card `#FBFBFB`, the same range-not-flat-white
+ * idea the previous theme already used, now with Fluent's own numbers.
  */
 .theme-light {
-  /* The range, widened after looking at it on a real screen.
-   *
-   * The previous values were a range in arithmetic and not in perception:
-   * #e9ecf1 to #fafbfc is seventeen steps, the same distance the dark theme
-   * uses to obvious effect — but contrast is judged against the surrounding
-   * luminance, so seventeen steps near white reads as nothing. The file
-   * manager showed it worst: sidebar, both panes and the page behind them all
-   * arrived as one flat sheet.
-   *
-   * So: a page that is definitely not white, panels that are, and borders
-   * strong enough to be a line rather than a suggestion. Most of the people
-   * this is for are over fifty, which makes contrast a feature rather than a
-   * preference — the same reason Application Size is a first-class setting. */
-  --bg: #dfe4ec;
-  --bg-elevated: #f1f4f8;
-  --bg-panel: #ffffff;
-  --bg-hover: #d5dce7;
-  --border: #b9c3d1;
-  --border-strong: #6a7a8f;
+  --bg: #f3f3f3;
+  --bg-elevated: #f9f9f9;
+  --bg-panel: #fbfbfb;
+  --bg-hover: #eaeaea;
+  --border: #e5e5e5;
+  /* Deviation: Fluent's #8a8a8a is 2.87:1 on --bg-hover. See note above. */
+  --border-strong: #808080;
 
-  --text: #1b212b;
-  --text-muted: #424a55;
-  --text-faint: #58606b;
+  --text: #1a1a1a;
+  --text-muted: #626262;
+  /* Deviation: Fluent's #8a8a8a is 3.11:1 on --bg-hover. See note above. */
+  --text-faint: #666666;
 
-  /* Darkened from #2d8aab so the primary button's white label clears 4.5:1
-     against it — it was 3.94:1, and that button is the one people press. */
-  --accent: #297e9c;
-  --accent-hover: #216981;
+  --accent: #005fb8;
+  --accent-hover: #1a6fc0;
   --accent-fg: #ffffff;
 
-  --ok: #2f9c66;
-  --warn: #b9881f;
-  --err: #c14b4b;
+  --ok: #0f7b0f;
+  --warn: #9d5d00;
+  --err: #c42b1c;
 
-  /* The same meanings as text — see the note at the top of this file. Deep
-     rather than bright: on paper a mid-tone green or amber is not readable at
-     11px, and the badge tint behind it makes it worse, not better. */
-  --accent-text: #1d586d;
-  --ok-text: #1c5e3d;
-  --warn-text: #6c4f12;
-  --err-text: #8a3030;
+  /* The same meanings as text — see the notes at the top of this file. */
+  --accent-text: #005fb8;
+  /* Deviation: darkened from the mark #0f7b0f. See note above. */
+  --ok-text: #0c640c;
+  /* Deviation: darkened from the mark #9d5d00. See note above. */
+  --warn-text: #7e4b00;
+  /* Deviation: darkened from the mark #c42b1c. See note above. */
+  --err-text: #9f2317;
 
-  --shadow: 0 2px 8px rgba(20, 30, 50, 0.08);
+  --ok-bg: #dff6dd;
+  --warn-bg: #fff4ce;
+  --err-bg: #fde7e9;
+  --accent-tint: #e1eef8;
+
+  --shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
 }
