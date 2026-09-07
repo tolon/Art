@@ -178,8 +178,8 @@ mod independence {
 
     /// The `(start, end)` line ranges (0-based, inclusive) a `#[cfg(test)]`
     /// covers — the attribute line itself through to the `}` that closes the
-    /// item it is attached to, or through the item's own line when it has no
-    /// block body (`#[cfg(test)] mod x;`).
+    /// item it is attached to, or through the item's own declaration when it
+    /// has no block body (`#[cfg(test)] mod x;`).
     ///
     /// Matching on **indent** rather than counting braces is deliberate: a
     /// WinUAE `.uae` line or an AmigaDOS script assembled with `format!`
@@ -189,6 +189,19 @@ mod independence {
     /// so a block's closing brace is always aligned with the line that opened
     /// it — indent is the reliable signal this codebase's own formatting
     /// already guarantees.
+    ///
+    /// **The item's own declaration can span several lines** — a
+    /// rustfmt-wrapped function signature, most often — so the line that
+    /// opens the block is found by scanning forward, not by checking only
+    /// the line right after the attribute(s). A round of review found the
+    /// single-line check missing exactly this: `core/volume/write/mod.rs`'s
+    /// `#[cfg(test)] pub(crate) fn commit_blocks(` wraps its three
+    /// parameters across their own lines before `{`, and the old check
+    /// covered only the attribute plus that first signature line — the body,
+    /// where a stray `Command::new(` would actually sit, was left outside
+    /// the region. The scan is bounded: a line ending in `;` (a bodyless
+    /// item, `#[cfg(test)] mod x;`) or a blank line means there is no block
+    /// to find, and it stops there instead of reading past the item.
     fn test_regions(lines: &[&str]) -> Vec<(usize, usize)> {
         let mut regions = Vec::new();
         let mut i = 0;
@@ -205,9 +218,26 @@ mod independence {
                 {
                     j += 1;
                 }
-                let opens_block = lines.get(j).is_some_and(|l| l.trim_end().ends_with('{'));
+                // Scan the item's own declaration, however many lines it
+                // wraps across, for the line that actually opens the block.
+                let mut sig_end = j;
+                let opens_block = loop {
+                    match lines.get(sig_end) {
+                        None => break false,
+                        Some(line) => {
+                            let trimmed = line.trim_end();
+                            if trimmed.ends_with('{') {
+                                break true;
+                            }
+                            if trimmed.ends_with(';') || trimmed.trim().is_empty() {
+                                break false;
+                            }
+                            sig_end += 1;
+                        }
+                    }
+                };
                 let end = if opens_block {
-                    let mut k = j + 1;
+                    let mut k = sig_end + 1;
                     while k < lines.len()
                         && !(indent_of(lines[k]) == indent && lines[k].trim() == "}")
                     {
@@ -215,7 +245,7 @@ mod independence {
                     }
                     k.min(lines.len().saturating_sub(1))
                 } else {
-                    j.min(lines.len().saturating_sub(1))
+                    sig_end.min(lines.len().saturating_sub(1))
                 };
                 regions.push((start, end));
                 i = end + 1;
@@ -224,6 +254,82 @@ mod independence {
             }
         }
         regions
+    }
+
+    /// A round of review simulated this exact shape against
+    /// `core/volume/write/mod.rs:995-1000` and found 2 of 9 lines covered —
+    /// the attribute plus the first signature line, with the wrapped
+    /// parameters and the body both left outside the region. This is the
+    /// regression test for the fix above: (a) a single-line-signature test
+    /// item, (b) a wrapped, multi-line-signature test item whose body holds
+    /// a `Command::new(`, and (c) ordinary code after both. (a) and (b) must
+    /// be fully covered; (c) must not be swept in.
+    #[test]
+    fn test_regions_covers_a_signature_that_wraps_across_lines() {
+        // Indented by 4 spaces relative to its own content on purpose: this
+        // literal becomes part of *this file's own bytes*, and the guard
+        // being tested scans its own source. A fake snippet flush at column
+        // 0 would put a `}` at indent 0 right where `core/mod.rs`'s real
+        // `#[cfg(test)] mod independence {` (also indent 0) is scanning for
+        // *its* closing brace — ending that real region early and turning
+        // every line after this test into a false offender. Discovered by
+        // running this exact test the first time it was written.
+        let src = "\
+    mod scratch {
+        #[cfg(test)]
+        fn single_line_test() {
+            let _ = 1;
+        }
+
+        #[cfg(test)]
+        pub(crate) fn wrapped_signature_test(
+            a: u32,
+            b: u32,
+        ) -> u32 {
+            let _ = std::process::Command::new(\"x\");
+            a + b
+        }
+
+        fn production_after(a: u32) -> u32 {
+            a
+        }
+    }
+";
+        let lines: Vec<&str> = src.lines().collect();
+        let regions = test_regions(&lines);
+
+        let single_line_body = lines.iter().position(|l| l.contains("let _ = 1;")).unwrap();
+        assert!(
+            is_test_line(&regions, single_line_body),
+            "a single-line-signature #[cfg(test)] item's body must be covered"
+        );
+
+        let wrapped_signature_line = lines
+            .iter()
+            .position(|l| l.contains("pub(crate) fn wrapped_signature_test("))
+            .unwrap();
+        let wrapped_body_line = lines
+            .iter()
+            .position(|l| l.contains("Command::new(\"x\")"))
+            .unwrap();
+        assert!(
+            is_test_line(&regions, wrapped_signature_line),
+            "the wrapped item's own signature line must be covered"
+        );
+        assert!(
+            is_test_line(&regions, wrapped_body_line),
+            "a #[cfg(test)] item's body must be covered even when its \
+             signature wraps across several lines before the opening brace"
+        );
+
+        let production_line = lines
+            .iter()
+            .position(|l| l.contains("fn production_after"))
+            .unwrap();
+        assert!(
+            !is_test_line(&regions, production_line),
+            "ordinary code after a #[cfg(test)] item must not be swept into its region"
+        );
     }
 
     fn is_test_line(regions: &[(usize, usize)], line_no: usize) -> bool {
