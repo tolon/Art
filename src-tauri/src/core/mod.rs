@@ -334,17 +334,32 @@ mod independence {
     /// the region. The scan is bounded: a line ending in `;` (a bodyless
     /// item, `#[cfg(test)] mod x;`) or a blank line means there is no block
     /// to find, and it stops there instead of reading past the item.
-    fn test_regions(lines: &[&str]) -> Vec<(usize, usize)> {
+    ///
+    /// `label` identifies the source for the panic message below only — the
+    /// real file's own path from [`core_never_spawns_a_process_outside_a_test`],
+    /// or a short description from a fixture-built unit test.
+    fn test_regions(label: &str, lines: &[&str]) -> Vec<(usize, usize)> {
         let stripped = strip_string_literals(&lines.join("\n"));
         let scan: Vec<&str> = stripped.lines().collect();
-        // `strip_string_literals` keeps every newline byte exactly where it
-        // was, so this always holds; falling back to the raw lines if it
-        // somehow did not is safer than indexing past the end below.
-        let scan: &[&str] = if scan.len() == lines.len() {
-            &scan
-        } else {
-            lines
-        };
+        // Fix round 1 (batch-4 review, Minor): `strip_string_literals` keeps
+        // every newline byte exactly where it was, by construction, so this
+        // must always hold. A silent fallback to the unstripped lines on
+        // mismatch used to fail open — reopening the exact
+        // flush-left-brace-inside-a-string hazard this guard exists to
+        // close, with nothing on screen saying it had happened. A stripper
+        // bug belongs in `strip_string_literals`'s own test coverage, not in
+        // a quiet revert here.
+        assert_eq!(
+            scan.len(),
+            lines.len(),
+            "{label}: strip_string_literals changed the line count ({} raw vs {} \
+             stripped) — every newline byte it sees must be preserved exactly; this is a \
+             bug in the stripper itself, not something test_regions may silently work \
+             around by falling back to the unstripped lines",
+            lines.len(),
+            scan.len()
+        );
+        let scan: &[&str] = &scan;
 
         let mut regions = Vec::new();
         let mut i = 0;
@@ -438,7 +453,7 @@ mod independence {
     }
 ";
         let lines: Vec<&str> = src.lines().collect();
-        let regions = test_regions(&lines);
+        let regions = test_regions("wrapped-signature fixture", &lines);
 
         let single_line_body = lines.iter().position(|l| l.contains("let _ = 1;")).unwrap();
         assert!(
@@ -502,7 +517,7 @@ fn production_after() -> u32 {
 }
 ";
         let lines: Vec<&str> = src.lines().collect();
-        let regions = test_regions(&lines);
+        let regions = test_regions("flush-left-brace-in-string fixture", &lines);
 
         let assert_line = lines
             .iter()
@@ -546,7 +561,7 @@ fn production_after() -> u32 {
 }
 ";
         let lines: Vec<&str> = src.lines().collect();
-        let regions = test_regions(&lines);
+        let regions = test_regions("flush-left-brace-in-raw-string fixture", &lines);
 
         let assert_line = lines
             .iter()
@@ -556,6 +571,67 @@ fn production_after() -> u32 {
             is_test_line(&regions, assert_line),
             "the flush-left `}}` inside the raw string literal must not have \
              ended the region before the fn's own body finished"
+        );
+
+        let production_line = lines
+            .iter()
+            .position(|l| l.contains("fn production_after"))
+            .unwrap();
+        assert!(
+            !is_test_line(&regions, production_line),
+            "ordinary code after the #[cfg(test)] item must still not be swept in"
+        );
+    }
+
+    /// Fix round 1 (batch-4 review, Important): the two tests above cover a
+    /// plain and a raw string, but neither exercises the escape branch —
+    /// `strip_string_literals`'s `Some('\\') => { .. }` arm, which must
+    /// consume the backslash *and* the character right after it together so
+    /// an escaped quote (`\"`) is never misread as the string's own closing
+    /// quote. A string with an escaped `\"` followed by a flush-left `}`
+    /// before its *real* closing quote is exactly the case that would catch
+    /// a broken escape branch: if the escape were mishandled, the scanner
+    /// would treat the `"` right after the `\` as the closer, leaving
+    /// everything from there on — the flush-left `}` included — as ordinary
+    /// unstripped text again, ending the region early the same way the two
+    /// tests above prove a naive, un-stripped scan does.
+    #[test]
+    fn an_escaped_quote_before_a_flush_left_brace_does_not_end_the_region_early() {
+        let src = "\
+#[cfg(test)]
+fn holds_an_escaped_quote_before_a_flush_left_brace() {
+    let evidence = \"before \\\" middle
+}
+after\";
+    assert!(!evidence.is_empty());
+}
+
+fn production_after() -> u32 {
+    0
+}
+";
+        let lines: Vec<&str> = src.lines().collect();
+        // The fixture's own escaped quote must actually be there, or this
+        // test could pass with no escape in play at all — the same
+        // discipline `test_regions_covers_a_signature_that_wraps_across_lines`
+        // exercises for its own fixture with the fixture-must-actually-
+        // distinguish check that pattern already uses elsewhere in this
+        // crate.
+        assert!(
+            lines.iter().any(|l| l.contains("before \\\" middle")),
+            "the fixture must actually contain an escaped quote, or this test proves nothing"
+        );
+
+        let regions = test_regions("escaped-quote fixture", &lines);
+
+        let assert_line = lines
+            .iter()
+            .position(|l| l.contains("assert!(!evidence.is_empty());"))
+            .unwrap();
+        assert!(
+            is_test_line(&regions, assert_line),
+            "the flush-left `}}` after an escaped quote must not have ended \
+             the region before the fn's own body finished"
         );
 
         let production_line = lines
@@ -580,7 +656,7 @@ fn production_after() -> u32 {
             let text = std::fs::read_to_string(&path)
                 .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
             let lines: Vec<&str> = text.lines().collect();
-            let regions = test_regions(&lines);
+            let regions = test_regions(&path.display().to_string(), &lines);
             for (n, line) in lines.iter().enumerate() {
                 if line.trim_start().starts_with("//") {
                     continue;
