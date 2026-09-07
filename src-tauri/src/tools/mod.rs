@@ -10,3 +10,4 @@
 
 pub mod hst_imager;
 pub mod recycle_bin;
+pub mod winuae_launcher;

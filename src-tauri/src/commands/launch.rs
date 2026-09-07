@@ -33,10 +33,9 @@ use crate::core::launch::{
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::profile::{AmigaProfile, MemoryConfig};
 use crate::core::rom::{scan_rom_directory, RomInfo};
-use crate::core::winuae::{
-    detect_winuae, generate_uae_config, launch_winuae, DirMount, LaunchMedia,
-};
+use crate::core::winuae::{detect_winuae, generate_uae_config, DirMount, LaunchMedia};
 use crate::error::{AppError, AppResult};
+use crate::tools::winuae_launcher::launch_winuae;
 
 /// `RomInfo` → the three fields `core/launch` reads. The lower module must
 /// not know the higher one's type; this is where the translation lives.

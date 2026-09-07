@@ -66,7 +66,8 @@ amiga-retro-toolkit/
 │   │   ├── net/                #   the only place in ART that opens a connection
 │   │   ├── tools/               #   platform-specific: launches external programs
 │   │   │   ├── hst_imager.rs   #     the VolumeFormatter that shells out (outside core/)
-│   │   │   └── recycle_bin.rs  #     the HostRecycler: IFileOperation, also outside core/
+│   │   │   ├── recycle_bin.rs  #     the HostRecycler: IFileOperation, also outside core/
+│   │   │   └── winuae_launcher.rs #  the EmulatorLauncher: spawns winuae64.exe (ART-274)
 │   │   └── core/               #   AMIGA CORE (platform-independent)
 │   │       ├── error.rs        #     CoreError
 │   │       ├── detect.rs       #     format detection
@@ -131,17 +132,18 @@ Concretely: if a `core/` module needs to do something platform-specific (open
 a file dialog, detect a USB drive, launch WinUAE), it exposes a **trait**, and
 the implementation lives outside the core.
 
-There are three live instances: `MirrorClient` (`core/sources/mirror.rs` →
-`net/http_mirror.rs`, the network), `VolumeFormatter` (below) and `HostRecycler`
+There are four live instances: `MirrorClient` (`core/sources/mirror.rs` →
+`net/http_mirror.rs`, the network), `VolumeFormatter` (below), `HostRecycler`
 (`core/hostfs.rs` → `tools/recycle_bin.rs`, which is how a file the user deletes goes to the
-Windows Recycle Bin rather than into a recovery mechanism ART invented — ART-080).
+Windows Recycle Bin rather than into a recovery mechanism ART invented — ART-080), and
+`EmulatorLauncher` (`core/amigainstall/run.rs` → `tools/winuae_launcher.rs`, which is how ART
+starts and ends the WinUAE process a run or a first-boot rehearsal drives).
 
-There is a **fourth place that should be one and is not**: `core/winuae.rs` spawns
-`winuae64.exe` directly from inside `core/`, with no trait between the decision to open the
-emulator and the process spawn that carries it out, and `core::amigainstall::run` and
-`core::amigainstall::rehearse` are both consumers of it. That is filed as
-[ART-274](ISSUES.md), not sanctioned; the fix is an `EmulatorLauncher`-style trait declared in
-`core/` with the spawn implemented in `tools/`, exactly as `VolumeFormatter` already is.
+`core/winuae.rs` used to spawn `winuae64.exe` directly from inside `core/`, with no trait
+between the decision to open the emulator and the process spawn that carried it out —
+[ART-274](ISSUES.md), closed 2026-09-07 by moving the spawn (`WinUaeLauncher`,
+`launch_winuae_process`, `WinUaeProcess`) into `tools/winuae_launcher.rs` and leaving only
+config generation and install-location detection in `core/winuae.rs`.
 
 `core/preload::VolumeFormatter` (`probe`, `import_filesystem`, `format_partition`, `copy_in`)
 is the largest of them: `src-tauri/src/tools/hst_imager.rs` launches `hst.imager.exe` and lives

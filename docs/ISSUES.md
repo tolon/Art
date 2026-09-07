@@ -25,48 +25,6 @@ pass — filed and closed together rather than sitting in Open in between.
 ---
 
 ## Open
-**ART-274** 🔵 **`core/winuae.rs` spawns an external process from inside
-`core/`, the exact shape the trait rule exists to prevent** — *found
-2026-09-07 by the whole-branch review of `art-firstboot` phases 1–2*
-`src-tauri/src/core/winuae.rs` · `src-tauri/src/core/amigainstall/run.rs` ·
-`src-tauri/src/core/amigainstall/rehearse.rs`
-
-CLAUDE.md's "The core independence rule" is explicit: `core/` is
-`std` + a short, named list of crates, and a module that needs something
-platform-specific — device enumeration, launching WinUAE — exposes a
-**trait**, with the implementation living outside `core/`. `VolumeFormatter`
-(`core/preload/mod.rs`, implemented in `tools/hst_imager.rs`) and
-`HostRecycler` (`core/hostfs.rs`, implemented in `tools/recycle_bin.rs`) are
-the two live instances of that shape. `core/winuae.rs` is not: it launches
-`winuae64.exe` directly, from inside `core/`, with no trait between the
-decision to open the emulator and the process spawn that does it.
-
-This did not start with `art-firstboot`. `core::amigainstall::run` has called
-`core::winuae` since the AmigaOS-install-under-WinUAE round, and this branch
-made it worse in the ordinary way a precedent gets worse: `core::amigainstall::rehearse`
-(the first-boot rehearsal engine) is a **second** consumer of the same
-un-abstracted call, added without anyone re-deciding whether the shape was
-still acceptable. Two consumers is a pattern one review away from being read
-as sanctioned; a third would make it one.
-
-**How it fails for a user: it does not, yet.** This is not a defect in
-`art-firstboot`'s own behaviour — `rehearse.rs` inherited an existing
-violation rather than introducing a new kind of one, and nothing here is
-reported to have produced a wrong sentence on screen. The cost is the one the
-trait rule is written against: `core/` is meant to stay unit-testable without
-a real WinUAE install and promotable to a standalone crate without carrying
-Windows-process-spawning code along, and `core/winuae.rs` as it stands
-already breaks both of those promises for anything that imports it.
-
-**The fix, not built in this round:** an `EmulatorLauncher`-style trait
-declared in `core/` (the decision — which executable, which arguments, when
-to give up waiting) with the actual process spawn implemented outside it, in
-`tools/`, exactly as `VolumeFormatter`/`tools/hst_imager.rs` already do for
-volume formatting. `core::amigainstall::run` and `core::amigainstall::rehearse`
-would both take the trait rather than calling `core::winuae` directly, the
-same way both call sites already take other platform boundaries as traits
-rather than concrete implementations.
-
 **ART-261** 🟠 **`cargo test --lib` reports exit 0 with no `test result:`
 line whenever `commands::artwork` runs, and passes cleanly without it** —
 *found 2026-09-06 by round 4's Task 1, localised the same day by a two-armed
@@ -742,6 +700,102 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-274** 🔵 **`core/winuae.rs` spawns an external process from inside
+`core/`, the exact shape the trait rule exists to prevent** — *found
+2026-09-07 by the whole-branch review of `art-firstboot` phases 1–2*
+`src-tauri/src/core/winuae.rs` · `src-tauri/src/core/amigainstall/run.rs` ·
+`src-tauri/src/core/amigainstall/rehearse.rs`
+
+CLAUDE.md's "The core independence rule" is explicit: `core/` is
+`std` + a short, named list of crates, and a module that needs something
+platform-specific — device enumeration, launching WinUAE — exposes a
+**trait**, with the implementation living outside `core/`. `VolumeFormatter`
+(`core/preload/mod.rs`, implemented in `tools/hst_imager.rs`) and
+`HostRecycler` (`core/hostfs.rs`, implemented in `tools/recycle_bin.rs`) are
+the two live instances of that shape. `core/winuae.rs` is not: it launches
+`winuae64.exe` directly, from inside `core/`, with no trait between the
+decision to open the emulator and the process spawn that does it.
+
+This did not start with `art-firstboot`. `core::amigainstall::run` has called
+`core::winuae` since the AmigaOS-install-under-WinUAE round, and this branch
+made it worse in the ordinary way a precedent gets worse: `core::amigainstall::rehearse`
+(the first-boot rehearsal engine) is a **second** consumer of the same
+un-abstracted call, added without anyone re-deciding whether the shape was
+still acceptable. Two consumers is a pattern one review away from being read
+as sanctioned; a third would make it one.
+
+**How it fails for a user: it does not, yet.** This is not a defect in
+`art-firstboot`'s own behaviour — `rehearse.rs` inherited an existing
+violation rather than introducing a new kind of one, and nothing here is
+reported to have produced a wrong sentence on screen. The cost is the one the
+trait rule is written against: `core/` is meant to stay unit-testable without
+a real WinUAE install and promotable to a standalone crate without carrying
+Windows-process-spawning code along, and `core/winuae.rs` as it stands
+already breaks both of those promises for anything that imports it.
+
+**Fixed** 2026-09-07 on `art-debts`, commit "The emulator spawn leaves core/
+(ART-274)", the same shape `VolumeFormatter`/`tools/hst_imager.rs` already
+have. `core::amigainstall::run::EmulatorLauncher`/`EmulatorSession` (and
+`Clock`/`RealClock`) stay declared in `core/amigainstall/run.rs` unchanged;
+the real implementation — `WinUaeLauncher`, its `WinUaeSession` newtype, and
+every `std::process` use (`WinUaeProcess`, `launch_winuae_process`,
+`launch_winuae`, `launch_winuae_inner`) — moved out to the new
+`src-tauri/src/tools/winuae_launcher.rs`. The two thin wrappers that used to
+pick the real launcher from inside `core/` (`run::run`, `rehearse::rehearse`)
+are deleted rather than left as stubs, because building a `WinUaeLauncher` is
+itself the process-spawning decision `core/` may not make — every caller now
+constructs `tools::winuae_launcher::WinUaeLauncher` itself and calls
+`run_with`/`rehearse_with` directly: `commands/amigainstall.rs::install`,
+`commands/firstboot.rs::perform` and its gated
+`rehearse_the_real_tree_when_asked` hook, and the two direct callers of the
+free `launch_winuae` function, `commands/launch.rs` (Play) and
+`commands/winuae.rs` (WinUAE Studio's manual launch). The two `#[ignore]`d
+real-material hooks that used to live in `core/winuae.rs`
+(`boot_a_distribution_tree_when_asked`, `ask_a_tree_its_version_when_asked`)
+moved with the code they exercise, unchanged, into
+`tools::winuae_launcher::real_boot_hook`/`real_version_hook`.
+`RunRequest`/`RehearseRequest` keep their `winuae_path` field — removing it
+would have touched the 22 `with_paths(...)` call sites in `run.rs`'s own test
+module for no behavioural gain, so it stays, read by nothing in `core/`
+any more, and its doc comment says so.
+
+The guard is a new test, not a script, per the round's own preference for one
+that runs in CI without a separate tool:
+`core::independence::core_never_spawns_a_process_outside_a_test`
+(`src-tauri/src/core/mod.rs`). It walks the real `src/core/**/*.rs` tree —
+not a fixture, same reason `osinstall::package`'s
+`every_package_json_file_on_disk_is_wired_into_shipped_json` does — and fails
+on a `Command::new(` outside a `#[cfg(test)]`-covered region, using indent
+matching rather than brace counting to find that region's end (a brace
+counter misreads the literal `{`/`}` inside a `.uae` line or an AmigaDOS
+script assembled with `format!`, both of which this crate's own test hooks
+carry; `cargo fmt --check` is blocking in CI, so a block's closing brace is
+reliably aligned with the line that opened it). **Mutated**: a
+`std::process::Command::new("winuae64.exe").spawn()` line was put back inside
+`generate_uae_config` in `core/winuae.rs`, above its `#[cfg(test)] mod tests`
+— the guard failed, naming that exact file and line; the file was restored
+from a `cp`'d backup and `touch`ed (not `shutil.move`/plain overwrite, per
+the mtime trap this project has paid for before) and the guard passed again.
+`cargo test --lib -- --skip artwork` run twice: **`test result: ok. 2954
+passed; 0 failed; 51 ignored`** both times, `finished in 32.15s` and `34.76s`.
+`cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` both
+clean.
+
+**What `grep -rn "std::process\|Command::new" src-tauri/src/core/` still
+shows, and why none of it is a violation**: `std::process::id()` in eight
+files (`amigainstall/stage.rs`, `detect.rs`, `dirsize.rs`, `cbm/t64.rs`,
+`cbm/d64.rs`, `layout/apply.rs`, `iso/mod.rs`, `preload/native.rs`,
+`sources/install.rs`, `volume/write/copy.rs`) reads the current process's own
+pid for a unique scratch/staging name — plain `std`, no platform API, not a
+spawn, and pre-existing (`core/mod.rs`'s own `test_scratch_id` doc already
+describes the pattern); `core/volume/journal.rs`'s two `Command::new(&exe)`
+calls (crash-recovery tests that re-invoke the test binary itself to prove a
+kill mid-write recovers) are inside `#[cfg(test)]`, confirmed before this fix
+and unchanged by it; the rest are this entry's own prose, in doc comments,
+describing the move. The substantive claim — no production `core/` code
+spawns a process — is what the new guard test checks structurally, not the
+raw grep.
+
 **ART-246** 🔵 ✅ **`verify_volume`'s prefs check has an untested failure
 path: a permission error walking the tree folds into one `Fail` row with no
 test provoking it** — *found 2026-09-05/06 by the prefs-and-wallpaper

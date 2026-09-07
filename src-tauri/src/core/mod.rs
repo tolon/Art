@@ -135,3 +135,129 @@ impl Drop for ScratchDir {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
+
+/// ART-274: `core/` may declare a trait for something platform-specific, but
+/// must never spawn a process itself — that is `tools/`'s job (CLAUDE.md,
+/// "The core independence rule"). `VolumeFormatter` and `HostRecycler` are
+/// the shape to copy; `EmulatorLauncher` (`core::amigainstall::run`) is the
+/// third, closed by moving `WinUaeLauncher`'s `Command::new` out to
+/// `tools::winuae_launcher`.
+///
+/// This walks the real, on-disk `core/` tree rather than a fixture, for the
+/// same reason `osinstall::package`'s
+/// `every_package_json_file_on_disk_is_wired_into_shipped_json` does: what
+/// matters is whether the source tree itself still holds the promise, not a
+/// copy of it that can drift out from under the check.
+#[cfg(test)]
+mod independence {
+    use std::path::{Path, PathBuf};
+
+    /// Every `.rs` file under `core/`, recursively.
+    fn core_files() -> Vec<PathBuf> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/core");
+        let mut files = Vec::new();
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir)
+                .unwrap_or_else(|err| panic!("reading {}: {err}", dir.display()))
+            {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    files.push(path);
+                }
+            }
+        }
+        files
+    }
+
+    fn indent_of(line: &str) -> usize {
+        line.len() - line.trim_start_matches(' ').len()
+    }
+
+    /// The `(start, end)` line ranges (0-based, inclusive) a `#[cfg(test)]`
+    /// covers — the attribute line itself through to the `}` that closes the
+    /// item it is attached to, or through the item's own line when it has no
+    /// block body (`#[cfg(test)] mod x;`).
+    ///
+    /// Matching on **indent** rather than counting braces is deliberate: a
+    /// WinUAE `.uae` line or an AmigaDOS script assembled with `format!`
+    /// carries plenty of literal `{`/`}` inside string data (see
+    /// `tools::winuae_launcher`'s own `real_version_hook`), and a brace
+    /// counter would misread those. `cargo fmt --check` is blocking in CI,
+    /// so a block's closing brace is always aligned with the line that opened
+    /// it — indent is the reliable signal this codebase's own formatting
+    /// already guarantees.
+    fn test_regions(lines: &[&str]) -> Vec<(usize, usize)> {
+        let mut regions = Vec::new();
+        let mut i = 0;
+        while i < lines.len() {
+            if lines[i].trim() == "#[cfg(test)]" {
+                let indent = indent_of(lines[i]);
+                let start = i;
+                let mut j = i + 1;
+                // Stacked attributes (`#[cfg(test)]` then `#[test]`, say) sit
+                // at the same indent as the item they both apply to.
+                while j < lines.len()
+                    && indent_of(lines[j]) == indent
+                    && lines[j].trim_start().starts_with('#')
+                {
+                    j += 1;
+                }
+                let opens_block = lines.get(j).is_some_and(|l| l.trim_end().ends_with('{'));
+                let end = if opens_block {
+                    let mut k = j + 1;
+                    while k < lines.len()
+                        && !(indent_of(lines[k]) == indent && lines[k].trim() == "}")
+                    {
+                        k += 1;
+                    }
+                    k.min(lines.len().saturating_sub(1))
+                } else {
+                    j.min(lines.len().saturating_sub(1))
+                };
+                regions.push((start, end));
+                i = end + 1;
+            } else {
+                i += 1;
+            }
+        }
+        regions
+    }
+
+    fn is_test_line(regions: &[(usize, usize)], line_no: usize) -> bool {
+        regions.iter().any(|(s, e)| line_no >= *s && line_no <= *e)
+    }
+
+    /// ART-274's own guard: production `core/` never spawns a process.
+    ///
+    /// Mutate by putting `std::process::Command::new(...)` back in
+    /// `core/winuae.rs`, above its `#[cfg(test)] mod tests {`, and this
+    /// should fail; restore it and this should pass again.
+    #[test]
+    fn core_never_spawns_a_process_outside_a_test() {
+        let mut offenders = Vec::new();
+        for path in core_files() {
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
+            let lines: Vec<&str> = text.lines().collect();
+            let regions = test_regions(&lines);
+            for (n, line) in lines.iter().enumerate() {
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                if line.contains("Command::new(") && !is_test_line(&regions, n) {
+                    offenders.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "core/ spawned a process outside a #[cfg(test)] block — the trait rule \
+             (CLAUDE.md, \"The core independence rule\"; ART-274) says the spawn belongs \
+             in tools/, not here:\n{}",
+            offenders.join("\n")
+        );
+    }
+}

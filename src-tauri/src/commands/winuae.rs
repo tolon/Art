@@ -5,10 +5,9 @@ use std::path::PathBuf;
 use crate::core::hdf::detect_hardfile_shape;
 use crate::core::profile::AmigaProfile;
 use crate::core::rom::{identify_rom, scan_rom_directory, RomInfo};
-use crate::core::winuae::{
-    detect_winuae, generate_uae_config, launch_winuae, LaunchMedia, WinUaeInstallation,
-};
+use crate::core::winuae::{detect_winuae, generate_uae_config, LaunchMedia, WinUaeInstallation};
 use crate::error::AppResult;
+use crate::tools::winuae_launcher::launch_winuae;
 
 /// ART-146: `winuae_launch` is WinUAE Studio's own manual launch, where the
 /// user picks an arbitrary `.hdf` from a file dialog (`WinuaeStudio.tsx`) —

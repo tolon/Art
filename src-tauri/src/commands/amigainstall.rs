@@ -97,7 +97,7 @@ use tauri::{AppHandle, Emitter, State};
 use super::jobs::{spawn_job, JobRegistry};
 use super::oplog::{user_operation, write_to_path};
 use crate::core::amigainstall::finish;
-use crate::core::amigainstall::run::{run, RunLimits, RunRequest};
+use crate::core::amigainstall::run::{run_with, RealClock, RunLimits, RunRequest};
 use crate::core::amigainstall::stage::{settle, stage_with, Settlement};
 use crate::core::amigainstall::{
     packagevol, workvol, PlannedRun, RunOutcome, PACKAGE_VOLUME, RESULT_FILE, WORK_VOLUME,
@@ -114,6 +114,7 @@ use crate::core::profile::AmigaProfile;
 use crate::core::sources::install::Scratch;
 use crate::core::winuae::detect_winuae;
 use crate::error::AppResult;
+use crate::tools::winuae_launcher::WinUaeLauncher;
 
 /// The volume a distribution tree is mounted as when the caller says nothing.
 ///
@@ -963,6 +964,10 @@ fn install(
         );
     }
 
+    // The real launcher is built here, not in `core/`: constructing one is a
+    // process-spawning decision, and `core/amigainstall::run` may not make it
+    // (ART-274) — it takes an `EmulatorLauncher` directly instead.
+    let launcher = WinUaeLauncher::new(emulator, scratch_root);
     perform(tree, &composed.post_install, sink, |copy, sink| {
         let request = RunRequest {
             plan,
@@ -976,7 +981,7 @@ fn install(
             cd_image: composed.medium.as_ref().map(|m| m.path.as_path()),
             limits: RunLimits::default(),
         };
-        let outcome = run(&request, sink)?;
+        let outcome = run_with(&request, &launcher, &RealClock::new(), sink)?;
         record_if_succeeded(copy, plan, &outcome)?;
         Ok(outcome)
     })

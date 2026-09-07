@@ -25,7 +25,7 @@
 //!    the installer said no; a timeout means nobody was there to answer it,
 //!    and the two are fixed by different things.
 //! 3. **ART owns the process it started, and only that one.** The emulator is
-//!    ended through the handle [`crate::core::winuae::launch_winuae_process`]
+//!    ended through the handle `tools::winuae_launcher::launch_winuae_process`
 //!    returned, never by name and never by a bare number: the owner may have
 //!    their own WinUAE open, and ending it would be ART destroying something
 //!    it does not own.
@@ -36,6 +36,12 @@
 //! `core/preload`'s `VolumeFormatter` is one: the platform-specific half of an
 //! operation lives behind a trait so the operation itself stays testable, and
 //! `core/` stays free of anything but `std` (the core-independence rule).
+//! `WinUaeLauncher`, the real [`EmulatorLauncher`], used to live here and call
+//! into `core::winuae`'s own `std::process::Command::new` — the one process
+//! spawn inside `core/`, filed as ART-274. It now lives in
+//! `tools::winuae_launcher`, the same shape `tools/hst_imager.rs` already is
+//! for `VolumeFormatter`; only the trait and the fakes that implement it for
+//! a test stay here.
 //!
 //! Here that has a second, sharper purpose. **The tests must not open an
 //! emulator window on the owner's desktop**, and a deadline test that sleeps
@@ -45,7 +51,7 @@
 //! *property* of the loop and not one machine's timing: no process is started,
 //! no wall-clock time passes, and the outcome is the same on every run.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::{
@@ -55,9 +61,7 @@ use super::{
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::profile::AmigaProfile;
-use crate::core::winuae::{
-    generate_uae_config, launch_winuae_process, DirMount, LaunchMedia, WinUaeProcess,
-};
+use crate::core::winuae::{generate_uae_config, DirMount, LaunchMedia};
 
 /// How long a run may go without an answer before ART ends it.
 ///
@@ -229,55 +233,6 @@ pub trait EmulatorLauncher {
     fn launch(&self, config_text: &str) -> CoreResult<Box<dyn EmulatorSession>>;
 }
 
-/// The real launcher: WinUAE, at the path the user configured.
-#[derive(Debug, Clone)]
-pub struct WinUaeLauncher {
-    executable: PathBuf,
-    /// Where the generated `.uae` is written (ART-196). Carried rather than
-    /// asked of the platform, for the same reason every other staging site in
-    /// ART now carries it: the user's system drive is theirs.
-    scratch_root: PathBuf,
-}
-
-impl WinUaeLauncher {
-    pub fn new(executable: impl Into<PathBuf>, scratch_root: impl Into<PathBuf>) -> Self {
-        Self {
-            executable: executable.into(),
-            scratch_root: scratch_root.into(),
-        }
-    }
-}
-
-/// A newtype rather than an `impl` on [`WinUaeProcess`] itself, because the
-/// trait's method names and the inherent ones are identical: written directly
-/// on the type, every trait body would be a call that resolves by precedence
-/// rules instead of by saying what it means.
-struct WinUaeSession(WinUaeProcess);
-
-impl EmulatorSession for WinUaeSession {
-    fn pid(&self) -> u32 {
-        self.0.pid()
-    }
-
-    fn is_running(&mut self) -> CoreResult<bool> {
-        self.0.is_running()
-    }
-
-    fn terminate(&mut self) -> CoreResult<()> {
-        self.0.terminate()
-    }
-}
-
-impl EmulatorLauncher for WinUaeLauncher {
-    fn launch(&self, config_text: &str) -> CoreResult<Box<dyn EmulatorSession>> {
-        Ok(Box::new(WinUaeSession(launch_winuae_process(
-            &self.executable,
-            config_text,
-            &self.scratch_root,
-        )?)))
-    }
-}
-
 /// How long a run may take, and how often it is asked.
 ///
 /// Data, not constants baked into the loop, so the deadline Task 8 measures
@@ -333,8 +288,14 @@ pub struct RunRequest<'a> {
     /// AROS — an installer that failed under a ROM the user did not choose
     /// would be a failure ART invented.
     pub kickstart_path: &'a Path,
-    /// The emulator ART will start. Unused by [`run_with`], which is given a
-    /// launcher directly.
+    /// The emulator ART will start.
+    ///
+    /// **Read by nothing in `core/`.** [`run_with`] takes an
+    /// [`EmulatorLauncher`] directly, and building the real one is a
+    /// process-spawning decision that `core/` may not make (ART-274) — the
+    /// caller builds `tools::winuae_launcher::WinUaeLauncher` from this same
+    /// path itself. The field stays here so a `RunRequest` still says
+    /// everything a run needs in one place.
     pub winuae_path: &'a Path,
     /// The user's **own** copy of the medium the package's installer verifies,
     /// as a CD image — `None` for a package that requires none.
@@ -483,16 +444,15 @@ pub fn media_for(request: &RunRequest) -> CoreResult<LaunchMedia> {
     })
 }
 
-/// Run the installer on the Amiga and report which of the three endings it had.
-///
-/// The thin wrapper: a real WinUAE and a real clock. Everything it does beyond
-/// choosing those two is in [`run_with`].
-pub fn run(request: &RunRequest, sink: &dyn ProgressSink) -> CoreResult<RunOutcome> {
-    let launcher = WinUaeLauncher::new(request.winuae_path, request.scratch_root);
-    run_with(request, &launcher, &RealClock::new(), sink)
-}
-
 /// The run, with its emulator and its clock supplied.
+///
+/// There is no thin `run()` wrapper choosing a real `WinUaeLauncher` any
+/// more (ART-274): building one is a process-spawning decision, so it
+/// belongs in `tools::winuae_launcher`, and `core/` may not make it. Every
+/// caller — `commands/amigainstall.rs`, `commands/firstboot.rs`, and the
+/// gated real-material hooks in both — constructs
+/// `tools::winuae_launcher::WinUaeLauncher` itself and calls this directly
+/// with it and a [`RealClock`].
 ///
 /// Returns [`CoreError::Cancelled`] when the user stopped it — cancellation is
 /// not a fourth outcome, because a run that was stopped produced no answer to
@@ -888,6 +848,7 @@ mod tests {
     use super::*;
     use crate::core::amigainstall::RESULT_FILE;
     use crate::core::jobs::NoProgress;
+    use std::path::PathBuf;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
