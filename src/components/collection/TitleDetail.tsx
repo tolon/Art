@@ -786,7 +786,6 @@ export function TitleDetail({
                     padding: "3px 6px",
                     background: "var(--bg)",
                     color: "var(--text)",
-                    border: "1px solid var(--border)",
                     borderRadius: 3,
                     fontSize: 12,
                   }}

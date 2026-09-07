@@ -299,7 +299,7 @@ export function GotekStudio() {
             <select
               value={config.display_type}
               onChange={(e) => setConfig({ ...config, display_type: e.target.value as FlashFloppyDisplay })}
-              style={{ width: "100%", padding: "6px 8px", background: "var(--bg)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 4 }}
+              style={{ width: "100%", padding: "6px 8px", background: "var(--bg)", color: "var(--text)", borderRadius: 4 }}
             >
               <option value="oled-128x32">{t("gotek.displayType.oled128x32")}</option>
               <option value="oled-128x64">{t("gotek.displayType.oled128x64")}</option>
@@ -333,7 +333,7 @@ export function GotekStudio() {
             <select
               value={config.rotary}
               onChange={(e) => setConfig({ ...config, rotary: e.target.value as any })}
-              style={{ width: "100%", padding: "6px 8px", background: "var(--bg)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 4 }}
+              style={{ width: "100%", padding: "6px 8px", background: "var(--bg)", color: "var(--text)", borderRadius: 4 }}
             >
               <option value="track">{t("gotek.rotary.track")}</option>
               <option value="quickslot">{t("gotek.rotary.quickslot")}</option>

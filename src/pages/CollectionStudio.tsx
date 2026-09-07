@@ -175,7 +175,6 @@ function NameFixes({
             fontSize: 11,
             background: "var(--bg)",
             color: "var(--text)",
-            border: "1px solid var(--border)",
             borderRadius: 3,
           }}
         />
@@ -1027,7 +1026,6 @@ export function CollectionStudio() {
                   padding: "6px 10px",
                   background: "var(--bg)",
                   color: "var(--text)",
-                  border: "1px solid var(--border)",
                   borderRadius: 4,
                   fontSize: 13,
                 }}
