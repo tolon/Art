@@ -398,6 +398,19 @@ to whichever future round of the intake reaches package modelling and
 hardware polish**; they are recorded here rather than acted on now, the same
 discipline "Suggested order" below already states.
 
+**Correction, 2026-09-07:** "Suggested order" item 2's own "unlocks ART-166"
+was already stale when it was written on 2026-09-06 — `core/amigainstall`
+had installed both BoingBags under WinUAE on 2026-08-21, over two weeks
+earlier, so the Amiga-side path already existed and ART-166 was already
+recorded as a route that works rather than a category nothing could do
+(see `ISSUES.md`'s ART-166, "The Amiga-side route works…", dated
+2026-08-21). Round 5 (this note's own first-boot mechanism, phases 1–2, on
+`art-firstboot`) does not unlock a closed door; its value is what phase 2's
+report (`.superpowers/sdd/2026-09-07-firstboot/phase-2-report.md`) argues
+for directly: **a real machine** rather than an emulator, **non-ASCII
+AmigaDOS names** that a directory-tree distribution cannot always carry
+(spec §1.3), and **users without WinUAE** at all.
+
 ## Suggested order, if this becomes work
 
 1. **Media identification by hash** — closes a defect class ART has already

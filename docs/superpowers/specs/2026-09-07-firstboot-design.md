@@ -206,6 +206,17 @@ exact-match tests. "Generated" files vary only in a step list and a few
 `SetEnv` lines. Every file gets a `.uaem` sidecar (`----rwed`) like every
 other file in the tree; `Execute` does not need the script bit.
 
+**Correction, 2026-09-07:** a sidecar is written only when protection, date
+or comment is non-default (`apply.rs::settle_sidecar`'s existing rule, not a
+new one for this round) — not for every file unconditionally as the sentence
+above says. None of phase 2's fixed files needs one, so phase 2 writes zero
+`.uaem` sidecars for `S/ART-FirstBoot` or the three `S/FirstBoot/*` steps.
+
+**Correction, 2026-09-07:** `Prefs/Env-Archive/ART/FirstBoot` in the table
+above is also stale — see the correction under §4.2 item 2: the variable is
+`ART_FirstBoot`, and its `ENVARC:` file is `Prefs/Env-Archive/ART_FirstBoot`,
+not a subdirectory.
+
 The `User-Startup` block is four lines and nothing else:
 
 ```
@@ -242,6 +253,15 @@ removes it through `merge_user_startup`. Nothing on the Amiga edits
    `ENVARC:ART/FirstBoot` = `FALSE` **now**, before any step — the same
    reason Hatcher gives: a partial run must not repeat as if it were the
    first, and the wizard still needs to know, this boot, that it was.
+
+   **Correction, 2026-09-07:** `ENV:ART/FirstBoot` and `ENVARC:ART/FirstBoot`
+   cannot address a subdirectory named by a `$name` substitution — the
+   variable is `ART_FirstBoot`, read and written throughout as
+   `ENV:ART_FirstBoot` / `ENVARC:ART_FirstBoot`. **And, measured under
+   WinUAE (ART-272):** every read of an AmigaDOS environment variable in
+   these scripts must be the braced form, `${ART_FirstBoot}` — the bare
+   `$ART_FirstBoot` does not expand and the comparison silently matches a
+   literal string instead.
 4. For each file in `S:FirstBoot/`, sorted by name (`List … LFORMAT` into
    `T:`, the way Hatcher does it, because AmigaDOS has no `for`): write
    `step <name> started` to the report; `Execute` it; on `WARN` or worse
@@ -252,8 +272,42 @@ removes it through `merge_user_startup`. Nothing on the Amiga edits
    `reboot requested by <name>`, `Wait 3`, `Reboot` (UAE) or `EMU68INFO
    HARDRESET` (PiStorm, the command Hatcher uses); the remaining steps run
    on the next boot through the same block.
+
+   **Correction, 2026-09-07:** "sorted by name" is not what `List` does —
+   measured directly, a directory holding steps `10-hardware`, `20-aux` and
+   `30-datatypes` was answered by `List` as `30, 20, 10`, its own on-disk
+   order. The run list is now piped through `C:Sort` before the dispatcher
+   executes it, and `plan` refuses to write a tree whose `C/` lacks `Sort`
+   (ART-272).
+
+   **Correction, 2026-09-07:** "on `WARN` or worse … refused rc=<n>" and
+   §4.4's "a step says no with `Quit 20`" both assumed a step could `Quit`
+   to signal its own outcome. Measured: a `Quit` inside a script that is
+   itself running under `Execute` ends every script above it in the call
+   chain — the first step's `Quit 0` ended the step, the generated run
+   list *and* the dispatcher in one stroke (ART-272). A step never `Quit`s;
+   it leaves through `Skip end` / `Lab end` and signals refusal by
+   `Set ART_StepRc 20`, a variable the wrapper resets before running the
+   step and reads immediately after.
+
+   **Correction, 2026-09-07:** phase 2's dispatcher only records `reboot
+   requested by <name>` when `ENV:ART_Reboot` is `TRUE` after a step; it
+   does not itself `Wait 3` or issue `Reboot`/`EMU68INFO HARDRESET`. The
+   reboot command is phase 3's. Measured on the owner's own trees which
+   carries `C:Reboot`: present on the AmigaOS 3.2 tree (`art205-32`) and
+   **absent** on both AmigaOS 3.9 trees (`art159-boot`, `art205-39c`) — so
+   phase 3 cannot assume the command exists and must check for it the same
+   way phase 2 checks for `C:Sort`.
 5. `done all` if `S:FirstBoot/` is empty, else `done partial`. Delete
    `S:ART-FirstBoot` only on `done all`.
+
+   **Correction, 2026-09-07:** measured, a script cannot delete itself while
+   AmigaDOS is still executing it (ART-273). The finished state is "the
+   `S:FirstBoot/` step directory is gone", not "the dispatcher file is
+   gone": `done all` removes the step directory and the wrapper; the
+   dispatcher's own first line is `IF NOT EXISTS S:FirstBoot` → `Skip end`,
+   so a dispatcher left in place by a finished run stays inert on every
+   boot after.
 6. If `SD0:` is mounted, copy `S:FirstBoot.log` to `SD0:art-firstboot.log`;
    on failure append `copy-to-fat failed` to the Amiga-side file. The Amiga
    never waits for the host.
@@ -323,6 +377,10 @@ listed, a sentence saying which window opens next and that Save closes it,
 console open on the Workbench screen cannot apply (Hatcher's `FirstBootWB`
 comment says why), so when ScreenMode is to be asked the step copies
 `ART-FirstBootWB` into `WBStartup/` and sets `ENV:ART/Reboot`.
+
+**Correction, 2026-09-07:** `ENV:ART/Reboot`, here as at §4.2 item 4, is
+`ENV:ART_Reboot` — the same subdirectory-in-a-`$name` mistake, corrected the
+same way.
 
 ### 5.2 `ART-FirstBootWB`, fixed
 

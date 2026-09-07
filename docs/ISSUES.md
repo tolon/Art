@@ -345,6 +345,17 @@ re-upload. The owner's decision forbids a bypass; obtaining somebody else's is
 the same bypass with an extra step, and the measurement above says it would
 buy nothing.
 
+**The Amiga-side path now has two vehicles, added 2026-09-07 (round 5,
+first-boot phases 1–2, `art-firstboot`).** The 2026-08-21 paragraph above is
+`core/amigainstall` launching WinUAE unattended and running a package's own
+`Updater` inside it. Round 5 built the second: a `run` action for the
+first-boot mechanism (`core/firstboot`, `S/FirstBoot/50-pkg-<id>`), planned
+for phase 4 and not yet built — phases 1–2 land the dispatcher, the steps and
+the report only. This entry stays open as the host-placement entry it is:
+neither vehicle places a BoingBag's files from the host, and
+`host_placement_block: "encrypted-payload"` is unchanged. What has widened is
+where the Amiga-side alternative can run — WinUAE today, a real machine once
+phase 4 exists.
 
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
@@ -9378,6 +9389,10 @@ composing, not merely coexisting), `::a_level_one_entry_with_no_directory_header
 `::an_absolute_name_survives_assembly_too` (the two wrong drafts, pinned so
 neither can come back). New fixture `make_level1_lha`, built byte-exact from
 the level-1 layout.
+
+**2026-09-07:** this decode is what a first-boot `unpack` step (phase 4 of
+round 5, not yet built) will hand an Amiga's own archiver — see
+`.superpowers/sdd/2026-09-07-firstboot/`.
 
 **ART-164** ✅ **`core::iso`'s test scratch directory can be shared by two
 threads, so *any* test in the module can read another's fixture — first

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A real Amiga can now finish its own first boot without a host in the
+  loop.** The OS Builder gains a first-boot step: turn it on and the tree ART
+  builds carries a small program that runs itself the first time the Amiga
+  starts up, detects the machine (a real PiStorm board or an emulator, and
+  which Kickstart), and runs a short list of fixed setup steps — quietly
+  skipping any that do not apply to this machine — before reporting what it
+  did. Proved on a real AmigaOS 3.2 tree under an emulator: every step ran,
+  the boot finished, and the run left no trace of itself behind once done.
+  Reading the card back — from its FAT card partition or from the Amiga
+  volume's own copy of the report, whichever is more trustworthy — shows the
+  same report in the card-preparation screen, so you can tell whether a card
+  has been booted yet and what happened when it was. *(Built on its own
+  branch; not yet part of a release.)*
 - **ART can now say what an install disk actually is, by its content —
   additively to the name it already reads off the disk, never in place of it.**
   On the OS Builder's media step, each file is checked against a 186-row table
