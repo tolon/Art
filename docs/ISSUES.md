@@ -410,9 +410,10 @@ request, and the refusal quoted an internal overlay path instead of naming
 either package:
 `'…BoingBag39-2.lha' is not this package's update archive: it carries none of
 'BoingBag3.9-1-UAE/BoingBag3.9-1'; it holds BoingBag3.9-2,
-BoingBag3.9-2.info (ART-INPUT-INVALID)`** — *found 2026-09-08 by the owner,
-running BoingBag 1 then attempting BoingBag 2 through `AmigaInstallPanel`;
-fixed 2026-09-08*
+BoingBag3.9-2.info (ART-INPUT-INVALID)`** — *found 2026-09-07 night by the
+owner, running BoingBag 1 then attempting BoingBag 2 through
+`AmigaInstallPanel` — the same sitting `docs/FEATURES.md`'s "Amiga-side
+install panel" row records; fixed 2026-09-08*
 `src/components/osbuilder/AmigaInstallPanel.tsx` · `src/lib/amigainstall.ts` ·
 `src-tauri/src/core/amigainstall/packagevol.rs` ·
 `src-tauri/src/commands/amigainstall.rs`
@@ -463,6 +464,59 @@ and five `classify_top_level_*`/`the_command_*` tests (`packagevol.rs` /
 green (165 Rust, 33 in the panel's own suite). Mutated both guards to
 confirm they fail without the fix: the archive key unscoped again, and the
 catalogue lookup in `overlay_mismatch_sentence` disabled.
+
+**Fix round 1 (2026-09-08).** Review found the first pass added a *third*
+confident-and-wrong sentence, in two places: the catalogue scan in
+`overlay_mismatch_sentence` could match the *selected* package itself and
+then say *"Select BoingBag 3.9-1 to install it"* about the package already
+selected (reachable because `refuse_wrong_package_archive` only checked
+`archives.first()`, never a second archive), and `classify_top_level` scanned
+every shipped package regardless of release or `amiga_installer`, so an
+archive named `Locale3.9` could produce *"Select Locale 3.9 to install
+it"* — a package not on this screen's radio at all — and then hard-disable
+Run over an instruction the user cannot follow, and pick arbitrarily between
+`locale-39` and `locale-39-turkish` (both declare `"Locale3.9"` on purpose):
+ART-276's own trap, arriving through a different door one night later.
+
+Fixed: `overlay_mismatch_sentence` checks the archive against the selected
+package's own drawer *first*, directly, and gives that its own sentence
+(`'<path>' is <Package>'s own archive — it belongs in the package field;
+the second field is for its update archive (top-level '<drawer>')`) rather
+than matching itself in the catalogue; `refuse_wrong_package_archive` now
+checks every archive against its own slot. `amigainstall_classify_archive`
+takes `release` and scans only `package::packages_for(release)`; a match
+that is not `amiga_installable`, or a media two or more release packages
+share, answers a new `` `other-artefact:<name>` `` kind naming the archive
+by what it is rather than an id nobody can act on; a match against another
+package's own *declared overlay* (not just its `media`) answers
+`` `another-packages-update-archive:<id>` ``. The panel now folds a wrong
+field's classification into the same `blockers` list the preview's own
+readiness checks render in — directly above the confirm checkbox, which it
+now also disables — rather than a second box beside the field (ART-202's own
+lesson, from this exact screen, applied to the disabled state).
+
+One residue, left deliberately: an installation from before this round may
+still carry the old, unscoped `amigaInstall.archive` / `.overlayArchive`
+keys in `settings.json`. They are never read or written again once a
+package is selected (every read/write now goes through
+`amigaInstallArchiveKey`'s per-package name), so they cost nothing but the
+bytes they occupy — a one-time orphan, not a leak and not a wrong value.
+
+Tests (fix round 1): `the_packages_own_archive_in_the_second_field_gets_its_own_sentence_and_never_says_select_it`,
+`the_sentence_keeps_an_unreadable_listing_apart_from_an_empty_one`,
+`a_wrong_second_archive_is_refused_before_the_tree_is_copied`,
+`classify_top_level_names_another_packages_update_archive`,
+`classify_top_level_answers_other_artefact_when_two_packages_share_the_media`,
+`classify_top_level_answers_other_artefact_for_a_match_the_radio_does_not_offer`
+(Rust, new); `"a wrong-package archive disables Run and the confirm checkbox,
+and names which package it belongs to in the blockers list"` and `"names
+another package's own update archive, and a shared Packages-step archive,
+without ever saying 'select' a package this screen does not offer"`
+(`AmigaInstallPanel.test.tsx`, new). 171 Rust `amigainstall::` tests, 34 in
+the panel's own suite, 1248 total Vitest tests, all green. Mutated
+`refuse_wrong_package_archive` back to `archives.first()` alone and the
+`archiveFieldBlockerPhrase` `"another-package"` case back to `null`; both
+caught by the tests above.
 
 **ART-276** 🟠 **Two packages sharing one medium tripped the wrong clash check:
 `'Locale3.9' already names the medium component 'locale-39' was installed from in this
