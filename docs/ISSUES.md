@@ -531,29 +531,6 @@ Nothing here is broken today: `run_install` works, is tested, and its
 catalogue join is itself tested and mutation-verified. What is missing is the
 layer that should hold this logic.
 
-**ART-244** 🔵 **Update mode re-reads every archive candidate on every
-refresh, on an argued rather than measured basis** — *found 2026-09-05 during
-the whdload-drawers round-2 wiring*
-`src-tauri/src/core/gameindex/store.rs::refresh_root`,
-`core/gameindex/readers/lhadrawer.rs`
-
-`refresh_root` treats every archive candidate as always-fresh in both
-`Refresh::Update` and `Refresh::Rescan` — the doc comment's own reasoning is
-that `read_archive_drawers` "seeks header to header rather than
-decompressing" (`readers::lhadrawer`'s own module doc) and is therefore cheap
-enough that the cache-reuse machinery built to skip re-hashing multi-megabyte
-hardfiles buys nothing here. That reasoning was never measured against the
-one archive it is actually about:
-`readers::lhadrawer::tests::real_archive_scan_is_fast` is `#[ignore]`d,
-env-gated on `ART_LHA_ARCHIVE`, and prints its own timing rather than
-asserting it — exactly the hook that would turn "seeks header to header, so
-it's cheap" from an argument into a number. Until that is run against the
-owner's own 663 MB, 8858-entry archive on an `Update`-mode refresh, this is
-unverified: if it turns out to cost real time for a user with several such
-archives who refreshes often, the fix is a size/mtime-keyed skip for an
-archive that has not changed, the same as the file walk already has — not a
-redesign.
-
 **ART-250** 🟡 **`tooltypes()`'s lossy UTF-8 decode cannot byte-for-byte
 round-trip a NewIcon `IM1=`/`IM2=` tool type** — *found 2026-09-06 by the
 drawer-icons round's icon-oracle run against the owner's own AmigaOS 3.9
@@ -675,6 +652,86 @@ and `AppearancePanel.test.tsx`'s `"ART-248: the apply runs as a cancellable
 job"` block (progress line, Stop calling `jobCancel` with the running job's
 own id, and a cancelled run rendering `appearance-cancelled` rather than
 `appearance-error`).
+
+**ART-244** 🔵 **Update mode re-reads every archive candidate on every
+refresh, on an argued rather than measured basis** — *found 2026-09-05 during
+the whdload-drawers round-2 wiring*
+`src-tauri/src/core/gameindex/store.rs::refresh_root`,
+`core/gameindex/readers/lhadrawer.rs`
+
+`refresh_root` treats every archive candidate as always-fresh in both
+`Refresh::Update` and `Refresh::Rescan` — the doc comment's own reasoning is
+that `read_archive_drawers` "seeks header to header rather than
+decompressing" (`readers::lhadrawer`'s own module doc) and is therefore cheap
+enough that the cache-reuse machinery built to skip re-hashing multi-megabyte
+hardfiles buys nothing here. That reasoning was never measured against the
+one archive it is actually about:
+`readers::lhadrawer::tests::real_archive_scan_is_fast` is `#[ignore]`d,
+env-gated on `ART_LHA_ARCHIVE`, and prints its own timing rather than
+asserting it — exactly the hook that would turn "seeks header to header, so
+it's cheap" from an argument into a number. Until that is run against the
+owner's own 663 MB, 8858-entry archive on an `Update`-mode refresh, this is
+unverified: if it turns out to cost real time for a user with several such
+archives who refreshes often, the fix is a size/mtime-keyed skip for an
+archive that has not changed, the same as the file walk already has — not a
+redesign.
+
+**Measured** 2026-09-07 on `art-debts` (batch 5), before designing anything
+(CLAUDE.md, "Research before design"):
+`ART_LHA_ARCHIVE="E:\amiga\Amigatolon\paketler\WHDLoadDemos100.lha" cargo test
+--lib real_archive_scan_is_fast -- --ignored --nocapture` against the real
+663 MB, 893-drawer archive (not the 8858-*entry* count the entry above
+guessed at — 8858 archive entries, 893 of them slaves) —
+`ART_LHA_RESULT drawers=893 elapsed_ms=3118` cold, then `elapsed_ms=1631` and
+`elapsed_ms=1600` on two immediate re-runs (warm OS file cache). Not under a
+second for 200 archives — it is over a second for **one**, every single time
+`refresh_root` runs in `Update` mode, changed or not. The "seeks header to
+header, not decompress the archive as a whole" half of the doc comment holds
+— confirmed by the timing itself, since 663 MB in 1.6-3.1 s is nowhere near
+what decompressing that much would cost — but the reads that *are*
+decompressed (one per slave candidate, kilobytes each, 893 of them here) add
+up to real, user-felt time regardless.
+
+**Fixed** 2026-09-07 on `art-debts` (batch 5), same commit as the
+measurement above. `refresh_root` gained an archive-level cache for
+`Refresh::Update`, the same size+mtime shape the file walk already had:
+`previous_by_archive_path` groups the previous run's `CachedEntry` rows by
+archive path (several rows share one path, so this cannot go through the
+single-entry-per-path `cached` map the file walk uses), and an archive whose
+current size and mtime still match every one of its own rows is never
+reopened at all — its rows are carried into `reuse` unchanged. Two new
+tests: `an_unchanged_archive_is_not_reopened_on_update` (a sentinel record
+planted at the archive's real size/mtime survives untouched, proving the
+archive was not reparsed) and `a_touched_archive_is_reopened_on_update` (a
+mismatched size forces a real reopen, proving the cache is not "never
+re-read again"). Mutated by forcing every archive through the read path
+regardless of the cache-hit check: the unchanged-archive test fell (39
+passed, 1 failed) while the touched-archive test and every other test
+stayed green; restored by re-applying the fix rather than `git checkout --`.
+
+Implementing this exposed a real edge in the ART-243 fix landed just before
+it (not a separate defect filed on its own, since it never reached anyone —
+caught by `a_touched_archive_is_reopened_on_update` itself before it was
+committed): content-derived ids change when a member's *content* changes
+even though the member itself never moved, so "this id was not found again"
+and "this member was not re-read" are different questions. Checking only
+"is the member still in the archive's listing" (ART-243's first cut) kept a
+superseded old record forever, duplicated beside the freshly re-parsed one
+at the same member. `archive_fresh_members` (new, same commit) tracks which
+members this run's archive reads actually produced *a* record for — any id
+— and a previous record is now dropped as stale when its member was
+re-read into something this run, kept as missing only when it was not
+(round 2's own sibling-failure case, still covered by the existing
+`one_bad_drawer_in_an_archive_is_kept_not_deleted_when_its_sibling_still_reads`,
+which stayed green through this change unmodified).
+
+`ART_LHA_ARCHIVE`'s reproduce line is now in
+[STATUS.md](STATUS.md)'s `#[ignore]`d-hooks block; the test's own name and
+skip sentence (`eprintln!("ART_LHA_ARCHIVE is not set")`) already said what
+it measures and did not need changing.
+
+`cargo test --lib -- --skip artwork` — `test result: ok. 2963 passed; 0
+failed; 51 ignored; 0 measured; 89 filtered out; finished in 35.56s`.
 
 **ART-243** 🟡 **An archive updated in place accumulates ghost records no
 Rescan can clear** — *found 2026-09-05 by the whdload-drawers round-2

@@ -114,6 +114,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   titles nothing on disk still holds. A rescan now clears exactly those; a
   title whose drive is unplugged, or whose archive cannot be opened at all
   this run, is still kept (ART-243).
+- **Updating a WHDLoad collection no longer reopens every archive it holds
+  on every single refresh.** Measured against a real 663 MB collection
+  archive: over a second just for that one archive, every time, whether
+  anything in it had changed or not. An archive whose size and mtime have
+  not changed since the last read is no longer reopened at all — the same
+  shortcut ART already took for plain files (ART-244).
 - **Stopping the "what are these disks" check no longer reads as ART having
   failed.** Pressing Stop while install media is being identified by content
   used to produce *"ART could not identify these files by content"* — the same

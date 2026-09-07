@@ -593,6 +593,20 @@ pub fn refresh_root(
         .cloned()
         .map(|entry| (entry.path.clone(), entry))
         .collect();
+    // ART-244: the same "several rows, one path" grouping the missing-
+    // reconciliation below needs, built once here for the archive cache-hit
+    // check just after `files`' own. A plain `BTreeMap<String, CachedEntry>`
+    // (`cached`, above) would keep only the last drawer of a multi-drawer
+    // archive — the same reason that map is never used for archives either.
+    let mut previous_by_archive_path: BTreeMap<String, Vec<&CachedEntry>> = BTreeMap::new();
+    for entry in &previous {
+        if matches!(entry.record.media, Media::WhdloadArchive { .. }) {
+            previous_by_archive_path
+                .entry(entry.path.clone())
+                .or_default()
+                .push(entry);
+        }
+    }
 
     progress.report(0, None, "Looking for titles…");
     let files = collect_indexable(root);
@@ -628,14 +642,55 @@ pub fn refresh_root(
         }
     }
 
-    // Drawers and archives are never cache-hits, in either mode: a drawer's
-    // slave is kilobytes and `read_archive_drawers` seeks header to header
-    // rather than decompressing (its own doc), so the cache machinery above —
+    // Drawers are never cache-hits, in either mode: a drawer's slave is
+    // kilobytes, cheap enough on its own that the cache machinery above —
     // built to skip re-hashing multi-megabyte hardfiles — buys nothing here.
-    // An archive holding several drawers also does not fit that machinery's
-    // one-cached-entry-per-path model: several `CachedEntry` rows share one
-    // archive path (see the reconciliation below, which knows this).
-    let total = (to_read.len() + drawers.len() + archives.len()) as u64;
+    //
+    // Archives **are** cache-hits in `Update` mode, since ART-244: measured
+    // directly against the owner's own 663 MB, 893-drawer
+    // `WHDLoadDemos100.lha` (`readers::lhadrawer::tests::real_archive_scan_is_fast`,
+    // `ART_LHA_ARCHIVE`-gated), one archive alone costs 1.6-3.1 s to
+    // re-read — nowhere near free, even though `read_archive_drawers`
+    // genuinely does seek header to header rather than decompress the
+    // archive as a whole (its own doc comment). The reads that *are*
+    // decompressed — one per slave candidate, kilobytes each, but hundreds
+    // of them in a large collection archive — add up to real, user-felt
+    // time on every refresh, changed or not. Skipped the same way the file
+    // walk already skips an unchanged file: an archive whose size and mtime
+    // still match every `CachedEntry` row it produced last time is not
+    // reopened at all — see `archives_to_scan`, just below — which is what
+    // makes the missing-reconciliation's `archive_paths_needing_check`
+    // above never even consider a cache-hit archive: every one of its ids
+    // was just carried into `reuse` unchanged, so `found_ids` already has
+    // them.
+    //
+    // An archive holding several drawers still does not fit `cached`'s
+    // one-entry-per-path model — several `CachedEntry` rows share one
+    // archive path — which is why this is checked against
+    // `previous_by_archive_path` instead, grouped, not through `cached`.
+    let mut archives_to_scan: Vec<PathBuf> = Vec::new();
+    for archive_path in &archives {
+        let key = archive_path.to_string_lossy().to_string();
+        let cache_hit = (mode == Refresh::Update)
+            .then(|| previous_by_archive_path.get(&key))
+            .flatten()
+            .filter(|group| {
+                !group.is_empty()
+                    && file_key(archive_path).is_some_and(|(size, mtime_ms)| {
+                        group.iter().all(|entry| {
+                            entry.size == size
+                                && entry.mtime_ms == mtime_ms
+                                && entry.record.schema == GAMEINDEX_SCHEMA
+                        })
+                    })
+            });
+        match cache_hit {
+            Some(group) => reuse.extend(group.iter().map(|entry| (*entry).clone())),
+            None => archives_to_scan.push(archive_path.clone()),
+        }
+    }
+
+    let total = (to_read.len() + drawers.len() + archives_to_scan.len()) as u64;
     let mut fresh: Vec<CachedEntry> = Vec::new();
     let mut done: u64 = 0;
     for (path, size, mtime_ms) in to_read {
@@ -692,7 +747,7 @@ pub fn refresh_root(
         }
     }
 
-    for archive_path in &archives {
+    for archive_path in &archives_to_scan {
         if progress.is_cancelled() {
             return Err(crate::core::jobs::cancelled_error());
         }
@@ -772,6 +827,30 @@ pub fn refresh_root(
                 (path, members)
             })
             .collect();
+    // Content-derived ids change when a member's *content* changes, even
+    // when the member itself never moved — so "this id was not found" and
+    // "this member was not re-read" are different questions. Without this,
+    // a member successfully re-parsed into a *different* id this run (real
+    // content change, not a transient failure) would pass the "still in the
+    // archive's own listing" check above and be kept as `missing` forever,
+    // sitting duplicated beside the fresh record for the same member.
+    // `fresh` only, deliberately: `reuse` entries are cache-hit archives
+    // that were never reopened this run, so they say nothing about what a
+    // *re-read* just produced.
+    let archive_fresh_members: BTreeMap<String, std::collections::BTreeSet<String>> = {
+        let mut map: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+        for entry in &fresh {
+            if let Media::WhdloadArchive { inner, slave, .. } = &entry.record.media {
+                let member = if inner.is_empty() {
+                    slave.clone()
+                } else {
+                    format!("{inner}/{slave}")
+                };
+                map.entry(entry.path.clone()).or_default().insert(member);
+            }
+        }
+        map
+    };
 
     let missing: Vec<CachedEntry> = previous
         .into_iter()
@@ -806,10 +885,23 @@ pub fn refresh_root(
                     // simply gone. Same treatment as every other
                     // unreadable-this-run title: kept.
                     Some(None) | None => true,
-                    // Reachable, and this exact member is still one of its
-                    // entries: the failure to re-read it into a record is
-                    // this run's problem, not the archive's. Kept.
-                    Some(Some(names)) => names.contains(&member),
+                    Some(Some(names)) => {
+                        if !names.contains(&member) {
+                            // No longer one of the archive's own entries at
+                            // all: genuinely removed. Stale.
+                            return false;
+                        }
+                        // Still there. If this run's re-read actually
+                        // produced *a* record for this exact member — any
+                        // id, since content-derived ids move when content
+                        // does — the old record is superseded, not merely
+                        // unlucky this run: stale. If it did not (round 2's
+                        // case: present but failed to parse, ambiguous, or
+                        // otherwise skipped), it is kept as missing.
+                        !archive_fresh_members
+                            .get(&entry.path)
+                            .is_some_and(|members| members.contains(&member))
+                    }
                 };
             }
             !present.contains(&entry.path)
@@ -1030,6 +1122,115 @@ mod tests {
 
         let after = refresh_root(&dir, &root, Refresh::Update, None, &NoProgress).unwrap();
         assert_eq!(after.entries[0].record.title.value, "Zool");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **ART-244.** The archive half of the same cache the file loop already
+    /// has: measured directly against the owner's own 663 MB, 893-drawer
+    /// `WHDLoadDemos100.lha`
+    /// (`readers::lhadrawer::tests::real_archive_scan_is_fast`), a single
+    /// archive costs 1.6-3.1 s to re-read even though nothing in it changed
+    /// — `read_archive_drawers` seeks header to header rather than
+    /// decompressing the archive as a whole, but the slave candidates it
+    /// *does* decompress, hundreds of them in a large collection archive,
+    /// add up to real time on every `Update` refresh. A sentinel record is
+    /// planted with the archive's real size and mtime but a title its own
+    /// content could never produce; if `SENTINEL` survives, the archive was
+    /// answered from the cache, not reopened.
+    #[test]
+    fn an_unchanged_archive_is_not_reopened_on_update() {
+        use crate::core::gameindex::readers::slave::tests_support::build_slave;
+
+        let dir = scratch("archive-cache-hit");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let archive = root.join("Demos.lha");
+        std::fs::write(
+            &archive,
+            crate::core::lha::tests::make_lha_with(&[(
+                "Demos/Real/Real.Slave",
+                build_slave("RealTitle", "1992 Someone", 16).as_slice(),
+            )]),
+        )
+        .unwrap();
+        let (size, mtime_ms) = file_key(&archive).unwrap();
+
+        let mut sentinel = a_record("SENTINEL");
+        sentinel.media = Media::WhdloadArchive {
+            file: "Demos.lha".into(),
+            inner: "Demos/Real".into(),
+            slave: "Real.Slave".into(),
+        };
+        plant(
+            &dir,
+            &root,
+            CachedEntry {
+                path: archive.to_string_lossy().into(),
+                size,
+                mtime_ms,
+                record: sentinel,
+            },
+            GAMEINDEX_SCHEMA,
+        );
+
+        let after = refresh_root(&dir, &root, Refresh::Update, None, &NoProgress).unwrap();
+        assert_eq!(after.entries.len(), 1, "{:?}", after.entries);
+        assert_eq!(
+            after.entries[0].record.title.value, "SENTINEL",
+            "the archive was reopened on Update even though its size and \
+             mtime had not changed"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **ART-244's other half.** An archive whose size no longer matches
+    /// what was stored is reopened, the same shape
+    /// `a_changed_file_is_read_again` pins for a plain file — the cache-hit
+    /// check above must not become "never re-read an archive at all".
+    #[test]
+    fn a_touched_archive_is_reopened_on_update() {
+        use crate::core::gameindex::readers::slave::tests_support::build_slave;
+
+        let dir = scratch("archive-cache-miss");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let archive = root.join("Demos.lha");
+        std::fs::write(
+            &archive,
+            crate::core::lha::tests::make_lha_with(&[(
+                "Demos/Real/Real.Slave",
+                build_slave("RealTitle", "1992 Someone", 16).as_slice(),
+            )]),
+        )
+        .unwrap();
+        let (_, mtime_ms) = file_key(&archive).unwrap();
+
+        let mut sentinel = a_record("SENTINEL");
+        sentinel.media = Media::WhdloadArchive {
+            file: "Demos.lha".into(),
+            inner: "Demos/Real".into(),
+            slave: "Real.Slave".into(),
+        };
+        plant(
+            &dir,
+            &root,
+            CachedEntry {
+                path: archive.to_string_lossy().into(),
+                size: 1, // does not match the archive's real size
+                mtime_ms,
+                record: sentinel,
+            },
+            GAMEINDEX_SCHEMA,
+        );
+
+        let after = refresh_root(&dir, &root, Refresh::Update, None, &NoProgress).unwrap();
+        assert_eq!(after.entries.len(), 1, "{:?}", after.entries);
+        assert_eq!(
+            after.entries[0].record.title.value, "RealTitle",
+            "a changed archive must be reopened, not answered from the cache"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

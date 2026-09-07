@@ -169,6 +169,16 @@ cd src-tauri && ART_FIRSTBOOT_TREE=E:/amiga/ProjeART/art205-32 \
 # stops at the first that answers and a dead one in position two is invisible
 # in an ordinary sync. Leaves the machine; never in CI.
 cd src-tauri && cargo test live_aminet -- --ignored --nocapture
+
+# ART-244's own measurement: `readers::lhadrawer`'s claim that reading an
+# archive's drawers "seeks header to header rather than decompressing" is
+# cheap, run against the owner's own 663 MB, 893-drawer archive rather than a
+# fixture. Prints the count and elapsed time; asserts neither. Measured
+# 2026-09-07: 3118 ms cold, ~1600-1631 ms warm, for one archive alone — which
+# is what motivated `refresh_root`'s Update-mode archive cache (size+mtime,
+# the same shape the file walk already had).
+cd src-tauri && ART_LHA_ARCHIVE="E:\amiga\Amigatolon\paketler\WHDLoadDemos100.lha" \
+  cargo test --lib real_archive_scan_is_fast -- --ignored --nocapture
 ```
 
 ---
