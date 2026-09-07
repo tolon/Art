@@ -39,6 +39,14 @@
 //! folding it into `ReportSource::None`; Task 11 renders it as a command
 //! error under the panel heading.
 //!
+//! **An Amiga-side read failure is reported as an error even when a FAT
+//! copy exists** (fix round 2): `read_card_report` never falls through to
+//! `fat_report` once `amiga_report` has returned `Err` — the secondary copy
+//! never stands in for a primary that could not be read. The FAT copy is
+//! secondary and may be stale (spec §9); showing it while the volume that
+//! outranks it could not even be checked would let the screen claim a
+//! report the core never actually confirmed.
+//!
 //! A read never opens the card for writing. `fat_report` wraps the file in
 //! [`crate::core::fat32::ReadOnly`] before handing it to
 //! [`crate::core::fat32::Region`] — see that type's own doc comment for why.
@@ -114,6 +122,13 @@ pub struct CardFirstBootReport {
 /// carrying a report too large to read, and nothing else on the card ever
 /// answered — also an `Err`, but a different one: "could not be checked",
 /// never quietly folded into "not booted".
+///
+/// **An Amiga-side read failure is reported as an error even when a FAT
+/// copy exists** (fix round 2) — the `?` below never falls through to
+/// [`fat_report`] once [`amiga_report`] has failed. The secondary copy
+/// never stands in for a primary that could not be read: it may be stale,
+/// and returning it would let the screen claim a report the core never
+/// actually confirmed.
 pub fn read_card_report(path: &Path) -> CoreResult<CardFirstBootReport> {
     let card = read_card(path)?;
 
@@ -717,6 +732,83 @@ mod tests {
             "the Amiga volume's own copy must win, per spec §9"
         );
         assert_eq!(found.report.ending, super::super::report::Ending::DoneAll);
+    }
+
+    /// **Fix round 2.** The mirror image of the test above: the Amiga
+    /// partition is corrupt and the FAT partition carries a perfectly
+    /// well-formed report. The secondary copy must not stand in for a
+    /// primary that could not be read — this has to be `Err`, never a quiet
+    /// `ReportSource::Fat`.
+    #[test]
+    fn a_corrupt_amiga_partition_is_an_error_even_when_the_fat_copy_is_fine() {
+        let dir = ScratchDir::new("art-firstboot-cardread", "amiga-corrupt-fat-fine");
+        let total = 400 * 1024 * 1024u64;
+        let boot_bytes = 300 * 1024 * 1024u64;
+        let area_bytes = 12 * 1024 * 1024u64;
+        let layout = plan_card(total, boot_bytes, &[area_bytes]).unwrap();
+        let mbr_sector = write_mbr(&layout);
+        let boot = layout.boot;
+        let area = layout.areas[0];
+
+        let path = dir.join("card.img");
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.set_len(total).unwrap();
+        file.write_all(&mbr_sector).unwrap();
+
+        // FAT side: a perfectly good, well-formed report — the one that must
+        // NOT be returned.
+        create_boot_partition(
+            &mut file,
+            boot.start_bytes(),
+            boot.length_bytes(),
+            DEFAULT_LABEL,
+            &[],
+        )
+        .unwrap();
+        {
+            let mut region = Region::new(&mut file, boot.start_bytes(), boot.length_bytes());
+            let fs = fatfs::FileSystem::new(&mut region, fatfs::FsOptions::new()).unwrap();
+            let mut report = fs.root_dir().create_file(FAT_REPORT_NAME).unwrap();
+            report.write_all(b"art-firstboot 1\ndone all\n").unwrap();
+            report.flush().unwrap();
+        }
+
+        // Amiga side: a real RDB with one FFS partition, formatted and then
+        // corrupted — the primary copy that could not be checked.
+        let rdb = create_rdb_layout(
+            area_bytes,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::FfsStandard,
+                size_mb: 8,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+            &[],
+        )
+        .unwrap();
+        file.seek(SeekFrom::Start(area.start_bytes())).unwrap();
+        file.write_all(&rdb.blocks).unwrap();
+        drop(file);
+
+        NativeFormatter
+            .format_partition(&path, Some(area.slot_number()), 1, "Work", &NoProgress)
+            .unwrap();
+        corrupt_root_block(&path, 0, 0);
+
+        let err = read_card_report(&path).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("DH0"),
+            "the refusal must name the partition: {text}"
+        );
     }
 
     /// The wire shape `src/lib/firstboot.ts` reads: three kebab-case strings,
