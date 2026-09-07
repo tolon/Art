@@ -31,7 +31,9 @@ defect it exists to find. Both shapes are searched now.
      reported and never touched.
   4. *already safe* — `fetch_add` or `test_scratch_id` appears inside the
      enclosing `fn` (walk back to the nearest `fn` at a lower indent, then
-     forward to the next one).
+     forward to the next one); so does a pid hashed together with
+     `std::thread::current().id()` (ART-182/ART-235) — a thread id is unique
+     within the process too, which is all this sweep requires.
   5. *path-building* — the enclosing `fn` mentions `temp_dir`, or the site is
      inside a `format!` whose literal begins `"art-`. An `as_nanos()` used for
      timing or as a seed is not a scratch name and is left alone.
@@ -127,6 +129,17 @@ def main():
             body = '\n'.join(lines[fn_start:fn_end])
 
             if 'fetch_add' in body or 'test_scratch_id' in body:
+                counts['safe'] += 1
+                report.append(('already-safe', path, line_no + 1, name, shape))
+                continue
+
+            # ART-235: a pid alone is shared by every thread in the process,
+            # but a pid hashed alongside `std::thread::current().id()` is
+            # unique within the process too -- ART-182's own fix, keeping two
+            # parallel tests from sharing one staging namespace. The right
+            # shape reported as the wrong one is the same defect this sweep
+            # exists to catch, one level up.
+            if 'thread::current().id()' in body:
                 counts['safe'] += 1
                 report.append(('already-safe', path, line_no + 1, name, shape))
                 continue

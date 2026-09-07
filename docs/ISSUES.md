@@ -495,23 +495,6 @@ owner has also read the Workbench menus of a Turkish tree ART built, which is
 a different claim — that is AmigaOS rendering ART's *output*, not ART's own
 interface.)
 
-**ART-235** 🔵 **The test-scratch sweep reports a site that is not a defect**
-*found 2026-09-04 by re-running the sweeps during a documentation pass*
-`scripts/scratch-counter-sweep.py`
-
-`scratch-counter-sweep.py` reports **1** site "needing a counter":
-`commands/osinstall.rs::staging_is_removed_however_the_preview_ends`. That
-helper keys its prefix on the **thread id** as well as the process id — which
-is [ART-182](#fixed)'s own fix and is unique within the process, exactly what
-the sweep exists to require — but the sweep recognises only an atomic counter,
-so it reports the right shape as a wrong one.
-
-Nothing is broken; what is damaged is the guard. STATUS.md's Tests row said
-this sweep "reports zero", and a zero that is really a one-with-an-excuse
-trains a reader to skim past the next real finding. Either teach the sweep the
-thread-id shape or convert that one helper to the counter — the first is
-better, because the thread-id keying is the *stronger* of the two here.
-
 **ART-241** 🔵 **Field hints, errors and outcome text sit beside a control, not
 associated with it** — *found 2026-09-05 by the bounded accessibility sweep
 ART-237 itself called for*
@@ -852,6 +835,39 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-235** 🔵 ✅ **The test-scratch sweep reports a site that is not a
+defect** *found 2026-09-04 by re-running the sweeps during a documentation
+pass*
+`scripts/scratch-counter-sweep.py`
+
+`scratch-counter-sweep.py` reports **1** site "needing a counter":
+`commands/osinstall.rs::staging_is_removed_however_the_preview_ends`. That
+helper keys its prefix on the **thread id** as well as the process id — which
+is [ART-182](#fixed)'s own fix and is unique within the process, exactly what
+the sweep exists to require — but the sweep recognises only an atomic counter,
+so it reports the right shape as a wrong one.
+
+Nothing is broken; what is damaged is the guard. STATUS.md's Tests row said
+this sweep "reports zero", and a zero that is really a one-with-an-excuse
+trains a reader to skim past the next real finding. Either teach the sweep the
+thread-id shape or convert that one helper to the counter — the first is
+better, because the thread-id keying is the *stronger* of the two here.
+
+**Fixed** 2026-09-07 in `scripts/scratch-counter-sweep.py`: a site is now also
+"already safe" when its enclosing `fn` hashes `std::thread::current().id()`
+alongside the pid, so `commands/osinstall.rs::staging_is_removed_however_the_preview_ends`'s
+own `staging_dirs()` helper is recognised rather than reported as needing a
+counter. Ran clean: `already had a counter: 25`, `needing a counter: 0`.
+Mutation: stripped the `std::thread::current().id().hash(...)` keying from
+that helper's prefix, leaving only the pid — the sweep reported
+`needing a counter: 1` again; the helper was restored (verified byte-identical
+by `git diff --stat`) and the sweep returned to `needing a counter: 0`.
+`docs/STATUS.md`'s Sweeps row updated to match. No test file changes: this
+item fixes the sweep script itself, whose "test" is its own reported count
+under the mutation above.
+
+---
+
 **ART-271** 🟠 ✅ **`control-byte-sweep.py` does not look for the one
 control byte CLAUDE.md's own incident report names first** — *found
 2026-09-06 by reproducing the accident live while writing STATUS.md*
