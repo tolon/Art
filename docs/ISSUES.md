@@ -67,47 +67,6 @@ would both take the trait rather than calling `core::winuae` directly, the
 same way both call sites already take other platform boundaries as traits
 rather than concrete implementations.
 
-**ART-271** 🟠 **`control-byte-sweep.py` does not look for the one
-control byte CLAUDE.md's own incident report names first** — *found
-2026-09-06 by reproducing the accident live while writing STATUS.md*
-`scripts/control-byte-sweep.py`
-
-`NEVER_DATA` lists BEL (`\a`), BS (`\b`), VT (`\v`), FF (`\f`) and ESC (`\e`).
-**TAB (`\t`, 0x09) is not in it.**
-
-The omission is defensible on its face — a tab is legitimate in plenty of
-files, and flagging every one would drown the sweep. But `CLAUDE.md`'s own
-account of the accident this script exists to catch reads:
-
-> *A Windows path in a `<<'EOF'` block loses its backslash escapes — `E:\amiga`
-> arrives as `E:` plus a BEL byte, **`\test\art-…` as a TAB and a BEL**.*
-
-So the project has already met this corruption in its TAB form, and the guard
-written for it does not look for that form.
-
-**Demonstrated, not argued.** Writing the "Start here" block into
-`docs/STATUS.md` through a heredoc turned `src-tauri\target\` into
-`src-tauri` + TAB + `arget\`. The sweep reported **clean before and after** the
-corruption, and clean again after the repair — three runs, one of them over a
-file that was demonstrably wrong. The text was fixed by hand; the guard is what
-this entry is about.
-
-**The fix is not "flag every TAB".** That would fire on legitimate indentation
-everywhere and the sweep would be turned off within a week, which is worse than
-the gap. The targeted shape: a TAB that appears **mid-line, immediately after a
-non-whitespace character**, in a file whose other lines do not use tabs for
-indentation — which is what a swallowed `\t` looks like and what real
-indentation never does. Sharpen it against this exact case, and put the defect
-back to watch it fail, because a guard added without that is the same defect one
-level up.
-
-**Worth noting for whoever takes it:** this is the third time in one session
-that a guard turned out not to guard what it was named for. That is not a
-coincidence about this script; it is what happens to a check nobody has
-mutated.
-
-
-
 **ART-261** 🟠 **`cargo test --lib` reports exit 0 with no `test result:`
 line whenever `commands::artwork` runs, and passes cleanly without it** —
 *found 2026-09-06 by round 4's Task 1, localised the same day by a two-armed
@@ -893,6 +852,60 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-271** 🟠 ✅ **`control-byte-sweep.py` does not look for the one
+control byte CLAUDE.md's own incident report names first** — *found
+2026-09-06 by reproducing the accident live while writing STATUS.md*
+`scripts/control-byte-sweep.py`
+
+`NEVER_DATA` lists BEL (`\a`), BS (`\b`), VT (`\v`), FF (`\f`) and ESC (`\e`).
+**TAB (`\t`, 0x09) is not in it.**
+
+The omission is defensible on its face — a tab is legitimate in plenty of
+files, and flagging every one would drown the sweep. But `CLAUDE.md`'s own
+account of the accident this script exists to catch reads:
+
+> *A Windows path in a `<<'EOF'` block loses its backslash escapes — `E:\amiga`
+> arrives as `E:` plus a BEL byte, **`\test\art-…` as a TAB and a BEL**.*
+
+So the project has already met this corruption in its TAB form, and the guard
+written for it does not look for that form.
+
+**Demonstrated, not argued.** Writing the "Start here" block into
+`docs/STATUS.md` through a heredoc turned `src-tauri\target\` into
+`src-tauri` + TAB + `arget\`. The sweep reported **clean before and after** the
+corruption, and clean again after the repair — three runs, one of them over a
+file that was demonstrably wrong. The text was fixed by hand; the guard is what
+this entry is about.
+
+**The fix is not "flag every TAB".** That would fire on legitimate indentation
+everywhere and the sweep would be turned off within a week, which is worse than
+the gap. The targeted shape: a TAB that appears **mid-line, immediately after a
+non-whitespace character**, in a file whose other lines do not use tabs for
+indentation — which is what a swallowed `\t` looks like and what real
+indentation never does. Sharpen it against this exact case, and put the defect
+back to watch it fail, because a guard added without that is the same defect one
+level up.
+
+**Worth noting for whoever takes it:** this is the third time in one session
+that a guard turned out not to guard what it was named for. That is not a
+coincidence about this script; it is what happens to a check nobody has
+mutated.
+
+**Fixed** 2026-09-07 in `scripts/control-byte-sweep.py`: `NEVER_DATA` now
+carries `0x09`, and `control_offenders()` flags a TAB only when it is
+mid-line, right after a non-whitespace character, in a file that does not
+indent with tabs elsewhere — the exact shape the incident produced, so
+legitimate indentation stays silent. Proven live rather than by assertion: a
+throwaway probe file (`src-tauri` + TAB + `arget\`, the exact bytes the
+`docs/STATUS.md` accident produced) made the sweep exit 1 naming the TAB by
+line; deleting the probe brought the sweep back to
+`control-byte sweep: clean - 7 file(s) allow-listed for AmigaDOS DosType data
+and 7 for deliberate alignment; no stray control bytes and no lost line
+continuations anywhere else`. Commit: see `git log` for the ART-271 subject
+on `art-debts`.
+
+---
+
 **ART-273** 🔵 ✅ **The first-boot dispatcher tried to delete itself on `done
 all`, and AmigaDOS refused: the file was still being executed** — *found
 2026-09-07 by the gated rehearsal on the owner's own 3.2 tree (task 8 of the
