@@ -48,7 +48,11 @@
     "quickActionHints": {
       "library": "Library",
       "emulator": "Emulator",
-      "rawData": "Raw data"
+      "rawData": "Raw data",
+      "filesManager": "Two-pane manager",
+      "hardDiskImages": "PiStorm card and images",
+      "osTree": "AmigaOS tree",
+      "oneClickInstall": "One-click install"
     },
     "footer": {
       "theme": "theme: {{theme}}"

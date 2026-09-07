@@ -9,11 +9,52 @@ import { runWorkflow } from "@/lib/api";
 import { usePowerMode } from "@/lib/uxmode";
 import type { DroppedAnalysis, WorkflowInfo, WorkflowOutcome } from "@/types";
 import { errorText } from "@/lib/errorText";
+import { QuickIcon, type QuickIconName } from "@/components/layout/QuickIcon";
+import { NavIcon } from "@/components/layout/NavIcon";
 
 interface LayoutContext {
   analyses: DroppedAnalysis[];
   dragOver: boolean;
 }
+
+/**
+ * The six tiles from the owner-approved design canvas — the icons, labels
+ * and hints `gen.py`'s `dashboard()` draws with, one for one. Not the same
+ * set the old quick-actions grid carried (disk/archive tools, Gotek, ROM):
+ * every one of those studios is still a full sidebar entry, so nothing here
+ * is a lost route, only a shorter shortcut tray. `nav.tools` (Hex Tools)
+ * stays a separate, Power-User-only tile below rather than a seventh here,
+ * since it is not one of the canvas's own six and carries no two-tone icon
+ * of its own.
+ */
+const QUICK_ACTIONS: Array<{ to: string; icon: QuickIconName; key: string; hintKey: string }> = [
+  { to: "/files", icon: "files", key: "nav.files", hintKey: "dashboard.quickActionHints.filesManager" },
+  {
+    to: "/collection",
+    icon: "collection",
+    key: "nav.collection",
+    hintKey: "dashboard.quickActionHints.library",
+  },
+  { to: "/winuae", icon: "winuae", key: "nav.winuae", hintKey: "dashboard.quickActionHints.emulator" },
+  {
+    to: "/hard-disk",
+    icon: "card",
+    key: "nav.hardDisk",
+    hintKey: "dashboard.quickActionHints.hardDiskImages",
+  },
+  {
+    to: "/os-builder",
+    icon: "install",
+    key: "nav.osBuilder",
+    hintKey: "dashboard.quickActionHints.osTree",
+  },
+  {
+    to: "/whdload",
+    icon: "whdload",
+    key: "nav.whdload",
+    hintKey: "dashboard.quickActionHints.oneClickInstall",
+  },
+];
 
 export function Dashboard() {
   const { t } = useTranslation();
@@ -90,28 +131,33 @@ export function Dashboard() {
       <section className="card">
         <h2 style={{ fontSize: 15 }}>{t("dashboard.quickActions")}</h2>
         <div className="quick-actions">
-          {[
-            { key: "nav.diskTools", hint: "ADF", to: "/disk-tools" },
-            { key: "nav.archiveTools", hint: "LHA", to: "/archive-tools" },
-            { key: "nav.hardDisk", hint: "HDF", to: "/hard-disk" },
-            { key: "nav.collection", hint: t("dashboard.quickActionHints.library"), to: "/collection" },
-            { key: "nav.gotek", hint: "USB", to: "/gotek" },
-            { key: "nav.rom", hint: "Kickstart", to: "/rom" },
-            { key: "nav.winuae", hint: t("dashboard.quickActionHints.emulator"), to: "/winuae" },
-            // Hex Tools is Power User territory (§47); hidden, not disabled.
-            ...(powerMode
-              ? [{ key: "nav.tools", hint: t("dashboard.quickActionHints.rawData"), to: "/tools" }]
-              : []),
-          ].map((qa) => (
-            <button
-              key={qa.to}
-              className="quick-action"
-              onClick={() => navigate(qa.to)}
-            >
-              <span className="quick-action-label">{t(qa.key)}</span>
-              <span className="quick-action-hint">{qa.hint}</span>
+          {QUICK_ACTIONS.map((qa) => (
+            <button key={qa.to} className="quick-action" onClick={() => navigate(qa.to)}>
+              <span className="quick-action-icon" aria-hidden>
+                <QuickIcon name={qa.icon} />
+              </span>
+              <span className="quick-action-text">
+                <span className="quick-action-label">{t(qa.key)}</span>
+                <span className="quick-action-hint">{t(qa.hintKey)}</span>
+              </span>
             </button>
           ))}
+          {/* Hex Tools is Power User territory (§47); hidden, not disabled.
+              Not one of the canvas's own six tiles, so it keeps a plain
+              stroke icon rather than a two-tone one invented for it. */}
+          {powerMode && (
+            <button className="quick-action" onClick={() => navigate("/tools")}>
+              <span className="quick-action-icon" aria-hidden>
+                <NavIcon name="wrench" />
+              </span>
+              <span className="quick-action-text">
+                <span className="quick-action-label">{t("nav.tools")}</span>
+                <span className="quick-action-hint">
+                  {t("dashboard.quickActionHints.rawData")}
+                </span>
+              </span>
+            </button>
+          )}
         </div>
       </section>
 

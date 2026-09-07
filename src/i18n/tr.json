@@ -48,7 +48,11 @@
     "quickActionHints": {
       "library": "Kütüphane",
       "emulator": "Emülatör",
-      "rawData": "Ham veri"
+      "rawData": "Ham veri",
+      "filesManager": "İki panelli yönetici",
+      "hardDiskImages": "PiStorm kartı ve imajlar",
+      "osTree": "AmigaOS ağacı",
+      "oneClickInstall": "Tek tıkla kurulum"
     },
     "footer": {
       "theme": "tema: {{theme}}"
