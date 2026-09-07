@@ -25,6 +25,33 @@ pass — filed and closed together rather than sitting in Open in between.
 ---
 
 ## Open
+**ART-275** 🟠 **The commander has no cursor keys: Up/Down, Home/End, PageUp/PageDown
+move nothing, and the ini's one custom shortcut (Ctrl+Space) is not wired** — *found
+2026-09-07 night by the owner, trying the Windows 11 build on the Files screen*
+`src/components/files/FunctionKeys.tsx` · `src/pages/FileManager.tsx`
+
+Not a regression of the Windows 11 round, which did not touch the Files screen: no
+version of ART has ever handled `ArrowUp`/`ArrowDown`/`Home`/`End`/`PageUp`/`PageDown`
+on a pane — `grep -rn ArrowDown src` finds only a test list. The keyboard brief
+(§3.2) decoded the owner's `wincmd.ini` into a key table, and the table omits the
+cursor keys because they are Total Commander's *defaults*, not `ini` entries; every
+key that *is* in the table exists (Enter, Backspace, Ctrl+PgUp/PgDn, Tab, Insert,
+Space, Ctrl+A, numpad + − *, type-to-search, F2–F9, Alt+F1/F2, Alt+Left/Right,
+Ctrl+T/W/Tab). The `[Colors]`, the 18 `ColorFilters`, the command line, the key
+bar and the layout are applied and match the file. The one `[Shortcuts]` line,
+`C+SPACE=cm_ExecuteDOS` (Ctrl+Space focuses the command line), is not applied:
+`isShortcutBlocked` refuses every Ctrl+ combination a hook did not ask for.
+
+A mouse-free commander without cursor keys is driven by Insert and letters only,
+which is what the owner met.
+
+**Fix:** one hook beside `useMarkKeys` — Up/Down one row, Home/End first/last,
+PageUp/PageDown one page of rows, Shift+movement marks the rows it passes over
+(Total Commander's own behaviour) — plus Ctrl+Space to the command line; each key
+tested, sharing the F-keys' gate and the text-field guard. Batched with whatever
+else the owner's test pass finds (the list is outside the repository,
+`D:\Projeler\Amiga\ART-test-bulgulari-2026-09-07.md`).
+
 **ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
 neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
 8's real run, on `content-layer`*
