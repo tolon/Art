@@ -167,6 +167,7 @@ pub fn run() {
             commands::osinstall::osinstall_verify,
             commands::amigainstall::amiga_install_preview,
             commands::amigainstall::amiga_install_run,
+            commands::amigainstall::amigainstall_classify_archive,
             commands::firstboot::firstboot_preview,
             commands::firstboot::firstboot_write,
             commands::firstboot::firstboot_rehearse,

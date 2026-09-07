@@ -562,14 +562,7 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
 
     // The recipe's own declarations, translated — never carried across as the
     // recipe's own type. See `Composed::overlays`.
-    let overlays: Vec<packagevol::Overlay> = installer
-        .overlays
-        .iter()
-        .map(|overlay| packagevol::Overlay {
-            from: overlay.from.clone(),
-            to: overlay.to.clone(),
-        })
-        .collect();
+    let overlays = translate_overlays(&installer);
     // `validate_installer` already refused a `minimum_version` that is not two
     // integers, so a shipped recipe always parses. A `None` here can therefore
     // only mean the recipe declared none.
@@ -600,6 +593,115 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
         minimum_installer_version,
         minimum_installer_version_text: installer.minimum_version.clone(),
     })
+}
+
+/// A recipe's own overlay declarations, translated into
+/// `core::amigainstall`'s own record — never carried across as
+/// `core::osinstall::package::InstallerOverlay` (CLAUDE.md's inward-dependency
+/// rule). One place for the translation `compose` and `classify_archive` both
+/// need.
+fn translate_overlays(installer: &package::AmigaInstaller) -> Vec<packagevol::Overlay> {
+    installer
+        .overlays
+        .iter()
+        .map(|overlay| packagevol::Overlay {
+            from: overlay.from.clone(),
+            to: overlay.to.clone(),
+        })
+        .collect()
+}
+
+/// Every package ART's catalogue ships an Amiga-side installer for, as the
+/// small record `core/amigainstall` is allowed to read (ART-277) — never the
+/// whole recipe. An unreadable catalogue answers empty rather than refusing:
+/// this is only ever used to make a refusal or a classification *friendlier*,
+/// never to decide whether a run may happen, so losing it costs a nicety and
+/// not a correctness guarantee.
+fn known_packages() -> Vec<packagevol::KnownPackage> {
+    package::packages()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| p.amiga_installer.is_some())
+        .map(|p| packagevol::KnownPackage {
+            id: p.id,
+            name: p.name,
+            media: p.media,
+        })
+        .collect()
+}
+
+/// What a chosen archive is, judged **before** it goes into a request —
+/// ART-277's second cause. `AmigaInstallPanel` calls this the moment a file
+/// picker returns, so a BoingBag 2 archive supplied while BoingBag 1 is still
+/// selected is named on screen immediately, rather than discovered as a
+/// refusal after the round trip through [`compose`].
+///
+/// Read-only and lenient: nothing is unpacked (the archive's listing alone is
+/// read — [`packagevol::archive_top_level`] never opens the encrypted payload
+/// a second archive might carry), and an archive this cannot make sense of —
+/// missing, unreadable, not carrying a single top-level directory — answers
+/// `"unknown"` rather than refusing. A query the panel asks on every file pick
+/// must not turn "I could not tell" into a hard error the user cannot get
+/// past.
+#[tauri::command]
+pub fn amigainstall_classify_archive(
+    path: PathBuf,
+    package_id: String,
+) -> AppResult<ArchiveClassification> {
+    let top_level = packagevol::archive_top_level(&path).unwrap_or_default();
+    let identity = packagevol::archive_identity(&path).unwrap_or(None);
+
+    let selected = package::by_id(package_id.trim()).ok();
+    let catalogue = package::packages().unwrap_or_default();
+
+    let kind = match identity {
+        None => "unknown".to_string(),
+        Some(top) => classify_top_level(&top, selected.as_ref(), &catalogue),
+    };
+
+    Ok(ArchiveClassification { kind, top_level })
+}
+
+/// [`amigainstall_classify_archive`]'s own decision, parameterised so it can
+/// be tested without a real archive on disk.
+fn classify_top_level(
+    top: &str,
+    selected: Option<&package::Package>,
+    catalogue: &[package::Package],
+) -> String {
+    if let Some(selected) = selected {
+        let overlays: Vec<packagevol::Overlay> = selected
+            .amiga_installer
+            .as_ref()
+            .map(translate_overlays)
+            .unwrap_or_default();
+        match packagevol::archive_is(&selected.media, &overlays, top) {
+            packagevol::ArchiveIs::ThePackage => return "the-package".to_string(),
+            packagevol::ArchiveIs::TheUpdateArchive => return "the-update-archive".to_string(),
+            packagevol::ArchiveIs::Neither => {}
+        }
+    }
+    for pkg in catalogue {
+        if Some(pkg.id.as_str()) == selected.map(|s| s.id.as_str()) {
+            continue;
+        }
+        if packagevol::drawer_names_equal(&pkg.media, top) {
+            return format!("another-package:{}", pkg.id);
+        }
+    }
+    "unknown".to_string()
+}
+
+/// [`amigainstall_classify_archive`]'s answer: what the archive is, and what
+/// it actually carries at its top level — the latter so a refusal or a hint
+/// can say what it held even when ART recognises none of it.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveClassification {
+    /// `"the-package"`, `"the-update-archive"`, `"another-package:<id>"`, or
+    /// `"unknown"`.
+    pub kind: String,
+    pub top_level: Vec<String>,
 }
 
 /// Ask the supplied archive what it carries, **before anything is unpacked**.
@@ -914,6 +1016,9 @@ fn install(
     // no volume the emulator can see.
     sink.report(0, None, "Unpacking the package's own files");
     let package = Scratch::in_dir(scratch_root)?;
+    // ART-277: named so a wrong-package refusal can say whose archive it
+    // really is, not only what the selected package expected.
+    let catalogue = known_packages();
     let unpacked = packagevol::unpack(
         package_archives,
         package.path(),
@@ -922,6 +1027,8 @@ fn install(
             installer: &composed.installer_in_package,
             overlays: &composed.overlays,
             minimum_installer_version: composed.minimum_installer_version,
+            package_name: &composed.package_name,
+            catalogue: &catalogue,
         },
         scratch_root,
         sink,
@@ -2547,6 +2654,113 @@ mod tests {
                 .package_archives_present,
             "the second one is not, and the screen has to say so before the confirm button"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // ART-277: classifying an archive at the moment it is picked, before
+    // it ever reaches a request.
+    // -----------------------------------------------------------------
+
+    /// A wrapper shaped like the owner's own `BoingBag39-2.lha` — the archive
+    /// this round's defect was about: chosen while BoingBag 3.9-1 was still
+    /// selected.
+    fn boingbag2_lha() -> Vec<u8> {
+        crate::core::lha::tests::make_lha_with(&[
+            ("BoingBag3.9-2.info", b"icon"),
+            ("BoingBag3.9-2/AmigaOS-Update", b"PK encrypted"),
+            ("BoingBag3.9-2/C/Updater", b"boingbag 2's own updater"),
+        ])
+    }
+
+    #[test]
+    fn classify_top_level_recognises_the_selected_packages_own_archive() {
+        let selected = package::by_id("boingbag-39-1").unwrap();
+        let catalogue = package::packages().unwrap();
+        assert_eq!(
+            classify_top_level("BoingBag3.9-1", Some(&selected), &catalogue),
+            "the-package"
+        );
+    }
+
+    #[test]
+    fn classify_top_level_recognises_the_selected_packages_update_archive() {
+        let selected = package::by_id("boingbag-39-1").unwrap();
+        let catalogue = package::packages().unwrap();
+        assert_eq!(
+            classify_top_level("BoingBag3.9-1-UAE", Some(&selected), &catalogue),
+            "the-update-archive"
+        );
+    }
+
+    /// The whole of ART-277: BoingBag 3.9-2's own archive, offered while
+    /// BoingBag 3.9-1 is still the selected package, is named by id rather
+    /// than folded into "unknown".
+    #[test]
+    fn classify_top_level_names_another_catalogued_package() {
+        let selected = package::by_id("boingbag-39-1").unwrap();
+        let catalogue = package::packages().unwrap();
+        assert_eq!(
+            classify_top_level("BoingBag3.9-2", Some(&selected), &catalogue),
+            "another-package:boingbag-39-2"
+        );
+    }
+
+    #[test]
+    fn classify_top_level_answers_unknown_for_an_archive_nothing_recognises() {
+        let selected = package::by_id("boingbag-39-1").unwrap();
+        let catalogue = package::packages().unwrap();
+        assert_eq!(
+            classify_top_level("Euro-Update", Some(&selected), &catalogue),
+            "unknown"
+        );
+    }
+
+    /// No package selected yet (a fresh panel, or an archive picked by hand):
+    /// still names another catalogued package rather than only ever
+    /// answering `"unknown"` — a query with no selected package is not the
+    /// same question as one that already knows something is wrong.
+    #[test]
+    fn classify_top_level_without_a_selected_package_still_names_a_catalogued_one() {
+        let catalogue = package::packages().unwrap();
+        assert_eq!(
+            classify_top_level("BoingBag3.9-2", None, &catalogue),
+            "another-package:boingbag-39-2"
+        );
+    }
+
+    /// End to end, through the command itself: a real file on disk, read by
+    /// its listing alone. This is the one test in the group that proves
+    /// `amigainstall_classify_archive` actually opens the archive rather than
+    /// merely wiring `classify_top_level` correctly.
+    #[test]
+    fn the_command_classifies_a_real_archive_on_disk() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "classify-archive");
+        let archive = scratch.join("BoingBag39-2.lha");
+        std::fs::write(&archive, boingbag2_lha()).unwrap();
+
+        let answer = amigainstall_classify_archive(archive, "boingbag-39-1".to_string()).unwrap();
+        assert_eq!(answer.kind, "another-package:boingbag-39-2");
+        assert!(
+            answer.top_level.iter().any(|n| n == "BoingBag3.9-2"),
+            "got {:?}",
+            answer.top_level
+        );
+    }
+
+    /// A file that is not an archive at all — or is not there — answers
+    /// `"unknown"` rather than an error: this is asked on every file pick,
+    /// and a query must not turn "I could not tell" into something the user
+    /// cannot get past.
+    #[test]
+    fn the_command_is_lenient_about_a_file_it_cannot_read() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "classify-unreadable");
+        let answer = amigainstall_classify_archive(
+            scratch.join("nothing-here.lha"),
+            "boingbag-39-1".to_string(),
+        )
+        .unwrap();
+        assert_eq!(answer.kind, "unknown");
+        assert!(answer.top_level.is_empty());
     }
 }
 
