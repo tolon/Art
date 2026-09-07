@@ -25,32 +25,6 @@ pass — filed and closed together rather than sitting in Open in between.
 ---
 
 ## Open
-**ART-275** 🟠 **The commander has no cursor keys: Up/Down, Home/End, PageUp/PageDown
-move nothing, and the ini's one custom shortcut (Ctrl+Space) is not wired** — *found
-2026-09-07 night by the owner, trying the Windows 11 build on the Files screen*
-`src/components/files/FunctionKeys.tsx` · `src/pages/FileManager.tsx`
-
-Not a regression of the Windows 11 round, which did not touch the Files screen: no
-version of ART has ever handled `ArrowUp`/`ArrowDown`/`Home`/`End`/`PageUp`/`PageDown`
-on a pane — `grep -rn ArrowDown src` finds only a test list. The keyboard brief
-(§3.2) decoded the owner's `wincmd.ini` into a key table, and the table omits the
-cursor keys because they are Total Commander's *defaults*, not `ini` entries; every
-key that *is* in the table exists (Enter, Backspace, Ctrl+PgUp/PgDn, Tab, Insert,
-Space, Ctrl+A, numpad + − *, type-to-search, F2–F9, Alt+F1/F2, Alt+Left/Right,
-Ctrl+T/W/Tab). The `[Colors]`, the 18 `ColorFilters`, the command line, the key
-bar and the layout are applied and match the file. The one `[Shortcuts]` line,
-`C+SPACE=cm_ExecuteDOS` (Ctrl+Space focuses the command line), is not applied:
-`isShortcutBlocked` refuses every Ctrl+ combination a hook did not ask for.
-
-A mouse-free commander without cursor keys is driven by Insert and letters only,
-which is what the owner met.
-
-**Fix:** one hook beside `useMarkKeys` — Up/Down one row, Home/End first/last,
-PageUp/PageDown one page of rows, Shift+movement marks the rows it passes over
-(Total Commander's own behaviour) — plus Ctrl+Space to the command line; each key
-tested, sharing the F-keys' gate and the text-field guard. Batched with whatever
-else the owner's test pass finds (the list is outside the repository,
-`D:\Projeler\Amiga\ART-test-bulgulari-2026-09-07.md`).
 
 **ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
 neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
@@ -431,6 +405,59 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-275** 🟠 **The commander had no cursor keys: Up/Down, Home/End, PageUp/PageDown
+moved nothing, and the ini's one custom shortcut (Ctrl+Space) was not wired** — *found
+2026-09-07 night by the owner, trying the Windows 11 build on the Files screen; fixed
+2026-09-08*
+`src/lib/cursorKeys.ts` · `src/components/files/FunctionKeys.tsx` · `src/lib/selection.ts` ·
+`src/pages/FileManager.tsx`
+
+Not a regression of the Windows 11 round, which did not touch the Files screen: no
+version of ART had ever handled `ArrowUp`/`ArrowDown`/`Home`/`End`/`PageUp`/`PageDown`
+on a pane — `grep -rn ArrowDown src` found only a test list. The keyboard brief
+(§3.2) decoded the owner's `wincmd.ini` into a key table, and the table omits the
+cursor keys because they are Total Commander's *defaults*, not `ini` entries; every
+key that *is* in the table existed (Enter, Backspace, Ctrl+PgUp/PgDn, Tab, Insert,
+Space, Ctrl+A, numpad + − *, type-to-search, F2–F9, Alt+F1/F2, Alt+Left/Right,
+Ctrl+T/W/Tab). The `[Colors]`, the 18 `ColorFilters`, the command line, the key
+bar and the layout were applied and matched the file. The one `[Shortcuts]` line,
+`C+SPACE=cm_ExecuteDOS` (Ctrl+Space focuses the command line), was not applied:
+`isShortcutBlocked` refused every Ctrl+ combination a hook did not ask for.
+
+A mouse-free commander without cursor keys was driven by Insert and letters only,
+which is what the owner met.
+
+**Fixed 2026-09-08.** `cursorStep` (`src/lib/cursorKeys.ts`, new) is the pure
+arithmetic: with no cursor, `down`/`home`/`pageDown` land on the first name and
+`up`/`end`/`pageUp` on the last; `up` at the first row and `down` at the last stay
+(no wrap); `pageUp`/`pageDown` move `pageRows` rows clamped to the ends; an empty
+list returns `null` — tested in `src/lib/cursorKeys.test.ts` (20 tests, new).
+`useCursorKeys` in `FunctionKeys.tsx` wires Up/Down/Home/End/PageUp/PageDown, gated
+like every other hook in the file by `isShortcutBlocked(event)` with
+`expectCtrl=false`, so Ctrl+PageUp/PageDown stay `useNavigationKeys`'s container
+steps and the two hooks can never both fire off one keystroke. `useCommandLineKey`
+wires Ctrl+Space (`isShortcutBlocked(event, true)`) to focus the command line's own
+`<input>`, which now carries a ref; a new test proves Ctrl+Space does not also reach
+`useMarkKeys`'s plain-Space handler. `FileManager.tsx` wires `onMove`: without Shift
+it calls `moveCursor` (the cursor only, exactly like type-to-search, so a selection
+built with Insert survives walking around it with the arrows); with Shift it marks
+the rows the cursor passed over through a new pure helper, `markThrough` in
+`selection.ts` — inclusive of the old cursor, exclusive of the new one, the same rule
+in both directions and at any step size — tested in `selection.test.ts`'s new
+`markThrough` suite. `pageRows` is measured from the focused pane's own
+`.tc-row-list` (found by a new `data-side` attribute on the pane, since the DOM has
+two) divided by a rendered row's `offsetHeight`, falling back to 20 when nothing has
+rendered; the cursor row is then scrolled into view (`scrollIntoView({block:
+"nearest"})`) by a new `data-name` attribute on each row.
+
+Tests: `src/lib/cursorKeys.test.ts` (20, new file), `src/lib/selection.test.ts`'s new
+`markThrough` suite (7 tests), and `FunctionKeys.test.tsx`'s new `useCursorKeys`,
+`useCommandLineKey` and `useMarkKeys — Ctrl+Space does not mark` suites (11 tests).
+**Mutation proof:** breaking `cursorStep`'s `down` clamp to wrap instead of stop at
+the last row is caught by exactly one test, `cursorStep — up/down, one row at a time
+> down at the last row stays — no wrap`; the mutation was backed up by absolute path
+before being introduced and restored the same way, never with `git checkout --`.
+
 **ART-261** 🟠 **`cargo test --lib` reports exit 0 with no `test result:`
 line whenever `commands::artwork` runs, and passes cleanly without it** —
 *found 2026-09-06 by round 4's Task 1, localised the same day by a two-armed
