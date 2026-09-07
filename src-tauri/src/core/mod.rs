@@ -176,6 +176,132 @@ mod independence {
         line.len() - line.trim_start_matches(' ').len()
     }
 
+    /// Replace every byte inside a string literal — plain `"…"` or raw
+    /// `r"…"` / `r#"…"#` / `r##"…"##`… of any hash count — with a space, so
+    /// [`test_regions`]'s brace matching below can never mistake a `}` that
+    /// is really just data for the end of a real Rust block. A multi-line
+    /// literal is handled the same as a single-line one: only the newline
+    /// bytes inside a stripped span are kept as-is, so line numbers and
+    /// every other line's own leading indentation stay exactly what they
+    /// were — [`test_regions`] can keep indexing by line number afterwards
+    /// without knowing anything changed.
+    ///
+    /// **Follow-up to ART-274.** A fixture string exercising this very guard
+    /// (see `test_regions_covers_a_signature_that_wraps_across_lines` below)
+    /// used to have to be indented four spaces past its own content, purely
+    /// so a flush-left `}` inside it would not land at the same indent as
+    /// the real `#[cfg(test)] mod independence {` this file opens with —
+    /// which would end that real region early and turn every line after the
+    /// fixture into a false offender. Stripping string content first removes
+    /// the need for that workaround rather than merely working around it
+    /// again.
+    ///
+    /// Deliberately not a full Rust lexer: it does not track character
+    /// literals, byte strings or comments, because a `}` sitting inside one
+    /// of those is not a failure mode this guard has ever actually hit —
+    /// only a string literal has (a WinUAE `.uae` line or an AmigaDOS script
+    /// assembled with `format!`, see `tools::winuae_launcher`'s own
+    /// `real_version_hook`; and now this file's own fixture).
+    fn strip_string_literals(text: &str) -> String {
+        let chars: Vec<char> = text.chars().collect();
+        let mut out = String::with_capacity(text.len());
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+
+            // A raw string: `r` or `br`, then zero or more `#`, then `"`.
+            if c == 'r' || (c == 'b' && chars.get(i + 1) == Some(&'r')) {
+                let prefix_start = i;
+                let mut j = if c == 'b' { i + 2 } else { i + 1 };
+                let mut hashes = 0usize;
+                while chars.get(j) == Some(&'#') {
+                    hashes += 1;
+                    j += 1;
+                }
+                if chars.get(j) == Some(&'"') {
+                    for &ch in &chars[prefix_start..=j] {
+                        out.push(if ch == '\n' { '\n' } else { ' ' });
+                    }
+                    i = j + 1;
+                    loop {
+                        match chars.get(i) {
+                            None => break,
+                            Some('"') => {
+                                let close_start = i;
+                                let mut k = i + 1;
+                                let mut seen = 0usize;
+                                while seen < hashes && chars.get(k) == Some(&'#') {
+                                    seen += 1;
+                                    k += 1;
+                                }
+                                if seen == hashes {
+                                    for &ch in &chars[close_start..k] {
+                                        out.push(if ch == '\n' { '\n' } else { ' ' });
+                                    }
+                                    i = k;
+                                    break;
+                                }
+                                out.push(' ');
+                                i += 1;
+                            }
+                            Some('\n') => {
+                                out.push('\n');
+                                i += 1;
+                            }
+                            Some(_) => {
+                                out.push(' ');
+                                i += 1;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                // Not actually a raw string (e.g. a bare `r` or `br`
+                // identifier fragment) — fall through and push `c` as
+                // ordinary text below.
+            }
+
+            if c == '"' {
+                out.push(' ');
+                i += 1;
+                loop {
+                    match chars.get(i) {
+                        None => break,
+                        // An escape consumes the backslash and the one
+                        // character after it together, so an escaped quote
+                        // (`\"`) can never be misread as the closing quote.
+                        Some('\\') => {
+                            out.push(' ');
+                            i += 1;
+                            if let Some(&next) = chars.get(i) {
+                                out.push(if next == '\n' { '\n' } else { ' ' });
+                                i += 1;
+                            }
+                        }
+                        Some('"') => {
+                            out.push(' ');
+                            i += 1;
+                            break;
+                        }
+                        Some('\n') => {
+                            out.push('\n');
+                            i += 1;
+                        }
+                        Some(_) => {
+                            out.push(' ');
+                            i += 1;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            out.push(c);
+            i += 1;
+        }
+        out
+    }
+
     /// The `(start, end)` line ranges (0-based, inclusive) a `#[cfg(test)]`
     /// covers — the attribute line itself through to the `}` that closes the
     /// item it is attached to, or through the item's own declaration when it
@@ -188,7 +314,13 @@ mod independence {
     /// counter would misread those. `cargo fmt --check` is blocking in CI,
     /// so a block's closing brace is always aligned with the line that opened
     /// it — indent is the reliable signal this codebase's own formatting
-    /// already guarantees.
+    /// already guarantees. [`strip_string_literals`] runs first so that
+    /// "indent" and "trim() == \"}\"" are asked of the *code*, not of
+    /// whatever a string literal happens to contain — a `}` inside string
+    /// data can no longer be mistaken for indentation-matched code at all,
+    /// which is the follow-up half of the same defect: matching by indent
+    /// alone still could not tell a flush-left `}` *inside a string* from a
+    /// real one at the same indent.
     ///
     /// **The item's own declaration can span several lines** — a
     /// rustfmt-wrapped function signature, most often — so the line that
@@ -203,18 +335,29 @@ mod independence {
     /// item, `#[cfg(test)] mod x;`) or a blank line means there is no block
     /// to find, and it stops there instead of reading past the item.
     fn test_regions(lines: &[&str]) -> Vec<(usize, usize)> {
+        let stripped = strip_string_literals(&lines.join("\n"));
+        let scan: Vec<&str> = stripped.lines().collect();
+        // `strip_string_literals` keeps every newline byte exactly where it
+        // was, so this always holds; falling back to the raw lines if it
+        // somehow did not is safer than indexing past the end below.
+        let scan: &[&str] = if scan.len() == lines.len() {
+            &scan
+        } else {
+            lines
+        };
+
         let mut regions = Vec::new();
         let mut i = 0;
-        while i < lines.len() {
-            if lines[i].trim() == "#[cfg(test)]" {
-                let indent = indent_of(lines[i]);
+        while i < scan.len() {
+            if scan[i].trim() == "#[cfg(test)]" {
+                let indent = indent_of(scan[i]);
                 let start = i;
                 let mut j = i + 1;
                 // Stacked attributes (`#[cfg(test)]` then `#[test]`, say) sit
                 // at the same indent as the item they both apply to.
-                while j < lines.len()
-                    && indent_of(lines[j]) == indent
-                    && lines[j].trim_start().starts_with('#')
+                while j < scan.len()
+                    && indent_of(scan[j]) == indent
+                    && scan[j].trim_start().starts_with('#')
                 {
                     j += 1;
                 }
@@ -222,7 +365,7 @@ mod independence {
                 // wraps across, for the line that actually opens the block.
                 let mut sig_end = j;
                 let opens_block = loop {
-                    match lines.get(sig_end) {
+                    match scan.get(sig_end) {
                         None => break false,
                         Some(line) => {
                             let trimmed = line.trim_end();
@@ -238,14 +381,13 @@ mod independence {
                 };
                 let end = if opens_block {
                     let mut k = sig_end + 1;
-                    while k < lines.len()
-                        && !(indent_of(lines[k]) == indent && lines[k].trim() == "}")
+                    while k < scan.len() && !(indent_of(scan[k]) == indent && scan[k].trim() == "}")
                     {
                         k += 1;
                     }
-                    k.min(lines.len().saturating_sub(1))
+                    k.min(scan.len().saturating_sub(1))
                 } else {
-                    sig_end.min(lines.len().saturating_sub(1))
+                    sig_end.min(scan.len().saturating_sub(1))
                 };
                 regions.push((start, end));
                 i = end + 1;
@@ -334,6 +476,96 @@ mod independence {
 
     fn is_test_line(regions: &[(usize, usize)], line_no: usize) -> bool {
         regions.iter().any(|(s, e)| line_no >= *s && line_no <= *e)
+    }
+
+    /// Follow-up to ART-274. A `}` sitting inside a string literal must
+    /// never be mistaken for the end of a real Rust block —
+    /// `strip_string_literals` exists to prevent exactly that. Built
+    /// directly, unlike the test above, so the fixture can place the
+    /// flush-left `}` exactly where it used to do damage: at indent 0, the
+    /// same indent the enclosing `#[cfg(test)] fn` itself sits at, so an
+    /// unfixed guard ends the region on that line instead of the fn's own
+    /// closing brace three lines later.
+    #[test]
+    fn a_flush_left_brace_inside_a_string_literal_does_not_end_the_region_early() {
+        let src = "\
+#[cfg(test)]
+fn holds_a_flush_left_brace_in_a_string() {
+    let evidence = \"before
+}
+after\";
+    assert!(!evidence.is_empty());
+}
+
+fn production_after() -> u32 {
+    0
+}
+";
+        let lines: Vec<&str> = src.lines().collect();
+        let regions = test_regions(&lines);
+
+        let assert_line = lines
+            .iter()
+            .position(|l| l.contains("assert!(!evidence.is_empty());"))
+            .unwrap();
+        assert!(
+            is_test_line(&regions, assert_line),
+            "the flush-left `}}` inside the string literal must not have ended \
+             the region before the fn's own body finished"
+        );
+
+        let production_line = lines
+            .iter()
+            .position(|l| l.contains("fn production_after"))
+            .unwrap();
+        assert!(
+            !is_test_line(&regions, production_line),
+            "ordinary code after the #[cfg(test)] item must still not be swept in"
+        );
+    }
+
+    /// The same shape, for a raw string (`r"…"` / `r#"…"#`) rather than a
+    /// plain one — the other span [`strip_string_literals`] is asked to
+    /// skip, and the one a WinUAE `.uae` template or an AmigaDOS script
+    /// assembled with `format!` is more likely to actually use, since
+    /// neither wants to escape every backslash in a Windows path or an
+    /// AmigaDOS `;` comment.
+    #[test]
+    fn a_flush_left_brace_inside_a_raw_string_literal_does_not_end_the_region_early() {
+        let src = "\
+#[cfg(test)]
+fn holds_a_flush_left_brace_in_a_raw_string() {
+    let evidence = r#\"before
+}
+after\"#;
+    assert!(!evidence.is_empty());
+}
+
+fn production_after() -> u32 {
+    0
+}
+";
+        let lines: Vec<&str> = src.lines().collect();
+        let regions = test_regions(&lines);
+
+        let assert_line = lines
+            .iter()
+            .position(|l| l.contains("assert!(!evidence.is_empty());"))
+            .unwrap();
+        assert!(
+            is_test_line(&regions, assert_line),
+            "the flush-left `}}` inside the raw string literal must not have \
+             ended the region before the fn's own body finished"
+        );
+
+        let production_line = lines
+            .iter()
+            .position(|l| l.contains("fn production_after"))
+            .unwrap();
+        assert!(
+            !is_test_line(&regions, production_line),
+            "ordinary code after the #[cfg(test)] item must still not be swept in"
+        );
     }
 
     /// ART-274's own guard: production `core/` never spawns a process.
