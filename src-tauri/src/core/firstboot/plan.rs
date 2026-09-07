@@ -51,10 +51,14 @@ pub struct FirstBootPlan {
 }
 
 /// Disk commands (not shell-internal ones) the fixed scripts run. `List`,
-/// `Sort`, `Delete`, `Copy`, `Version`, `Mount` and `Assign` are files in
-/// `C/` on every release; a recipe that dropped one would break the boot.
-pub const NEEDED_COMMANDS: [&str; 7] = [
-    "List", "Sort", "Delete", "Copy", "Version", "Mount", "Assign",
+/// `Sort`, `Delete`, `Copy`, `Rename`, `Version`, `Mount` and `Assign` are
+/// files in `C/` on every release; a recipe that dropped one would break the
+/// boot. `Rename` is what `20-aux` and `30-datatypes` use to swap a staged
+/// `.new`/`_AUX` file into place (M1, final review — missing from this list
+/// even though both scripts already ran it; a completeness gap in the guard,
+/// not a live bug, since every real release ships `C:Rename` too).
+pub const NEEDED_COMMANDS: [&str; 8] = [
+    "List", "Sort", "Delete", "Copy", "Rename", "Version", "Mount", "Assign",
 ];
 
 pub fn plan(request: &FirstBootRequest) -> CoreResult<FirstBootPlan> {
@@ -157,6 +161,24 @@ mod tests {
         .unwrap_err();
         match err {
             CoreError::FirstBootNeedsCommand { command } => assert_eq!(command, "Sort"),
+            other => panic!("wrong refusal: {other:?}"),
+        }
+    }
+
+    /// **M1, final review.** `20-aux` and `30-datatypes` both run `Rename`
+    /// (swapping a staged `.new`/`_AUX` file into place); a tree missing it
+    /// must be refused by name the same way a missing `Sort` is, not left to
+    /// fail partway through a real boot.
+    #[test]
+    fn a_tree_without_c_rename_is_refused_by_name() {
+        let d = tree("norename");
+        fs::remove_file(d.join("C/Rename")).unwrap();
+        let err = plan(&FirstBootRequest {
+            tree: d.path().to_path_buf(),
+        })
+        .unwrap_err();
+        match err {
+            CoreError::FirstBootNeedsCommand { command } => assert_eq!(command, "Rename"),
             other => panic!("wrong refusal: {other:?}"),
         }
     }
