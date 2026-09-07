@@ -27,7 +27,7 @@ PASS forward on faith.
 |---|---|
 | **Last updated** | 2026-09-07 — round 5 of the Emu68 Hatcher intake (first boot on the Amiga, phases 1–2) merged to `main` as `1cb5ce1` and pushed. Per-round detail is the [session log](session-log.md) |
 | **Version** | **0.9.0**, released 2026-09-04. The number lives in three files (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`) and `release.yml` refuses a tag that disagrees with them. Deliberately not 1.0: the bar is a card ART built, flashed and booting a real A500 — not a bigger feature count |
-| **`main` / `origin`** | Identical at `32651c9`, pushed 2026-09-07 (`git rev-parse main origin/main`; the push was `722a8c5..32651c9`). No live phase branch. CI run 34116056492 on that commit was still `in_progress` when this was written — **result not yet recorded** |
+| **`main` / `origin`** | Identical at `32651c9`, pushed 2026-09-07 (`git rev-parse main origin/main`; the push was `722a8c5..32651c9`). No live phase branch. CI run 34116056492 on that commit — the first CI has seen of rounds 3, 4 and 5 — **passed** (`Build & Test (Windows x64): success`, 2026-09-07 11:44 UTC, `gh run view 34116056492`); one docs-only commit sits on `main` above it, unpushed |
 | **Tests — Rust** | `cd src-tauri && cargo test --lib -- --skip artwork` on the merged `main`, 2026-09-07: `test result: ok. 2948 passed; 0 failed; 51 ignored; 0 measured; 89 filtered out; finished in 35.35s`. **`--skip artwork` is the only honest number here** until [ART-261](ISSUES.md)'s antivirus exclusions land — a full `cargo test --lib` dies mid-run with exit 0 and no summary. **Quote the `test result:` line, never the exit code**, and run the suite twice before merging ([ART-059](ISSUES.md#fixed)). The 51 ignored are the real-material hooks, env-gated and run by hand — command lines below |
 | **Tests — frontend** | `pnpm test` on the merged `main`, 2026-09-07: `Test Files 87 passed (87)`, `Tests 1178 passed (1178)` |
 | **Lint, format, clippy** | Clean on the merged `main`, 2026-09-07: `pnpm lint` (run unpiped — a pipe reports `tail`'s status, not `tsc`'s), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` |
@@ -182,12 +182,13 @@ block — do not stack another on top of it.**
 
 ### Start here (2026-09-07)
 
-1. **`main` is pushed and CI has not answered yet.** `main` and `origin/main`
-   are both `32651c9`; the push was `722a8c5..32651c9`. GitHub Actions run
-   **34116056492** on that commit was `in_progress` when this was written, so
-   **its result is not recorded here** — check it before treating `main` as
-   green on CI. Local lint, fmt, clippy, both suites and the three blocking
-   sweeps were clean on the merged tree the same day (Snapshot above).
+1. **`main` is pushed and CI is green on it.** The push was
+   `722a8c5..32651c9`, and GitHub Actions run **34116056492** on `32651c9` —
+   the first run to see rounds 3, 4 and 5, which had been merged locally —
+   passed (`Build & Test (Windows x64): success`, 2026-09-07 11:44 UTC).
+   Local lint, fmt, clippy, both suites and the three blocking sweeps were
+   clean on the same tree (Snapshot above). Anything committed to `main`
+   after `32651c9` is docs-only and unpushed until the owner says so.
 2. **Round 5 of the Emu68 Hatcher intake — first boot on the Amiga — has
    phases 1 and 2 merged** (`1cb5ce1`, `--no-ff`, branch deleted). What it
    built is two [FEATURES.md](FEATURES.md) rows and one
