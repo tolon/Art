@@ -198,48 +198,59 @@ pub struct KnownPackage {
     pub id: String,
     pub name: String,
     pub media: String,
+    /// Every overlay drawer this package's own recipe declares — the first
+    /// `/`-segment of each `amiga_installer.overlays[].from` — so an archive
+    /// that is recognisably *this* package's **update** archive can be named
+    /// as that, not folded into "unknown" (ART-277 review, Medium 1: the
+    /// brief asked for "`media`/overlay drawer names" and the first round
+    /// compared `media` only). `&[]`/empty for the package's own recipe
+    /// declaring no overlay — every one but BoingBag 3.9-1, today.
+    pub overlay_drawers: Vec<String>,
 }
 
-/// The archive's own top-level names, read from its listing alone — the
-/// wrapper is plain LHA and this never extracts a byte, so the encrypted
-/// payload an update archive might carry is never opened. Used to judge a
-/// second archive **before** it is unpacked (ART-277's second cause: the
-/// panel used to find out only after the round trip through `compose`).
-pub fn archive_top_level(archive: &Path) -> CoreResult<Vec<String>> {
+/// The archive's own top-level names, and its single identity drawer when it
+/// has exactly one — read from **one** listing, so a caller wanting both
+/// answers (`amigainstall_classify_archive` wants exactly this pair) opens
+/// the archive once rather than twice (review finding 7). The wrapper is
+/// plain LHA and this never extracts a byte, so the encrypted payload an
+/// update archive might carry is never opened.
+///
+/// The identity is the same question [`archive_is`] answers, asked of the
+/// raw listing rather than of one name already picked out: a root sibling
+/// (an `.info` icon) does not count on its own, the same rule
+/// `ArchiveSource::open` in `core::osinstall` uses for the same reason — it
+/// is not what the archive is *named after*. `None` for an archive with none
+/// or with more than one, which [`archive_is`] can only ever answer
+/// `Neither` about anyway.
+pub fn archive_listing(archive: &Path) -> CoreResult<(Vec<String>, Option<String>)> {
     let mut backend = crate::core::archive::open(archive)?;
     let entries = backend.entries()?;
     let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for entry in &entries {
-        if let Some(first) = entry.name.split(['/', '\\']).find(|s| !s.is_empty()) {
-            names.insert(first.to_string());
-        }
-    }
-    Ok(names.into_iter().collect())
-}
-
-/// The archive's single identity drawer, when it has exactly one — the same
-/// question [`archive_is`] answers, asked of an archive's raw listing rather
-/// than of one name already picked out. A root sibling (an `.info` icon)
-/// does not count on its own, the same rule `ArchiveSource::open` in
-/// `core::osinstall` uses for the same reason: it is not what the archive is
-/// *named after*. `None` for an archive with none or with more than one,
-/// which [`archive_is`] can only ever answer `Neither` about anyway.
-pub fn archive_identity(archive: &Path) -> CoreResult<Option<String>> {
-    let mut backend = crate::core::archive::open(archive)?;
-    let entries = backend.entries()?;
     let mut identity: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for entry in &entries {
         let mut parts = entry.name.split(['/', '\\']).filter(|s| !s.is_empty());
         let Some(first) = parts.next() else { continue };
+        names.insert(first.to_string());
         if entry.is_dir || parts.next().is_some() {
             identity.insert(first.to_string());
         }
     }
-    Ok(if identity.len() == 1 {
-        identity.into_iter().next()
-    } else {
-        None
-    })
+    let identity = (identity.len() == 1).then(|| identity.into_iter().next().unwrap());
+    Ok((names.into_iter().collect(), identity))
+}
+
+/// The archive's own top-level names alone. A thin wrapper over
+/// [`archive_listing`], kept as its own pub function because it is unit
+/// tested on its own; production code that wants both answers calls
+/// [`archive_listing`] directly rather than through this and
+/// [`archive_identity`] both, which would open the archive twice.
+pub fn archive_top_level(archive: &Path) -> CoreResult<Vec<String>> {
+    Ok(archive_listing(archive)?.0)
+}
+
+/// The archive's single identity drawer alone — see [`archive_listing`].
+pub fn archive_identity(archive: &Path) -> CoreResult<Option<String>> {
+    Ok(archive_listing(archive)?.1)
 }
 
 /// See [`ArchiveIs`].
@@ -275,7 +286,18 @@ pub fn wrong_archive_sentence(
              carrying '{media}' in the package's own field.",
             archive.display()
         ),
-        _ => format!(
+        // ART-277 review, Major 1: the *other* direction of the same
+        // mistake — this exact archive, correct in the package's own field,
+        // supplied again as if it were the update archive. `refuse_wrong_
+        // package_archive` reaches this arm only for a slot after the
+        // first, so "the package field" always means a real, different
+        // field on this screen.
+        ArchiveIs::ThePackage => format!(
+            "'{}' is the package's own archive — it carries '{holds}'. It belongs in the \
+             package's own field; supply its update archive here instead.",
+            archive.display()
+        ),
+        ArchiveIs::Neither => format!(
             "'{}' carries no '{media}' drawer, so it is not the archive this \
              package's installer lives in; it holds {holds}",
             archive.display()
@@ -619,10 +641,15 @@ fn apply_overlay(
         }
     }
     let Some((overlay, source)) = matched else {
+        // `top_level_dir_names` stays an `Option` all the way into the
+        // sentence (ART-277 review, Medium 3): an unreadable staging
+        // directory and an empty one are different endings, and collapsing
+        // them here with `unwrap_or_default` is exactly the "endings stay
+        // distinct" mistake CLAUDE.md names.
         return Err(CoreError::InvalidInput(overlay_mismatch_sentence(
             medium,
             layout,
-            top_level_dir_names(staging.path()).unwrap_or_default(),
+            top_level_dir_names(staging.path()),
         )));
     };
 
@@ -646,6 +673,21 @@ fn expected_overlays(layout: &Layout<'_>) -> String {
         .join(" or ")
 }
 
+/// The drawers a package's own declared overlays are recognised by — just
+/// the first path segment of each, `'BoingBag3.9-1-UAE'` rather than the
+/// full `'BoingBag3.9-1-UAE/BoingBag3.9-1'` [`expected_overlays`] prints —
+/// used only by the "this is your own archive, in the wrong field" sentence,
+/// which names the archive the way a user would go and look for it, not the
+/// path inside it.
+fn overlay_drawers_display(layout: &Layout<'_>) -> String {
+    layout
+        .overlays
+        .iter()
+        .map(|o| format!("'{}'", overlay_drawer(o)))
+        .collect::<Vec<String>>()
+        .join(" or ")
+}
+
 /// What to say when a second archive is not this package's declared overlay
 /// — ART-277's second cause.
 ///
@@ -660,35 +702,113 @@ fn expected_overlays(layout: &Layout<'_>) -> String {
 /// own, which `layout.catalogue` (ART-277's own reason to exist) can tell it
 /// when it is.
 ///
-/// Four shapes, the old one preserved exactly when neither new fact is
-/// available (`layout.package_name` empty and no catalogue match) — every
-/// call site before ART-277 gets the identical sentence it always did.
-fn overlay_mismatch_sentence(medium: &Path, layout: &Layout<'_>, names: Vec<String>) -> String {
+/// **ART-277 review, Major 1.** The first round's catalogue scan could match
+/// the *selected* package itself and then tell the user to "select" the
+/// package that is already selected — reachable by putting the package's own
+/// archive in the second field, which is exactly the mistake this sentence
+/// exists to name. Checked first, directly against `layout.drawer` (the same
+/// identity [`archive_is`] uses for `ArchiveIs::ThePackage`) rather than
+/// through the catalogue, so it is true even when no catalogue was supplied
+/// at all. `layout.catalogue` is expected to already exclude the selected
+/// package (the command layer's job — a lower module should not have to
+/// re-derive "which one is me" from a list it was handed); this function
+/// does not rely on that alone, since a caller could pass its own entry by
+/// mistake and the drawer check catches it regardless.
+///
+/// **Medium 1** (matches another package's *update* archive, not only its
+/// own) and **Medium 3** (an unreadable listing and an empty one stay
+/// different sentences) are both here too — see `KnownPackage::overlay_drawers`
+/// and the `names: Option<…>` parameter respectively.
+///
+/// The base shape (neither the selected package's own drawer nor a catalogue
+/// match) is the old sentence, preserved exactly when `layout.package_name`
+/// is empty and `layout.catalogue` is `&[]` — every call site before
+/// ART-277 gets the identical sentence it always did.
+fn overlay_mismatch_sentence(
+    medium: &Path,
+    layout: &Layout<'_>,
+    names: Option<Vec<String>>,
+) -> String {
     let expected = expected_overlays(layout);
-    let other = layout.catalogue.iter().find(|pkg| {
-        names
-            .iter()
-            .any(|name| drawer_names_equal(name, &pkg.media))
-    });
-    let holds = format_holds(names);
     let selected = layout.package_name;
+    let own = if selected.is_empty() {
+        "this package's".to_string()
+    } else {
+        format!("{selected}'s")
+    };
+
+    // This package's own archive, in the wrong field — checked before the
+    // catalogue and regardless of it (see the function doc comment).
+    if let (Some(drawer), Some(names)) = (layout.drawer, &names) {
+        if names.iter().any(|name| drawer_names_equal(name, drawer)) {
+            return format!(
+                "'{}' is {own} own archive — it belongs in the package field; the second field \
+                 is for its update archive (top-level {}).",
+                medium.display(),
+                overlay_drawers_display(layout)
+            );
+        }
+    }
+
+    // Every *other* catalogued package this archive could be — its own
+    // drawer, or (Medium 1) one of its own declared overlays' drawer.
+    let other = names.as_ref().and_then(|names| {
+        layout.catalogue.iter().find_map(|pkg| {
+            if names
+                .iter()
+                .any(|name| drawer_names_equal(name, &pkg.media))
+            {
+                Some((pkg, false))
+            } else if pkg
+                .overlay_drawers
+                .iter()
+                .any(|drawer| names.iter().any(|name| drawer_names_equal(name, drawer)))
+            {
+                Some((pkg, true))
+            } else {
+                None
+            }
+        })
+    });
+
+    // Medium 3: an unreadable listing and an empty one are different
+    // endings; `top_level_dir_names` already tells them apart and this must
+    // not collapse the distinction back together with `unwrap_or_default`.
+    let holds = match &names {
+        Some(names) => format_holds(names.clone()),
+        None => "nothing that could be read".to_string(),
+    };
 
     match (other, selected.is_empty()) {
-        (Some(pkg), false) => format!(
-            "'{}' is {}'s own archive, not the second archive {selected} needs — {selected}'s \
-             second archive is {expected}. Select {} to install it, or give {selected}'s own \
-             second archive here.",
-            medium.display(),
-            pkg.name,
-            pkg.name
-        ),
-        (Some(pkg), true) => format!(
-            "'{}' is {}'s own archive, not this package's own second archive — its second \
-             archive is {expected}. Select {} to install it, or give the right archive here.",
-            medium.display(),
-            pkg.name,
-            pkg.name
-        ),
+        (Some((pkg, is_update)), false) => {
+            let owns = if is_update {
+                "own update archive"
+            } else {
+                "own archive"
+            };
+            format!(
+                "'{}' is {}'s {owns}, not the second archive {selected} needs — {selected}'s \
+                 second archive is {expected}. Select {} to install it, or give {selected}'s own \
+                 second archive here.",
+                medium.display(),
+                pkg.name,
+                pkg.name
+            )
+        }
+        (Some((pkg, is_update)), true) => {
+            let owns = if is_update {
+                "own update archive"
+            } else {
+                "own archive"
+            };
+            format!(
+                "'{}' is {}'s {owns}, not this package's own second archive — its second \
+                 archive is {expected}. Select {} to install it, or give the right archive here.",
+                medium.display(),
+                pkg.name,
+                pkg.name
+            )
+        }
         (None, false) => format!(
             "'{}' is not an archive ART knows: it holds {holds}; {selected}'s second archive is \
              {expected}",
@@ -1847,11 +1967,13 @@ mod tests {
                 id: "boingbag-39-1".to_string(),
                 name: "BoingBag 3.9-1".to_string(),
                 media: "BoingBag3.9-1".to_string(),
+                overlay_drawers: vec![],
             },
             KnownPackage {
                 id: "boingbag-39-2".to_string(),
                 name: "BoingBag 3.9-2".to_string(),
                 media: "BoingBag3.9-2".to_string(),
+                overlay_drawers: vec![],
             },
         ];
         let layout = Layout {
@@ -1884,6 +2006,78 @@ mod tests {
         assert!(
             text.contains("Select BoingBag 3.9-2"),
             "must say what to do about it: {text}"
+        );
+    }
+
+    /// **ART-277 review, Major 1 — the finding itself, reproduced and
+    /// fixed.** BoingBag 3.9-1's own archive, supplied a *second* time while
+    /// BoingBag 3.9-1 is selected, used to match itself in the catalogue and
+    /// produce *"Select BoingBag 3.9-1 to install it"* — an instruction to
+    /// select the package that is already selected. It now gets its own
+    /// sentence, checked before the catalogue is even consulted, and never
+    /// tells the user to select anything.
+    #[test]
+    fn the_packages_own_archive_in_the_second_field_gets_its_own_sentence_and_never_says_select_it()
+    {
+        let dir = scratch("own-archive-wrong-field");
+        let stock = stock_wrapper(dir.path());
+        let into = dir.join("pkg");
+        let overlays = uae_overlay();
+
+        let err = unpack(
+            &[stock.clone(), stock],
+            &into,
+            &with_overlay(&overlays),
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap_err();
+
+        let text = err.to_string();
+        assert!(
+            text.contains("is BoingBag 3.9-1's own archive"),
+            "must name whose archive it is: {text}"
+        );
+        assert!(
+            text.contains("it belongs in the package field"),
+            "must say where it belongs: {text}"
+        );
+        assert!(
+            text.contains("the second field is for its update archive"),
+            "must say what the second field is for: {text}"
+        );
+        assert!(
+            text.contains("'BoingBag3.9-1-UAE'"),
+            "must name the update archive's own drawer: {text}"
+        );
+        assert!(
+            !text.contains("Select"),
+            "must never tell the user to select the package that is already selected: {text}"
+        );
+    }
+
+    /// **ART-277 review, Medium 3.** An unreadable listing and an empty one
+    /// are different endings and must stay different — `top_level_dir_names`
+    /// already tells them apart (`what_it_holds`'s own two sentences); this
+    /// pins that the sentence built on top of it does not collapse them back
+    /// together with an `unwrap_or_default`.
+    #[test]
+    fn the_sentence_keeps_an_unreadable_listing_apart_from_an_empty_one() {
+        let overlays = uae_overlay();
+        let layout = with_overlay(&overlays);
+        let medium = Path::new("E:\\dl\\Mystery.lha");
+
+        let unreadable = overlay_mismatch_sentence(medium, &layout, None);
+        assert!(
+            unreadable.contains("nothing that could be read"),
+            "got {unreadable}"
+        );
+
+        let empty = overlay_mismatch_sentence(medium, &layout, Some(Vec::new()));
+        assert!(empty.contains("it holds nothing"), "got {empty}");
+        assert!(
+            !empty.contains("could be read"),
+            "an empty, readable listing must not say the same thing as an unreadable one: {empty}"
         );
     }
 
