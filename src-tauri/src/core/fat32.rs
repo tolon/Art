@@ -132,13 +132,25 @@ impl<T: Read + Write + Seek> Seek for Region<T> {
 /// **A read of a user's card must never open it for writing** (task 10). The
 /// FAT crate has no read-only mount mode — mounting means owning a type that
 /// implements `Write` — so this exists to make that impossible one layer
-/// down instead: `write` and `flush` refuse with
-/// [`io::ErrorKind::Unsupported`] rather than silently succeeding or, worse,
-/// actually reaching the inner `T`. In practice neither is ever called for a
-/// plain read (mounting and reading a file touch nothing on disk — `fatfs`
-/// only writes through its `Write` impl when something is actually
-/// modified), so this is a belt no ordinary read needs and a refusal for the
-/// one that would.
+/// down instead: `write` refuses with [`io::ErrorKind::Unsupported`] rather
+/// than silently succeeding or, worse, actually reaching the inner `T`. In
+/// practice it is never called for a plain read — mounting and reading a
+/// file touch nothing on disk (`fatfs` only writes through its `Write` impl
+/// when something is actually modified) — so this is a belt no ordinary read
+/// needs and a refusal for the one that would.
+///
+/// **`flush` is deliberately not the same refusal** (fix round 1). `fatfs`'s
+/// own `File::drop` calls `self.fs.disk.borrow_mut().flush()`
+/// *unconditionally* on every file it closes, dirty or not — a plain read
+/// closes the file it opened, and a refusing `flush` made every successful
+/// `read_root_file` call log a spurious `error!("flush failed …")` from
+/// inside `fatfs` even though nothing was ever written. Flushing an
+/// unmodified read-only view has nothing to lose: there is no buffered
+/// write to lose track of, because [`write`](Write::write) above never let
+/// one happen. `reading_through_read_only_never_changes_the_cards_bytes`
+/// stays the guard against `flush` ever being asked to persist real bytes —
+/// if `fatfs` ever changed to write through `flush` on a path this module
+/// exercises, that hash comparison would still catch it.
 pub struct ReadOnly<T>(T);
 
 impl<T> ReadOnly<T> {
@@ -162,10 +174,7 @@ impl<T> Write for ReadOnly<T> {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "this card was opened read-only; nothing here may write to it",
-        ))
+        Ok(())
     }
 }
 
@@ -1109,26 +1118,88 @@ mod tests {
     }
 
     /// The guard itself, checked directly rather than only through a full
-    /// mount: a real read never exercises `fatfs`'s `Write` bound at all (see
-    /// the next test's own comment), so a version of `ReadOnly` that quietly
-    /// forwarded `write`/`flush` to the inner value instead of refusing would
-    /// pass every other test in this file. This is the one that would catch
-    /// it.
+    /// mount: `write` refuses outright, and `flush` — deliberately, since fix
+    /// round 1 — does not, because `fatfs`'s own `File::drop` calls it
+    /// unconditionally on every close and a refusal there produced a
+    /// spurious `error!` log line on every successful read. A version of
+    /// `write` that quietly forwarded to the inner value instead of refusing
+    /// would pass every other test in this file; this is the one that would
+    /// catch it.
     #[test]
-    fn read_only_refuses_write_and_flush_directly() {
+    fn read_only_refuses_write_but_lets_flush_succeed_quietly() {
         let mut wrapped = ReadOnly::new(Cursor::new(vec![0u8; 4]));
         let err = wrapped.write(&[1, 2]).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Unsupported);
-        let err = wrapped.flush().unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+        wrapped
+            .flush()
+            .expect("flush must succeed quietly — nothing here is ever dirty on a read");
+    }
+
+    /// A second, more direct proof that the read path never calls `write` at
+    /// all — independent of whatever `ReadOnly` itself would do about it.
+    /// Wraps the image in a plain counter instead of `ReadOnly`, mounts and
+    /// reads exactly the way `read_root_file` does, and asserts the count is
+    /// zero: a full mount-read-drop cycle over an unmodified file has nothing
+    /// to write, on its own terms, not because something downstream refused.
+    #[test]
+    fn a_plain_read_never_calls_write_at_all() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct CountingWrites<T> {
+            inner: T,
+            writes: Rc<Cell<usize>>,
+        }
+        impl<T: Read> Read for CountingWrites<T> {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                self.inner.read(buf)
+            }
+        }
+        impl<T> Write for CountingWrites<T> {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.writes.set(self.writes.get() + 1);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<T: Seek> Seek for CountingWrites<T> {
+            fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+                self.inner.seek(pos)
+            }
+        }
+
+        let mut image = blank_image();
+        create_boot_partition(&mut image, START, PARTITION, DEFAULT_LABEL, &[]).unwrap();
+        {
+            let mut region = Region::new(&mut image, START, PARTITION);
+            let fs = fatfs::FileSystem::new(&mut region, fatfs::FsOptions::new()).unwrap();
+            let mut file = fs.root_dir().create_file("art-firstboot.log").unwrap();
+            file.write_all(b"art-firstboot 1\ndone all\n").unwrap();
+        }
+
+        let writes = Rc::new(Cell::new(0usize));
+        let counted = CountingWrites {
+            inner: image,
+            writes: Rc::clone(&writes),
+        };
+        let mut region = Region::new(counted, START, PARTITION);
+        let bytes = read_root_file(&mut region, "art-firstboot.log").unwrap();
+        assert_eq!(bytes, Some(b"art-firstboot 1\ndone all\n".to_vec()));
+        assert_eq!(
+            writes.get(),
+            0,
+            "a plain read has nothing to write, on its own terms"
+        );
     }
 
     /// **The property task 10's own ruling exists for.** A read through
     /// [`ReadOnly`] must be a read and nothing else: the bytes underneath
     /// come back identical whether or not `read_root_file` was ever called.
-    /// `ReadOnly` refuses `write`/`flush` outright, so this also proves
-    /// `fatfs` never actually needs them for a plain read — if it did, this
-    /// test would fail with an I/O error rather than a bytes mismatch.
+    /// `ReadOnly` refuses `write` outright, so this also proves `fatfs` never
+    /// actually needs it for a plain read — if it did, this test would fail
+    /// with an I/O error rather than a bytes mismatch.
     #[test]
     fn reading_through_read_only_never_changes_the_cards_bytes() {
         let mut image = blank_image();

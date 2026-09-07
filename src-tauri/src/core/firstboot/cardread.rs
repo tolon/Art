@@ -22,6 +22,23 @@
 //! a single well-known path (`S/FirstBoot.log`) to look up and, if it is
 //! there, read.
 //!
+//! ## Three endings, not two (fix round 1)
+//!
+//! "Not booted" and "could not be checked" are different sentences and must
+//! stay different — CLAUDE.md's "endings stay distinct". A card whose only
+//! Amiga partition is corrupt or unformatted has not told ART "no report
+//! yet"; it has told ART nothing at all, and reporting `ReportSource::None`
+//! about it would be the same wire shape a genuinely untouched card
+//! produces. So [`amiga_report`] treats "no such file here" and "this is not
+//! a filesystem ART reads" (`DosFamily::Other`) as silent, ordinary misses —
+//! another partition, or the FAT copy, may still answer — but any other
+//! failure (a corrupt or unformatted volume, a report too large to read) is
+//! carried forward and, if nothing else on the card ever answers, returned
+//! as `Err` naming the partition. `read_card_report` and the
+//! `card_firstboot_report` command let that `Err` propagate rather than
+//! folding it into `ReportSource::None`; Task 11 renders it as a command
+//! error under the panel heading.
+//!
 //! A read never opens the card for writing. `fat_report` wraps the file in
 //! [`crate::core::fat32::ReadOnly`] before handing it to
 //! [`crate::core::fat32::Region`] — see that type's own doc comment for why.
@@ -87,12 +104,16 @@ pub struct CardFirstBootReport {
 /// The Amiga volume's own copy wins where both exist (spec §9); the FAT copy
 /// is tried only when nothing on the Amiga side carries the file.
 ///
-/// Structural failures — the image will not open at all — are a hard `Err`,
-/// the same convention `core::osinstall::verify::verify_volume` uses: nothing
-/// here could be read, so there is nothing to report. A card that opens fine
-/// but simply carries no report yet is not an error — it comes back as
-/// [`ReportSource::None`] with an empty, [`super::report::Ending::NotBooted`]
-/// report.
+/// Three endings, kept distinct (fix round 1's own section in the module
+/// doc): the image will not even open (a hard `Err`, nothing here could be
+/// read at all); a partition ART could read carried no file but nothing else
+/// on the card went wrong either (`ReportSource::None`,
+/// [`super::report::Ending::NotBooted`] — not an error, the ordinary shape
+/// of a card that has not booted the block yet); or a partition ART should
+/// have been able to read (PFS3, FFS/OFS) came back corrupt, unformatted, or
+/// carrying a report too large to read, and nothing else on the card ever
+/// answered — also an `Err`, but a different one: "could not be checked",
+/// never quietly folded into "not booted".
 pub fn read_card_report(path: &Path) -> CoreResult<CardFirstBootReport> {
     let card = read_card(path)?;
 
@@ -139,18 +160,25 @@ fn fat_report(card: &CardImage, path: &Path) -> CoreResult<Option<Vec<u8>>> {
 ///
 /// Tries every partition on every area, in the order `read_card` reported
 /// them, for the two families this module can read at all (PFS3, FFS/OFS);
-/// first hit wins. A partition ART cannot even open as the filesystem its own
-/// `DosType` claims — unformatted, corrupt, or a family `write_refusal`
-/// declines to write and this module equally declines to read — is not this
-/// search's business to fail on: another partition, or the FAT copy, may
-/// still answer. **Finding the file and it being too large to read is
-/// different**: that refusal is real, and letting it be swallowed in favour
-/// of a quieter "not booted" further down the fallback chain would be exactly
-/// the confident-wrong sentence CLAUDE.md's "the failure that does not crash"
-/// warns about, so it is the one error this function lets through.
+/// **first hit wins, and nothing short-circuits the search except a hit** —
+/// not even a failure on an earlier partition, because another partition
+/// further along may still answer (fix round 1's second test: a corrupt
+/// first partition must not hide a good report on the second).
+///
+/// Two outcomes are not failures and are never carried forward: `Ok(None)`
+/// from a partition simply not carrying the file (`pfs3_report`/`ffs_report`
+/// already return that for "no such file", a directory where the file
+/// should be, or a shape `write_refusal` declines), and `DosFamily::Other` —
+/// a filesystem this module has no reader for at all. Everything else `Err`
+/// is a genuine problem — corrupt, unformatted, a report too large to read —
+/// and is logged and remembered; if the whole search ends with no hit, the
+/// **first** such failure is what `amiga_report` returns, naming the
+/// partition it came from. See the module doc's "Three endings, not two".
 fn amiga_report(card: &CardImage) -> CoreResult<Option<Vec<u8>>> {
     let path = Path::new(&card.path);
-    for area in &card.areas {
+    let mut failure: Option<(usize, String, CoreError)> = None;
+
+    for (area_index, area) in card.areas.iter().enumerate() {
         for part in &area.rdb.partitions {
             let dos = DosType::new(part.dostype.to_be_bytes());
             let found = match family_of(dos) {
@@ -161,12 +189,37 @@ fn amiga_report(card: &CardImage) -> CoreResult<Option<Vec<u8>>> {
             match found {
                 Ok(Some(bytes)) => return Ok(Some(bytes)),
                 Ok(None) => continue,
-                Err(err @ CoreError::LimitExceeded { .. }) => return Err(err),
-                Err(_) => continue,
+                Err(err) => {
+                    log::warn!(
+                        "first-boot report: area {area_index} partition '{}' ({}) could not \
+                         be read: {err}",
+                        part.drive_name,
+                        dos.label(),
+                    );
+                    if failure.is_none() {
+                        failure = Some((area_index, part.drive_name.clone(), err));
+                    }
+                }
             }
         }
     }
-    Ok(None)
+
+    match failure {
+        None => Ok(None),
+        // A report that was actually *found*, and is simply too large, is
+        // already a complete, actionable sentence — return it as itself
+        // rather than folding it into the generic "could not be checked"
+        // wording below, which would bury the one detail (the size) a user
+        // could act on.
+        Some((_, _, err @ CoreError::LimitExceeded { .. })) => Err(err),
+        Some((area_index, name, err)) => Err(CoreError::Malformed {
+            format: "card".into(),
+            detail: format!(
+                "the Amiga volume's own first-boot report could not be checked: area \
+                 {area_index} partition '{name}': {err}"
+            ),
+        }),
+    }
 }
 
 fn too_large(size: u64) -> CoreError {
@@ -180,10 +233,26 @@ fn too_large(size: u64) -> CoreError {
 }
 
 /// `S/FirstBoot.log` off a PFS3 partition. Read-only: `Volume::open` never
-/// takes a write handle (see `core::osinstall::verify`'s own module doc,
-/// Decision 1, for what else PFS3 can and cannot honestly claim — content
-/// here is a lookup by name and a read by anode chain, the same limited trust
-/// that module already places in `libpfs3`).
+/// takes a write handle.
+///
+/// **The same weak witness `core::osinstall::verify`'s own module doc names
+/// in Decision 2, and disclosed here for the same reason it is disclosed
+/// there.** `lookup` (presence) and `entry.file_size()` (size) are a
+/// directory entry PFS3's own on-disk structure carries, worth trusting the
+/// way `verify_pfs3_one` trusts them. **The bytes this function returns are
+/// not the same kind of proof.** `read_file_data` walks an anode chain with
+/// `libpfs3` — the very library `core::preload::native::copy_in_pfs3` used
+/// to *write* that chain on every fixture in this module's own test suite,
+/// and on a real card built by `core::preload`. A bug the writer and this
+/// reader share (ART-079's shape) would agree with itself and pass every
+/// test here; `verify.rs`'s Decision 2 declines to re-hash PFS3 content for
+/// exactly this reason and this function inherits the same limit. **What
+/// this closes and what it does not**: a real card is written by a real
+/// Amiga running the dispatcher, not by `NativeFormatter`, so a fixture built
+/// through `core::preload::native` proves this code path runs and returns
+/// *something* — it does not independently prove the bytes it returns are
+/// the bytes a real Amiga wrote. That only closes when a real card, actually
+/// booted, is read back through this path.
 fn pfs3_report(
     path: &Path,
     area: &AmigaArea,
@@ -226,11 +295,20 @@ fn ffs_report(
 
     let set = BlockSet::new(geometry.block_size);
     let mut current = geometry.root_block;
+    let mut is_dir = true; // the root itself is a directory
     for segment in REPORT_PATH.split('/') {
         match dir::find_entry(&region, &set, &geometry, current, segment)? {
-            Some(entry) => current = entry.block,
+            Some(entry) => {
+                current = entry.block;
+                is_dir = entry.is_dir;
+            }
             None => return Ok(None),
         }
+    }
+    // A directory named like the report is not the report — the same check
+    // `pfs3_report` makes on `entry.is_dir()`.
+    if is_dir {
+        return Ok(None);
     }
 
     // Peeked before `file::read_file` reads the whole thing, the same reason
@@ -357,12 +435,53 @@ mod tests {
         path
     }
 
+    /// Two FFS partitions in one RDB — `DH0` and `DH1` — so a test can corrupt
+    /// one and still copy a real report into the other.
+    fn card_with_two_partitions(dir: &std::path::Path, mb: u32) -> std::path::PathBuf {
+        let path = dir.join("card.hdf");
+        let spec = |name: &str| PartitionSpec {
+            drive_name: name.into(),
+            fs_type: AmigaHardDiskFs::FfsStandard,
+            size_mb: mb,
+            bootable: true,
+            boot_priority: 0,
+            num_buffers: 0,
+        };
+        crate::core::hdf::create_hdf(
+            &path,
+            (mb as u64 * 2 + RDB_HEADROOM_MB) * 1024 * 1024,
+            true,
+            &[spec("DH0"), spec("DH1")],
+            &[],
+        )
+        .unwrap();
+        path
+    }
+
     /// A host folder carrying `S/FirstBoot.log`, ready for `NativeFormatter::copy_in`.
     fn tree_with_report(dir: &std::path::Path, contents: &[u8]) -> std::path::PathBuf {
         let tree = dir.join("tree");
         std::fs::create_dir_all(tree.join("S")).unwrap();
         std::fs::write(tree.join("S/FirstBoot.log"), contents).unwrap();
         tree
+    }
+
+    /// Overwrite one partition's root block with garbage, directly — a real
+    /// corruption, not a mocked error. `read_card` and `partition_region` are
+    /// used to find the exact bytes to hit, the same way production code
+    /// would locate them; nothing here goes through ART's own writer.
+    fn corrupt_root_block(image: &std::path::Path, area_index: usize, part_index: usize) {
+        let card = read_card(image).unwrap();
+        let area = &card.areas[area_index];
+        let part = &area.rdb.partitions[part_index];
+        let (offset, length, block_size) = partition_region(area, part).unwrap();
+        let total_blocks = (length / block_size as u64) as u32;
+        let root_block = VolumeGeometry::root_block_for(total_blocks);
+        let at = offset + root_block as u64 * block_size as u64;
+
+        let mut file = std::fs::OpenOptions::new().write(true).open(image).unwrap();
+        file.seek(SeekFrom::Start(at)).unwrap();
+        file.write_all(&vec![0xFFu8; block_size]).unwrap();
     }
 
     /// A report larger than `MAX_REPORT_BYTES` on the Amiga side is a real
@@ -428,6 +547,91 @@ mod tests {
             .unwrap();
         // Nothing copied in: an empty, freshly formatted volume, and no FAT
         // partition at all (this is a plain HDF).
+
+        let found = read_card_report(&image).unwrap();
+        assert_eq!(found.source, ReportSource::None);
+        assert_eq!(found.report.ending, super::super::report::Ending::NotBooted);
+    }
+
+    // ---- fix round 1: "not booted" and "could not be checked" are not the
+    // same ending ----
+
+    /// A card whose only Amiga partition is corrupt has told ART nothing at
+    /// all — the same wire shape as a genuinely untouched card would be a
+    /// confident-wrong sentence. This must be `Err`, never `ReportSource::None`.
+    #[test]
+    fn a_card_whose_only_amiga_partition_is_corrupt_is_could_not_be_checked() {
+        let dir = ScratchDir::new("art-firstboot-cardread", "ffs-corrupt-only");
+        let image = card_with_partition(dir.path(), AmigaHardDiskFs::FfsStandard, 8);
+        NativeFormatter
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        corrupt_root_block(&image, 0, 0);
+
+        let err = read_card_report(&image).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("DH0"),
+            "the refusal must name the partition: {text}"
+        );
+    }
+
+    /// The other half: a failure on one partition must not stop the search.
+    /// `DH0` is corrupt; `DH1` carries the real report, and it still wins.
+    #[test]
+    fn a_corrupt_first_partition_does_not_hide_a_good_report_on_the_second() {
+        let dir = ScratchDir::new("art-firstboot-cardread", "ffs-corrupt-first");
+        let image = card_with_two_partitions(dir.path(), 8);
+        NativeFormatter
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        NativeFormatter
+            .format_partition(&image, None, 2, "Work", &NoProgress)
+            .unwrap();
+        corrupt_root_block(&image, 0, 0);
+
+        let tree = tree_with_report(dir.path(), b"art-firstboot 1\ndone all\n");
+        NativeFormatter
+            .copy_in(&image, None, "DH1", &tree, &NoProgress)
+            .unwrap();
+
+        let found = read_card_report(&image).unwrap();
+        assert_eq!(found.source, ReportSource::AmigaVolume);
+        assert_eq!(found.report.ending, super::super::report::Ending::DoneAll);
+    }
+
+    /// A card whose only partitions are a family this module has no reader
+    /// for at all (`DosFamily::Other`) is not a failure — it is the same
+    /// "nothing to try" `DosFamily::Other` always has been. With no FAT copy
+    /// either, this is an ordinary "not booted", not an error.
+    #[test]
+    fn a_card_with_only_unreadable_filesystem_families_and_no_fat_copy_is_not_booted() {
+        let dir = ScratchDir::new("art-firstboot-cardread", "other-family-only");
+        let image = card_with_partition(dir.path(), AmigaHardDiskFs::Sfs0, 8);
+        // Deliberately not formatted or copied into: `DosFamily::Other` is
+        // skipped before this module ever tries to open one.
+
+        let found = read_card_report(&image).unwrap();
+        assert_eq!(found.source, ReportSource::None);
+        assert_eq!(found.report.ending, super::super::report::Ending::NotBooted);
+    }
+
+    /// **Fix round 1, finding 3.** `S/FirstBoot.log` existing as a directory
+    /// is not the report — the same check `pfs3_report` already made for
+    /// PFS3, now made for FFS too.
+    #[test]
+    fn an_ffs_directory_named_like_the_report_is_not_read_as_one() {
+        let dir = ScratchDir::new("art-firstboot-cardread", "ffs-report-is-dir");
+        let image = card_with_partition(dir.path(), AmigaHardDiskFs::FfsStandard, 8);
+        NativeFormatter
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+
+        let tree = dir.path().join("tree");
+        std::fs::create_dir_all(tree.join("S/FirstBoot.log")).unwrap(); // a directory
+        NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
 
         let found = read_card_report(&image).unwrap();
         assert_eq!(found.source, ReportSource::None);
