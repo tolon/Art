@@ -3276,3 +3276,60 @@ describe("resetIfEmpty (ART-260)", () => {
     expect(reset).not.toBe(populated);
   });
 });
+
+// ART-241: the ROM field's Browse button used to sit beside its own
+// identified/unreadable paragraph with nothing wiring the two together — a
+// screen reader user tabbing to Browse heard only its own name and had to
+// go hunting forward in the page for whether the ROM they had already
+// chosen was recognised at all.
+function describedByIds(el: Element): string[] {
+  return (el.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean);
+}
+
+describe("ART-241: the ROM field's Browse button is described by its own outcome paragraph", () => {
+  it("names the identified paragraph once the ROM resolves", async () => {
+    await renderFull();
+
+    const field = screen.getByTestId("osinstall-rom-field");
+    const button = within(field).getByRole("button", { name: i18n.t("common.browse") });
+    // Not `findByText`: the ROM's own name ("Kickstart 3.2 (47.96)") also
+    // appears elsewhere on this screen (a component's condition line), so
+    // more than one element matches the text alone — the paragraph's own
+    // id is what actually identifies it here.
+    const identified = await waitFor(() => {
+      const el = document.getElementById("osinstall-rom-identified");
+      if (!el) throw new Error("not rendered yet");
+      return el;
+    });
+
+    expect(identified.textContent).toContain("Kickstart 3.2 (47.96)");
+    // Also carries the hint's own id (ROM's `Field` sets a `hint` too) — the
+    // point is that the outcome paragraph's id is *among* them, not that it
+    // is the only one.
+    expect(describedByIds(button)).toContain("osinstall-rom-identified");
+    expect(describedByIds(button)).not.toContain("osinstall-rom-unreadable");
+  });
+
+  it("names the unreadable paragraph when the ROM fails to identify, not the identified one", async () => {
+    identifyRomMock.mockReset().mockRejectedValue(new Error("not a Kickstart"));
+    await renderFull();
+
+    const field = screen.getByTestId("osinstall-rom-field");
+    const button = within(field).getByRole("button", { name: i18n.t("common.browse") });
+    await screen.findByText(i18n.t("osinstall.rom.unreadable"));
+
+    expect(describedByIds(button)).toContain("osinstall-rom-unreadable");
+    expect(describedByIds(button)).not.toContain("osinstall-rom-identified");
+    expect(screen.queryByText(/Kickstart 3\.2 \(47\.96\)/)).toBeNull();
+  });
+
+  it("names neither outcome paragraph before any ROM has been chosen", async () => {
+    seedRemembered({});
+    render(<OsInstall />);
+
+    const field = screen.getByTestId("osinstall-rom-field");
+    const button = within(field).getByRole("button", { name: i18n.t("common.browse") });
+    expect(describedByIds(button)).not.toContain("osinstall-rom-identified");
+    expect(describedByIds(button)).not.toContain("osinstall-rom-unreadable");
+  });
+});

@@ -6,6 +6,8 @@
 // hand-written copy of this is how two screens start disagreeing about what a
 // chosen file looks like.
 
+import { useId } from "react";
+
 export function Field({
   label,
   ariaLabel,
@@ -14,6 +16,7 @@ export function Field({
   choose,
   onChoose,
   hint,
+  describedBy,
   clear,
   onClear,
   testId,
@@ -42,6 +45,17 @@ export function Field({
   choose: string;
   onChoose: () => void;
   hint?: string;
+  /**
+   * One id, or several space-separated (the `aria-describedby` attribute's
+   * own syntax), naming a paragraph rendered **outside** this component that
+   * still describes this row's control — a wrong-layer warning, a ROM
+   * error/identified line, a media-scan outcome (ART-241). `Field`'s own
+   * `hint` already gets this wiring for free (see `hintId` below); this prop
+   * exists for exactly the ad-hoc `<p>` elements ART-241 found rendered
+   * beside a `Field` rather than by it. The caller owns the id: it must
+   * match the id on the element it names.
+   */
+  describedBy?: string;
   clear?: string;
   onClear?: () => void;
   /**
@@ -52,6 +66,18 @@ export function Field({
    */
   testId?: string;
 }) {
+  // ART-241: `hint` used to sit as a plain sibling `<p>` after the row,
+  // never wired to the row's own control through `aria-describedby` — a
+  // sighted user reads the two side by side, but a screen reader user who
+  // reaches the Browse button by Tab heard only its own name and had to go
+  // hunting forward in the page to find out whether a hint (or, via
+  // `describedBy`, a warning or a confirmation) was attached to it at all.
+  // `useId()` answers this with no prop change to any existing caller.
+  const hintId = useId();
+  const describedByIds = [hint ? hintId : null, describedBy ?? null]
+    .filter((id): id is string => Boolean(id))
+    .join(" ");
+
   return (
     <div style={{ marginBottom: 12 }} data-testid={testId}>
       <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
@@ -62,6 +88,7 @@ export function Field({
           className="btn"
           onClick={onChoose}
           aria-label={ariaLabel ? `${choose} ${ariaLabel}` : undefined}
+          aria-describedby={describedByIds || undefined}
         >
           {choose}
         </button>
@@ -77,7 +104,7 @@ export function Field({
         )}
       </div>
       {hint && (
-        <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+        <p id={hintId} className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
           {hint}
         </p>
       )}

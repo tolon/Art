@@ -453,37 +453,6 @@ owner has also read the Workbench menus of a Turkish tree ART built, which is
 a different claim — that is AmigaOS rendering ART's *output*, not ART's own
 interface.)
 
-**ART-241** 🔵 **Field hints, errors and outcome text sit beside a control, not
-associated with it** — *found 2026-09-05 by the bounded accessibility sweep
-ART-237 itself called for*
-`src/components/osbuilder/Field.tsx` (the `hint` prop), `src/components/osbuilder/OsInstall.tsx`
-(the layer wrong-hint, ROM error/identified and media-scan-outcome paragraphs)
-
-Every `<Field>` that carries a `hint`, and every ad-hoc status paragraph the
-media step renders beside one (`layer-wrong-hint-*`, `osinstall.rom.unreadable`,
-`osinstall.rom.identified`, the `mediaScan` outcome lines), sits as a plain
-sibling `<p>` after the row — never wired to the row's own button through
-`aria-describedby`. A sighted user reads the two side by side; a screen reader
-user who reaches the Browse button by Tab hears only its own name and has to
-go hunting forward in the page to find out whether there is a warning or a
-confirmation attached to it at all.
-
-Filed rather than fixed here, for the same reason ART-237 itself was — but not
-because a stable id is hard to make: `React.useId()` answers that inside
-`Field` with no prop change at all, and any entry that argued otherwise would
-send the next reader looking for a harder fix than the one actually needed.
-The real reason is scope. `hint` is a prop on the **shared** `Field` component,
-passed at call sites this sweep never audited (`CardBuilder`, `VolumePreload`,
-`PackagePanel` and others) — wiring `Field`'s own `hint` up correctly and
-stopping there would still leave every one of those callers unexamined. And
-the media step's own worst instances are not `Field`'s `hint` at all: the
-layer wrong-hint, the ROM error/identified lines and the `mediaScan` outcome
-paragraphs are ad-hoc `<p>` elements rendered **outside** `Field` entirely, so
-`Field`'s own fix would not reach them regardless of how it wired `hint` up.
-A correct fix is an id-threading pass over all of these — inside `Field` and
-out — not a change confined to one component. Bounded to what the media step
-actually renders; a wider sweep of every other `Field` caller is still owed.
-
 **ART-242** 🔵 **WHDLoad's one-click install writes and joins directly in
 `commands/whdload.rs`, with no `core`-level "install a pack" function to call
 instead** — *found 2026-09-05 by the whdload-drawers Task 5 fix-round review*
@@ -594,6 +563,65 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-241** 🔵 **Field hints, errors and outcome text sit beside a control, not
+associated with it** — *found 2026-09-05 by the bounded accessibility sweep
+ART-237 itself called for*
+`src/components/osbuilder/Field.tsx` (the `hint` prop), `src/components/osbuilder/OsInstall.tsx`
+(the layer wrong-hint, ROM error/identified and media-scan-outcome paragraphs)
+
+Every `<Field>` that carries a `hint`, and every ad-hoc status paragraph the
+media step renders beside one (`layer-wrong-hint-*`, `osinstall.rom.unreadable`,
+`osinstall.rom.identified`, the `mediaScan` outcome lines), sits as a plain
+sibling `<p>` after the row — never wired to the row's own button through
+`aria-describedby`. A sighted user reads the two side by side; a screen reader
+user who reaches the Browse button by Tab hears only its own name and has to
+go hunting forward in the page to find out whether there is a warning or a
+confirmation attached to it at all.
+
+Filed rather than fixed here, for the same reason ART-237 itself was — but not
+because a stable id is hard to make: `React.useId()` answers that inside
+`Field` with no prop change at all, and any entry that argued otherwise would
+send the next reader looking for a harder fix than the one actually needed.
+The real reason is scope. `hint` is a prop on the **shared** `Field` component,
+passed at call sites this sweep never audited (`CardBuilder`, `VolumePreload`,
+`PackagePanel` and others) — wiring `Field`'s own `hint` up correctly and
+stopping there would still leave every one of those callers unexamined. And
+the media step's own worst instances are not `Field`'s `hint` at all: the
+layer wrong-hint, the ROM error/identified lines and the `mediaScan` outcome
+paragraphs are ad-hoc `<p>` elements rendered **outside** `Field` entirely, so
+`Field`'s own fix would not reach them regardless of how it wired `hint` up.
+A correct fix is an id-threading pass over all of these — inside `Field` and
+out — not a change confined to one component. Bounded to what the media step
+actually renders; a wider sweep of every other `Field` caller is still owed.
+
+**Fixed** 2026-09-07 on `art-debts` (batch 4). `Field` (`src/components/osbuilder/Field.tsx`)
+gained a `React.useId()`-based `hintId`, put on the hint paragraph and
+referenced from the choose button's `aria-describedby` — every existing
+caller that already passes `hint` gets this for free, with no call-site
+change at all, which is what closes the "callers this sweep never audited"
+half of the concern above for the `hint` prop specifically. A new optional
+`describedBy` prop lets a caller name an id rendered **outside** `Field`
+(space-separated alongside the hint's own id when both are present), for
+exactly the three ad-hoc paragraphs this entry named: `OsInstall.tsx`'s
+per-layer `layer-wrong-hint-{id}` now carries that id itself and is passed
+through `describedBy`; the ROM field is described by
+`osinstall-rom-identified` or `osinstall-rom-unreadable`, whichever renders
+(mutually exclusive); and the unlayered media `Field` is described by
+whichever of `osinstall-media-unreadable`/`osinstall-media-empty`/`osinstall-media-found`
+renders. **Still bounded, on purpose**: a layered release's media-scan
+outcome describes every layer's folder together, so it is not wired to any
+one of several per-layer fields — there is no single relationship to state
+without inventing one that is not actually there — and the wider sweep of
+every other `Field` call site's own ad-hoc paragraphs (`CardBuilder`,
+`VolumePreload`, `PackagePanel` and others) beyond `hint` itself is still
+owed, exactly as this entry originally scoped it. Covering tests:
+`Field.test.tsx`'s `"Field associates its hint and any externally supplied
+paragraph with its control"` block (hint alone, `describedBy` alone, both
+together space-separated, neither) and `OsInstall.test.tsx`'s `"ART-241: the
+ROM field's Browse button is described by its own outcome paragraph"` block
+— mutated by dropping the `aria-describedby` attribute entirely, which all
+seven of those failed against, then restored.
+
 **ART-248** 🔵 **`appearance_apply` runs the whole wallpaper pipeline
 synchronously on the command thread, with no progress and no cancel** — *found
 2026-09-05/06 during the prefs-and-wallpaper round's whole-branch review,
