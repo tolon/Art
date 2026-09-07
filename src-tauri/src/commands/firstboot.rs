@@ -156,9 +156,16 @@ fn perform(
     kickstart: &Path,
     emulator: &Path,
     sink: &dyn ProgressSink,
+    copy_out: &mut Option<PathBuf>,
 ) -> CoreResult<Rehearsed> {
     let staged = stage_with(tree, sink)?;
     let copy = staged.copy_path().to_path_buf();
+    // Set as soon as a copy exists, regardless of what `perform` returns —
+    // an `Err` below still leaves the copy on disk (comment further down),
+    // and the caller has no other way to learn where it is (I2, final
+    // review). `stage_with` failing above never reaches this line, which is
+    // correct: no copy was ever made, so there is nothing to report.
+    *copy_out = Some(copy.clone());
 
     let request = RehearseRequest {
         tree_copy: &copy,
@@ -209,8 +216,22 @@ fn perform(
             Err(CoreError::Cancelled)
         }
         // An error part way is not nothing: whatever the Amiga wrote before
-        // it is in the copy, so the copy stays.
-        Err(err) => Err(err),
+        // it is in the copy, so the copy stays. I2, final review: that used
+        // to be true and unsaid — the copy survived, but neither the job bar
+        // nor the oplog ever named it. Reported here the same way the three
+        // non-`Finished` `Ok` endings already are.
+        Err(err) => {
+            sink.report(
+                0,
+                None,
+                &format!(
+                    "'{}' was not touched; the copy the rehearsal booted is kept at '{}'",
+                    tree.display(),
+                    copy.display()
+                ),
+            );
+            Err(err)
+        }
     }
 }
 
@@ -267,6 +288,7 @@ pub fn firstboot_rehearse(
         Arc::clone(&registry),
         &title,
         move |job_id, progress| {
+            let mut copy_path: Option<PathBuf> = None;
             let result = perform(
                 &tree,
                 &scratch_root,
@@ -274,6 +296,7 @@ pub fn firstboot_rehearse(
                 &kickstart,
                 &emulator,
                 progress,
+                &mut copy_path,
             );
 
             // §53. Best-effort, and never able to fail the operation it
@@ -302,7 +325,16 @@ pub fn firstboot_rehearse(
                         RehearsalOutcome::Finished { .. }
                     )))
                 }
-                Err(err) => record.failed(err),
+                // I2, final review: a failed rehearsal still made a copy in
+                // every case except staging itself failing — `copy_path` is
+                // `perform`'s own answer to "where", set the moment one
+                // exists regardless of what it later returns. Naming it here
+                // is what makes the failure record match the three
+                // non-`Finished` `Ok` records above, which already do.
+                Err(err) => match &copy_path {
+                    Some(copy) => record.destination(copy.display().to_string()).failed(err),
+                    None => record.failed(err),
+                },
             };
             write_to_path(&log_path, &record);
 
