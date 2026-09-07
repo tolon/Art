@@ -25,16 +25,16 @@ PASS forward on faith.
 
 | | |
 |---|---|
-| **Last updated** | 2026-09-07 — round 5 of the Emu68 Hatcher intake (first boot on the Amiga, phases 1–2) merged to `main` as `1cb5ce1` and pushed. Per-round detail is the [session log](session-log.md) |
+| **Last updated** | 2026-09-07 — round 5 of the Emu68 Hatcher intake (first boot on the Amiga, phases 1–2) merged to `main` as `1cb5ce1` and pushed. The debt-clearing wave below (13 defects closed, six batches plus a whole-branch review and its fix wave) is built and reviewed on `art-debts` at `e46062a` — **not merged to `main`, not pushed**. Per-round detail is the [session log](session-log.md) |
 | **Version** | **0.9.0**, released 2026-09-04. The number lives in three files (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`) and `release.yml` refuses a tag that disagrees with them. Deliberately not 1.0: the bar is a card ART built, flashed and booting a real A500 — not a bigger feature count |
-| **`main` / `origin`** | Identical at `32651c9`, pushed 2026-09-07 (`git rev-parse main origin/main`; the push was `722a8c5..32651c9`). No live phase branch. CI run 34116056492 on that commit — the first CI has seen of rounds 3, 4 and 5 — **passed** (`Build & Test (Windows x64): success`, 2026-09-07 11:44 UTC, `gh run view 34116056492`); one docs-only commit sits on `main` above it, unpushed |
-| **Tests — Rust** | `cd src-tauri && cargo test --lib -- --skip artwork` on the merged `main`, 2026-09-07: `test result: ok. 2948 passed; 0 failed; 51 ignored; 0 measured; 89 filtered out; finished in 35.35s`. **`--skip artwork` is the only honest number here** until [ART-261](ISSUES.md)'s antivirus exclusions land — a full `cargo test --lib` dies mid-run with exit 0 and no summary. **Quote the `test result:` line, never the exit code**, and run the suite twice before merging ([ART-059](ISSUES.md#fixed)). The 51 ignored are the real-material hooks, env-gated and run by hand — command lines below |
-| **Tests — frontend** | `pnpm test` on the merged `main`, 2026-09-07: `Test Files 87 passed (87)`, `Tests 1178 passed (1178)` |
-| **Lint, format, clippy** | Clean on the merged `main`, 2026-09-07: `pnpm lint` (run unpiped — a pipe reports `tail`'s status, not `tsc`'s), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` |
-| **Sweeps** | Re-run 2026-09-07 on `art-debts`, all clean: `scripts/control-byte-sweep.py`, `scripts/scratch-root-sweep.py`, `scripts/contrast-check.py --quiet` (**113/113** pairs, both themes). `scripts/scratch-counter-sweep.py`, same day, after [ART-235](ISSUES.md#fixed)'s fix: `already had a counter: 25`, `needing a counter: 0` — the sweep now recognises a pid hashed with the thread id as safe |
+| **`main` / `origin`** | Identical at `32651c9`, pushed 2026-09-07 (`git rev-parse main origin/main`; the push was `722a8c5..32651c9`). No live phase branch. CI run 34116056492 on that commit — the first CI has seen of rounds 3, 4 and 5 — **passed** (`Build & Test (Windows x64): success`, 2026-09-07 11:44 UTC, `gh run view 34116056492`); one docs-only commit sits on `main` above it, unpushed. `art-debts` (13 more defects closed, HEAD `e46062a`) branches off `main` at `3877628` and is neither merged nor pushed |
+| **Tests — Rust** | `cd src-tauri && cargo test --lib -- --skip artwork` on `art-debts` (`e46062a` plus this batch's docs-only commit), 2026-09-07, run twice: `test result: ok. 2971 passed; 0 failed; 51 ignored; 0 measured; 89 filtered out; finished in 40.37s`, then again `... finished in 33.52s`. **`--skip artwork` is the only honest number here** until [ART-261](ISSUES.md)'s antivirus exclusions land — a full `cargo test --lib` dies mid-run with exit 0 and no summary. **Quote the `test result:` line, never the exit code**, and run the suite twice before merging ([ART-059](ISSUES.md#fixed)). The 51 ignored are the real-material hooks, env-gated and run by hand — command lines below. `main`'s own number (unaffected by this branch) is still **2948** |
+| **Tests — frontend** | `pnpm test` on `art-debts`, 2026-09-07: `Test Files 87 passed (87)`, `Tests 1194 passed (1194)`. `main`'s own number is still **1178 / 87 files** |
+| **Lint, format, clippy** | Clean on `art-debts`, 2026-09-07: `pnpm lint` (run unpiped — a pipe reports `tail`'s status, not `tsc`'s), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` |
+| **Sweeps** | Re-run 2026-09-07 on `art-debts` (HEAD `e46062a`), all clean: `scripts/control-byte-sweep.py` — clean, and now also catches a stray mid-line TAB inside tracked text, not only one that swallows a line continuation ([ART-271](ISSUES.md#fixed)); `scripts/scratch-root-sweep.py` — clean, 8 named exceptions; `scripts/contrast-check.py --quiet` — **113/113** pairs, both themes. `scripts/scratch-counter-sweep.py`: `already had a counter: 25`, `needing a counter: 0` — the false positive on a pid hashed with the thread id is gone ([ART-235](ISSUES.md#fixed)) |
 | **Build** | The last full `pnpm tauri build` was the 0.9.0 bundle, 2026-09-04 (5m 47s) — `Amiga Retro Toolkit_0.9.0_x64_en-US.msi` and `_x64-setup.exe`, **not code-signed**, which the README says rather than leaving to SmartScreen. Not re-run since |
-| **i18n** | `src/i18n/en.json` and `tr.json`: **2078** leaf keys each, counted 2026-09-07 on the merged `main`. Parity — key sets, empty values, interpolation variables — is enforced by `pnpm test`, so count them rather than quoting this |
-| **Open defects** | **13**, newest [ART-274](ISSUES.md), counted 2026-09-07 after batch 1 of the debt wave closed six with `awk '/^## Open/{f=1} /^## Fixed/{f=0} f' docs/ISSUES.md \| grep -c '^\*\*ART-'` |
+| **i18n** | `src/i18n/en.json` and `tr.json`: **2082** leaf keys each, counted 2026-09-07 on `art-debts` (`main`'s own count is still 2078). Parity — key sets, empty values, interpolation variables — is enforced by `pnpm test`, so count them rather than quoting this |
+| **Open defects** | **6** on `art-debts`, counted 2026-09-07 with `awk '/^## Open/{f=1} /^## Fixed/{f=0} f' docs/ISSUES.md \| grep -c '^\*\*ART-'` — newest is [ART-261](ISSUES.md). Thirteen closed across the whole debt-clearing wave (19 open before it, 6 after): ART-271, ART-235, ART-260, ART-245, ART-247, ART-246, ART-274, ART-251, ART-248, ART-241, ART-243, ART-244, ART-242. `main`'s own count (19 open, `git show main:docs/ISSUES.md`) is unaffected until the branch merges |
 | **Feature rows** | **216 marked rows** in [FEATURES.md](FEATURES.md) — **159 green, 26 amber, 21 not started, 6 stubs, 4 deferred to v2** — counted 2026-09-07, one marker per table row, taken from the first cell in that row that is exactly a State marker. **State the method with the number**: counting marker *cells* instead gives a different figure, and an earlier count of "233 rows" left behind no method and cannot now be reproduced |
 | **amitools oracle** | 53 checks, both directions (`scripts/oracle-check.py`, blocking in CI) — including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
 | **Kickstart table** | 154 dumps (`core/rom/remus.rs::REMUS_ROMS`, counted 2026-09-07), generated from amitools' Remus split database and re-verified against it on every CI run (`scripts/rom-table-check.py`, [ART-104](ISSUES.md#fixed)). Licensed Amiga Forever ROMs are first-class input ([ART-128](ISSUES.md#fixed)): decoded with the `rom.key` beside them, then identified like any dump |
@@ -120,7 +120,10 @@ cd src-tauri && ART_159_ISO="E:\amiga\Amigatolon\iso\AmigaOS39.iso" \
 # **asks the tree what it is** — `Prefs/Env-Archive/Versions/Release` is
 # written by the release, so the claim comes from a file Hyperion wrote rather
 # than from ART's own dropdown. Measured 2026-09-05: 4 052 files, 295 drawers,
-# 20 667 671 bytes, and the tree says `Release 3.2.2`. The ROM matters —
+# 20 667 671 bytes. Re-measured 2026-09-07 after ART-251 gave `workbench-base`
+# two more `Subtree` rules: 4066 files, 295 drawers, 20706449 bytes (+14 files
+# over the earlier number) — the tree still says `Release 3.2.2`. The ROM
+# matters —
 # `kicka1200.rom` is 47.96, so both update Modules components switch on and the
 # base's own stays off. Unpack `Update3.2.2.lha` yourself; ART never reads it.
 cd src-tauri && ART_322_BASE="E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF" \
@@ -211,18 +214,79 @@ block — do not stack another on top of it.**
    absent on both AmigaOS 3.9 trees (`art159-boot`, `art205-39c`)** — so phase
    3 cannot assume the reboot command exists and must check for it the way
    phase 2 checks for `C:Sort`. Phase 4 (`run`/`unpack` package steps) is not
-   designed yet.
-4. **[ART-261](ISSUES.md) is open and still changes how you quote numbers.**
-   The owner's antivirus kills a full `cargo test --lib` — exit 0, no
-   `test result:` line, no `FAILED`. `cargo test --lib -- --skip artwork` is
-   the only honest Rust number here until exclusions are added for
-   `src-tauri\target\`, the test scratch root and `art_lib`'s build output.
-   An exit code cannot tell a finished suite from a killed one.
-5. **[ART-274](ISSUES.md) is the newest open entry** and it is architectural:
-   `core/winuae.rs` spawns `winuae64.exe` from inside `core/`, which is the
-   exact shape the trait rule exists to prevent, and this round added a second
-   consumer of it. Not a user-visible defect; the fix is an
-   `EmulatorLauncher` trait in `core/` with the spawn in `tools/`.
+   designed yet. **This is still the next code work** — the debt wave below
+   touched none of it.
+4. **The debt-clearing wave is built and reviewed on `art-debts`
+   (`3877628..e46062a`, six batches plus a whole-branch review and its fix
+   wave), and it is not merged to `main` and not pushed.** Thirteen entries
+   closed, each with a test: [ART-271](ISSUES.md#fixed) (control-byte sweep
+   catches a mid-line TAB), [ART-235](ISSUES.md#fixed) (scratch-counter sweep
+   stops false-flagging a pid+thread-id-keyed name),
+   [ART-260](ISSUES.md#fixed), [ART-245](ISSUES.md#fixed),
+   [ART-247](ISSUES.md#fixed), [ART-246](ISSUES.md#fixed) (first-boot round
+   leftovers), [ART-274](ISSUES.md#fixed) (the WinUAE spawn left `core/` for
+   `tools/winuae_launcher.rs`, a fifth `EmulatorLauncher`-shaped trait
+   instance), [ART-251](ISSUES.md#fixed) (a built AmigaOS 3.2 tree now
+   carries `Utilities` and `WBStartup`), [ART-248](ISSUES.md#fixed) (wallpaper
+   apply is a cancellable job), [ART-241](ISSUES.md#fixed) (a field's hint and
+   outcome text are associated with its control for a screen reader),
+   [ART-243](ISSUES.md#fixed) (a rescan clears a WHDLoad title genuinely
+   removed from its archive), [ART-244](ISSUES.md#fixed) (update mode stops
+   reopening every unchanged archive on every refresh), and
+   [ART-242](ISSUES.md#fixed) (the WHDLoad one-click install is a core
+   function behind a new `VolumeSession` trait, `architecture.md`'s fifth
+   instance). The whole-branch review found three Important findings after
+   all six batches closed, and a fix wave (`53283d5`, `7e5557a`, `fcc561f`,
+   `e46062a`) closed all three on the branch: the core-independence guard now
+   blanks comments and char literals too, not only string literals, so it can
+   no longer misread a genuine test-only spawn as a production offender; a
+   stale test comment was corrected to say what it actually guards; and the
+   AmigaOS 3.2.2 tree was re-measured against the owner's own media after
+   ART-251 changed the recipe it is built from — **4066 files, 295 drawers,
+   20706449 bytes**, +14 files over the pre-ART-251 number. Reasoning and
+   every task report are local-only under
+   `.superpowers/sdd/2026-09-07-debts/` (`progress.md` is the ledger,
+   `final-review.md` and `final-fix-report.md` cover the review and its
+   fixes).
+5. **What is left open on the debt-clearing wave's own list is not code, and
+   each is open for a different reason.** [ART-261](ISSUES.md) — the owner's
+   antivirus kills a full `cargo test --lib`, a machine-configuration problem
+   this repository cannot fix from inside itself. [ART-166](ISSUES.md) — a
+   BoingBag's payload is a password-encrypted ZIP whose password lives on an
+   Amiga; the way past it is external (run the package's own installer on an
+   Amiga), not a host-side bypass, which the owner has ruled out writing.
+   [ART-118](ISSUES.md) and [ART-062](ISSUES.md) both need a person driving a
+   real screen — the OS Builder's install screen in a live window, and the
+   Turkish catalogue read by someone who speaks it — not a design or a fix.
+   [ART-117](ISSUES.md) is the owner's standing decision not to risk silently
+   shifting a foreign card's existing partitions. [ART-250](ISSUES.md) is
+   deliberate: `tooltypes()`'s lossy UTF-8 decode is disclosed and counted
+   apart, not hidden, and closing it is not scheduled.
+6. **Four minors the whole-branch review found are deliberately still open**,
+   each disclosed where the next reader will find it rather than silently
+   dropped: `install_pack` unpacks its archive twice, once inside `build_plan`
+   and once for itself — inherited from `run_install`, not introduced by this
+   wave, and not in [ISSUES.md](ISSUES.md); the fix and the cost are in
+   `final-review.md`'s Minors section (local-only,
+   `.superpowers/sdd/2026-09-07-debts/`). The two cancel-sink tests added for
+   ART-242 anchor on the *second* total-bearing phase by ordinal, not by
+   identity — a third phase inserted before the copy would silently move the
+   cancel earlier — disclosed in both twins' own doc comments in
+   `core/whdload/install.rs` and `commands/whdload.rs`, not in ISSUES; worth
+   an identity anchor the next time `install_pack` changes. The dead
+   `RunRequest`/`RehearseRequest.winuae_path` field, read by nothing in
+   `core/` any more, **is** in ISSUES — it is disclosed in
+   [ART-274](ISSUES.md#fixed)'s own Fixed paragraph rather than a separate
+   entry. `scripts/control-byte-sweep.py` walks the real filesystem
+   (`Path.rglob`), never `git ls-files`, on purpose — a false positive on
+   untracked scratch, never a miss — and that reasoning is now in the
+   script's own header, not in ISSUES.
+7. **ART-261 still changes how you quote a Rust number, on `main` and on
+   `art-debts` alike.** The owner's antivirus kills a full `cargo test --lib`
+   — exit 0, no `test result:` line, no `FAILED`. `cargo test --lib -- --skip
+   artwork` is the only honest Rust number here until exclusions are added
+   for `src-tauri\target\`, the test scratch root and `art_lib`'s build
+   output. An exit code cannot tell a finished suite from a killed one.
 
 ### Where the work stands
 
