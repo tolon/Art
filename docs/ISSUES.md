@@ -25,6 +25,48 @@ pass — filed and closed together rather than sitting in Open in between.
 ---
 
 ## Open
+**ART-274** 🔵 **`core/winuae.rs` spawns an external process from inside
+`core/`, the exact shape the trait rule exists to prevent** — *found
+2026-09-07 by the whole-branch review of `art-firstboot` phases 1–2*
+`src-tauri/src/core/winuae.rs` · `src-tauri/src/core/amigainstall/run.rs` ·
+`src-tauri/src/core/amigainstall/rehearse.rs`
+
+CLAUDE.md's "The core independence rule" is explicit: `core/` is
+`std` + a short, named list of crates, and a module that needs something
+platform-specific — device enumeration, launching WinUAE — exposes a
+**trait**, with the implementation living outside `core/`. `VolumeFormatter`
+(`core/preload/mod.rs`, implemented in `tools/hst_imager.rs`) and
+`HostRecycler` (`core/hostfs.rs`, implemented in `tools/recycle_bin.rs`) are
+the two live instances of that shape. `core/winuae.rs` is not: it launches
+`winuae64.exe` directly, from inside `core/`, with no trait between the
+decision to open the emulator and the process spawn that does it.
+
+This did not start with `art-firstboot`. `core::amigainstall::run` has called
+`core::winuae` since the AmigaOS-install-under-WinUAE round, and this branch
+made it worse in the ordinary way a precedent gets worse: `core::amigainstall::rehearse`
+(the first-boot rehearsal engine) is a **second** consumer of the same
+un-abstracted call, added without anyone re-deciding whether the shape was
+still acceptable. Two consumers is a pattern one review away from being read
+as sanctioned; a third would make it one.
+
+**How it fails for a user: it does not, yet.** This is not a defect in
+`art-firstboot`'s own behaviour — `rehearse.rs` inherited an existing
+violation rather than introducing a new kind of one, and nothing here is
+reported to have produced a wrong sentence on screen. The cost is the one the
+trait rule is written against: `core/` is meant to stay unit-testable without
+a real WinUAE install and promotable to a standalone crate without carrying
+Windows-process-spawning code along, and `core/winuae.rs` as it stands
+already breaks both of those promises for anything that imports it.
+
+**The fix, not built in this round:** an `EmulatorLauncher`-style trait
+declared in `core/` (the decision — which executable, which arguments, when
+to give up waiting) with the actual process spawn implemented outside it, in
+`tools/`, exactly as `VolumeFormatter`/`tools/hst_imager.rs` already do for
+volume formatting. `core::amigainstall::run` and `core::amigainstall::rehearse`
+would both take the trait rather than calling `core::winuae` directly, the
+same way both call sites already take other platform boundaries as traits
+rather than concrete implementations.
+
 **ART-271** 🟠 **`control-byte-sweep.py` does not look for the one
 control byte CLAUDE.md's own incident report names first** — *found
 2026-09-06 by reproducing the accident live while writing STATUS.md*
