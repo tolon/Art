@@ -647,30 +647,6 @@ awkward, which is why it was disclosed rather than attempted under time
 pressure at the end of a twelve-task round. Low severity: the branch is
 defensive coding for a case that is plausible but has not been observed.
 
-**ART-247** 🔵 **A PNG decode arm the `png` crate's own `EXPAND` transform
-should make unreachable has no test of its own** — *found 2026-09-05/06
-during the prefs-and-wallpaper round's Task 6, disclosed with a traced
-unreachability argument rather than asserted*
-`src-tauri/src/core/picture/mod.rs::decode` (the `png::ColorType::Indexed`
-arm)
-
-`core/picture::decode` sets `Transformations::EXPAND` on the PNG reader,
-which the crate documents as always turning a palette (indexed) image into
-`Rgb` or `Rgba` before `next_frame` returns — so the `ColorType::Indexed` arm
-of the match on the decoded frame's colour type should never run for any PNG
-this decoder can produce. Per this round's own rule (recorded in CLAUDE.md,
-"the failure that does not crash" / unreachable-code section): this is
-unreachable because of a **third party's current behaviour** on
-attacker-supplied bytes, not because of ART's own arithmetic, so it correctly
-stays a runtime `CoreError::Malformed` refusal rather than a `debug_assert!`
-that would compile out in release and let a future `png` upgrade turn a
-silently-misread palette image into a confident-wrong result. What is
-missing is a test — no PNG fixture has been found or constructed that
-reaches this arm, because reaching it would mean the crate's own documented
-guarantee is already broken, which is precisely why one has not been forced.
-Low severity: the arm cannot be exercised without first finding the
-third-party defect it exists to catch.
-
 **ART-248** 🔵 **`appearance_apply` runs the whole wallpaper pipeline
 synchronously on the command thread, with no progress and no cancel** — *found
 2026-09-05/06 during the prefs-and-wallpaper round's whole-branch review,
@@ -788,6 +764,49 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-247** 🔵 ✅ **A PNG decode arm the `png` crate's own `EXPAND` transform
+should make unreachable has no test of its own** — *found 2026-09-05/06
+during the prefs-and-wallpaper round's Task 6, disclosed with a traced
+unreachability argument rather than asserted*
+`src-tauri/src/core/picture/mod.rs::decode` (the `png::ColorType::Indexed`
+arm)
+
+`core/picture::decode` sets `Transformations::EXPAND` on the PNG reader,
+which the crate documents as always turning a palette (indexed) image into
+`Rgb` or `Rgba` before `next_frame` returns — so the `ColorType::Indexed` arm
+of the match on the decoded frame's colour type should never run for any PNG
+this decoder can produce. Per this round's own rule (recorded in CLAUDE.md,
+"the failure that does not crash" / unreachable-code section): this is
+unreachable because of a **third party's current behaviour** on
+attacker-supplied bytes, not because of ART's own arithmetic, so it correctly
+stays a runtime `CoreError::Malformed` refusal rather than a `debug_assert!`
+that would compile out in release and let a future `png` upgrade turn a
+silently-misread palette image into a confident-wrong result. What is
+missing is a test — no PNG fixture has been found or constructed that
+reaches this arm, because reaching it would mean the crate's own documented
+guarantee is already broken, which is precisely why one has not been forced.
+Low severity: the arm cannot be exercised without first finding the
+third-party defect it exists to catch.
+
+**Fixed** 2026-09-07: the arm stays (the entry's own argument for keeping it
+a runtime refusal rather than a `debug_assert!` is correct and unchanged),
+but its logic is now reachable *directly* rather than only through a full PNG
+decode. The match on `frame.color_type` was split out of `decode_png` into a
+new `rgb_pixels_for(color_type: png::ColorType, data: &[u8])`, which does not
+know or care that `Transformations::EXPAND` is what keeps a real decode from
+ever calling it with `Indexed` — so a test can call it with `Indexed` itself
+without needing the `png` crate's own documented guarantee to already be
+broken. Test:
+`an_indexed_color_type_is_refused_by_name_rather_than_guessed_at`, calling
+`rgb_pixels_for(png::ColorType::Indexed, &[0u8; 4])` directly and asserting
+the refusal names "indexed". Mutation: changed the refusal's own message to
+a marker string — the test failed (its own assertion, "the refusal must name
+what went wrong", caught the missing word); restored via copy, touched,
+re-diffed against the real fix, and the test passed again.
+`cargo test --lib picture::tests`: `10 passed; 0 failed`.
+
+---
+
 **ART-245** 🔵 ✅ **A missing backdrop and a wrong-type match at the same
 name read as the same sentence** — *found 2026-09-05/06 during the
 prefs-and-wallpaper round's whole-branch review, filed rather than fixed*
