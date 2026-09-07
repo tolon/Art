@@ -789,8 +789,26 @@ unreadable. Filed here as a real, measured gap rather than left to be
 rediscovered as a surprise the next time someone opens `Utilities` on a built
 tree and finds it missing.
 
-**ART-260** 🔵 **`setLayerIdentified({})` writes a fresh object where its two
-neighbours guard with `prev => prev`, and nothing wakes it yet** — *found
+Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
+not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
+
+Every module with working logic has now been audited. The remaining `core`
+modules are stubs that only return `NotImplemented` (`recovery.rs`,
+`conversion.rs`, `binary.rs`, `validation.rs`) or hold types with no logic
+(`compatibility.rs`) — see [FEATURES.md](FEATURES.md) for their planned state.
+
+Two areas were reviewed and found sound, and are recorded here so nobody
+re-audits them without reason:
+
+- `core/analysis.rs` — the hex reader clamps both offset and length, and the
+  signature scan guards its window.
+- `core/profile.rs` — preset data only, no parsing of untrusted input.
+
+---
+
+## Fixed
+**ART-260** 🔵 ✅ **`setLayerIdentified({})` writes a fresh object where its
+two neighbours guard with `prev => prev`, and nothing wakes it yet** — *found
 2026-09-06 by the whole-branch review of the refusal-evidence round (M3),
 filed rather than fixed by fix wave 5's own brief*
 `src/components/osbuilder/OsInstall.tsx:493`
@@ -817,24 +835,21 @@ observed bug is how this project has hurt itself before. Add the same
 `prev => prev` guard the day a real dependency on `layerIdentified` is added,
 not before.
 
-Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
-not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
-
-Every module with working logic has now been audited. The remaining `core`
-modules are stubs that only return `NotImplemented` (`recovery.rs`,
-`conversion.rs`, `binary.rs`, `validation.rs`) or hold types with no logic
-(`compatibility.rs`) — see [FEATURES.md](FEATURES.md) for their planned state.
-
-Two areas were reviewed and found sound, and are recorded here so nobody
-re-audits them without reason:
-
-- `core/analysis.rs` — the hex reader clamps both offset and length, and the
-  signature scan guards its window.
-- `core/profile.rs` — preset data only, no parsing of untrusted input.
+**Fixed** 2026-09-07 in `src/components/osbuilder/OsInstall.tsx`: the three
+duplicate inline guards (`layerScans`, `layerIdentified`, `extraScans`) now
+share one exported helper, `resetIfEmpty`, so `setLayerIdentified` carries
+the same no-op-preserves-identity guard its neighbours always had. Guard:
+`resetIfEmpty (ART-260) > keeps the same object identity across a no-op
+reset` in `src/components/osbuilder/OsInstall.test.tsx` (plus a sibling test
+that a genuinely non-empty record still resets to a fresh `{}`). Mutation:
+made `resetIfEmpty` return a fresh `{}` unconditionally — the identity test
+failed (`expected {} to be {} // Object.is equality`); the file was restored
+from a copy (verified via `git diff --stat`, then re-diffed against the real
+fix) and the test passed again. `pnpm lint` and `pnpm test` both clean
+afterwards (`Test Files 87 passed (87)`, `Tests 1180 passed (1180)`).
 
 ---
 
-## Fixed
 **ART-235** 🔵 ✅ **The test-scratch sweep reports a site that is not a
 defect** *found 2026-09-04 by re-running the sweeps during a documentation
 pass*

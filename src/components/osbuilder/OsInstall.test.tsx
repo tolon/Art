@@ -128,7 +128,7 @@ vi.mock("@/lib/settings", async (importOriginal) => ({
   saveSettings: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { OsInstall } = await import("@/components/osbuilder/OsInstall");
+const { OsInstall, resetIfEmpty } = await import("@/components/osbuilder/OsInstall");
 const { refusalPhrase } = await import("@/lib/osinstall");
 const { DEFAULT_SETTINGS } = await import("@/lib/settings");
 
@@ -3251,5 +3251,28 @@ describe("identifying install media by content hash (design §4.3)", () => {
     await userEvent.click(screen.getByRole("button", { name: i18n.t("osinstall.media.rescan") }));
 
     await waitFor(() => expect(identifyMediaMock).toHaveBeenCalledWith("E:\\media"));
+  });
+});
+
+// ART-260: `layerScans`, `layerIdentified` and `extraScans` all clear to
+// `{}` through this one guard rather than their own inline `{}` literal, so
+// a no-op reset (already empty, resetting to empty again -- what happens on
+// every settled render while a release has no layers) keeps the *same*
+// object instead of manufacturing a fresh identity for nothing. Nothing
+// downstream depends on that identity yet (harmless today, per the entry),
+// so this tests the guard directly rather than an effect that does not
+// exist -- the same shape `foundVolumeNames`'s own identity guard would need
+// the day something does read it.
+describe("resetIfEmpty (ART-260)", () => {
+  it("keeps the same object identity across a no-op reset", () => {
+    const empty: Record<string, string | null> = {};
+    expect(resetIfEmpty(empty)).toBe(empty);
+  });
+
+  it("still clears a non-empty record to a genuinely new empty object", () => {
+    const populated: Record<string, string | null> = { "layer-a": "Workbench3.2" };
+    const reset = resetIfEmpty(populated);
+    expect(reset).toEqual({});
+    expect(reset).not.toBe(populated);
   });
 });

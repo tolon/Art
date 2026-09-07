@@ -177,6 +177,19 @@ function groupByComponent(plan: InstallPlan): { component: string; items: Instal
 export type DroppedMedia = { path: string; arrivalKey: string } | null;
 
 /**
+ * Keeps the same object identity across a no-op reset (ART-260):
+ * `layerScans`, `layerIdentified` and `extraScans` all clear to `{}` when
+ * there is nothing left to hold, and a fresh `{}` every settled render would
+ * be a new identity for nothing. Harmless while nothing reads the record
+ * itself as a dependency — but that is exactly the shape ART-178/ART-195
+ * were, so every one of the three resets goes through this rather than its
+ * own inline `{}`.
+ */
+export function resetIfEmpty<T>(prev: Record<string, T>): Record<string, T> {
+  return Object.keys(prev).length === 0 ? prev : {};
+}
+
+/**
  * How far the install has got, beside the button that started it.
  *
  * Three things, and each is there because its absence was the complaint:
@@ -458,7 +471,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       // `foundVolumeNames` is memoized on this one too (ART-257): a fresh
       // `{}` per run is a new identity for nothing, and the two evidence
       // lookups downstream would be asked again for it (ART-178/ART-195).
-      setLayerScans((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+      setLayerScans(resetIfEmpty);
       return;
     }
     let cancelled = false;
@@ -503,7 +516,10 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const [layerIdentified, setLayerIdentified] = useState<Record<string, string | null>>({});
   useEffect(() => {
     if (layers.length === 0) {
-      setLayerIdentified({});
+      // Same guard as `layerScans` and `extraScans` (ART-260): keep the
+      // previous object when it is already empty, so a no-op reset does not
+      // manufacture a fresh identity for nothing.
+      setLayerIdentified(resetIfEmpty);
       return;
     }
     let cancelled = false;
@@ -1061,7 +1077,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       // memoized on this — ART-178/ART-195 were exactly a per-render identity
       // driving an effect, and the evidence lookup below is one of those
       // effects.
-      setExtraScans((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+      setExtraScans(resetIfEmpty);
       return;
     }
     let cancelled = false;
