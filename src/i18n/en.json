@@ -2818,9 +2818,14 @@
     "report": {
       "heading": "First boot's own report",
       "system": "{{system}} · {{rpi}} · Kickstart {{kick}}",
+      "source": {
+        "fat": "Read from the FAT boot partition's own copy (art-firstboot.log).",
+        "amigaVolume": "Read from the Amiga volume's own copy (S/FirstBoot.log)."
+      },
       "fatCopyFailed": "Copying onto the FAT boot partition failed; the files stayed on the AmigaDOS side.",
       "unknown": "Lines from a newer ART, carried rather than dropped:",
-      "details": "Details"
+      "details": "Details",
+      "readFailed": "This card's first-boot report could not be read:"
     },
     "panel": {
       "heading": "First boot on the Amiga",

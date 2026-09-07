@@ -2818,9 +2818,14 @@
     "report": {
       "heading": "İlk açılışın kendi raporu",
       "system": "{{system}} · {{rpi}} · Kickstart {{kick}}",
+      "source": {
+        "fat": "FAT önyükleme bölümünün kendi kopyasından okundu (art-firstboot.log).",
+        "amigaVolume": "Amiga biriminin kendi kopyasından okundu (S/FirstBoot.log)."
+      },
       "fatCopyFailed": "FAT önyükleme bölümüne kopyalama başarısız oldu; dosyalar AmigaDOS tarafında kaldı.",
       "unknown": "Daha yeni bir ART'tan gelen, atılmayıp taşınan satırlar:",
-      "details": "Ayrıntılar"
+      "details": "Ayrıntılar",
+      "readFailed": "Bu kartın ilk açılış raporu okunamadı:"
     },
     "panel": {
       "heading": "Amiga'da ilk açılış",

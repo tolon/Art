@@ -118,6 +118,31 @@ describe("the ending, and the two things that ride beside it", () => {
   });
 });
 
+describe("which copy was read", () => {
+  it("says the Amiga volume's own copy when source is amiga-volume", () => {
+    render(<FirstBootReportPanel report={report()} source="amiga-volume" />);
+    expect(screen.getByTestId("firstboot-report-source").textContent).toBe(
+      i18n.t("firstboot.report.source.amigaVolume")
+    );
+  });
+
+  it("says the FAT partition's copy when source is fat", () => {
+    render(<FirstBootReportPanel report={report()} source="fat" />);
+    expect(screen.getByTestId("firstboot-report-source").textContent).toBe(
+      i18n.t("firstboot.report.source.fat")
+    );
+  });
+
+  it("says nothing about a source when there is none, or none is given", () => {
+    render(<FirstBootReportPanel report={report()} source="none" />);
+    expect(screen.queryByTestId("firstboot-report-source")).toBeNull();
+
+    cleanup();
+    render(<FirstBootReportPanel report={report()} />);
+    expect(screen.queryByTestId("firstboot-report-source")).toBeNull();
+  });
+});
+
 describe("a card that has never been booted", () => {
   it("shows only the not-booted sentence and no table", () => {
     render(

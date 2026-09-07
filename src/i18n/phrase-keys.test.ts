@@ -145,10 +145,12 @@ import {
   fatMountPhrase,
   rehearsalNextStepPhrase,
   rehearsalOutcomePhrase,
+  reportSourcePhrase,
   stepOutcomePhrase,
   type Ending,
   type FatMount,
   type RehearsalOutcome,
+  type ReportSource,
   type StepOutcome,
 } from "@/lib/firstboot";
 
@@ -1770,6 +1772,16 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       const phrase = fatMountPhrase(mount);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
     }
+  });
+
+  it("reportSourcePhrase: both real sources resolve; 'none' has no key to check", () => {
+    const sources: ReportSource[] = ["fat", "amiga-volume"];
+    for (const source of sources) {
+      const phrase = reportSourcePhrase(source);
+      expect(phrase, source).not.toBeNull();
+      expect(isLeafKey(phrase!.key), phrase!.key).toBe(true);
+    }
+    expect(reportSourcePhrase("none")).toBeNull();
   });
 
   it("firstboot rehearsal: every ending resolves, and so does its next step", () => {

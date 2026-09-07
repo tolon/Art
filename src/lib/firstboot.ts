@@ -127,6 +127,22 @@ export function fatMountPhrase(fat: FatMount): Phrase {
     : { key: "firstboot.fat.unavailable", params: { needs: fat.needs } };
 }
 
+/** Which copy of the report was actually read (spec §9: the Amiga volume's
+ *  own `S/FirstBoot.log` wins over the FAT partition's `art-firstboot.log`
+ *  where both exist). `null` for `"none"` — a card with neither copy has not
+ *  booted, and the not-booted sentence already says so; there is nothing
+ *  about a source to add to it. */
+export function reportSourcePhrase(source: ReportSource): Phrase | null {
+  switch (source) {
+    case "fat":
+      return { key: "firstboot.report.source.fat" };
+    case "amiga-volume":
+      return { key: "firstboot.report.source.amigaVolume" };
+    case "none":
+      return null;
+  }
+}
+
 /** The tone a row takes — colour is never the only signal, the key wording is. */
 export function stepOutcomeTone(outcome: StepOutcome): "ok" | "muted" | "warn" | "err" {
   switch (outcome.kind) {

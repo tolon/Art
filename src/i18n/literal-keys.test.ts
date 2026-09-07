@@ -494,6 +494,14 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // the four-ending and four-outcome shapes CLAUDE.md's "endings stay
     // distinct" rule exists for. `phrase-keys.test.ts` enumerates every
     // variant `@/lib/firstboot` exports.
-    expect(dynamicCalls).toBe(157);
+    // 157 -> 158 (first-boot round, Task 11: the card screen's report panel
+    // gains `source`): one. `FirstBootReportPanel.tsx` renders
+    // `reportSourcePhrase(source)` — the same `Phrase`-off-a-mapper shape as
+    // `endingPhrase` beside it, and for the same reason: "read from the
+    // Amiga volume" and "read from the FAT partition" are two different,
+    // checkable sentences, never one collapsed into the other.
+    // `firstboot.test.ts` pins the mapper directly; `FirstBootReportPanel.
+    // test.tsx` renders both non-null variants.
+    expect(dynamicCalls).toBe(158);
   });
 });

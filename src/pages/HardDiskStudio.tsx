@@ -31,6 +31,8 @@ import {
 import { useRemembered } from "@/lib/useRemembered";
 import { useOpenObject } from "@/stores/openObjectStore";
 import { errorText } from "@/lib/errorText";
+import { cardFirstBootReport, type CardFirstBootReport } from "@/lib/firstboot";
+import { FirstBootReportPanel } from "@/components/card/FirstBootReportPanel";
 
 /** The filesystems the wizard offers. A remembered value that is not one of
  *  them — an older ART's, or a hand-edited file's — falls back rather than
@@ -105,6 +107,12 @@ export function HardDiskStudio() {
    * report a working card as broken (ART-097).
    */
   const [card, setCard] = useState<CardReport | null>(null);
+  /** A card's own first-boot report, read once the card opens (§9, task 11).
+   *  Reading it never opens the card for writing and never boots anything —
+   *  it fails or succeeds independently of the partition table above, which
+   *  is why it has its own error state rather than sharing `error`. */
+  const [firstBoot, setFirstBoot] = useState<CardFirstBootReport | null>(null);
+  const [firstBootError, setFirstBootError] = useState<string | null>(null);
   const [selectedPart, setSelectedPart] = useState<ParsedPartition | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -184,6 +192,11 @@ export function HardDiskStudio() {
     setBusy(true);
     setError(null);
     setStatusMsg(null);
+    // A fresh load's first-boot report belongs to the file being opened, not
+    // to whatever was open before it — carrying it across would be the same
+    // staleness ART-197 named for the OS Builder, here on the card screen.
+    setFirstBoot(null);
+    setFirstBootError(null);
     try {
       // Ask the card reader first, whatever the file is. It answers for both
       // kinds (`core/card.rs`): a plain HDF comes back as one area at offset
@@ -199,6 +212,14 @@ export function HardDiskStudio() {
         setInfo(null);
         setSelectedPart(report.card.areas[0]?.rdb.partitions[0] ?? null);
         setPath(p);
+        // The report read is a second, independent question — no card
+        // operation, no boot — so its own failure must not disturb the
+        // partition table this call already resolved (controller ruling).
+        try {
+          setFirstBoot(await cardFirstBootReport(p));
+        } catch (e) {
+          setFirstBootError(errorText(t, e));
+        }
         return;
       }
 
@@ -525,6 +546,27 @@ export function HardDiskStudio() {
               </p>
             )}
           </section>
+
+          {/* First boot's own report — read once, alongside the partition
+              table, never as part of it: a failed read says so under its own
+              heading and leaves everything above untouched. Nothing renders
+              here while the read is still in flight — an empty card would
+              look like progress with no information behind it. */}
+          {firstBoot && <FirstBootReportPanel report={firstBoot.report} source={firstBoot.source} />}
+          {firstBootError && (
+            <section className="card">
+              <p className="muted" style={{ fontSize: 12, fontWeight: 600, margin: "0 0 6px" }}>
+                {t("firstboot.report.heading")}
+              </p>
+              <p
+                data-testid="firstboot-report-error"
+                className="badge badge-err"
+                style={{ display: "block", padding: "6px 12px" }}
+              >
+                {t("firstboot.report.readFailed")} {firstBootError}
+              </p>
+            </section>
+          )}
         </div>
       )}
 

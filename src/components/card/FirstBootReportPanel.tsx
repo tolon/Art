@@ -1,7 +1,8 @@
 // Reading `S:FirstBoot.log`'s parsed shape — a plain presentational read of
 // `FirstBootReport` (Task 9 of the first-boot round; Task 11 mounts this on
-// the card screen with its own `source` prop, which this component does not
-// have yet — nothing here is wired to a real file).
+// the card screen and adds `source`, which says *which* copy was read: the
+// Amiga volume's own `S/FirstBoot.log`, or the FAT partition's
+// `art-firstboot.log`).
 //
 // **Endings stay distinct** (CLAUDE.md). `endingPhrase` gives each ending its
 // own sentence, and a card that has never booted gets *only* that sentence —
@@ -14,14 +15,20 @@ import { useTranslation } from "react-i18next";
 
 import {
   endingPhrase,
+  reportSourcePhrase,
   stepOutcomePhrase,
   stepOutcomeTone,
   type FirstBootReport,
+  type ReportSource,
 } from "@/lib/firstboot";
 import { usePowerMode } from "@/lib/uxmode";
 
 export interface FirstBootReportPanelProps {
   report: FirstBootReport;
+  /** Which copy was read. Optional so the OS Builder's rehearsal call site
+   *  (a live report, no card, no source) does not have to invent one;
+   *  `"none"` renders nothing about a source, same as omitting the prop. */
+  source?: ReportSource;
 }
 
 const TONE_CLASS: Record<string, string> = {
@@ -31,10 +38,11 @@ const TONE_CLASS: Record<string, string> = {
   err: "badge-err",
 };
 
-export function FirstBootReportPanel({ report }: FirstBootReportPanelProps) {
+export function FirstBootReportPanel({ report, source }: FirstBootReportPanelProps) {
   const { t } = useTranslation();
   const power = usePowerMode();
   const ending = endingPhrase(report.ending);
+  const sourcePhrase = source ? reportSourcePhrase(source) : null;
 
   if (report.ending === "not-booted") {
     return (
@@ -51,6 +59,12 @@ export function FirstBootReportPanel({ report }: FirstBootReportPanelProps) {
       <p className="muted" style={{ fontSize: 12, fontWeight: 600, margin: "0 0 6px" }}>
         {t("firstboot.report.heading")}
       </p>
+
+      {sourcePhrase && (
+        <p data-testid="firstboot-report-source" className="faint" style={{ fontSize: 11, margin: "0 0 8px" }}>
+          {t(sourcePhrase.key, sourcePhrase.params)}
+        </p>
+      )}
 
       {report.system && (
         <p data-testid="firstboot-report-system" style={{ fontSize: 12, margin: "0 0 8px" }}>

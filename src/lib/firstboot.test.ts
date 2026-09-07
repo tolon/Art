@@ -18,12 +18,14 @@ import {
   rehearsalNextStepPhrase,
   rehearsalOutcomePhrase,
   rehearsalTone,
+  reportSourcePhrase,
   stepOutcomePhrase,
   FIRSTBOOT_REHEARSAL_EVENT,
   type Ending,
   type FatMount,
   type FirstBootReport,
   type RehearsalOutcome,
+  type ReportSource,
   type StepOutcome,
 } from "@/lib/firstboot";
 
@@ -42,6 +44,11 @@ const COMMAND = readFileSync(
   "utf8"
 );
 
+const CARDREAD = readFileSync(
+  resolve(__dirname, "..", "..", "src-tauri", "src", "core", "firstboot", "cardread.rs"),
+  "utf8"
+);
+
 describe("report.rs still tags both enums kebab-case", () => {
   it("StepOutcome", () => {
     expect(REPORT).toMatch(/#\[serde\(tag = "kind", rename_all = "kebab-case"\)\]\s*\r?\n\s*pub enum StepOutcome/);
@@ -49,6 +56,12 @@ describe("report.rs still tags both enums kebab-case", () => {
 
   it("Ending", () => {
     expect(REPORT).toMatch(/#\[serde\(rename_all = "kebab-case"\)\]\s*\r?\n\s*pub enum Ending/);
+  });
+});
+
+describe("cardread.rs still tags ReportSource kebab-case", () => {
+  it("ReportSource", () => {
+    expect(CARDREAD).toMatch(/#\[serde\(rename_all = "kebab-case"\)\]\s*\r?\n\s*pub enum ReportSource/);
   });
 });
 
@@ -94,6 +107,16 @@ describe("fatMountPhrase", () => {
     const phrase = fatMountPhrase(fat);
     expect(phrase.key).toBe("firstboot.fat.unavailable");
     expect(phrase.params).toEqual({ needs: "fat95" });
+  });
+});
+
+describe("reportSourcePhrase", () => {
+  it("gives the two real sources their own key, and none to a card with neither copy", () => {
+    const sources: ReportSource[] = ["fat", "amiga-volume", "none"];
+    const phrases = sources.map((s) => reportSourcePhrase(s));
+    expect(phrases[0]?.key).toBe("firstboot.report.source.fat");
+    expect(phrases[1]?.key).toBe("firstboot.report.source.amigaVolume");
+    expect(phrases[2]).toBeNull();
   });
 });
 
