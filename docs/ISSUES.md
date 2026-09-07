@@ -405,6 +405,40 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-276** 🟠 **Two packages sharing one medium tripped the wrong clash check:
+`'Locale3.9' already names the medium component 'locale-39' was installed from in this
+tree`** — *found 2026-09-07 night by the owner, adding `locale-39-turkish` after
+`locale-39` on the Windows 11 build; fixed 2026-09-08*
+`src-tauri/src/core/osinstall/apply.rs`
+
+The owner added `locale-39` to a tree, then `locale-39-turkish` **from the same
+archive**, and got refused with the sentence above (`ART-INPUT-INVALID`).
+`add_package_staging_in`'s clash check scanned `manifest.files` for any file whose
+`media` matched the package being added and whose `component` differed — which fires on
+the very first file the first component placed, because `locale-39.json` and
+`locale-39-turkish.json` both declare `"media": "Locale3.9"` **on purpose**:
+`recipes/packages/locale-39-turkish.json`'s own doc comment says "two packages sharing
+one medium is ordinary: `media` says which archive, and the rules say which part of
+it." The check confused two components legitimately sharing one archive with the real
+ambiguity it meant to catch: one volume-name string meaning two *different* archives at
+different points in a tree's life.
+
+The manifest already held the fact that tells the two apart: `built_from: Vec<MediaRecord
+{ volume_name, sha256 }>` records one hash per medium name, and the archive's SHA-256 was
+already computed one line after the wrong check. The fix looks up `built_from` by
+`volume_name == package.media` instead of scanning `files`: no entry means no ambiguity
+yet; a matching hash means the same archive, a second component sharing it, allowed; a
+different hash means a genuine collision, refused by name and hash rather than by
+component id.
+
+**Fixed 2026-09-08.** `add_package_staging_in` moves `sha256_file(archive)` above the
+check and replaces the `manifest.files` scan with the `built_from` lookup above, naming
+both archives' SHA-256 prefixes in the refusal instead of a component id. Tests:
+`two_components_sharing_one_medium_are_both_accepted_when_the_archive_is_the_same` and
+`a_second_archive_under_the_same_medium_name_is_refused_and_names_both_hashes` (new);
+`adding_the_same_package_twice_replaces_its_own_files_rather_than_refusing` (existing,
+already asserts `built_from`'s single entry per archive).
+
 **ART-275** 🟠 **The commander had no cursor keys: Up/Down, Home/End, PageUp/PageDown
 moved nothing, and the ini's one custom shortcut (Ctrl+Space) was not wired** — *found
 2026-09-07 night by the owner, trying the Windows 11 build on the Files screen; fixed
