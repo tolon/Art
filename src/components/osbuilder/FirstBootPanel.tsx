@@ -97,6 +97,14 @@ export function FirstBootPanel({ treeRoot, onTreeRootChange }: FirstBootPanelPro
   useEffect(() => {
     setWriteResult(null);
     setWriteError(null);
+    // A rehearsal's outcome, report and copy path are about the tree that was
+    // on screen when it ran. Picking a different folder must not leave tree
+    // A's rehearsal sitting beside tree B's fresh preview with nothing saying
+    // it belongs elsewhere — the confident-wrong-sentence class CLAUDE.md
+    // names, here as "still true, just not about this folder any more".
+    setRehearsalResult(null);
+    setRehearsalError(null);
+    setRehearsalCancelled(false);
     if (!treeRoot) {
       setPreview(null);
       setPreviewRefusal(null);

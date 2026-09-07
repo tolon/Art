@@ -280,6 +280,39 @@ describe("stopping a rehearsal", () => {
   });
 });
 
+describe("changing the tree clears a stale rehearsal", () => {
+  // Fix round 1: a rehearsal's outcome, report and copy path describe the
+  // tree that was on screen when it ran. Picking a different folder must not
+  // leave that sentence sitting beside the new folder's fresh preview with
+  // nothing saying it belongs elsewhere — CLAUDE.md's "the failure that does
+  // not crash", here as "still true, just not about this folder any more".
+  // The screen is put into a state (a finished rehearsal on screen) where
+  // only the reset under test can make the sentence disappear.
+  it("removes the previous tree's rehearsal outcome when the tree field changes", async () => {
+    const { rerender } = render(
+      <FirstBootPanel treeRoot="D:/amiga/os39" onTreeRootChange={() => {}} />
+    );
+    await screen.findByTestId("firstboot-preview");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: i18n.t("firstboot.panel.run") }));
+    await waitFor(() => expect(rehearseMock).toHaveBeenCalled());
+    resolveRehearsal!({
+      job_id: 42,
+      outcome: { kind: "finished", report: REPORT },
+      copy: "D:/amiga/os39.rehearsal",
+      discarded: true,
+    });
+    await screen.findByTestId("firstboot-rehearsal-outcome");
+
+    rerender(<FirstBootPanel treeRoot="D:/amiga/os40" onTreeRootChange={() => {}} />);
+
+    await waitFor(() => expect(previewMock).toHaveBeenLastCalledWith("D:/amiga/os40"));
+    expect(screen.queryByTestId("firstboot-rehearsal-outcome")).toBeNull();
+    expect(screen.queryByTestId("firstboot-rehearsal-report")).toBeNull();
+    expect(screen.queryByTestId("firstboot-rehearsal-copy")).toBeNull();
+  });
+});
+
 describe("beginner mode hides the AmigaDOS path and never disables the write", () => {
   it("hides the tree-path column and keeps Write enabled", async () => {
     render(<FirstBootPanel treeRoot="D:/amiga/os39" onTreeRootChange={() => {}} />);
