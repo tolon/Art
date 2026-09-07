@@ -26,18 +26,37 @@
 //!
 //! "Not booted" and "could not be checked" are different sentences and must
 //! stay different — CLAUDE.md's "endings stay distinct". A card whose only
-//! Amiga partition is corrupt or unformatted has not told ART "no report
-//! yet"; it has told ART nothing at all, and reporting `ReportSource::None`
-//! about it would be the same wire shape a genuinely untouched card
-//! produces. So [`amiga_report`] treats "no such file here" and "this is not
-//! a filesystem ART reads" (`DosFamily::Other`) as silent, ordinary misses —
-//! another partition, or the FAT copy, may still answer — but any other
-//! failure (a corrupt or unformatted volume, a report too large to read) is
-//! carried forward and, if nothing else on the card ever answers, returned
-//! as `Err` naming the partition. `read_card_report` and the
-//! `card_firstboot_report` command let that `Err` propagate rather than
-//! folding it into `ReportSource::None`; Task 11 renders it as a command
-//! error under the panel heading.
+//! Amiga partition is corrupt has not told ART "no report yet"; it has told
+//! ART nothing at all, and reporting `ReportSource::None` about it would be
+//! the same wire shape a genuinely untouched card produces. So
+//! [`amiga_report`] treats "no such file here" and "this is not a filesystem
+//! ART reads" (`DosFamily::Other`) as silent, ordinary misses — another
+//! partition, or the FAT copy, may still answer — but any other failure (a
+//! corrupt volume, a report too large to read) is carried forward and, if
+//! nothing else on the card ever answers, returned as `Err` naming the
+//! partition. `read_card_report` and the `card_firstboot_report` command let
+//! that `Err` propagate rather than folding it into `ReportSource::None`;
+//! Task 11 renders it as a command error under the panel heading.
+//!
+//! ## An unformatted partition is a miss, not a failure (final review, I1)
+//!
+//! **Corrupt and unformatted are not the same thing, and only one of them
+//! belongs in the paragraph above.** `core/card/build.rs` leaves a card with
+//! every partition declared and typed in its RDB but nothing written to any
+//! of them yet — `core/preload`'s volumes step formats them afterwards. That
+//! is the *ordinary* state of a card ART itself just built, and reading its
+//! first-boot report before that step ran used to answer "could not be
+//! checked" — a red error about a good card, naming a partition that has
+//! never been touched. `pfs3_rootblock_probe` and the equivalent read inside
+//! [`ffs_report`] look at the partition's own root/boot block region — the
+//! same bounded, read-only window each mount call would read first anyway —
+//! before ever asking `Volume::open` or `dir::find_entry` to make sense of
+//! it. Neither family's on-disk signature is ever all zero, so an all-zero
+//! window means "nothing written here yet", classified as `Ok(None)`
+//! alongside `DosFamily::Other`, and logged at `debug` rather than `warn`.
+//! **A genuinely corrupt partition is unaffected**: `corrupt_root_block`'s
+//! own tests overwrite the block with `0xFF`, never zero, so they still fail
+//! the mount and still return `Err` exactly as before.
 //!
 //! **An Amiga-side read failure is reported as an error even when a FAT
 //! copy exists** (fix round 2): `read_card_report` never falls through to
@@ -118,8 +137,8 @@ pub struct CardFirstBootReport {
 /// on the card went wrong either (`ReportSource::None`,
 /// [`super::report::Ending::NotBooted`] — not an error, the ordinary shape
 /// of a card that has not booted the block yet); or a partition ART should
-/// have been able to read (PFS3, FFS/OFS) came back corrupt, unformatted, or
-/// carrying a report too large to read, and nothing else on the card ever
+/// have been able to read (PFS3, FFS/OFS) came back corrupt or carrying a
+/// report too large to read, and nothing else on the card ever
 /// answered — also an `Err`, but a different one: "could not be checked",
 /// never quietly folded into "not booted".
 ///
@@ -183,10 +202,12 @@ fn fat_report(card: &CardImage, path: &Path) -> CoreResult<Option<Vec<u8>>> {
 /// Two outcomes are not failures and are never carried forward: `Ok(None)`
 /// from a partition simply not carrying the file (`pfs3_report`/`ffs_report`
 /// already return that for "no such file", a directory where the file
-/// should be, or a shape `write_refusal` declines), and `DosFamily::Other` —
-/// a filesystem this module has no reader for at all. Everything else `Err`
-/// is a genuine problem — corrupt, unformatted, a report too large to read —
-/// and is logged and remembered; if the whole search ends with no hit, the
+/// should be, a partition with no filesystem written to it yet — final
+/// review's I1, see the module doc's own section — or a shape
+/// `write_refusal` declines), and `DosFamily::Other` — a filesystem this
+/// module has no reader for at all. Everything else `Err` is a genuine
+/// problem — corrupt, a report too large to read — and is logged and
+/// remembered; if the whole search ends with no hit, the
 /// **first** such failure is what `amiga_report` returns, naming the
 /// partition it came from. See the module doc's "Three endings, not two".
 fn amiga_report(card: &CardImage) -> CoreResult<Option<Vec<u8>>> {
@@ -247,6 +268,42 @@ fn too_large(size: u64) -> CoreError {
     }
 }
 
+/// True when every byte of a bounded probe window is zero — the shape
+/// `core/card/build.rs` leaves a partition in before `core/preload`'s volumes
+/// step ever writes a filesystem into it: an RDB with the partition declared
+/// and typed, but nothing written to its body yet (I1, final review). Neither
+/// family's on-disk signature is ever all zero, so this distinguishes "no
+/// filesystem here yet" from "a filesystem that will not open" before either
+/// reader is asked to open one.
+fn window_is_all_zero(bytes: &[u8]) -> bool {
+    bytes.iter().all(|&b| b == 0)
+}
+
+/// Read-only, bounded probe of PFS3's own rootblock sector — partition-
+/// relative sector [`libpfs3::ondisk::ROOTBLOCK`], the exact sector
+/// `libpfs3::volume::Volume::open` itself reads first (`Volume::from_device`)
+/// to find the `disktype` magic it insists on. One sector, never more: this
+/// is a probe, not a mount, and a partition's own length is not trusted to
+/// size it.
+fn pfs3_rootblock_probe(
+    path: &Path,
+    partition_offset: u64,
+) -> CoreResult<[u8; libpfs3::ondisk::SECTOR_SIZE as usize]> {
+    use std::io::{Read, Seek, SeekFrom};
+    let sector_bytes = libpfs3::ondisk::SECTOR_SIZE as u64;
+    let at = partition_offset
+        .checked_add(libpfs3::ondisk::ROOTBLOCK * sector_bytes)
+        .ok_or_else(|| CoreError::Malformed {
+            format: "card".into(),
+            detail: "the PFS3 rootblock's address overflows a 64-bit offset".into(),
+        })?;
+    let mut file = std::fs::File::open(path)?;
+    file.seek(SeekFrom::Start(at))?;
+    let mut sector = [0u8; libpfs3::ondisk::SECTOR_SIZE as usize];
+    file.read_exact(&mut sector)?;
+    Ok(sector)
+}
+
 /// `S/FirstBoot.log` off a PFS3 partition. Read-only: `Volume::open` never
 /// takes a write handle.
 ///
@@ -274,6 +331,20 @@ fn pfs3_report(
     part: &ParsedPartition,
 ) -> CoreResult<Option<Vec<u8>>> {
     let (offset, _length, _block_size) = partition_region(area, part)?;
+
+    // I1, final review: a partition `core/card/build.rs` has declared and
+    // typed but `core/preload` has not yet formatted has an all-zero
+    // rootblock sector — not a `disktype` `PFS_TYPES` recognises, but not
+    // corruption either. Treat it as the ordinary miss it is before asking
+    // `Volume::open` to mount it at all.
+    if window_is_all_zero(&pfs3_rootblock_probe(path, offset)?) {
+        log::debug!(
+            "first-boot report: partition '{}' (pfs3) has no filesystem written yet (unformatted)",
+            part.drive_name
+        );
+        return Ok(None);
+    }
+
     let mut vol = libpfs3::volume::Volume::open(path, offset).map_err(from_pfs3)?;
     let Some(entry) = vol.lookup(REPORT_PATH).map_err(from_pfs3)? else {
         return Ok(None);
@@ -309,6 +380,22 @@ fn ffs_report(
     }
 
     let set = BlockSet::new(geometry.block_size);
+
+    // I1, final review: the same pre-format state as `pfs3_report`'s check,
+    // read here as the FFS/OFS root block. `dir::find_entry` below already
+    // answers `Ok(None)` for a zeroed root block on its own (every hash
+    // bucket reads as zero), so this changes nothing about the outcome — it
+    // is here so the two families are checked the same way, by content
+    // rather than by relying on one family's search happening to degrade
+    // gracefully and the other's mount call happening not to.
+    if window_is_all_zero(&set.view(&region, geometry.root_block)?) {
+        log::debug!(
+            "first-boot report: partition '{}' (ffs/ofs) has no filesystem written yet (unformatted)",
+            part.drive_name
+        );
+        return Ok(None);
+    }
+
     let mut current = geometry.root_block;
     let mut is_dir = true; // the root itself is a directory
     for segment in REPORT_PATH.split('/') {
@@ -562,6 +649,38 @@ mod tests {
             .unwrap();
         // Nothing copied in: an empty, freshly formatted volume, and no FAT
         // partition at all (this is a plain HDF).
+
+        let found = read_card_report(&image).unwrap();
+        assert_eq!(found.source, ReportSource::None);
+        assert_eq!(found.report.ending, super::super::report::Ending::NotBooted);
+    }
+
+    // ---- final review, I1: an unformatted partition is a miss, not a
+    // failure ----
+
+    /// **I1's central claim.** A card exactly as `core/card/build.rs` leaves
+    /// one before the volumes step runs — an RDB with a PFS3-typed partition
+    /// declared, nothing formatted into it — must read as an ordinary
+    /// "not booted", never as "could not be checked". `format_partition` is
+    /// deliberately never called here.
+    #[test]
+    fn an_unformatted_pfs3_partition_is_not_booted_not_an_error() {
+        let dir = ScratchDir::new("art-firstboot-cardread", "pfs3-unformatted");
+        let image = card_with_partition(dir.path(), AmigaHardDiskFs::Pfs3DirectScsi, 8);
+
+        let found = read_card_report(&image).unwrap();
+        assert_eq!(found.source, ReportSource::None);
+        assert_eq!(found.report.ending, super::super::report::Ending::NotBooted);
+    }
+
+    /// The FFS/OFS mirror of the test above. `ffs_report`'s own zero check is
+    /// belt-and-braces here — `dir::find_entry` already answers `Ok(None)`
+    /// for a zeroed root block on its own — but the outcome this test pins is
+    /// the one that matters: still an ordinary miss, still not an `Err`.
+    #[test]
+    fn an_unformatted_ffs_partition_is_not_booted_not_an_error() {
+        let dir = ScratchDir::new("art-firstboot-cardread", "ffs-unformatted");
+        let image = card_with_partition(dir.path(), AmigaHardDiskFs::FfsStandard, 8);
 
         let found = read_card_report(&image).unwrap();
         assert_eq!(found.source, ReportSource::None);
