@@ -73,6 +73,49 @@ export function selectRange(
 }
 
 /**
+ * Shift+cursor-movement (ART-275) — Total Commander's own way of marking a
+ * run without a mouse: mark every row the cursor passes over as it moves
+ * from `from` to `to`, **inclusive of `from`, exclusive of `to`**. That one
+ * rule reads the same for every direction and every step size:
+ *
+ * - Shift+Down one row: `from` is the row you were standing on, `to` is the
+ *   next one — marks just the row you left, same as Insert.
+ * - Shift+Up one row: `from` and `to` swap ends, but the rule is unchanged —
+ *   the row you were standing on gets marked, the one you land on does not
+ *   (it will, on the *next* Shift+Up, when it becomes the new `from`).
+ * - Shift+Home/End/PageUp/PageDown: the same rule over a longer span — every
+ *   row from the old cursor up to but not including the new one.
+ *
+ * `to` is deliberately not `selectRange`'s pivot: `selectRange` re-selects
+ * the same anchor-to-here span on every call (a second Shift+click can
+ * shrink a range), where this **adds** the span it is given and moves the
+ * anchor with the cursor, so repeated presses build up a selection the way
+ * repeated Inserts do. `from`/`to` unknown to `entries` (a stale anchor, or a
+ * name from a directory that has since changed) marks nothing and just
+ * carries `to` through as the new anchor — the same fallback `selectRange`
+ * makes, short of guessing a range.
+ */
+export function markThrough(
+  entries: PanelEntry[],
+  selected: Set<string>,
+  from: string,
+  to: string
+): SelectionUpdate {
+  const names = entries.map((e) => e.name);
+  const fromIndex = names.indexOf(from);
+  const toIndex = names.indexOf(to);
+  if (fromIndex === -1 || toIndex === -1) return { selected, anchor: to };
+
+  const [lo, hi] = fromIndex <= toIndex ? [fromIndex, toIndex] : [toIndex, fromIndex];
+  const next = new Set(selected);
+  for (let i = lo; i <= hi; i++) {
+    if (names[i] === to) continue;
+    next.add(names[i]);
+  }
+  return { selected: next, anchor: to };
+}
+
+/**
  * Insert — Norton Commander's mark key: toggle the entry the anchor sits on
  * and move the anchor down one, so repeated presses mark a run without a
  * mouse. With no prior anchor (nothing clicked yet this pane) it starts at

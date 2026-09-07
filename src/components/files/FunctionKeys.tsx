@@ -15,6 +15,7 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
+import type { CursorMove } from "@/lib/cursorKeys";
 import { searchCharacter } from "@/lib/quickSearch";
 
 export interface FunctionAction {
@@ -329,6 +330,83 @@ export function useMarkKeys(
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onSpace, onMarkByMask, onUnmarkByMask, onInvert, active]);
+}
+
+/**
+ * Up/Down/Home/End/PageUp/PageDown — the commander's own cursor movement
+ * (ART-275: a mouse-free commander driven by Insert and letters alone has no
+ * way to walk the list one row, or one page, at a time).
+ *
+ * Owns no pane state, the same way `usePaneTab`'s `onTab` does not: `onMove`
+ * is told which key fired and whether Shift was held, and `FileManager.tsx`
+ * decides what that means — `cursorStep` (`@/lib/cursorKeys`) for where the
+ * cursor lands, `markThrough` (`@/lib/selection`) for what Shift marks along
+ * the way.
+ *
+ * Deliberately asks `isShortcutBlocked` for `expectCtrl=false`: Ctrl+PageUp
+ * and Ctrl+PageDown are already `useNavigationKeys`'s container steps (brief
+ * §3.1, "walk in and out of things"), so refusing the Ctrl variants here is
+ * what keeps the two hooks from ever firing off the same keystroke.
+ */
+export function useCursorKeys(
+  onMove: (move: CursorMove, shift: boolean) => void,
+  active: boolean
+) {
+  useEffect(() => {
+    if (!active) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      const move: CursorMove | null =
+        event.key === "ArrowUp"
+          ? "up"
+          : event.key === "ArrowDown"
+            ? "down"
+            : event.key === "Home"
+              ? "home"
+              : event.key === "End"
+                ? "end"
+                : event.key === "PageUp"
+                  ? "pageUp"
+                  : event.key === "PageDown"
+                    ? "pageDown"
+                    : null;
+      if (!move) return;
+      if (isShortcutBlocked(event)) return;
+
+      event.preventDefault();
+      onMove(move, event.shiftKey);
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onMove, active]);
+}
+
+/**
+ * Ctrl+Space — focus the command line (ART-275, the owner's own `wincmd.ini`
+ * `[Shortcuts]` line: `C+SPACE=cm_ExecuteDOS`).
+ *
+ * The one shortcut in this file, besides Ctrl+A, that *wants* Ctrl held —
+ * hence `expectCtrl=true` — which is exactly what keeps it from colliding
+ * with `useMarkKeys`'s plain Space: that hook's own `isShortcutBlocked(event)`
+ * (no `expectCtrl`) refuses every Ctrl+ combination, so Ctrl+Space can never
+ * also mark the row under the cursor.
+ */
+export function useCommandLineKey(onFocus: () => void, active: boolean) {
+  useEffect(() => {
+    if (!active) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (!event.ctrlKey || event.key !== " ") return;
+      if (isShortcutBlocked(event, true)) return;
+
+      event.preventDefault();
+      onFocus();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onFocus, active]);
 }
 
 /**
