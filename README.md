@@ -305,8 +305,9 @@ title on the A1200 profile is the claim** — not every OCS title in a
 collection. And a **Turkish** sentence has finally
 been read on a running screen by someone who speaks it: the new WHDLoad
 Kickstart refusal, judged clear, and the launch then worked
-([ART-062](docs/ISSUES.md#open)). That is one sentence out of 1916, so the
-language as a whole is still unseen — but it is no longer zero.
+([ART-062](docs/ISSUES.md#open)). That is one sentence out of 2078 (counted
+2026-09-07), so the language as a whole is still unseen — but it is no longer
+zero.
 
 ### How to report what you find
 

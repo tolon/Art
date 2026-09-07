@@ -7,7 +7,10 @@ Every other document describes intent (the spec, `roadmap.md`) or mechanics
 disagree, this file wins — and if this file disagrees with the code, fix this
 file.
 
-Update it at the end of any session that changes what works.
+Update it at the end of any session that changes what works. Keep it short:
+each round's own story is one row in the [session log](session-log.md), its
+reasoning is under `docs/superpowers/` and `.superpowers/sdd/`, and the defect
+register is [ISSUES.md](ISSUES.md). Nothing here is retold from those.
 
 - Known defects and technical debt: [ISSUES.md](ISSUES.md)
 - Feature-by-feature implementation state: [FEATURES.md](FEATURES.md)
@@ -16,120 +19,110 @@ Update it at the end of any session that changes what works.
 
 ## Snapshot
 
+Every row is one current fact and the measurement behind it. A claim here is
+only valid if the command that proves it was actually run — do not carry a
+PASS forward on faith.
+
 | | |
 |---|---|
-| **Last updated** | 2026-09-07 — **Round 5 of the Emu68 Hatcher intake (first boot on the Amiga, phases 1–2) merged to `main` as `1cb5ce1`, the owner's decision the same day; `main` is 64 commits ahead of `origin` and still unpushed.** Before that, 2026-09-06 — **Held for the owner's decision, on `art-prefs-wallpaper`, not on `main`: a distribution tree can carry the owner's own wallpaper, screen mode and shell defaults, edited into the release's own prefs files rather than regenerated.** SD-3 G14 closes and work-list item 7 with it — round 1 of six taking what is worth taking from `rootrootde/emu68hatcher` (MIT). Three new pure-`core` modules (`core/amigaprefs`, `core/ilbm`, `core/picture`) plus `core/appearance`, a verify check and an OS Builder panel. Proved two ways that are not ART: ffmpeg agrees pixel-for-pixel with ART's own ILBM encoder on **8 of 8** fixtures, and against the owner's own AmigaOS 3.9 material, **15 of 24** real `.prefs` files are genuine `FORM PREF` containers and all 15 round-trip byte-for-byte **through the actual rebuilder** (`replace_bodies(&[])`) — a whole-branch review on 2026-09-06 found the two round-trip tests had been comparing against `to_bytes()`, the bytes `parse` was handed back verbatim, which is true by construction and never ran the rebuilder at all; fixed, and the count held at 15/24 with 0 failures, now proven rather than merely claimed. Twelve tasks, each reviewed; the reviews caught a Critical in the `png`/`jpeg-decoder` crates themselves (a tiny header declaring 65535×65535 could drive a multi-gigabyte allocation under `panic = "abort"`) and a defect only the real 3.9 material exposed — `.prefs` is a filename convention, not a format guarantee, and the verify check would have failed a correct tree for a file that is not ART's business. The same whole-branch review found three more things (PTRN's reserved bytes zeroed on every write; the `Sys:` assign folded case-sensitively against real material that carries `SYS:`; the verify check's own wording and its `Pass` verdict claiming a volume when it examines the host distribution tree), all fixed, plus a fifth — the wallpaper apply blocking the command thread — filed as [ART-248](ISSUES.md) rather than fixed. **The branch is built, reviewed and verified; merging it is the owner's call, held back deliberately rather than done by the round that built it.** Everything below this row that is not explicitly marked as the branch still describes `main` as of the WHDLoad-drawer round, 2026-09-05. Earlier that day: **a drawer-shaped WHDLoad collection is catalogued, and iGame can be told what ART knows.** A directory holding one `.slave` is a title now, and so is a drawer *inside* an archive; `igame.data` goes beside each slave — into a tree ART built by default, into a user's own collection only as an explicit, previewed, backed-up action reported **per entry**. Proved on real material: **893** drawers found and all 893 read back, and the archive scan taken from **140 469 ms to 1 719 ms** by reading entries in index order rather than `HashMap` order. Seven tasks, each reviewed; the reviews caught the feature being **unreachable twice** while every test was green. Earlier the same day: **AmigaOS 3.2.2 is an installable release.** A recipe can now say that a release arrives as a base plus an update: ordered media **layers**, recipe inheritance, and media resolved inside the layer its recipe names, so nothing is decided by the order folders were added in. Proved against the owner's own media — a real layered build of **4 052 files** whose tree states `Release 3.2.2`, and **485** real `.info` icons round-tripped with 0 failures. Eleven tasks, each reviewed; the reviews caught three things 2 700 tests did not. Per-round detail is the [session log](session-log.md) |
-| **Version** | **0.9.0** (2026-09-04) — the first version cut as a GitHub release with installers attached, built by `.github/workflows/release.yml` from the tagged commit. 0.8.5 was the first published for other people to use. Deliberately not 1.0: of **204 marked rows** in [FEATURES.md](FEATURES.md), **153 are green — 24 amber, 21 not started, 6 stubs** (re-counted 2026-09-05 after the WHDLoad-drawer round, taking **one marker per table row**, from that row's State column). **State the method with the number**, because this row did not: the figure it carried before — 233 rows, 162 green, 32 amber, 33 not started, 6 stubs, counted 2026-09-04 — cannot be reproduced by either obvious rule. Counting every marker *cell* instead of one per row gives 262/184/32/40/6 today, so the old figure sat between the two and nobody can now say which it meant, and as the row above says, what is left in SD-1 is not code: a card flashed and an A500 booted. That is the bar for 1.0, not a bigger number |
-| **Current stage** | **SD-0, SD-1, SD-2 and SD-4 built; SD-3 mostly, SD-5 part-built.** The per-gap detail is the stage table further down this file, which is maintained gap by gap — this cell no longer retells it. Three sentences that have not changed and are the ones to read first: **what is left in SD-1 is not code — a card flashed and an A500 booted**; what emulation has settled is the **filesystem** side (a PFS3 volume ART formatted, and an AmigaOS 3.2 tree ART built, each boot a licensed Kickstart to a clean Workbench — so `expansion.library` and the real `pfs3aio` binary have accepted ART's disk, which is not provisional), and it does **not** touch the card path, where an MBR, an Amiga disk starting 1.1 GB in and Emu68's `brcm-sdhc.device` are the untested rung ([ART-095](ISSUES.md)); and **no card ART built has been flashed or booted** |
-| **Build** | PASS |
-| **Tests** | `main`'s own count as of item 7's merge (`bf5bbe7`, 2026-09-06): **2863 Rust passed, 0 failed, 49 ignored; 1045 frontend across 82 files** — the prefs-and-wallpaper round's own last-measured figures, carried into `main` unchanged by the merge and not independently re-run against `main` by this session. Before that merge: **2771 Rust passed, 0 failed, 47 ignored; 1027 frontend passed across 80 files** (re-measured 2026-09-05 at the end of the WHDLoad-drawer round — 30.99 s and 31.19 s, run twice per the standing rule; the previous figures, 2707/1016, were the layered-release round earlier the same day, and 2626/1004 were 2026-09-04). The ignored ones are the real-material hooks, env-gated and run by hand - real install media, a real card, `hst.imager.exe`, Microsoft's `Get-VHD`, the owner's own 1.2 GB `AmiKit.hdf` ([ART-146](ISSUES.md#fixed)), and since 2026-08-24 the three that leave the machine for the real Aminet (`net/live_aminet.rs`). **Quote the `test result:` line, never the exit code** — on 2026-09-04 an antivirus interfering with `rustup.exe` killed the harness after about seventy tests and the shell still saw exit 0, four runs in a row, with no summary line and no failure (recorded in CLAUDE.md, "Before you commit"). **The trigger has a name now, found 2026-09-06 by the drawer-icons round and confirmed by the owner: the scanner reacts to `art_lib` itself** — this crate's own library name (`src-tauri/Cargo.toml`, `[lib] name = "art_lib"`, built as `staticlib`/`cdylib`/`rlib`) — not to any file the tests write, which is why the harness dies mid-run with a clean exit and no summary rather than failing a specific test. This is machine configuration, not a code defect: excluding `src-tauri\target\` and `D:\tmp\art-tests\` from the scanner is expected to close the whole class, and that re-run is what would turn "explained" into "settled" — see ART-159's own addendum in ISSUES.md for the case that named it. Outside the two suites: **113 contrast pairs** (`scripts/contrast-check.py`, blocking in CI, and since [ART-232](ISSUES.md#fixed) it covers the colours three screens hard-code outside the token system as well as `theme.css`). **The scratch-directory class is closed rather than reduced**: [ART-164](ISSUES.md) fixed `core::iso`, [ART-173](ISSUES.md) fixed `core::cbm` and `core::detect` (4 failures in 40 runs, two different tests, one failing with the *other* test's 1000-byte fixture), and a sweep then took every remaining test scratch helper in the crate - 70 keyed on the process id, then 26 more keyed on `as_nanos()` **alone**, which is the worse shape since two threads can share a nanosecond but not a pid. The first sweep script reported a clean zero while blind to those 26; the widened one (`scripts/scratch-counter-sweep.py`) is the reason that number means anything. It reports **one** site "needing a counter" and that one is a **false positive**: the helper in `commands/osinstall.rs::staging_is_removed_however_the_preview_ends` keys on the thread id rather than a counter ([ART-182](ISSUES.md#fixed)'s own fix), which is unique within the process and which the sweep does not recognise ([ART-235](ISSUES.md)). **The `art-firstboot` branch's own numbers, not `main`'s, measured 2026-09-07 at the end of round 5's phases 1–2 (Task 12), run twice per this same rule**: `cargo test --lib -- --skip artwork` — `test result: ok. 2945 passed; 0 failed; 51 ignored; 0 measured; 89 filtered out` both times (40.51s, then 38.79s); `pnpm test` — `Test Files 87 passed (87)`, `Tests 1173 passed (1173)`. ART-261's caveat still applies: `--skip artwork` is the only honest number until the antivirus exclusions land, and both runs did print a `test result:` line rather than dying silently. **Re-measured after the whole-branch review's fix wave** (`.superpowers/sdd/2026-09-07-firstboot-phase-1-2/final-review.md`, same day): `cargo test --lib -- --skip artwork` — `test result: ok. 2948 passed; 0 failed; 51 ignored; 0 measured; 89 filtered out` both times (37.00s, then 39.05s; +3 over Task 12's count — I1's two unformatted-partition tests and M1's `Rename`-refusal test); `pnpm test` — `Test Files 87 passed (87)`, `Tests 1178 passed (1178)` (+5 — `FirstBootPanel.test.tsx` gained C1's discard-claim test and I3's stale-rehearsal test; `FirstBootReportPanel.test.tsx` gained I4's power-mode `rc=` case and its beginner-mode unknown-lines case; `phrase-keys.test.ts` gained the beginner refusal variant). **`art-firstboot` was merged to `main` as `1cb5ce1` on 2026-09-07 and re-measured on the merged tree the same hour**: `cargo test --lib -- --skip artwork` — `test result: ok. 2948 passed; 0 failed; 51 ignored; 0 measured; 89 filtered out; finished in 35.35s`; `pnpm test` — `Test Files 87 passed (87)`, `Tests 1178 passed (1178)`; lint, fmt, clippy and the control-byte sweep clean. These are `main`'s numbers now |
-| **Round 2 (`art-drawer-icons`), merged into `main` as `722a8c5`** | **Re-measured 2026-09-06 by the final whole-branch review's fix wave.** **2918 Rust passed, 0 failed, 49 ignored** (run twice — 18.95 s and 20.22 s); **1050 frontend tests**, 82 files. `pnpm lint` clean, `cargo fmt --check` OK, `clippy --all-targets -- -D warnings` clean. Sweeps: control-byte clean, scratch-root clean, contrast **113/113** both themes, scratch-counter reports the same one known false positive as `main` ([ART-235](ISSUES.md)). i18n: **2009** leaf keys each file, up from 2005 at the branch's start (item 7's own count) — the fix wave's own `appearance.done.nothingWritten` key (C7) is the last one of that count. Branch totals (`git diff --shortstat main...art-drawer-icons`, taken with this fix wave's own changes staged for commit): **19 commits, 25 files changed, 5 649 insertions, 136 deletions**. These numbers were the branch's when measured; it merged on 2026-09-06, so `main` carries them now and the row above is the same tree. **Of the three real-material hooks this round needed, two ran clean and one could not be measured.** The AmigaOS 3.2.2 layered build and the AmigaOS 3.9 base build both completed with `refusals=[]`, so this round's own sibling-icon feature is measured clean against two of the three releases. `build_the_real_39_language_components_when_asked` (ART-159's own hook) died mid-run four attempts in four — exit 0, no `test result:` line — which the antivirus finding above explains; it is not evidence against this round's own change and it is not evidence for it either, since the hook never finished |
-| **Round 4 of the Emu68 Hatcher intake, merged to `main` as `800fdc0`** | **ART can now say what an install disk is, by content hash, additively to the volume name it already reads — a miss says nothing and takes nothing away.** Six tasks, off `main` at `35c3097` (after the refusal-evidence merge): `core/hashing.rs` gained MD5 (Task 1 — its own module doc had claimed MD5 already existed and never had; `md-5 0.10.6` was already compiled into every build as a transitive `sqlx` dependency, now a direct, documented one); `core/osinstall/mediahash.rs` loads the 186-row `media_hashes.json` adopted from `rootrootde/emu68hatcher` (MIT) and looks a hash up case-insensitively (Task 2); `scripts/media-table-check.py` and an `#[ignore]`d Rust twin check the table against real media, read-only (Task 3); `osinstall_identify_media` is a job with progress and cancellation, caching each hash against the `MediaIdentity` `scan_cache.rs` already keys on (Task 4); the screen keeps five endings distinct — matched-and-confirmed, matched-but-unconfirmed, not in the table, unreadable, not yet hashed — and ART ships its own `media_hashes_confirmed.json`, generated by `scripts/media-table-check.py --emit-confirmed` from a real run rather than hand-edited (Task 5). **The round's own design was reversed by a measurement, and that is what a future reader should meet here first**: `core/osinstall/identify.rs` carried a recorded refusal calling a 186-row hash table "one ART could not verify", and the Emu68 Hatcher teardown had concluded "take the idea, generate the table" — before designing, the owner's own 35 AmigaOS 3.2 ADFs were hashed and looked up, and **35 of 35 matched**, to the right name and the right publisher, zero misses. Generating ART's own table would have covered only those 35 rows and discarded the other 151; carrying Hatcher's table and **saying which rows this machine has confirmed** is what shipped. **A second measured trap, worth repeating so nobody rebuilds it**: a row's `volume` field is *not* the disk's AmigaDOS volume name — `Backdrops3_2`, `LocaleDE3_2`, `DiskDoctor3_2` in the table against `Backdrops3.2`, `Locale-DE`, `DiskDoctor` on the disks themselves, measured **0 of 12** — so no sentence anywhere in this round compares the two; had Task 3 cross-checked them, all 35 of the owner's good disks would have reported in conflict instead of confirmed. **Measured at the end of Task 5**: `pnpm test` **1106** passed across **82** files; `cargo test --lib -- --skip artwork` `test result: ok. 2877 passed; 0 failed; 50 ignored; 0 measured; 89 filtered out`; i18n **2012 → 2021** leaf keys each catalogue (nine `osinstall.mediaId.*` keys, both files in sync); `scripts/media-table-check.py` against the owner's own media, **35 verified / 151 unverified / 0 conflicting**, the Rust twin agreeing; the table itself **186 rows, 186 distinct MD5s**, and the confirmation file's 35 entries are all rows of the table (0 orphans, verified); `pnpm lint` exit 0 unpiped, `cargo fmt --check`, `clippy --all-targets -- -D warnings`, and the control-byte, scratch-root and contrast (113/113, both themes) sweeps all clean. **No honest full-suite number exists on this machine right now**: [ART-261](ISSUES.md) is open again, found by this round's Task 1, closed the same day on numbers taken while the scanner was off, and reopened hours later when Task 4 hit the identical symptom with the scanner back on — every Rust count in this round from Task 1 onward is the `--skip artwork` one, labelled as such rather than quoted as a full run. Design and plan: `docs/superpowers/specs/2026-09-06-media-identification-by-hash-design.md`, `docs/superpowers/plans/2026-09-06-media-identification-by-hash.md`. **Fix wave 1 of the whole-branch review has since landed on the same branch** (ART-262..ART-265): the module doc that still denied the round, a stopped pass reported as a failure, one bad folder discarding the folders already identified, and two checks that passed with 0 verified. Re-measured after it: `pnpm test` **1113** / 82 files, `cargo test --lib -- --skip artwork` **2877 passed, 0 failed, 50 ignored**, i18n **2026** leaf keys each. Four Minors from that review remain unfixed, by design, for a second wave |
-| **Clippy** | clean at `-D warnings` |
-| **TypeScript** | clean |
-| **Kickstart table** | 154 dumps, generated from amitools' Remus split database and verified against it on every CI run (`scripts/rom-table-check.py`, ART-104). 24 of the user's own collection now named *with their machine*, including the two 40.68 builds told apart; ART's previous ten hand-listed hashes matched none of them. **Licensed Amiga Forever ROMs are first-class input** (ART-128): decoded with the `rom.key` beside them and then identified like any dump, and refused for a card build when the key is absent — they used to reach the boot partition still encrypted, which no Amiga could start |
-| **amitools oracle** | 53 checks, both directions — now including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
-| **7-Zip FAT32 oracle** | the card's boot partition, written by ART and read by 7-Zip: filesystem type, geometry, label, names and every file's bytes (`scripts/fat-oracle-check.py`) |
-| **7-Zip disc oracle** | 4 fixtures — Joliet, ISO9660-only, raw Mode 1, raw Mode 2/XA — names, sizes and every file's SHA-256 |
-| **hst-imager PFS3 oracle** | both directions, local only (`scripts/pfs3-oracle-check.py`, no `hst.imager.exe` in CI): ART writes a volume through `NativeFormatter` and `hst-imager fs dir -r` reads it back — names, sizes, and every protection-bit string, `hsparwed` cased as `hst-imager` spells it; `hst-imager` formats and fills a volume and ART reads it back through `libpfs3`, SHA-256 per file rather than a length (ART-079's exact shape) plus the same protection strings |
-| **ILBM oracle / prefs oracle** | on `main` since item 7 merged (`bf5bbe7`, 2026-09-06). `scripts/ilbm-oracle-check.py` (ART writes, ffmpeg reads, every pixel compared) agrees with ffmpeg on **8 of 8** ILBM fixtures, every pixel compared; an `#[ignore]`d `ART_PREFS_DIR` hook against the owner's own AmigaOS 3.9 material found 24 `.prefs` files, of which **15 genuine `FORM PREF` containers round-trip byte-for-byte with 0 failures** through `replace_bodies(&[])`, the real rebuilder (9 are third-party non-IFF formats, reported apart) |
-| **Icon oracle** | merged to `main` in `722a8c5` — see the round-2 row above. `scripts/icon-oracle-check.py` round-trips real `.info` files through `core/amigaicon`'s reader **and its four writers** (`set_position`, `set_tooltypes`, `set_show_all_files`, and `rendered_size`'s never-smaller-than-`Gadget` invariant), against the owner's own AmigaOS 3.9 material: `checked=798 failed=0 no_drawer_data2=0 lossy_tooltypes=69` — up from round 1's 485-icon, reader-only corpus. Earned its place on its first real run: found [ART-249](ISSUES.md#fixed), a writer offset landing inside the wrong struct, that no unit test could see because the reader and the writer shared the identical wrong constant. The 69 `lossy_tooltypes` icons are counted apart, never folded into `failed` — checked for text identity only, not byte identity ([ART-250](ISSUES.md)) |
+| **Last updated** | 2026-09-07 — round 5 of the Emu68 Hatcher intake (first boot on the Amiga, phases 1–2) merged to `main` as `1cb5ce1` and pushed. Per-round detail is the [session log](session-log.md) |
+| **Version** | **0.9.0**, released 2026-09-04. The number lives in three files (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`) and `release.yml` refuses a tag that disagrees with them. Deliberately not 1.0: the bar is a card ART built, flashed and booting a real A500 — not a bigger feature count |
+| **`main` / `origin`** | Identical at `32651c9`, pushed 2026-09-07 (`git rev-parse main origin/main`; the push was `722a8c5..32651c9`). No live phase branch. CI run 34116056492 on that commit was still `in_progress` when this was written — **result not yet recorded** |
+| **Tests — Rust** | `cd src-tauri && cargo test --lib -- --skip artwork` on the merged `main`, 2026-09-07: `test result: ok. 2948 passed; 0 failed; 51 ignored; 0 measured; 89 filtered out; finished in 35.35s`. **`--skip artwork` is the only honest number here** until [ART-261](ISSUES.md)'s antivirus exclusions land — a full `cargo test --lib` dies mid-run with exit 0 and no summary. **Quote the `test result:` line, never the exit code**, and run the suite twice before merging ([ART-059](ISSUES.md#fixed)). The 51 ignored are the real-material hooks, env-gated and run by hand — command lines below |
+| **Tests — frontend** | `pnpm test` on the merged `main`, 2026-09-07: `Test Files 87 passed (87)`, `Tests 1178 passed (1178)` |
+| **Lint, format, clippy** | Clean on the merged `main`, 2026-09-07: `pnpm lint` (run unpiped — a pipe reports `tail`'s status, not `tsc`'s), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` |
+| **Sweeps** | Re-run 2026-09-07 on the merged `main`, all clean: `scripts/control-byte-sweep.py`, `scripts/scratch-root-sweep.py`, `scripts/contrast-check.py --quiet` (**113/113** pairs, both themes). `scripts/scratch-counter-sweep.py`, same day: `already had a counter: 24`, `needing a counter: 1` — and that one is a known false positive, a helper keyed on the thread id ([ART-235](ISSUES.md)) |
+| **Build** | The last full `pnpm tauri build` was the 0.9.0 bundle, 2026-09-04 (5m 47s) — `Amiga Retro Toolkit_0.9.0_x64_en-US.msi` and `_x64-setup.exe`, **not code-signed**, which the README says rather than leaving to SmartScreen. Not re-run since |
+| **i18n** | `src/i18n/en.json` and `tr.json`: **2078** leaf keys each, counted 2026-09-07 on the merged `main`. Parity — key sets, empty values, interpolation variables — is enforced by `pnpm test`, so count them rather than quoting this |
+| **Open defects** | **19**, newest [ART-274](ISSUES.md), counted 2026-09-07 with `awk '/^## Open/{f=1} /^## Fixed/{f=0} f' docs/ISSUES.md \| grep -c '^\*\*ART-'` |
+| **Feature rows** | **216 marked rows** in [FEATURES.md](FEATURES.md) — **159 green, 26 amber, 21 not started, 6 stubs, 4 deferred to v2** — counted 2026-09-07, one marker per table row, taken from the first cell in that row that is exactly a State marker. **State the method with the number**: counting marker *cells* instead gives a different figure, and an earlier count of "233 rows" left behind no method and cannot now be reproduced |
+| **amitools oracle** | 53 checks, both directions (`scripts/oracle-check.py`, blocking in CI) — including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
+| **Kickstart table** | 154 dumps (`core/rom/remus.rs::REMUS_ROMS`, counted 2026-09-07), generated from amitools' Remus split database and re-verified against it on every CI run (`scripts/rom-table-check.py`, [ART-104](ISSUES.md#fixed)). Licensed Amiga Forever ROMs are first-class input ([ART-128](ISSUES.md#fixed)): decoded with the `rom.key` beside them, then identified like any dump |
+| **Install-media table** | 186 rows, 186 distinct MD5s, adopted from `rootrootde/emu68hatcher` (MIT). `scripts/media-table-check.py` against the owner's own AmigaOS 3.2 ADFs, 2026-09-06: **35 verified, 151 unverified, 0 conflicting**; the Rust twin agrees. Both fail when a directory verifies nothing ([ART-265](ISSUES.md#fixed)) |
+| **7-Zip oracles** | The card's FAT32 boot partition read back by 7-Zip — type, geometry, label, names and every file's bytes (`scripts/fat-oracle-check.py`); and 4 disc fixtures — Joliet, ISO9660-only, raw Mode 1, raw Mode 2/XA — names, sizes, SHA-256 per file (`scripts/iso-oracle-check.py`). Neither in CI |
+| **hst-imager PFS3 oracle** | Both directions, local only (`scripts/pfs3-oracle-check.py`): ART writes a volume through `NativeFormatter` and `hst-imager fs dir -r` reads it back; `hst-imager` formats and fills one and ART reads it back through `libpfs3`, SHA-256 per file plus protection strings |
+| **ILBM / prefs oracle** | `scripts/ilbm-oracle-check.py` — ffmpeg agrees with ART's ByteRun1 encoder pixel-for-pixel on **8 of 8** fixtures. Against the owner's own AmigaOS 3.9 material, **15 of 24** `.prefs` files are genuine `FORM PREF` containers and all 15 round-trip byte-for-byte through the real rebuilder (`replace_bodies(&[])`); the other 9 are third-party non-IFF formats, reported apart |
+| **Icon oracle** | `scripts/icon-oracle-check.py` round-trips real `.info` files through `core/amigaicon`'s reader **and its four writers**, against the owner's own material: `checked=798 failed=0 no_drawer_data2=0 lossy_tooltypes=69`. Its first real run found [ART-249](ISSUES.md#fixed), a writer offset landing inside the wrong struct that no unit test could see. The 69 lossy ToolTypes icons are counted apart, never as passes ([ART-250](ISSUES.md)) |
 | **cargo-deny** | advisories, bans, licences, sources — all ok |
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
-| **i18n** | `en.json` and `tr.json` on `main`: **2026** leaf keys each, counted 2026-09-06 after the media-hash merge (`800fdc0`) — **2012** before it, after the refusal-evidence merge (`bd91942`) — **2009** before it, after the drawer-icons merge (`722a8c5`) — up from **2005** at item 7's merge (`bf5bbe7`), **1972** after the WHDLoad-drawer round, 1958 earlier that same day, 1916 before the layered-release round. On the unmerged `art-refusal-evidence` branch: **2012**, up from `main`'s 2009 — the three `osinstall.evidence.*` keys. The 2008 this row carried for the drawer-icons branch was wrong and contradicted the branch row's own 2009; both were re-counted rather than reconciled. On the unmerged `art-media-hash` branch (built on top of `main`'s 2012, after the refusal-evidence merge): **2026** after fix wave 1, up from **2021** at the round's own end — nine `osinstall.mediaId.*` keys from the round plus five more from ART-263/ART-264 (`cancelled` and the four per-folder results), both catalogues in sync. Count them, do not quote this; parity enforced by `pnpm test`. **On `art-firstboot` (round 5, first-boot phases 1–2; merged to `main` as `1cb5ce1` on 2026-09-07)**: **2076** leaf keys each catalogue, counted 2026-09-07 at Task 12 — up from 2026 at the branch's start; growth came from Task 9's OS Builder step and Task 11's card-report `source` keys. **After the whole-branch review's fix wave, same day: 2078** — C1's `firstboot.panel.copyDiscarded` and I4's `firstboot.step.refusedPlain`, both catalogues, both counted by `pnpm test` rather than quoted here. **2078 is `main`'s count after the merge**, re-counted on the merged tree |
-| **Release bundle** | rebuilt 2026-09-04 for 0.9.0 — `Amiga Retro Toolkit_0.9.0_x64_en-US.msi` and `_x64-setup.exe`, both produced by `pnpm tauri build` in 5m 47s. **Not code-signed**, which the README now says rather than leaving to SmartScreen |
-| **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later**. **[v0.9.0](https://github.com/tolon/Art/releases/tag/v0.9.0) is released, 2026-09-04**, with both installers attached (NSIS 5.1 MB, MSI 6.3 MB) — built by `release.yml` from the tagged commit, after CI went green on that same commit. The built `.exe` was launched and answered before the draft was published. Work lands on `sd-1` and merges to `main` at the phase's
-end; the licence *inventory* still said MIT until 2026-08-13, months after the
-licence itself changed |
-| **Real hardware** | **Bare metal, reached 2026-08-12** — `test/art-bootable-test.adf` booted a real **A500/A500+** (Kickstart 3.9) from a **Gotek**, to an AmigaDOS CLI. Photographed. Two ADFs had already mounted/booted under licensed Kickstart in WinUAE (Phase 1a). Still untouched: physical magnetic media — a Gotek is not a mechanical drive. **A hard disk joined the ADFs on 2026-08-16, in emulation**: a PFS3 volume ART formatted and filled booted a licensed Kickstart 3.1 to `hello from ART` at the `1>` prompt, and the full AmigaOS 3.2 tree booted a licensed V47 A1200 ROM to a clean Workbench. No card or hard disk ART built has reached real hardware |
-| **Seen on a screen** | **The Files screen, at last** — opened, driven and screenshotted on 2026-08-12, along with the ADF, hard-disk, PiStorm, WHDLoad and Settings screens. It cost immediately: [ART-082](ISSUES.md) (the listings were capped at 420 px inside panes that filled the window) had shipped green behind 178 tests. Four more findings came out of the same session — ART-083 … ART-086. `ART-062` narrows to the screens still unopened (Aminet, Collection, Gotek, ROM, WinUAE, Tools) |
+| **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later**. [v0.9.0](https://github.com/tolon/Art/releases/tag/v0.9.0) is released with both installers attached (NSIS 5.1 MB, MSI 6.3 MB), built by `release.yml` from the tagged commit after CI went green on it. The built `.exe` was launched and answered before the draft was published |
+| **Real hardware** | **Bare metal, 2026-08-12**: `test/art-bootable-test.adf` booted a real **A500/A500+** (Kickstart 3.9) from a **Gotek** to an AmigaDOS CLI. Photographed. In emulation, 2026-08-16: a PFS3 volume ART formatted and filled booted a licensed Kickstart 3.1 to `hello from ART`, and a full AmigaOS 3.2 tree ART built booted a licensed V47 A1200 ROM to a clean Workbench. **No card or hard disk ART built has reached real hardware**, and physical magnetic media is still untouched — a Gotek is not a mechanical drive |
+| **Seen on a screen** | The ADF, hard-disk, PiStorm, WHDLoad, Files and Settings screens have been opened and driven by a person (2026-08-12 onwards); the Collection's Play path ran real titles on 2026-08-18/21. **[ART-062](ISSUES.md)** narrows to the screens still unopened (Aminet, Collection, Gotek, ROM, WinUAE, Tools) and to the Turkish catalogue, of which a handful of strings out of 2078 have been read by someone who speaks it |
 
 Reproduce the numbers above:
 
 ```bash
-pnpm lint                                              # TypeScript
+pnpm lint                                              # TypeScript (run unpiped)
 pnpm test                                              # frontend unit tests (i18n parity, phrase keys)
 cd src-tauri && cargo fmt --check                      # formatting
 cd src-tauri && cargo clippy --all-targets -- -D warnings
-cd src-tauri && cargo test                             # unit + integration (twice — ART-059)
+cd src-tauri && cargo test --lib -- --skip artwork     # twice — ART-059; --skip artwork per ART-261
 pip install amitools && python scripts/oracle-check.py # independent cross-check
 python scripts/iso-oracle-check.py                     # the disc reader vs 7-Zip (needs 7z; not in CI)
 python scripts/fat-oracle-check.py                     # the card's boot partition vs 7-Zip (needs 7z; not in CI)
-python scripts/pfs3-oracle-check.py                     # PFS3, both directions, vs hst-imager (needs hst.imager.exe; not in CI)
+python scripts/pfs3-oracle-check.py                    # PFS3, both directions, vs hst-imager (needs hst.imager.exe; not in CI)
 python scripts/catalogue-check.py                      # every shipped bundle path vs Aminet itself (not in CI, it leaves the machine)
 python scripts/zoom-check.py                           # the shell's widths, in a real browser (needs `pnpm dev`)
 python scripts/osbuilder-strip-check.py                # the OS Builder's step strip: per kind, both languages,
                                                        #   three Application Sizes (needs `pnpm dev`)
-python scripts/contrast-check.py                       # every colour pair in both themes, against WCAG (in CI)
-python scripts/control-byte-sweep.py                   # no stray BEL/BS/VT/FF/ESC in tracked text
-                                                       #   (the heredoc trap; ART-216, in CI)
+python scripts/contrast-check.py --quiet               # every colour pair in both themes, against WCAG (in CI)
+python scripts/control-byte-sweep.py                   # no stray BEL/BS/VT/FF/ESC in tracked text (ART-216; in CI)
 python scripts/scratch-root-sweep.py                   # every production staging site goes through the chosen
                                                        #   scratch root, not %TEMP% (ART-196; in CI)
 python scripts/scratch-counter-sweep.py                # test scratch names unique *within one process*
                                                        #   (ART-059/164/173; not in CI — one known false
                                                        #   positive, ART-235)
-python scripts/rom-table-check.py                      # the Kickstart table vs amitools' Remus data
-                                                       #   (ART-104; in CI)
+python scripts/rom-table-check.py                      # the Kickstart table vs amitools' Remus data (ART-104; in CI)
 python scripts/vhd-oracle-check.py                     # the dynamic VHD writer vs Microsoft's Get-VHD
                                                        #   (needs the Hyper-V PowerShell module; not in CI)
+cd src-tauri && cargo deny check                       # licences and advisories
+pnpm tauri build                                       # full bundle (slow)
+```
 
-# Task 14's real run — the user's own media, not a fixture. `#[ignore]`d
-# (unlike the two pfs3-oracle hooks above them in the same file, which are
-# only env-gated); skipped cleanly with the vars unset. Needs
-# E:\amiga\Amigatolon (the user's own material) and E:\amiga\ProjeART
-# (scratch) to exist.
+**The `#[ignore]`d hooks are the other half**, and they are where ART meets
+material nobody here wrote. `cargo test -- --ignored` lists them; each is
+env-gated on the owner's own disks and none is in CI.
+
+```bash
+# The OS-install engine against the owner's own AmigaOS 3.2 ADFs.
 cd src-tauri && ART_OSINSTALL_MEDIA="E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF" \
   ART_OSINSTALL_ROM="E:\amiga\Amigatolon\kickstart\Kickstart v3.1 rev 40.68 (1993)(Commodore)(A1200).rom" \
   ART_OSINSTALL_DEST="E:\amiga\ProjeART\dist-3.2" \
   cargo test run_the_real_engine_against_the_users_own_media_when_asked -- --nocapture --ignored
 
-# The second hook only puts a tree onto a card — it does not build one. Point
-# it at dist-3.2 above and it reproduces the ART-113 failure exactly (see
-# that entry). The reduced "witness" tree it built successfully against
-# (dist-3.2 with every non-ASCII-named entry's subtree removed by hand) was
-# a one-off Python pass, not a committed script, so the 969/106-file
-# exclusion count and the 3059/3061 hash-match figure in ART-113/ART-114 are
-# this session's own measurement, not something this block can regenerate.
+# Puts an existing tree onto a card; it does not build one. Point it at
+# dist-3.2 above and it reproduces ART-113's non-ASCII PFS3 refusal exactly.
 cd src-tauri && ART_OSINSTALL_DEST="E:\amiga\ProjeART\dist-3.2-witness" \
   ART_CARD_OUT="E:\amiga\ProjeART\dist-3.2-witness-card.hdf" \
   cargo test build_the_real_dist_tree_onto_a_card_when_asked -- --nocapture --ignored
 
-# The third hook is the one that carries the **whole** tree through the path
-# the product actually runs — `run_with_fallback`, native first — rather than
-# calling one formatter directly like the two above. It is what re-measured
-# ART-113's gap on 2026-08-16 and what found ART-122; it prints the source
-# tree's own counts beside the copy's, so the two can be compared without a
-# separate pass. `ART_HST` is optional: without it the run measures the
-# native path alone and ends on the refusal a user with no hst-imager would
-# see. Delete the output image first — SAFE_CREATE refuses an existing one.
+# The only one that carries the whole tree through the path the product
+# actually runs — `run_with_fallback`, native first. `ART_HST` is optional:
+# without it the run measures the native path alone and ends on the refusal a
+# user with no hst-imager would see. Delete the output image first; SAFE_CREATE
+# refuses an existing one.
 cd src-tauri && ART_OSINSTALL_DEST="E:\amiga\ProjeART\dist-3.2" \
   ART_CARD_OUT="E:\amiga\ProjeART\dist-3.2-fallback.hdf" \
   ART_PFS3="E:\amiga\Amigatolon\hstimager\pfs3aio" \
   ART_HST="E:\amiga\Amigatolon\hstimager\hst.imager.exe" \
   cargo test carry_the_real_dist_tree_through_the_fallback_path_when_asked -- --nocapture --ignored
+
 # ART-159's two language components, against the disc they were read off.
-# `#[ignore]`d; needs the owner's own AmigaOS39.iso and an empty destination.
-# Died mid-run four times in the drawer-icons round (2026-09-06) -- exit 0,
-# no `test result:` line, always at 561 of 2391 files -- and ISSUES.md's
-# ART-159 entry now names the cause: the machine's antivirus reacting to
-# `art_lib` itself, not this recipe. Before trusting a re-run, exclude
-# src-tauri\target\ and D:\tmp\art-tests\ from the scanner; nobody has done
-# that yet, so a clean run here is still owed rather than already had.
+# Died mid-run four times in four on 2026-09-06 — exit 0, no `test result:`
+# line, always at 561 of 2391 files. ART-261 names the cause (the scanner
+# reacting to `art_lib`), so a clean run here is still owed rather than had:
+# exclude src-tauri\target\ and D:\tmp\art-tests\ from the scanner first.
 cd src-tauri && ART_159_ISO="E:\amiga\Amigatolon\iso\AmigaOS39.iso" \
   ART_159_DEST="E:\amiga\ProjeART\art159-tree" \
   cargo test --release build_the_real_39_language_components_when_asked -- --nocapture --ignored
 
-# The layered-release round's two hooks (2026-09-05). The first builds
-# AmigaOS 3.2.2 from the owner's own base and update media and then **asks the
-# tree what it is**: `Prefs/Env-Archive/Versions/Release` is written by the
-# release itself, so the claim comes from a file Hyperion wrote rather than
-# from ART's own dropdown. Measured on that run: 4 052 files, 295 drawers,
-# 20 667 671 bytes, and the tree says `Release 3.2.2`. The ROM matters --
-# `kicka1200.rom` is 47.96, whose exec is 47.7 and whose strap is 45.1, so
-# both update Modules components switch on and the base's own stays off.
-# Delete the destination first; SAFE_CREATE refuses one that exists. The
-# update folder is whatever you extracted `Update3.2.2.lha`'s ADFs into --
-# ART reads that archive nowhere, so unpack it yourself.
+# Builds AmigaOS 3.2.2 from the owner's own base and update media and then
+# **asks the tree what it is** — `Prefs/Env-Archive/Versions/Release` is
+# written by the release, so the claim comes from a file Hyperion wrote rather
+# than from ART's own dropdown. Measured 2026-09-05: 4 052 files, 295 drawers,
+# 20 667 671 bytes, and the tree says `Release 3.2.2`. The ROM matters —
+# `kicka1200.rom` is 47.96, so both update Modules components switch on and the
+# base's own stays off. Unpack `Update3.2.2.lha` yourself; ART never reads it.
 cd src-tauri && ART_322_BASE="E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF" \
   ART_322_UPDATE="E:\amiga\ProjeART\layer-research\Update3.2.2\ADFs" \
   ART_322_ROM="E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ROM\kicka1200.rom" \
@@ -137,1325 +130,129 @@ cd src-tauri && ART_322_BASE="E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF" 
   cargo test build_the_real_322_tree_when_asked -- --nocapture --ignored
 
 # The icon oracle's Rust half. `scripts/icon-oracle-check.py` extracts the
-# `.info` files and drives this; run it directly only when debugging that
-# script. 485 icons off the owner's own 35 AmigaOS 3.2 ADFs, 0 failures --
-# 183 exercise the byte-identical merge, and the 302 that carry no ToolTypes
-# block are counted separately rather than as passes.
+# `.info` files and drives this; run it directly only when debugging that script.
 cd src-tauri && ART_ICON_DIR="<a folder of extracted .info files>" \
   cargo test round_trip_every_icon_in_a_folder_when_asked -- --nocapture --ignored
 
-# The install-media hash table's outside check (§4.2 of the 2026-09-06
-# media-identification-by-hash round, task 3) -- the sibling of
-# rom-table-check.py, for the 186-row table adopted from Emu68 Hatcher.
-# Hashes every .adf/.iso/.lha under a directory and reports per row:
-# verified (a file here matches it), unverified (no file here does -- expected
-# for most rows, never a failure) and conflicting (something matched but
-# disagrees). Read-only: only ever opens a file to hash it. Not in CI --
-# needs media ART must never ship. Standing measurement (2026-09-06), against
-# the owner's own AmigaOS 3.2 ADFs: 35 verified, 151 unverified, 0 conflicting
-# -- every one of the 35 matched, to the right name and the right source
-# (Hyperion (3.2 base)), zero misses.
-#
-# Since fix wave 1 (ART-265) this is a check rather than a report: it FAILS
-# when a directory verifies nothing (rom-table-check.py --scan's own
-# condition), and --expect-verified N holds it to a number the CALLER states.
-# 35 is never hardcoded -- it is this machine's measurement against this
-# machine's disks, and a user with a 3.1 set must not meet a failing check.
+# The install-media hash table's outside check — rom-table-check.py's sibling.
+# Read-only: it only ever opens a file to hash it. `--expect-verified N` holds
+# it to a number the CALLER states; 35 is this machine's measurement against
+# this machine's disks and is deliberately never hardcoded, because a user with
+# a 3.1 set must not meet a failing check.
 python scripts/media-table-check.py "E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF" \
   --expect-verified 35
 
 # The same run, rewriting ART's own record of which rows this machine has
-# confirmed (task 5) -- core/osinstall/media_hashes_confirmed.json, the file
-# the screen's "checked against a real disk here" sentence reads. Re-derivable
-# from a real run, not hand-edited; `--against` is the sentence the screen
-# shows, so word it as a claim ART will put on screen. Committed 2026-09-06
-# with 35 entries, all 35 rows of the table (0 orphans).
+# confirmed — core/osinstall/media_hashes_confirmed.json, which the screen's
+# "checked against a real disk here" sentence reads. `--against` is that
+# sentence, so word it as a claim ART will put on screen. It appends rather
+# than replacing (ART-267).
 python scripts/media-table-check.py "E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF" \
   --emit-confirmed --against "the ART author's own AmigaOS 3.2 install set, 35 ADFs"
 
-# The Rust half of the same check -- the same lookup through core's own
-# row_for/rows rather than the script's independent re-implementation, the
-# pattern round_trip_every_icon_in_a_folder_when_asked established. Same
-# directory, same result: checked=35 not_in_table=0 verified=35
-# unverified=151 conflicting=0. Fails when nothing verifies (ART-265), and
-# ART_MEDIA_EXPECT_VERIFIED holds it to the caller's own number.
+# The Rust twin of the same check, through core's own row_for/rows rather than
+# the script's independent re-implementation.
 cd src-tauri && ART_MEDIA_DIR="E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF" \
   ART_MEDIA_EXPECT_VERIFIED=35 \
   cargo test every_real_disk_in_a_folder_is_looked_up_through_cores_own_code_when_asked -- --nocapture --ignored
 
-# The first-boot round's own hook (`art-firstboot`, phases 1-2, 2026-09-07) --
-# the only test in ART that opens WinUAE against the owner's own first-boot
-# tree. `#[ignore]`d; needs a tree that already carries first boot written
-# into it (`firstboot_write`), a real Kickstart ROM and a real WinUAE
-# install. Never touches the tree it is pointed at -- `stage_with` copies it,
-# the first-boot files are written into the copy, and the copy is what boots;
-# a failure keeps the copy and prints where it is. Exactly the command line
-# in the test's own doc comment (`commands::firstboot::tests::rehearse_the_real_tree_when_asked`).
+# The only test in ART that opens WinUAE against a real first-boot tree. Never
+# touches the tree it is pointed at — `stage_with` copies it, first boot is
+# written into the copy, and the copy is what boots; a failure keeps the copy
+# and prints where it is.
 cd src-tauri && ART_FIRSTBOOT_TREE=E:/amiga/ProjeART/art205-32 \
   ART_FIRSTBOOT_ROM="E:/amiga/Amigatolon/paketler/3.2/AmigaOs 3.2/ROM/kicka1200.rom" \
   ART_WINUAE="C:/Program Files/WinUAE/winuae64.exe" \
   cargo test rehearse_the_real_tree_when_asked -- --ignored --nocapture
 
-cd src-tauri && cargo deny check                       # licences and advisories
-pnpm tauri build                                       # full bundle (slow)
+# The real Aminet — every shipped mirror asked separately, because failover
+# stops at the first that answers and a dead one in position two is invisible
+# in an ordinary sync. Leaves the machine; never in CI.
+cd src-tauri && cargo test live_aminet -- --ignored --nocapture
 ```
-
-A claim in this file is only valid if the command that proves it was actually
-run. Do not carry a PASS forward on faith.
-
----
-
-## Where ART sits, and the ceiling that comes with it (2026-08-19)
-
-**This is the most useful thing a future session could know before planning
-more content work**, and it came from external research the owner asked for
-after the content-layer round met his own packages and could not place two of
-the three.
-
-**Every established Amiga distribution builder runs the install inside an
-emulator.** HstWB Installer, AmiKit, AmigaSYS and ClassicWB all do this, using
-the user's own OS files; HstWB's own README says so outright — *"HstWB
-Installer uses WinUAE or FS-UAE emulator to run the installation process"* —
-with its logic in AmigaDOS scripts and 68000 binaries. That is *how* they
-install BoingBags. They do not decrypt anything: they run the package's own
-`Updater` where the password already lives.
-
-**ART is not in that family.** `amitools`'s `xdftool` does what ART does —
-host-side placement plus a metadata sidecar (`.xdfmeta`, ART's `.uaem`) — so
-ART sits in the **tooling** family, and the distributions sit in another. The
-walls this round kept hitting are that family's ceiling, not defects in the
-round's own work:
-
-- **[ART-166](ISSUES.md)** — a BoingBag's payload is password-encrypted and
-  the password lives in an Amiga executable. A host-side placer cannot read
-  it. A builder that boots an Amiga does not need to.
-- **[ART-168](ISSUES.md)** — Cloanto's own knowledge base (RetroPlatform KB
-  19-106) names this by description: for *directory-based* distributions,
-  filenames with characters above 128 "as used in Amiga locale names" are a
-  known problem, and AmiKit's solution is to carry those files in an LhA and
-  extract them **on the Amiga**.
-
-**The owner's decision, taken the same day and recorded so it is not
-re-litigated by accident:** do **not** force the host side, and **no bypass of
-the BoingBag password will be written.** The content layer's host-side work
-stands — archive media, nested media, the collision preview, the two entry
-points, the screen. An **Amiga-side install step becomes its own round**, and
-it is cheaper than it sounds: `core/winuae::launch_winuae` already exists, and
-what is missing is running it unattended and reading the result back. Nothing
-about it is scheduled for next week; it is a round, not a patch.
-
-**The round's own closing bar was not met, and was substituted — said here
-because being silent about it is the part that would be wrong.** The content
-layer's design spec §7 set the bar as *"a 3.9 tree with BoingBag 2 applied
-reports a different Workbench version than a base one; booting it under
-WinUAE … is what closes this round. A tree that builds and does not boot is
-not a distribution."* No BoingBag file ever reached a tree (ART-166), so what
-actually closed the round was the **3.9 overlay** boot — `Kickstart 40.68,
-Workbench 45.1 (13-Nov-00)`, measured from the running system. That is a
-different result, reached by the same method, and a good one. Nothing in the
-record ever claimed a BoingBag booted; what was missing until the final
-whole-branch review (m3) was the sentence saying the bar moved, and where it
-moved to: the Amiga-side round above.
-
-Two of the spec's §8 hazards went unexercised for the same reason and are now
-**filed rather than merely absent** — [ART-171](ISSUES.md) (`WBStartup` and
-`Devs` arriving on a tree for the first time) and [ART-172](ISSUES.md) (a
-language pack colliding with the base `Locale`). The second is the one worth
-remembering: the Türkçe run reported **0 rows of every collision class**,
-which reads like "no collisions" and was in fact ART-168 comparing against a
-drawer name nothing had ever written. The cleanest number the round produced
-was measuring the wrong thing.
-
-**And the lesson that cost the most to learn, which points the same way.**
-`Libs/WORKBENCH.LIBRARY` carries no `$VER:` marker, so the 3.9 overlay's
-replacement of it (193,400 → 199,852 bytes) landed in the `Unversioned`
-bucket — while being the single change that turns `Workbench 44.5` into
-`Workbench 45.1`. **The boot proved the decisive change and the collision
-classifier could not.** Generalised: if the library carries no readable
-marker, other decisive files will not either, so **any future "did the update
-take?" check built on collision classes alone will be confidently wrong about
-the one file that matters.** Ask the running system its version; do not infer
-it from a copyright line, which is exactly the mistake that let a 3.5 tree be
-recorded as 3.9 for most of a day ([ART-169](ISSUES.md)). The method for the
-next boot check follows from it: let the tree boot normally and have it write
-`Version >SYS:version.txt FULL`, rather than interrupting `Startup-Sequence`
-to reach a shell — a healthy tree resists that by design, which is itself how
-the fix was confirmed.
-
----
-
-## Stage plan
-
-This supersedes the phase numbering in `roadmap.md` for scheduling purposes.
-`roadmap.md` still defines *what each phase contains*; this defines *what order
-the remaining work happens in and why*.
-
-### ✅ Stage 1 — Data safety (complete, 2026-08-09)
-
-Made it impossible for ART to quietly destroy user data.
-
-- `core/safety`: atomic writes, generational backups
-- ADF mutation pipeline: `read → mutate → validate → backup → commit`
-- Bounds-checked block access (a bad block number no longer aborts the app)
-- AmigaDOS hash compatibility fix
-- FF.CFG / PiStorm config round-trip (hand-tuned settings survive)
-
-Defects fixed: [ART-001 … ART-020](ISSUES.md#fixed).
-
-### ✅ Stage 2 — Workflow Engine (complete, 2026-08-09)
-
-Made the spec's central interaction real: *drop something → what can I do?*
-
-- `core/workflow/builtin.rs`: 22 registered workflows across ADF/LHA/HDF/ROM/folder
-- `Navigate` vs `Execute` split; `run_workflow` command refuses non-read-only actions
-- Dashboard renders the engine's plan instead of hard-coded buttons
-
-### ✅ Stage 3 — Systematic audit (complete, 2026-08-09)
-
-Audited every module with working logic. HDF/RDB held the worst of it: nine
-defects ([ART-021 … ART-029](ISSUES.md#fixed)), including three critical ones.
-
-- Hard disk images are now created **sparsely** — a 4 GB HDF no longer needs
-  4 GB of RAM, and `open_hdf` reads a header window instead of the whole file
-- Creating an image never replaces an existing one (HDF and ADF alike)
-- RDSK logical-drive fields written at their documented offsets, verified
-  against `amitools` — disks ART creates now describe their real capacity
-- Partition layouts that do not fit are refused instead of silently truncated
-- Folder scans are depth-limited and do not follow symlinks
-
-`core/analysis.rs` and `core/profile.rs` were reviewed and found sound. The
-remaining modules are stubs — building them is feature work, not audit work.
-
-### ✅ Stage 4 — Shared infrastructure (complete, 2026-08-09)
-
-Not polish — these were hard prerequisites for Stage 5, which both addenda name
-directly.
-
-| Item | Spec | Needed by |
-|---|---|---|
-| Operation Log + error IDs | §53, §68 | AI plan audit trail, `origin: ai-plan` (§45.5.8) |
-| Job Queue (background work, responsive UI) | §54, §55 | Aminet download/install queue (§41.5.6) |
-| Beginner / Power User mode | §47, §48 | Aminet mirror & cache UI (§41.5.6) |
-
-**Operation Log** — `core/oplog` records every operation that touched user data:
-what was done, where the backup went, whether verification passed, and on
-failure the error ID. Append-only JSON Lines, readable in Settings and
-exportable as text. `OperationOrigin::AiPlan` is already in the model so the AI
-layer has somewhere to declare itself from day one. Errors carry stable `ART-*`
-identifiers (§68).
-
-**Job Queue** — `core/jobs` gives platform-independent operations a
-`ProgressSink` to report through and a cancel flag to check; `commands/jobs.rs`
-runs them on background threads and forwards progress as throttled
-`job-progress` events. Collection scanning and LHA extraction are jobs now, with
-a global `JobBar` in the app shell so work started in one studio stays visible
-and stoppable from anywhere. Cancellation is checked only between whole units of
-work, so stopping never leaves a half-written file.
-
-**Beginner / Power User mode** — `usePowerMode()` drives what the UI shows. In
-Beginner mode the raw-data studios (Hex Tools, PiStorm), the Advanced action
-group and block-level numbers are hidden; nothing is disabled, and Settings
-explains what the switch changes.
-
-### ✅ Stage W — Writing into volumes (complete, 2026-08-09)
-
-The commander became a real file manager. `core/volume/write/` writes OFS, FFS
-and INTL at any geometry — multi-block bitmaps through `bm_pages[25]` and the
-extension chain, OFS data-block headers, extension chains for files past 72
-blocks, hash insert/remove/rename per volume.
-
-The decision the stage turns on: **a 2 GB image is not a big floppy.** An image
-of 16 MiB or less keeps the audited whole-file pipeline exactly as it was;
-anything larger is written in place under an undo journal
-(`core/volume/journal.rs`) that saves every block before touching it and is
-fsynced before the first image write. `Journalled::write_block` refuses any
-block it has not saved, which turns "remember to journal first" from a rule
-into a compile-time-shaped one. A journal found at mount blocks every write
-until the user decides, and rolling it back restores the image byte for byte —
-proved by a test that really kills the process at three points mid-write.
-
-Also landed: `.uaem` sidecars in WinUAE's format so protection bits and
-comments survive a trip through a filesystem that cannot hold them; F3–F9 on
-the keyboard and on a bar; checkout/checkin gated on SHA-256 so an editor that
-opens and closes a file cannot cause a write; `.info` pairing on rename and
-delete; and a pre-flight copy plan that reports blocks, name problems and
-collisions before anything is written.
-
-The oracle now runs **both ways**: ART writes and amitools reads, amitools
-writes and ART reads. Both halves are needed — a reader and a writer that agree
-with each other and with nothing else is exactly what ART-032 … ART-035 were.
-
-Still deliberately read-only: dircache volumes (a directory is stored twice),
-long-filename volumes, PFS3 and SFS, and any volume whose bitmap is marked
-invalid. Each is listed by name with the reason, never hidden.
-
-### ✅ §82 — One-click WHDLoad install (complete, 2026-08-09)
-
-The spec's first MVP success scenario, end to end:
-
-```text
-Game.lha → DROP → WHDLoad detected → Install to HDF → Backup → Apply → Verify
-```
-
-Every arrow but one already existed. The missing piece was working out **what
-inside the archive is the game**: a WHDLoad archive wraps the pack in a drawer
-and puts the drawer's `.info` *beside* it, not inside. Copy only the drawer and
-the icon is left behind — the game is then on the disk and **invisible on
-Workbench**, which is indistinguishable from a failed install.
-
-`core/whdload` is that analysis, and it is pure: it takes a list of names and
-returns where the pack is, what it is called, which file is the slave, where
-the icon is, and what in the archive is not part of the game (usually a
-readme, left behind and said so).
-
-The install refuses rather than guesses. Each refusal is a case where going
-ahead produces something that looks installed and does not work:
-
-| Refusal | Why |
-|---|---|
-| Low or unknown WHDLoad confidence | §14/§34: an uncertain detection is never acted on as fact |
-| The archive holds an `Install` script | The game is not installed yet, and running the script needs an Amiga |
-| A drawer of that name is already there | Writing a game over one that is already there is not a one-click decision |
-| It does not fit | With the real block numbers, before the disk is touched |
-| Names AmigaDOS cannot store | A slave looks for its files by name; renaming them gives a game that starts and finds nothing |
-| The archive did not unpack completely | Half a game is not a game |
-
-Backup, journalling and per-file verification all come from Stage W — the whole
-install runs in **one** volume session, so a floppy-sized image is backed up
-once rather than three times.
-
-### ✅ Phase 0a — Live bugs fixed, one filesystem writer (complete, 2026-08-10)
-
-Found live in the running app, not by audit: ADF Studio could not open a
-single real bootable disk, the shell clipped instead of scrolling, and a
-disabled button looked exactly like a live one.
-
-- **The shell scrolls and scales.** `min-height: 0` on `.app-main` and
-  `.app-content` so `overflow` actually engages, `@media` breakpoints that
-  collapse the sidebar and drop quick actions to two columns below a width,
-  and one central content width instead of eleven hand-written `maxWidth`
-  values (ART-039, ART-040).
-- **`:disabled` and `:focus-visible` styles exist.** A disabled primary button
-  used to keep its solid accent fill (ART-039).
-- **ADF Studio opens bootable disks.** The root block was being read out of
-  68000 boot code instead of computed from the volume's size — `core/adf`
-  predated the geometry Stage R gave `core/volume` and never adopted it. The
-  same root cause gave HD ADFs half their reported capacity (ART-037,
-  ART-038).
-- **A refusal is not an error.** "This is not a WHDLoad package" used to throw
-  the same red, `ART-*`-coded banner as a real failure; it now renders as an
-  amber `Refusal`, and a review pass on the same work confirmed real failures
-  (a corrupt archive, a permission error) still throw.
-- **Both install commands refuse atomically when a package will not fit**,
-  instead of discovering it mid-copy and reporting the rest as `skipped` — a
-  WHDLoad pack missing its `.slave` used to be a broken game with no warning
-  (ART-044).
-- **`MutationOutcome` is built from the write session's own still-open
-  device**, not a second file open after the fact — closing a race where an
-  external lock (antivirus scan-on-close, a search indexer) could turn a
-  durable, successful write into a reported failure and lose the backup path
-  with it (ART-045).
-- **`core/adf/mutate.rs` — the second AmigaDOS writer — is retired.** 858
-  lines that hardcoded DD floppy geometry throughout and could never write a
-  hard disk. ADF Studio and the file manager now share exactly one writer
-  (`core/volume/write`). Its five previously-fixed defects (ART-007, ART-008,
-  ART-011 … ART-013) moved with their tests rather than disappearing — none
-  reopened, all still pinned.
-- **Validation now measures every image against its own geometry**, not a DD
-  floppy, and the whole in-memory result is checked before a write commits,
-  not only the blocks the operation touched (ART-041, ART-042).
-
-Defects fixed: ART-037 … ART-040, ART-044, ART-045 (this phase's own),
-ART-041, ART-042 (found restoring the write pipeline's validation step). Left
-open: ART-043 (a partition inside a small image), and five findings recorded
-but not fixed — ART-046 … ART-050.
-
-**Left undone on purpose: the hardware verification rung.** A boot-test ADF
-(`.superpowers/sdd/2026-08-09-phase-0a-live-bugs/artifacts/task-10-boot-test.adf`,
-gitignored) was built by the changed write path and cross-checked with
-`xdftool` — `xdftool … list` reports the volume and the file it holds. No
-human has mounted it in WinUAE or on a Gotek yet. A pass is `DIR DF0:` listing
-`Readme`, `TYPE DF0:Readme` printing `hello from ART`, and `INFO DF0:`
-reporting volume `Work` with no errors. This image is **not bootable** — ART
-installs no boot code, only an RTS stub when the `bootable` flag is set — the
-claim under test is that a real Amiga mounts the volume and reads the file
-back, not that it boots.
-
-### ✅ Phase 0b — Dead code removed, interface speaks Turkish (complete, 2026-08-10)
-
-Two slices, eleven commits.
-
-**Dead code.** Nine code paths that were registered, typed and reached by
-nothing were deleted: Rust commands `adf_extract_to`, `panel_plan_folder_copy`,
-`volume_write_bytes`, `lha_extract_job`, `sources_get`, the helper
-`write_bytes_into`; TypeScript wrappers `adfExtractTo`, `panelPlanFolderCopy`,
-`volumeWriteBytes`, `sourcesGet`; and the `ComingLater` page (`common
-.comingLater`'s key now feeds the "Coming Later" badge that Dashboard used to
-hardcode). The plan named six; three more (`write_bytes_into`, `sources_get`,
-the `comingLater` badge) turned out dead once their last callers were gone and
-were removed in the same pass. Rust test count dropped from 687 to 683 as the
-four tests pinning the deleted paths went with them. `ART-047`, `ART-048` and
-`ART-051` — hygiene issues left over from Phase 0a — were closed alongside.
-
-**Turkish.** `tr.json` ships beside `en.json`, both at 814 leaf keys. All
-fourteen screens, every shared component, and the eight `src/lib` modules that
-used to build English sentences by hand (`sources.ts`, `whdload.ts`, …) now
-return a `Phrase { key, params? }` that the caller renders through `t()`. The
-language switcher shows each language in its own name (`English` / `Türkçe`).
-A parity test (`src/i18n/parity.test.ts`) fails the build if the two
-catalogues' key sets diverge, a value is empty, or an interpolation variable is
-dropped — this is also where `pnpm test` and vitest entered the project;
-before this phase there were no frontend tests at all. 10 frontend tests now
-pass alongside the 683 Rust ones.
-
-**The boundary, recorded rather than fixed:** `CoreError` and
-`WhdloadRefusal { reason, suggestion }` are English sentences written in
-`core/` and `commands/`, and they reach the UI unchanged regardless of the
-chosen language ([ART-060](ISSUES.md#fixed)) — `core/`'s independence rule means
-this needs a real design decision, not a quick fix. `formatAge`
-(`src/lib/sources.ts`) still renders "1 weeks ago" in English, a pre-existing
-defect task 7b reproduced faithfully rather than fixing mid-refactor
-([ART-061](ISSUES.md)). And no language has been checked on a running
-screen — every string was verified by the parity test and by reading, never by
-opening the app ([ART-062](ISSUES.md#open)); several Turkish strings are
-substantially longer than their English originals and sit in tight controls,
-listed in that issue so the check is possible.
-
-### ✅ Phase 1a — The Commander (complete, 2026-08-11)
-
-Planned as eight tasks, ran to 35 commits. The Files screen stopped being a
-plain two-pane copier and became the Norton/Total Commander the spec always
-called it: real selection, batch operations, sorting, a filter, and — outside
-the plan entirely — the first fix ART has ever needed to make a disk actually
-*boot*.
-
-**Selection and focus (Tasks 1–2).** Pane focus is now a real value
-(`focused: Side`), not derived from which pane happens to hold a selection,
-and Tab moves it. Selection became `Set<string>` per pane — Shift-click a
-range, Ctrl-click to toggle, Insert to mark-and-advance, Ctrl+A to select
-all — behind a pure, tested reducer (`src/lib/selection.ts`). This is also
-where frontend testing entered the project for real: Task 1 wrote the first
-`.test.tsx` (Vitest + jsdom, scoped to that extension) *before* touching a
-1600-line component with no prior coverage, specifically because focus and
-selection together touch nearly every handler in it.
-
-**Batch operations (Tasks 3–5).** `HostSelection` — a `CopySource` spanning
-several host roots, each keeping its own name at the destination — let batch
-copy and delete reuse the existing tested copy engine rather than growing a
-second one. `volume_plan_copy_many` / `volume_copy_in_many` /
-`volume_delete_many` give local→volume and delete their all-or-nothing
-guarantee: a cancelled batch copy commits nothing, a batch delete that can't
-fully succeed (a name that's gone, a directory that isn't empty) deletes
-nothing. Several `.lha` archives dropped on a disk at once each get their own
-drawer, staged into one write, so a cancelled multi-archive install can't
-leave two games half-installed. **Volume→volume multi-select and
-volume→local multi-select did not get the same treatment** — see ART-064 and
-ART-065 below; the roadmap named only local→volume and single-file
-volume→volume as in scope, and Task 8 confirmed no primitive exists to build
-the other two batched directions on top of.
-
-**One listing order, sorting, the filter, the restyle (Tasks 6–7, plus 6b and
-Attr, added).** There had been three different listing orders — local
-folders-first, ADF name-only, HDF not sorted at all — now one floor
-(folders first, case-insensitive name) everywhere, with a client-side
-per-pane column sort on top and `PanelEntry.date` carried end to end so date
-is sortable at all. A Total Commander-style filename mask (`*`/`?`, whole-name,
-case-insensitive) narrows what a pane shows and clears the pane's selection
-when it changes, so a selection never silently keeps entries the mask just
-hid. Outside the original eight tasks: the Files screen was restyled as
-Total Commander from two reference screenshots, with row icons, file-type
-colour and an Attr column backed by the protection-bit reader that already
-existed for the attributes dialog.
-
-**ART-063, out of plan: ART could not write a disk an Amiga would boot.**
-Found while building the hardware-verification artifact this phase set out
-to produce anyway. The `bootable` flag wrote a bare `RTS` at offset 12 —
-every test, and the amitools oracle, only ever asked whether the boot block
-was *well-formed*, and an `RTS` is. Only Kickstart can answer whether the
-code runs. `core/adf/bootcode.rs` now assembles real boot code from the
-documented contract (read `ExecBase`, `FindResident("dos.library")`, return
-`rt_Init` in `A0` with `D0 = 0`) — ART's own implementation from the published
-LVO table, not Commodore's copyrighted boot block. **Fixed and verified by
-actually booting `test/art-bootable-test.adf`** — see below.
-
-**The headline: real hardware, reached for the first time.** Two rungs
-existed before this phase — `cargo test` (ART agrees with itself) and the
-amitools oracle (ART agrees with an independent implementation) — and both
-can be wrong together, which is exactly how ART-032 … ART-035 shipped behind
-a green suite. This phase reached the third: `test/task-10-boot-test.adf` was
-mounted, its volume `Work` listed, and `Readme` inside it read back
-`hello from ART`; `test/art-bootable-test.adf` — the same disk with real boot
-code — booted to a CLI prompt. Both under **licensed Kickstart and Workbench,
-Amiga Forever under WinUAE, in A1200 and A500+ configurations — not bare
-metal at the time**, and `test/README.md` said so plainly rather than letting
-the A1200/A500+ machine names imply real hardware. (**That caveat has since
-been lifted** — the bootable image booted a real A500/A500+ on 2026-08-12; see
-the entry under Phase 2b below.) A `DIR DF0:` on the non-bootable
-image also read AmigaDOS's own free-space count off ART's bitmap for the
-first time (878 KB free of 880 for a 14-byte file, correct) — nothing set out
-to test that; it came free with the screenshot.
-
-**Debt opened this phase, not fixed:** ART-064 (volume→volume multi-select
-refuses), ART-065 (volume→local multi-select is concurrent per-entry jobs,
-not one operation), ART-066 (`archives_plan_install` unpacks synchronously on
-the command thread instead of a job), ART-067 (a batch archive install can't
-be stopped mid-archive), ART-068 (the filter's empty-vs-no-match message is
-inferred from two counts rather than carried as a flag). None are data-unsafe;
-all are named in [ISSUES.md](ISSUES.md#open) with what fixing each would take.
-
-**What Task 8 added: the one test the phase owed.** Volume-to-volume copy
-(`volume_copy_between`) shipped in Stage W and was wired to F5, but no test
-ever exercised the command's own pipeline — only the bare staging primitives
-in `core/volume/write/copy.rs`. `commands/volume_write.rs` now has
-`a_tree_copies_between_two_images_through_the_command_pipeline`, which stages
-a source volume's tree into a temp folder and runs it through
-`run_copy_in_staged` — the same journal-check, whole-image-validate,
-guarded-backup pipeline every write command in that file goes through — and
-asserts the destination has the tree while the source is byte-for-byte
-unchanged. Rust tests: 729 → 731.
-
-**Nothing in this phase has been checked on a running screen.** Not the
-restyle, not the Attr column, not the filter box, not multi-select — all of
-it was written and tested (Rust + Vitest), never opened in `pnpm tauri dev`.
-ART-062 (no language checked on screen) predates this phase and is still
-open; it now also covers a phase's worth of new UI nobody has looked at.
-
-### ✅ Phase 2a — Content-first detection and containers (complete, 2026-08-12)
-
-Plan: [2026-08-11-phase-2a-content-detection-and-optical.md](superpowers/plans/2026-08-11-phase-2a-content-detection-and-optical.md),
-amended 2026-08-11 (A1–A7 in that file's Amendments section).
-
-The commander stops asking what a file is *called* and starts asking what it
-*is*, and grows container kinds behind the pane model it already has: a CD, two
-archive formats, and Commodore 64 disk and tape images.
-
-Done: content-first `detect()`; an ISO9660 + Joliet reader; a disc pane with F5
-out of it in both directions; **an independent 7-Zip oracle** for the disc
-reader, raw layouts included; Mode 2/XA Form 1 (which closed ART-075); and one
-shared archive security gate with the format behind a backend trait.
-
-Then ZIP and 7z behind that gate, and the archive pane with the virtual tree
-that gives a flat list of names folders to walk into (Task 4). Then the
-Commodore side (Task 5): D64/D71/D81 and T64 read and browsable, TAP/PRG/CRT
-identified and described — with the 40-track variants and the "a T64's header
-is not to be trusted" rules amendments A3 and A4 added.
-
-**What the phase actually changed, in one line each:**
-
-- **A file is what its bytes say**, not what its name says. `.img` holding a
-  floppy is a floppy; an LHA renamed `.dat` still opens. Fixing that found
-  [ART-076](ISSUES.md#fixed) — LHA's own signature had been matched at the
-  wrong offset all along, so content-first detection had never worked for the
-  format ART is built around.
-- **Four new container kinds behind the one pane model**: a CD, ZIP, 7z, and
-  Commodore disks and tapes. Not four new screens.
-- **One security gate for every archive** (`core/archive/extract.rs`), written
-  *before* the second format arrived, with one hostile-archive test each
-  backend is run through.
-- **An independent oracle for the disc reader** (7-Zip), which is what
-  replaced the cancelled real-Amiga-CD rung and what closed
-  [ART-075](ISSUES.md#fixed)'s "two layers wrong together" for raw tracks.
-- **The MSRV moved to 1.93**, deliberately, so 7z uses a maintained decoder
-  rather than one fourteen versions behind.
-
-**Defects found and fixed on the way:** ART-075 (Mode 2/XA), ART-076 (LHA
-detection), ART-077 (the file manager ignored the object a workflow sent it —
-so "Open in the file manager" had been doing nothing since Task 3), and
-**ART-079** — a 7z from any real tool gave one entry another entry's bytes,
-found by pointing the reader at a file 7-Zip wrote while every fixture ART
-builds for itself passed.
-
-**The third time that shape has bitten this project** (ART-032…035, ART-075,
-now ART-079), so it is now one command rather than an idea:
-`read_foreign_archive_for_oracle_when_asked` and
-`read_foreign_c64_for_oracle_when_asked` read files ART did not write, and
-print a hash per entry rather than a length — the defect gave every file
-exactly the right length.
-
-**Owed, recorded not fixed:** [ART-078](ISSUES.md#fixed) — Rock Ridge and the
-Amiga `AS` System Use entry are not read, so an AmigaOS CD's protection bits
-and file comments are lost on the way out. *(Fixed 2026-08-20 on
-`debt-wave-b2`; the line is left as it was written to keep this session's own
-record honest.)*
-
-**Nothing in this phase has been seen on a screen.** Not the disc pane, not
-the archive pane with its virtual tree, not the C64 pane. Every claim above
-rests on tests and on two oracles (ART-062).
-
-**The real-Amiga-CD verification step was cancelled** (amendment A1) — it
-assumed licensed AmigaOS media reliably to hand. `scripts/iso-oracle-check.py`
-covers the risk it existed for, with an implementation that shares no code with
-ART's.
-
-### ✅ Phase 2b — The Files screen, done right (complete, 2026-08-12)
-
-Plan: [2026-08-12-phase-2b-commander-ui.md](superpowers/plans/2026-08-12-phase-2b-commander-ui.md).
-Brief: [brief-files-commander-ui.md](brief-files-commander-ui.md) — written from
-the **first human look at the running screen** plus the user's own twenty-year-old
-Total Commander `wincmd.ini`, and it supersedes the earlier restyle briefs.
-
-The verdict it starts from: the first restyle got Total Commander's *components*
-right and its *gestalt* wrong. TC is not a widget on a page; it is the window.
-
-Done (3 of 8 tasks):
-
-- **Task 1 — the panes fill the window.** Page title and intro gone, full-bleed
-  grid, and panes that are equal **by construction** (`minmax(0, 1fr)`, not a
-  content-sized flex — that is what made the right pane come up short). Rows
-  lost their `→`/`←`/`X` buttons; TC puts nothing on rows. `Ctrl+B` collapses
-  the sidebar and the state survives a restart.
-- **Task 2 — one visual world, in the user's own colours.** Decoded from his
-  `[Colors]`: pane `#1C1F24`, cursor bar pure yellow with black text
-  (`InverseCursor=1` settles the question the first restyle guessed wrong),
-  selected names `#FF3C3C`. Chrome is one step lighter than the rows instead of
-  Windows-95 grey, in dark and light alike, and focus moved to the path row.
-- **Task 3 — minimal chrome, and F6 means Move.** The pane header is
-  `[source ▾] [path] [filter]`; the button strip behind it is a Settings
-  toggle, off by default, because his `[Layout]` is `ButtonBar=0, DriveBar1=0,
-  DriveCombo=1`. The combo lists **enumerated** mounts plus the six things ART
-  opens — no hardcoded letters — and a folder under no listed mount says so
-  rather than claiming one. The command line stops being decoration: it
-  navigates and filters, and refuses anything else *by name* (§56 — it is not
-  a shell, and a prompt-shaped box that swallows a keystroke is worse than
-  none). The F-key row is one row that cannot become two, with labels giving
-  way to keycaps below 1000px. Everything that used to push the panes down
-  from the top of the page — error, message, busy — is one status strip inside
-  the dock, and the permanent collision footer moved into the copy dialog,
-  where Total Commander asks that question, with its default now a Setting.
-
-  **F6 is Move** (Shift+F6 renames), and it is the one function key that can
-  destroy the original, so it runs §92's pipeline in full: validate → offer
-  the icons (§7.1) → confirm → copy → **re-list the destination and look for
-  every moved name** → delete. Nothing is deleted unless the destination's own
-  listing has it, so the worst a stopped move can leave is a duplicate. A
-  collision is refused up front rather than handed to the overwrite policy —
-  "leave it alone" would skip the copy and then delete the source. Three
-  directions have no primitive underneath and are refused by name rather than
-  half-built: out of a host folder ([ART-080](ISSUES.md#fixed) — ART owns no
-  host-side delete), several entries between two images (ART-064), and a
-  single *file* between two images ([ART-081](ISSUES.md#fixed) —
-  `volume_copy_between` addresses a directory). Task 5's `F2`/`Ctrl+R` refresh
-  came forward into this task, because hiding the button strip left Refresh
-  with no other way to be reached.
-
-**Out of plan, and the bigger news of the day: a real Amiga booted a disk ART
-wrote.** `test/art-bootable-test.adf` was put on a **Gotek** and cold-booted a
-real **A500 / A500+** running **Kickstart 3.9** (the screen's copyright line
-reads `1985-2002`) straight to an AmigaDOS `1>` prompt. Photographed.
-
-This is the rung the project has been careful not to claim since Phase 1a. The
-boot code is ART's own, assembled from the published LVO table, and until this
-photograph "it runs on a real 68000" was an assumption: the emulated passes
-were an A1200 (68020) and an A500+ *configuration*, both under WinUAE with
-licensed ROMs. A Gotek also presents the image the way FlashFloppy reads an
-ADF — sector by sector — rather than as a file an emulator maps into memory,
-so the disk had to behave like a disk.
-
-**One caveat survives and is not being quietly dropped:** a Gotek is not a
-mechanical drive. Nothing ART has written has been through a real floppy head
-on physical magnetic media. `test/README.md` carries that as its own rung.
-
-- **Task 4 — Enter opens the container, in the same pane.** The phase's
-  headline, and the one thing here that was *seen working on a real disk*:
-  Enter on `art-bootable-test.adf` turned the pane into the floppy — breadcrumb
-  `test\art-bootable-test.adf`, volume row `Work FFS 877 k of 880 k free` —
-  and Backspace came back out with the cursor sitting on the ADF it had
-  entered. What a row opens into comes from `analyze_paths`, never the
-  extension. `PaneState.host` is the mechanism, threaded through all seven
-  `openX` functions as a *required* parameter so the compiler names every call
-  site. Per-pane history (Alt+Left/Right) treats a container as a place.
-- **Task 5 — the keyboard covers everything.** Space marks where you stand,
-  Insert marks and advances, the numpad marks by mask and inverts,
-  type-to-search moves the cursor (and only the cursor — a search must never
-  throw away a selection), Alt+F1/F2 open the source combos.
-- **Task 6 — tabs and session restore.** A tab is a place plus how you were
-  looking at it, built on task 4's `PaneLocation`, so a tab can live inside an
-  image. Persistence falls out because the tab is *derived* from the pane
-  rather than remembered alongside it.
-- **Task 7 — colour rules, histories, confirmations.** Three shipped colour
-  rules that answer the question a directory of Amiga files poses — walk into
-  it, unpack it, identify it — sitting in front of the built-in classification
-  rather than replacing it. A dropdown history on the command line. Right-button
-  marking as a setting.
-
-**Filed rather than built** (the phase's own rule): [ART-080](ISSUES.md#fixed),
-[ART-081](ISSUES.md#fixed) (move's missing primitives),
-[ART-087](ISSUES.md#fixed) (`Space` does not count a directory) and
-[ART-088](ISSUES.md) (the writer ignores the `d` protection bit; the file
-manager asks, the engine does not refuse).
-
-**What was and was not seen.** The acceptance walk is in the plan file, point
-by point: six of the twelve were verified on the running screen, four on tests
-alone, and two were not looked at. The two that matter:
-
-- **The light theme was never opened.** Its tokens derive from the dark ones by
-  role; nobody has looked at it.
-- **Session restore is half verified.** Two tabs made in the running pane do
-  reach `settings.json` as two tabs, with their paths, the focused side and the
-  command history — so the *write* half is real. The **read-back half has still
-  not been seen**, because nothing has closed and reopened ART since. The
-  round trip itself now has its own tests (`src/lib/paneSession.ts`), added
-  because the acceptance walk said it had none.
-
-### 🟡 PiStorm Image Builder — SD-0 … SD-5 (SD-0, SD-1, SD-2 and SD-4 built; SD-3 and SD-5 part-built)
-
-**This was the project's largest unbuilt feature and, per the user, its point.** Read the table below with its own correction in mind: four of the six phases are built, SD-4 among them, and what SD-1 has left is a card flashed rather than a line of code. The remaining two are **part-built** rather than planned as of 2026-08-24 - SD-3's G14 network half and the whole of G16, SD-5's safety half - and what is left of each is named in its own row rather than implied by a tick.
-
-Gap analysis: [sd-appliance-gap-analysis.md](sd-appliance-gap-analysis.md)
-(2026-08-11, from the PiStorm multiboot architecture; rescoped 2026-08-12). It
-lists **only** what ART lacks; everything ART already has — WHDLoad install,
-ADF/LHA import, RDB creation, Gotek prep, config round-trip, journalled
-writes, Aminet, oplog, the job queue — the build consumes rather than
-reimplements.
-
-The story: build a complete PiStorm/Emu68 **image file** on Windows, verified,
-that boots a real Amiga once the user has flashed it.
-
-**Scope decision, 2026-08-12: ART builds the image; it never touches physical
-media.** The user flashes the `.img` with whichever imager they already have.
-This deletes **G1** — raw `\\.\PhysicalDriveN` access, device enumeration and
-identification, dismount/lock, verify-back and the typed-confirmation UI
-around all of it — which was blocker number one and ART's single largest
-safety surface. G8 becomes image validation rather than card validation (and
-moves up, since it is now the last thing before the file is handed over), and
-G12 (card backup) goes with G1: the build manifest already describes how to
-*rebuild* an image, which is better than a 32 GB blob. Everything that makes
-the image an Amiga — partitioning, filesystems, the OS, the content, the
-multiboot layout — is untouched by the decision and is all file work.
-
-**SD-0 is complete** ([sd0-prior-art.md](sd0-prior-art.md), from the user's own
-research). Three of its findings change what gets built, not merely how:
-
-- **The card's shape is exact now**: MBR, a FAT32 primary, then 1–3 `0x76`
-  primaries, each of which the m68k side sees as a separate hard drive — and
-  **the RDB sits at a byte offset inside one of those**, not at offset 0. So G4
-  is bigger than "write FSHD/LSEG": ART's RDB writer has to work at an offset,
-  which is the same shape as [ART-043](ISSUES.md). **Both halves are done**
-  (2026-08-13/14) — writing *into* a volume that starts at an offset was
-  ART-043, and laying an RDB *at* one is `core/card/build.rs` — each with tests
-  at both offsets.
-- **PC-side PFS3 write is already solved and MIT-licensed.** `hst-amiga` /
-  `hst-imager` read, write *and format* PFS3 and FFS with no emulator, and both
-  existing imagers stand on them. G3 gains a Route E that is proven rather than
-  speculative, and Route B (native PFS3 in ART, the flagship) gains a PC-side
-  oracle — which likely pulls SD-2 in by weeks.
-- **Multiboot mechanism B ships in the field today** on stock Emu68: one
-  `config_{distro}.txt` per distribution on FAT32, and an Amiga-side selector
-  that rewrites `CONFIG.TXT` and reboots. ART can generate the entire static
-  side at build time; the selector itself is later work and must be ART's own
-  code — the pattern is free, the implementation is not.
-
-Also settled: install media is identified **by content checksum, not by
-filename** (ART's own content-first rule, applied to OS media); Kickstarts are
-A1200-only against a checksum DB; and the community-standard package set is
-full of demo and conditionally-redistributable software, so SD-2's manifest
-needs a **licence column** and anything not clearly redistributable ships as a
-fetch task through the Aminet engine instead of as bundled bytes.
-
-One blocker-grade unknown is carried into SD-1: SD-0's own exit test — drive
-`hst-imager` on a scratch image end to end (init RDB, add a PFS3 partition,
-format, copy a tree in) and verify the result with ART's readers and WinUAE.
-
-**Three gaps the analysis did not name, added 2026-08-12 from the user:**
-
-- **G14** — the build inputs that make a distribution *theirs*: wallpaper,
-  WiFi credentials, prefs, Startup-Sequence additions. Every one is a config
-  file, so §39/§40's "edit in place, never regenerate" rule applies to all of
-  them, and the WiFi key is secret material that must stay out of the oplog,
-  the manifest and any AI prompt. **Wallpaper is new scope** — it is in no
-  existing document *(true on 2026-08-12; designed and built 2026-09-05/06,
-  see the SD-3 row above)*. WiFi is not: §45.5 designed `write_pistorm_wifi`
-  with `@form.wifi_psk`, reachable only through an AI layer that is not built.
-- **G15** — a **build** as a drag & drop target. ART already has exactly one
-  drop pipeline (`analyze_paths` → `WorkflowEngine::plan`); what is missing is
-  not the pipeline but the question "what does this file become in *this*
-  image", as against today's "what can I do with this file".
-- **G16** — multiboot as several complete AmigaOS environments and a boot
-  menu, not a boot-priority field.
-
-**Which Amiga is a parameter, not an assumption** (decision, 2026-08-12). The
-gap analysis was written around "the A500"; that is one of the machines
-PiStorm goes into. What varies by machine is data the build already carries —
-which Kickstart ROM lands on the FAT32 partition, what the Emu68 config says
-about the board, which OS release is installed, what partition geometry suits
-the card — not a code path.
-
-**Settled 2026-08-13: the classic PiStorm on a Pi 3A+, first verified on an
-A500** (an A500+ follows around 2026-08-28). That is the hardware in the room,
-which is the only kind of answer this question has. It is recorded *with* the
-result rather than generalised from it — a card that boots an A500 has proved
-one machine, not the line.
-
-| Phase | Contents |
-|---|---|
-| **SD-0** | ✅ **Done 2026-08-12** — prior-art teardown, written up as [sd0-prior-art.md](sd0-prior-art.md). Its one owed exit test (drive `hst-imager` end to end) has since been paid several times over and is now a standing check: `scripts/pfs3-oracle-check.py` runs it **both** directions, and `tools/hst_imager.rs` is the named fallback the product itself reaches for (corrected 2026-09-04 — this row still called it owed) |
-| **SD-1** | The image has a shape: MBR + FAT32 boot partition (**G2 — done 2026-08-13/14, engine and screen**), RDB filesystem embedding FSHD/LSEG (**G4 — done**, also closed ART-084), build manifest (**G7 — done 2026-08-15**, with 7-Zip answering the half ART cannot check), image validation (**G8 — done 2026-08-15**), a build as a drop target (**G15 — done 2026-08-15**). **Every gap in SD-1 is built; what is left is a card flashed and booted** |
-| **SD-2** | Content, preloaded: PFS3 via `hst-imager` (**G3 route E — done 2026-08-15, engine *and* screen**; route D dropped: E was already proven and needs no Kickstart), OS install engine (**G5 — done 2026-08-16, engine *and* screen**), ROM pairing (**G9 — done 2026-08-17, engine *and* screen**: the preload screen says whether a card's Kickstart suits the volume about to be written, and warns without blocking), launcher metadata export (G10), layout policy (**G11 — done 2026-08-15, engine *and* screen**: a pile of dropped files becomes a staging tree, not yet driven against real material and no staging tree has reached a card) |
-| **SD-3** | 🟡 **Mostly built; G14 is now built in full and merged** (`bf5bbe7`, 2026-09-06 — this row called it unmerged for a day after it landed). *It is mine*: **G14's network half is done** - `core/amiganet/` writes `DEVS:tolunnet.config` (merged, because the stack's own GUI writes it too) and `ENVARC:Sys/Wireless.prefs` (replaced, and said so first, with the count of what is already there), asked for on the volumes step while the card is being set up, and the passphrase deliberately **not** remembered ([ART-231](ISSUES.md#fixed) was the drawer it first wrote to). **G16 is done, engine and screen** - `core/card/multiboot.rs` plus a second Amiga disk the card builder can ask for; there is no menu to write, because AmigaOS has one, so what ART decides is `de_BootPri` and it **names a tie rather than resolving it**. **The wallpaper ruling this row carried since 2026-08-24 - "duvar kağıdını boşver kullanıcı onu kendisi yapar", out of scope, not deferred - was superseded by the owner when the 2026-09-05 design was presented: the user's own picture is in, because a stock 3.2 tree has `ilbm.datatype` and nothing else, so a placed PNG nobody can open is this project's own confident-and-wrong shape.** `core/amigaprefs` (the IFF `FORM PREF` container and its `PTRN`/`SCRM`/`Env-Archive` codecs), `core/ilbm` (a ByteRun1 encoder) and `core/picture` (decode/scale/quantise) close both the wallpaper and the rest of prefs — screen mode and shell defaults — edited into the release's own files rather than regenerated, verified against ffmpeg (8/8 fixtures) and against the owner's own AmigaOS 3.9 material (15 of 24 real `.prefs` files are genuine containers, all 15 round-trip). **Built and reviewed on `art-prefs-wallpaper`; not on `main`, and the merge is the owner's decision** — see the Snapshot's branch row above. Still left, on either branch: the named ROM+volume pairing G9 deferred into G16 |
-| **SD-4** | ✅ **Built, and this row said otherwise until 2026-08-24.** It read *"the flagship: native PFS3 write in ART (G3 route B) — its own brief"*, which stopped being true when `libpfs3` arrived: `core/preload/native.rs` implements `VolumeFormatter` over it and over ART's own FFS writer, it is the **default** with `hst-imager` a named fallback for two typed gaps ([ART-120](ISSUES.md#fixed)), it is checked in both directions by an independent `hst-imager` oracle, and a PFS3 volume ART formatted booted a licensed Kickstart. Route D's harness never became its oracle because route D was dropped and the `hst-imager` one serves. What is left of SD-4 is nothing |
-| **SD-5** | 🟡 **Half built, 2026-08-24, and its own note called the whole thing *"comfort"* - half of it was not.** `core/card/capacity.rs` refuses to let ART build an FFS partition past the 4 GB a pre-v46 Kickstart can address, which is a partition that corrupts the drive rather than an inconvenience. Left: the planner proper - the distro registry's entries are all `available: false`, so nothing yet plans a card from a named distribution |
-
-*The old SD-2 ("the card exists") is gone with G1, and everything after it
-moved up a number; validation came forward into SD-1, where it is now the last
-thing that happens before the file is handed over.*
-
-Four decisions in it are worth knowing before reading the code they will
-produce:
-
-- **ART never touches physical media.** Everything is built into a sparse
-  image file through the existing tested paths, and there the job ends: the
-  user flashes it with the imager they already have. §56's raw-device guard
-  stays in the spec as the reason ART does not do this, rather than as a
-  problem ART has to solve.
-- **v1 targets Emu68 only.** The classic Linux/Musashi route is a different
-  build and is out of scope in writing, not by omission.
-- **PFS3 preload starts borrowed and ends native.** Route D has the real
-  `pfs3aio` do the writing inside a scripted WinUAE session — correct by
-  construction, zero reimplementation risk — while route B (a native PFS3
-  writer, the thing no other imager has) stays the flagship. Once B exists, D
-  is its oracle.
-- **A distribution is configured in ART, not afterwards on the Amiga.**
-  Wallpaper, WiFi, prefs and Startup-Sequence are build inputs (G14), and
-  every one of them is edited in place rather than regenerated — the same rule
-  §39/§40 already impose on `FF.CFG` and `cmdline.txt`, applied to AmigaOS.
-
-The milestone that matters first is not a preloaded 128 GB image: it is **one
-image, built entirely from Windows, that boots a real Amiga into AmigaOS 3.2
-with a recovery volume beside it** — with the machine and the board it was
-proved on written down beside the claim. The bootable-ADF pass on a real
-A500/A500+ (2026-08-12) is what that proof looks like, and what its honesty
-standard is.
-
-Sequenced after Phase 2a. Whether it goes before or after Stage 5's AI layer
-is open.
-
-### ⏳ Stage 5 — Spec addenda
-
-From `ART-SPEC-ADDENDA-COMPLETE.md` in the project root. **Stage 4 has landed, so
-both are now unblocked** — every prerequisite they name by hand exists:
-
-| Addendum requires | Provided by |
-|---|---|
-| §41.5.6 download/install queue on the standard Job Queue | `core/jobs`, `commands/jobs.rs` |
-| §41.5.6 Beginner hides mirrors/cache, Power exposes them | `lib/uxmode.ts` |
-| §41.5.6 per-package actions follow §46 | workflow catalogue |
-| §45.5.8 operation log entry with `origin: ai-plan` | `core/oplog`, `OperationOrigin::AiPlan` |
-| §45.5.1 plans made of existing, tested workflows | `core/workflow/builtin.rs` |
-
-- **§41.5 Software Sources Engine (Aminet)** — Stage A: catalog sync, search,
-  download, readme, Collection. Stage B: one-click install to HDF, update view.
-- **§45.5 AI Workflow Layer** — Stage A: read-only assistant. Stage B: plan
-  generation with Plan Cards. Stage C: full multi-step scenarios.
-
-**Both are now designed, neither is built.** The designs are:
-
-- [design-software-sources.md](design-software-sources.md)
-- [design-ai-layer.md](design-ai-layer.md)
-
-Design decisions worth carrying forward, because they are not obvious from the
-addenda:
-
-- Aminet's local catalog is a **core trait (`CatalogStore`) with a file-backed
-  implementation outside core**, not SQLite. The spec says SQLite; SQLite in
-  `core/` would break the independence rule and putting it in `art.db` would put
-  engine logic in React. A `SqliteCatalogStore` can replace it later without
-  touching `core/`.
-- Network access is a core trait (`MirrorClient`) implemented outside core with
-  **`ureq`** — blocking, so it fits the existing job threads and drags in no
-  async runtime. Both traits get in-memory test doubles, so CI never opens a
-  socket.
-- The AI layer's `DangerClass` is **derived from the existing `Safety` enum** by
-  a total mapping, not defined as a second parallel enum. `Experimental`
-  workflows are excluded from the tool whitelist in v1.
-- Secrets can only reach a plan as `@form.*` placeholders. A literal supplied
-  for a `Secret` parameter is a validator *rejection*, not something ART
-  sanitises.
-
-Build order: Aminet Stage A first — it is self-contained, fully offline-testable,
-and it leaves the AI layer more engine to describe when its turn comes.
-
-#### Aminet Stage A — where it stands
-
-`core/sources` is built and tested (167 tests, all driven by an in-memory
-mirror, no socket opened):
-
-| Module | What it does |
-|---|---|
-| `index.rs` | `INDEX` parsing, structural rather than fixed-column; malformed lines counted, never guessed |
-| `readme.rs` | readme field extraction, bounded and sanitised |
-| `text.rs` | the bounding/control-character rules every repository string goes through |
-| `catalog/` | `CatalogStore` trait, search and ranking, version resolution, `MemoryCatalogStore` + `JsonlCatalogStore` |
-| `mirror.rs` | `Mirror` URL construction, `MirrorClient` trait, failover |
-| `cache.rs` | content-addressed cache layout |
-| `fetch.rs` | the §41.5.3 trust pipeline |
-| `sync.rs` | `sync_catalog`, including the refusal to replace a good catalog with a bad parse |
-
-Two new error IDs, stable from here: `ART-MIRROR-UNREACHABLE`,
-`ART-INTEGRITY-MISMATCH`.
-
-Verified against live Aminet mirrors on 2026-08-09, which **corrected the
-format**: the index is five columns (name · directory · size · age ·
-description) with a `|` header, not the path-first layout the design assumed.
-The parser was rewritten and now reads 3 026 of 3 026 data lines from a real
-256 KB `INDEX` sample with zero skips. Shipped defaults —
-`https://aminet.net/`, `https://se.aminet.net/`, `https://ftp.fau.de/aminet/`,
-index path `INDEX` — all served a byte-identical 7 229 355-byte index and
-honoured range requests.
-
-The whole stack is built: `core/sources`, `net/http_mirror.rs` (a `ureq`-backed
-`MirrorClient` that follows only same-host redirects, refuses an HTTPS→HTTP
-downgrade, never reports a `200` as a resume, and rejects a body shorter than an
-announced `Content-Length`), `commands/sources.rs` on the Job Queue,
-`src/lib/sources.ts`, and Aminet Studio at `/aminet` in the sidebar. Transport
-tests run against a real socket on localhost, so CI stays offline.
-
-Running the finished engine against real mirrors found two defects the fixture
-suite could not — [ART-030](ISSUES.md#software-sources-aminet-415) (failover
-concatenated a dead mirror's bytes onto the next one's) and
-[ART-031](ISSUES.md#software-sources-aminet-415) (LHA level 2/3 headers could
-not be opened at all, which also broke LHA Studio for typical Aminet
-downloads). Both are fixed with regression tests.
-
-Live end-to-end, after the fixes: 7 229 355 bytes of index, 85 435 packages,
-zero skipped lines, and a real AmiSSL release fetched, size-checked, hashed,
-validated and cached.
-
-**Not done in Stage A**, listed so it is not mistaken for finished:
-"Add to Collection" (§41.5.6's secondary action — downloads reach the cache and
-stop there), editing the mirror list from the UI (`sources_set_mirrors` exists
-and is tested; the UI only displays the order), and **actually launching the
-app** — everything is covered by tests and both bundles build, but nobody has
-clicked the button yet.
-
-There is deliberately no workflow-catalogue entry: nothing you can drop leads to
-Aminet in Stage A, so a `route::AMINET` no workflow points at would be dead code.
-Stage B's update view is the first thing that plausibly needs one.
-
----
-
-## Phase completion criteria
-
-Carried over from `roadmap.md`; a stage is not done until all of these hold.
-
-- Build: PASS
-- Tests: PASS
-- No critical errors
-- No obvious data-loss risk
-- UI remains responsive
-- Documentation updated (this file, [ISSUES.md](ISSUES.md), [FEATURES.md](FEATURES.md))
-- CHANGELOG updated
 
 ---
 
 ## Picking up next session
 
-*One block, kept current. Every round used to add its own "Start here" and
+*One block, kept current.* Every round used to add its own "Start here" and
 leave the previous one below it; on 2026-09-04 four such blocks were collapsed
-into this one, because the oldest of them still contradicted the newest.
-**Update this block — do not stack another on top of it.** A round's own
-narrative is one line in the [session log](session-log.md), its reasoning is in
-`docs/superpowers/`, and the defect register is [ISSUES.md](ISSUES.md).*
+into this one, because the oldest still contradicted the newest. **Update this
+block — do not stack another on top of it.**
 
-### Start here (2026-09-07, end of session)
+### Start here (2026-09-07)
 
-**Four things are true right now that a fresh session would otherwise
-rediscover the hard way.**
-
-1. **`main` is still unpushed — 64 commits ahead of `origin/main`, three local
-   merges (round 3 `bd91942`, round 4 `800fdc0`, round 5 `1cb5ce1`) that CI
-   has never seen.** `git push origin main` is the whole of it, and it is the
-   owner's. **Do not assume `origin/main` matches this tree.**
-2. **Round 5 of the Emu68 Hatcher intake — the first-boot mechanism — has its
-   phases 1 and 2 built, reviewed, documented and — the owner's decision,
-   2026-09-07 — merged to `main` as `1cb5ce1` (`--no-ff`; the branch is
-   deleted).** Twelve tasks: the spike (Task 1), the AmigaDOS
-   scripts and Rust core (Tasks 2–6), a WinUAE rehearsal proven on the
-   owner's own real AmigaOS 3.2 tree (Tasks 7–9), reading a card's own report
-   back off FAT, FFS and PFS3 (Tasks 10–11), and this document-landing task
-   (12). **The spike's answer, in one line**: `Updater` does not need "all
-   470 MB" of the AmigaOS 3.9 CD — 45.15 needs 2 named files (~27 MB) and
-   45.19 needs 4 (~34 MB), proven minimal/sufficient by bisection under
-   WinUAE (`task-1-report.md` §8.6). Two real defects were found and fixed by
-   the one real rehearsal and nothing else: a bare `$name` AmigaDOS variable
-   read does not expand (ART-272), and a script cannot delete itself while
-   AmigaDOS is still executing it (ART-273). A whole-branch review then found
-   one Critical (the screen claiming a discard the core did not make) and four
-   Important, all fixed in one wave before the merge — the round's ledger and
-   reports are local-only under `.superpowers/sdd/2026-09-07-firstboot-phase-1-2/`.
-   **Pushing is still the owner's to do and has not happened.**
-3. **[ART-261](ISSUES.md) is still open and still changes how you quote
-   numbers.** The owner's antivirus kills a full `cargo test --lib` — exit 0,
-   no `test result:` line, no `FAILED`. `cargo test --lib -- --skip artwork`
-   completes and is the only honest Rust number here until exclusions are
-   added for `src-tauri\target\`, the test scratch root and `art_lib`'s
-   build output. **An exit code cannot tell a finished suite from a killed
-   one.** Both of this session's two required runs (ART-059) printed a real
-   `test result:` line.
-4. **Phase 3 (the reboot itself, and the wizard's `90-prefs`/`ART-FirstBootWB`)
-   is next**, and it inherits one measured fact phase 2 already has: `C:Reboot`
-   is present on the owner's AmigaOS 3.2 tree (`art205-32`) and **absent** on
-   both AmigaOS 3.9 trees (`art159-boot`, `art205-39c`), so phase 3 cannot
-   assume the reboot command exists and must check for it the same way phase
-   2 checks for `C:Sort`. Phase 4 (`run`/`unpack` package steps) is not
+1. **`main` is pushed and CI has not answered yet.** `main` and `origin/main`
+   are both `32651c9`; the push was `722a8c5..32651c9`. GitHub Actions run
+   **34116056492** on that commit was `in_progress` when this was written, so
+   **its result is not recorded here** — check it before treating `main` as
+   green on CI. Local lint, fmt, clippy, both suites and the three blocking
+   sweeps were clean on the merged tree the same day (Snapshot above).
+2. **Round 5 of the Emu68 Hatcher intake — first boot on the Amiga — has
+   phases 1 and 2 merged** (`1cb5ce1`, `--no-ff`, branch deleted). What it
+   built is two [FEATURES.md](FEATURES.md) rows and one
+   [session log](session-log.md) entry; the reasoning and the twelve task
+   reports are local-only under
+   `.superpowers/sdd/2026-09-07-firstboot-phase-1-2/`.
+3. **Phase 3 is next: the reboot itself, plus the wizard's `90-prefs` /
+   `ART-FirstBootWB`.** It inherits one measured fact from phase 2 —
+   **`C:Reboot` is present on the owner's AmigaOS 3.2 tree (`art205-32`) and
+   absent on both AmigaOS 3.9 trees (`art159-boot`, `art205-39c`)** — so phase
+   3 cannot assume the reboot command exists and must check for it the way
+   phase 2 checks for `C:Sort`. Phase 4 (`run`/`unpack` package steps) is not
    designed yet.
+4. **[ART-261](ISSUES.md) is open and still changes how you quote numbers.**
+   The owner's antivirus kills a full `cargo test --lib` — exit 0, no
+   `test result:` line, no `FAILED`. `cargo test --lib -- --skip artwork` is
+   the only honest Rust number here until exclusions are added for
+   `src-tauri\target\`, the test scratch root and `art_lib`'s build output.
+   An exit code cannot tell a finished suite from a killed one.
+5. **[ART-274](ISSUES.md) is the newest open entry** and it is architectural:
+   `core/winuae.rs` spawns `winuae64.exe` from inside `core/`, which is the
+   exact shape the trait rule exists to prevent, and this round added a second
+   consumer of it. Not a user-visible defect; the fix is an
+   `EmulatorLauncher` trait in `core/` with the spawn in `tools/`.
 
-Standing numbers on `main` after the merge, re-measured on the merged tree
-on 2026-09-07 (the Snapshot's Tests and i18n rows carry the full quotes):
-**87 frontend files / 1178 tests**; Rust **2948 passed, 0 failed, 51 ignored**
-(`--skip artwork`); i18n **2078** leaf keys each catalogue; **19 open**
-entries in [ISSUES.md](ISSUES.md) — this round filed ART-272 and ART-273
-(both fixed the same day) and ART-274 (open: `core/winuae.rs` spawns a
-process from inside `core/`), and ART-166 and ART-168 each gained a
-paragraph rather than a new number.
+### Where the work stands
 
-### Where the work stands (as of 2026-09-06)
+One paragraph per live area. Per-feature state is [FEATURES.md](FEATURES.md),
+per-defect state is [ISSUES.md](ISSUES.md), per-round narrative is the
+[session log](session-log.md). None of it is retold here.
 
-- **ART can now say what an install disk is, by content hash, additively to
-  the volume name it already reads — a miss says nothing and takes nothing
-  away.** Round 4 of the Emu68 Hatcher intake, six tasks plus two fix waves,
-  **merged to `main` as `800fdc0`** off `35c3097`. `core/
-  hashing.rs` gained MD5, `core/osinstall/mediahash.rs` loads and looks up
-  the 186-row `media_hashes.json` adopted from `rootrootde/emu68hatcher`
-  (MIT), `scripts/media-table-check.py` plus an `#[ignore]`d Rust twin check
-  it against real media, `osinstall_identify_media` is a job with progress
-  and cancellation, and the screen keeps five endings distinct (matched-and-
-  confirmed, matched-but-unconfirmed, not in the table, unreadable, not yet
-  hashed) backed by ART's own `media_hashes_confirmed.json`. **The round's
-  own design was reversed by a measurement, and a future reader should meet
-  that here rather than rediscover it**: `core/osinstall/identify.rs` carried
-  a recorded refusal calling the table "one ART could not verify", and before
-  designing, the owner's own 35 AmigaOS 3.2 ADFs were hashed and looked up —
-  **35 of 35 matched**, to the right name and the right publisher, zero
-  misses, which is what made carrying Hatcher's table (rather than generating
-  ART's own, smaller one) the right call. **A second measured trap, worth
-  repeating**: a row's `volume` field is *not* the disk's AmigaDOS volume
-  name — measured **0 of 12** (`Backdrops3_2` in the table against
-  `Backdrops3.2` on the disk) — so nothing here cross-checks the two; doing
-  so would have reported all 35 of the owner's good disks as conflicting.
-  **[ART-261](ISSUES.md) is open again**, and it is not this round's defect:
-  found by Task 1, closed the same day on numbers taken with the machine's
-  antivirus switched off, reopened hours later by Task 4 when the identical
-  symptom returned with the scanner back on — every Rust count in this round
-  is quoted `--skip artwork` and said to be that. **Measured**: `pnpm test`
-  1106 passed / 82 files; `cargo test --lib -- --skip artwork` 2877 passed, 0
-  failed, 50 ignored; i18n 2012 → 2021 leaf keys each catalogue (nine
-  `osinstall.mediaId.*` keys); `scripts/media-table-check.py` against the
-  owner's own media, 35 verified / 151 unverified / 0 conflicting, the Rust
-  twin agreeing; the table is 186 rows, 186 distinct MD5s, and the
-  confirmation file's 35 entries are all rows of the table (0 orphans);
-  `pnpm lint`, `cargo fmt --check`, `clippy --all-targets -- -D warnings`,
-  and the control-byte, scratch-root and contrast (113/113, both themes)
-  sweeps all clean. **Merged to `main` as `800fdc0` on 2026-09-06 and NOT
-  pushed** — the merge is local, so `origin/main` is two merges behind this
-  tree until the owner pushes. Publishing is theirs to do. Full detail: the task reports and design/plan under this round's
-  own `superpowers/sdd/` and `superpowers/specs/`/`superpowers/plans/`
-  folders, dated 2026-09-06.
-- **Fix wave 1 of that round's whole-branch review took four of its eight
-  findings, and three of the four were the round's own named failure class
-  — something in the tree stating what is not true of the tree.**
-  [ART-262](ISSUES.md#fixed): `identify.rs`'s module doc still argued, in
-  ART's own voice, that there is no hash table and that ART hashes nothing;
-  the refusal is now kept verbatim as a quote with the measurement that
-  overturned it (35 of 35), and the half that was *not* overturned ("it
-  goes stale silently") is named as answered by
-  `media_hashes_confirmed.json` instead. [ART-263](ISSUES.md#fixed):
-  pressing Stop said ART had failed — fixed in the **type**, a fifth
-  `MediaIdentityState` variant plus `jobs.ts`'s own
-  `JOB_CANCELLED_MESSAGE`/`isJobCancellation`, so a later edit cannot
-  collapse the two endings back into one message on one state.
-  [ART-264](ISSUES.md#fixed): one unreadable folder discarded every folder
-  already identified — now `core/hostfs.rs`'s shape, per entry, by name and
-  by result (identified / unreadable / stopped / not-reached).
-  [ART-265](ISSUES.md#fixed): both media-table checks passed with **0
-  verified**, so neither could fail on what it exists to check; they now
-  require at least one row to verify when a directory is given, and hold to
-  `--expect-verified N` / `ART_MEDIA_EXPECT_VERIFIED` when the caller states
-  a number — 35 deliberately not hardcoded, since it is this machine's
-  measurement and a user with a 3.1 set must not meet a failing check.
-  Proven both arms against a scratch directory of one junk `.adf`: before,
-  exit 0; after, exit 1 in both the script and the Rust twin. **Measured**:
-  `pnpm test` **1113** passed / **82** files; `cargo test --lib -- --skip
-  artwork` `test result: ok. 2877 passed; 0 failed; 50 ignored`; i18n **2021
-  → 2026** leaf keys each catalogue (five new `osinstall.mediaId.*`); `pnpm
-  lint` exit 0 unpiped, `cargo fmt --check`, `clippy --all-targets -- -D
-  warnings`, and the control-byte, scratch-root and contrast (113/113)
-  sweeps clean. Report:
-  `.superpowers/sdd/2026-09-06-media-identification-by-hash/fix-wave-1-report.md`.
-- **Fix wave 2 of that same review closed the remaining five findings
-  (M3–M7), so the whole-branch review's list is now closed end to end.**
-  Each was re-checked against the tree first — fix wave 1 touched the same
-  three files these live near — and all five still stood.
-  [ART-266](ISSUES.md#fixed) (M3): "151 of the table's 186 rows" was two
-  literal digits in both catalogues with nothing tying them to the two data
-  files; fixed with a guard rather than interpolation — a new
-  `src/i18n/media-table-counts.test.ts`, on `distro-registry-keys.test.ts`'s
-  own precedent, reads both JSON files directly and fails if the prose and
-  the data disagree. [ART-267](ISSUES.md#fixed) (M4): `--emit-confirmed`
-  always wrote a single check event, discarding an earlier run's record the
-  moment a second one was made — now appends, tested with a real scratch
-  run and a new Rust test for `parse_confirmed`'s previously-untested
-  duplicate-hash branch. [ART-268](ISSUES.md#fixed) (M5): two layers
-  pointed at one folder identified it twice and rendered every line twice
-  under the same React key — fixed by folding the folder list through a
-  `Set`; reverting it reproduced React's own duplicate-key console warning.
-  [ART-269](ISSUES.md#fixed) (M6): `mediaIdentitySummary`'s null case
-  named one cause where it has two — fixed as a comment correction (no
-  untrue sentence resulted from the code), with a new test for the
-  previously-uncovered second cause. [ART-270](ISSUES.md#fixed) (M7): two
-  new MD5 tests leaked their scratch directory on a panic; checking the
-  sha256 tests they copied the pattern from found the same defect
-  predating this round, so all four moved onto `core::ScratchDir`, not only
-  the two named — proven with a controlled two-armed forced-panic
-  experiment rather than a unit test, since nothing asserts "the directory
-  survives a panic" directly. **Measured**: `pnpm test` **1119** passed /
-  **83** files; `cargo test --lib -- --skip artwork` `test result: ok. 2878
-  passed; 0 failed; 50 ignored`; i18n unchanged at **2026** leaf keys each
-  catalogue (no key added — M3's fix is a guard, not a new string); `pnpm
-  lint` exit 0 unpiped, `cargo fmt --check`, `clippy --all-targets -- -D
-  warnings`, and the control-byte, scratch-root, contrast (113/113) and
-  scratch-counter sweeps all clean (the counter sweep's one flagged site is
-  ART-235's pre-existing false positive, in a file this wave never
-  touched). Report:
-  `.superpowers/sdd/2026-09-06-media-identification-by-hash/fix-wave-2-report.md`.
-  **Merged to `main` as `800fdc0`, not pushed** — the round and both fix
-  waves are complete; publishing is the owner's.
-- **The OS Builder now shows what media was found when it cannot complete a
-  build.** The `mediaEvidence` helper renders a line above the refusals list
-  saying which of three things is true: this release's own media is among what
-  the folder holds, the folder holds a different release's, or what is there
-  does not settle which release it is. With no folder chosen the line says
-  **nothing** — `osinstall.blocked.noFolder` already owns that sentence, and
-  the helper's own doc comment forbids saying it twice. *(That fourth "state"
-  was described as one of the line's own until 2026-09-06; the review's M6
-  caught it in `CHANGELOG.md` and it was corrected here at the same time.)*
-  Three new i18n keys (`osinstall.evidence.*`); tests exist for both the
-  helper and the render. **The round's own three tasks changed no Rust** — the
-  evidence strings already existed, gated behind an all-or-nothing condition
-  that made them unreachable for partial media sets, and ungating them is what
-  the round was. Its **final whole-branch review** then found seven things, and
-  **five** fix waves closed all of them, adding both Rust and frontend work:
-  [ART-253](ISSUES.md#fixed) through [ART-259](ISSUES.md#fixed), plus
-  [ART-260](ISSUES.md) recorded as latent rather than fixed. **Merged to `main`
-  as `bd91942`, 2026-09-06; not yet pushed** — the push is the owner's. Full detail: the task and
-  fix-wave reports in this round's own `superpowers/sdd/` folder and the design
-  under `superpowers/specs/` dated 2026-09-06.
-- **A tree ART builds now carries its drawers' own icons, and the ones that
-  arrive with no position get laid out instead of being scattered by
-  Workbench.** Round 2 of six taking what is worth taking from
-  `rootrootde/emu68hatcher` (MIT); round 1 (prefs and wallpaper, item 7 below)
-  is merged to `main`. Researching the round found a defect that had been
-  shipping rather than the polish the round was named for: a `Subtree` rule
-  (174 of them across all three recipes) copies everything **inside** a
-  drawer, including nested drawer icons, but never the drawer's **own**
-  icon — its sibling on the medium, not its child — so `Prefs`, `System`,
-  `Utilities` and `WBStartup` were invisible on a real Workbench and the tree
-  had no `Disk.info` either. Fixed in `core/osinstall/plan.rs`; root-level
-  `.info` files in the built AmigaOS 3.2 tree went **0 → 7** (measured on the
-  real media; the other twelve of the design's own 19 are accounted for —
-  five `Disk.info`s excluded on purpose, and [ART-251](ISSUES.md), filed this
-  round, is why two more never had a component to attach to). `core/amigaicon`
-  gained the reads it deliberately skipped — icon type, position and its
-  `0x80000000` sentinel (not `0`; 361 of 798 real icons carry it), a drawer's
-  own window, the rendered size a layout actually needs rather than the
-  `Gadget` size a layout cannot trust (613 of 798 real icons disagree between
-  the two, by up to 15×) — plus four writers, all preserving every byte not
-  named. A new pure `core/icongrid` does the arrangement arithmetic, adopted
-  from Hatcher and marked as adopted rather than measured; `core::appearance`
-  gained an `arrange_icons` flag reaching one checkbox on the OS Builder's
-  Appearance panel. **Verified against the owner's own 798 real icons**:
-  `scripts/icon-oracle-check.py` reports `checked=798 failed=0
-  no_drawer_data2=0 lossy_tooltypes=69` — a corpus larger than round 1 left it
-  (485) and with four new writer checks per icon. The oracle's first real run
-  found a genuine defect no unit test could see: `set_show_all_files` was
-  writing `dd_Flags` inside `DrawerData`'s own window geometry rather than the
-  separate `DrawerData2` block, because the reader and the writer shared the
-  identical wrong offset ([ART-249](ISSUES.md#fixed), fixed). A second real
-  finding stays open by design: `tooltypes()`'s lossy UTF-8 decode cannot
-  byte-for-byte round-trip a NewIcon `IM1=`/`IM2=` tool type, measured on 69
-  of 798 real icons — text identity holds, byte identity does not
-  ([ART-250](ISSUES.md)). **Not claimed: no Amiga has opened an
-  ART-arranged icon** — the oracle proves the bytes round-trip and the fields
-  read back, not that Workbench draws the predicted grid. **Merged into `main` as `722a8c5` on
-  2026-09-06**, built off `main` after item 7 merged into it — nine tasks,
-  each reviewed. Full detail:
-  [session log](session-log.md), design and plan under `superpowers/specs/`
-  and `superpowers/plans/` dated 2026-09-06.
-- **Work-list item 7 — the prefs-and-wallpaper round — is merged to `main`**
-  (`bf5bbe7`, 2026-09-06), no longer held back; the drawer-icons round above
-  branched off `main` after this merge. What follows describes that round as
-  it stood while it was still a live branch, left as it was written:
-  **a distribution tree can carry the owner's own
-  wallpaper, screen mode and shell defaults, edited into the release's own
-  prefs files rather than regenerated.** SD-3 G14 closes. Round 1 of six
-  taking what is worth taking from `rootrootde/emu68hatcher` (MIT), twelve
-  tasks, `core/amigaprefs` + `core/ilbm` + `core/picture` + `core/appearance`
-  + a verify check + an OS Builder panel. Proved against ffmpeg (8/8 ILBM
-  fixtures, every pixel) and against the owner's own AmigaOS 3.9 material
-  (15 of 24 real `.prefs` files are genuine containers, all 15 round-trip
-  byte-for-byte). Full detail: [session log](session-log.md), design and
-  plan under `superpowers/specs/` and `superpowers/plans/` dated
-  2026-09-05. **Since merged into `main` at `bf5bbe7` (2026-09-06) — held on
-  `art-prefs-wallpaper` while it was being reviewed, the way the drawer-icons
-  round above is held now.** Three issues filed rather than patched: [ART-245](ISSUES.md),
-  [ART-246](ISSUES.md), [ART-247](ISSUES.md). **A whole-branch review then
-  found four more things the twelve task-scoped reviews could not see**
-  (2026-09-06, same branch): the prefs oracle was comparing
-  `to_bytes()` — the exact bytes `parse` was handed back verbatim — rather
-  than `replace_bodies(&[])`, the function that actually produces the bytes
-  a write puts into a tree, so both round-trip tests were true by
-  construction and never exercised the real rebuilder at all; fixed, and the
-  measurement stands unchanged at **15 of 24, 0 failures**, now proven
-  through the real serialiser rather than the identity function. `PTRN`'s 16
-  reserved bytes were zeroed on every write — `ScreenMode` got the
-  carry-through treatment in an earlier fix round and `Backdrop` did not —
-  fixed with the same field and the same guard shape. The `Sys:` assign was
-  matched case-sensitively while every path component after it already folds
-  case-insensitively, so a real chunk naming `SYS:…` (measured on the
-  owner's own material) was wrongly waved off as an unresolvable foreign
-  assign in `core::osinstall::verify` and refused outright in
-  `core::appearance`; fixed in both, through one shared helper. And
-  `CHANGELOG.md`/`FEATURES.md` said the verify check confirms a backdrop
-  path "on the volume" when it walks the host distribution tree, never a
-  volume — corrected, and the check's own `Pass` verdict now names what it
-  examined rather than leaving that to a document. A fifth finding — the
-  wallpaper apply runs its whole decode/scale/quantise pipeline
-  synchronously on the command thread, no progress, no cancel — was filed as
-  [ART-248](ISSUES.md) rather than fixed this round.
-- **Work-list item 5 is done: a drawer-shaped WHDLoad collection is
-  catalogued, and iGame is told what ART knows.** A directory holding one
-  `.slave` is a title, and so is a drawer *inside* an archive — two `Media`
-  variants rather than one with a location field, because an unpacked drawer
-  launches through `RequestKind::Whdload` and an archived one cannot.
-  `igame.data` goes beside each slave: into a tree ART built by default, into
-  a user's own collection only as an explicit, previewed, backed-up action
-  reported **per entry**. Proved on real material — **893** drawers found and
-  all 893 read back, and the archive scan cut from **140 469 ms to 1 719 ms**
-  once entries are read in ascending index order. Merged from
-  `art-whdload-drawers` and pushed (`e42510b`, 2026-09-05); the branch and its
-  plan workspace are deleted. **Not claimed:** no `igame.data` ART wrote has
-  been read by iGame on a real Amiga.
-- **The work list's own question for item 5 was wrong, and measuring the
-  reader is what showed it.** Both routes it offered wrote `igame.data` into
-  WHDLoad **hardfiles**; iGame's own `examineFolder` walks the Amiga
-  filesystem for `.slave` files and reads `igame.data` from the directory the
-  slave is in, so a self-booting `.hdf` — which keeps its slave inside the
-  image — is invisible to it. The cost of that route was never the free space
-  those 1 697 images have left; it is that nothing would ever read the file.
-- **Two things this round learnt that outlive it:**
-  - **Green tests do not prove a feature is reachable.** The drawer scans had
-    no production caller at all, and then were wired into a function whose
-    command has no frontend callers. Both times every test was correct and
-    pinned the wrong thing. The plan was at fault — no task owned the new
-    producer's first real caller — and the third attempt was checked by
-    tracing the chain from the Collection screen's Update button to
-    `store::refresh_root` hop by hop.
-  - **A fixture that cannot fail is not a test.** Five in this branch were
-    written to prove a rule and could not have failed without it; every one
-    was caught by an implementer or a reviewer rather than by the suite.
-- **Work-list item 3 is done too**, earlier the same day: a release update is
-  layered, `AmigaOS 3.2.2` ships as a recipe declaring `base: "AmigaOS 3.2"`
-  and two ordered media layers, and a component's media is resolved inside the
-  layer its recipe names. Proved on the owner's own media: **4 052 files**,
-  and the tree states `Release 3.2.2`. Merged from `art-layered-release`.
-- **[v0.9.0 is released](https://github.com/tolon/Art/releases/tag/v0.9.0)**
-  and the owner has taken it to the community. **Reading what came back is
-  still the first thing a session does** — issues on the repository, and
-  whatever the owner was told directly. A report that went *well* counts: the
-  nine gaps in the README are unverified in both directions, so a green result
-  closes one as surely as a defect opens one. Nothing had come back as of
-  2026-09-05: no issues, three release downloads.
-- **`main` carries everything; there is no live branch, and `main` is now TWO
-  merges ahead of `origin`.** Five rounds landed on 2026-09-05/06 in sequence —
-  `art-layered-release`, `art-whdload-drawers`, `art-prefs-wallpaper` (merged
-  `bf5bbe7`), the Hatcher intake's round 2 `art-drawer-icons` (merged
-  `722a8c5`) and its round 3 `art-refusal-evidence` (merged `bd91942`) — each
-  merged `--no-ff`. **The first four were pushed; the fifth was not**, because
-  the owner was away and publishing is theirs to do. So `origin/main` is one
-  merge behind this tree until they push it. Measured on that merge: 82
-  frontend files / **1087** tests, **2926** Rust passed with 0
-  failed and 49 ignored, `pnpm lint` exit 0 (measured unpiped — a pipe reports
-  `tail`'s status, not `tsc`'s), control-byte, scratch-root and contrast
-  (**113/113**, both themes) sweeps clean, i18n **2012** leaf keys each
-  catalogue, `cargo fmt --check` and `clippy --all-targets -- -D warnings`
-  clean. **16 commits, 18 files, +3692 / −113.** Re-measured by the controller
-  2026-09-06 on the merge commit itself, not quoted from a report. The whole-branch review found 1 Critical, 2 Important and 4 Minor,
-  and each wave's re-review found the next thing: wave 1
-  [ART-253](ISSUES.md#fixed), wave 2 [ART-254](ISSUES.md#fixed),
-  [ART-255](ISSUES.md#fixed), [ART-256](ISSUES.md#fixed), wave 3
-  [ART-257](ISSUES.md#fixed), [ART-258](ISSUES.md#fixed), wave 4
-  [ART-259](ISSUES.md#fixed) — which was **introduced by ART-257's own fix and
-  caught by its re-review**, the round's named failure class turning up inside
-  the round's own repair. Held there on purpose
-  so the owner decides whether and when it joins `main`, rather than being
-  merged by the round that built it.
-- **Fifteen open entries**, counted on this branch 2026-09-06. The
-  refusal-evidence round itself added none — but its **final whole-branch
-  review did**: [ART-253](ISSUES.md) in fix wave 1, [ART-254](ISSUES.md),
-  [ART-255](ISSUES.md) and [ART-256](ISSUES.md) in fix wave 2, and
-  [ART-257](ISSUES.md) and [ART-258](ISSUES.md) in fix wave 3 — false or
-  over-claiming sentences on the OS Builder's own screen, each filed and fixed
-  in the same wave, so all six are in Fixed rather than Open and the count is
-  unchanged. **ART-254 is ART-253's own sentence reached through a different
-  door**: the evidence that checks the claim was never asked which release it
-  was about, so a release switch could put the new release's plan beside the
-  old release's evidence. **The review is now closed**: wave 3 took the four
-  Minor findings — the evidence line never reached a layered release at all
-  (ART-257, and the union alone would have called AmigaOS 3.2.2's own base
-  disks somebody else's media), `sameRelease` called every disk in the folder
-  the right media (ART-258), the CHANGELOG described a state the line is
-  deliberately silent in, and a component test that asserted against the
-  helper's own output. [ART-166](ISSUES.md) and
-  [ART-117](ISSUES.md) are standing decisions; [ART-118](ISSUES.md) and
-  [ART-062](ISSUES.md) need a person at a screen; [ART-235](ISSUES.md) is a
-  guard reporting a false positive; [ART-241](ISSUES.md) is the accessibility
-  sweep nobody has run; the WHDLoad-drawer round filed three it chose not to
-  patch at the end of a round — [ART-242](ISSUES.md) (WHDLoad's one-click
-  install writes and joins directly in `commands/`, with no `core`-level
-  "install a pack" function to call), [ART-243](ISSUES.md) (an archive edited
-  in place keeps ghost records no Rescan clears) and [ART-244](ISSUES.md)
-  (Update mode re-reads every archive candidate on an argued rather than
-  measured basis — and the hook that would settle it is
-  `real_archive_scan_is_fast`, already written); the prefs-and-wallpaper round
-  filed three more, disclosed rather than fixed at the end of its own twelve
-  tasks — [ART-245](ISSUES.md) (a missing backdrop and a wrong-type match at
-  the same name read as the same "not found" sentence), [ART-246](ISSUES.md)
-  (a permission error walking the tree's prefs has no test provoking it),
-  [ART-247](ISSUES.md) (a PNG decode arm a third-party crate's own guarantee
-  should make unreachable has no test of its own) and [ART-248](ISSUES.md)
-  (the wallpaper apply runs synchronously on the command thread, no progress,
-  no cancel); and the drawer-icons round above filed two, now on `main` — [ART-250](ISSUES.md) (a NewIcon tool type cannot round-trip
-  byte-for-byte through the lossy UTF-8 decode `tooltypes()` uses, measured on
-  69 of 798 real icons) and [ART-251](ISSUES.md) (the AmigaOS 3.2 recipe has
-  no rule at all for `Utilities` or `WBStartup`, so a tree ART builds ships
-  with neither — a recipe-content gap the round found and named rather than
-  fixed, since it is not an icon question).
-- **The list to walk** is
-  [superpowers/specs/2026-09-04-work-list.md](superpowers/specs/2026-09-04-work-list.md).
-  Items 3, 5 and 7 are closed, item 7 now on `main` itself. The drawer-icons
-  round above is not one of the list's own six items — it is round 2 of the
-  separate Hatcher-intake series item 7 opened. **Every item left on the list
-  is the owner's**: items 1, 2 and 4 need a person (a card, a screen driven by
-  hand, a real catalogue looked at), and item 6 is blocked on the owner
-  bringing a real distribution image. There is no next build round queued
-  until one of those is unblocked, the Hatcher intake's remaining four rounds
-  are wanted, or the drawer-icons branch above is merged — the work list's
-  own closing section says so now, corrected in place after it went on
-  naming item 5 as "the next build round" on the same day item 7, the actual
-  next one, was designed and built.
-- **Two things the layered round learnt that still hold**, both worth reading
-  before the next round designs anything:
-  - **One real run is a data point, not coverage.** The 3.2.2 build against
-    the owner's media passed and still hid a defect that would have stopped
-    most real Amigas: with a pre-47 Kickstart both the inherited and the
-    update Modules component switch on into one exclusive group, and the plan
-    refused. The run used a 47.96 ROM, where the base component is off.
-  - **A component's rules must be read off the medium, never across from a
-    neighbouring recipe.** One that was read across placed a file 3.2.2 never
-    copies and omitted one it does, with both files present so nothing
-    refused — a tree stamped `Release 3.2.2` and quietly wrong, invisible to
-    2 676 green tests because nothing read that component's rules.
-- Per-gap state is the stage table above; per-feature state is
-  [FEATURES.md](FEATURES.md). Neither is retold here.
+- **The PiStorm card path** — SD-0, SD-1, SD-2 and SD-4 are built, SD-3's two
+  named gaps are merged, SD-5 is part-built. The gaps still open are one line
+  each in the stage table below. What is left in SD-1 is **not code**: a card
+  flashed and an A500 booted, which is also the project's 1.0 bar.
+- **The OS Builder** — builds a distribution tree from the owner's own
+  AmigaOS 3.2, 3.2.2 (layered base + update) and 3.9 media, carries wallpaper,
+  screen mode, shell defaults, network config and arranged drawer icons, and
+  identifies install media by content hash. Its remaining recipe gap is
+  [ART-251](ISSUES.md) (no rule for `Utilities` or `WBStartup`).
+- **First boot on the Amiga** — phases 1 and 2 built (dispatcher, the
+  `10-hardware`/`20-aux`/`30-datatypes` steps, the `S/FirstBoot.log` report,
+  reading that report back off a card's FAT, FFS or PFS3). Phases 3 and 4 are
+  not built; the Pi3/Pi4 branch of `10-hardware` is unmeasured because it needs
+  a real card.
+- **Aminet and the package catalogue** — Stage A and Stage B are both built
+  and tested, catalogue sync through install-to-HDF and the update view. The
+  AI layer (§45.5) is deliberately deferred to v2, the owner's decision of
+  2026-08-24.
+- **The Emu68 Hatcher intake** (`rootrootde/emu68hatcher`, MIT) — scoped at six
+  rounds of taking what is worth taking. Five have landed on `main`: prefs and
+  wallpaper (1), drawer icons (2), refusal evidence (3), media identification
+  by hash (4), and first boot phases 1–2 (5). Round 5's own phases 3 and 4 are
+  the next code work; nothing else is queued.
+- **The 2026-09-04 work list**
+  ([superpowers/specs/2026-09-04-work-list.md](superpowers/specs/2026-09-04-work-list.md))
+  — items 3, 5 and 7 are closed. **Every item left on it is the owner's**:
+  items 1, 2 and 4 need a person (a card, a screen driven by hand, a real
+  catalogue looked at) and item 6 is blocked on the owner bringing a real
+  distribution image.
+- **v0.9.0 is out and in the community's hands.** Reading what came back is
+  still the first thing a session does — issues on the repository, and whatever
+  the owner was told directly. A report that went *well* counts: the nine gaps
+  the README lists are unverified in both directions. Nothing had come back as
+  of 2026-09-05: no issues, three release downloads.
 
 ### How a release goes out now
 
@@ -1485,28 +282,151 @@ the built `.exe` once. "It compiled" is not the same claim as "it opens".
 
 Neither needs a design decision or more code first.
 
-### The machine, and where things live
+---
 
-- `E:\amiga\Amigatolon` — the owner's own material. **Read from, never
-  written to.** Inventoried 2026-08-13 and nothing copyrighted is missing:
-  A1200 Kickstarts in both families (3.1 rev 40.68, 3.2's `kicka1200.rom`,
-  3.2.1's `A1200.47.102.rom`), the full AmigaOS 3.2 ADF set with its CD and the
-  3.2.1/3.2.2 updates, the 3.9 ISO with both BoingBags, every release from 1.0
-  to 3.1 as ADFs, and both real PiStorm distributions (CaffeineOS 9317,
-  MultibootOS 2.2) as images. WinUAE, 7-Zip and amitools are installed.
+## What ART is, and the ceiling that comes with it
+
+**Every established Amiga distribution builder runs the install inside an
+emulator** — HstWB Installer, AmiKit, AmigaSYS and ClassicWB all do, using the
+user's own OS files. ART is not in that family: `amitools`'s `xdftool` does
+what ART does — host-side placement plus a metadata sidecar (`.xdfmeta`, ART's
+`.uaem`) — so ART sits in the **tooling** family. That has a ceiling, and it
+is a live constraint rather than a defect:
+
+- **[ART-166](ISSUES.md)** (open) — a BoingBag's payload is a
+  password-encrypted ZIP and the password lives in an Amiga executable. A
+  host-side placer cannot read it. **The owner's decision, 2026-08-19, so it
+  is not re-litigated by accident: no bypass of the BoingBag password will be
+  written.** The way past it is to run the package's own installer on an Amiga.
+- **The Amiga side is no longer hypothetical.** `core/amigainstall` runs a
+  package's own installer under WinUAE, and `core/firstboot` runs a tree's own
+  setup on the real machine at first boot. What that path can and cannot do
+  yet is the FEATURES rows for those two, not this paragraph.
+
+Two rules came out of the same round and outlive it, both now in CLAUDE.md:
+**ask the artefact what it is** — a booted system answers `version full`,
+where a copyright line, a directory name and a file size are each consistent
+with several answers (this is how a 3.5 tree was recorded as 3.9 for most of a
+day, [ART-169](ISSUES.md#fixed)) — and **a file with no `$VER:` marker is
+invisible to a collision classifier**, so any "did the update take?" check
+built on collision classes alone will be confidently wrong about the one file
+that matters ([ART-170](ISSUES.md#fixed)).
+
+---
+
+## Stage plan
+
+This supersedes the phase numbering in `roadmap.md` for scheduling.
+`roadmap.md` still defines *what each phase contains*; this defines *what order
+the remaining work happens in and why*.
+
+### Closed stages
+
+Each of these is finished. The detail is the [session log](session-log.md) row
+for its date and the FEATURES rows it produced; nothing about them is retold
+here.
+
+| Stage | Status | Closed | Where the detail lives |
+|---|---|---|---|
+| **Stage 1** — Data safety (`core/safety`, atomic writes, generational backups, bounds-checked blocks, the AmigaDOS hash fix) | ✅ | 2026-08-09 | [session log](session-log.md) · [ART-021…ART-029](ISSUES.md#fixed) |
+| **Stage 2** — Workflow Engine (`core/workflow/builtin.rs`, `Navigate`/`Execute`, the drop panel) | ✅ | 2026-08-09 | [session log](session-log.md) · [architecture.md](architecture.md) |
+| **Stage 3** — Systematic audit (HDF/RDB held nine defects, three critical; sparse HDF creation) | ✅ | 2026-08-09 | [ISSUES.md](ISSUES.md#fixed) |
+| **Stage 4** — Shared infrastructure (jobs, oplog, UX modes — the hard prerequisites Stage 5 names) | ✅ | 2026-08-09 | [session log](session-log.md) |
+| **Stage W** — Writing into volumes (`core/volume/write/`: OFS, FFS, INTL at any geometry) | ✅ | 2026-08-09 | [FEATURES.md](FEATURES.md) |
+| **§82** — One-click WHDLoad install, end to end | ✅ | 2026-08-09 | [FEATURES.md](FEATURES.md) |
+| **Phase 0a** — Live bugs fixed, one filesystem writer | ✅ | 2026-08-10 | [session log](session-log.md) |
+| **Phase 0b** — Dead code removed, the interface speaks Turkish | ✅ | 2026-08-10 | [session log](session-log.md) |
+| **Phase 1a** — The Commander (real selection, batch operations, sorting, filter) | ✅ | 2026-08-11 | [session log](session-log.md) |
+| **Phase 2a** — Content-first detection and containers | ✅ | 2026-08-12 | [plan](superpowers/plans/2026-08-11-phase-2a-content-detection-and-optical.md) |
+| **Phase 2b** — The Files screen, done right | ✅ | 2026-08-12 | [plan](superpowers/plans/2026-08-12-phase-2b-commander-ui.md) · [brief](brief-files-commander-ui.md) |
+| **Stage 5 / §41.5** — Aminet: catalog sync, search, download, readme, Collection, install to HDF, update view, and the 14-set package-bundle catalogue | ✅ | 2026-08-09, extended to 2026-08-24 | [FEATURES.md](FEATURES.md) · [design-software-sources.md](design-software-sources.md). Bundles are download-only in phase 1 — nothing installs onto an Amiga volume yet; `net/live_aminet.rs` (2026-08-24) is the re-runnable check against the real mirrors |
+| **Stage 5 / §45.5** — the AI workflow layer | 🅥2 | deferred 2026-08-24 | [design-ai-layer.md](design-ai-layer.md) — the owner's decision: the only planned feature that adds no capability ART lacks, so it waits until the ground under it has been driven |
+
+Two caveats from Phase 2b that nobody has closed since: **the light theme has
+never been looked at** (its tokens derive from the dark ones by role), and
+**session restore is only half verified** — the write half reaches
+`settings.json` and has tests (`src/lib/paneSession.ts`), but nothing has
+closed and reopened ART to watch the read half. Both sit under
+[ART-062](ISSUES.md).
+
+### 🟡 PiStorm Image Builder — SD-0 … SD-5
+
+**The project's largest feature and, per the owner, its point.** SD-0, SD-1,
+SD-2 and SD-4 are built. SD-3's two named gaps are both built and merged —
+G14 (prefs, wallpaper, screen mode, shell defaults, `core/amiganet/`'s network
+half) and G16 (multiboot) — and SD-5 is part-built. Only the gaps still open
+are listed below; a built gap is a [FEATURES.md](FEATURES.md) row, not a line
+here.
+
+Gap analysis: [sd-appliance-gap-analysis.md](sd-appliance-gap-analysis.md).
+Prior-art teardown: [sd0-prior-art.md](sd0-prior-art.md). Card layout measured
+off two real cards: [sd2-card-layout.md](sd2-card-layout.md).
+
+| Gap | Stage | What is still missing (checked against the tree 2026-09-07) |
+|---|---|---|
+| **SD-1 exit** | SD-1 | Not code. Every gap in SD-1 is a ✅ row in [FEATURES.md](FEATURES.md); what is left is a card ART built, flashed, and an A500 booted from it. This is the 1.0 bar |
+| **G10** | SD-2 | Built and closed 2026-09-05 (`core/gameindex/igame.rs`, `igamewrite.rs`). The one outstanding claim: **no `igame.data` ART wrote has been read by iGame on a real Amiga.** The AGS half was assessed 2026-08-25 and the recommendation is not to build it — `core/artwork` handles PNG and JPEG and not IFF, so the launcher would show a collection with no pictures |
+| **G11** | SD-2 | Built (`core/layout/`, the `/layout` screen). **Not yet driven in `pnpm tauri dev` against real material, and no staging tree it built has been carried onto a card** |
+| **SD-5 planner** | SD-5 | All five entries in the distro registry are `available: false` (`grep -c '"available": false' src-tauri/src/core/distro/*.json` → 5), so nothing yet plans a card from a named distribution. The capacity half is built — `core/card/capacity.rs` refuses an FFS partition past the 4 GB a pre-v46 Kickstart can address, which is a corrupted drive rather than an inconvenience |
+
+Four decisions behind it, worth knowing before reading the code they produced:
+
+- **ART never touches physical media.** Everything is built into a sparse image
+  file through the existing tested paths, and there the job ends: the user
+  flashes it with the imager they already have. §56's raw-device guard stays in
+  the spec as the reason ART does not do this, rather than as a problem ART has
+  to solve. This deleted the original G1 and G12 outright.
+- **v1 targets Emu68 only.** The classic Linux/Musashi route is a different
+  build and is out of scope in writing, not by omission.
+- **Which Amiga is a parameter, not an assumption.** What varies by machine is
+  data the build already carries — the Kickstart, the Emu68 config, the OS
+  release, the partition geometry — not a code path. The hardware in the room
+  is a classic PiStorm on a Pi 3A+, verified on an A500 and an A500+.
+- **A distribution is configured in ART, not afterwards on the Amiga.**
+  Wallpaper, WiFi, prefs and Startup-Sequence are build inputs (G14), each
+  **edited in place rather than regenerated** — the rule §39/§40 already impose
+  on `FF.CFG` and `cmdline.txt`, applied to AmigaOS. The WiFi passphrase is
+  deliberately not remembered and stays out of the oplog, the manifest and any
+  AI prompt.
+
+---
+
+## Phase completion criteria
+
+Carried over from `roadmap.md`; a stage is not done until all of these hold.
+
+- Build: PASS
+- Tests: PASS
+- No critical errors
+- No obvious data-loss risk
+- UI remains responsive
+- Documentation updated (this file, [ISSUES.md](ISSUES.md), [FEATURES.md](FEATURES.md))
+- CHANGELOG updated
+
+---
+
+## The machine, and where things live
+
+- `E:\amiga\Amigatolon` — the owner's own material. **Read from, never written
+  to.** Inventoried 2026-08-13: A1200 Kickstarts in both families (3.1 rev
+  40.68, 3.2's `kicka1200.rom`, 3.2.1's `A1200.47.102.rom`), the full AmigaOS
+  3.2 ADF set with its CD and the 3.2.1/3.2.2 updates, the 3.9 ISO with both
+  BoingBags, every release from 1.0 to 3.1 as ADFs, and both real PiStorm
+  distributions (CaffeineOS 9317, MultibootOS 2.2) as images. WinUAE, 7-Zip
+  and amitools are installed.
 - `E:\amiga\ProjeART` — where trial output goes. **Not C:, not D:** (the
   owner's rule, 2026-08-14), and not F: either, which is a 499 MB drive a
   300 MB oracle image will not fit on. `ART_SCRATCH` overrides it in the
   scripts. It holds `card.img` (a card ART built from the real release),
-  `dist-3.2\` (the real AmigaOS 3.2 tree `core/osinstall` built from the
-  owner's own ADFs — read from, not rebuilt idly, since rebuilding costs the
-  same real-media run), and `screen-test.img` + `preload-tree\`, staged for a
-  screen run. That card's one Amiga partition is `SDH0`, FFS, 0.90 GiB, in MBR
-  slot 2 — so a correct preload plan has **two** steps and no driver-embed
-  step, because Kickstart carries FFS. If the plan shows three, something is
-  wrong before anything is formatted.
+  `dist-3.2\` (the real AmigaOS 3.2 tree — read from, not rebuilt idly, since
+  rebuilding costs the same real-media run), and `screen-test.img` +
+  `preload-tree\`, staged for a screen run. That card's one Amiga partition is
+  `SDH0`, FFS, 0.90 GiB, in MBR slot 2 — so a correct preload plan has **two**
+  steps and no driver-embed step, because Kickstart carries FFS. If the plan
+  shows three, something is wrong before anything is formatted.
 - The test suite's own scratch goes to `D:/tmp/art-tests`, forced by
-  `src-tauri/.cargo/config.toml` (ART-184) — machine-local relief, not a fix.
+  `src-tauri/.cargo/config.toml` ([ART-184](ISSUES.md#fixed)) — machine-local
+  relief, not a fix.
 - Rebuilding the card is the fastest way to see the whole engine work at once:
 
   ```bash
@@ -1521,7 +441,7 @@ Neither needs a design decision or more code first.
   finished card back. Delete `card.img` first — `build_card` refuses to write
   over one that is already there.
 
-### What the owner brings, and what each thing settles
+## What the owner brings, and what each thing settles
 
 Each of these changed a decision rather than merely being nice to know.
 
@@ -1529,17 +449,17 @@ Each of these changed a decision rather than merely being nice to know.
   classic PiStorm on a Raspberry Pi 3A+, plus a Gotek — which is
   `PistormHardware::default()` already. Consequences that are facts rather
   than parameters: the kernel archive is `Emu68-pistorm.zip` on the stable
-  line (**not** the same file as on the 1.1 alpha — ART-091), the SD driver is
-  `brcm-sdhc.device`, and `genet.device` is irrelevant (the 3A+ has no
-  ethernet; its WiFi is `wifipi.device`).
+  line (**not** the same file as on the 1.1 alpha — [ART-091](ISSUES.md#fixed)),
+  the SD driver is `brcm-sdhc.device`, and `genet.device` is irrelevant (the
+  3A+ has no ethernet; its WiFi is `wifipi.device`).
 - **More than one real Amiga.** The rule is unchanged — a claim records
   *which* machine proved it — but there is more than one machine to prove
   things on.
 - **Licensed Amiga Forever, desktop and mobile.** There is no Kickstart
   licence problem to design around, and the Cloanto-headered dumps are
   available — which `core/rom` already strips (`AMIROMTYPE1`). It is also why
-  [ART-104](ISSUES.md) mattered: a licensed collection carries dumps whose
-  checksums are not the ones a table copied from anywhere else will hold.
+  [ART-104](ISSUES.md#fixed) mattered: a licensed collection carries dumps
+  whose checksums are not the ones a table copied from anywhere else will hold.
 - **The owner wrote two Amiga-side programs and both are meant to ship in
   ART-built distributions**: **tolunnet**, a TCP/IP stack in Roadshow's place,
   and **tolunwifi**. Source at `D:\Projeler\tolunnet`. A stack the owner
@@ -1549,13 +469,13 @@ Each of these changed a decision rather than merely being nice to know.
   source (`core/amiganet/`), so nothing was reverse-engineered and Roadshow is
   not assumed as the default stack.
 
+---
+
 ## Session log
 
-Moved to [session-log.md](session-log.md) on 2026-09-04. It was 279 KB of this
-file's 353 KB and it describes the past, where the rest of this file describes
-the present — and a reader looking for "where is the project" had to scroll
-past every round ART has ever had to reach the end.
+Moved to [session-log.md](session-log.md) on 2026-09-04, and it is history: a
+row describes the tree on the day it was written and is never rewritten.
 
 **Add a row there, at the top, when work lands.** Nothing is duplicated back
-here on purpose: two copies of a log is how the Snapshot's own "Last updated"
-cell ended up a day behind it.
+here on purpose — two copies of a log is how this file's own "Last updated"
+cell once ended up a day behind it.

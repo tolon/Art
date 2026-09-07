@@ -181,10 +181,19 @@ cargo clippy --all-targets -- -D warnings   # Rust lints — blocking on purpose
 cargo test                             # all Rust tests
 python scripts/oracle-check.py         # amitools oracle, both directions
 python scripts/rom-table-check.py      # the Kickstart table against amitools' Remus data
+python scripts/control-byte-sweep.py   # no stray control bytes in tracked text (ART-216)
+python scripts/scratch-root-sweep.py   # every staging site goes through the scratch root (ART-196)
 python scripts/contrast-check.py --quiet    # every colour pair, both themes, against WCAG
 cargo deny check                       # licence + advisory audit
 pnpm tauri build                       # full production build
 ```
+
+**Locally, `cargo test` may not be the command to quote from.** On the owner's
+machine an antivirus kills a full `cargo test --lib` mid-run — exit 0, no
+`test result:` line, no failure — so `cargo test --lib -- --skip artwork` is
+the only honest Rust number there until the exclusions land
+([ART-261](ISSUES.md)). **Quote the `test result:` line, never the exit code**:
+an exit code cannot tell a finished suite from a killed one.
 
 Clippy runs with `-D warnings` and is **blocking on purpose**: it previously
 ran with `continue-on-error`, and that hid a real correctness bug for months

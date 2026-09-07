@@ -131,10 +131,17 @@ Concretely: if a `core/` module needs to do something platform-specific (open
 a file dialog, detect a USB drive, launch WinUAE), it exposes a **trait**, and
 the implementation lives outside the core.
 
-There are three: `MirrorClient` (`core/sources/mirror.rs` → `net/http_mirror.rs`, the
-network), `VolumeFormatter` (below) and `HostRecycler` (`core/hostfs.rs` →
-`tools/recycle_bin.rs`, which is how a file the user deletes goes to the Windows Recycle
-Bin rather than into a recovery mechanism ART invented — ART-080).
+There are three live instances: `MirrorClient` (`core/sources/mirror.rs` →
+`net/http_mirror.rs`, the network), `VolumeFormatter` (below) and `HostRecycler`
+(`core/hostfs.rs` → `tools/recycle_bin.rs`, which is how a file the user deletes goes to the
+Windows Recycle Bin rather than into a recovery mechanism ART invented — ART-080).
+
+There is a **fourth place that should be one and is not**: `core/winuae.rs` spawns
+`winuae64.exe` directly from inside `core/`, with no trait between the decision to open the
+emulator and the process spawn that carries it out, and `core::amigainstall::run` and
+`core::amigainstall::rehearse` are both consumers of it. That is filed as
+[ART-274](ISSUES.md), not sanctioned; the fix is an `EmulatorLauncher`-style trait declared in
+`core/` with the spawn implemented in `tools/`, exactly as `VolumeFormatter` already is.
 
 `core/preload::VolumeFormatter` (`probe`, `import_filesystem`, `format_partition`, `copy_in`)
 is the largest of them: `src-tauri/src/tools/hst_imager.rs` launches `hst.imager.exe` and lives
