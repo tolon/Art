@@ -74,6 +74,28 @@ export async function firstbootWrite(tree: string): Promise<FirstBootWritten> {
   return invoke<FirstBootWritten>("firstboot_write", { tree });
 }
 
+// ---------------------------------------------------------------------------
+// Reading a card's first-boot report back (§9, tasks 10/10b)
+// ---------------------------------------------------------------------------
+//
+// Where the report actually came from. `"amiga-volume"` is the copy spec §9
+// says wins where both exist; task 10 lands `"fat"`/`"none"` only — the
+// backend never answers `"amiga-volume"` until task 10b, but the type
+// carries all three from the start so this wrapper does not change shape
+// between the two commits.
+export type ReportSource = "fat" | "amiga-volume" | "none";
+
+export interface CardFirstBootReport {
+  source: ReportSource;
+  report: FirstBootReport;
+}
+
+/** Read a card's first-boot report — no card operation, no boot, just files
+ *  already on the image. Never opens the card for writing. */
+export async function cardFirstBootReport(path: string): Promise<CardFirstBootReport> {
+  return invoke<CardFirstBootReport>("card_firstboot_report", { path });
+}
+
 export function stepOutcomePhrase(outcome: StepOutcome): Phrase {
   switch (outcome.kind) {
     case "ok":

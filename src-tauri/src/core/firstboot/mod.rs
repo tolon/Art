@@ -34,6 +34,7 @@
 //! `commands/firstboot.rs`'s job, the same rule as `core::artwork` and
 //! `core::gameindex`.
 
+pub mod cardread;
 pub mod plan;
 pub mod report;
 pub mod scripts;

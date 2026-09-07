@@ -170,6 +170,7 @@ pub fn run() {
             commands::firstboot::firstboot_preview,
             commands::firstboot::firstboot_write,
             commands::firstboot::firstboot_rehearse,
+            commands::firstboot::card_firstboot_report,
             commands::gotek::gotek_scan,
             commands::gotek::gotek_save,
             commands::distro::distro_profiles,

@@ -125,6 +125,103 @@ impl<T: Read + Write + Seek> Seek for Region<T> {
     }
 }
 
+/// Wraps something that can only be read, so it can still satisfy the
+/// `Read + Write + Seek` bound [`Region`] and `fatfs::FileSystem::new` both
+/// require.
+///
+/// **A read of a user's card must never open it for writing** (task 10). The
+/// FAT crate has no read-only mount mode — mounting means owning a type that
+/// implements `Write` — so this exists to make that impossible one layer
+/// down instead: `write` and `flush` refuse with
+/// [`io::ErrorKind::Unsupported`] rather than silently succeeding or, worse,
+/// actually reaching the inner `T`. In practice neither is ever called for a
+/// plain read (mounting and reading a file touch nothing on disk — `fatfs`
+/// only writes through its `Write` impl when something is actually
+/// modified), so this is a belt no ordinary read needs and a refusal for the
+/// one that would.
+pub struct ReadOnly<T>(T);
+
+impl<T> ReadOnly<T> {
+    pub fn new(inner: T) -> Self {
+        Self(inner)
+    }
+}
+
+impl<T: Read> Read for ReadOnly<T> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+impl<T> Write for ReadOnly<T> {
+    fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this card was opened read-only; nothing here may write to it",
+        ))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this card was opened read-only; nothing here may write to it",
+        ))
+    }
+}
+
+impl<T: Seek> Seek for ReadOnly<T> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        self.0.seek(pos)
+    }
+}
+
+/// One file from the boot partition's root, or `None` when it is not there.
+///
+/// Bounded: a report is a few hundred bytes, so anything past
+/// `MAX_ROOT_FILE_BYTES` is refused rather than read — a card is untrusted
+/// input like any other, and a length field is never trusted enough to drive
+/// an unbounded allocation.
+///
+/// Read-only end to end: nothing here needs to look further than opening the
+/// filesystem and one file inside it, so a caller may (and, for a user's own
+/// card, should) pass a [`Region`] wrapping [`ReadOnly`] rather than a
+/// writable handle.
+pub const MAX_ROOT_FILE_BYTES: u64 = 1 << 20;
+
+pub fn read_root_file<T: Read + Write + Seek>(
+    region: &mut Region<T>,
+    name: &str,
+) -> CoreResult<Option<Vec<u8>>> {
+    let fs = fatfs::FileSystem::new(region, fatfs::FsOptions::new()).map_err(|err| {
+        CoreError::Malformed {
+            format: "FAT32".into(),
+            detail: format!("the boot partition cannot be opened: {err}"),
+        }
+    })?;
+    let root = fs.root_dir();
+    let entry = match root
+        .iter()
+        .flatten()
+        .find(|e| e.file_name().eq_ignore_ascii_case(name))
+    {
+        Some(entry) => entry,
+        None => return Ok(None),
+    };
+    if entry.len() > MAX_ROOT_FILE_BYTES {
+        return Err(CoreError::LimitExceeded {
+            subject: "the boot partition's root".into(),
+            detail: format!(
+                "'{name}' is {} bytes, more than ART reads from a card's root ({MAX_ROOT_FILE_BYTES} bytes)",
+                entry.len()
+            ),
+        });
+    }
+    let mut file = entry.to_file();
+    let mut bytes = Vec::with_capacity(entry.len() as usize);
+    file.read_to_end(&mut bytes)?;
+    Ok(Some(bytes))
+}
+
 /// A file to put on the boot partition.
 #[derive(Debug, Clone)]
 pub struct BootFile {
@@ -917,5 +1014,140 @@ mod tests {
         assert_eq!(read, 5, "the window is five bytes long");
         assert_eq!(&buf[..5], &[10, 11, 12, 13, 14]);
         assert_eq!(region.read(&mut buf).unwrap(), 0, "and then nothing");
+    }
+
+    // ---- reading a report back (task 10) ----
+
+    /// A file written the way the Amiga's own first-boot script would leave
+    /// it — through `fatfs` directly, not through `create_boot_partition` —
+    /// still reads back through `read_root_file`.
+    #[test]
+    fn a_file_written_by_fatfs_directly_reads_back() {
+        let mut image = blank_image();
+        create_boot_partition(&mut image, START, PARTITION, DEFAULT_LABEL, &[]).unwrap();
+
+        {
+            let mut region = Region::new(&mut image, START, PARTITION);
+            let fs = fatfs::FileSystem::new(&mut region, fatfs::FsOptions::new()).unwrap();
+            let mut file = fs.root_dir().create_file("art-firstboot.log").unwrap();
+            file.write_all(b"art-firstboot 1\ndone all\n").unwrap();
+            file.flush().unwrap();
+        }
+
+        let mut region = Region::new(&mut image, START, PARTITION);
+        let bytes = read_root_file(&mut region, "art-firstboot.log").unwrap();
+        assert_eq!(bytes, Some(b"art-firstboot 1\ndone all\n".to_vec()));
+    }
+
+    #[test]
+    fn a_file_that_is_not_there_reads_as_none_not_an_error() {
+        let mut image = blank_image();
+        create_boot_partition(&mut image, START, PARTITION, DEFAULT_LABEL, &[]).unwrap();
+
+        let mut region = Region::new(&mut image, START, PARTITION);
+        assert_eq!(
+            read_root_file(&mut region, "absent.log").unwrap(),
+            None,
+            "a card that never booted has no report yet, which is not an error"
+        );
+    }
+
+    /// `art-firstboot.log` is longer than 8.3, so `fatfs` writes it as a long
+    /// filename entry — this is the shape `read_root_file` must read, not the
+    /// short alias beside it.
+    #[test]
+    fn a_long_filename_entry_still_reads() {
+        let mut image = blank_image();
+        create_boot_partition(&mut image, START, PARTITION, DEFAULT_LABEL, &[]).unwrap();
+        {
+            let mut region = Region::new(&mut image, START, PARTITION);
+            let fs = fatfs::FileSystem::new(&mut region, fatfs::FsOptions::new()).unwrap();
+            let mut file = fs.root_dir().create_file("art-firstboot.log").unwrap();
+            file.write_all(b"x").unwrap();
+        }
+
+        let mut region = Region::new(&mut image, START, PARTITION);
+        let names: Vec<String> = {
+            let fs = fatfs::FileSystem::new(&mut region, fatfs::FsOptions::new()).unwrap();
+            let names = fs
+                .root_dir()
+                .iter()
+                .map(|e| e.unwrap().file_name())
+                .collect();
+            names
+        };
+        assert!(
+            names.contains(&"art-firstboot.log".to_string()),
+            "the long name must be the one on disk, not an 8.3 alias: {names:?}"
+        );
+
+        let mut region = Region::new(&mut image, START, PARTITION);
+        assert_eq!(
+            read_root_file(&mut region, "art-firstboot.log").unwrap(),
+            Some(b"x".to_vec())
+        );
+    }
+
+    /// A report is never more than a few hundred bytes — anything past
+    /// `MAX_ROOT_FILE_BYTES` is refused rather than read, the same rule every
+    /// other length-driven allocation in ART follows for untrusted input.
+    #[test]
+    fn a_file_larger_than_the_bound_is_refused_not_read() {
+        let mut image = blank_image();
+        create_boot_partition(&mut image, START, PARTITION, DEFAULT_LABEL, &[]).unwrap();
+        {
+            let mut region = Region::new(&mut image, START, PARTITION);
+            let fs = fatfs::FileSystem::new(&mut region, fatfs::FsOptions::new()).unwrap();
+            let mut file = fs.root_dir().create_file("huge.log").unwrap();
+            file.write_all(&vec![7u8; (MAX_ROOT_FILE_BYTES + 1) as usize])
+                .unwrap();
+        }
+
+        let mut region = Region::new(&mut image, START, PARTITION);
+        let err = read_root_file(&mut region, "huge.log").unwrap_err();
+        assert_eq!(err.code(), "ART-LIMIT-EXCEEDED", "{err}");
+    }
+
+    /// The guard itself, checked directly rather than only through a full
+    /// mount: a real read never exercises `fatfs`'s `Write` bound at all (see
+    /// the next test's own comment), so a version of `ReadOnly` that quietly
+    /// forwarded `write`/`flush` to the inner value instead of refusing would
+    /// pass every other test in this file. This is the one that would catch
+    /// it.
+    #[test]
+    fn read_only_refuses_write_and_flush_directly() {
+        let mut wrapped = ReadOnly::new(Cursor::new(vec![0u8; 4]));
+        let err = wrapped.write(&[1, 2]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+        let err = wrapped.flush().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+    }
+
+    /// **The property task 10's own ruling exists for.** A read through
+    /// [`ReadOnly`] must be a read and nothing else: the bytes underneath
+    /// come back identical whether or not `read_root_file` was ever called.
+    /// `ReadOnly` refuses `write`/`flush` outright, so this also proves
+    /// `fatfs` never actually needs them for a plain read — if it did, this
+    /// test would fail with an I/O error rather than a bytes mismatch.
+    #[test]
+    fn reading_through_read_only_never_changes_the_cards_bytes() {
+        let mut image = blank_image();
+        create_boot_partition(&mut image, START, PARTITION, DEFAULT_LABEL, &[]).unwrap();
+        {
+            let mut region = Region::new(&mut image, START, PARTITION);
+            let fs = fatfs::FileSystem::new(&mut region, fatfs::FsOptions::new()).unwrap();
+            let mut file = fs.root_dir().create_file("art-firstboot.log").unwrap();
+            file.write_all(b"art-firstboot 1\ndone all\n").unwrap();
+        }
+
+        let before = crate::core::hashing::sha256_bytes(image.get_ref());
+
+        let read_only = ReadOnly::new(image.clone());
+        let mut region = Region::new(read_only, START, PARTITION);
+        let bytes = read_root_file(&mut region, "art-firstboot.log").unwrap();
+        assert_eq!(bytes, Some(b"art-firstboot 1\ndone all\n".to_vec()));
+
+        let after = crate::core::hashing::sha256_bytes(image.get_ref());
+        assert_eq!(before, after, "a read must never change the card's bytes");
     }
 }
