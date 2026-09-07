@@ -34,8 +34,10 @@ they could happen.
   `scan::find_packages` reads an archive's single top-level directory. **None of it is
   replaced.** This round joins them.
 - **The table has no AmigaOS 3.9 rows.** `media_hashes.json`: 186 rows, 0 for the ISO, 0 for
-  any package archive. `candidates_in` hashes only `MEDIA_EXTENSIONS` (floppy images), so the
-  ISO and the `.lha` archives are never hashed today.
+  any package archive. `candidates_in` already hashes `adf`, `iso` and `lha`
+  (`MEDIA_EXTENSIONS`, `mediahash.rs:430`), so the owner's ISO and archives are hashed today
+  and every one of them reads *not in the table* — a claim about the table, as the module's
+  own doc says, and one this round makes true less often.
 - **HstWB's table (MIT) and the owner's files agree where they overlap**, measured 2026-09-08:
 
   | Artefact | Owner's file | MD5 | In HstWB's CSV |
@@ -172,12 +174,18 @@ Never added silently: `remembered.ts`'s rule.
 
 ### 3.6 The table grows, and its check script with it
 
-- `media_hashes.json` rows gain `artefact` (the slot id a hash belongs to) and `kind`
-  (`floppy` | `disc` | `archive`); the eleven rows of § 2 are added with their source stated.
-  HstWB's three are attributed (`adopted_from` already exists for Hatcher).
-- `candidates_in` hashes `.iso` and `.lha` (and `.lzh`, `.zip`, `.7z` — what
-  `find_packages` opens) as well as floppies. An ISO is 490 MB: hashed once, cached against
-  `(path, size, mtime)` like everything else, in the background job that already exists.
+- **A second table file, ART's own.** `mediahash.rs` keeps the adopted table exactly as
+  adopted (its own rule: a reader must be able to tell whose claim a row is). So the eleven
+  rows of § 2 go into `media_hashes_own.json`, each with `source` ("HstWB Installer
+  `amiga-os-entries.csv` (MIT)" for the three it also carries, "the owner's copy,
+  2026-09-08" for the rest), `artefact` (the slot id) and `kind` (`disc` | `archive`);
+  `rows()` serves both files, and a row's provenance sentence names its file. The adopted
+  rows gain nothing; `artefact` for them is derived from `volume` + `version` by the
+  existing name mapping, not written into Hatcher's data.
+- `candidates_in` already hashes `.iso` and `.lha`; add `lzh`, `zip`, `7z` (what
+  `find_packages` opens) so a re-packed archive is at least reported. An ISO is 490 MB:
+  hashed once, cached against `(path, size, mtime)` like everything else, in the background
+  job that already exists.
 - `scripts/media-table-check.py DIR` learns the new kinds and reports, for a directory of
   real material, which rows matched — the re-runnable check the table's own design demands.
 - **Structural check beside the hash** for the CD (HstWB's six directories): a slot for a
