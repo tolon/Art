@@ -405,6 +405,65 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-277** 🟠 **A stale package selection carried the wrong archive into a
+request, and the refusal quoted an internal overlay path instead of naming
+either package:
+`'…BoingBag39-2.lha' is not this package's update archive: it carries none of
+'BoingBag3.9-1-UAE/BoingBag3.9-1'; it holds BoingBag3.9-2,
+BoingBag3.9-2.info (ART-INPUT-INVALID)`** — *found 2026-09-08 by the owner,
+running BoingBag 1 then attempting BoingBag 2 through `AmigaInstallPanel`;
+fixed 2026-09-08*
+`src/components/osbuilder/AmigaInstallPanel.tsx` · `src/lib/amigainstall.ts` ·
+`src-tauri/src/core/amigainstall/packagevol.rs` ·
+`src-tauri/src/commands/amigainstall.rs`
+
+Two causes, both in the panel that had never been driven by a person until
+the night before (ART-118's own claim: "no run has ever been launched from
+this screen"). First, `AmigaInstallPanel.tsx` kept four **global, unscoped**
+`useRemembered` keys — `amigaInstall.package`, `amigaInstall.archive`,
+`amigaInstall.overlayArchive`, `amigaInstall.medium` — so switching the radio
+from BoingBag 3.9-1 to BoingBag 3.9-2 called `setPackageId` alone and left
+BoingBag 1's own archive paths sitting in the two archive fields, which then
+rode into the BoingBag 2 preview/run request. Second, `apply_overlay`'s
+refusal (`packagevol.rs`) named only the *expected* overlay path —
+`expected_overlays(layout)`, which can only ever describe the *selected*
+package's own declaration — and never said which package was actually
+selected, nor that the supplied archive was recognisably a whole other
+package's own (`BoingBag3.9-2`'s own top-level drawer), because
+`core/amigainstall` had no catalogue to check that against at all.
+
+**Fixed 2026-09-08.** The archive and overlay-archive keys are now scoped per
+package — `amigaInstall.<packageId>.archive` / `.overlayArchive`, via
+`amigaInstallArchiveKey` (`src/lib/amigainstall.ts`) — the same shape
+`rememberedComponentKey` already gives `OsInstall.tsx`'s per-release
+component picks; `amigaInstall.medium` stays global, since the AmigaOS 3.9
+CD image is one fact about the build and not about which package is
+selected. Nothing is cleared on a package switch (CLAUDE.md: nothing changes
+unless the user changes it) — a different key is simply read, so BoingBag
+1's own choice is exactly where it was left the next time BoingBag 1 is
+selected again. A new read-only command, `amigainstall_classify_archive`
+(`commands/amigainstall.rs`, over `packagevol::archive_top_level` /
+`archive_identity` / `archive_is`), classifies a chosen archive **at the
+moment it is picked** — `"the-package"`, `"the-update-archive"`,
+`` `another-package:<id>` ``, or `"unknown"` — and the panel shows a hint
+beside the field and disables Run while a field carries another catalogued
+package's own archive. `apply_overlay`'s refusal (`packagevol.rs`) now takes
+the selected package's own name and a small `KnownPackage { id, name, media }`
+catalogue (the lower-module's own record — `core/amigainstall` still never
+reads a recipe) from the command layer, and names the package a mismatched
+archive actually belongs to when its top level matches a catalogued
+`media`, or the selected package by name when it recognises nothing.
+
+Tests: `switching_the_selected_package_reads_that_packages_own_remembered_archive`
+and `a wrong-package archive disables Run and says which package it belongs to`
+(`AmigaInstallPanel.test.tsx`, new); `a_second_archive_matching_another_known_packages_media_names_that_package`
+and five `classify_top_level_*`/`the_command_*` tests (`packagevol.rs` /
+`commands/amigainstall.rs`, new); `a_second_archive_that_is_not_the_declared_overlay_is_refused`
+(existing, updated for the new sentence); every other `amigainstall::` test
+green (165 Rust, 33 in the panel's own suite). Mutated both guards to
+confirm they fail without the fix: the archive key unscoped again, and the
+catalogue lookup in `overlay_mismatch_sentence` disabled.
+
 **ART-276** 🟠 **Two packages sharing one medium tripped the wrong clash check:
 `'Locale3.9' already names the medium component 'locale-39' was installed from in this
 tree`** — *found 2026-09-07 night by the owner, adding `locale-39-turkish` after
