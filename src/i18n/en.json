@@ -2507,6 +2507,11 @@
         "chooseTitle": "Choose the package's update archive",
         "hint": "A second archive that replaces part of the first — the fix some packages shipped separately for their own installer. Leave it empty unless the note below asks for it."
       },
+      "classify": {
+        "anotherPackage": "This is {{other}}'s own archive — but {{selected}} is selected. Select {{other}} to install it, or give {{selected}}'s own archive here.",
+        "wrongFieldOverlay": "This is the package's update archive, not the package itself. It belongs in the second field below.",
+        "wrongFieldPackage": "This is the package's own archive, not its update archive. It belongs in the first field above."
+      },
       "kickstart": {
         "label": "Your own Kickstart ROM",
         "none": "No Kickstart chosen.",

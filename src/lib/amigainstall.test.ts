@@ -133,6 +133,10 @@ describe("the four endings reach the frontend", () => {
 // can reach [it], because it lives inside the component."
 
 import {
+  amigaInstallArchiveKey,
+  anotherPackageId,
+  archiveFieldHint,
+  isWrongPackageArchive,
   outcomeNextStepPhrase,
   outcomePhrase,
   outcomeTone,
@@ -141,6 +145,7 @@ import {
   settlementPhrase,
   waitedSeconds,
   type AmigaInstallPreview,
+  type ArchiveClassification,
   type RunOutcome,
   type SettlementReport,
 } from "@/lib/amigainstall";
@@ -282,5 +287,113 @@ describe("what a previewed run still lacks", () => {
   it("names the Kickstart it looked for, so the user can see which path is wrong", () => {
     const [blocker] = readinessBlockers(preview({ kickstartPresent: false }));
     expect(blocker.params).toEqual({ path: "D:/roms/kick31.rom" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ART-277: per-package remembered keys, and classifying an archive before
+// it ever reaches a request.
+// ---------------------------------------------------------------------------
+
+describe("amigaInstallArchiveKey", () => {
+  it("scopes the key by package once one is chosen", () => {
+    expect(amigaInstallArchiveKey("amigaInstall.archive", "boingbag-39-1")).toBe(
+      "amigaInstall.archive.boingbag-39-1"
+    );
+  });
+
+  it("gives two packages two different keys", () => {
+    const one = amigaInstallArchiveKey("amigaInstall.archive", "boingbag-39-1");
+    const two = amigaInstallArchiveKey("amigaInstall.archive", "boingbag-39-2");
+    expect(one).not.toBe(two);
+  });
+
+  it("stays unscoped while no package is chosen at all", () => {
+    expect(amigaInstallArchiveKey("amigaInstall.archive", null)).toBe("amigaInstall.archive");
+  });
+});
+
+describe("anotherPackageId", () => {
+  it("reads the id out of an another-package classification", () => {
+    expect(
+      anotherPackageId({ kind: "another-package:boingbag-39-2", topLevel: [] })
+    ).toBe("boingbag-39-2");
+  });
+
+  it("is null for every other kind, and for no classification at all", () => {
+    expect(anotherPackageId({ kind: "the-package", topLevel: [] })).toBeNull();
+    expect(anotherPackageId({ kind: "the-update-archive", topLevel: [] })).toBeNull();
+    expect(anotherPackageId({ kind: "unknown", topLevel: [] })).toBeNull();
+    expect(anotherPackageId(null)).toBeNull();
+  });
+});
+
+describe("archiveFieldHint", () => {
+  const anotherPackage: ArchiveClassification = {
+    kind: "another-package:boingbag-39-2",
+    topLevel: ["BoingBag3.9-2", "BoingBag3.9-2.info"],
+  };
+
+  it("names both packages when the archive is recognisably another package's own", () => {
+    const hint = archiveFieldHint(anotherPackage, "package", "BoingBag 3.9-1", "BoingBag 3.9-2");
+    expect(hint).toEqual({
+      key: "osinstall.amigaInstall.classify.anotherPackage",
+      params: { other: "BoingBag 3.9-2", selected: "BoingBag 3.9-1" },
+    });
+    // And the same regardless of which field it sits in — a wrong package is
+    // wrong wherever it was put.
+    expect(archiveFieldHint(anotherPackage, "overlay", "BoingBag 3.9-1", "BoingBag 3.9-2")).toEqual(
+      hint
+    );
+  });
+
+  it("says the update archive belongs in the second field when it is in the first", () => {
+    const hint = archiveFieldHint(
+      { kind: "the-update-archive", topLevel: ["BoingBag3.9-1-UAE"] },
+      "package",
+      "BoingBag 3.9-1",
+      null
+    );
+    expect(hint?.key).toBe("osinstall.amigaInstall.classify.wrongFieldOverlay");
+  });
+
+  it("says the package's own archive belongs in the first field when it is in the second", () => {
+    const hint = archiveFieldHint(
+      { kind: "the-package", topLevel: ["BoingBag3.9-1"] },
+      "overlay",
+      "BoingBag 3.9-1",
+      null
+    );
+    expect(hint?.key).toBe("osinstall.amigaInstall.classify.wrongFieldPackage");
+  });
+
+  it("says nothing for the right archive in the right field, or an unrecognised one", () => {
+    expect(
+      archiveFieldHint({ kind: "the-package", topLevel: [] }, "package", "BoingBag 3.9-1", null)
+    ).toBeNull();
+    expect(
+      archiveFieldHint(
+        { kind: "the-update-archive", topLevel: [] },
+        "overlay",
+        "BoingBag 3.9-1",
+        null
+      )
+    ).toBeNull();
+    expect(
+      archiveFieldHint({ kind: "unknown", topLevel: [] }, "package", "BoingBag 3.9-1", null)
+    ).toBeNull();
+    expect(archiveFieldHint(null, "package", "BoingBag 3.9-1", null)).toBeNull();
+  });
+});
+
+describe("isWrongPackageArchive", () => {
+  it("is true only for another catalogued package's own archive", () => {
+    expect(
+      isWrongPackageArchive({ kind: "another-package:boingbag-39-2", topLevel: [] })
+    ).toBe(true);
+    expect(isWrongPackageArchive({ kind: "the-package", topLevel: [] })).toBe(false);
+    expect(isWrongPackageArchive({ kind: "the-update-archive", topLevel: [] })).toBe(false);
+    expect(isWrongPackageArchive({ kind: "unknown", topLevel: [] })).toBe(false);
+    expect(isWrongPackageArchive(null)).toBe(false);
   });
 });

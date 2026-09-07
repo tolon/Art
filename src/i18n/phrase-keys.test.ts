@@ -118,12 +118,14 @@ import {
   type RefusalReason as OsInstallRefusalReason,
 } from "@/lib/osinstall";
 import {
+  archiveFieldHint,
   outcomeNextStepPhrase as amigaNextStepPhrase,
   outcomePhrase as amigaOutcomePhrase,
   overlayAdvicePhrase,
   readinessBlockers,
   settlementPhrase,
   type AmigaInstallPreview,
+  type ArchiveClassification,
   type RunOutcome,
   type SettlementReport,
 } from "@/lib/amigainstall";
@@ -235,6 +237,29 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       expect(advice).not.toBeNull();
       expect(resolvesAtRuntime(advice!.key)).toBe(true);
     }
+
+    // ART-277: which package a picked archive really belongs to. Both
+    // fields, and all three non-null shapes `archiveFieldHint` can answer.
+    const anotherPackage: ArchiveClassification = {
+      kind: "another-package:boingbag-39-2",
+      topLevel: ["BoingBag3.9-2", "BoingBag3.9-2.info"],
+    };
+    const theUpdateArchive: ArchiveClassification = {
+      kind: "the-update-archive",
+      topLevel: ["BoingBag3.9-1-UAE"],
+    };
+    const thePackage: ArchiveClassification = { kind: "the-package", topLevel: ["BoingBag3.9-1"] };
+    expect(
+      resolvesAtRuntime(
+        archiveFieldHint(anotherPackage, "package", "BoingBag 3.9-1", "BoingBag 3.9-2")!.key
+      )
+    ).toBe(true);
+    expect(
+      resolvesAtRuntime(archiveFieldHint(theUpdateArchive, "package", "BoingBag 3.9-1", null)!.key)
+    ).toBe(true);
+    expect(
+      resolvesAtRuntime(archiveFieldHint(thePackage, "overlay", "BoingBag 3.9-1", null)!.key)
+    ).toBe(true);
   });
 
   it("describeUpdate: every PackageUpdate.state variant resolves", () => {

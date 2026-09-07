@@ -508,6 +508,12 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // that gained a real hint (`nav.files`/`nav.hardDisk`/`nav.osBuilder`/
     // `nav.whdload`) are catalogue phrases now, not the old literal codes
     // (ADF/LHA/HDF) or a hint resolved once outside the map.
-    expect(dynamicCalls).toBe(159);
+    // 159 -> 161 (ART-277): two. `AmigaInstallPanel.tsx` renders
+    // `archiveFieldHint`'s answer beside each archive field — the same
+    // `Phrase`-off-a-mapper shape as every other ending list on this file,
+    // and for the same reason: "this is another package's own archive" and
+    // "this belongs in the other field" are different, checkable sentences.
+    // `phrase-keys.test.ts` resolves all three non-null shapes.
+    expect(dynamicCalls).toBe(161);
   });
 });

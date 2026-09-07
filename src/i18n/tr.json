@@ -2507,6 +2507,11 @@
         "chooseTitle": "Paketin güncelleme arşivini seçin",
         "hint": "Birincinin bir bölümünün yerine geçen ikinci bir arşiv — bazı paketlerin kendi kurucusu için ayrıca yayımladığı düzeltme. Aşağıdaki not istemedikçe boş bırakın."
       },
+      "classify": {
+        "anotherPackage": "Bu, {{other}} paketinin kendi arşivi — ama seçili olan {{selected}}. Onu kurmak için {{other}}'ı seçin, ya da buraya {{selected}} paketinin kendi arşivini verin.",
+        "wrongFieldOverlay": "Bu, paketin güncelleme arşivi; paketin kendisi değil. Aşağıdaki ikinci alana ait.",
+        "wrongFieldPackage": "Bu, paketin kendi arşivi; güncelleme arşivi değil. Yukarıdaki ilk alana ait."
+      },
       "kickstart": {
         "label": "Kendi Kickstart ROM'unuz",
         "none": "Kickstart seçilmedi.",

@@ -228,6 +228,79 @@ export async function amigaInstallRun(
   });
 }
 
+/**
+ * What a chosen archive is, judged against a selected package — **before**
+ * it goes into a request (ART-277). The wrapper is plain LHA and this reads
+ * its listing alone; nothing is unpacked and the encrypted payload an update
+ * archive might carry is never opened.
+ *
+ * `kind` is one of four shapes: `"the-package"` (the selected package's own
+ * archive), `"the-update-archive"` (the selected package's own second
+ * archive), `` `another-package:${id}` `` (another catalogued package's own
+ * archive — the archive is real, the package selected is not the one it
+ * belongs to), or `"unknown"` (ART recognises neither — accepted without
+ * comment, since Rust still validates the real thing at `compose`).
+ */
+export interface ArchiveClassification {
+  kind: "the-package" | "the-update-archive" | "unknown" | `another-package:${string}`;
+  /** What the archive's own listing carries at its top level — a drawer and,
+   *  usually, its sibling `.info` icon. Shown when ART cannot say more. */
+  topLevel: string[];
+}
+
+/** Ask Rust what an archive is, against the package currently selected.
+ *  Read-only and lenient: an archive ART cannot make sense of answers
+ *  `"unknown"` rather than rejecting the promise — this is asked on every
+ *  file pick, and a query must not turn "I could not tell" into an error the
+ *  user cannot get past. */
+export async function amigainstallClassifyArchive(
+  path: string,
+  packageId: string
+): Promise<ArchiveClassification> {
+  return invoke<ArchiveClassification>("amigainstall_classify_archive", {
+    path,
+    packageId,
+  });
+}
+
+/** The other catalogued package's id, out of a `` `another-package:${id}` ``
+ *  classification — `null` for every other kind. */
+export function anotherPackageId(classification: ArchiveClassification | null): string | null {
+  if (!classification) return null;
+  return classification.kind.startsWith("another-package:")
+    ? classification.kind.slice("another-package:".length)
+    : null;
+}
+
+/**
+ * Where one package's own archive/overlay-archive choice is remembered
+ * (ART-277).
+ *
+ * **Scoped per package**, the way `rememberedComponentKey`
+ * (`@/lib/osinstall`) scopes a release's component picks: a component id
+ * means something only inside the recipe that declares it, and a chosen
+ * archive path means something only for the package it was picked for.
+ * Before this, `AmigaInstall.tsx` kept one global `"amigaInstall.archive"`
+ * key for every package, so switching the panel's radio from BoingBag 1 to
+ * BoingBag 2 carried BoingBag 1's own path straight into a BoingBag 2
+ * request — the owner's own defect: *"'…BoingBag39-2.lha' is not this
+ * package's update archive: it carries none of
+ * 'BoingBag3.9-1-UAE/BoingBag3.9-1'"*, produced by a stale `packageId`
+ * nothing had cleared.
+ *
+ * **Nothing is cleared** (CLAUDE.md: nothing changes unless the user changes
+ * it) — the carry is closed structurally instead: switching packages reads a
+ * *different* key, so BoingBag 1's own choice is still there, under its own
+ * name, the next time BoingBag 1 is selected again.
+ *
+ * `null` (no package chosen yet, or the panel used with an archive picked by
+ * hand before any package folder exists) keeps the base, unscoped key —
+ * there is no second package to collide with while none is selected at all.
+ */
+export function amigaInstallArchiveKey(base: string, packageId: string | null): string {
+  return packageId === null ? base : `${base}.${packageId}`;
+}
+
 /** The event a finished run's own answer arrives on. */
 export const AMIGA_INSTALL_EVENT = "amiga-install-result";
 
@@ -381,6 +454,48 @@ export function overlayAdvicePhrase(preview: AmigaInstallPreview): Phrase | null
  * Empty means every one of the three things ART cannot supply itself (the
  * user's own Kickstart, the package's own archives, an emulator) is there.
  */
+/**
+ * The hint next to an archive field, once Rust has classified it — ART-277.
+ *
+ * `field` says which slot this classification is for: `"package"` is the
+ * package's own archive field, `"overlay"` the second/update-archive field.
+ * The three outcomes the panel shows: a wrong package entirely (named by
+ * `otherName`), the right package's own archive in the wrong field, or
+ * nothing — an archive ART does not recognise, or one that is exactly right,
+ * is accepted silently, because Rust still validates the real thing at
+ * `compose` and inventing a warning here for "unknown" would be a confident
+ * guess about a file this function cannot actually place.
+ */
+export function archiveFieldHint(
+  classification: ArchiveClassification | null,
+  field: "package" | "overlay",
+  selectedName: string,
+  otherName: string | null
+): Phrase | null {
+  if (!classification) return null;
+  const other = anotherPackageId(classification);
+  if (other !== null) {
+    return {
+      key: "osinstall.amigaInstall.classify.anotherPackage",
+      params: { other: otherName ?? other, selected: selectedName },
+    };
+  }
+  if (field === "package" && classification.kind === "the-update-archive") {
+    return { key: "osinstall.amigaInstall.classify.wrongFieldOverlay" };
+  }
+  if (field === "overlay" && classification.kind === "the-package") {
+    return { key: "osinstall.amigaInstall.classify.wrongFieldPackage" };
+  }
+  return null;
+}
+
+/** Whether this field's classification is another catalogued package's own
+ *  archive — CLAUDE.md: nothing changes unless the user changes it, so ART
+ *  does not clear the field itself; it disables Run until the user does. */
+export function isWrongPackageArchive(classification: ArchiveClassification | null): boolean {
+  return anotherPackageId(classification) !== null;
+}
+
 export function readinessBlockers(preview: AmigaInstallPreview): Phrase[] {
   const blockers: Phrase[] = [];
   if (!preview.packageArchivesPresent) {

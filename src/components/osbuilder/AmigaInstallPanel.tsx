@@ -74,8 +74,13 @@ import { useBuildSession } from "@/lib/useBuildSession";
 import { errorText } from "@/lib/errorText";
 
 import {
+  amigaInstallArchiveKey,
   amigaInstallPreview,
   amigaInstallRun,
+  amigainstallClassifyArchive,
+  anotherPackageId,
+  archiveFieldHint,
+  isWrongPackageArchive,
   onAmigaInstallResult,
   outcomeNextStepPhrase,
   outcomePhrase,
@@ -86,6 +91,7 @@ import {
   type AmigaInstallPreview,
   type AmigaInstallRequest,
   type AmigaInstallResult,
+  type ArchiveClassification,
 } from "@/lib/amigainstall";
 import { osinstallPackages, type InstallRelease, type PackageSummary } from "@/lib/osinstall";
 import { fraction, onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
@@ -163,13 +169,23 @@ export function AmigaInstallPanel({
     isTextOrNothing,
     null
   );
+  /**
+   * The two archives, **scoped per package** (ART-277). `useRemembered`
+   * takes its key as a plain argument re-read on every render, so a key that
+   * changes with `packageId` is exactly what it already supports — no
+   * lower-level `@/lib/remembered` call is needed. Switching the radio to
+   * BoingBag 3.9-2 therefore reads BoingBag 3.9-2's own remembered archive
+   * (empty the first time), while BoingBag 3.9-1's stays exactly where it
+   * was under its own key. See `amigaInstallArchiveKey`'s own comment for
+   * the defect this closes.
+   */
   const [archive, setArchive] = useRemembered<string | null>(
-    "amigaInstall.archive",
+    amigaInstallArchiveKey("amigaInstall.archive", packageId),
     isTextOrNothing,
     null
   );
   const [overlayArchive, setOverlayArchive] = useRemembered<string | null>(
-    "amigaInstall.overlayArchive",
+    amigaInstallArchiveKey("amigaInstall.overlayArchive", packageId),
     isTextOrNothing,
     null
   );
@@ -188,9 +204,18 @@ export function AmigaInstallPanel({
    */
   const kickstart = session.rom.path;
   const setKickstart = setRom;
-  /** The user's own copy of the disc a package's installer verifies
-   *  (ART-193). Remembered like every other choice on this screen: nothing
-   *  the user chose resets itself between runs. */
+  /**
+   * The user's own copy of the disc a package's installer verifies
+   * (ART-193). Remembered like every other choice on this screen: nothing
+   * the user chose resets itself between runs.
+   *
+   * **Deliberately global, unlike `archive`/`overlayArchive` (ART-277).**
+   * The AmigaOS 3.9 CD image is one fact about the *build*, not about which
+   * package is selected — both BoingBags verify the same `AmigaOS3.9:`
+   * volume — so scoping this per package would make the owner re-browse to
+   * the same file for BoingBag 3.9-2 having just given it for BoingBag
+   * 3.9-1, which is exactly the annoyance this module exists to prevent.
+   */
   const [medium, setMedium] = useRemembered<string | null>(
     "amigaInstall.medium",
     isTextOrNothing,
@@ -199,6 +224,18 @@ export function AmigaInstallPanel({
 
   const [catalogue, setCatalogue] = useState<PackageSummary[] | null>(null);
   const [catalogueError, setCatalogueError] = useState(false);
+  /**
+   * What Rust says each archive field actually holds, asked the moment it is
+   * picked (or restored) rather than only discovered after the round trip
+   * through `compose` (ART-277). `null` means "not asked, or nothing to ask
+   * about" — never "wrong": a field with nothing in it is not misclassified,
+   * it is empty.
+   */
+  const [archiveClassification, setArchiveClassification] = useState<ArchiveClassification | null>(
+    null
+  );
+  const [overlayClassification, setOverlayClassification] =
+    useState<ArchiveClassification | null>(null);
   const [preview, setPreview] = useState<AmigaInstallPreview | null>(null);
   /** A refusal, exactly as Rust wrote it (ART-060). Never folded into one
    *  translated sentence: which reason applies is the whole content. */
@@ -346,6 +383,48 @@ export function AmigaInstallPanel({
       cancelled = true;
     };
   }, [packageFolder, release]);
+
+  // ART-277: ask what an archive *is* at the moment it is picked (or
+  // restored from a remembered choice), rather than finding out only once
+  // `compose` refuses it a moment later. Two effects, one per field, because
+  // the two fields ask two different questions of the same file — the
+  // package's own field expects `"the-package"`, the second field expects
+  // `"the-update-archive"` — and `archiveFieldHint` reads which is which.
+  useEffect(() => {
+    if (!archive || !packageId) {
+      setArchiveClassification(null);
+      return;
+    }
+    let cancelled = false;
+    amigainstallClassifyArchive(archive, packageId)
+      .then((answer) => {
+        if (!cancelled) setArchiveClassification(answer);
+      })
+      .catch(() => {
+        if (!cancelled) setArchiveClassification(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [archive, packageId]);
+
+  useEffect(() => {
+    if (!overlayArchive || !packageId) {
+      setOverlayClassification(null);
+      return;
+    }
+    let cancelled = false;
+    amigainstallClassifyArchive(overlayArchive, packageId)
+      .then((answer) => {
+        if (!cancelled) setOverlayClassification(answer);
+      })
+      .catch(() => {
+        if (!cancelled) setOverlayClassification(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [overlayArchive, packageId]);
 
   // §92's PREVIEW: read-only, recomputed whenever the request changes, and
   // the place every refusal lands — `compose` is shared with the run, so a
@@ -495,6 +574,26 @@ export function AmigaInstallPanel({
 
   const runnable = (catalogue ?? []).filter((p) => p.amigaInstallable);
   const nameOf = (id: string) => catalogue?.find((p) => p.id === id)?.name ?? id;
+  // ART-277. Named beside the field the classification is about, the moment
+  // the file was chosen — never only after the round trip through Rust's
+  // `compose` refusal.
+  const selectedPackageName = packageId ? nameOf(packageId) : "";
+  const archiveOtherId = anotherPackageId(archiveClassification);
+  const overlayOtherId = anotherPackageId(overlayClassification);
+  const archiveHint = archiveFieldHint(
+    archiveClassification,
+    "package",
+    selectedPackageName,
+    archiveOtherId ? nameOf(archiveOtherId) : null
+  );
+  const overlayHint = archiveFieldHint(
+    overlayClassification,
+    "overlay",
+    selectedPackageName,
+    overlayOtherId ? nameOf(overlayOtherId) : null
+  );
+  const wrongPackageArchive =
+    isWrongPackageArchive(archiveClassification) || isWrongPackageArchive(overlayClassification);
   const blockers = preview ? readinessBlockers(preview) : [];
   const overlayAdvice = preview ? overlayAdvicePhrase(preview) : null;
   const pct = progress ? fraction(progress) : null;
@@ -603,6 +702,17 @@ export function AmigaInstallPanel({
           choose={t("common.browse")}
           hint={t("osinstall.amigaInstall.archive.hint")}
         />
+        {/* ART-277: which package this archive actually belongs to, asked
+            the moment it was picked — before Run, not after a refusal. */}
+        {archiveHint && (
+          <p
+            className="badge badge-warn"
+            data-testid="amiga-archive-hint"
+            style={{ display: "block", padding: "6px 12px", fontSize: 12, margin: "-6px 0 12px" }}
+          >
+            {t(archiveHint.key, archiveHint.params)}
+          </p>
+        )}
         <Field
           label={t("osinstall.amigaInstall.overlayArchive.label")}
           value={overlayArchive}
@@ -618,6 +728,15 @@ export function AmigaInstallPanel({
           clear={overlayArchive ? t("common.clear") : undefined}
           onClear={overlayArchive ? () => setOverlayArchive(null) : undefined}
         />
+        {overlayHint && (
+          <p
+            className="badge badge-warn"
+            data-testid="amiga-overlay-hint"
+            style={{ display: "block", padding: "6px 12px", fontSize: 12, margin: "-6px 0 12px" }}
+          >
+            {t(overlayHint.key, overlayHint.params)}
+          </p>
+        )}
         <Field
           label={t("osinstall.amigaInstall.kickstart.label")}
           value={kickstart}
@@ -862,7 +981,7 @@ export function AmigaInstallPanel({
         <button
           className="btn btn-primary"
           onClick={() => void runInstall()}
-          disabled={busy || !confirmed || !preview || blockers.length > 0}
+          disabled={busy || !confirmed || !preview || blockers.length > 0 || wrongPackageArchive}
         >
           {t(busy ? "osinstall.amigaInstall.running" : "osinstall.amigaInstall.run")}
         </button>

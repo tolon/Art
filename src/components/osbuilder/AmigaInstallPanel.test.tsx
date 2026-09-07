@@ -41,12 +41,14 @@ const onResultMock = vi.hoisted(() => vi.fn());
 const packagesMock = vi.hoisted(() => vi.fn());
 const onJobProgressMock = vi.hoisted(() => vi.fn());
 const saveSettingsMock = vi.hoisted(() => vi.fn(async () => {}));
+const classifyMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/amigainstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/amigainstall")>()),
   amigaInstallPreview: previewMock,
   amigaInstallRun: runMock,
   onAmigaInstallResult: onResultMock,
+  amigainstallClassifyArchive: classifyMock,
 }));
 
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
@@ -156,7 +158,8 @@ function withChoices() {
       // rather than spread.
       remembered: {
         "amigaInstall.package": "boingbag-39-1",
-        "amigaInstall.archive": "D:/pkg/BoingBag39-1.lha",
+        // Scoped per package (ART-277) — see `amigaInstallArchiveKey`.
+        "amigaInstall.archive.boingbag-39-1": "D:/pkg/BoingBag39-1.lha",
         "amigaInstall.kickstart": "D:/roms/kick31.rom",
       },
     },
@@ -181,6 +184,9 @@ beforeEach(() => {
   packagesMock.mockResolvedValue(PACKAGES);
   previewMock.mockResolvedValue(preview());
   runMock.mockResolvedValue(7);
+  // The ordinary answer: whatever is in the field is the selected package's
+  // own archive. Individual tests override this to exercise ART-277's hint.
+  classifyMock.mockResolvedValue({ kind: "the-package", topLevel: [] });
   onJobProgressMock.mockImplementation(async (handler: (p: JobProgress) => void) => {
     report = handler;
     return () => {};
@@ -599,8 +605,8 @@ describe("the run itself", () => {
         winuaePath: "C:/WinUAE/winuae64.exe",
         remembered: {
           "amigaInstall.package": "boingbag-39-1",
-          "amigaInstall.archive": "D:/pkg/BoingBag39-1.lha",
-          "amigaInstall.overlayArchive": "D:/pkg/BoingBag39-1-UAE.lha",
+          "amigaInstall.archive.boingbag-39-1": "D:/pkg/BoingBag39-1.lha",
+          "amigaInstall.overlayArchive.boingbag-39-1": "D:/pkg/BoingBag39-1-UAE.lha",
           "amigaInstall.kickstart": "D:/roms/kick31.rom",
         },
       },
@@ -776,7 +782,7 @@ describe("one Kickstart for the build (ART-197's fourth row)", () => {
         winuaePath: "C:/Program Files/WinUAE/winuae64.exe",
         remembered: {
           "amigaInstall.package": "boingbag-39-1",
-          "amigaInstall.archive": "D:/pkg/BoingBag39-1.lha",
+          "amigaInstall.archive.boingbag-39-1": "D:/pkg/BoingBag39-1.lha",
           // Deliberately *not* "amigaInstall.kickstart".
           "osinstall.rom": "D:/roms/from-the-install-step.rom",
         },
@@ -790,5 +796,92 @@ describe("one Kickstart for the build (ART-197's fourth row)", () => {
     expect(
       await screen.findByText("D:/roms/from-the-install-step.rom")
     ).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ART-277: the owner ran BoingBag 1, then supplied BoingBag 2's own archive
+// while BoingBag 1 was still selected, and read a refusal quoting an
+// internal overlay path that never said either package's name.
+// ---------------------------------------------------------------------------
+
+describe("ART-277: switching the selected package does not carry its archives", () => {
+  it("switching the selected package reads that package's own remembered archive", async () => {
+    useSettingsStore.setState((state) => ({
+      settings: {
+        ...state.settings,
+        winuaePath: "C:/Program Files/WinUAE/winuae64.exe",
+        remembered: {
+          "amigaInstall.package": "boingbag-39-1",
+          "amigaInstall.archive.boingbag-39-1": "D:/pkg/BoingBag39-1.lha",
+          "amigaInstall.kickstart": "D:/roms/kick31.rom",
+        },
+      },
+    }));
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+
+    // BoingBag 1's own archive is showing, under its own key.
+    expect(await screen.findByText("D:/pkg/BoingBag39-1.lha")).toBeTruthy();
+
+    const user = userEvent.setup();
+    const rows = await screen.findAllByTestId("amiga-package-row");
+    const boingbag2Radio = rows[1].querySelector("input[type=radio]") as HTMLInputElement;
+    await user.click(boingbag2Radio);
+
+    // BoingBag 2's own archive field is empty — never BoingBag 1's path,
+    // which is the owner's own defect (ART-277's first cause).
+    await waitFor(() =>
+      expect(screen.queryByText("D:/pkg/BoingBag39-1.lha")).toBeNull()
+    );
+    expect(
+      screen.getByText(i18n.t("osinstall.amigaInstall.archive.none"))
+    ).toBeTruthy();
+
+    // And BoingBag 1's own choice is still remembered, under its own key —
+    // nothing was cleared, a different key is read (CLAUDE.md: nothing
+    // changes unless the user changes it).
+    expect(useSettingsStore.getState().settings.remembered).toMatchObject({
+      "amigaInstall.archive.boingbag-39-1": "D:/pkg/BoingBag39-1.lha",
+    });
+  });
+
+  it("a wrong-package archive disables Run and says which package it belongs to", async () => {
+    classifyMock.mockImplementation(async (path: string) =>
+      path === "D:/pkg/BoingBag39-2.lha"
+        ? {
+            kind: "another-package:boingbag-39-2",
+            topLevel: ["BoingBag3.9-2", "BoingBag3.9-2.info"],
+          }
+        : { kind: "the-package", topLevel: [] }
+    );
+    useSettingsStore.setState((state) => ({
+      settings: {
+        ...state.settings,
+        winuaePath: "C:/Program Files/WinUAE/winuae64.exe",
+        remembered: {
+          "amigaInstall.package": "boingbag-39-1",
+          // BoingBag 2's own archive, sitting under BoingBag 1's own key —
+          // exactly the owner's mistake, reproduced directly rather than
+          // driven through the file picker.
+          "amigaInstall.archive.boingbag-39-1": "D:/pkg/BoingBag39-2.lha",
+          "amigaInstall.kickstart": "D:/roms/kick31.rom",
+        },
+      },
+    }));
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+
+    const hint = await screen.findByTestId("amiga-archive-hint");
+    expect(hint.textContent).toContain("BoingBag 3.9-2");
+    expect(hint.textContent).toContain("BoingBag 3.9-1");
+
+    await screen.findByTestId("amiga-install-preview");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("checkbox"));
+    expect(
+      screen.getByRole("button", { name: i18n.t("osinstall.amigaInstall.run") }).hasAttribute(
+        "disabled"
+      )
+    ).toBe(true);
+    expect(runMock).not.toHaveBeenCalled();
   });
 });
