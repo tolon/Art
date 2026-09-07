@@ -443,21 +443,47 @@ mod tests {
             "core's own sentence must name the missing file: {core_text}"
         );
 
-        // Through `apply_appearance_request` — the actual command-layer
-        // function `appearance_apply` calls.
+        // I2 (2026-09-07 final review): `apply_appearance_request` is
+        // `#[cfg(test)]`-only (ART-248 moved the production path onto a job
+        // — `appearance_apply` now calls `apply_appearance_with` from inside
+        // `spawn_job`'s closure, never this function). This is not coverage
+        // of `appearance_apply` itself, but it does still guard the property
+        // that matters: `apply_appearance_request` calls `apply_appearance`
+        // (`core::appearance::apply_appearance`), which is exactly
+        // `apply_appearance_with(tree, req, &NoProgress)` — the identical
+        // fallible core function `appearance_apply`'s job closure calls, the
+        // only difference being which `ProgressSink` reports through it, and
+        // a sink cannot change which `CoreError` a refusal is. So the
+        // `CoreError` reaching `app_err` below is exactly the `CoreError`
+        // the job would have received for this same input.
+        //
+        // And `AppError::Core` is `#[error(transparent)] Core(#[from]
+        // CoreError)` (`src-tauri/src/error.rs`), so `AppError::Display`
+        // *is* `CoreError::Display` with nothing prepended or appended —
+        // this assertion is what proves that transparency holds rather than
+        // trusting the attribute by inspection. The job path carries the
+        // same unmodified sentence a different way: `spawn_job`'s
+        // `JobState::Failed { message: e.to_string(), .. }`
+        // (`commands/jobs.rs::spawn_in_lane`) calls `.to_string()` on the
+        // raw `CoreError` directly, which is that same `Display` again. So
+        // this test and the production job path both terminate at the same
+        // unmodified `CoreError::Display` — guarded here because it is
+        // synchronous and needs no `AppHandle`/`JobRegistry` to drive, not
+        // because it is the function `appearance_apply` calls.
         let app_err = apply_appearance_request(&tree, request).unwrap_err();
         let rendered = format!("{app_err}");
 
-        // Exact equality, not `.contains()` — a command-layer rewrite that
-        // *wraps* the sentence (`format!("could not apply appearance: {e}")`,
-        // say) would still contain this substring and slip past a `.contains`
-        // check; only byte-for-byte equality with core's own text catches
-        // that (CLAUDE.md's own warning: "a refusal test that searched for
-        // two substrings separately where a weaker sentence contained both").
+        // Exact equality, not `.contains()` — a rewrite that *wraps* the
+        // sentence (`format!("could not apply appearance: {e}")`, say) would
+        // still contain this substring and slip past a `.contains` check;
+        // only byte-for-byte equality with core's own text catches that
+        // (CLAUDE.md's own warning: "a refusal test that searched for two
+        // substrings separately where a weaker sentence contained both").
         assert_eq!(
             rendered, core_text,
             "AppError::Display must carry core's sentence unchanged, verbatim, with nothing \
-             prepended or appended"
+             prepended or appended — and, by the transparency argument above, so must the \
+             job path's own JobState::Failed.message for the same refusal"
         );
     }
 
