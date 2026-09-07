@@ -520,6 +520,24 @@ fn walk_into(base: &Path, relative: &str, depth: usize, out: &mut Vec<Entry>) ->
 // Installing
 // ---------------------------------------------------------------------------
 
+/// The scratch directory an installable plan is supposed to have kept.
+///
+/// `build_plan_with_scratch` only ever returns `None` on its refusal path (no
+/// pack found), and `install_pack` only reaches this after checking
+/// `plan.can_install()` — so today, `None` here should be unreachable. It is
+/// still refused rather than `expect()`ed: the release profile runs with
+/// `panic = "abort"` (`Cargo.toml`), so a third `None`-returning branch added
+/// to `build_plan_with_scratch` later must surface as a refusal on screen,
+/// not take the whole application down.
+fn scratch_for_install(scratch: Option<Scratch>) -> CoreResult<Scratch> {
+    scratch.ok_or_else(|| CoreError::Malformed {
+        format: "whdload install".into(),
+        detail: "the plan says this pack can be installed, but its staging directory was \
+                 never kept"
+            .into(),
+    })
+}
+
 /// Re-plan, unpack once, and write — all in one volume session.
 ///
 /// The plan is rebuilt here rather than carried from the UI. A plan the user
@@ -560,9 +578,9 @@ pub fn install_pack(
     // `build_plan_with_scratch` only ever returns `None` on the refusal path
     // (no pack found), and that refusal was just handled above — an
     // installable plan always found a pack, and finding one always keeps the
-    // scratch directory it was found in.
-    let scratch =
-        scratch.expect("an installable plan always keeps the scratch directory it was built from");
+    // scratch directory it was found in. See `scratch_for_install`'s own doc
+    // for why this is a refusal rather than an `expect()`.
+    let scratch = scratch_for_install(scratch)?;
     let layout = plan.layout;
 
     let pack_root = if layout.root.is_empty() {
@@ -1770,6 +1788,26 @@ mod tests {
             1,
             "the archive must be unpacked exactly once per install"
         );
+    }
+
+    /// Batch 8, fix round 1: `install_pack` used to `expect()` a scratch
+    /// directory out of an installable plan, and the release profile runs
+    /// with `panic = "abort"` — an invariant that should be unreachable today
+    /// is not the same thing as one the app may abort over if it is ever
+    /// wrong. `scratch_for_install` is the guard, tested directly against the
+    /// `None` `build_plan_with_scratch` can only produce on its refusal path;
+    /// there is no cheap way to drive `install_pack` itself into this state,
+    /// since it always calls `build_plan_with_scratch` fresh and that
+    /// function's own `can_install() == true` branch always returns
+    /// `Some(scratch)`.
+    #[test]
+    fn an_installable_plan_with_no_scratch_is_refused_not_aborted() {
+        let err = scratch_for_install(None).unwrap_err();
+        assert!(
+            matches!(err, CoreError::Malformed { .. }),
+            "expected a refusal, got {err:?}"
+        );
+        assert!(err.to_string().contains("staging directory"), "{err}");
     }
 
     /// §54/§57, and the data-safety rule at the core level: cancelling
