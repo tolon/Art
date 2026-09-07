@@ -29,6 +29,7 @@ import {
   type RehearsalOutcome,
   type RehearsalResult,
 } from "@/lib/firstboot";
+import { JOB_CANCELLED_MESSAGE } from "@/lib/jobs";
 
 const previewMock = vi.hoisted(() => vi.fn());
 const writeMock = vi.hoisted(() => vi.fn());
@@ -219,6 +220,54 @@ describe("pressing Write", () => {
     const created = await screen.findByTestId("firstboot-write-created");
     expect(created.textContent).toBe(i18n.t("firstboot.panel.created"));
   });
+
+  // Leftover round: the post-write `firstbootPreview(treeRoot).then(setPreview)`
+  // in `runWrite` used to carry no guard at all -- unlike the mount effect's
+  // own preview fetch, which drops a stale answer via its `cancelled` flag.
+  // Write on tree A, switch to tree B before A's refresh resolves, and A's
+  // stale answer must not land under B's own fresh preview.
+  it("does not let tree A's post-write preview refresh land under tree B", async () => {
+    let resolveStaleRefresh: ((value: FirstBootPlan) => void) | null = null;
+    let calls = 0;
+    previewMock.mockImplementation((tree: string) => {
+      calls += 1;
+      if (calls === 2) {
+        // The post-write refresh for tree A, held open on purpose so the
+        // tree switch below happens before it resolves.
+        return new Promise<FirstBootPlan>((resolve) => {
+          resolveStaleRefresh = resolve;
+        });
+      }
+      return Promise.resolve(plan({ tree, alreadyWritten: false }));
+    });
+
+    const { rerender } = render(
+      <FirstBootPanel treeRoot="D:/amiga/os39" onTreeRootChange={() => {}} />
+    );
+    await screen.findByTestId("firstboot-preview"); // call 1: tree A's own mount preview
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: i18n.t("firstboot.panel.write") }));
+    await waitFor(() => expect(writeMock).toHaveBeenCalledTimes(1));
+    // The post-write refresh (call 2) has been asked for, and is pending.
+    await waitFor(() => expect(calls).toBe(2));
+
+    // The user picks a different folder before tree A's refresh answers.
+    rerender(<FirstBootPanel treeRoot="D:/amiga/os40" onTreeRootChange={() => {}} />);
+    await waitFor(() => expect(previewMock).toHaveBeenLastCalledWith("D:/amiga/os40"));
+    expect(screen.queryByTestId("firstboot-already-written")).toBeNull();
+
+    // Tree A's stale refresh answers only now, claiming "already written" --
+    // the one field on screen that distinguishes it from tree B's own
+    // preview, which never set that flag.
+    await act(async () => {
+      resolveStaleRefresh!(plan({ tree: "D:/amiga/os39", alreadyWritten: true, bytesAdded: 999 }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Still tree B's preview: the stale "already written" answer never rendered.
+    expect(screen.queryByTestId("firstboot-already-written")).toBeNull();
+  });
 });
 
 describe("the four rehearsal endings stay four sentences on screen", () => {
@@ -382,6 +431,62 @@ describe("changing the tree clears a stale rehearsal", () => {
     expect(screen.queryByTestId("firstboot-rehearsal-copy")).toBeNull();
     // Still usable — a dropped stale result must not leave the button
     // disabled behind it either.
+    expect(screen.getByRole("button", { name: i18n.t("firstboot.panel.run") })).toBeTruthy();
+  });
+
+  // Leftover round: the test above covers `runRehearsal`'s success branch
+  // (`if (treeRootRef.current !== forTree) return;` before `setRehearsalResult`).
+  // The same guard sits in the `catch` block, split two ways
+  // (`isJobCancellation(e)` vs a genuine failure) — neither was exercised.
+  it("drops a rehearsal's error if it rejects only after the tree has since changed", async () => {
+    const { rerender } = render(
+      <FirstBootPanel treeRoot="D:/amiga/os39" onTreeRootChange={() => {}} />
+    );
+    await screen.findByTestId("firstboot-preview");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: i18n.t("firstboot.panel.run") }));
+    await waitFor(() => expect(rehearseMock).toHaveBeenCalled());
+
+    // The user picks a different folder before tree A's rehearsal has answered.
+    rerender(<FirstBootPanel treeRoot="D:/amiga/os40" onTreeRootChange={() => {}} />);
+    await waitFor(() => expect(previewMock).toHaveBeenLastCalledWith("D:/amiga/os40"));
+    expect(screen.getByRole("button", { name: i18n.t("firstboot.panel.run") })).toBeTruthy();
+
+    // Tree A's rehearsal fails only now — a genuine error, not a cancellation.
+    await act(async () => {
+      rejectRehearsal!(new Error("winuae.exe could not be started"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("firstboot-rehearsal-error")).toBeNull();
+    expect(screen.queryByTestId("firstboot-rehearsal-cancelled")).toBeNull();
+    expect(screen.getByRole("button", { name: i18n.t("firstboot.panel.run") })).toBeTruthy();
+  });
+
+  it("drops a rehearsal's cancellation if it rejects only after the tree has since changed", async () => {
+    const { rerender } = render(
+      <FirstBootPanel treeRoot="D:/amiga/os39" onTreeRootChange={() => {}} />
+    );
+    await screen.findByTestId("firstboot-preview");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: i18n.t("firstboot.panel.run") }));
+    await waitFor(() => expect(rehearseMock).toHaveBeenCalled());
+
+    // The user picks a different folder before tree A's rehearsal has answered.
+    rerender(<FirstBootPanel treeRoot="D:/amiga/os40" onTreeRootChange={() => {}} />);
+    await waitFor(() => expect(previewMock).toHaveBeenLastCalledWith("D:/amiga/os40"));
+
+    // Tree A's rehearsal is cancelled only now — `JOB_CANCELLED_MESSAGE`,
+    // the exact string `isJobCancellation` matches on.
+    await act(async () => {
+      rejectRehearsal!(new Error(JOB_CANCELLED_MESSAGE));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("firstboot-rehearsal-cancelled")).toBeNull();
+    expect(screen.queryByTestId("firstboot-rehearsal-error")).toBeNull();
     expect(screen.getByRole("button", { name: i18n.t("firstboot.panel.run") })).toBeTruthy();
   });
 });

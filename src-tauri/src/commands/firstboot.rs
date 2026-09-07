@@ -212,7 +212,23 @@ fn perform(
         // keep — the same decision `amigainstall::perform` makes, and the one
         // path where a copy goes without an outcome having been reported.
         Err(CoreError::Cancelled) => {
-            let _ = staged.discard();
+            // Leftover round: this used to swallow a failed discard with
+            // `let _ = staged.discard()`. The same rule the `Finished` arm's
+            // own discard failure already follows above applies here too —
+            // never claim a discard that did not happen, and a discard that
+            // is never even reported is exactly that, by omission: the copy
+            // is still on disk and nothing on screen says where.
+            if let Err(err) = staged.discard() {
+                sink.report(
+                    0,
+                    None,
+                    &format!(
+                        "the rehearsal was cancelled, but the copy at {} could not be removed: \
+                         {err}",
+                        copy.display()
+                    ),
+                );
+            }
             Err(CoreError::Cancelled)
         }
         // An error part way is not nothing: whatever the Amiga wrote before

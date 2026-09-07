@@ -160,6 +160,13 @@ export function FirstBootPanel({ treeRoot, onTreeRootChange }: FirstBootPanelPro
 
   async function runWrite() {
     if (!treeRoot) return;
+    // Leftover round: captured the same way `runRehearsal` already captures
+    // its own `forTree` below, and compared against `treeRootRef.current`
+    // (the latest render's value) when the refresh resolves — the same I3
+    // guard the preview effect carries for its own fetch, one call further
+    // on. Without it, writing on tree A and switching to tree B before the
+    // refresh resolves would overwrite B's own fresh preview with A's.
+    const forTree = treeRoot;
     setWriting(true);
     setWriteError(null);
     setWriteResult(null);
@@ -170,7 +177,10 @@ export function FirstBootPanel({ treeRoot, onTreeRootChange }: FirstBootPanelPro
       // Refresh the preview so "already written" and the button's own label
       // reflect what is on disk now — a re-read, never a guess.
       firstbootPreview(treeRoot)
-        .then(setPreview)
+        .then((plan) => {
+          if (treeRootRef.current !== forTree) return;
+          setPreview(plan);
+        })
         .catch(() => {
           // The write itself already succeeded and is reported; a preview
           // that cannot re-run a moment later must not turn that into a

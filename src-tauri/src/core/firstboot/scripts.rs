@@ -199,7 +199,9 @@ mod tests {
                         let next = bytes.get(j + 1).copied().unwrap_or(b' ');
                         assert!(
                             next == b'{',
-                            "{} line {}: unbraced variable read in {line:?}",
+                            "{} line {}: unbraced variable read in {line:?} -- checked strictly, \
+                             a `$` in a comment counts too, so write the word out there rather \
+                             than using `$` at all",
                             file.tree_path,
                             i + 1
                         );
