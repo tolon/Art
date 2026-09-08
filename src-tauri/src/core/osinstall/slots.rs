@@ -64,8 +64,11 @@
 //! lookup nobody made, which is exactly what
 //! [`mediahash::remembered_media_in`]'s own doc comment forbids its callers to
 //! say. So [`Found::bytes_read`] and [`Candidate::bytes_read`] carry the
-//! difference to the screen, and the readout has two sentences where it used
-//! to have one.
+//! difference to the screen, and the readout has three sentences where it used
+//! to have one: **nobody looked**, **looked and no row claims these bytes**,
+//! and **looked, and a row claims them for a different artefact** — the last
+//! being a relabelled disk, where "in no table ART has" is simply false. See
+//! [`BytesRead`].
 //!
 //! ## What rank 3 can see, and what it cannot (F8, parked by ruling)
 //!
@@ -583,32 +586,66 @@ pub struct Found {
     /// would present one artefact's provenance as another's.
     pub row: Option<MediaRowRef>,
     pub confirmed: Option<ConfirmationRef>,
-    /// Whether anybody has hashed this file yet — that is, whether
-    /// [`Facts::hashes`] carries an answer for it.
-    ///
-    /// **The readout needs this to keep two sentences apart** (fix round 1,
-    /// F1). Rank 1 not firing has more than one cause, and the most common of
-    /// them is that nothing has read the bytes: `osinstall_slots` asks the
-    /// scan cache and hashes nothing, so until `osinstall_identify_media`'s
-    /// job has run over a folder, every file in it lands at rank 2 with
-    /// nothing at all known about its bytes. *"Its bytes are in no table ART
-    /// has"* is then a statement about a lookup nobody made — the exact
-    /// sentence [`mediahash::remembered_media_in`]'s own doc comment forbids
-    /// its callers from producing.
-    pub bytes_read: bool,
+    /// What the table lookup for these bytes actually came back with — see
+    /// [`BytesRead`].
+    pub bytes_read: BytesRead,
 }
 
-/// One file that might fill a slot, and whether its bytes have been read.
+/// What is known about one file's **bytes**, as three distinct answers.
+///
+/// **Three, because two was a lie in the middle** (fix round 1's F1, then the
+/// re-review's F13). Rank 1 not firing has more than one cause, and a single
+/// boolean collapsed the first two of these:
+///
+/// 1. [`BytesRead::NotRead`] — nobody has hashed this file. `osinstall_slots`
+///    asks the scan cache and hashes nothing (a 490 MB ISO belongs on the job
+///    that already exists), so until `osinstall_identify_media` has run over a
+///    folder this is the state of every file in it. *"Its bytes are in no
+///    table ART has"* would be a statement about a lookup nobody made — the
+///    exact sentence [`mediahash::remembered_media_in`]'s own doc comment
+///    forbids its callers from producing.
+/// 2. [`BytesRead::ReadNoRow`] — hashed, and no row in either table claims
+///    those bytes. This is the one that *may* say "in no table ART has".
+/// 3. [`BytesRead::ReadRow`] — hashed, and a row **does** claim them. At
+///    rank 1 that row is this slot's own artefact and the readout says so by
+///    its own sentence. At ranks 2 and 3 it is by construction a *different*
+///    artefact: rank 1 filters `facts.hashes` by `artefact_of(row) ==
+///    slot.artefact`, and a single hit there returns before rank 2 is
+///    reached — so a file arriving here with a row is a relabelled or
+///    mislabelled disk, and telling its owner the bytes are "in no table" is
+///    both false and unhelpful. The row's own `artefact` and human-readable
+///    `name` travel with it so the readout can say which artefact the bytes
+///    actually are.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum BytesRead {
+    /// Nobody has hashed this file.
+    NotRead,
+    /// Hashed; no row in either table claims these bytes.
+    ReadNoRow,
+    /// Hashed, and a row claims these bytes.
+    ReadRow {
+        /// The artefact id that row's bytes are of, when ART has one for it —
+        /// an adopted row nothing maps answers `None` rather than inventing
+        /// an id (see [`artefact_of`]).
+        artefact: Option<String>,
+        /// The row's own human-readable label, as its table states it.
+        name: String,
+    },
+}
+
+/// One file that might fill a slot, and what is known about its bytes.
 ///
 /// A struct rather than a bare path for [`Found::bytes_read`]'s reason: a
-/// filename guess that nobody has hashed and one that was hashed and matched
-/// no row are two different situations, and the row that offers the user a
-/// next step has to know which it is looking at.
+/// filename guess that nobody has hashed, one that was hashed and matched no
+/// row, and one whose bytes are some *other* catalogued artefact are three
+/// different situations, and the row that offers the user a next step has to
+/// know which it is looking at.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Candidate {
     pub path: PathBuf,
-    pub bytes_read: bool,
+    pub bytes_read: BytesRead,
 }
 
 /// Whether this slot's artefact is already part of the tree, **as the tree's
@@ -810,7 +847,12 @@ fn resolve_one(slot: &Slot, facts: &Facts<'_>) -> SlotState {
                 matched_by: MatchedBy::Hash,
                 row: entry.row.clone(),
                 confirmed: entry.confirmed.clone(),
-                bytes_read: true,
+                // The same lookup as every other rank, not a hardcoded
+                // `true`: at rank 1 it answers `ReadRow` naming *this
+                // slot's* artefact, which is what the row already proves.
+                // One function, so there is one answer to "what is known
+                // about these bytes".
+                bytes_read: bytes_read(&entry.path, facts),
             }),
             Vec::new(),
             None,
@@ -885,10 +927,27 @@ fn sorted(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
     paths
 }
 
-/// Whether anybody has hashed this file — the fact
+/// What the table lookup for this file's bytes came back with — the fact
 /// [`Found::bytes_read`] carries.
-fn bytes_read(path: &Path, facts: &Facts<'_>) -> bool {
-    facts.hashes.iter().any(|entry| entry.path == path)
+///
+/// **Presence in `facts.hashes` was not enough** (F13). An entry there means
+/// somebody hashed the file; whether its `row` is `None` or names another
+/// artefact entirely is a second question, and the readout's sentence turns
+/// on it. A relabelled disk — one that answers rank 2 by volume name while
+/// its bytes belong to a different catalogued artefact — used to render
+/// *"its bytes are in no table ART has"*, which is false about a file the
+/// table knows perfectly well.
+fn bytes_read(path: &Path, facts: &Facts<'_>) -> BytesRead {
+    let Some(entry) = facts.hashes.iter().find(|entry| entry.path == path) else {
+        return BytesRead::NotRead;
+    };
+    match &entry.row {
+        None => BytesRead::ReadNoRow,
+        Some(row) => BytesRead::ReadRow {
+            artefact: artefact_of(row),
+            name: row.name.clone(),
+        },
+    }
 }
 
 /// Every path the caller looked at, however it was looked at.
@@ -1377,7 +1436,7 @@ mod tests {
         );
         // Nobody hashed it, and the readout has to be able to say so rather
         // than claiming the table does not know these bytes (F1).
-        assert!(!overlay.candidates[0].bytes_read);
+        assert_eq!(overlay.candidates[0].bytes_read, BytesRead::NotRead);
     }
 
     #[test]
@@ -1630,7 +1689,11 @@ mod tests {
             .as_ref()
             .unwrap();
         assert_eq!(found.matched_by, MatchedBy::TopLevelDirectory);
-        assert!(!found.bytes_read, "the scan cache had no answer for it");
+        assert_eq!(
+            found.bytes_read,
+            BytesRead::NotRead,
+            "the scan cache had no answer for it"
+        );
 
         // Hashed, and the hash matched no row this slot's artefact names —
         // the genuinely stronger statement.
@@ -1647,19 +1710,65 @@ mod tests {
             .as_ref()
             .unwrap();
         assert_eq!(found.matched_by, MatchedBy::TopLevelDirectory);
-        assert!(found.bytes_read, "somebody hashed it and no row claimed it");
+        assert_eq!(
+            found.bytes_read,
+            BytesRead::ReadNoRow,
+            "somebody hashed it and no row claimed it"
+        );
 
-        // Rank 1 is only ever reached through a hash, so it always has them.
+        // Rank 1 is only ever reached through a hash, so it always has them —
+        // and the row it matched is this slot's own artefact.
         let mut by_bytes = Gathered::empty();
         by_bytes.hashes.push(hashed("D:/a/bb1.lha", BB1_45_15_MD5));
         let states = resolve(&slots, &by_bytes.facts(None));
-        assert!(
+        assert!(matches!(
             state_of(&states, "package:boingbag-39-1")
                 .found
                 .as_ref()
                 .unwrap()
-                .bytes_read
-        );
+                .bytes_read,
+            BytesRead::ReadRow { artefact: Some(ref id), .. } if id == "boingbag-39-1"
+        ));
+    }
+
+    /// F13 — "nobody hashed it", "hashed and in no table" and "hashed, and
+    /// the table says these bytes are something **else**" are three answers,
+    /// and the third used to render as the second.
+    ///
+    /// The case is a real one and it is exactly what this module exists to
+    /// sort out: a disc relabelled `AmigaOS3.9` whose bytes are BoingBag 1's.
+    /// Rank 1 excludes it from the CD slot precisely *because* the row names
+    /// another artefact; rank 2 then matches it on the volume name, and the
+    /// old boolean said only "somebody hashed this", which the readout
+    /// rendered as *"its bytes are in no table ART has"* — false about a file
+    /// the table knows perfectly well.
+    #[test]
+    fn a_row_for_a_different_artefact_is_not_the_same_as_no_row_at_all() {
+        let slots = slots_for("AmigaOS 3.9").unwrap();
+
+        let mut relabelled = Gathered::empty();
+        // The volume name says the CD; the bytes say BoingBag 1.
+        relabelled
+            .media
+            .push(medium("D:/a/relabelled.iso", "AmigaOS3.9"));
+        relabelled
+            .hashes
+            .push(hashed("D:/a/relabelled.iso", BB1_45_15_MD5));
+
+        let states = resolve(&slots, &relabelled.facts(None));
+        let cd = state_of(&states, "medium:AmigaOS3.9");
+        let found = cd.found.as_ref().expect("rank 2 matched the volume name");
+        assert_eq!(found.matched_by, MatchedBy::VolumeName);
+        match &found.bytes_read {
+            BytesRead::ReadRow { artefact, name } => {
+                assert_eq!(artefact.as_deref(), Some("boingbag-39-1"));
+                assert!(
+                    !name.is_empty(),
+                    "the readout names the artefact the bytes actually are"
+                );
+            }
+            other => panic!("the table knows these bytes: {other:?}"),
+        }
     }
 
     /// F3 — a package slot whose own id no row names falls back to the
@@ -1748,7 +1857,10 @@ mod tests {
                 PathBuf::from("D:/b/second.iso")
             ]
         );
-        assert!(cd.candidates.iter().all(|c| c.bytes_read));
+        assert!(cd
+            .candidates
+            .iter()
+            .all(|c| matches!(c.bytes_read, BytesRead::ReadRow { .. })));
     }
 
     /// F6 — `collapse_identical` is the one rule, and rank 2 goes through it:

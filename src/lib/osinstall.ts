@@ -1370,6 +1370,29 @@ export interface Slot {
   supersededBy: string[];
 }
 
+/**
+ * What is known about one file's **bytes**. Mirrors `slots::BytesRead`.
+ *
+ * Three answers, because two of them were one for a round (fix round 1's F1,
+ * then the re-review's F13):
+ *
+ * - `not-read` — nobody has hashed this file. `osinstallSlots` asks the scan
+ *   cache and hashes nothing, so this is the state of every file in a folder
+ *   `osinstallIdentifyMedia`'s job has not run over. Saying "its bytes are in
+ *   no table ART has" here reports a lookup nobody made.
+ * - `read-no-row` — hashed, and no row in either table claims those bytes.
+ *   The one answer that may say "in no table ART has".
+ * - `read-row` — hashed, and a row **does** claim them. At rank 1 that row is
+ *   the slot's own artefact; at ranks 2 and 3 it is by construction a
+ *   different one — a relabelled or mislabelled disk — and the row's own
+ *   `name` is what lets the readout say which artefact the bytes actually
+ *   are instead of claiming the table does not know them.
+ */
+export type BytesRead =
+  | { state: "not-read" }
+  | { state: "read-no-row" }
+  | { state: "read-row"; artefact: string | null; name: string };
+
 /** The file that fills a slot, and how ART knows. Mirrors `slots::Found`. */
 export interface SlotFound {
   path: string;
@@ -1380,26 +1403,18 @@ export interface SlotFound {
    *  would present one artefact's provenance as another's. */
   row: MediaRow | null;
   confirmed: MediaConfirmation | null;
-  /**
-   * Whether **anybody has hashed this file yet**.
-   *
-   * The readout needs it to keep two sentences apart. Rank 1 not firing has
-   * more than one cause, and the commonest is that nothing has read the
-   * bytes: `osinstallSlots` asks the scan cache and hashes nothing, so until
-   * `osinstallIdentifyMedia`'s job has run over a folder every file in it
-   * lands at rank 2 with nothing at all known about its bytes. Saying "its
-   * bytes are in no table ART has" there would be reporting a lookup nobody
-   * made.
-   */
-  bytesRead: boolean;
+  /** What the table lookup for these bytes came back with — see
+   *  {@link BytesRead}. */
+  bytesRead: BytesRead;
 }
 
 /** One file that might fill a slot. Mirrors `slots::Candidate`. */
 export interface SlotCandidate {
   path: string;
-  /** See {@link SlotFound.bytesRead} — a guess nobody has hashed and one that
-   *  was hashed and matched nothing are two different rows. */
-  bytesRead: boolean;
+  /** See {@link BytesRead} — a guess nobody has hashed, one that was hashed
+   *  and matched nothing, and one whose bytes are some *other* catalogued
+   *  artefact are three different rows. */
+  bytesRead: BytesRead;
 }
 
 /**

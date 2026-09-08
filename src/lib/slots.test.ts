@@ -13,8 +13,15 @@ import { describe, expect, it } from "vitest";
 
 import en from "@/i18n/en.json";
 import tr from "@/i18n/tr.json";
-import type { Installed, SlotCandidate, SlotKind, SlotState } from "@/lib/osinstall";
-import { slotLines } from "@/lib/slots";
+import type {
+  BytesRead,
+  Installed,
+  SetSummary,
+  SlotCandidate,
+  SlotKind,
+  SlotState,
+} from "@/lib/osinstall";
+import { readoutRunningLine, setLine, slotLines, unreadableFolderLines } from "@/lib/slots";
 
 /** Whether `dotted` names a string leaf in `catalogue`. */
 function isLeafKey(catalogue: unknown, dotted: string): boolean {
@@ -24,6 +31,17 @@ function isLeafKey(catalogue: unknown, dotted: string): boolean {
     node = (node as Record<string, unknown>)[part];
   }
   return typeof node === "string";
+}
+
+/** The sentence itself, for the few checks that are about the wording rather
+ *  than about which key was picked. */
+function leafText(catalogue: unknown, dotted: string): string {
+  let node: unknown = catalogue;
+  for (const part of dotted.split(".")) {
+    node = (node as Record<string, unknown>)[part];
+  }
+  if (typeof node !== "string") throw new Error(`${dotted} is not a string leaf`);
+  return node;
 }
 
 interface StateOptions {
@@ -43,10 +61,19 @@ interface StateOptions {
   notNeeded?: string | null;
 }
 
+const NOT_READ: BytesRead = { state: "not-read" };
+const NO_ROW: BytesRead = { state: "read-no-row" };
+/** Hashed, and the table names those bytes as something else — F13's case. */
+const OTHER: BytesRead = {
+  state: "read-row",
+  artefact: "boingbag-39-2",
+  name: "BoingBag 3.9-2",
+};
+
 /** A candidate nobody has hashed — the ordinary state before the identify
  *  job has run over a folder. */
-const unread = (path: string): SlotCandidate => ({ path, bytesRead: false });
-const read = (path: string): SlotCandidate => ({ path, bytesRead: true });
+const unread = (path: string): SlotCandidate => ({ path, bytesRead: NOT_READ });
+const read = (path: string): SlotCandidate => ({ path, bytesRead: NO_ROW });
 
 function state(options: StateOptions = {}): SlotState {
   return {
@@ -72,7 +99,7 @@ function state(options: StateOptions = {}): SlotState {
   };
 }
 
-const foundBy = (matchedBy: string, path: string, bytesRead = true) =>
+const foundBy = (matchedBy: string, path: string, bytesRead: BytesRead = NO_ROW) =>
   ({
     path,
     matchedBy,
@@ -222,13 +249,13 @@ describe("slotLines", () => {
     // the identify job has run this is the *default* state — and the row used
     // to assert a fact about a table nobody had asked.
     const hashed = slotLines([
-      state({ found: foundBy("top-level-directory", "D:\\a\\renamed.lha", true) }),
+      state({ found: foundBy("top-level-directory", "D:\\a\\renamed.lha", NO_ROW) }),
     ])[0];
     expect(hashed.kind).toBe("found-by-name");
     expect(hashed.phrase.key).toBe("osinstall.slots.foundByName");
 
     const unhashed = slotLines([
-      state({ found: foundBy("top-level-directory", "D:\\a\\renamed.lha", false) }),
+      state({ found: foundBy("top-level-directory", "D:\\a\\renamed.lha", NOT_READ) }),
     ])[0];
     expect(unhashed.kind).toBe("found-by-name");
     expect(unhashed.phrase.key).toBe("osinstall.slots.foundByNameUnread");
@@ -245,6 +272,43 @@ describe("slotLines", () => {
       "osinstall.slots.guessedByFilename",
       "osinstall.slots.guessedByFilenameUnread",
     ]) {
+      expect(isLeafKey(en, key), `${key} missing from en.json`).toBe(true);
+      expect(isLeafKey(tr, key), `${key} missing from tr.json`).toBe(true);
+    }
+  });
+
+  it("keeps 'in no table' apart from 'in the table, as something else'", () => {
+    // F13. A disk relabelled `AmigaOS3.9` whose bytes are BoingBag 2's
+    // matches this slot at rank 2 by the name it gives for itself, and the
+    // old sentence said its bytes were "in no table ART has" — false about a
+    // file the table knows perfectly well, and unhelpful: what the owner
+    // needs to be told is what the bytes actually are.
+    const relabelled = slotLines([
+      state({ found: foundBy("volume-name", "D:\\a\\relabelled.iso", OTHER) }),
+    ])[0];
+    expect(relabelled.kind).toBe("found-by-name");
+    expect(relabelled.phrase.key).toBe("osinstall.slots.foundByNameOtherArtefact");
+    expect(relabelled.phrase.params?.other).toBe("BoingBag 3.9-2");
+
+    // The same third answer on the guess rank.
+    const guessed = slotLines([
+      state({ candidates: [{ path: "D:\\a\\BoingBag39-1.lha", bytesRead: OTHER }] }),
+    ])[0];
+    expect(guessed.kind).toBe("guessed-by-filename");
+    expect(guessed.phrase.key).toBe("osinstall.slots.guessedByFilenameOtherArtefact");
+    expect(guessed.phrase.params?.other).toBe("BoingBag 3.9-2");
+
+    // Three keys per ending, all distinct, all in both catalogues.
+    const keys = [
+      "osinstall.slots.foundByNameUnread",
+      "osinstall.slots.foundByName",
+      "osinstall.slots.foundByNameOtherArtefact",
+      "osinstall.slots.guessedByFilenameUnread",
+      "osinstall.slots.guessedByFilename",
+      "osinstall.slots.guessedByFilenameOtherArtefact",
+    ];
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const key of keys) {
       expect(isLeafKey(en, key), `${key} missing from en.json`).toBe(true);
       expect(isLeafKey(tr, key), `${key} missing from tr.json`).toBe(true);
     }
@@ -280,5 +344,107 @@ describe("slotLines", () => {
     expect(line.kind).toBe("not-needed");
     expect(line.phrase.key).toBe("osinstall.slots.notNeeded");
     expect(line.phrase.params?.carries).toBe("Updater 45.15");
+  });
+});
+
+describe("chosenMissing states only what was checked", () => {
+  /// The re-review's own constructed case: `path.is_file()` answers `false`
+  /// identically for "does not exist", "is a directory now" and "exists but
+  /// the metadata call failed" (permission denied, an inaccessible share).
+  /// The sentence used to name one specific cause — *"plug in the drive it
+  /// was on"* — which the check never established, and which is simply wrong
+  /// advice in the permission case.
+  it("does not name a cause the existence check never established", () => {
+    for (const catalogue of [en, tr]) {
+      const sentence = leafText(catalogue, "osinstall.slots.chosenMissing");
+      expect(sentence).toContain("{{path}}");
+      expect(sentence.toLowerCase()).not.toContain("drive");
+      expect(sentence.toLowerCase()).not.toContain("sürücü");
+    }
+  });
+});
+
+describe("setLine", () => {
+  const summary = (over: Partial<SetSummary> = {}): SetSummary => ({
+    release: "AmigaOS 3.9",
+    requiredTotal: 2,
+    requiredFound: 2,
+    optionalTotal: 4,
+    optionalFound: 3,
+    ...over,
+  });
+
+  it("counts found over the whole set and names the required shortfall apart", () => {
+    const { phrase, ready } = setLine(summary(), []);
+    expect(phrase.key).toBe("osinstall.slots.setLine");
+    expect(phrase.params).toMatchObject({
+      release: "AmigaOS 3.9",
+      found: 5,
+      total: 6,
+      missingRequired: 0,
+    });
+    // A set missing only optional files is ready to build — one fraction
+    // cannot say that, which is why `ready` reads the required half alone.
+    expect(ready).toBe(true);
+  });
+
+  it("is not ready the moment a required slot is missing", () => {
+    const { phrase, ready } = setLine(summary({ requiredFound: 1 }), []);
+    expect(ready).toBe(false);
+    expect(phrase.params?.missingRequired).toBe(1);
+  });
+
+  it("says how many are not needed, so a shrinking denominator is not a disappearance", () => {
+    // `slots::summarize` leaves a not-needed slot out of **both** totals, so
+    // "5 of 6" legitimately becomes "5 of 5" as ART learns more. Without this
+    // clause on the line, that reads as material vanishing.
+    const states = [
+      state({ id: "overlay:uae", notNeeded: "Updater 45.15" }),
+      state({ id: "package:boingbag-39-1" }),
+    ];
+    const { phrase } = setLine(summary({ optionalTotal: 3, optionalFound: 3 }), states);
+    expect(phrase.key).toBe("osinstall.slots.setLineNotNeeded");
+    expect(phrase.params?.notNeeded).toBe(1);
+    expect(phrase.params?.total).toBe(5);
+
+    // And says nothing when there is nothing to say: "0 not needed" is noise.
+    expect(setLine(summary(), states.slice(1)).phrase.key).toBe("osinstall.slots.setLine");
+
+    for (const key of ["osinstall.slots.setLine", "osinstall.slots.setLineNotNeeded"]) {
+      expect(isLeafKey(en, key), `${key} missing from en.json`).toBe(true);
+      expect(isLeafKey(tr, key), `${key} missing from tr.json`).toBe(true);
+    }
+  });
+});
+
+describe("unreadableFolderLines", () => {
+  /// Fix round 1's F2 put the field on the wire and nothing rendered it. A
+  /// remembered path on a drive nobody plugged in is the ordinary case, and
+  /// the rows resolved against the *other* folders stay true — so this names
+  /// what was not counted rather than casting doubt over them.
+  it("names each folder that could not be read, and says nothing when there are none", () => {
+    const lines = unreadableFolderLines(["E:\gone", "F:\also gone"]);
+    expect(lines.map((line) => line.folder)).toEqual(["E:\gone", "F:\also gone"]);
+    expect(lines[0].phrase.key).toBe("osinstall.slots.unreadableFolder");
+    expect(lines[0].phrase.params?.folder).toBe("E:\gone");
+    expect(unreadableFolderLines([])).toEqual([]);
+    expect(isLeafKey(en, "osinstall.slots.unreadableFolder")).toBe(true);
+    expect(isLeafKey(tr, "osinstall.slots.unreadableFolder")).toBe(true);
+  });
+});
+
+describe("readoutRunningLine", () => {
+  /// CLAUDE.md: a bar with no total looks like progress and carries none.
+  /// `osinstall_slots` is one round trip and reports no progress of its own,
+  /// so the honest running statement is the count it was given.
+  it("states a count rather than a fraction ART cannot fill in", () => {
+    const phrase = readoutRunningLine(3);
+    expect(phrase.key).toBe("osinstall.slots.reading");
+    expect(phrase.params?.count).toBe(3);
+    // Pluralised, so both arms have to be in both catalogues.
+    for (const key of ["osinstall.slots.reading_one", "osinstall.slots.reading_other"]) {
+      expect(isLeafKey(en, key), `${key} missing from en.json`).toBe(true);
+      expect(isLeafKey(tr, key), `${key} missing from tr.json`).toBe(true);
+    }
   });
 });

@@ -4602,8 +4602,35 @@ mod tests {
                 &["path", "matchedBy", "row", "confirmed", "bytesRead"],
             );
             assert_eq!(rom_state["found"]["matchedBy"], "chosen");
-            assert_eq!(rom_state["found"]["bytesRead"], false);
+            // `BytesRead` is a tagged enum on the wire (F13), not a boolean:
+            // `slots.ts` switches on `state`, so a rename here would drop
+            // straight through to a sentence about a lookup nobody made.
+            assert_eq!(rom_state["found"]["bytesRead"]["state"], "not-read");
             assert_eq!(rom_state["slot"]["kind"], "rom");
+        }
+
+        /// F13's three answers, as the readout reads them off the wire.
+        ///
+        /// `slots.ts` switches on `bytesRead.state` with a case per variant;
+        /// a renamed tag or a dropped `name` would silently fall through to
+        /// the sentence that says the bytes are in no table, which is the
+        /// exact claim F13 exists to stop being made about a file the table
+        /// knows.
+        #[test]
+        fn the_three_answers_about_a_files_bytes_each_have_their_own_wire_shape() {
+            use crate::core::osinstall::slots::BytesRead;
+            let not_read = serde_json::to_value(BytesRead::NotRead).unwrap();
+            assert_eq!(not_read["state"], "not-read");
+            let no_row = serde_json::to_value(BytesRead::ReadNoRow).unwrap();
+            assert_eq!(no_row["state"], "read-no-row");
+            let row = serde_json::to_value(BytesRead::ReadRow {
+                artefact: Some("boingbag-39-1".to_string()),
+                name: "BoingBag 3.9-1".to_string(),
+            })
+            .unwrap();
+            expect_keys(&row, &["state", "artefact", "name"]);
+            assert_eq!(row["state"], "read-row");
+            assert_eq!(row["name"], "BoingBag 3.9-1");
         }
 
         /// A chosen ROM whose file is not on disk (fix round 1, F5) — its own

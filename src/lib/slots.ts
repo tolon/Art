@@ -15,14 +15,17 @@
 // states with eight different next steps. They never collapse into "not
 // found" or into "found".
 //
-// **And "ART did not look" is not "ART looked and found nothing"** (fix round
-// 1, F1). `osinstallSlots` hashes nothing — it reads the scan cache the
-// identify job fills — so a folder nobody has identified yet produces rank-2
-// and rank-3 rows with *nothing at all known about the bytes*. Every such row
-// picks between two sentences on `bytesRead`: one reports a lookup that
-// happened and matched nothing, the other says the lookup has not happened and
-// what to do about it. The first version of this file had one sentence for
-// both, and it was the one that asserted a fact about a table nobody had
+// **And "ART did not look" is not "ART looked and found nothing", which is
+// not "ART looked and these bytes are something else"** (fix round 1's F1,
+// then the re-review's F13). `osinstallSlots` hashes nothing — it reads the
+// scan cache the identify job fills — so a folder nobody has identified yet
+// produces rank-2 and rank-3 rows with *nothing at all known about the bytes*.
+// Every such row picks between **three** sentences on `bytesRead`: the lookup
+// has not happened and here is what to do about it; the lookup happened and
+// matched nothing; the lookup happened and the bytes are a *different*
+// catalogued artefact — a relabelled disk, about which "in no table ART has"
+// is simply false. The first version of this file had one sentence for all
+// three, and it was the one that asserted a fact about a table nobody had
 // asked.
 //
 // The `installed` badge is separate from all of them on purpose: it comes
@@ -30,7 +33,13 @@
 // file is still in a folder — and the folder says nothing about whether it
 // was ever installed.
 
-import { fileName, type Installed, type SlotState } from "@/lib/osinstall";
+import {
+  fileName,
+  type BytesRead,
+  type Installed,
+  type SetSummary,
+  type SlotState,
+} from "@/lib/osinstall";
 import type { Phrase } from "@/lib/phrase";
 
 /**
@@ -38,9 +47,9 @@ import type { Phrase } from "@/lib/phrase";
  *
  * Kept on the object rather than derived from the phrase key, so a screen can
  * style a guess differently from a find without re-deciding which is which.
- * `found-by-name` and `guessed-by-filename` each carry two possible sentences
- * — see the file header — because the *ending* is the same and only the
- * reason ART cannot say more differs.
+ * `found-by-name` and `guessed-by-filename` each carry three possible
+ * sentences — see the file header — because the *ending* is the same and only
+ * the reason ART cannot say more differs.
  */
 export type SlotLineKind =
   | "found-by-hash"
@@ -87,6 +96,46 @@ function displayName(state: SlotState): string {
   const { slot } = state;
   if (slot.kind === "rom" && slot.identity) return `${slot.name} ${slot.identity}`;
   return slot.name;
+}
+
+/**
+ * The sentence a row about a **matched-by-its-own-name** file gets, chosen by
+ * what is actually known about its bytes (F1, F13).
+ *
+ * Three keys, never two: the middle one is the only one entitled to say the
+ * bytes are in no table ART has. `read-row` at this rank means a row claims
+ * these bytes for a *different* artefact — rank 1 filters by the slot's own
+ * artefact and returns before rank 2 is reached — so the sentence names what
+ * the table says they are instead.
+ */
+function foundByNameKey(bytes: BytesRead): string {
+  switch (bytes.state) {
+    case "not-read":
+      return "osinstall.slots.foundByNameUnread";
+    case "read-no-row":
+      return "osinstall.slots.foundByName";
+    case "read-row":
+      return "osinstall.slots.foundByNameOtherArtefact";
+  }
+}
+
+/** The same three-way choice for the *guess* rank. */
+function guessedByFilenameKey(bytes: BytesRead): string {
+  switch (bytes.state) {
+    case "not-read":
+      return "osinstall.slots.guessedByFilenameUnread";
+    case "read-no-row":
+      return "osinstall.slots.guessedByFilename";
+    case "read-row":
+      return "osinstall.slots.guessedByFilenameOtherArtefact";
+  }
+}
+
+/** What the table calls the artefact these bytes actually are, or `""` when
+ *  the row is not the one being rendered. A parameter the two
+ *  `…OtherArtefact` sentences interpolate and the other four ignore. */
+function otherArtefactName(bytes: BytesRead): string {
+  return bytes.state === "read-row" ? bytes.name : "";
 }
 
 function installedPhrase(installed: Installed): Phrase | null {
@@ -188,10 +237,13 @@ export function slotLines(states: SlotState[]): SlotLine[] {
               kind: "found-by-name" as const,
               file,
               phrase: {
-                key: state.found.bytesRead
-                  ? "osinstall.slots.foundByName"
-                  : "osinstall.slots.foundByNameUnread",
-                params: { file, name, identity: state.slot.identity },
+                key: foundByNameKey(state.found.bytesRead),
+                params: {
+                  file,
+                  name,
+                  identity: state.slot.identity,
+                  other: otherArtefactName(state.found.bytesRead),
+                },
               },
             };
           case "chosen":
@@ -211,10 +263,8 @@ export function slotLines(states: SlotState[]): SlotLine[] {
               kind: "guessed-by-filename" as const,
               file,
               phrase: {
-                key: state.found.bytesRead
-                  ? "osinstall.slots.guessedByFilename"
-                  : "osinstall.slots.guessedByFilenameUnread",
-                params: { file, name },
+                key: guessedByFilenameKey(state.found.bytesRead),
+                params: { file, name, other: otherArtefactName(state.found.bytesRead) },
               },
             };
         }
@@ -244,10 +294,8 @@ export function slotLines(states: SlotState[]): SlotLine[] {
           kind: "guessed-by-filename" as const,
           file,
           phrase: {
-            key: candidate.bytesRead
-              ? "osinstall.slots.guessedByFilename"
-              : "osinstall.slots.guessedByFilenameUnread",
-            params: { file, name },
+            key: guessedByFilenameKey(candidate.bytesRead),
+            params: { file, name, other: otherArtefactName(candidate.bytesRead) },
           },
         };
       }
@@ -268,4 +316,78 @@ export function slotLines(states: SlotState[]): SlotLine[] {
             : { key: "osinstall.slots.notFoundUnnamed", params: { name } },
       };
     });
+}
+
+/**
+ * The set line above the rows — *"AmigaOS 3.9 · 5 of 6 found · 1 required
+ * missing"* — plus whether it may be shown as ready.
+ *
+ * **Required and optional are counted apart in `SetSummary`, and the totals
+ * here keep them apart too**: a set missing only optional files is ready to
+ * build, and one fraction cannot say that. `ready` is `false` the moment a
+ * required slot is missing, which is the only thing the colour is allowed to
+ * mean.
+ *
+ * **The not-needed count is on the line for a reason.** A slot ART has
+ * measured as unnecessary leaves *both* totals (`slots::summarize`), so the
+ * denominator legitimately shrinks as ART learns more — "5 of 6" becomes
+ * "5 of 5" between two calls, and with nothing else on the line that reads as
+ * material vanishing. Saying "1 not needed" beside the counts is what makes
+ * the smaller denominator an answer rather than a disappearance. It is said
+ * only when there is one: "0 not needed" is noise about nothing.
+ */
+export function setLine(
+  summary: SetSummary,
+  states: SlotState[]
+): { phrase: Phrase; ready: boolean } {
+  const found = summary.requiredFound + summary.optionalFound;
+  const total = summary.requiredTotal + summary.optionalTotal;
+  const missingRequired = summary.requiredTotal - summary.requiredFound;
+  const notNeeded = states.filter((state) => state.notNeeded !== null).length;
+  const params = {
+    release: summary.release,
+    found,
+    total,
+    missingRequired,
+    notNeeded,
+  };
+  return {
+    ready: missingRequired === 0,
+    phrase: {
+      key: notNeeded > 0 ? "osinstall.slots.setLineNotNeeded" : "osinstall.slots.setLine",
+      params,
+    },
+  };
+}
+
+/**
+ * One line per material folder ART could not read at all.
+ *
+ * **Its own sentence, and not a row of the readout** (fix round 1, F2, whose
+ * field this finally renders). A remembered path on a drive nobody plugged in
+ * is the ordinary case here, and every slot resolved against the *other*
+ * folders is still true — so this says what was not counted rather than
+ * casting doubt over the rows. Empty is the normal answer and renders
+ * nothing: "0 folders could not be read" is a sentence about nothing.
+ */
+export function unreadableFolderLines(
+  folders: string[]
+): { folder: string; phrase: Phrase }[] {
+  return folders.map((folder) => ({
+    folder,
+    phrase: { key: "osinstall.slots.unreadableFolder", params: { folder } },
+  }));
+}
+
+/**
+ * What the readout says while it is working.
+ *
+ * **A count, never a bar** (CLAUDE.md: a progress bar showing a fixed width
+ * with no total looks like progress and carries none). `osinstall_slots` is
+ * one round trip over the whole folder list and reports no progress of its
+ * own, so the honest statement is how many folders it was given — not a
+ * fraction ART cannot fill in, and not a moving sliver that means nothing.
+ */
+export function readoutRunningLine(folders: number): Phrase {
+  return { key: "osinstall.slots.reading", params: { count: folders } };
 }
