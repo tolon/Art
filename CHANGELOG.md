@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The commander now has cursor keys.** Up/Down, Home/End and Page Up/Page
+  Down move the pane's cursor — no version of ART had ever handled them, so a
+  mouse-free session was driven by Insert and letters only. Holding Shift
+  while moving marks every row the cursor passes over, inclusive of where it
+  started and exclusive of where it lands, the same rule in either direction
+  and at any step size. Ctrl+Space focuses the command line, the one custom
+  shortcut the Total Commander `.ini` this build reads still needed wiring
+  (ART-275).
 - **A real Amiga can now finish its own first boot without a host in the
   loop.** The OS Builder gains a first-boot step: turn it on and the tree ART
   builds carries a small program that runs itself the first time the Amiga
@@ -113,6 +121,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two packages can now legitimately share one archive.** Adding a second
+  update package built from the same medium as one already in the tree used
+  to be refused outright — `'Locale3.9' already names the medium component
+  'locale-39' was installed from in this tree` — even where the recipe
+  declares the sharing on purpose. An archive that genuinely is a different
+  file under the same medium name is still refused, and now names which
+  component the tree's own copy actually came from (ART-276).
+- **The Amiga-side install panel remembers each package's own archive
+  choice, tells you the moment a picked file belongs to a different
+  package, and its refusals name that package.** Switching between BoingBag
+  3.9-1 and BoingBag 3.9-2 used to carry the first package's archive
+  straight into the second one's request, and a wrong-archive refusal named
+  an internal path instead of either package. The panel now remembers an
+  archive per package rather than one shared choice, classifies a chosen
+  file as soon as it is picked and shows what it found beside the confirm
+  box, and both the screen's own hint and Rust's own refusal name the
+  package an archive actually belongs to — never by guessing when more than
+  one package could be meant (ART-277).
 - **Applying a wallpaper, screen depth or icon arrangement no longer freezes
   the window, and can be stopped.** ART now reports progress while it works
   and a Stop button appears; stopping partway leaves whatever had already

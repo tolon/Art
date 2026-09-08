@@ -518,6 +518,86 @@ the panel's own suite, 1248 total Vitest tests, all green. Mutated
 `archiveFieldBlockerPhrase` `"another-package"` case back to `null`; both
 caught by the tests above.
 
+**Fix round 2 (5e40e5e, 2026-09-08).** A scoped re-review found the round-1 relocation
+of `wrongFieldOverlay`/`wrongFieldPackage` into the `blockers` box left both sentences
+saying "the second field **below**"/"the first field **above**" — true only at the old
+render position, beside the specific field; moved into a box below *both* fields, one
+direction read backwards and the other was right only by coincidence.
+`archiveFieldBlockerPhrase` now takes the two fields' own rendered labels
+(`t("osinstall.amigaInstall.archive.label")` / `.overlayArchive.label`) and both
+sentences interpolate `{{packageLabel}}`/`{{overlayLabel}}` instead of a direction —
+immune to the two fields ever reordering. A direct Rust test,
+`a_second_archive_matching_another_known_packages_overlay_drawer_names_it_as_that_packages_update_archive`,
+pins `overlay_mismatch_sentence`'s own text for "another package's own **update**
+archive" (previously checked only through the command layer's `kind` string). Tests:
+two new `AmigaInstallPanel.test.tsx` cases asserting the rendered box contains both
+labels and that the old "second field below"/"first field above" wording is gone; two
+`amigainstall.test.ts` cases extended to assert `phrase.params` carries both labels.
+172 Rust `amigainstall::` tests, 1250 total Vitest tests, all green.
+
+**Final fix — round 1 whole-branch review (2026-09-08).** Two new instances of this
+project's own signature defect, both in the panel and both invisible to the suite
+(M1/M2), plus nine lower-severity findings, all applied:
+
+- **M1.** The archive classification was never cleared before the next question was
+  asked — changing a field's archive (a second Browse, or switching to a package with
+  its own remembered one) left the *previous* file's verdict rendered against the *new*
+  file's path for the whole round trip. `setArchiveClassification(null)` /
+  `setOverlayClassification(null)` now run as the *first* statement of each effect,
+  before the new question is even asked. Test: a deferred `classifyMock` promise proves
+  the stale verdict is gone before the new one resolves; mutation (reverting the clear
+  to the old "only when the field is empty" branch) fails exactly that test.
+- **M2.** Two archive fields can now legitimately produce the identical `Phrase` (the
+  same wrong archive in both fields), which used to render as a duplicate React key and
+  the same sentence twice in one box — the *"aynı uyarı tek ekranda 2 tane"* mistake
+  ART-202 already cost this screen once. New `dedupeBlockers` (`src/lib/amigainstall.ts`)
+  namespaces each blocker's id by which field produced it and drops a later entry whose
+  key and params exactly match an earlier one. Test: the same wrong archive in both
+  fields renders one `<li>`, not two.
+- **L3/L4.** The core refusal's own catalogue (`Layout.catalogue`) was built from every
+  shipped package regardless of release, and a doc comment claimed it excluded the
+  selected package while the one production caller did not. `compose` now builds it from
+  `known_packages_for(&package)` — every package sharing a release with the one selected,
+  with the selected package's own id removed — and passes the identical list `install`
+  already had, rather than recomputing it. Test: `known_packages_from_excludes_a_package_from_a_different_release`
+  (a package built from a real one via struct-update, since the shipped catalogue has
+  only one release today).
+- **L5.** `other-artefact` had two causes — two or more release packages sharing an
+  identity, or a single non-installable match — and one sentence claiming "the Packages
+  step places it from Windows", true of only the second. Split into `shared-artefact:<media>`
+  (names *both* packages by display name, no claim about which step handles them) and
+  `other-artefact:<media>` (says only that *this* step does not run it). Both catalogues,
+  same commit. Tests: `classify_top_level_answers_shared_artefact_when_two_packages_share_the_media`
+  (asserts both package ids), the renamed `other-artefact` test, and two panel tests
+  (one per kind, the `other-artefact` one asserting the "Packages step"/"Windows" text
+  is gone).
+- **L6.** See ART-276's own addendum above — the same round applied it.
+- **L7.** `tr.json`'s new `otherArtefact`/`otherArtefactGeneric` text used
+  "Windows **tarafından**" (ablative-agentive, "by Windows") where the participle's
+  agent is already "Paketler adımı"; the locative "tarafında" was meant. The clause
+  moved to the new `sharedArtefact` key with the grammar corrected; `otherArtefact`
+  no longer makes the claim at all (L5).
+- **I9.** `classify_top_level`'s catalogue scan re-derived "is this archive's identity"
+  by hand (`drawer_names_equal` calls) instead of asking `archive_is` — the same
+  function already used for the *selected* package. Now calls `archive_is` for every
+  catalogue candidate too; one implementation of the identity rule, not two.
+- **I10.** `archive_listing` had no cap on entry count — `MAX_ENTRIES` (100,000) is
+  enforced in `extract_selection`, downstream of every other caller, but
+  `amigainstall_classify_archive` reaches a listing directly from a raw user-picked
+  path with nothing downstream to cap it. Split into `listing_from_entries` (testable
+  over a synthetic entry list) plus the bound; a listing over it refuses with "too many
+  entries", which the caller already turns into `"unknown"`. Test:
+  `a_listing_over_the_entry_cap_is_refused_rather_than_read` (100,001 synthetic entries,
+  no real archive built).
+- **I11.** The *package* field's own refusal (`wrong_archive_sentence`'s `Neither` arm)
+  named only what the archive was not, with no catalogue lookup, while the *second*
+  field's equivalent already named a recognised archive's real owner. Given the same
+  catalogue, it now does too: `… it holds BoingBag3.9-2, which is BoingBag 3.9-2's own
+  archive`. Test: `a_wrong_archive_in_the_package_field_names_its_real_owner_when_the_catalogue_knows_it`.
+
+Tests (final fix): 175 Rust `amigainstall::` tests, 75 `osinstall::apply::` tests, 1258
+total Vitest tests, all green (`cargo test --lib`: 3085). Mutation quoted above (M1).
+
 **ART-276** 🟠 **Two packages sharing one medium tripped the wrong clash check:
 `'Locale3.9' already names the medium component 'locale-39' was installed from in this
 tree`** — *found 2026-09-07 night by the owner, adding `locale-39-turkish` after
@@ -551,6 +631,18 @@ both archives' SHA-256 prefixes in the refusal instead of a component id. Tests:
 `a_second_archive_under_the_same_medium_name_is_refused_and_names_both_hashes` (new);
 `adding_the_same_package_twice_replaces_its_own_files_rather_than_refusing` (existing,
 already asserts `built_from`'s single entry per archive).
+
+**Round 1 whole-branch review (L6, 2026-09-08).** Two SHA-256 prefixes are correct and
+specific, but the review found them not actionable on their own: a user is told which
+file is wrong and given twelve hex digits for the one that is right, with nothing to
+map either hash back to a file they recognise. `manifest.files` already knows which
+**component** was placed from the clashing record, so the refusal now names it too —
+`… 'Locale3.9' in this tree came from a different archive (sha256 abc123def456…, which
+placed locale-39) than '…' (sha256 …) — …`. Distinct and sorted, since two components
+can legitimately share one medium (the very fact this check exists to allow).
+`a_second_archive_under_the_same_medium_name_is_refused_and_names_both_hashes` (existing,
+updated) now also asserts `"which placed shared-a"`. 75 `osinstall::apply::` tests, all
+green.
 
 **ART-275** 🟠 **The commander had no cursor keys: Up/Down, Home/End, PageUp/PageDown
 moved nothing, and the ini's one custom shortcut (Ctrl+Space) was not wired** — *found
