@@ -846,6 +846,45 @@ pub enum HostPlacementBlock {
     /// The package's payload archive is encrypted, and only the package's
     /// own Amiga-side `Updater` holds the password (ART-166).
     EncryptedPayload,
+    /// The package replaces bitmap fonts and ships its own `.font`
+    /// descriptors, and its installer runs `FixFonts` afterwards to rebuild
+    /// them from what the drawer actually holds. **ART cannot rebuild a
+    /// `.font` index**, so placing the files alone would leave the index
+    /// listing only the sizes this package happens to ship.
+    ///
+    /// **Measured, 2026-09-08, on the owner's own material.**
+    /// `Euro-Update.lha` carries ten `.font` descriptors beside its size
+    /// files; each is a `FontContentsHeader` (`0x0f00`, an entry count, then
+    /// 260-byte entries carrying a name, a `ysize`, a `style` and `flags`).
+    /// Compared against the tree ART's own 3.9 build produced: every one
+    /// names exactly the sizes that tree already has and differs **only in
+    /// entry order** (`courier.font` lists 24 first, the tree's lists 11
+    /// first; `topaz.font` is byte-identical), so on a standard tree the
+    /// rebuild is a no-op. That is the measurement — and it is a
+    /// measurement about *one* tree. ART cannot ask an arbitrary tree
+    /// whether its `Fonts` drawer holds a size this package's descriptor
+    /// omits, and where it does, placing the descriptor silently removes
+    /// that size from the index: nothing fails, nothing is logged, and a
+    /// font stops being available. Rebuilding the index honestly means
+    /// reading each size file's own `DiskFontHeader` for the `style` and
+    /// `flags` no descriptor can invent — a second binary format ART has
+    /// never parsed and has no oracle for. So the row is refused and says
+    /// why, rather than half-placed.
+    NeedsFixfonts,
+    /// The package installs through its **own Installer script**, which
+    /// decides what to copy from answers only a person can give.
+    ///
+    /// **Measured, 2026-09-08, on the owner's own `BoingBags3&4.lha`.** Its
+    /// `Install` picks the CPU-specific `xadmaster`, `mpega` and datatype
+    /// builds, asks `askoptions` which languages to install, asks which SCSI
+    /// device the machine wants, copies into whatever `AmiTCP:` and
+    /// `SYS:Internet/AWeb3SE` happen to be assigned, deletes
+    /// `L/CrossDOSFileSystem`, renames files inside its own source drawer
+    /// and offers to open `SYS:Tools/EditPad` on the startup-sequence. None
+    /// of that is a set of `PathRule`s, and a recipe that declared the
+    /// unconditional half as if it were the whole would produce a tree that
+    /// boots and is quietly short — this project's named defect.
+    NeedsInstallerScript,
 }
 
 /// Why an install cannot proceed. A value, never a sentence — the UI
@@ -1584,6 +1623,8 @@ pub(crate) mod fixtures {
             amiga_installer: None,
             requires: Vec::new(),
             requires_components: Vec::new(),
+            chain_position: None,
+            superseded_by: Vec::new(),
             host_placement_block: None,
             component,
         }
@@ -1668,6 +1709,8 @@ pub(crate) mod fixtures {
             amiga_installer: None,
             requires: vec!["test-package".to_string()],
             requires_components: Vec::new(),
+            chain_position: None,
+            superseded_by: Vec::new(),
             host_placement_block: None,
             component,
         }

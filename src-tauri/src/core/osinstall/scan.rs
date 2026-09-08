@@ -692,7 +692,19 @@ pub fn media_for<'a>(found: &'a [FoundMedia], volume_name: &str) -> MediaMatch<'
 /// archive could pass the check. A directory has to hold at least one entry
 /// under it; a file has to be a file. `walk` answers entries **at or under**
 /// the path, so "under" is tested by path length, not by count.
-fn archive_carries(archive: &Path, inner: &str) -> bool {
+/// Whether `archive` carries `inner` below its own top-level directory —
+/// the check `Package::distinguished_by` exists for.
+///
+/// `pub` since round 3: `commands::amigainstall::classify_top_level` needs
+/// the same question answered about one archive it already has a path for.
+/// Two packages now legitimately share the top level `BoingBag3.9-2`
+/// (`BoingBag39-2.lha` and `BoingBag39-2-Contribution.lha`), and a
+/// classification that stopped at the top level would tell somebody holding
+/// the plain BoingBag 2 archive that ART cannot tell which of two packages
+/// it is — about a file whose own contents say so. One implementation, so
+/// the panel and `package_for` cannot come to different answers about one
+/// file.
+pub fn archive_carries(archive: &Path, inner: &str) -> bool {
     let Ok(mut source) = ArchiveSource::open(archive) else {
         return false;
     };

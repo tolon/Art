@@ -9,6 +9,8 @@
   ],
   "media": "Locale3.9",
   "_why_no_distinguished_by": "`Locale3.9` is this archive's own top-level directory and is unique among the owner's material - the same measurement `locale-39` records, from the same pass over all 44 archives. Two packages sharing one medium is ordinary: `media` says which archive, and the rules say which part of it.",
+  "_why_chain_position": "4, the same rank `locale-39` carries and for the same reason - both read `Locale3_9.lha`, and the material states no order between them. The chain sorts by (rank, id), so `locale-39` renders above `locale-39-turkish` and does so the same way twice running.",
+  "chain_position": 4,
   "requires": [],
   "requires_components": [
     "locale-base"

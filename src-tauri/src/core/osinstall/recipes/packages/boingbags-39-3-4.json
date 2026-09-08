@@ -1,0 +1,217 @@
+{
+  "_why_this_package_exists": [
+    "Row 8 - the last link of the AmigaOS 3.9 chain, and the only community one.",
+    "Boing Bags 3 & 4, v1.59 (29.12.2023), James Jacobs. Its own readme states",
+    "its place in the order in as many words: `Requires: OS3.9+BB2` and *\"You",
+    "need to install Boing Bags #1 and #2 first\"* (read from the owner's own",
+    "`BoingBags3&4.lha`, 7-Zip 26.02, 2026-09-08).",
+    "",
+    "It is registered **unready rather than hidden** (section 10 / section 89):",
+    "see `_why_not_yet_runnable`."
+  ],
+  "_why_the_tree_measured": [
+    "Read read-only from `E:\\amiga\\Amigatolon\\os39\\BoingBags3&4.lha`,",
+    "2026-09-08: 983 entries, 117 of them `.info`.",
+    "",
+    "    BoingBag3.9-3&4.info",
+    "    BoingBag3.9-3&4/BoingBags3&4.readme + .info",
+    "    BoingBag3.9-3&4/Install + .info             an Installer script",
+    "    BoingBag3.9-3&4/Files1   245 entries        C Classes Devs L Libs Locale",
+    "                                                Prefs S Storage Tools",
+    "                                                Utilities WBStartup",
+    "    BoingBag3.9-3&4/Files2   456 entries        C Classes Devs Fonts",
+    "                                                Internet L Libs Locale",
+    "                                                Prefs S",
+    "    BoingBag3.9-3&4/Files3   250 entries        the optional contributions",
+    "    BoingBag3.9-3&4/Files4    27 entries        Classes Locale S",
+    "",
+    "There is **no `Updater` and no `C/Installer`** in this archive: the only",
+    "bundled helper is `Files2/C/FixFonts`, which the script runs itself."
+  ],
+  "id": "boingbags-39-3-4",
+  "name": "BoingBags 3&4 for AmigaOS 3.9",
+  "releases": [
+    "AmigaOS 3.9"
+  ],
+  "media": "BoingBag3.9-3&4",
+  "_why_no_distinguished_by": [
+    "`BoingBag3.9-3&4` is this archive's own single top-level directory and no",
+    "other archive in the owner's folder claims it. A condition that separates",
+    "nothing can only refuse an archive that would have worked."
+  ],
+  "_why_chain_position_and_requires": [
+    "8 - last, and the readme says why: `Requires: OS3.9+BB2`, and the Install",
+    "script's own `#msg-bad-revision` refuses a tree that has not had BoingBags",
+    "3.9-1 and 3.9-2 applied. `requires` names `boingbag-39-2` alone because",
+    "`prerequisite_chain` closes it transitively - BoingBag 3.9-2 names",
+    "BoingBag 3.9-1 - and naming both here would state one fact twice.",
+    "",
+    "The readme also states what goes on *before* it and is not incorporated:",
+    "*\"The various BB2 Locale packages ... are not incorporated. You should",
+    "install any of them that you require before installing BB3&4.\"* That is",
+    "the group at ranks 4 to 7, and it is expressed as their ranks rather than",
+    "as a `requires` here: they are optional, and a `requires` naming an",
+    "optional package would refuse a chain nobody has to install."
+  ],
+  "chain_position": 8,
+  "requires": [
+    "boingbag-39-2"
+  ],
+  "_why_host_placement_block_needs_installer_script": [
+    "**Not an encryption block - a decision block.** Nothing in this archive is",
+    "encrypted; every one of the 983 entries is a plain file. What ART cannot do",
+    "is *decide*, and its own `Install` script is 1600 lines of deciding. Read in",
+    "full on 2026-09-08, it:",
+    "",
+    "  - asks `askoptions` which languages to install and copies only those;",
+    "  - copies `Files1` whole into the volume root, and `Files3` only if the",
+    "    user asked for the optional contributions;",
+    "  - picks the 060, 040 or 020 build of `xadmaster.library`, `mpega*.library`",
+    "    and the BMP/PNG datatypes from the CPU it detects;",
+    "  - copies one of five `scsi-A<model>.device` files under the name",
+    "    `scsi.device`, chosen by the machine the user names;",
+    "  - copies into whatever `AmiTCP:` and `SYS:Internet/AWeb3SE` happen to be,",
+    "    renaming and deleting inside them first;",
+    "  - deletes `L/CrossDOSFileSystem` from the target;",
+    "  - renames files inside its own source drawer;",
+    "  - runs `Files2/C/FixFonts` after the fonts, which ART cannot do",
+    "    (`euro-update.json` carries that measurement in full);",
+    "  - and offers to open `SYS:Tools/EditPad` on the startup-sequence.",
+    "",
+    "A `PathRule` set cannot express any of that. Declaring the unconditional",
+    "half as if it were the whole would produce a tree that boots and is quietly",
+    "short of the components it thinks it has - this project's named defect - so",
+    "the row is refused for host placement and says why."
+  ],
+  "host_placement_block": "needs-installer-script",
+  "_why_amiga_installer_and_not_yet_runnable": [
+    "**The declaration is honest about what it is not.** `program` names",
+    "`Install`, the archive's own Installer script - the artefact that installs",
+    "this package - and `Install` is a *script*, not a program: it has to be",
+    "handed to `C:Installer` on the target, and ART's engine launches a program",
+    "with fixed arguments. So the declaration cannot be composed into a run as",
+    "it stands, and `not_yet_runnable` is exactly that gap, written down where",
+    "the screen can read it.",
+    "",
+    "It is not left out. Omitting `amiga_installer` would make",
+    "`PackageSummary::amigaInstallable` false and the row would vanish from the",
+    "Amiga-side panel entirely - ART silently claiming it ships nothing for a",
+    "package it ships a whole recipe for. Section 10's rule is the opposite:",
+    "register the unready action and say why it is unready. The panel renders",
+    "the row disabled with this sentence, and `commands::amigainstall::compose`",
+    "refuses a request for it whatever the screen does.",
+    "",
+    "**What would have to be measured.** Whether `Installer` can drive this",
+    "script unattended at all. The script sets `(user N)` internally, asks",
+    "`askoptions` for the languages and `confirm`s the target, and none of the",
+    "AmigaOS 3.9 Installer scripts accepts `NOVICE`, `DEFUSER`, `LOGFILE`,",
+    "`MINUSER` or `PROMPTUSER` (research section 2). Round 3's task 3 is where",
+    "that is run and counted; until then this row is a question ART is asking,",
+    "not a promise it is making."
+  ],
+  "amiga_installer": {
+    "program": "Install",
+    "args": [],
+    "not_yet_runnable": "the Installer script has not been run unattended by ART; round 3 task 3 measures it"
+  },
+  "_why_overrides": [
+    "Every path the rules below name is one `workbench-base` and `workbench-39`",
+    "already write, and BoingBags 3&4 replaces them on purpose - which is what",
+    "an update is. `boingbag-39-1` and `boingbag-39-2` are named too, since this",
+    "goes on after both and replaces what they left. The declaration is what",
+    "separates a deliberate layer from a package that landed on a name nobody",
+    "expected; `boingbag-39-1.json` records the reasoning at length."
+  ],
+  "overrides": [
+    "workbench-base",
+    "workbench-39",
+    "boingbag-39-1",
+    "boingbag-39-2"
+  ],
+  "_why_rules_are_the_unconditional_copies_only": [
+    "**These rules are documentation, not a placement plan**, and",
+    "`host_placement_block` above is what stops them being applied. They are the",
+    "copies the script makes with no question asked - `Files2/Devs/Keymaps`,",
+    "`Files2/Fonts`, `Files2/Locale/Countries`, and `Files1` into the volume",
+    "root, written out as its twelve own drawers because a rule's destination",
+    "may not be empty. Everything conditional is deliberately absent rather than",
+    "guessed at: see the block's own note for the list."
+  ],
+  "rules": [
+    {
+      "from": "Files2/Devs/Keymaps",
+      "to": "Devs/Keymaps",
+      "kind": "subtree"
+    },
+    {
+      "from": "Files2/Fonts",
+      "to": "Fonts",
+      "kind": "subtree"
+    },
+    {
+      "from": "Files2/Locale/Countries",
+      "to": "Locale/Countries",
+      "kind": "subtree"
+    },
+    {
+      "from": "Files1/C",
+      "to": "C",
+      "kind": "subtree"
+    },
+    {
+      "from": "Files1/Classes",
+      "to": "Classes",
+      "kind": "subtree"
+    },
+    {
+      "from": "Files1/Devs",
+      "to": "Devs",
+      "kind": "subtree"
+    },
+    {
+      "from": "Files1/L",
+      "to": "L",
+      "kind": "subtree"
+    },
+    {
+      "from": "Files1/Libs",
+      "to": "Libs",
+      "kind": "subtree"
+    },
+    {
+      "from": "Files1/Locale",
+      "to": "Locale",
+      "kind": "subtree"
+    },
+    {
+      "from": "Files1/Prefs",
+      "to": "Prefs",
+      "kind": "subtree"
+    },
+    {
+      "from": "Files1/S",
+      "to": "S",
+      "kind": "subtree"
+    },
+    {
+      "from": "Files1/Storage",
+      "to": "Storage",
+      "kind": "subtree"
+    },
+    {
+      "from": "Files1/Tools",
+      "to": "Tools",
+      "kind": "subtree"
+    },
+    {
+      "from": "Files1/Utilities",
+      "to": "Utilities",
+      "kind": "subtree"
+    },
+    {
+      "from": "Files1/WBStartup",
+      "to": "WBStartup",
+      "kind": "subtree"
+    }
+  ]
+}

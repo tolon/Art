@@ -2203,7 +2203,9 @@
       "packageArchiveMissing": "Güncelleme paketleri klasöründe, \"{{package}}\"in ihtiyaç duyduğu \"{{media}}\" medyasını taşıyan bir arşiv yok — o arşivi klasöre koy ve yeniden dene.",
       "packageArchiveAmbiguous": "Güncelleme paketleri klasöründe \"{{package}}\"in ihtiyaç duyduğu {{media}} medya adını taşıyan birden fazla arşiv var: {{paths}}. İstediğin biri dışında hepsini kaldır.",
       "packageNotPlaceableOnHost": {
-        "encryptedPayload": "\"{{package}}\" Windows üzerinden yerleştirilemez: dosyaları kilitli ve anahtar yalnızca paketin kendi Amiga tarafındaki Updater'ında. Tikini kaldır ve onun yerine Amiga'da o Updater ile kur."
+        "encryptedPayload": "\"{{package}}\" Windows üzerinden yerleştirilemez: dosyaları kilitli ve anahtar yalnızca paketin kendi Amiga tarafındaki Updater'ında. Tikini kaldır ve onun yerine Amiga'da o Updater ile kur.",
+        "needsFixfonts": "\"{{package}}\" Windows üzerinden yerleştirilemez: bitmap yazı tiplerini değiştiriyor ve kendi kurucusu sonrasında FixFonts ile yazı tipi dizinini yeniden kuruyor. ART o dizini yeniden kuramaz, dolayısıyla Fonts çekmecende yalnızca bu paketin getirdiği boyutlar listeli kalırdı. Tikini kaldır ve Amiga'da kendi kurucusuyla kur.",
+        "needsInstallerScript": "\"{{package}}\" Windows üzerinden yerleştirilemez: kendi Installer betiği hangi dosyaları kopyalayacağını işlemcinden, makinenden ve istediğin dillerden seçiyor ve startup-sequence'ı düzenliyor. ART sabit bir yol kümesi yerleştirir, bu soruları senin yerine yanıtlayamaz. Tikini kaldır ve Install betiğini Amiga'da çalıştır."
       },
       "activationSourceMissing": "'{{component}}' {{name}} öğesini açmayı istiyor, ama bu planda '{{from}}' dosyasını ağaca koyan hiçbir şey yok. Onu sağlayan bileşeni seçin ya da etkinleştirmeyi reçeteden çıkarın."
     },
@@ -2491,6 +2493,8 @@
       "blocked": {
         "badge": "Windows üzerinden yerleştirilemez",
         "encryptedPayload": "Bu paketin içindeki dosyalar kilitli ve anahtar yalnızca paketin kendi Amiga tarafındaki Updater'ında. O Updater bir Amiga programı: Amiga'nın kendisinde çalışmak zorunda — diğer bütün dağıtım kurucuları da bu paketi böyle kuruyor. ART kilidi kırmaz, dolayısıyla buradan tek bir dosya bile yerleştiremez — arşivi Amiga'na koy ve kendi Updater'ını orada çalıştır.",
+        "needsFixfonts": "Bu paket bitmap yazı tiplerini değiştiriyor ve kendi kurucusu sonrasında FixFonts çalıştırıp .font dizin dosyalarını Fonts çekmecende gerçekten ne varsa ona göre yeniden kuruyor. ART böyle bir dizini yeniden kuramaz; onsuz yerleştirmek, bu paketin kendisinin getirmediği her yazı tipi boyutunu sessizce düşürürdü — hiçbir şey hata vermez, bir yazı tipi sadece artık bulunmaz olurdu. Bu yüzden ART buradan hiçbir şey yerleştirmiyor: paketin kendi kurucusunu Amiga'da çalıştır, ya da bu güncellemeyi zaten içeren BoingBags 3&4'ü kur.",
+        "needsInstallerScript": "Bu paket düz dosyalardan oluşuyor, ama hangilerini alacağını bir Installer betiği kararlaştırıyor: işlemcine uyan yapıyı seçiyor, hangi dilleri kuracağını soruyor, hangi makinenin SCSI sürücüsünü istediğini soruyor, AmiTCP: ve AWeb neredeyse oraya kopyalıyor ve startup-sequence'ını düzenliyor. ART sabit bir yol kümesi yerleştirir ve bunların hiçbirini senin yerine yanıtlayamaz — yarım yerleştirilmiş bir ağaç açılır ve sessizce eksik olur. Bunun yerine Install betiğini Amiga'da çalıştır.",
         "chosen": "{{names}} Windows üzerinden yerleştirilemez, bu yüzden bu seçim için hiçbir şey önizlenemez ve eklenemez. Tikini kaldır, ya da paketin kendi Updater'ı ile Amiga'da ekle."
       },
       "refusedNames": "Bu arşiv, ART'ın kullanmayı reddettiği {{count}} giriş adı taşıyor; çünkü ait oldukları klasörün dışını gösteriyorlar: {{names}}. Onlardan hiçbir şey yerleştirilmeyecek — arşivin geri kalanı bundan etkilenmez.",
@@ -2547,6 +2551,7 @@
         "label": "Paket",
         "needsFolder": "ART'ın Amiga tarafında hangi paketleri çalıştırabildiğini görmek için yukarıdan güncelleme paketleri klasörünü seçin.",
         "none": "ART'ın getirdiği paketlerin hiçbiri Amiga tarafında çalıştırabileceği bir kurucu taşımıyor.",
+        "notYetRunnable": "Henüz hazır değil: {{reason}}. ART bunu gizlemek yerine burada gösteriyor, böylece tarifin var olduğunu ve çalıştırılabilmesi için neyin eksik olduğunu biliyorsun.",
         "unavailableHint": "ART, birlikte gelen paket listesini okuyamadı."
       },
       "archive": {

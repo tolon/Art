@@ -261,9 +261,21 @@ pub struct Slot {
     /// Slot ids that must be installed before this one — a package's own
     /// `requires`, and the CD its installer verifies before it will work.
     pub requires: Vec<String>,
-    /// Reserved for round 3 (a newer artefact that makes this one
-    /// unnecessary). Always empty today, and stated rather than omitted so
-    /// the wire shape does not change under the screen when it fills.
+    /// A newer artefact that makes this one unnecessary.
+    ///
+    /// **Still empty after round 3, and now for a reason rather than because
+    /// nothing had been built.** `Package::superseded_by` is where that fact
+    /// lives, and [`super::chain::rows_for`] — which already has to read the
+    /// packages for their `chain_position`, their name and their
+    /// `not_yet_runnable` — reads it straight from the recipe. Copying it
+    /// onto the slot as well would be a second copy of one fact, and copies
+    /// drift; a resolved slot would then be able to disagree with the chain
+    /// row above it about the same artefact, which is the two-screens-one-
+    /// artefact defect the overrides field was added to close.
+    ///
+    /// Kept on the wire rather than deleted so the shape does not change
+    /// under the screen the day a *slot-level* supersession exists — one an
+    /// artefact's own bytes state, rather than one a package's recipe does.
     pub superseded_by: Vec<String>,
     /// Directories a disc filling this slot must carry at its root — design
     /// § 3.6's structural check, and **data on the artefact map, never a list
@@ -370,9 +382,21 @@ fn slots_over(recipe: &Recipe, packages: &[Package]) -> CoreResult<Vec<Slot>> {
 
         // --- and its overlays, immediately after it ------------------------
         //
-        // No `requires` on an overlay, deliberately: it patches the package
-        // *before* the run, so "wait until the package is installed" would be
-        // exactly backwards.
+        // **An overlay requires the package whose drawer it patches** (round
+        // 2 whole-branch review, I15). It shipped with `requires: []` and the
+        // reasoning written beside it was that an overlay patches the package
+        // *before* the run, so waiting for the package to be installed would
+        // be backwards. The first half is right and the conclusion did not
+        // follow: what the overlay waits for is not the package being
+        // *installed*, it is the package's own **archive being here** — a
+        // BoingBag 3.9-1 UAE fix with no BoingBag 3.9-1 beside it patches
+        // nothing. The empty list made the drop-folder guide print *"Nothing
+        // has to be in place before it"* about exactly that file, which is
+        // false.
+        //
+        // `resolve` is what keeps the direction right: an overlay's
+        // requirement is satisfied by the package slot being **found**, not
+        // by its being installed — see `requirement_satisfied`.
         let Some(installer) = &pkg.amiga_installer else {
             continue;
         };
@@ -389,7 +413,7 @@ fn slots_over(recipe: &Recipe, packages: &[Package]) -> CoreResult<Vec<Slot>> {
                 provenance: provenance_for(rows, artefact.as_deref()),
                 artefact,
                 position: take(&mut position),
-                requires: Vec::new(),
+                requires: vec![format!("package:{}", pkg.id)],
                 superseded_by: Vec::new(),
                 expects_directories: Vec::new(),
             });
@@ -886,11 +910,18 @@ impl Override<'_> {
 pub fn resolve(slots: &[Slot], facts: &Facts<'_>) -> Vec<SlotState> {
     let mut states: Vec<SlotState> = slots.iter().map(|slot| resolve_one(slot, facts)).collect();
 
-    let installed: Vec<(String, bool)> = states
+    let known: Vec<(String, bool, bool)> = states
         .iter()
-        .map(|state| (state.slot.id.clone(), state.installed != Installed::No))
+        .map(|state| {
+            (
+                state.slot.id.clone(),
+                state.installed != Installed::No,
+                state.found.is_some(),
+            )
+        })
         .collect();
     for state in &mut states {
+        let kind = state.slot.kind;
         state.blocked_by = state
             .slot
             .requires
@@ -900,12 +931,33 @@ pub fn resolve(slots: &[Slot], facts: &Facts<'_>) -> Vec<SlotState> {
                 // treated as not installed rather than ignored: silently
                 // dropping it would turn a data mistake into a run that
                 // looks ready.
-                !installed.iter().any(|(id, done)| id == *need && *done)
+                !known.iter().any(|(id, installed, found)| {
+                    id == *need && requirement_met(kind, *installed, *found)
+                })
             })
             .cloned()
             .collect();
     }
     states
+}
+
+/// Whether a requirement is met, given what is known about the slot it names.
+///
+/// **An overlay asks a different question from everything else, and asking
+/// the same one produced a false sentence** (round 2 whole-branch review,
+/// I15). A package waits for the package before it to be *installed*: running
+/// BoingBag 3.9-2 against a tree BoingBag 3.9-1 never touched is a system
+/// that boots and is quietly wrong (ART-186). An overlay waits for nothing of
+/// the kind — it is copied **over its package's own drawer, before that
+/// package's installer runs**, so "BoingBag 3.9-1 must be installed first"
+/// describes the opposite of what happens. What it genuinely needs is the
+/// package's own archive to be in hand, which is `found`.
+///
+/// `installed` still satisfies an overlay: a package already on the tree is
+/// not one the overlay is waiting for either, and answering *blocked* there
+/// would be a row waiting for something that has already happened.
+fn requirement_met(requiring: SlotKind, installed: bool, found: bool) -> bool {
+    installed || (requiring == SlotKind::Overlay && found)
 }
 
 fn resolve_one(slot: &Slot, facts: &Facts<'_>) -> SlotState {
@@ -1892,7 +1944,7 @@ mod tests {
                 entry.contains(&fill(
                     &words.without_needed_by,
                     "dependents",
-                    "BoingBag 3.9-2"
+                    "BoingBag3.9-1-UAE, BoingBag 3.9-2"
                 )),
                 "{language}: BoingBag 3.9-1 does not name what needs it:\n{entry}"
             );
@@ -2208,16 +2260,19 @@ mod tests {
                 "medium:AmigaOS3.9",
                 "package:boingbag-39-1",
                 "overlay:boingbag-39-1:BoingBag3.9-1-UAE",
-                "package:locale-turkish",
                 "package:locale-39",
                 "package:locale-39-turkish",
+                "package:euro-update",
                 "package:boingbag-39-2",
+                "package:locale-turkish",
+                "package:boingbag-39-2-contribution",
+                "package:boingbags-39-3-4",
                 "rom",
             ]
         );
         assert_eq!(
             slots.iter().map(|s| s.position).collect::<Vec<_>>(),
-            (0..8).collect::<Vec<u32>>()
+            (0..11).collect::<Vec<u32>>()
         );
         // BoingBag 2 after BoingBag 1, which is the whole reason `order_over`
         // is asked rather than the shipped list being taken as written.
@@ -2266,10 +2321,20 @@ mod tests {
             .find(|s| s.id == "package:boingbag-39-2")
             .unwrap();
         assert!(bb2.requires.contains(&"package:boingbag-39-1".to_string()));
-        // An overlay patches its package before the run, so it must not wait
-        // for the package to be installed.
+        // **An overlay names the package whose drawer it patches** (round 2
+        // whole-branch review, I15). It shipped with an empty list, and the
+        // drop-folder guide therefore said "Nothing has to be in place
+        // before it" about a file that patches BoingBag 3.9-1 and is useless
+        // without it. What keeps the direction right is not an empty list
+        // but `requirement_met`: the requirement is satisfied by the
+        // package's archive being **found**, never by its being installed —
+        // see `an_overlay_waits_for_its_packages_archive_not_for_its_install`.
         let overlay = slots.iter().find(|s| s.kind == SlotKind::Overlay).unwrap();
-        assert!(overlay.requires.is_empty(), "{:?}", overlay.requires);
+        assert_eq!(
+            overlay.requires,
+            vec!["package:boingbag-39-1".to_string()],
+            "the UAE fix patches BoingBag 3.9-1's own drawer"
+        );
     }
 
     #[test]
@@ -2732,9 +2797,76 @@ mod tests {
         assert_eq!(summary.release, "AmigaOS 3.9");
         // The CD is found; the ROM is required and nobody chose one.
         assert_eq!((summary.required_total, summary.required_found), (2, 1));
-        // Five packages, one of them found — and the UAE overlay, which is
+        // Eight packages, one of them found — and the UAE overlay, which is
         // present but measured as unnecessary, is in neither total.
-        assert_eq!((summary.optional_total, summary.optional_found), (5, 1));
+        assert_eq!((summary.optional_total, summary.optional_found), (8, 1));
+    }
+
+    /// **An overlay waits for its package's *archive*, never for its
+    /// install** (round 2 whole-branch review, I15).
+    ///
+    /// Three arms, because the rule has three answers and only the middle
+    /// one is new. The overlay slot is given no requirement satisfaction of
+    /// its own in any of them; what changes is BoingBag 3.9-1's state.
+    #[test]
+    fn an_overlay_waits_for_its_packages_archive_not_for_its_install() {
+        let slots = slots_for("AmigaOS 3.9").unwrap();
+        let overlay_id = "overlay:boingbag-39-1:BoingBag3.9-1-UAE";
+        let blocked = |states: &[SlotState]| {
+            states
+                .iter()
+                .find(|state| state.slot.id == overlay_id)
+                .expect("the UAE overlay is one of 3.9's slots")
+                .blocked_by
+                .clone()
+        };
+
+        // 1 — nothing in the folders and no tree: the overlay waits, and it
+        // names what it waits for rather than reading ready.
+        let nothing = Gathered::empty();
+        assert_eq!(
+            blocked(&resolve(&slots, &nothing.facts(None))),
+            vec!["package:boingbag-39-1".to_string()],
+            "with no BoingBag 3.9-1 anywhere, the fix patches nothing"
+        );
+
+        // 2 — the archive is in the folder and nothing is installed. This is
+        // the arm the old empty `requires` could not tell from arm 1 and the
+        // new rule could get backwards: the fix is used *during* BoingBag
+        // 3.9-1's run, so an archive in hand is all it is waiting for.
+        //
+        // Matched at rank 2 by the archive's own top-level directory, so the
+        // package slot is `found` while the manifest still says nothing.
+        let mut in_folder = Gathered::empty();
+        in_folder
+            .packages
+            .push(archive("D:/a/BoingBag39-1.lha", "BoingBag3.9-1"));
+        assert!(
+            blocked(&resolve(&slots, &in_folder.facts(None))).is_empty(),
+            "an overlay must not wait for its package to be installed — that is backwards"
+        );
+
+        // 3 — installed and the archive gone. Still not waiting: a package
+        // already on the tree is not one anything is waiting for.
+        let done = manifest_with(vec![], vec![], vec!["boingbag-39-1"]);
+        assert!(
+            blocked(&resolve(&slots, &nothing.facts(Some(&done)))).is_empty(),
+            "a requirement that has already happened cannot still be blocking"
+        );
+
+        // And the control: a **package** requirement is not softened by the
+        // same fact. BoingBag 3.9-2 with BoingBag 3.9-1's archive merely
+        // sitting in a folder is exactly the run ART-186 refuses.
+        let bb2 = resolve(&slots, &in_folder.facts(None))
+            .into_iter()
+            .find(|state| state.slot.id == "package:boingbag-39-2")
+            .expect("BoingBag 3.9-2 is one of 3.9's slots");
+        assert!(
+            bb2.blocked_by
+                .contains(&"package:boingbag-39-1".to_string()),
+            "a package waits for the package before it to be installed: {:?}",
+            bb2.blocked_by
+        );
     }
 
     #[test]

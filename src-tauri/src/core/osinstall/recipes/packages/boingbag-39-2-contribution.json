@@ -1,0 +1,126 @@
+{
+  "_why_this_package_exists": [
+    "The one thing in the AmigaOS 3.9 update chain that is genuinely",
+    "host-placeable: plain files, no payload archive, no program, no Installer",
+    "script. The research pass over the owner's whole `os39` folder says so in",
+    "as many words (2026-09-08-os-builder-intake-research.md section 2: *\"What",
+    "is host-placeable, exactly: only `BoingBag39-2-Contribution.lha`\"*), and",
+    "the listing below is what that claim was checked against."
+  ],
+  "_why_the_tree_measured": [
+    "Read with 7-Zip 26.02 on 2026-09-08 from the owner's own",
+    "`E:\\amiga\\Amigatolon\\os39\\BoingBag39-2-Contribution.lha`, read-only:",
+    "445 entries, 64 of them `.info`, no directory entries of their own (LhA",
+    "stores paths, not drawers) and no `Install`, `Installer`, `Updater`,",
+    "`GetLocale` or `FixFonts` anywhere in the archive.",
+    "",
+    "    BoingBag3.9-2.info",
+    "    BoingBag3.9-2/Contribution.info",
+    "    BoingBag3.9-2/Contribution/ClassAction        105 entries",
+    "    BoingBag3.9-2/Contribution/ClassAction.info",
+    "    BoingBag3.9-2/Contribution/OpenURL            102 entries",
+    "    BoingBag3.9-2/Contribution/OpenURL.info",
+    "    BoingBag3.9-2/Contribution/cddb-lib           221 entries",
+    "    BoingBag3.9-2/Contribution/cddb-lib.info",
+    "    BoingBag3.9-2/{Readme,Liesmich,LisezMoi,Leggimi,CzytajTo,LäsMig} + .info",
+    "",
+    "The two `.install` files inside it - `ClassAction/ClassAction.install` and",
+    "`OpenURL/Install OpenURL` - are the *contributed programs'* own installers,",
+    "for a person to double-click later if they want them wired in. Nothing in",
+    "this archive installs itself, which is exactly why ART may place it."
+  ],
+  "id": "boingbag-39-2-contribution",
+  "name": "BoingBag 3.9-2 Contribution",
+  "releases": [
+    "AmigaOS 3.9"
+  ],
+  "media": "BoingBag3.9-2",
+  "_why_distinguished_by": [
+    "ART-167. This archive's single top-level directory is `BoingBag3.9-2` -",
+    "**the same identity `BoingBag39-2.lha` claims** - which is the collision",
+    "`scripts/lha-package-identity.py` measured over the owner's 44 archives",
+    "(`BoingBag3.9-2` claimed by 2 archives). `media` alone therefore separates",
+    "nothing here, and each of the two packages has to name a path only its own",
+    "archive carries.",
+    "",
+    "`boingbag-39-2` names `AmigaOS-Update`, its payload member, which this",
+    "archive does not have. This one names `Contribution/ClassAction/ClassAction`",
+    "- the ClassAction program itself, 210 540 bytes, present in the listing",
+    "above and absent from `BoingBag39-2.lha`. The **program** rather than the",
+    "`Contribution` drawer, because `archive_carries` accepts a drawer with any",
+    "child at all and a whole-drawer name is the easier thing for some future",
+    "archive to happen to carry.",
+    "",
+    "Resolved case-insensitively and as a whole path, never as a prefix - see",
+    "`Package::distinguished_by`."
+  ],
+  "distinguished_by": "Contribution/ClassAction/ClassAction",
+  "_why_chain_position_and_requires": [
+    "6 of the material's own order: after BoingBag 3.9-2, before BoingBags 3&4,",
+    "in the group the material states no internal order for (research section 2).",
+    "",
+    "`requires` names `boingbag-39-2` because this archive **is** BoingBag",
+    "3.9-2's own contribution drawer - its files sit under that BoingBag's own",
+    "top-level name and the archive carries BoingBag 3.9-2's readmes in six",
+    "languages. Placing them on a tree BoingBag 3.9-2 has never touched puts a",
+    "BoingBag's extras beside a system that is not that BoingBag's.",
+    "",
+    "BoingBag 3.9-2 cannot be *chosen* on the Packages step (it is Amiga-side,",
+    "ART-166), so the requirement is one a tree meets rather than a selection -",
+    "see `package::order_with_installed` for why that had to be built before",
+    "this line could be written."
+  ],
+  "chain_position": 6,
+  "requires": [
+    "boingbag-39-2"
+  ],
+  "_why_host_placement_block_is_null": [
+    "Stated rather than omitted, because every other package in this chain has",
+    "one and a reader deserves to see that this one's absence is a finding.",
+    "There is no payload archive to be encrypted, no program to run and no",
+    "`.font` index to rebuild: the archive is 445 plain files and their icons."
+  ],
+  "host_placement_block": null,
+  "_why_one_subtree_rule_and_where_it_lands": [
+    "**Where the tree keeps `Contribution` was read, not assumed.** The AmigaOS",
+    "3.9 CD carries a `Contribution` drawer at its own root - it is one of the",
+    "three directories `media_artefacts_adopted.json` records for that disc -",
+    "but **no component of `amigaos-3.9.json` copies it**: `workbench-base` and",
+    "`workbench-39` between them place `OS-VERSION3.9/WORKBENCH3.5/*` and",
+    "`OS-VERSION3.9/WORKBENCH3.9/*`, and neither names `Contribution` (checked",
+    "against the recipe on 2026-09-08). So a tree ART builds has no",
+    "`Contribution` drawer at all, and this rule creates one.",
+    "",
+    "`Contribution/BoingBag3.9-2` rather than `Contribution` itself: the disc's",
+    "own contribution and this BoingBag's are two different collections of",
+    "somebody else's programs, and merging them into one drawer would put the",
+    "update's ClassAction on top of the disc's the day somebody teaches",
+    "`workbench-base` to place the disc's drawer. Beside it, never over it.",
+    "",
+    "**The icons ride with the files.** A `subtree` rule copies every entry",
+    "below `from`, and 64 of the 445 entries are `.info` files - the drawer",
+    "icons for `Contribution`, `ClassAction`, `OpenURL` and `cddb-lib` among",
+    "them. That is how `locale-39`'s own subtree rules already carry theirs;",
+    "nothing here treats `.info` specially, and nothing has to.",
+    "",
+    "`BoingBag3.9-2/Contribution.info` and `BoingBag3.9-2.info` sit *above* the",
+    "rule's `from` and are deliberately not placed: an icon for a drawer whose",
+    "destination name is different would name the wrong thing."
+  ],
+  "_why_overrides_is_empty": [
+    "Measured rather than defaulted. `Contribution/BoingBag3.9-2` is a",
+    "destination no shipped component writes - no release recipe places a",
+    "`Contribution` drawer at all (above), and no other package does either -",
+    "so there is nothing for this to be replacing. Declaring an override that",
+    "names no real collision is ART-159's own mistake, and an empty list here",
+    "is the measured answer rather than the unexamined one."
+  ],
+  "overrides": [],
+  "rules": [
+    {
+      "from": "Contribution",
+      "to": "Contribution/BoingBag3.9-2",
+      "kind": "subtree"
+    }
+  ]
+}

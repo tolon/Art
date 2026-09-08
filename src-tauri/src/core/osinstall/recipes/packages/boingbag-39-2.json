@@ -129,6 +129,8 @@
       "name": "the original AmigaOS 3.9 CD-ROM"
     }
   },
+  "_why_chain_position": "3 of the material's own order. BoingBag 3.9-2's own Install script reads version.library off the target and requires revision >= 2, which is BoingBag 3.9-1 applied - the arrow between rows 2 and 3, enforced by the package rather than advised by prose.",
+  "chain_position": 3,
   "requires": [
     "boingbag-39-1"
   ],

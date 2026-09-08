@@ -280,14 +280,25 @@ pub fn trees_in(folder: &Path) -> CoreResult<Vec<FoundTree>> {
 /// the same string by construction — `RawPackage::into_package` builds the
 /// component from the package's own `id` — so one set answers it.
 pub fn applied(tree: &Path) -> CoreResult<BTreeSet<String>> {
-    let manifest = read_manifest(tree)?;
+    Ok(applied_in(&read_manifest(tree)?))
+}
+
+/// [`applied`] over a manifest the caller already holds.
+///
+/// The same answer from the same rule, for the callers that have read the
+/// tree once and must not read it a second time to ask a second question —
+/// `osinstall_chain` resolves slots and rows off one manifest, and
+/// `resolve_packages_for_add` derives both `components_on` and this from the
+/// manifest it already opened. A second inline union is how the two would
+/// come to disagree about what "already there" means.
+pub fn applied_in(manifest: &DistributionManifest) -> BTreeSet<String> {
     let mut ids: BTreeSet<String> = manifest
         .files
         .iter()
         .map(|file| file.component.clone())
         .collect();
     ids.extend(manifest.amiga_installed.iter().map(|r| r.package.clone()));
-    Ok(ids)
+    ids
 }
 
 /// Every package `package` needs before it, transitively, in the order they

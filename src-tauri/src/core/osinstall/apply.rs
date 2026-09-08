@@ -6068,6 +6068,8 @@ mod tests {
             amiga_installer: None,
             requires: Vec::new(),
             requires_components: Vec::new(),
+            chain_position: None,
+            superseded_by: Vec::new(),
             host_placement_block: None,
             component,
         }

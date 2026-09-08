@@ -96,6 +96,7 @@ const PACKAGES: PackageSummary[] = [
     hostPlacementBlock: "encrypted-payload",
     amigaInstallable: true,
     refusedNames: [],
+  notYetRunnable: null,
   },
   {
     id: "boingbag-39-2",
@@ -106,6 +107,7 @@ const PACKAGES: PackageSummary[] = [
     hostPlacementBlock: "encrypted-payload",
     amigaInstallable: true,
     refusedNames: [],
+  notYetRunnable: null,
   },
   {
     id: "locale-turkish",
@@ -116,6 +118,7 @@ const PACKAGES: PackageSummary[] = [
     hostPlacementBlock: null,
     amigaInstallable: false,
     refusedNames: [],
+  notYetRunnable: null,
   },
 ];
 
@@ -447,6 +450,45 @@ describe("before anything opens", () => {
     expect(
       screen.getByText(i18n.t("osinstall.packages.requiresPackages", { list: "BoingBag 3.9-1" }))
     ).toBeTruthy();
+  });
+
+  // **Registered unready, never hidden** (§10/§89, round 3). BoingBags 3&4
+  // declares an installer so the row exists at all, and declares
+  // `notYetRunnable` because nobody has driven its Installer script
+  // unattended. Both halves are asserted: the row is there *and* it cannot
+  // be picked, and the sentence says what has not been measured.
+  it("shows a package nobody has run yet, disabled, with the reason on its row", async () => {
+    packagesMock.mockResolvedValue([
+      ...PACKAGES,
+      {
+        id: "boingbags-39-3-4",
+        name: "BoingBags 3&4 for AmigaOS 3.9",
+        requires: ["boingbag-39-2"],
+        requiresComponents: [],
+        available: true,
+        hostPlacementBlock: "needs-installer-script",
+        amigaInstallable: true,
+        refusedNames: [],
+        notYetRunnable: "the Installer script has not been run unattended by ART",
+      },
+    ] satisfies PackageSummary[]);
+
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+    const rows = await screen.findAllByTestId("amiga-package-row");
+    expect(rows).toHaveLength(3);
+    expect(rows[2].textContent).toContain("BoingBags 3&4");
+
+    const radios = screen.getAllByRole("radio");
+    expect(radios[0].hasAttribute("disabled")).toBe(false);
+    expect(radios[2].hasAttribute("disabled")).toBe(true);
+
+    expect(
+      screen.getByTestId("amiga-package-not-yet-runnable").textContent
+    ).toBe(
+      i18n.t("osinstall.amigaInstall.package.notYetRunnable", {
+        reason: "the Installer script has not been run unattended by ART",
+      })
+    );
   });
 
   it("will not let the run be confirmed until a preview exists", () => {

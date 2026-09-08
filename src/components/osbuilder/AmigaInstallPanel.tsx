@@ -1156,16 +1156,33 @@ export function AmigaInstallPanel({
           {t("osinstall.amigaInstall.package.none")}
         </p>
       )}
+      {/*
+        A package whose recipe declares an installer **nobody has run** is
+        shown here, disabled, with the recipe's own reason under it — §10's
+        "register an unready action rather than hiding it". Hiding it would
+        have ART claim it ships nothing for a package it ships a whole recipe
+        for; offering it would be a Run button for a program ART has never
+        seen finish. `compose` refuses such a request as well, so this is the
+        sentence rather than the guard.
+      */}
       {runnable.map((pkg) => (
         <label
           key={pkg.id}
           data-testid="amiga-package-row"
-          style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 12, padding: "3px 0" }}
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "baseline",
+            fontSize: 12,
+            padding: "3px 0",
+            opacity: pkg.notYetRunnable ? 0.6 : 1,
+          }}
         >
           <input
             type="radio"
             name="amiga-install-package"
             checked={packageId === pkg.id}
+            disabled={pkg.notYetRunnable !== null}
             onChange={() => setPackageId(pkg.id)}
           />
           <span>
@@ -1176,6 +1193,17 @@ export function AmigaInstallPanel({
                   list: pkg.requires.map(nameOf).join(", "),
                 })}
               </span>
+            )}
+            {pkg.notYetRunnable && (
+              <div
+                className="faint"
+                data-testid="amiga-package-not-yet-runnable"
+                style={{ fontSize: 11, marginTop: 2 }}
+              >
+                {t("osinstall.amigaInstall.package.notYetRunnable", {
+                  reason: pkg.notYetRunnable,
+                })}
+              </div>
             )}
           </span>
         </label>

@@ -508,6 +508,25 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
         )));
     };
 
+    // **Declared, and never run.** A recipe may say what installs a package
+    // before anybody has measured that ART can drive it — §10's "register an
+    // unready action rather than hiding it", from the side that has to be
+    // guarded. The panel already renders such a row disabled with this
+    // sentence; this is the guard that means a request built any other way
+    // is refused too, rather than reaching the emulator on the strength of a
+    // greyed-out checkbox.
+    //
+    // Its own refusal, deliberately not folded into the one above: "ART ships
+    // no installer for this" and "this one has not been run yet" are
+    // different sentences with different next steps, and the second names
+    // what would have to happen for it to become the first.
+    if let Some(why) = &installer.not_yet_runnable {
+        return Err(CoreError::SafetyRefused(format!(
+            "'{}' is not a package ART can run yet: {why}",
+            package.name
+        )));
+    }
+
     // ART-186, and it is **before** anything is copied, unpacked or written:
     // `perform` makes the tree copy, `install` builds two scratch volumes, and
     // all of it happens after this line. A BoingBag 2 run against a tree
@@ -746,7 +765,7 @@ pub fn amigainstall_classify_archive(
             kind: "unknown".to_string(),
             shared_by: Vec::new(),
         },
-        Some(top) => classify_top_level(&top, selected, &release_packages),
+        Some(top) => classify_top_level(&top, selected, &release_packages, Some(&path)),
     };
 
     Ok(ArchiveClassification {
@@ -818,6 +837,7 @@ fn classify_top_level(
     top: &str,
     selected: Option<&package::Package>,
     release_packages: &[package::Package],
+    archive: Option<&std::path::Path>,
 ) -> Classified {
     if let Some(selected) = selected {
         let overlays: Vec<packagevol::Overlay> = selected
@@ -863,6 +883,49 @@ fn classify_top_level(
             }
         })
         .collect();
+
+    // **Narrowed by what is inside the archive before it is called
+    // ambiguous** (round 3). Two of the shipped 3.9 packages now share the
+    // top level `BoingBag3.9-2` — `BoingBag39-2.lha` and
+    // `BoingBag39-2-Contribution.lha` — which is exactly the collision
+    // `Package::distinguished_by` was measured for. Stopping at the top
+    // level here would tell somebody holding the plain BoingBag 2 archive
+    // that ART cannot say which package it is, about a file that carries
+    // `AmigaOS-Update` and says so itself.
+    //
+    // Only when a path is in hand (the command's case), and only to *drop*
+    // candidates whose declared path this archive does not carry: a package
+    // that declares no distinguisher survives, and narrowing never picks a
+    // winner — a still-ambiguous list is still ambiguous.
+    let matches: Vec<(&package::Package, Matched)> = match archive {
+        None => matches,
+        Some(path) => {
+            let narrowed: Vec<(&package::Package, Matched)> = matches
+                .iter()
+                .filter(|(pkg, _)| match pkg.distinguished_by.as_deref() {
+                    Some(inner) => crate::core::osinstall::scan::archive_carries(path, inner),
+                    None => true,
+                })
+                .map(|(pkg, matched)| {
+                    (
+                        *pkg,
+                        match matched {
+                            Matched::Own => Matched::Own,
+                            Matched::Overlay => Matched::Overlay,
+                        },
+                    )
+                })
+                .collect();
+            // Narrowing to nothing is never an improvement: an unreadable
+            // archive makes `archive_carries` answer `false` for every
+            // candidate, and answering "unknown" about a file two packages
+            // do claim would be worse than saying they both do.
+            match narrowed.is_empty() {
+                true => matches,
+                false => narrowed,
+            }
+        }
+    };
 
     // More than one release package claims this exact top level: never pick
     // one arbitrarily (ART-276's own trap, arriving here too) — named as
@@ -2455,6 +2518,46 @@ mod tests {
         assert!(err.to_string().contains("BoingBag 3.9-1"), "got {err}");
     }
 
+    /// **A declaration nobody has run is refused here, not only greyed out
+    /// on a screen** (round 3, §10/§89).
+    ///
+    /// `boingbags-39-3-4` declares an `amiga_installer` so the row exists at
+    /// all — hiding it would be ART claiming it ships nothing for a package
+    /// it ships a whole recipe for — and declares `not_yet_runnable` because
+    /// its `Install` is an Installer script nobody has driven unattended. The
+    /// panel renders that row disabled; this is the guard that means a
+    /// request built any other way is refused too.
+    ///
+    /// The refusal is checked to be *this* one and not the chain's: the
+    /// tree carries BoingBag 3.9-2, so prerequisites are met and the only
+    /// thing left standing in the way is the declaration itself.
+    #[test]
+    fn a_package_whose_installer_nobody_has_run_is_refused_and_says_so() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "not-yet-runnable");
+        let tree = tree_with_manifest(
+            &scratch,
+            &["workbench-base", "boingbag-39-1", "boingbag-39-2"],
+        );
+
+        let err = compose(&request_for(&tree, "boingbags-39-3-4")).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("has not been run unattended by ART"),
+            "the refusal must say what has not been measured: {text}"
+        );
+        assert!(
+            !text.contains("ART ships no Amiga-side installer"),
+            "that is a different sentence about a different package: {text}"
+        );
+        // The screen the user is looking at refuses identically.
+        let err = amiga_install_preview(request_for(&tree, "boingbags-39-3-4"), None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("has not been run unattended by ART"),
+            "got {err}"
+        );
+    }
+
     /// The same package on a tree that has BoingBag 1 composes. A refusal that
     /// fired either way would be no check at all.
     #[test]
@@ -2961,7 +3064,7 @@ mod tests {
         let selected = boingbag_1();
         let catalogue = release_packages();
         assert_eq!(
-            classify_top_level("BoingBag3.9-1", Some(&selected), &catalogue).kind,
+            classify_top_level("BoingBag3.9-1", Some(&selected), &catalogue, None).kind,
             "the-package"
         );
     }
@@ -2971,7 +3074,7 @@ mod tests {
         let selected = boingbag_1();
         let catalogue = release_packages();
         assert_eq!(
-            classify_top_level("BoingBag3.9-1-UAE", Some(&selected), &catalogue).kind,
+            classify_top_level("BoingBag3.9-1-UAE", Some(&selected), &catalogue, None).kind,
             "the-update-archive"
         );
     }
@@ -2983,8 +3086,15 @@ mod tests {
     fn classify_top_level_names_another_catalogued_package() {
         let selected = boingbag_1();
         let catalogue = release_packages();
+        // Read from the archive, because round 3 gave `BoingBag3.9-2` a
+        // second claimant and the top level alone can no longer say which
+        // package this is — see
+        // `an_archive_that_can_be_read_is_narrowed_by_what_is_inside_it`.
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "classify-another");
+        let archive = scratch.join("BoingBag39-2.lha");
+        std::fs::write(&archive, boingbag2_lha()).unwrap();
         assert_eq!(
-            classify_top_level("BoingBag3.9-2", Some(&selected), &catalogue).kind,
+            classify_top_level("BoingBag3.9-2", Some(&selected), &catalogue, Some(&archive)).kind,
             "another-package:boingbag-39-2"
         );
     }
@@ -2999,7 +3109,7 @@ mod tests {
         let selected = package::by_id("boingbag-39-2").unwrap();
         let catalogue = release_packages();
         assert_eq!(
-            classify_top_level("BoingBag3.9-1-UAE", Some(&selected), &catalogue).kind,
+            classify_top_level("BoingBag3.9-1-UAE", Some(&selected), &catalogue, None).kind,
             "another-packages-update-archive:boingbag-39-1"
         );
     }
@@ -3008,8 +3118,12 @@ mod tests {
     fn classify_top_level_answers_unknown_for_an_archive_nothing_recognises() {
         let selected = boingbag_1();
         let catalogue = release_packages();
+        // `NDK39` rather than `Euro-Update`: round 3 ships a recipe whose
+        // own media *is* `Euro-Update`, and the NDK installs nothing and is
+        // outside the chain (research section 2), so it is an archive ART
+        // genuinely does not recognise.
         assert_eq!(
-            classify_top_level("Euro-Update", Some(&selected), &catalogue).kind,
+            classify_top_level("NDK39", Some(&selected), &catalogue, None).kind,
             "unknown"
         );
     }
@@ -3027,7 +3141,7 @@ mod tests {
     fn classify_top_level_answers_shared_artefact_when_two_packages_share_the_media() {
         let selected = boingbag_1();
         let catalogue = release_packages();
-        let classified = classify_top_level("Locale3.9", Some(&selected), &catalogue);
+        let classified = classify_top_level("Locale3.9", Some(&selected), &catalogue, None);
         assert_eq!(classified.kind, "shared-artefact:Locale3.9");
         let mut shared_by = classified.shared_by;
         shared_by.sort();
@@ -3049,7 +3163,7 @@ mod tests {
     fn classify_top_level_answers_other_artefact_for_a_match_the_radio_does_not_offer() {
         let selected = boingbag_1();
         let catalogue = release_packages();
-        let classified = classify_top_level("LocaleUpdate", Some(&selected), &catalogue);
+        let classified = classify_top_level("LocaleUpdate", Some(&selected), &catalogue, None);
         assert_eq!(classified.kind, "other-artefact:LocaleUpdate");
         assert!(classified.shared_by.is_empty());
     }
@@ -3062,8 +3176,35 @@ mod tests {
     fn classify_top_level_without_a_selected_package_still_names_a_catalogued_one() {
         let catalogue = release_packages();
         assert_eq!(
-            classify_top_level("BoingBag3.9-2", None, &catalogue).kind,
-            "another-package:boingbag-39-2"
+            classify_top_level("BoingBag3.9-1", None, &catalogue, None).kind,
+            "another-package:boingbag-39-1"
+        );
+    }
+
+    /// **The top level alone cannot separate BoingBag 3.9-2 from its own
+    /// Contribution archive, and the archive's contents can** (round 3).
+    ///
+    /// Both arms, on the same top level, because the whole point is that the
+    /// second fact changes the answer: without a file to read, two packages
+    /// claim `BoingBag3.9-2` and saying which would be a guess; with the
+    /// file, `AmigaOS-Update` is in it and the Contribution's declared
+    /// `Contribution/ClassAction/ClassAction` is not.
+    #[test]
+    fn an_archive_that_can_be_read_is_narrowed_by_what_is_inside_it() {
+        let catalogue = release_packages();
+        assert_eq!(
+            classify_top_level("BoingBag3.9-2", None, &catalogue, None).kind,
+            "shared-artefact:BoingBag3.9-2",
+            "two packages claim this top level and nothing here can tell them apart"
+        );
+
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "classify-narrow");
+        let archive = scratch.join("BoingBag39-2.lha");
+        std::fs::write(&archive, boingbag2_lha()).unwrap();
+        assert_eq!(
+            classify_top_level("BoingBag3.9-2", None, &catalogue, Some(&archive)).kind,
+            "another-package:boingbag-39-2",
+            "this archive carries AmigaOS-Update and not the Contribution's ClassAction"
         );
     }
 

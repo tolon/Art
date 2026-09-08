@@ -192,8 +192,23 @@ export type RuleKind = "file" | "subtree" | "icon-tooltypes";
  * it (the owner's recorded decision), so the tick must be refused with a
  * sentence naming the Updater rather than accepted and answered later with
  * a raw English ZIP error.
+ *
+ * `"needs-fixfonts"` is Euro-Update: it replaces bitmap fonts and ships its
+ * own `.font` descriptors, and its own installer runs `FixFonts` afterwards
+ * to rebuild those indexes from what the drawer actually holds. ART cannot
+ * rebuild one, so placing the files alone would leave the index naming only
+ * the sizes this package happens to ship — a font that quietly stops being
+ * available, with nothing failing and nothing logged.
+ *
+ * `"needs-installer-script"` is BoingBags 3&4: plain files, and an Installer
+ * script that chooses among them by CPU, by machine, by the languages it
+ * asks for and by which assigns exist, then edits the startup-sequence. ART
+ * places a fixed set of paths and cannot answer those questions.
  */
-export type HostPlacementBlock = "encrypted-payload";
+export type HostPlacementBlock =
+  | "encrypted-payload"
+  | "needs-fixfonts"
+  | "needs-installer-script";
 
 export type RefusalReason =
   | { refusal: "media-missing"; component: string; volume_name: string }
@@ -1288,6 +1303,18 @@ export interface PackageSummary {
    *  `AmigaInstallPanel` offers exactly the packages this is true of, read
    *  from the recipe rather than from a list of ids written here. */
   amigaInstallable: boolean;
+  /**
+   * `null` for a package ART has actually run. Non-null is the recipe's own
+   * English sentence saying **what has not been measured yet** — the row is
+   * rendered *disabled with that sentence*, never hidden.
+   *
+   * Its own field rather than `amigaInstallable: false`, because the two are
+   * different sentences with different next steps: "ART ships no Amiga-side
+   * installer for this" is a fact about the recipe, and "nobody has run this
+   * one unattended yet" is a fact about what has been measured. §10 asks for
+   * the unready action to be registered, not hidden.
+   */
+  notYetRunnable: string | null;
   /** Every entry name this package's own archive carries that `safe_join`
    *  refused — a `..`, an absolute path, a Windows prefix — exactly as the
    *  archive spelled it, and `[]` for the ordinary archive. Shown beside
@@ -2423,6 +2450,10 @@ export function hostPlacementBlockSuffix(block: HostPlacementBlock): string {
   switch (block) {
     case "encrypted-payload":
       return "encryptedPayload";
+    case "needs-fixfonts":
+      return "needsFixfonts";
+    case "needs-installer-script":
+      return "needsInstallerScript";
   }
 }
 

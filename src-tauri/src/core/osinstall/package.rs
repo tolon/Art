@@ -209,6 +209,10 @@ const BOINGBAG_39_2_JSON: &str = include_str!("recipes/packages/boingbag-39-2.js
 const LOCALE_TURKISH_JSON: &str = include_str!("recipes/packages/locale-turkish.json");
 const LOCALE_39_JSON: &str = include_str!("recipes/packages/locale-39.json");
 const LOCALE_39_TURKISH_JSON: &str = include_str!("recipes/packages/locale-39-turkish.json");
+const BOINGBAG_39_2_CONTRIBUTION_JSON: &str =
+    include_str!("recipes/packages/boingbag-39-2-contribution.json");
+const EURO_UPDATE_JSON: &str = include_str!("recipes/packages/euro-update.json");
+const BOINGBAGS_39_3_4_JSON: &str = include_str!("recipes/packages/boingbags-39-3-4.json");
 
 /// Every package JSON this project ships. The one list a new package JSON
 /// has to join — see the module doc comment.
@@ -218,6 +222,9 @@ const SHIPPED_JSON: &[&str] = &[
     LOCALE_TURKISH_JSON,
     LOCALE_39_JSON,
     LOCALE_39_TURKISH_JSON,
+    BOINGBAG_39_2_CONTRIBUTION_JSON,
+    EURO_UPDATE_JSON,
+    BOINGBAGS_39_3_4_JSON,
 ];
 
 /// An update package on top of an installed AmigaOS tree — an official
@@ -278,6 +285,38 @@ pub struct Package {
     /// packages; see the module doc comment's "`requires_components` is not
     /// `requires`" section.
     pub requires_components: Vec<String>,
+    /// This row's place in **the material's own order** — the chain the
+    /// packages' own `Install` scripts enforce by reading `version.library`
+    /// off the target (design § 1 of
+    /// `2026-09-08-os-builder-chain-design.md`).
+    ///
+    /// `None` is not "last": it means *this package is not a chain row at
+    /// all* and belongs only on the Packages step. Stated rather than
+    /// derived, because the order is a fact about the material and not
+    /// about ART's data — `requires` says what is *forbidden* before what,
+    /// and that is a weaker statement: Locale 3.9, the Turkish locale
+    /// update, Contribution and Euro-Update may go on in any order among
+    /// themselves, and every one of them goes on before BoingBags 3&4.
+    /// A topological sort of `requires` alone would put them in whatever
+    /// order the shipped list happened to have.
+    ///
+    /// **Two packages may share a rank**, and that is the point of a rank
+    /// rather than a sequence number: `locale-39` and `locale-39-turkish`
+    /// are both 4 because the material states no order between them. The
+    /// chain sorts by `(chain_position, id)` so the list is the same list
+    /// twice running.
+    pub chain_position: Option<u32>,
+    /// Packages that make this one unnecessary — `euro-update` is
+    /// superseded by `boingbags-39-3-4`, whose own readme states
+    /// *"These official updates are incorporated: Euro-Update, ShellUpdate
+    /// 45.39"* (read from the owner's own `BoingBags3&4.lha`, 7-Zip 26.02,
+    /// 2026-09-08).
+    ///
+    /// A superseded row whose superseder is **installed** reads *not
+    /// needed*; one whose superseder is not installed is an ordinary row.
+    /// The direction matters: this names the *newer* package, so a package
+    /// added later declares nothing here and the older one is edited once.
+    pub superseded_by: Vec<String>,
     /// `Some` when ART **cannot place this package's files from the host at
     /// all**, whatever the user's folder holds — see
     /// [`HostPlacementBlock`]. `None` is the ordinary case.
@@ -403,6 +442,24 @@ pub struct AmigaInstaller {
     /// appending AmigaDOS lines to the boot script.
     #[serde(default)]
     pub post_install: Vec<crate::core::amigainstall::finish::PostStep>,
+    /// `Some` when this declaration is written down but **nobody has run
+    /// it** — the sentence says what has not been measured yet.
+    ///
+    /// **§10/§89, from the side that is easy to miss.** Leaving the
+    /// declaration out would hide the package; leaving it in without this
+    /// would offer a Run button for a program ART has never seen finish.
+    /// `boingbags-39-3-4` is the case that bought the field: its `Install`
+    /// is an Installer *script* — not a program the engine can launch — and
+    /// the script calls `askoptions` for the languages, `confirm` for the
+    /// target, and `(run "SYS:Tools/EditPad …")` on the startup-sequence
+    /// (read from the owner's own archive, 7-Zip 26.02, 2026-09-08). Nobody
+    /// has measured whether it can finish without a person at the window.
+    ///
+    /// A row carrying this is shown **disabled with this sentence**, never
+    /// hidden: "ART ships no installer for this" would be a different claim,
+    /// and a false one.
+    #[serde(default)]
+    pub not_yet_runnable: Option<String>,
 }
 
 /// A disc a package's own installer insists on seeing (ART-193).
@@ -524,6 +581,10 @@ struct RawPackage {
     #[serde(default)]
     requires_components: Vec<String>,
     #[serde(default)]
+    chain_position: Option<u32>,
+    #[serde(default)]
+    superseded_by: Vec<String>,
+    #[serde(default)]
     host_placement_block: Option<HostPlacementBlock>,
     #[serde(default)]
     amiga_installer: Option<AmigaInstaller>,
@@ -599,6 +660,8 @@ impl RawPackage {
             distinguished_by: self.distinguished_by,
             requires: self.requires,
             requires_components: self.requires_components,
+            chain_position: self.chain_position,
+            superseded_by: self.superseded_by,
             host_placement_block: self.host_placement_block,
             component,
             amiga_installer: self.amiga_installer,
@@ -850,6 +913,42 @@ fn parse_all(jsons: &[&str]) -> CoreResult<Vec<Package>> {
             });
         }
     }
+
+    // **A relationship that names nothing is a relationship that does
+    // nothing**, and neither of these two can be checked by [`parse`],
+    // which sees one JSON at a time. `requires` had this check only as a
+    // test over the shipped list; `superseded_by` gets it here, where it
+    // also covers a caller that builds its own list.
+    //
+    // A `superseded_by` naming an unshipped id would leave its row reading
+    // *ready* for ever with no way to reach *not needed* — the quiet
+    // unreachability §89 exists to stop, and the exact failure an empty
+    // `overrides` produced once already.
+    let ids: HashSet<&str> = all.iter().map(|p| p.id.as_str()).collect();
+    for package in &all {
+        for (field, named) in [
+            ("requires", &package.requires),
+            ("superseded_by", &package.superseded_by),
+        ] {
+            for other in named {
+                if !ids.contains(other.as_str()) {
+                    return Err(CoreError::Malformed {
+                        format: "package".into(),
+                        detail: format!(
+                            "'{}': {field} names '{other}', which ART ships no package for",
+                            package.id
+                        ),
+                    });
+                }
+            }
+        }
+        if package.superseded_by.iter().any(|id| id == &package.id) {
+            return Err(CoreError::Malformed {
+                format: "package".into(),
+                detail: format!("'{}': supersedes itself", package.id),
+            });
+        }
+    }
     Ok(all)
 }
 
@@ -917,6 +1016,32 @@ pub fn by_id(id: &str) -> CoreResult<Package> {
 /// `result.len() != chosen.len()` fires for the wrong reason, and the actual
 /// mistake — the caller chose the same package twice — is never named.
 pub(super) fn order_over(chosen: &[String], all: &[Package]) -> CoreResult<Vec<String>> {
+    order_over_with_installed(chosen, all, &[])
+}
+
+/// [`order_over`], plus the ids the **tree already carries**.
+///
+/// **A requirement can be met by the tree instead of by the selection, and
+/// until round 3 it could not be.** `locale-turkish` and
+/// `boingbag-39-2-contribution` are host-placeable and both go on after
+/// BoingBag 3.9-2, which is Amiga-side and can never appear in a host
+/// selection (ART-166). Checking `requires` against `chosen` alone therefore
+/// made the owner's own Turkish catalogue pack unaddable the moment its
+/// `requires` was corrected to what its readme states: ticking it alone was
+/// refused for a missing package, and ticking both was refused because the
+/// other cannot be placed from Windows. Two refusals, no path through.
+///
+/// `installed` is the tree's own account of itself
+/// ([`super::chain::applied_in`] — components **and** Amiga-side runs), so a
+/// requirement already on the volume is satisfied and contributes **no
+/// edge**: it is not being applied in this run and cannot be ordered against.
+/// An empty `installed` is the old behaviour exactly, which is what every
+/// caller with no tree in hand passes.
+pub(super) fn order_over_with_installed(
+    chosen: &[String],
+    all: &[Package],
+    installed: &[String],
+) -> CoreResult<Vec<String>> {
     let mut seen_chosen = HashSet::new();
     for id in chosen {
         if !seen_chosen.insert(id.as_str()) {
@@ -928,13 +1053,14 @@ pub(super) fn order_over(chosen: &[String], all: &[Package]) -> CoreResult<Vec<S
 
     let index: HashMap<&str, &Package> = all.iter().map(|p| (p.id.as_str(), p)).collect();
     let chosen_set: HashSet<&str> = chosen.iter().map(|s| s.as_str()).collect();
+    let installed_set: HashSet<&str> = installed.iter().map(|s| s.as_str()).collect();
 
     for id in chosen {
         let package = index
             .get(id.as_str())
             .ok_or_else(|| CoreError::InvalidInput(format!("ART ships no package '{id}'")))?;
         for need in &package.requires {
-            if !chosen_set.contains(need.as_str()) {
+            if !chosen_set.contains(need.as_str()) && !installed_set.contains(need.as_str()) {
                 return Err(CoreError::InvalidInput(format!(
                     "'{id}' requires '{need}', which was not chosen"
                 )));
@@ -949,7 +1075,13 @@ pub(super) fn order_over(chosen: &[String], all: &[Package]) -> CoreResult<Vec<S
     for id in chosen {
         let package = index[id.as_str()];
         for need in &package.requires {
-            dependents.get_mut(need.as_str()).unwrap().push(id.as_str());
+            // A requirement met by the tree is not being applied in this
+            // run, so it is not a node in this graph and cannot carry an
+            // edge. Only a requirement that is *also chosen* orders anything.
+            let Some(dependents) = dependents.get_mut(need.as_str()) else {
+                continue;
+            };
+            dependents.push(id.as_str());
             *in_degree.get_mut(id.as_str()).unwrap() += 1;
         }
     }
@@ -999,6 +1131,12 @@ pub(super) fn order_over(chosen: &[String], all: &[Package]) -> CoreResult<Vec<S
 /// the order the user happened to tick the boxes in.
 pub fn order(chosen: &[String]) -> CoreResult<Vec<String>> {
     order_over(chosen, &packages()?)
+}
+
+/// [`order`], with the ids a tree already carries treated as satisfied — see
+/// [`order_over_with_installed`] for the defect that bought it.
+pub fn order_with_installed(chosen: &[String], installed: &[String]) -> CoreResult<Vec<String>> {
+    order_over_with_installed(chosen, &packages()?, installed)
 }
 
 #[cfg(test)]
@@ -1075,8 +1213,195 @@ mod tests {
                 // copies whatever languages the user picks.
                 "locale-39",
                 "locale-39-turkish",
+                // Round 3: the rest of the chain the material states — the
+                // one genuinely host-placeable archive, the update BoingBags
+                // 3&4 incorporates, and BoingBags 3&4 itself.
+                "boingbag-39-2-contribution",
+                "euro-update",
+                "boingbags-39-3-4",
             ],
             "the shipped packages for AmigaOS 3.9"
+        );
+    }
+
+    /// **The chain, as the material states it** — design § 1 of
+    /// `2026-09-08-os-builder-chain-design.md`, read back out of the shipped
+    /// recipes rather than out of a list in code.
+    ///
+    /// The CD is rank 1 and is not a package, so the packages start at 2. Two
+    /// rows share rank 4 on purpose: `locale-39` and `locale-39-turkish` read
+    /// one archive and the material states no order between them.
+    #[test]
+    fn every_chain_row_states_its_place_in_the_materials_own_order() {
+        let mut rows: Vec<(Option<u32>, String)> = super::packages_for("AmigaOS 3.9")
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.chain_position, p.id))
+            .collect();
+        rows.sort();
+        assert_eq!(
+            rows,
+            vec![
+                (Some(2), "boingbag-39-1".to_string()),
+                (Some(3), "boingbag-39-2".to_string()),
+                (Some(4), "locale-39".to_string()),
+                (Some(4), "locale-39-turkish".to_string()),
+                (Some(5), "locale-turkish".to_string()),
+                (Some(6), "boingbag-39-2-contribution".to_string()),
+                (Some(7), "euro-update".to_string()),
+                (Some(8), "boingbags-39-3-4".to_string()),
+            ],
+            "the AmigaOS 3.9 chain, ranked as the material ranks it"
+        );
+    }
+
+    /// **Euro-Update is folded into BoingBags 3&4, and only that one row
+    /// says so.** Both directions: a `superseded_by` that spread would turn
+    /// rows *not needed* that nobody has measured as redundant, which is the
+    /// same confident-wrong sentence from the opposite side.
+    #[test]
+    fn only_euro_update_declares_a_superseder() {
+        assert_eq!(
+            super::by_id("euro-update").unwrap().superseded_by,
+            vec!["boingbags-39-3-4".to_string()],
+            "BoingBags 3&4's own readme: \"These official updates are incorporated: \
+             Euro-Update, ShellUpdate 45.39\""
+        );
+        for package in super::packages().unwrap() {
+            if package.id == "euro-update" {
+                continue;
+            }
+            assert!(
+                package.superseded_by.is_empty(),
+                "{} declares a superseder nobody measured",
+                package.id
+            );
+        }
+    }
+
+    /// A `superseded_by` naming an id ART ships no package for would leave
+    /// its row unable ever to reach *not needed* — the quiet unreachability
+    /// § 89 exists to stop. Checked over a hand-built pair, so it is the
+    /// *gate* being tested and not today's shipped data.
+    #[test]
+    fn a_superseder_that_names_no_shipped_package_is_refused() {
+        let json = |id: &str, superseded: &str| {
+            format!(
+                r#"{{ "id": "{id}", "name": "X", "releases": ["AmigaOS 3.9"], "media": "{id}",
+                      "superseded_by": [{superseded}],
+                      "rules": [ {{ "from": "C/A", "to": "C/A", "kind": "file" }} ] }}"#
+            )
+        };
+        let good = json("a", "\"b\"");
+        let other = json("b", "");
+        super::parse_all(&[&good, &other]).expect("a superseder that is shipped is accepted");
+
+        let bad = json("a", "\"nobody\"");
+        let err = super::parse_all(&[&bad, &other])
+            .expect_err("a superseder ART ships no package for must be refused");
+        assert!(
+            format!("{err}").contains("nobody"),
+            "the refusal must name the id it did not recognise, got: {err}"
+        );
+    }
+
+    /// `requires` gets the same cross-package check, at parse time rather
+    /// than only as an assertion over today's shipped list.
+    #[test]
+    fn a_requirement_that_names_no_shipped_package_is_refused() {
+        let bad = r#"{ "id": "a", "name": "X", "releases": ["AmigaOS 3.9"], "media": "a",
+                       "requires": ["nobody"],
+                       "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ] }"#;
+        let err = super::parse_all(&[bad])
+            .expect_err("a requirement ART ships no package for must be refused");
+        assert!(
+            format!("{err}").contains("nobody"),
+            "the refusal must name the id it did not recognise, got: {err}"
+        );
+    }
+
+    /// **The Amiga-side declaration nobody has run says so.** Both
+    /// directions, because a `not_yet_runnable` that spread would disable
+    /// two runs this project has measured end to end (ART-193).
+    #[test]
+    fn only_boingbags_three_and_four_declare_an_installer_nobody_has_run() {
+        let bb34 = super::by_id("boingbags-39-3-4").unwrap();
+        let installer = bb34
+            .amiga_installer
+            .as_ref()
+            .expect("registered unready, never hidden (§10)");
+        assert_eq!(
+            installer.not_yet_runnable.as_deref(),
+            Some(
+                "the Installer script has not been run unattended by ART; round 3 task 3 \
+                 measures it"
+            )
+        );
+        for id in ["boingbag-39-1", "boingbag-39-2"] {
+            assert_eq!(
+                super::by_id(id)
+                    .unwrap()
+                    .amiga_installer
+                    .unwrap()
+                    .not_yet_runnable,
+                None,
+                "{id} has been run on the owner's own material (ART-193)"
+            );
+        }
+    }
+
+    /// **The three packages ART cannot place from Windows each say a
+    /// different thing about why**, and the two that it can say nothing.
+    /// A block that spread would silently turn the feature off and still
+    /// look safe; a block that collapsed into one variant would send half
+    /// its readers to the wrong fix.
+    #[test]
+    fn each_blocked_package_names_the_reason_that_is_true_of_it() {
+        use super::super::HostPlacementBlock;
+        let block = |id: &str| super::by_id(id).unwrap().host_placement_block;
+        assert_eq!(
+            block("euro-update"),
+            Some(HostPlacementBlock::NeedsFixfonts),
+            "its installer runs FixFonts after the bitmap fonts and ART cannot rebuild a \
+             '.font' index"
+        );
+        assert_eq!(
+            block("boingbags-39-3-4"),
+            Some(HostPlacementBlock::NeedsInstallerScript),
+            "its Install script chooses files by CPU, machine and language"
+        );
+        assert_eq!(
+            block("boingbag-39-1"),
+            Some(HostPlacementBlock::EncryptedPayload)
+        );
+        assert_eq!(
+            block("boingbag-39-2-contribution"),
+            None,
+            "plain files, no program, no script — the one host-placeable archive of the chain"
+        );
+        assert_eq!(block("locale-turkish"), None);
+    }
+
+    /// The Contribution archive shares its top-level directory with
+    /// `BoingBag39-2.lha`, so it has to name a path only its own archive
+    /// carries — measured in the listing its recipe records.
+    #[test]
+    fn the_contribution_archive_is_told_apart_by_a_file_only_it_carries() {
+        let package = super::by_id("boingbag-39-2-contribution").unwrap();
+        assert_eq!(package.media, "BoingBag3.9-2");
+        assert_eq!(
+            package.distinguished_by.as_deref(),
+            Some("Contribution/ClassAction/ClassAction"),
+            "`media` alone cannot separate it from BoingBag39-2.lha"
+        );
+        assert_eq!(
+            package.component.rules.len(),
+            1,
+            "one subtree rule, beside the disc's own Contribution rather than over it"
+        );
+        assert_eq!(
+            package.component.rules[0].to, "Contribution/BoingBag3.9-2",
+            "no component of amigaos-3.9.json places the disc's own Contribution drawer"
         );
     }
 
@@ -1508,6 +1833,7 @@ mod tests {
             overlays: Vec::new(),
             required_medium: None,
             post_install: Vec::new(),
+            not_yet_runnable: None,
         };
         let json = serde_json::json!({
             "id": "x",
@@ -1996,6 +2322,8 @@ mod tests {
             amiga_installer: None,
             requires: requires.iter().map(|s| s.to_string()).collect(),
             requires_components: Vec::new(),
+            chain_position: None,
+            superseded_by: Vec::new(),
             host_placement_block: None,
             component: Component {
                 id: id.to_string(),
@@ -2164,8 +2492,20 @@ mod tests {
             vec!["locale-base".to_string()],
             "without locale-base this package writes catalogs nothing can open"
         );
+        // The two say different things and both are true of this package.
+        // `requires` names the **package** the material puts before it —
+        // BoingBag 3.9-2, whose catalogs these are; `requires_components`
+        // names the **release component** without which they land in a
+        // drawer nothing can open. `locale-base` is a component and must
+        // never appear in `requires`: `order` would refuse a correct
+        // selection by a name no package answers to.
+        assert_eq!(
+            package.requires,
+            vec!["boingbag-39-2".to_string()],
+            "the BoingBag 3.9-2 language packs go on after BoingBag 3.9-2"
+        );
         assert!(
-            package.requires.is_empty(),
+            !package.requires.iter().any(|need| need == "locale-base"),
             "'locale-base' is a recipe component, not a package — naming it in \
              `requires` would make `order` refuse a correct selection by name"
         );

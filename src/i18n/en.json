@@ -2203,7 +2203,9 @@
       "packageArchiveMissing": "No archive in the update packages folder carries \"{{media}}\", the media \"{{package}}\" needs — put that archive in the folder and try again.",
       "packageArchiveAmbiguous": "More than one archive in the update packages folder carries the media name {{media}} that \"{{package}}\" needs: {{paths}}. Remove all but the one you want.",
       "packageNotPlaceableOnHost": {
-        "encryptedPayload": "\"{{package}}\" cannot be placed from Windows: its files are locked and only the package's own Amiga-side Updater has the key. Untick it, and install it on the Amiga with that Updater instead."
+        "encryptedPayload": "\"{{package}}\" cannot be placed from Windows: its files are locked and only the package's own Amiga-side Updater has the key. Untick it, and install it on the Amiga with that Updater instead.",
+        "needsFixfonts": "\"{{package}}\" cannot be placed from Windows: it replaces bitmap fonts, and its own installer rebuilds the font index afterwards with FixFonts. ART cannot rebuild that index, so it would leave your Fonts drawer listing only the sizes this package ships. Untick it, and install it on the Amiga with its own installer.",
+        "needsInstallerScript": "\"{{package}}\" cannot be placed from Windows: its own Installer script picks which files to copy from your processor, your machine and the languages you ask for, and edits the startup-sequence. ART places a fixed set of paths and cannot answer those questions for you. Untick it, and run its Install script on the Amiga."
       },
       "activationSourceMissing": "'{{component}}' asks to switch on {{name}}, but nothing on this plan puts '{{from}}' on the tree. Choose the component that supplies it, or take the activation out of the recipe."
     },
@@ -2491,6 +2493,8 @@
       "blocked": {
         "badge": "Cannot be placed from Windows",
         "encryptedPayload": "The files inside this package are locked, and only the package's own Amiga-side Updater has the key. That Updater is an Amiga program: it has to run on the Amiga itself, which is how every other distribution builder installs this package too. ART will not break the lock, so it cannot place a single file from here — put the archive on your Amiga and run its own Updater there instead.",
+        "needsFixfonts": "This package replaces the bitmap fonts, and its own installer runs FixFonts afterwards to rebuild the .font index files from whatever your Fonts drawer really holds. ART cannot rebuild one of those indexes, and placing the files without it would quietly drop any font size this package does not itself ship — nothing would fail, and a font would simply stop being available. So ART places nothing from here: run the package's own installer on the Amiga, or install BoingBags 3&4, which already contains this update.",
+        "needsInstallerScript": "This package is plain files with an Installer script that decides which of them you get: it picks the build that matches your processor, asks which languages to install, asks which machine's SCSI driver you need, copies into whatever AmiTCP: and AWeb happen to be, and edits your startup-sequence. ART places a fixed set of paths and cannot answer any of that for you — a half-placed tree would boot and quietly be short of what it thinks it has. Run its Install script on the Amiga instead.",
         "chosen": "{{names}} cannot be placed from Windows, so nothing can be previewed or added for this selection. Untick it, or add it on the Amiga with the package's own Updater."
       },
       "refusedNames": "This archive carries {{count}} entry name(s) ART refuses to use, because they point outside the folder they belong in: {{names}}. Nothing will ever be placed from them — the rest of the archive is unaffected.",
@@ -2547,6 +2551,7 @@
         "label": "Package",
         "needsFolder": "Choose the update packages folder above to see which packages ART can run on the Amiga.",
         "none": "None of the packages ART ships carries an installer it can run on the Amiga.",
+        "notYetRunnable": "Not ready yet: {{reason}}. ART shows it here rather than hiding it, so you know the recipe exists and what is missing before it can be run.",
         "unavailableHint": "ART could not read the shipped package list."
       },
       "archive": {

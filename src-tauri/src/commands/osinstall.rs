@@ -645,6 +645,20 @@ pub struct PackageSummary {
     /// 'locale-turkish'", met after the pick rather than before it — or
     /// carry a list of ids that a fourth recipe would silently not join.
     pub amiga_installable: bool,
+    /// `Some` when this package declares an Amiga-side installer that
+    /// **nobody has run** — the recipe's own
+    /// [`AmigaInstaller::not_yet_runnable`](crate::core::osinstall::package::AmigaInstaller::not_yet_runnable)
+    /// sentence, verbatim and in English like every other Rust-side string
+    /// (ART-060); the screen renders the translated one and shows the row
+    /// **disabled**.
+    ///
+    /// Its own field rather than `amiga_installable: false`, because the two
+    /// are different sentences with different next steps: *"ART ships no
+    /// Amiga-side installer for this"* is a fact about the recipe, and
+    /// *"this one has not been run unattended yet"* is a fact about what has
+    /// been measured. Registering the row unready is what §10/§89 asks for —
+    /// never hiding it.
+    pub not_yet_runnable: Option<String>,
     /// Every entry name this package's own archive carries that
     /// [`safe_join`](crate::core::security::safe_join) refused — a `..`, an
     /// absolute path, a Windows prefix — exactly as the archive spelled it,
@@ -708,6 +722,10 @@ pub fn osinstall_packages(
                 available: !matched.is_empty(),
                 host_placement_block: p.host_placement_block,
                 amiga_installable: p.amiga_installer.is_some(),
+                not_yet_runnable: p
+                    .amiga_installer
+                    .as_ref()
+                    .and_then(|i| i.not_yet_runnable.clone()),
                 // Every claimant's, not only the first: an ambiguous name
                 // is still offered as available (the refusal comes later,
                 // by name), so saying nothing about the *other* claimant's
@@ -1409,6 +1427,19 @@ fn describe_host_placement_block(package: &str, block: HostPlacementBlock) -> St
              password-encrypted, and only the package's own Amiga-side Updater \
              holds the password (ART-166)"
         ),
+        HostPlacementBlock::NeedsFixfonts => format!(
+            "'{package}' cannot be placed from Windows: it replaces bitmap fonts, and \
+             its own installer runs FixFonts afterwards to rebuild the '.font' index \
+             files from what the drawer actually holds. ART cannot rebuild one, so \
+             placing the files alone would leave the index naming only the sizes this \
+             package ships"
+        ),
+        HostPlacementBlock::NeedsInstallerScript => format!(
+            "'{package}' cannot be placed from Windows: it installs through its own \
+             Installer script, which chooses files by CPU, by machine and by the \
+             languages it asks for, and edits the startup-sequence. ART places a fixed \
+             set of paths and cannot answer those questions for you"
+        ),
     }
 }
 
@@ -2095,7 +2126,12 @@ pub fn osinstall_collisions(
     registry: State<'_, Arc<JobRegistry>>,
 ) -> AppResult<u64> {
     let catalogue = package::packages()?;
-    let ordered = package::order(&packages)?;
+    // The same tolerance the add path applies, and for the same reason: a
+    // preview against a tree that already carries the prerequisite must not
+    // refuse the selection the add would accept, or the two screens
+    // disagree about one selection.
+    let applied: Vec<String> = chain::applied(&tree_root)?.into_iter().collect();
+    let ordered = package::order_with_installed(&packages, &applied)?;
     let title = format!(
         "Previewing {} package(s) against {}",
         ordered.len(),
@@ -2193,7 +2229,15 @@ fn resolve_packages_for_add(
         set.into_iter().collect()
     };
 
-    let mut refusals = detect_package_refusals(packages, &catalogue, &components_on);
+    // What this tree already carries — components *and* Amiga-side runs,
+    // through `chain`'s one reader. A `requires` naming a package the tree
+    // already has is met: `locale-turkish` and `boingbag-39-2-contribution`
+    // both go on after BoingBag 3.9-2, which is Amiga-side and can never be
+    // in a host selection, so without this the corrected `requires` would
+    // have made both permanently unaddable.
+    let applied: Vec<String> = chain::applied_in(&manifest).into_iter().collect();
+
+    let mut refusals = detect_package_refusals(packages, &catalogue, &components_on, &applied);
 
     let found = find_packages(package_folder)?;
     for id in packages {
@@ -2218,7 +2262,7 @@ fn resolve_packages_for_add(
     // the shipped data, not a user situation), and `detect_package_refusals`
     // above has already named the ordinary case — a `requires` that was not
     // itself chosen — by type.
-    let ordered = package::order(packages)?;
+    let ordered = package::order_with_installed(packages, &applied)?;
     let mut resolved = Vec::new();
     for id in &ordered {
         let package = catalogue
@@ -2814,6 +2858,23 @@ mod tests {
     /// uses, duplicated here rather than shared because that one is
     /// `#[cfg(test)]`-private to a different module.
     fn write_test_manifest(tree: &Path, files: Vec<crate::core::osinstall::apply::FileRecord>) {
+        write_test_manifest_with_runs(tree, files, Vec::new());
+    }
+
+    /// [`write_test_manifest`], plus the packages whose own installer ran on
+    /// the Amiga against this tree.
+    ///
+    /// Round 3: a host-placeable package may now `require` an Amiga-side one
+    /// — `locale-turkish` and `boingbag-39-2-contribution` both go on after
+    /// BoingBag 3.9-2 — and the only thing that can satisfy such a
+    /// requirement is this list. A test tree that records none is a tree that
+    /// has never had a BoingBag run on it, which is a real state and a
+    /// refusal, not a fixture to work around.
+    fn write_test_manifest_with_runs(
+        tree: &Path,
+        files: Vec<crate::core::osinstall::apply::FileRecord>,
+        amiga_installed: Vec<crate::core::osinstall::apply::AmigaInstallRecord>,
+    ) {
         let manifest = DistributionManifest {
             release: "AmigaOS 3.9".into(),
             built_from: vec![crate::core::osinstall::apply::MediaRecord {
@@ -2822,7 +2883,7 @@ mod tests {
             }],
             files,
             paired_rom: None,
-            amiga_installed: Vec::new(),
+            amiga_installed,
             layers: Vec::new(),
         };
         std::fs::write(
@@ -2830,6 +2891,16 @@ mod tests {
             serde_json::to_string_pretty(&manifest).unwrap(),
         )
         .unwrap();
+    }
+
+    /// The record a successful Amiga-side BoingBag 3.9-2 run leaves behind —
+    /// the only thing that can satisfy a `requires` naming it, since it can
+    /// never be chosen on the Packages step (ART-166).
+    fn boingbag_two_ran() -> crate::core::osinstall::apply::AmigaInstallRecord {
+        crate::core::osinstall::apply::AmigaInstallRecord {
+            package: "boingbag-39-2".into(),
+            command: "PKG:C/Updater AmigaOS-Update SYS:".into(),
+        }
     }
 
     fn locale_base_file_record(path: &str) -> crate::core::osinstall::apply::FileRecord {
@@ -2891,7 +2962,11 @@ mod tests {
         write_locale_turkish_archive(&folder, "turkish.lha", b"catalog bytes");
 
         let summaries = osinstall_packages(folder, "AmigaOS 3.9".to_string()).unwrap();
-        assert_eq!(summaries.len(), 5, "ART ships exactly five packages today");
+        assert_eq!(
+            summaries.len(),
+            8,
+            "the eight packages of the AmigaOS 3.9 chain"
+        );
 
         let turkish = summaries
             .iter()
@@ -2940,10 +3015,10 @@ mod tests {
         );
 
         // ...and the same folder, for the release these packages do belong
-        // to, still offers all four. A filter that answered "none" for
+        // to, still offers all eight. A filter that answered "none" for
         // everything would pass the assertion above.
         let for_39 = osinstall_packages(folder, "AmigaOS 3.9".to_string()).unwrap();
-        assert_eq!(for_39.len(), 5);
+        assert_eq!(for_39.len(), 8);
     }
 
     #[test]
@@ -2987,7 +3062,7 @@ mod tests {
         let missing = dir.join("does-not-exist");
 
         let summaries = osinstall_packages(missing, "AmigaOS 3.9".to_string()).unwrap();
-        assert_eq!(summaries.len(), 5);
+        assert_eq!(summaries.len(), 8);
         assert!(summaries.iter().all(|p| !p.available));
     }
 
@@ -3006,9 +3081,14 @@ mod tests {
             .join("t\u{FC}rk\u{E7}e");
         std::fs::create_dir_all(&drawer).unwrap();
         std::fs::write(drawer.join("x.catalog"), b"$VER: x.catalog 1.0 (1.1.20)").unwrap();
-        write_test_manifest(
+        // The run BoingBag 3.9-2 leaves behind is part of the fixture now:
+        // `locale-turkish` goes on after it, and a tree that has not had it
+        // run is one this selection is legitimately refused on (see
+        // `a_requirement_the_tree_already_carries_is_met_and_one_it_does_not_is_refused`).
+        write_test_manifest_with_runs(
             &tree,
             vec![locale_base_file_record(TURKISH_CATALOG_ON_TREE)],
+            vec![boingbag_two_ran()],
         );
 
         let packages_dir = dir.join("packages");
@@ -3025,7 +3105,9 @@ mod tests {
         // read-only work directly, the way `resolve_packages_for_add` and
         // `osinstall_verify`'s own `verify_at` already are.
         let catalogue = package::packages().unwrap();
-        let ordered = package::order(&["locale-turkish".to_string()]).unwrap();
+        let applied: Vec<String> = chain::applied(&tree).unwrap().into_iter().collect();
+        let ordered =
+            package::order_with_installed(&["locale-turkish".to_string()], &applied).unwrap();
         let reports = preview_collisions(
             &tree,
             &packages_dir,
@@ -4441,16 +4523,17 @@ mod tests {
     }
 
     /// The positive case beside it: once `locale-base` really is on the
-    /// tree, the same selection resolves to exactly one package, ready for
-    /// `add_package` to place.
+    /// tree **and BoingBag 3.9-2 has been run on it**, the same selection
+    /// resolves to exactly one package, ready for `add_package` to place.
     #[test]
     fn resolve_packages_for_add_resolves_locale_turkish_once_locale_base_is_on_the_tree() {
         let dir = scratch("add-component-present");
         let tree = dir.join("tree");
         std::fs::create_dir_all(&tree).unwrap();
-        write_test_manifest(
+        write_test_manifest_with_runs(
             &tree,
             vec![locale_base_file_record("Locale/Languages/turkish.language")],
+            vec![boingbag_two_ran()],
         );
 
         let packages_dir = dir.join("packages");
@@ -4464,6 +4547,67 @@ mod tests {
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].0.id, "locale-turkish");
         assert_eq!(resolved[0].1, packages_dir.join("turkish.lha"));
+    }
+
+    /// **A `requires` may be met by the tree instead of by the selection, and
+    /// the two arms are what make that a rule rather than a leak.**
+    ///
+    /// Round 3 corrected `locale-turkish`'s `requires` to what the material
+    /// states: it goes on after BoingBag 3.9-2. BoingBag 3.9-2 is Amiga-side
+    /// and can never appear in a host selection (ART-166), so checking the
+    /// selection alone would have made the owner's own Turkish catalogue pack
+    /// permanently unaddable — refused for a missing package if ticked alone,
+    /// refused as unplaceable if ticked together. Neither arm is asserted by
+    /// the other test, so both are here.
+    #[test]
+    fn a_requirement_the_tree_already_carries_is_met_and_one_it_does_not_is_refused() {
+        let dir = scratch("add-requires-from-tree");
+        let packages_dir = dir.join("packages");
+        std::fs::create_dir_all(&packages_dir).unwrap();
+        write_locale_turkish_archive(&packages_dir, "turkish.lha", b"catalog bytes");
+
+        // Arm 1 — `locale-base` is on the tree, BoingBag 3.9-2 has never run.
+        let without = dir.join("without-bb2");
+        std::fs::create_dir_all(&without).unwrap();
+        write_test_manifest(
+            &without,
+            vec![locale_base_file_record("Locale/Languages/turkish.language")],
+        );
+        let refusals =
+            resolve_packages_for_add(&without, &packages_dir, &["locale-turkish".to_string()])
+                .unwrap()
+                .unwrap_err();
+        assert!(
+            refusals.iter().any(|r| matches!(
+                r,
+                crate::core::osinstall::RefusalReason::PackageRequirementMissing {
+                    requires,
+                    ..
+                } if requires == "boingbag-39-2"
+            )),
+            "the refusal must name BoingBag 3.9-2, got {refusals:?}"
+        );
+
+        // Arm 2 — the same folder, the same selection, a tree that records
+        // the run. The only difference is the manifest.
+        let with = dir.join("with-bb2");
+        std::fs::create_dir_all(&with).unwrap();
+        write_test_manifest_with_runs(
+            &with,
+            vec![locale_base_file_record("Locale/Languages/turkish.language")],
+            vec![boingbag_two_ran()],
+        );
+        let resolved =
+            resolve_packages_for_add(&with, &packages_dir, &["locale-turkish".to_string()])
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            resolved
+                .iter()
+                .map(|(p, _)| p.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["locale-turkish"],
+        );
     }
 
     /// A missing archive is refused by name, not left for `add_package` to

@@ -77,6 +77,7 @@ const PACKAGES: PackageSummary[] = [
     hostPlacementBlock: null,
     amigaInstallable: false,
     refusedNames: [],
+  notYetRunnable: null,
   },
   {
     id: "boingbag-39-2",
@@ -87,6 +88,7 @@ const PACKAGES: PackageSummary[] = [
     hostPlacementBlock: null,
     amigaInstallable: false,
     refusedNames: [],
+  notYetRunnable: null,
   },
   {
     id: "locale-turkish",
@@ -97,6 +99,7 @@ const PACKAGES: PackageSummary[] = [
     hostPlacementBlock: null,
     amigaInstallable: false,
     refusedNames: [],
+  notYetRunnable: null,
   },
 ];
 
@@ -250,6 +253,7 @@ describe("F3 — a remembered pick whose archive vanished can still be unticked"
         hostPlacementBlock: null,
         amigaInstallable: false,
         refusedNames: [],
+  notYetRunnable: null,
       },
     ]);
     render(
@@ -331,6 +335,7 @@ const REAL_PACKAGES: PackageSummary[] = [
     hostPlacementBlock: "encrypted-payload",
     amigaInstallable: false,
     refusedNames: [],
+  notYetRunnable: null,
   },
   {
     id: "locale-turkish",
@@ -341,6 +346,7 @@ const REAL_PACKAGES: PackageSummary[] = [
     hostPlacementBlock: null,
     amigaInstallable: false,
     refusedNames: [],
+  notYetRunnable: null,
   },
 ];
 
@@ -409,6 +415,7 @@ describe("m6 — an entry name safe_join refused is shown, not only counted", ()
         hostPlacementBlock: null,
         amigaInstallable: false,
         refusedNames: ["../../Startup"],
+        notYetRunnable: null,
       },
     ] satisfies PackageSummary[]);
     render(<PackagePanel release="AmigaOS 3.9" treeRoot="E:/tree" packageFolder="E:/packages" chosen={[]} />);
