@@ -128,6 +128,32 @@ This is the same discipline as the mutation rule in
 put the defect back and watch the test fail. Both measure the **difference**
 rather than the claim.
 
+### And an experiment whose value was refuting the fix it was going to justify
+
+**2026-09-08.** The question was whether a BoingBag's `Updater` returns a code
+ART can trust, and the plan already had its answer ready: if a corrupt payload
+returned `ok`, ART would verify success afterwards by asking the artefact —
+`Libs/version.library`'s revision against a `leaves_version` the recipe would
+declare. The experiment was run to justify building that.
+
+It refuted it. One byte of the encrypted payload was changed (member CRC and
+LHA header checksum recomputed, so the archive still tests clean — one variable,
+and the CRC routine was validated by reproducing the archive's own stored value
+first). Each arm twice, the control measured:
+
+- **corrupt payload** — the `Updater` never returns. No word but `started`,
+  `TimedOut` at 1 800.7 s both times, stopped on the exact payload entry the
+  byte falls in, writing 170 MB of runaway output into the copy. `If Warn` is
+  not proven by this; it is *unexercised*.
+- **wrong target** — `ok`, twice, promoted. And `version.library` moved to
+  **exactly the right value**: `45.3`, the same 352 bytes and the same sha256
+  as the correctly chained tree, on a tree missing 60 files.
+
+So the check the round set out to build would have passed the one broken tree
+the round produced. **It was not built**, and the not-building is the result.
+An experiment that only ever confirms the fix you had in mind is not measuring
+anything; decide what would be measured first, and let it say no.
+
 ---
 
 ## A one-off verification answers for the day it happened

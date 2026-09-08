@@ -390,6 +390,51 @@ pub fn result_path(work_volume_dir: &Path) -> PathBuf {
 /// the wait is somewhere in that GUI, and saying more than that would be
 /// a story rather than a measurement.
 ///
+/// ## What `If Warn` was measured to be worth, on 2026-09-08
+///
+/// The two lines below the invocation turn the `Updater`'s return code into
+/// the one word the host reads. Round 3, task 3 put that to a controlled
+/// experiment on the owner's own material — one variable, both arms twice, and
+/// the control measured — and **`If Warn` came out unproven rather than
+/// proven**. Written here because the next person to read these lines will
+/// otherwise assume the branch is load-bearing:
+///
+/// - **Control** (the real `BoingBag39-2.lha` on a BoingBag-1 tree): `ok`,
+///   `Succeeded`, 141.5 s. The `Else` arm works.
+/// - **Corrupt payload** (the identical wrapper with **one byte** of the
+///   encrypted `AmigaOS-Update` flipped, member CRC and header checksum
+///   recomputed so the LHA is still valid): the `Updater` **never returns**.
+///   Both runs: only `started` was ever written, `TimedOut` at 1 800.7 s /
+///   1 800.7 s, and the emulator's own screen showed its progress window
+///   stopped on `PlayCD` — the exact payload entry the flipped byte lands in —
+///   pixel-identical across five minutes. It also wrote a runaway
+///   `Utilities/PlayCD.BB1` of 170 328 064 and 173 408 256 bytes into the copy.
+///   So a broken payload is not a `Warn`; it is a hang, and `RunOutcome::TimedOut`
+///   is what the user gets.
+/// - **Wrong target** (the real archive against a tree that never had BoingBag
+///   3.9-1 — reachable only by doctoring the copy's own manifest, because
+///   `chain::refuse_unless_installable` refuses it in 17.6 ms first): **`ok`,
+///   twice**, `Succeeded`, `Promoted`, 142.2 s and 140.7 s, two byte-identical
+///   trees. The `Updater` does not check what it is being applied to.
+///
+/// Two consequences, both of which the branch below cannot fix and neither of
+/// which is a reason to change it:
+///
+/// 1. **The word is not evidence that the right thing happened.** It is
+///    evidence that the program returned without `Warn`, which is all this
+///    script claims and all [`RunOutcome`](super::RunOutcome) says.
+/// 2. **Asking the artefact afterwards would not have caught the wrong
+///    target either.** `Libs/version.library` reads `version 45.3 (7.12.2001)`
+///    on the correctly chained tree *and* on the tree that skipped BoingBag 1 —
+///    the same 352 bytes, the same sha256 — while that tree is missing 60 files
+///    and carries 51 at older bytes. A `leaves_version` check would have passed
+///    the broken tree, so it is deliberately not built.
+///
+/// `core::osinstall::chain::refuse_unless_installable` is therefore the *only*
+/// thing standing between a user and that tree — named in prose rather than
+/// linked, because a lower-level `core/` module does not reach upwards — which
+/// is why it is a refusal before anything is copied and not a warning.
+///
 /// ## Why a `CD` may sit between the assigns and the installer
 ///
 /// [`PlannedRun::working_directory`] carries the drawer the installer is run

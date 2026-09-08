@@ -373,6 +373,27 @@ fn unmet_prerequisites(package: &Package, have: &BTreeSet<String>) -> CoreResult
 /// Called **before anything is copied** — the copy, the work volume and the
 /// package unpack all happen after this, so a refused run has changed
 /// nothing at all.
+///
+/// ## This is the only thing that stops it — measured 2026-09-08
+///
+/// Until round 3 the sentence below rested on reasoning: BoingBag 3.9-2's own
+/// `Install` script reads `version.library` off the target and wants revision
+/// 2, so the package would presumably decline. **ART does not run that script;
+/// it runs `C/Updater` directly**, and the experiment in round 3, task 3 asked
+/// the program itself. On a tree that had never had BoingBag 3.9-1 — reachable
+/// only by doctoring the copy's own `distribution.json`, because this function
+/// refuses it in 17.6 ms with nothing copied and no emulator started — the
+/// `Updater` ran to completion and wrote **`ok`**, twice, `Succeeded` and
+/// `Promoted` in 142.2 s and 140.7 s, producing two byte-identical trees.
+///
+/// Those trees are the "boots and is quietly wrong" case, and the numbers are
+/// worth carrying: against a correctly chained tree they are **missing 60
+/// files**, carry **51 at older bytes**, and leave `Libs/xadmaster.library` at
+/// `9.0` where the chained tree has `9.1` — while `Libs/version.library` reads
+/// `version 45.3 (7.12.2001)` on **both**, the same 352 bytes and the same
+/// sha256. So no after-the-fact check of the artefact could have separated
+/// them either. The refusal here is not belt-and-braces over the package's own
+/// judgement; it is the whole of the protection.
 pub fn refuse_unless_installable(package: &Package, tree: &Path) -> CoreResult<()> {
     let missing = missing_prerequisites(package, tree)?;
     let Some(first) = missing.first() else {

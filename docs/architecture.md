@@ -672,6 +672,22 @@ The guards read the text; the proof is the gated real boot
 [testing.md § Real material](testing.md#real-material-and-the-ignored-hooks)).
 Emu68 Hatcher's own scripts, which run on real hardware, follow the same rules.
 
+**A sixth rule, about the other script ART writes.**
+`core/amigainstall/workvol.rs` generates a one-shot `Startup-Sequence` that runs
+a package's own installer and then reports through `If Warn`. **That branch is
+unexercised, not proven** — measured 2026-09-08 with a controlled experiment on
+the owner's own BoingBags, one variable, each arm twice, the control measured:
+a payload with **one byte** changed does not make the `Updater` set WARN, it
+makes it **hang** (`TimedOut` at 1 800.7 s, twice, stopped on the payload entry
+the byte falls in), and the real archive applied to a **wrong target** returns
+**`ok`, twice**. So the word the Amiga writes says the program returned without
+WARN and nothing more, and asking the artefact afterwards does not close the
+gap either: `Libs/version.library` reads `45.3` byte-identically on a correctly
+chained tree and on one that skipped BoingBag 1 and is missing 60 files. **What
+protects the user is the refusal before the run**
+(`core/osinstall/chain.rs::refuse_unless_installable`, 17.6 ms, nothing copied),
+not the installer's own judgement. Numbers and both arms: ART-227.
+
 ## Config files are user data
 
 **Never regenerate a user's config file from scratch.** `FF.CFG` (FlashFloppy),

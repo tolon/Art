@@ -3719,6 +3719,104 @@ what anyone can check. `NSDPatch.cfg` is left alone on purpose — it is
 user-editable configuration and a reference copy beside it is the right shape,
 which is the same conclusion HstWB reaches by touching neither.
 
+---
+
+**Appended 2026-09-08 (round 3, task 3) — three of those five measured, and
+none of them became a variant.** The paragraph above stands; this is the
+measurement it asked for, not a rewrite of it.
+
+A clean AmigaOS 3.9 tree **that carries locale** was needed and none of the
+three trees the round's brief named was one — checked against the tree rather
+than trusted: `dist-3.9` has no `Locale/` at all (2 499 files, 0 catalogs),
+`dist-3.9-bb`'s `version.library` reads **45.1**, so despite its name it was
+never BoingBag'd, and `bb-run2` is a folder of logs. The chain was therefore
+produced fresh from `E:\amiga\ProjeART\art226-tree` (3 947 files,
+`amigaInstalled: []`, `version.library 45.1`, **20 catalog languages, 597
+catalog files**): BoingBag 1 `Succeeded`/`Promoted` in **176.8 s** → 4 015
+files, then BoingBag 2 on a copy of that, `Succeeded`/`Promoted` in **141.5 s**
+→ 4 025 files. Every file of every state was hashed, so the rows below are
+whole-tree diffs.
+
+| HstWB step | what the tree says | verdict |
+|---|---|---|
+| `C/Installer` into `SYS:C`/`SYS:Utilities` | `Utilities/Installer` is `$VER: installer 44.10 (1.10.99)`, 154 804 B, sha256 `6e28d173…` — **byte-identical** to `BoingBag3.9-2/C/Installer`; unchanged by both runs | **measured, not needed** |
+| locale catalogs | **597 catalog files, 20 languages: 0 added, 0 removed, 0 changed** by BoingBag 1 and 2 together | **measured, not needed** |
+| second `Updater` run for `XAD-Update` | `xadmaster 9.0` clean → **`9.1` after BoingBag 1** (whose payload carries the 105 368-byte build) → **`9.1` still** after BoingBag 2. 9.1 < 10 | **needed — and not a `PostStep`** |
+
+The catalog row has a reason and not only a count, read out of the payloads'
+own entry names (ZipCrypto encrypts the bytes and leaves the names in clear,
+the same property ART-166 rests on): `BoingBag3.9-1/AmigaOS-Update` has 233
+entries and `BoingBag3.9-2/AmigaOS-Update` has 147, and **neither carries a
+single `Locale/` entry**. There is nothing for a merge step to merge.
+
+One divergence was found beside it and is deliberately left alone: BoingBag 2
+updates `Utilities/Amplifier/catalogs/deutsch/AMPlifier.catalog` (1 994 →
+2 174 bytes) and leaves `Locale/Catalogs/deutsch/AMPlifier.catalog` at 1 994 —
+the same shape as the ROM update, the newer file beside the older one. *What is
+not claimed:* which of the two paths `locale.library` opens first. That was not
+established from any source, and one file in one language out of 597 is not a
+basis for a step.
+
+**`XAD-Update` is needed and cannot live in `finish.rs`, which is the part
+worth writing down.** `BoingBag3.9-2/XAD-Update` is a **second ZipCrypto
+archive inside the same wrapper**: 152 837 bytes, **39 entries, every one
+encrypted**, carrying `Libs/xadmaster.library` at 110 100 bytes plus 26
+`Libs/xad/*` clients and 10 `C/` tools. Applying it means running
+`C/Updater XAD-Update "<target>"` **inside the emulator** — the package's own
+`Install` line 1632 — on content ART must not decrypt, and that line is gated
+on a requester the script puts to the *user* (`#install-xad-update`). So the
+round-3 design's *"`finish.rs` gains `run-again-with`"* is the one instruction
+this measurement contradicts: `finish.rs` is host file operations that need no
+emulator, ROM or licence, and this is none of those. The day ART offers it, it
+is a second declaration in the recipe and a second run, which is what
+`boingbag-39-2.json` already says.
+
+**And the experiment ART-227 asked for: does `Updater` return a usable code?**
+Decided first: the measured quantity is the one word in `ARTWork:art-result.txt`,
+captured off ART's scratch **while the run was going** (the work volume is
+deleted on `Drop`), plus `Libs/version.library` before and after. One variable,
+each arm twice, the control measured.
+
+| arm | what changed | word | `RunOutcome` | `version.library` |
+|---|---|---|---|---|
+| control | nothing — the real `BoingBag39-2.lha` on a BoingBag-1 tree | `ok` | `Succeeded`/`Promoted`, 141.5 s | 45.2 → **45.3** |
+| corrupt payload ×2 | **one byte** of the encrypted `AmigaOS-Update` flipped, member CRC-16 and header checksum recomputed so the LHA still tests `Everything is Ok` | *none* — only `started` | **`TimedOut`** at 1 800.7 s / 1 800.7 s, `Kept` | 45.2 → **45.2** |
+| wrong target ×2 | the real archive on a tree that never had BoingBag 1 | **`ok`** | `Succeeded`/**`Promoted`**, 142.2 s / 140.7 s | 45.1 → **45.3** |
+
+- **`If Warn` is not proven; it is unexercised.** A corrupt payload does not
+  make the `Updater` warn — it makes it **hang**. Both runs stopped on the same
+  payload entry (`Utilities/PlayCD`, exactly where the flipped byte falls;
+  screenshots of the emulator's own progress window, pixel-identical across
+  five minutes) and wrote a runaway `Utilities/PlayCD.BB1` of **170 328 064**
+  and **173 408 256** bytes into the copy before ART ended the emulator at the
+  deadline. ART's data safety held perfectly — the copy was kept, the tree was
+  untouched — but the ending a user is shown is *"nobody answered"*, and
+  watching the window next time will not help.
+- **The `Updater` says `ok` on a wrong target.** ART does not run BoingBag 2's
+  `Install` script (which checks `version.library`); it runs `C/Updater`
+  directly, and the program itself checks nothing. Reaching that arm required
+  doctoring the copy's own manifest, because `chain::refuse_unless_installable`
+  refuses it first — **in 17.6 ms, with nothing copied and no emulator
+  started**. So that guard is not belt-and-braces over the package's own
+  judgement; it is the whole of the protection. Not a state a user can reach
+  through ART.
+- **No fifth ending, and no `leaves_version` — because the measurement says it
+  would not work.** The design offered `NotApplied` for a run whose word is
+  `ok` while the version did not move. The version *did* move: the
+  wrong-target trees read `version 45.3 (7.12.2001)`, the same 352 bytes and
+  the same sha256 as the correctly chained tree, while being **missing 60
+  files**, carrying **51 at older bytes** and leaving `xadmaster` at 9.0. A
+  `leaves_version` check would have passed the broken tree. Building it would
+  have been a confident wrong sentence in code, which is what this file exists
+  for.
+
+*Guards:* `package.rs::the_boingbags_declare_what_their_updater_leaves_undone_art_227`
+asserts both `post_install` lists **whole**, so a fourth step cannot be added
+without failing it; `chain.rs::boingbag_two_is_refused_on_a_tree_that_never_had_boingbag_one`
+and `…_is_allowed_once_boingbag_one_is_recorded` hold both arms of the refusal.
+Report and re-runnable command lines:
+`.superpowers/sdd/2026-09-08-intake/r3-task-3-report.md`.
+
 **ART-225** 🟠 ✅ **Thirteen font descriptors were placed as `X.FONT` and the
 running Amiga could see none of them — `diskfont.library` matches the `.font`
 suffix case-sensitively** — *found 2026-08-23 by booting the tree
