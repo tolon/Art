@@ -135,6 +135,7 @@ describe("the four endings reach the frontend", () => {
 import {
   amigaInstallArchiveKey,
   archiveFieldBlockerPhrase,
+  dedupeBlockers,
   outcomeNextStepPhrase,
   outcomePhrase,
   outcomeTone,
@@ -318,7 +319,7 @@ function classification(
   kind: ArchiveClassification["kind"],
   over: Partial<ArchiveClassification> = {}
 ): ArchiveClassification {
-  return { kind, topLevel: [], expectedMedia: null, expectedOverlays: [], ...over };
+  return { kind, topLevel: [], expectedMedia: null, expectedOverlays: [], sharedBy: [], ...over };
 }
 
 describe("parseClassification", () => {
@@ -338,6 +339,13 @@ describe("parseClassification", () => {
   it("reads the media out of an other-artefact classification", () => {
     expect(parseClassification(classification("other-artefact:Locale3.9"))).toEqual({
       kind: "other-artefact",
+      media: "Locale3.9",
+    });
+  });
+
+  it("reads the media out of a shared-artefact classification", () => {
+    expect(parseClassification(classification("shared-artefact:Locale3.9"))).toEqual({
+      kind: "shared-artefact",
       media: "Locale3.9",
     });
   });
@@ -396,6 +404,33 @@ describe("archiveFieldBlockerPhrase", () => {
     expect(phrase).toEqual({
       key: "osinstall.amigaInstall.classify.anotherPackagesUpdateArchive",
       params: { other: "BoingBag 3.9-2", selected: "BoingBag 3.9-1" },
+    });
+  });
+
+  it("names both packages, by display name, when two or more release packages share one identity", () => {
+    // ART-277 re-review, L5: never resolved by picking one (ART-276's own
+    // trap), and — unlike `other-artefact` — makes no claim about which
+    // step handles the file, since more than one package does.
+    const c = classification("shared-artefact:Locale3.9", {
+      sharedBy: ["locale-39", "locale-39-turkish"],
+    });
+    const otherPackageName = (id: string) =>
+      id === "locale-39" ? "Locale 3.9" : id === "locale-39-turkish" ? "Türkçe Locale 3.9" : id;
+    const phrase = archiveFieldBlockerPhrase(
+      c,
+      "package",
+      "D:/pkg/Locale3.9.lha",
+      "BoingBag 3.9-1",
+      otherPackageName,
+      labels
+    );
+    expect(phrase).toEqual({
+      key: "osinstall.amigaInstall.classify.sharedArtefact",
+      params: {
+        path: "D:/pkg/Locale3.9.lha",
+        media: "Locale3.9",
+        packages: "Locale 3.9, Türkçe Locale 3.9",
+      },
     });
   });
 
@@ -508,5 +543,40 @@ describe("archiveFieldBlockerPhrase", () => {
     expect(
       archiveFieldBlockerPhrase(null, "package", "D:/pkg/x.lha", "BoingBag 3.9-1", otherName, labels)
     ).toBeNull();
+  });
+});
+
+describe("dedupeBlockers", () => {
+  it("keeps every entry when no two phrases are identical", () => {
+    const out = dedupeBlockers([
+      { field: "preview", phrase: { key: "a" } },
+      { field: "package", phrase: { key: "b", params: { x: 1 } } },
+      { field: "overlay", phrase: { key: "b", params: { x: 2 } } },
+    ]);
+    expect(out.map((k) => k.id)).toEqual(["preview:a", "package:b", "overlay:b"]);
+  });
+
+  // ART-277 round 1 whole-branch review, M2: two fields agreeing on the
+  // same wrong archive produce the identical `Phrase` — dropped after the
+  // first, not rendered twice.
+  it("drops a later entry whose key and params exactly match an earlier one", () => {
+    const phrase = {
+      key: "osinstall.amigaInstall.classify.anotherPackage",
+      params: { other: "BoingBag 3.9-2", selected: "BoingBag 3.9-1" },
+    };
+    const out = dedupeBlockers([
+      { field: "package", phrase },
+      { field: "overlay", phrase: { ...phrase, params: { ...phrase.params } } },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe("package:osinstall.amigaInstall.classify.anotherPackage");
+  });
+
+  it("gives two different phrases two different ids even when their keys collide by field alone", () => {
+    const out = dedupeBlockers([
+      { field: "preview", phrase: { key: "osinstall.amigaInstall.blocker.noEmulator" } },
+      { field: "preview", phrase: { key: "osinstall.amigaInstall.blocker.kickstartMissing" } },
+    ]);
+    expect(new Set(out.map((k) => k.id)).size).toBe(2);
   });
 });

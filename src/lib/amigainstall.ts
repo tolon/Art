@@ -254,6 +254,7 @@ export interface ArchiveClassification {
     | "unknown"
     | `another-package:${string}`
     | `another-packages-update-archive:${string}`
+    | `shared-artefact:${string}`
     | `other-artefact:${string}`;
   /** What the archive's own listing carries at its top level — a drawer and,
    *  usually, its sibling `.info` icon. Shown when ART cannot say more. */
@@ -266,6 +267,11 @@ export interface ArchiveClassification {
   /** The selected package's own declared overlay drawers — what the
    *  update-archive field expects. Empty for a package that declares none. */
   expectedOverlays: string[];
+  /** Every release package that reads this exact identity, as ids — only
+   *  non-empty when `kind` is `` `shared-artefact:${media}` `` (ART-277
+   *  re-review, L5). Resolved to display names by the panel, the same way
+   *  it already does for `another-package`'s id. */
+  sharedBy: string[];
 }
 
 /** Ask Rust what an archive is, against the package currently selected and
@@ -297,6 +303,7 @@ export type ParsedClassification =
   | { kind: "unknown" }
   | { kind: "another-package"; id: string }
   | { kind: "another-packages-update-archive"; id: string }
+  | { kind: "shared-artefact"; media: string }
   | { kind: "other-artefact"; media: string };
 
 export function parseClassification(
@@ -312,6 +319,9 @@ export function parseClassification(
   }
   if (kind.startsWith("another-package:")) {
     return { kind: "another-package", id: kind.slice("another-package:".length) };
+  }
+  if (kind.startsWith("shared-artefact:")) {
+    return { kind: "shared-artefact", media: kind.slice("shared-artefact:".length) };
   }
   if (kind.startsWith("other-artefact:")) {
     return { kind: "other-artefact", media: kind.slice("other-artefact:".length) };
@@ -534,16 +544,22 @@ export function readinessBlockers(preview: AmigaInstallPreview): Phrase[] {
  * has to say so where the button is, and the first attempt at this said it
  * only beside the field, a screen's height away.
  *
- * Four outcomes:
+ * Five outcomes:
  * - **Another release package's own archive**, or its own update archive
  *   (Medium 1) — named by `otherName`, telling the user to select that
  *   package instead, because this screen's radio actually offers it.
- * - **Something real ART cannot offer a selection for** — two or more
- *   release packages share this identity (ART-276's own shape, reached from
- *   a different door: never resolved by guessing), or the one package that
- *   does claim it is not Amiga-installable at all (`other-artefact`, ART-277
- *   review's Major 2 fix). Named by what it is and what this field expects,
- *   never by an id the user cannot act on here.
+ * - **Two or more release packages share this identity** — `shared-artefact`
+ *   (ART-277 re-review, L5, split out of `other-artefact`): named by
+ *   *both* display names via `sharedBy`, never resolved by picking one
+ *   (ART-276's own shape, reached from a different door), and making no
+ *   claim about which step handles it, since more than one package doing so
+ *   is not evidence either way.
+ * - **A single, real match this screen's radio does not offer at all** —
+ *   `other-artefact` (not Amiga-installable). The only safe claim is that
+ *   *this* step does not run it — true regardless of which one does — never
+ *   the first round's "the Packages step places it from Windows", which
+ *   assumed a specific other step `shared-artefact`'s own cause does not
+ *   establish (L5's own finding: one sentence asserting one cause for two).
  * - **This package's own archive, in the wrong field** — `the-package` in
  *   the *overlay* field (Major 1: the mirror of the update archive already
  *   caught by the equivalent case at the other end, which Rust's own preview
@@ -583,7 +599,23 @@ export function archiveFieldBlockerPhrase(
         key: "osinstall.amigaInstall.classify.anotherPackagesUpdateArchive",
         params: { other: otherName(parsed.id), selected: selectedName },
       };
+    case "shared-artefact": {
+      // ART-277 re-review, L5: two or more release packages read this
+      // exact identity — named, both, by display name; never picked one
+      // over the other (ART-276's own trap, one door over) and never a
+      // claim about which step handles it, since more than one might.
+      const names = (classification?.sharedBy ?? []).map(otherName);
+      return {
+        key: "osinstall.amigaInstall.classify.sharedArtefact",
+        params: { path, media: parsed.media, packages: names.join(", ") },
+      };
+    }
     case "other-artefact": {
+      // ART-277 re-review, L5: a single, real match this screen's radio
+      // does not offer at all — the only claim safe to make is that *this*
+      // step does not run it (true regardless of which one does); the
+      // first round's "the Packages step places it from Windows" assumed a
+      // specific other step that this shape does not actually establish.
       const expected =
         field === "package"
           ? (classification?.expectedMedia ?? null)
@@ -615,4 +647,43 @@ export function archiveFieldBlockerPhrase(
     default:
       return null;
   }
+}
+
+/** A `Phrase` plus a stable id for React's `key` prop. */
+export interface KeyedPhrase {
+  id: string;
+  phrase: Phrase;
+}
+
+/**
+ * `blockers`, keyed and deduplicated — the round 1 whole-branch review's M2.
+ *
+ * `readinessBlockers` was the only producer of the panel's `blockers` list
+ * when `blocker.key` was used as the React key directly, so every key was
+ * unique by construction. It is not the only producer any more: the package
+ * field and the overlay field each contribute their own
+ * `archiveFieldBlockerPhrase`, and nothing stops both fields holding the
+ * *same* wrong archive (BoingBag 2's own archive in both fields while
+ * BoingBag 1 is selected) — which produces the identical `Phrase` (same
+ * key, same params) from two different `entries`. Keying on `blocker.key`
+ * alone then gives React two identical keys in one list — a warning and a
+ * mis-reconciliation risk — and renders the same sentence twice, which is
+ * the exact *"aynı uyarı tek ekranda 2 tane"* mistake ART-202 already cost
+ * this screen once.
+ *
+ * `field` namespaces the id so two *different* phrases never collide by
+ * coincidence; identical phrases (same key, same serialized params) are
+ * dropped after the first, since two fields agreeing on one wrong archive
+ * genuinely have one thing to say, not two.
+ */
+export function dedupeBlockers(entries: { field: string; phrase: Phrase }[]): KeyedPhrase[] {
+  const seen = new Set<string>();
+  const out: KeyedPhrase[] = [];
+  for (const { field, phrase } of entries) {
+    const signature = `${phrase.key}:${JSON.stringify(phrase.params ?? {})}`;
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    out.push({ id: `${field}:${phrase.key}`, phrase });
+  }
+  return out;
 }

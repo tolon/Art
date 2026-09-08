@@ -31,7 +31,12 @@ import i18n from "i18next";
 // instance, the way `OsInstall.test.tsx` and `PackagePanel.test.tsx` do.
 import "@/i18n";
 import { useSettingsStore } from "@/stores/settingsStore";
-import type { AmigaInstallPreview, AmigaInstallResult, RunOutcome } from "@/lib/amigainstall";
+import type {
+  AmigaInstallPreview,
+  AmigaInstallResult,
+  ArchiveClassification,
+  RunOutcome,
+} from "@/lib/amigainstall";
 import type { PackageSummary } from "@/lib/osinstall";
 import type { JobProgress } from "@/lib/jobs";
 
@@ -901,11 +906,11 @@ describe("ART-277: switching the selected package does not carry its archives", 
     expect(runMock).not.toHaveBeenCalled();
   });
 
-  it("names another package's own update archive, and a shared Packages-step archive, without ever saying 'select' a package this screen does not offer", async () => {
-    // ART-277 review, Major 2 and Medium 1: `other-artefact` (a match this
-    // screen cannot select, or one two release packages share) and
-    // `another-packages-update-archive` (a real match, but the *update*
-    // archive of a different package).
+  it("names another package's own update archive, and both packages sharing one identity, without ever saying 'select' a package this screen does not offer", async () => {
+    // ART-277 review, Major 2 and Medium 1, plus re-review L5:
+    // `shared-artefact` (two release packages read the same identity —
+    // `Locale3.9`'s own real shape) and `another-packages-update-archive`
+    // (a real match, but the *update* archive of a different package).
     classifyMock.mockImplementation(async (path: string) => {
       if (path === "D:/pkg/BoingBag39-1-UAE.lha") {
         return {
@@ -913,17 +918,25 @@ describe("ART-277: switching the selected package does not carry its archives", 
           topLevel: ["BoingBag3.9-1-UAE"],
           expectedMedia: null,
           expectedOverlays: [],
+          sharedBy: [],
         };
       }
       if (path === "D:/pkg/Locale3.9.lha") {
         return {
-          kind: "other-artefact:Locale3.9",
+          kind: "shared-artefact:Locale3.9",
           topLevel: ["Locale3.9", "Locale3.9.info"],
           expectedMedia: "BoingBag3.9-2",
           expectedOverlays: [],
+          sharedBy: ["locale-39", "locale-39-turkish"],
         };
       }
-      return { kind: "the-package", topLevel: [], expectedMedia: null, expectedOverlays: [] };
+      return {
+        kind: "the-package",
+        topLevel: [],
+        expectedMedia: null,
+        expectedOverlays: [],
+        sharedBy: [],
+      };
     });
     useSettingsStore.setState((state) => ({
       settings: {
@@ -940,14 +953,38 @@ describe("ART-277: switching the selected package does not carry its archives", 
     render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
 
     const blockers = await screen.findByTestId("amiga-install-blockers");
-    // The shared/unselectable artefact names itself and what this field
-    // wants — never an id the radio does not offer.
+    // The shared archive names itself and *both* packages that read it —
+    // never one of the two picked arbitrarily (ART-276's own trap).
     expect(blockers.textContent).toContain("Locale3.9");
-    expect(blockers.textContent).toContain("BoingBag3.9-2");
+    expect(blockers.textContent).toContain("locale-39");
+    expect(blockers.textContent).toContain("locale-39-turkish");
     // The other package's *update* archive is named as that, not folded
     // into "select BoingBag 3.9-1" (which would be the wrong archive to ask
     // for) nor into silence.
     expect(blockers.textContent).toContain("BoingBag 3.9-1");
+    expect(screen.getByRole("checkbox").hasAttribute("disabled")).toBe(true);
+  });
+
+  // ART-277 re-review, L5: `other-artefact` (a single, unselectable match)
+  // must not claim "the Packages step places it from Windows" — that claim
+  // is only ever true of `shared-artefact`'s own cause, which the test
+  // above covers. `other-artefact`'s only safe claim is that *this* step
+  // does not run the file.
+  it("says only that this step does not run an other-artefact archive, never which step does", async () => {
+    classifyMock.mockImplementation(async () => ({
+      kind: "other-artefact:LocaleUpdate",
+      topLevel: ["LocaleUpdate", "LocaleUpdate.info"],
+      expectedMedia: "BoingBag3.9-1",
+      expectedOverlays: [],
+      sharedBy: [],
+    }));
+    withChoices();
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+
+    const blockers = await screen.findByTestId("amiga-install-blockers");
+    expect(blockers.textContent).toContain("LocaleUpdate");
+    expect(blockers.textContent).not.toMatch(/Packages step/i);
+    expect(blockers.textContent).not.toMatch(/Windows/i);
     expect(screen.getByRole("checkbox").hasAttribute("disabled")).toBe(true);
   });
 
@@ -1008,6 +1045,124 @@ describe("ART-277: switching the selected package does not carry its archives", 
       i18n.t("osinstall.amigaInstall.overlayArchive.label")
     );
     expect(blockers.textContent).not.toMatch(/first field above/i);
+    expect(screen.getByRole("checkbox").hasAttribute("disabled")).toBe(true);
+  });
+
+  // ART-277 round 1 whole-branch review, M1: the classification must not
+  // outlive the file it was asked about.
+  it("clears the previous verdict immediately, before the new archive's own answer lands", async () => {
+    let resolvePending: (value: ArchiveClassification) => void = () => {};
+    const pending = new Promise<ArchiveClassification>((resolve) => {
+      resolvePending = resolve;
+    });
+    classifyMock.mockImplementation(async (path: string) => {
+      if (path === "D:/pkg/Locale3.9.lha") {
+        return {
+          kind: "other-artefact:Locale3.9",
+          topLevel: ["Locale3.9", "Locale3.9.info"],
+          expectedMedia: "BoingBag3.9-1",
+          expectedOverlays: [],
+          sharedBy: [],
+        };
+      }
+      if (path === "D:/pkg/pending.lha") {
+        // Never resolves within this test — if the stale verdict were not
+        // cleared immediately, it would be the only thing on screen for
+        // the whole time this promise is outstanding.
+        return pending;
+      }
+      return {
+        kind: "the-package",
+        topLevel: [],
+        expectedMedia: null,
+        expectedOverlays: [],
+        sharedBy: [],
+      };
+    });
+    useSettingsStore.setState((state) => ({
+      settings: {
+        ...state.settings,
+        winuaePath: "C:/Program Files/WinUAE/winuae64.exe",
+        remembered: {
+          "amigaInstall.package": "boingbag-39-1",
+          "amigaInstall.archive.boingbag-39-1": "D:/pkg/Locale3.9.lha",
+          "amigaInstall.kickstart": "D:/roms/kick31.rom",
+        },
+      },
+    }));
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+
+    // The first (stale-to-be) verdict is up.
+    let blockers = await screen.findByTestId("amiga-install-blockers");
+    expect(blockers.textContent).toContain("Locale3.9");
+
+    // The archive changes to a file whose classify call this test holds
+    // pending forever.
+    await act(async () => {
+      useSettingsStore.setState((state) => ({
+        settings: {
+          ...state.settings,
+          remembered: {
+            "amigaInstall.package": "boingbag-39-1",
+            "amigaInstall.archive.boingbag-39-1": "D:/pkg/pending.lha",
+            "amigaInstall.kickstart": "D:/roms/kick31.rom",
+          },
+        },
+      }));
+      await Promise.resolve();
+    });
+
+    // The stale "Locale3.9" verdict must be gone immediately — not held
+    // over until the pending promise resolves, which in this test never
+    // happens at all.
+    await waitFor(() => {
+      const box = screen.queryByTestId("amiga-install-blockers");
+      if (box) {
+        expect(box.textContent).not.toContain("Locale3.9");
+      }
+    });
+
+    // Resolving the new answer renders the new verdict in its place.
+    resolvePending({
+      kind: "other-artefact:Locale3.9",
+      topLevel: [],
+      expectedMedia: "BoingBag3.9-1",
+      expectedOverlays: [],
+      sharedBy: [],
+    });
+    blockers = await screen.findByTestId("amiga-install-blockers");
+    expect(blockers.textContent).toContain("Locale3.9");
+  });
+
+  // ART-277 round 1 whole-branch review, M2: two fields agreeing on one
+  // wrong archive have one thing to say, not two — no duplicate React key,
+  // no duplicate sentence in the box.
+  it("renders one sentence, not two, when both fields hold the same wrong archive", async () => {
+    classifyMock.mockImplementation(async () => ({
+      kind: "another-package:boingbag-39-2",
+      topLevel: ["BoingBag3.9-2", "BoingBag3.9-2.info"],
+      expectedMedia: null,
+      expectedOverlays: [],
+      sharedBy: [],
+    }));
+    useSettingsStore.setState((state) => ({
+      settings: {
+        ...state.settings,
+        winuaePath: "C:/Program Files/WinUAE/winuae64.exe",
+        remembered: {
+          "amigaInstall.package": "boingbag-39-1",
+          "amigaInstall.archive.boingbag-39-1": "D:/pkg/BoingBag39-2.lha",
+          "amigaInstall.overlayArchive.boingbag-39-1": "D:/pkg/BoingBag39-2.lha",
+          "amigaInstall.kickstart": "D:/roms/kick31.rom",
+        },
+      },
+    }));
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+
+    const blockers = await screen.findByTestId("amiga-install-blockers");
+    const items = blockers.querySelectorAll("li");
+    const matching = Array.from(items).filter((li) => li.textContent?.includes("BoingBag 3.9-2"));
+    expect(matching).toHaveLength(1);
     expect(screen.getByRole("checkbox").hasAttribute("disabled")).toBe(true);
   });
 });

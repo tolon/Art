@@ -79,6 +79,7 @@ import {
   amigaInstallRun,
   amigainstallClassifyArchive,
   archiveFieldBlockerPhrase,
+  dedupeBlockers,
   onAmigaInstallResult,
   outcomeNextStepPhrase,
   outcomePhrase,
@@ -390,9 +391,19 @@ export function AmigaInstallPanel({
   // `"the-update-archive"` — and `archiveFieldBlockerPhrase` reads which is
   // which. Scoped to `release` (ART-277 review, Major 2): the same list the
   // radio below actually offers.
+  //
+  // **M1 (round 1 whole-branch review).** `setArchiveClassification(null)`
+  // is the *first* statement, before the new question is even asked —
+  // clearing was previously reached only on the "field is empty" branch, so
+  // changing the archive (a second Browse, or switching to a package with
+  // its own remembered one) left the *previous* file's verdict rendered
+  // against the *new* file's path for the whole round trip: a confident
+  // sentence about a file that is not the one it names. Clearing first means
+  // the box says nothing while the question is outstanding, which is the
+  // honest state.
   useEffect(() => {
+    setArchiveClassification(null);
     if (!archive || !packageId) {
-      setArchiveClassification(null);
       return;
     }
     let cancelled = false;
@@ -409,8 +420,8 @@ export function AmigaInstallPanel({
   }, [archive, packageId, release]);
 
   useEffect(() => {
+    setOverlayClassification(null);
     if (!overlayArchive || !packageId) {
-      setOverlayClassification(null);
       return;
     }
     let cancelled = false;
@@ -611,11 +622,20 @@ export function AmigaInstallPanel({
   // used to disable Run alone, so the checkbox could still be ticked over a
   // request that could never succeed and Run would die with no reason
   // rendered anywhere near it).
-  const blockers = [
-    ...(preview ? readinessBlockers(preview) : []),
-    ...(archiveBlocker ? [archiveBlocker] : []),
-    ...(overlayBlocker ? [overlayBlocker] : []),
-  ];
+  //
+  // **M2 (round 1 whole-branch review).** Keyed and deduplicated —
+  // `readinessBlockers` was the only producer when `blocker.key` was used
+  // as the React key directly, so every key was unique by construction.
+  // Both archive fields can now hold the same wrong archive (the identical
+  // `Phrase`, same key and params, from two different fields), which used
+  // to render as a duplicate React key and the same sentence twice —
+  // ART-202's own "aynı uyarı tek ekranda 2 tane" mistake, reached through
+  // a producer this screen did not have when that rule was written.
+  const blockers = dedupeBlockers([
+    ...(preview ? readinessBlockers(preview).map((phrase) => ({ field: "preview", phrase })) : []),
+    ...(archiveBlocker ? [{ field: "package", phrase: archiveBlocker }] : []),
+    ...(overlayBlocker ? [{ field: "overlay", phrase: overlayBlocker }] : []),
+  ]);
   const overlayAdvice = preview ? overlayAdvicePhrase(preview) : null;
   const pct = progress ? fraction(progress) : null;
   const outcome = result ? outcomePhrase(result.outcome) : null;
@@ -872,8 +892,8 @@ export function AmigaInstallPanel({
           </p>
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             {blockers.map((blocker) => (
-              <li key={blocker.key} style={{ padding: "2px 0", wordBreak: "break-all" }}>
-                {t(blocker.key, blocker.params)}
+              <li key={blocker.id} style={{ padding: "2px 0", wordBreak: "break-all" }}>
+                {t(blocker.phrase.key, blocker.phrase.params)}
               </li>
             ))}
           </ul>

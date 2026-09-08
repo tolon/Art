@@ -250,6 +250,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       topLevel: [],
       expectedMedia: null,
       expectedOverlays: [],
+      sharedBy: [],
       ...over,
     });
     const otherName = () => "BoingBag 3.9-2";
@@ -270,6 +271,16 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     expect(
       resolvesAtRuntime(
         phrasesFor(archiveClassification("another-package:boingbag-39-2"), "package")!.key
+      )
+    ).toBe(true);
+    expect(
+      resolvesAtRuntime(
+        phrasesFor(
+          archiveClassification("shared-artefact:Locale3.9", {
+            sharedBy: ["locale-39", "locale-39-turkish"],
+          }),
+          "package"
+        )!.key
       )
     ).toBe(true);
     expect(
