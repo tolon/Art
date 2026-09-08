@@ -77,7 +77,7 @@ const PACKAGES: PackageSummary[] = [
     hostPlacementBlock: null,
     amigaInstallable: false,
     refusedNames: [],
-  notYetRunnable: null,
+    notYetRunnable: null,
   },
   {
     id: "boingbag-39-2",
@@ -88,7 +88,7 @@ const PACKAGES: PackageSummary[] = [
     hostPlacementBlock: null,
     amigaInstallable: false,
     refusedNames: [],
-  notYetRunnable: null,
+    notYetRunnable: null,
   },
   {
     id: "locale-turkish",
@@ -99,7 +99,7 @@ const PACKAGES: PackageSummary[] = [
     hostPlacementBlock: null,
     amigaInstallable: false,
     refusedNames: [],
-  notYetRunnable: null,
+    notYetRunnable: null,
   },
 ];
 
@@ -253,7 +253,7 @@ describe("F3 — a remembered pick whose archive vanished can still be unticked"
         hostPlacementBlock: null,
         amigaInstallable: false,
         refusedNames: [],
-  notYetRunnable: null,
+        notYetRunnable: null,
       },
     ]);
     render(
@@ -335,7 +335,7 @@ const REAL_PACKAGES: PackageSummary[] = [
     hostPlacementBlock: "encrypted-payload",
     amigaInstallable: false,
     refusedNames: [],
-  notYetRunnable: null,
+    notYetRunnable: null,
   },
   {
     id: "locale-turkish",
@@ -346,7 +346,7 @@ const REAL_PACKAGES: PackageSummary[] = [
     hostPlacementBlock: null,
     amigaInstallable: false,
     refusedNames: [],
-  notYetRunnable: null,
+    notYetRunnable: null,
   },
 ];
 

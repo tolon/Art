@@ -29,7 +29,12 @@
 // checklist shows under the same package. Two wordings for one fact is how
 // the two screens would come to disagree about it.
 
-import { hostPlacementBlockKey, type ChainReport, type ChainRow } from "@/lib/osinstall";
+import {
+  hostPlacementBlockKey,
+  notYetRunnableChainKey,
+  type ChainReport,
+  type ChainRow,
+} from "@/lib/osinstall";
 import type { Phrase } from "@/lib/phrase";
 
 /** Which of the seven endings this row is. Kept on the object rather than
@@ -94,7 +99,7 @@ export function chainLines(rows: ChainRow[]): ChainLine[] {
       id: row.packageId ?? row.slotId ?? `row-${row.position}`,
       position: row.position,
       name,
-      file: row.facts.file,
+      file: row.sentenceFacts.file,
       where: wherePhrase(row),
       runnable: false,
     };
@@ -117,8 +122,8 @@ export function chainLines(rows: ChainRow[]): ChainLine[] {
           ...base,
           kind: "ready" as const,
           runnable,
-          phrase: row.facts.file
-            ? { key: "osinstall.chain.ready", params: { name, file: row.facts.file } }
+          phrase: row.sentenceFacts.file
+            ? { key: "osinstall.chain.ready", params: { name, file: row.sentenceFacts.file } }
             : { key: "osinstall.chain.readyUnnamed", params: { name } },
         };
       }
@@ -182,10 +187,10 @@ export function chainLines(rows: ChainRow[]): ChainLine[] {
         return {
           ...base,
           kind: "not-yet-runnable" as const,
-          phrase: {
-            key: "osinstall.chain.notYetRunnable",
-            params: { name, reason: row.state.reason },
-          },
+          // One key per reason, so the whole sentence is translated rather
+          // than a translated frame around an English clause (fix round 1,
+          // m6) — the same shape `hostPlacementBlockKey` already has.
+          phrase: { key: notYetRunnableChainKey(row.state.reason), params: { name } },
         };
     }
   });
@@ -194,8 +199,9 @@ export function chainLines(rows: ChainRow[]): ChainLine[] {
 /** *runs on the Amiga* / *placed from Windows*, or nothing for a row that is
  *  neither. See {@link ChainLine.where}. */
 function wherePhrase(row: ChainRow): Phrase | null {
-  if (row.facts.runsOnAmiga === null) return null;
-  return { key: row.facts.runsOnAmiga ? "osinstall.chain.onAmiga" : "osinstall.chain.onWindows" };
+  const where = row.sentenceFacts.runsOnAmiga;
+  if (where === null) return null;
+  return { key: where ? "osinstall.chain.onAmiga" : "osinstall.chain.onWindows" };
 }
 
 /**

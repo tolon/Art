@@ -102,6 +102,8 @@ import {
   conditionalReasonText,
   hostPlacementBlockKey,
   mediaEvidence,
+  notYetRunnableChainKey,
+  notYetRunnablePanelKey,
   mediaIdentityFolderLines,
   mediaIdentityLines,
   mediaIdentitySummary,
@@ -111,6 +113,7 @@ import {
   type ConditionalReason,
   type HostPlacementBlock,
   type InstallPlan as OsInstallPlan,
+  type NotYetRunnable,
   type MediaFolderOutcome,
   type MediaIdentification,
   type MediaIdentityState,
@@ -176,6 +179,31 @@ function isLeafKey(dotted: string): boolean {
 function resolvesAtRuntime(dotted: string): boolean {
   return isLeafKey(dotted) || isLeafKey(`${dotted}_one`) || isLeafKey(`${dotted}_other`);
 }
+
+/**
+ * **Every** value of a closed union, built so a new member is a *compile*
+ * error here rather than a key nobody tested (fix round 1, M2).
+ *
+ * A hand-written array is a copy of the union, and copies drift: round 3
+ * added two `HostPlacementBlock` kinds and the array below used to read
+ * `["encrypted-payload"]`, so two refusal keys and two checklist keys went
+ * untested while the test's own name still said "every". A `Record` keyed by
+ * the union has to carry a property per member or `pnpm lint` fails before
+ * any test runs, and `Object.keys` then *is* the union.
+ */
+function everyValueOf<T extends string>(members: Record<T, true>): T[] {
+  return Object.keys(members) as T[];
+}
+
+const EVERY_HOST_PLACEMENT_BLOCK = everyValueOf<HostPlacementBlock>({
+  "encrypted-payload": true,
+  "needs-fixfonts": true,
+  "needs-installer-script": true,
+});
+
+const EVERY_NOT_YET_RUNNABLE = everyValueOf<NotYetRunnable>({
+  "installer-not-measured": true,
+});
 
 describe("Phrase keys returned by the discriminated-union mappers", () => {
   it("amigainstall: every ending, every settlement, every blocker resolves", () => {
@@ -1366,10 +1394,18 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         refusal: "package-folder-missing",
         packages: ["locale-turkish"],
       },
+      // Fix round 1, M1: both fields carry display *names* now, and the
+      // Amiga-side split is its own variant because "tick that one too" is
+      // advice about a checkbox `PackagePanel` disables.
       "package-requirement-missing": {
         refusal: "package-requirement-missing",
-        package: "boingbag-39-2",
-        requires: "boingbag-39-1",
+        package: "BoingBag 3.9-2",
+        requires: "BoingBag 3.9-1",
+      },
+      "package-requirement-needs-amiga-run": {
+        refusal: "package-requirement-needs-amiga-run",
+        package: "T\u00fcrk\u00e7e catalogs (BoingBag 3.9-2)",
+        requirement: "BoingBag 3.9-2",
       },
       "package-component-missing": {
         refusal: "package-component-missing",
@@ -1388,6 +1424,13 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         paths: ["a", "b"],
       },
       // ---- M3 / ART-166: a package ART cannot place from the host at all.
+      //
+      // The mapped type above pins the *variant*; `block` has three values
+      // and one entry can only carry one of them, so
+      // `every_host_placement_block_has_a_refusal_sentence` below walks
+      // `EVERY_HOST_PLACEMENT_BLOCK` for the other two (fix round 1, M2 —
+      // two kinds arrived in round 3 and this entry did not move, so their
+      // refusal keys had no test at all).
       "package-not-placeable-on-host": {
         refusal: "package-not-placeable-on-host",
         package: "boingbag-39-1",
@@ -1402,6 +1445,24 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     };
     for (const reason of Object.values(reasonsByVariant)) {
       const phrase = osinstallRefusalPhrase(reason);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  // **M2 (fix round 1).** `package-not-placeable-on-host` carries a `block`,
+  // and the mapped type above can only pin one of its values. Round 3 added
+  // two more kinds and nothing enumerated them, so
+  // `osinstall.refusal.packageNotPlaceableOnHost.needsFixfonts` and
+  // `.needsInstallerScript` had no test asserting they are leaves in either
+  // catalogue — `chain.ts` reads the `osinstall.packages.blocked.*` keys, so
+  // `chain.test.ts` did not cover them either.
+  it("osinstall refusalPhrase: every HostPlacementBlock has its own refusal sentence", () => {
+    for (const block of EVERY_HOST_PLACEMENT_BLOCK) {
+      const phrase = osinstallRefusalPhrase({
+        refusal: "package-not-placeable-on-host",
+        package: "BoingBag 3.9-1",
+        block,
+      });
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
     }
   });
@@ -1612,12 +1673,27 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
   });
 
   // M3, ART-166: the *other* sentence about the same fact — the one the
-  // checklist row shows before the tick. Two keys, one `switch`, so a
-  // second kind of block cannot arrive with one of them missing.
+  // checklist row shows before the tick. **Every** kind, from
+  // `EVERY_HOST_PLACEMENT_BLOCK`, so a fourth is a compile error at the
+  // record rather than a silently unchecked key (fix round 1, M2: this list
+  // was written `["encrypted-payload"]` and did not move when two more
+  // arrived, while its own comment still said "a second kind of block
+  // cannot arrive with one of them missing").
   it("hostPlacementBlockKey: every HostPlacementBlock resolves", () => {
-    const blocks: HostPlacementBlock[] = ["encrypted-payload"];
-    for (const block of blocks) {
+    expect(EVERY_HOST_PLACEMENT_BLOCK.length).toBe(3);
+    for (const block of EVERY_HOST_PLACEMENT_BLOCK) {
       expect(isLeafKey(hostPlacementBlockKey(block)), hostPlacementBlockKey(block)).toBe(true);
+    }
+  });
+
+  // The third sentence a recipe-declared value produces (fix round 1, m6):
+  // an Amiga-side installer nobody has run. Two keys per reason — the chain
+  // row names the package, the panel row sits under it — so both are walked.
+  it("notYetRunnable: every reason resolves on both screens", () => {
+    for (const reason of EVERY_NOT_YET_RUNNABLE) {
+      for (const key of [notYetRunnablePanelKey(reason), notYetRunnableChainKey(reason)]) {
+        expect(isLeafKey(key), key).toBe(true);
+      }
     }
   });
 

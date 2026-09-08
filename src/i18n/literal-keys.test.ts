@@ -299,9 +299,15 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // one more, `t(hostPlacementBlockKey(pkg.hostPlacementBlock))` — the
     // sentence explaining why a package cannot be placed from the host at
     // all (ART-166). Key-only, from a `switch` over `HostPlacementBlock` in
-    // `@/lib/osinstall` that is exhaustive by its own return type, and its
-    // single value today is enumerated in `phrase-keys.test.ts`
-    // (`hostPlacementBlockKey: every HostPlacementBlock resolves`).
+    // `@/lib/osinstall` that is exhaustive by its own return type, and
+    // **all three** of its values — `encrypted-payload`, `needs-fixfonts`
+    // and `needs-installer-script` — are enumerated in `phrase-keys.test.ts`
+    // (`hostPlacementBlockKey: every HostPlacementBlock resolves`), which
+    // builds its list from a `Record` keyed by the union so a fourth kind is
+    // a compile error there. This comment said "its single value today" and
+    // stayed saying it while two more arrived (round 3 fix round 1, M2):
+    // the enumeration is the coverage this file cannot provide, so a claim
+    // about it going stale is a hole with a sentence over it.
     // 114 → 115 (ART-119 #2, debt-wave-c2): `OsInstall.tsx` gained one,
     // `t(reasonText.phrase.key, reasonText.phrase.params)`, and *lost four
     // literal ones* in the same edit — the four independent `&&` guards that
@@ -543,6 +549,16 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // unreadable-folder line beside it (`crowdedFolderLines`). Design § 6's
     // "bound the count and **name the bound**" — the number is in the
     // sentence, so it is one key with a parameter rather than a literal.
-    expect(dynamicCalls).toBe(168);
+    // 168 -> 169 (round 3 fix round 1, m6): `AmigaInstallPanel`'s
+    // not-yet-runnable row became `t(notYetRunnablePanelKey(reason))`. It was
+    // a literal key with an English `{{reason}}` interpolated into it — a
+    // Turkish frame around an English clause, and the reason is *recipe
+    // data*, not a `CoreError` sentence ART-060 lets stay English. Key-only,
+    // from a `switch` over `NotYetRunnable` in `@/lib/osinstall` that is
+    // exhaustive by its own return type, and every one of its values is
+    // enumerated in `phrase-keys.test.ts` (`notYetRunnable: every reason
+    // resolves on both screens`) from a `Record` keyed by the union, so a
+    // second reason is a compile error there rather than an untested key.
+    expect(dynamicCalls).toBe(169);
   });
 });

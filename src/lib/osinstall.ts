@@ -210,6 +210,21 @@ export type HostPlacementBlock =
   | "needs-fixfonts"
   | "needs-installer-script";
 
+/**
+ * Why a declared Amiga-side installer is not one ART will start. Mirrors
+ * `core::osinstall::package::NotYetRunnable`.
+ *
+ * A union of string literals rather than a `string`, for the reason
+ * {@link HostPlacementBlock} is one: every place that has to say something
+ * about it fails to compile rather than rendering a blank explanation when a
+ * second kind arrives.
+ *
+ * `"installer-not-measured"` is BoingBags 3&4: it installs through an
+ * Installer *script*, and nobody has measured whether that script finishes
+ * without a person at the window.
+ */
+export type NotYetRunnable = "installer-not-measured";
+
 export type RefusalReason =
   | { refusal: "media-missing"; component: string; volume_name: string }
   | { refusal: "media-path-missing"; component: string; media: string; path: string }
@@ -264,7 +279,25 @@ export type RefusalReason =
   // wrote it, same as the seven above.
   | { refusal: "package-unknown"; package: string }
   | { refusal: "package-folder-missing"; packages: string[] }
+  // **Both fields are display *names*, not ids** (fix round 1, M1): the
+  // sentence renders them verbatim, and `locale-turkish` is ART's own
+  // bookkeeping.
   | { refusal: "package-requirement-missing"; package: string; requires: string }
+  /**
+   * The required package is one that **runs on the Amiga**, so *"tick that
+   * one too"* is advice about a checkbox `PackagePanel` disables.
+   *
+   * Correcting `locale-turkish`'s `requires` to what the material states
+   * made it need BoingBag 3.9-2 — `encrypted-payload` blocked, and
+   * untickable by design — so the owner's own Turkish catalogue pack became
+   * unaddable with an instruction they could not follow. This variant names
+   * the step that can actually do it.
+   */
+  | {
+      refusal: "package-requirement-needs-amiga-run";
+      package: string;
+      requirement: string;
+    }
   | { refusal: "package-component-missing"; package: string; component: string }
   | { refusal: "package-archive-missing"; package: string; media: string }
   | {
@@ -1313,8 +1346,11 @@ export interface PackageSummary {
    * installer for this" is a fact about the recipe, and "nobody has run this
    * one unattended yet" is a fact about what has been measured. §10 asks for
    * the unready action to be registered, not hidden.
+   *
+   * A **value**, not prose (fix round 1, m6): it shipped as free English
+   * recipe text interpolated into a translated frame.
    */
-  notYetRunnable: string | null;
+  notYetRunnable: NotYetRunnable | null;
   /** Every entry name this package's own archive carries that `safe_join`
    *  refused — a `..`, an absolute path, a Windows prefix — exactly as the
    *  archive spelled it, and `[]` for the ordinary archive. Shown beside
@@ -1600,7 +1636,7 @@ export type ChainState =
   | { state: "missing"; expected: string[] }
   | { state: "not-needed"; supersededBy: string }
   | { state: "refused"; reason: RefusedBecause }
-  | { state: "not-yet-runnable"; reason: string };
+  | { state: "not-yet-runnable"; reason: NotYetRunnable };
 
 /** Why a chain row is refused. A value, never a sentence — this file turns it
  *  into one. Mirrors `chain::RefusedBecause`. */
@@ -1635,7 +1671,9 @@ export interface ChainRow {
   /** The package's own name, or the medium's (ART-060). */
   name: string;
   state: ChainState;
-  facts: SentenceFacts;
+  /** The facts the row's sentence needs beside its state. Named as the brief
+   *  named it (fix round 1, m5). */
+  sentenceFacts: SentenceFacts;
 }
 
 /** How much of the chain is done. Mirrors `chain::ChainSummary`.
@@ -2512,6 +2550,11 @@ export function refusalPhrase(reason: RefusalReason): Phrase {
         key: "osinstall.refusal.packageFolderMissing",
         params: { packages: reason.packages.join(", ") },
       };
+    case "package-requirement-needs-amiga-run":
+      return {
+        key: "osinstall.refusal.packageRequirementNeedsAmigaRun",
+        params: { package: reason.package, requirement: reason.requirement },
+      };
     case "package-requirement-missing":
       return {
         key: "osinstall.refusal.packageRequirementMissing",
@@ -2575,6 +2618,33 @@ export function hostPlacementBlockSuffix(block: HostPlacementBlock): string {
  *  no parameters; see [`hostPlacementBlockSuffix`]. */
 export function hostPlacementBlockKey(block: HostPlacementBlock): string {
   return `osinstall.packages.blocked.${hostPlacementBlockSuffix(block)}`;
+}
+
+/**
+ * The catalogue-key fragment naming one {@link NotYetRunnable} — the single
+ * `switch` both sentences about it are built from, exactly as
+ * {@link hostPlacementBlockSuffix} is for a block (fix round 1, m6).
+ *
+ * Two keys per reason, not one shared sentence: the chain row names the
+ * package (it is one line in a list of nine), while the Amiga-side panel's
+ * row sits directly under the package's own name and must not repeat it.
+ */
+export function notYetRunnableSuffix(reason: NotYetRunnable): string {
+  switch (reason) {
+    case "installer-not-measured":
+      return "installerNotMeasured";
+  }
+}
+
+/** The i18n key for the Amiga-side panel's own disabled row — no package
+ *  name, because it renders under one. */
+export function notYetRunnablePanelKey(reason: NotYetRunnable): string {
+  return `osinstall.amigaInstall.package.notYetRunnable.${notYetRunnableSuffix(reason)}`;
+}
+
+/** The i18n key for the chain row's sentence — takes `{{name}}`. */
+export function notYetRunnableChainKey(reason: NotYetRunnable): string {
+  return `osinstall.chain.notYetRunnable.${notYetRunnableSuffix(reason)}`;
 }
 
 /** Whether a plan's own refusals include the one that means "the paired

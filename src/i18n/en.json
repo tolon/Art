@@ -2199,6 +2199,7 @@
       "packageUnknown": "\"{{package}}\" is not a package ART ships a recipe for — it cannot be applied. Untick it; this is usually a choice saved by an older version of ART.",
       "packageFolderMissing": "Packages were chosen ({{packages}}), but no update packages folder was given — choose the folder holding their archives.",
       "packageRequirementMissing": "\"{{package}}\" needs \"{{requires}}\" applied first — tick that one too, or untick \"{{package}}\" on its own.",
+      "packageRequirementNeedsAmigaRun": "\"{{package}}\" needs \"{{requirement}}\" installed first, and \"{{requirement}}\" is run on the Amiga from the Amiga-side step — it cannot be ticked on this list. Do that one there first, then add \"{{package}}\" here.",
       "packageComponentMissing": "\"{{package}}\" needs the \"{{component}}\" component, and this tree was not built with it. Untick \"{{package}}\", or build a new tree with \"{{component}}\" switched on and add \"{{package}}\" to that one instead.",
       "packageArchiveMissing": "No archive in the update packages folder carries \"{{media}}\", the media \"{{package}}\" needs — put that archive in the folder and try again.",
       "packageArchiveAmbiguous": "More than one archive in the update packages folder carries the media name {{media}} that \"{{package}}\" needs: {{paths}}. Remove all but the one you want.",
@@ -2296,7 +2297,9 @@
       "missingUnnamed": "{{name}} is not in the folders you named.",
       "notNeeded": "{{name}} is not needed — {{supersededBy}} already contains it.",
       "refusedAmbiguous": "{{count}} files here could be {{name}}, and ART will not choose between them: {{candidates}}. Pick the one you mean.",
-      "notYetRunnable": "{{name}} — ART has never run this one: {{reason}}. It is listed rather than hidden, so you can see the recipe exists.",
+      "notYetRunnable": {
+        "installerNotMeasured": "{{name}} — ART has never run this one: it installs through an Installer script, and nobody has measured whether that script finishes without somebody at the window. It is listed rather than hidden, so you can see the recipe exists."
+      },
       "onAmiga": "runs on the Amiga",
       "onWindows": "placed from Windows",
       "setLine": "{{release}} updates — {{installed}} of {{total}} applied",
@@ -2566,7 +2569,9 @@
         "label": "Package",
         "needsFolder": "Choose the update packages folder above to see which packages ART can run on the Amiga.",
         "none": "None of the packages ART ships carries an installer it can run on the Amiga.",
-        "notYetRunnable": "Not ready yet: {{reason}}. ART shows it here rather than hiding it, so you know the recipe exists and what is missing before it can be run.",
+        "notYetRunnable": {
+          "installerNotMeasured": "Not ready yet: it installs through an Installer script, and nobody has measured whether that script finishes without somebody at the window. ART shows it here rather than hiding it, so you know the recipe exists and what is missing before it can be run."
+        },
         "unavailableHint": "ART could not read the shipped package list."
       },
       "archive": {

@@ -2199,6 +2199,7 @@
       "packageUnknown": "\"{{package}}\", ART'ın tarifini gönderdiği bir paket değil — uygulanamaz. Tikini kaldır; bu genelde ART'ın eski bir sürümünün kaydettiği bir seçimdir.",
       "packageFolderMissing": "Paketler seçildi ({{packages}}), ama bir güncelleme paketleri klasörü verilmedi — arşivlerinin bulunduğu klasörü seç.",
       "packageRequirementMissing": "\"{{package}}\", önce \"{{requires}}\"in uygulanmasına ihtiyaç duyuyor — onu da tikle, ya da \"{{package}}\"in tikini tek başına kaldır.",
+      "packageRequirementNeedsAmigaRun": "\"{{package}}\" için önce \"{{requirement}}\" kurulmuş olmalı ve \"{{requirement}}\" Amiga tarafındaki adımdan Amiga'da çalıştırılır — bu listeden tiklenemez. Önce onu orada yap, sonra \"{{package}}\" paketini buraya ekle.",
       "packageComponentMissing": "\"{{package}}\", \"{{component}}\" bileşenine ihtiyaç duyuyor, ve bu ağaç onunla kurulmadı. \"{{package}}\"in tikini kaldır, ya da \"{{component}}\" açıkken yeni bir ağaç kur ve \"{{package}}\"i o ağaca ekle.",
       "packageArchiveMissing": "Güncelleme paketleri klasöründe, \"{{package}}\"in ihtiyaç duyduğu \"{{media}}\" medyasını taşıyan bir arşiv yok — o arşivi klasöre koy ve yeniden dene.",
       "packageArchiveAmbiguous": "Güncelleme paketleri klasöründe \"{{package}}\"in ihtiyaç duyduğu {{media}} medya adını taşıyan birden fazla arşiv var: {{paths}}. İstediğin biri dışında hepsini kaldır.",
@@ -2296,7 +2297,9 @@
       "missingUnnamed": "{{name}} adını verdiğin klasörlerde yok.",
       "notNeeded": "{{name}} gerekmiyor — {{supersededBy}} bunu zaten içeriyor.",
       "refusedAmbiguous": "Buradaki {{count}} dosya {{name}} olabilir ve ART aralarında seçim yapmaz: {{candidates}}. Hangisini kastettiğini sen seç.",
-      "notYetRunnable": "{{name}} — ART bunu hiç çalıştırmadı: {{reason}}. Gizlemek yerine listeleniyor, böylece tarifin var olduğunu görebilirsin.",
+      "notYetRunnable": {
+        "installerNotMeasured": "{{name}} — ART bunu hiç çalıştırmadı: bir Installer betiği ile kuruluyor ve o betiğin pencerede biri olmadan bitip bitmediğini kimse ölçmedi. Gizlemek yerine listeleniyor, böylece tarifin var olduğunu görebilirsin."
+      },
       "onAmiga": "Amiga'da çalışır",
       "onWindows": "Windows'tan yerleştirilir",
       "setLine": "{{release}} güncellemeleri — {{total}} satırın {{installed}} tanesi uygulandı",
@@ -2566,7 +2569,9 @@
         "label": "Paket",
         "needsFolder": "ART'ın Amiga tarafında hangi paketleri çalıştırabildiğini görmek için yukarıdan güncelleme paketleri klasörünü seçin.",
         "none": "ART'ın getirdiği paketlerin hiçbiri Amiga tarafında çalıştırabileceği bir kurucu taşımıyor.",
-        "notYetRunnable": "Henüz hazır değil: {{reason}}. ART bunu gizlemek yerine burada gösteriyor, böylece tarifin var olduğunu ve çalıştırılabilmesi için neyin eksik olduğunu biliyorsun.",
+        "notYetRunnable": {
+          "installerNotMeasured": "Henüz hazır değil: bir Installer betiği ile kuruluyor ve o betiğin pencerede biri olmadan bitip bitmediğini kimse ölçmedi. ART bunu gizlemek yerine burada gösteriyor, böylece tarifin var olduğunu ve çalıştırılabilmesi için neyin eksik olduğunu biliyorsun."
+        },
         "unavailableHint": "ART, birlikte gelen paket listesini okuyamadı."
       },
       "archive": {

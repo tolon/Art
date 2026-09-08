@@ -94,6 +94,7 @@ import {
 } from "@/lib/amigainstall";
 import {
   fileName,
+  notYetRunnablePanelKey,
   osinstallPackages,
   osinstallSlots,
   type InstallRelease,
@@ -1200,9 +1201,7 @@ export function AmigaInstallPanel({
                 data-testid="amiga-package-not-yet-runnable"
                 style={{ fontSize: 11, marginTop: 2 }}
               >
-                {t("osinstall.amigaInstall.package.notYetRunnable", {
-                  reason: pkg.notYetRunnable,
-                })}
+                {t(notYetRunnablePanelKey(pkg.notYetRunnable))}
               </div>
             )}
           </span>

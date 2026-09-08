@@ -96,7 +96,7 @@ const PACKAGES: PackageSummary[] = [
     hostPlacementBlock: "encrypted-payload",
     amigaInstallable: true,
     refusedNames: [],
-  notYetRunnable: null,
+    notYetRunnable: null,
   },
   {
     id: "boingbag-39-2",
@@ -107,7 +107,7 @@ const PACKAGES: PackageSummary[] = [
     hostPlacementBlock: "encrypted-payload",
     amigaInstallable: true,
     refusedNames: [],
-  notYetRunnable: null,
+    notYetRunnable: null,
   },
   {
     id: "locale-turkish",
@@ -118,7 +118,7 @@ const PACKAGES: PackageSummary[] = [
     hostPlacementBlock: null,
     amigaInstallable: false,
     refusedNames: [],
-  notYetRunnable: null,
+    notYetRunnable: null,
   },
 ];
 
@@ -469,7 +469,7 @@ describe("before anything opens", () => {
         hostPlacementBlock: "needs-installer-script",
         amigaInstallable: true,
         refusedNames: [],
-        notYetRunnable: "the Installer script has not been run unattended by ART",
+        notYetRunnable: "installer-not-measured",
       },
     ] satisfies PackageSummary[]);
 
@@ -482,13 +482,14 @@ describe("before anything opens", () => {
     expect(radios[0].hasAttribute("disabled")).toBe(false);
     expect(radios[2].hasAttribute("disabled")).toBe(true);
 
-    expect(
-      screen.getByTestId("amiga-package-not-yet-runnable").textContent
-    ).toBe(
-      i18n.t("osinstall.amigaInstall.package.notYetRunnable", {
-        reason: "the Installer script has not been run unattended by ART",
-      })
+    // The whole sentence comes from the catalogue (fix round 1, m6) — no
+    // English clause is interpolated into a translated frame, so this is a
+    // real translated sentence in both languages rather than half of one.
+    const sentence = screen.getByTestId("amiga-package-not-yet-runnable").textContent;
+    expect(sentence).toBe(
+      i18n.t("osinstall.amigaInstall.package.notYetRunnable.installerNotMeasured")
     );
+    expect(sentence).not.toContain("installer-not-measured");
   });
 
   it("will not let the run be confirmed until a preview exists", () => {

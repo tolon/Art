@@ -40,7 +40,7 @@ function row(over: Partial<ChainRow> & { state: ChainState }): ChainRow {
     packageId: "boingbag-39-1",
     slotId: "package:boingbag-39-1",
     name: "BoingBag 3.9-1",
-    facts: { file: null, runsOnAmiga: true },
+    sentenceFacts: { file: null, runsOnAmiga: true },
     ...over,
   };
 }
@@ -51,7 +51,7 @@ const EVERY_STATE: ChainRow[] = [
   row({
     packageId: "boingbag-39-2",
     name: "BoingBag 3.9-2",
-    facts: { file: "BoingBag39-2.lha", runsOnAmiga: true },
+    sentenceFacts: { file: "BoingBag39-2.lha", runsOnAmiga: true },
     state: { state: "ready" },
   }),
   row({
@@ -62,13 +62,13 @@ const EVERY_STATE: ChainRow[] = [
   row({
     packageId: "locale-39",
     name: "Locale 3.9",
-    facts: { file: null, runsOnAmiga: false },
+    sentenceFacts: { file: null, runsOnAmiga: false },
     state: { state: "missing", expected: ["Locale3_9.lha"] },
   }),
   row({
     packageId: "euro-update",
     name: "Euro-Update",
-    facts: { file: null, runsOnAmiga: null },
+    sentenceFacts: { file: null, runsOnAmiga: null },
     state: { state: "not-needed", supersededBy: "BoingBags 3&4" },
   }),
   row({
@@ -82,7 +82,7 @@ const EVERY_STATE: ChainRow[] = [
   row({
     packageId: "boingbags-39-3-4",
     name: "BoingBags 3&4",
-    state: { state: "not-yet-runnable", reason: "nobody has run it" },
+    state: { state: "not-yet-runnable", reason: "installer-not-measured" },
   }),
 ];
 
@@ -110,7 +110,7 @@ describe("chainLines", () => {
     const rows: ChainRow[] = [
       ...EVERY_STATE,
       // The two fallbacks the ordinary fixtures do not reach.
-      row({ state: { state: "ready" }, facts: { file: null, runsOnAmiga: true } }),
+      row({ state: { state: "ready" }, sentenceFacts: { file: null, runsOnAmiga: true } }),
       row({ state: { state: "missing", expected: [] } }),
       // And the other refusal, which borrows the Packages checklist's own
       // sentence rather than writing a second one.
@@ -213,9 +213,9 @@ describe("chainLines", () => {
   // Three answers to "where does this happen", and the third is silence.
   it("keeps 'on the Amiga', 'placed from Windows' and 'neither' apart", () => {
     const lines = chainLines([
-      row({ facts: { file: null, runsOnAmiga: true }, state: { state: "ready" } }),
-      row({ facts: { file: null, runsOnAmiga: false }, state: { state: "ready" } }),
-      row({ facts: { file: null, runsOnAmiga: null }, state: { state: "ready" } }),
+      row({ sentenceFacts: { file: null, runsOnAmiga: true }, state: { state: "ready" } }),
+      row({ sentenceFacts: { file: null, runsOnAmiga: false }, state: { state: "ready" } }),
+      row({ sentenceFacts: { file: null, runsOnAmiga: null }, state: { state: "ready" } }),
     ]);
     expect(lines.map((line) => line.where?.key ?? null)).toEqual([
       "osinstall.chain.onAmiga",
