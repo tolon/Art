@@ -37,6 +37,7 @@ import {
   firstUntaggedFolder,
   isBuildKind,
   seedCardImage,
+  seedPackagesChosen,
   seedPackagesFolder,
   seedRom,
   seedTreeRoot,
@@ -55,7 +56,7 @@ import {
   type TreeChoice,
 } from "@/lib/buildSession";
 import { isInstallRelease, type InstallRelease } from "@/lib/osinstall";
-import { isFlag, isTextList, recall, recallInto } from "@/lib/remembered";
+import { isFlag, recall, recallInto } from "@/lib/remembered";
 import { useRemembered, useRememberedShape } from "@/lib/useRemembered";
 import { useSettingsStore } from "@/stores/settingsStore";
 
@@ -165,11 +166,11 @@ export function useBuildSession(): BuildSessionApi {
   // user whose archives live apart from their disks must keep *their* folder
   // for the two package panels while those panels each take one.
   const [packagesShape, setPackagesShape] = useRememberedShape<PackageChoice>(
-    SESSION_KEYS.packages,
+    SESSION_KEYS.packages(release),
     PACKAGE_SPEC,
     {
-      folder: seedPackagesFolder(bag),
-      chosen: recall(bag, LEGACY_KEYS.packagesChosen, isTextList, DEFAULT_PACKAGES.chosen),
+      folder: seedPackagesFolder(bag, release),
+      chosen: seedPackagesChosen(bag, release),
     }
   );
 
@@ -224,17 +225,22 @@ export function useBuildSession(): BuildSessionApi {
       // `null` stays `null` here rather than falling back to a legacy key and
       // resurrecting a folder the user has already had removed.
       const latest = useSettingsStore.getState().settings.remembered;
-      const stored = recallInto<PackageChoice>(latest, SESSION_KEYS.packages, PACKAGE_SPEC, {
-        folder: seedPackagesFolder(latest),
-        chosen: DEFAULT_PACKAGES.chosen,
-      }).folder;
+      const stored = recallInto<PackageChoice>(
+        latest,
+        SESSION_KEYS.packages(release),
+        PACKAGE_SPEC,
+        {
+          folder: seedPackagesFolder(latest, release),
+          chosen: DEFAULT_PACKAGES.chosen,
+        }
+      ).folder;
       if (!stored) return;
       const wanted = canonicalFolder(stored);
       if (!folders.some((entry) => canonicalFolder(entry.path) === wanted)) {
         setPackagesShape({ folder: null });
       }
     },
-    [setMaterialShape, setPackagesShape]
+    [release, setMaterialShape, setPackagesShape]
   );
 
   // Reads the store rather than the rendered `material`, exactly as

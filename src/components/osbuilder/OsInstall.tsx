@@ -126,7 +126,10 @@ import {
   type MediaScanResult,
   type OsInstallResult,
   type PlanResult,
+  type SlotOverride,
 } from "@/lib/osinstall";
+import { slotOverrides } from "@/lib/amigainstall";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
 import { isFlag, isText, isTextList, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
@@ -788,7 +791,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   /**
    * **The ROM half of the same offer** (fix round 1, F6). `Shared\rom` is the
    * one folder that answers the Kickstart field on this very step, and the
-   * command was already returning it while nothing consumed it %s a value on
+   * command was already returning it while nothing consumed it — a value on
    * the wire that nothing reads is a later reader's wrong assumption.
    *
    * Its own dismissal, because it is its own suggestion: somebody who has a
@@ -1074,6 +1077,25 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    * the same cold cache and put the same wrong sentence back.
    */
   const identifiedPass = identifyNonce + (mediaIdentity.kind === "identified" ? 1 : 0);
+
+  /**
+   * **The archives the user picked by hand on the Amiga-side step** (design
+   * § 3.4; round 2 review, M5).
+   *
+   * This step is the one place that can see both: the readout below and the
+   * remembered keys the panel writes. Without them the two screens said
+   * opposite things about one artefact — *"not in the folders you named"*
+   * here about a file the run over there was going to use.
+   *
+   * A string dependency rather than the array, for `MaterialReadout`'s own
+   * reason: this effect chain starts disk work (ART-178/ART-195).
+   */
+  const remembered = useSettingsStore((s) => s.settings.remembered);
+  const overridesKey = JSON.stringify(slotOverrides(remembered));
+  const materialOverrides = useMemo(
+    () => JSON.parse(overridesKey) as SlotOverride[],
+    [overridesKey]
+  );
 
   // Re-identify whatever ROM was remembered, for the same reason.
   useEffect(() => {
@@ -1933,6 +1955,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           treeRoot={packagesTreeRoot}
           rom={romPath}
           identifiedPass={identifiedPass}
+          overrides={materialOverrides}
         />
 
         {/*

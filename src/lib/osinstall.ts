@@ -1368,6 +1368,10 @@ export interface Slot {
   requires: string[];
   /** Reserved for round 3; empty today. */
   supersededBy: string[];
+  /** Directories a disc filling this slot must carry at its root — design
+   *  § 3.6's structural check, as data on the artefact map. Empty for
+   *  everything ART records no expectation for. */
+  expectsDirectories: string[];
 }
 
 /**
@@ -1452,6 +1456,17 @@ export interface SlotState {
    *  statement about itself, e.g. `"Updater 45.15"`. A measurement, not a
    *  sentence: the words go in the catalogue. */
   notNeeded: string | null;
+  /**
+   * The first directory {@link Slot.expectsDirectories} names that the disc
+   * filling this slot does **not** carry (design § 3.6).
+   *
+   * *Matched but incomplete* is a different sentence from *not found*: a
+   * disc ART recognises whose root is missing `Emergency-Boot` is a
+   * re-master or a partial copy, and telling somebody it is absent would
+   * send them looking for a file sitting right there. `null` when ART has
+   * nothing to check or everything expected is there.
+   */
+  incomplete: string | null;
 }
 
 /**
@@ -1478,6 +1493,11 @@ export interface SlotReport {
    *  nothing": a remembered path on a drive nobody plugged in must not make
    *  the disks in the folder beside it read as missing. */
   unreadableFolders: string[];
+  /** Folders holding more archives than ART opens in one pass, as
+   *  `[folder, bound]` — design § 6's "bound the count and **name the
+   *  bound**". An artefact ART never reached must not read as one that is
+   *  not there, so the readout says so and quotes the number. */
+  crowdedFolders: [string, number][];
 }
 
 /**
@@ -1498,15 +1518,34 @@ export async function osinstallSlots(
   release: InstallRelease,
   folders: string[],
   tree?: string | null,
-  rom?: string | null
+  rom?: string | null,
+  /**
+   * The files the user picked by hand, as `[slot id, path]` — design § 3.4's
+   * *"a file the user picked by hand wins over the slot, and the readout says
+   * chosen by you for it"*.
+   *
+   * An override outranks every rank ART has: it is not an identification ART
+   * made and cannot be compared with one. Without them the readout said *"not
+   * in the folders you named"* about a file the run was going to use, while
+   * the Amiga-side panel said the opposite — two screens, one artefact.
+   *
+   * An overlay's entry may name `overlay:<packageId>` rather than a
+   * particular drawer; the screen holding these has one *"update archive"*
+   * field per package.
+   */
+  overrides?: SlotOverride[]
 ): Promise<SlotReport> {
   return invoke<SlotReport>("osinstall_slots", {
     release,
     folders,
     tree: tree || null,
     rom: rom || null,
+    overrides: overrides && overrides.length > 0 ? overrides : null,
   });
 }
+
+/** One file the user picked by hand, as `osinstall_slots` takes it. */
+export type SlotOverride = [slot: string, path: string];
 
 /**
  * What writing the drop-folder guide did. Mirrors

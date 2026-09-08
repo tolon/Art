@@ -41,9 +41,11 @@ import {
   osinstallWriteMaterialGuide,
   type GuideOutcome,
   type InstallRelease,
+  type SlotOverride,
   type SlotReport,
 } from "@/lib/osinstall";
 import {
+  crowdedFolderLines,
   readoutRunningLine,
   setLine,
   slotLines,
@@ -68,10 +70,19 @@ function rowClass(kind: SlotLineKind): string {
       return "badge badge-ok";
     case "guessed-by-filename":
     case "ambiguous":
+    // Matched, and the copy is short: a warning about a file that **is**
+    // there, never the error colour a missing artefact gets (L6).
+    case "incomplete":
       return "badge badge-warn";
     case "not-found":
     case "chosen-missing":
       return "badge badge-err";
+    // **Neither of the two above** (M1, M2): a slot `summarize` counts found
+    // must not be drawn as a problem, and a Kickstart nobody has chosen yet
+    // is a question this step is still asking rather than a fault.
+    case "installed-elsewhere":
+      return "badge badge-ok";
+    case "rom-not-chosen":
     case "not-needed":
       return "badge badge-muted";
   }
@@ -85,13 +96,17 @@ function rowMark(kind: SlotLineKind): string {
     case "found-by-hash":
     case "found-by-name":
     case "chosen":
+    case "installed-elsewhere":
       return "✔";
     case "guessed-by-filename":
     case "ambiguous":
+    case "incomplete":
       return "!";
     case "not-found":
     case "chosen-missing":
       return "✖";
+    case "rom-not-chosen":
+      return "?";
     case "not-needed":
       return "—";
   }
@@ -126,6 +141,17 @@ export interface MaterialReadoutProps {
    * already dropped by the cancellation below.
    */
   identifiedPass: number;
+  /**
+   * The files the user picked by hand, as `[slot id, path]` — design § 3.4.
+   *
+   * **Without these the readout contradicted the panel** (round 2 review,
+   * M5): a user who chose BoingBag 3.9-1's archive on the Amiga-side step and
+   * came back one step read *"not in the folders you named"* about the file
+   * the run was going to use. They are the caller's because the keys are the
+   * panel's (`amigaInstall.archive.<packageId>`), and the caller is the one
+   * screen that can see both.
+   */
+  overrides?: SlotOverride[];
 }
 
 export function MaterialReadout({
@@ -134,6 +160,7 @@ export function MaterialReadout({
   treeRoot,
   rom,
   identifiedPass,
+  overrides = [],
 }: MaterialReadoutProps) {
   const { t, i18n } = useTranslation();
   const [report, setReport] = useState<SlotReport | null>(null);
@@ -175,6 +202,12 @@ export function MaterialReadout({
   // effect starts disk work (ART-178/ART-195, measured at 2,149 preview jobs
   // in one session).
   const foldersKey = folders.join("\n");
+  // The same rule for the overrides: a primitive, so an equal list is the
+  // same value to React and this effect does not restart disk work on every
+  // render (ART-178/ART-195).
+  const overridesKey = overrides
+    .map(([slot, path]) => `${slot}\t${path}`)
+    .join("\n");
 
   useEffect(() => {
     const list = foldersKey ? foldersKey.split("\n") : [];
@@ -196,7 +229,15 @@ export function MaterialReadout({
     // look current and are not. Nothing is a truer readout than stale
     // something.
     setReport(null);
-    osinstallSlots(release, list, treeRoot, rom)
+    osinstallSlots(
+      release,
+      list,
+      treeRoot,
+      rom,
+      overridesKey
+        ? overridesKey.split("\n").map((line) => line.split("\t") as SlotOverride)
+        : []
+    )
       .then((answer) => {
         if (cancelled) return;
         setReport(answer);
@@ -220,13 +261,14 @@ export function MaterialReadout({
     // re-rendered in the new language by `errorText`'s own key when it is one
     // ART recognises.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [release, foldersKey, treeRoot, rom, identifiedPass]);
+  }, [release, foldersKey, treeRoot, rom, identifiedPass, overridesKey]);
 
   if (folders.length === 0) return null;
 
   const rows = report ? slotLines(report.states) : [];
   const set = report ? setLine(report.summary, report.states) : null;
   const unreadable = report ? unreadableFolderLines(report.unreadableFolders) : [];
+  const crowded = report ? crowdedFolderLines(report.crowdedFolders) : [];
 
   return (
     <div data-testid="material-readout" style={{ margin: "0 0 12px" }}>
@@ -302,6 +344,25 @@ export function MaterialReadout({
           key={line.folder}
           className="badge badge-err"
           data-testid="material-readout-unreadable"
+          style={{ fontSize: 11, margin: "4px 0 0", display: "inline-block" }}
+          title={line.folder}
+        >
+          {t(line.phrase.key, line.phrase.params)}
+        </p>
+      ))}
+
+      {/*
+        **A folder ART stopped reading, and the number it stopped at** (design
+        § 6, round 2 review L7). A warning rather than an error: everything ART
+        *did* read is true, and what this says is that the rows above are not
+        the whole of that folder. Silence here would make an artefact ART
+        never reached read as an artefact that is not there.
+      */}
+      {crowded.map((line) => (
+        <p
+          key={line.folder}
+          className="badge badge-warn"
+          data-testid="material-readout-crowded"
           style={{ fontSize: 11, margin: "4px 0 0", display: "inline-block" }}
           title={line.folder}
         >

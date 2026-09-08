@@ -31,6 +31,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+import type { SlotOverride } from "@/lib/osinstall";
 import type { Phrase } from "@/lib/phrase";
 
 // ---------------------------------------------------------------------------
@@ -511,6 +512,47 @@ export function overlayAdvicePhrase(preview: AmigaInstallPreview): Phrase | null
  * Empty means every one of the three things ART cannot supply itself (the
  * user's own Kickstart, the package's own archives, an emulator) is there.
  */
+/**
+ * Every archive the user picked by hand, as `osinstall_slots` takes them —
+ * design § 3.4 (round 2 whole-branch review, M5).
+ *
+ * **The readout could not see these, and said the opposite of the panel.** A
+ * user who chose BoingBag 3.9-1's archive on the Amiga-side step and stepped
+ * back one read *"BoingBag 3.9-1 is not in the folders you named"* about a
+ * file ART was holding a path for and would use in the run. The keys are the
+ * panel's own (`amigaInstall.archive.<packageId>` and `.overlayArchive.…`,
+ * ART-277); this reads them straight out of the remembered bag so the one
+ * screen that can see both — the step — can hand them over.
+ *
+ * An overlay is named as `overlay:<packageId>` rather than by drawer: the
+ * panel has one *"update archive"* field per package, not one per overlay,
+ * and the resolver matches an overlay slot by that prefix. See
+ * `slots::Override`.
+ *
+ * A path that is not there is **not** filtered out here: whether a chosen
+ * file has gone is a fact about the disk, the command checks it, and
+ * `chosen-missing` is its own ending precisely so the user is told rather
+ * than quietly dropped back to whatever ART found.
+ */
+export function slotOverrides(remembered: unknown): SlotOverride[] {
+  const bag =
+    typeof remembered === "object" && remembered !== null
+      ? (remembered as Record<string, unknown>)
+      : {};
+  const out: SlotOverride[] = [];
+  for (const [key, value] of Object.entries(bag)) {
+    if (typeof value !== "string" || value === "") continue;
+    if (key.startsWith("amigaInstall.archive.")) {
+      out.push([`package:${key.slice("amigaInstall.archive.".length)}`, value]);
+    } else if (key.startsWith("amigaInstall.overlayArchive.")) {
+      out.push([`overlay:${key.slice("amigaInstall.overlayArchive.".length)}`, value]);
+    }
+  }
+  // Sorted, so two equal bags give one string to `MaterialReadout`'s own
+  // primitive dependency and the readout does not re-ask on a key reorder.
+  return out.sort((a, b) => a[0].localeCompare(b[0]));
+}
+
 export function readinessBlockers(
   preview: AmigaInstallPreview,
   /**

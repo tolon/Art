@@ -196,6 +196,7 @@ function slot(over: Partial<SlotState["slot"]> = {}): SlotState["slot"] {
     position: 1,
     requires: [],
     supersededBy: [],
+    expectsDirectories: [],
     ...over,
   };
 }
@@ -212,6 +213,7 @@ function slotState(
     chosenMissing: null,
     blockedBy: [],
     notNeeded: null,
+    incomplete: null,
     ...rest,
   };
 }
@@ -237,6 +239,7 @@ function slotReport(states: SlotState[]): SlotReport {
       optionalFound: states.filter((state) => state.found !== null).length,
     },
     unreadableFolders: [],
+    crowdedFolders: [],
   };
 }
 

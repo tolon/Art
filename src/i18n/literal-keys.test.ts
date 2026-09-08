@@ -538,6 +538,11 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // sentence, which is the evidence beside each option rather than two
     // paths and nothing else. Resolved by `phrase-keys.test.ts` through
     // `slotLines`/`candidateLines`.
-    expect(dynamicCalls).toBe(167);
+    // 167 -> 168 (round 2 whole-branch review, L7): `MaterialReadout`'s
+    // crowded-folder line, the same `Phrase`-from-`src/lib` pattern as the
+    // unreadable-folder line beside it (`crowdedFolderLines`). Design § 6's
+    // "bound the count and **name the bound**" — the number is in the
+    // sentence, so it is one key with a parameter rather than a literal.
+    expect(dynamicCalls).toBe(168);
   });
 });

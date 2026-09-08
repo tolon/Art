@@ -330,6 +330,53 @@ describe("a folder taken out of the material list is out of the build (F10)", ()
     expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\second");
     const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
     expect(bag["buildSession.packages"]).toBeUndefined();
+    expect(bag["buildSession.packages.AmigaOS 3.2"]).toBeUndefined();
+  });
+
+  /// **M3, the whole-branch review's own reproduction.** `material` is per
+  /// release and `packages.folder` was global, so the guard above compared a
+  /// global value against *one release's* list: build 3.9 with `E:\archives`
+  /// stored, switch to 3.2.2 (whose list seeds that folder too), remove it
+  /// there because it holds no 3.2 media, and 3.9's archives folder is
+  /// silently repointed at its disks folder. F1's defect through F1's fix.
+  it("leaves another release's archives folder alone when a folder is removed here", async () => {
+    seed({
+      "buildSession.release": "AmigaOS 3.9",
+      "buildSession.material.AmigaOS 3.9": {
+        folders: [
+          { path: "E:\\disks", layer: null },
+          { path: "E:\\archives", layer: null },
+        ],
+      },
+      "buildSession.packages.AmigaOS 3.9": { folder: "E:\\archives", chosen: [] },
+      "buildSession.material.AmigaOS 3.2.2": {
+        folders: [{ path: "E:\\archives", layer: null }],
+      },
+      "buildSession.packages.AmigaOS 3.2.2": { folder: "E:\\archives", chosen: [] },
+    });
+    const { unmount } = render(<MaterialProbe />);
+    expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\archives");
+
+    // Building 3.2.2, and its list loses the archives folder.
+    useSettingsStore.setState((s) => ({
+      settings: {
+        ...s.settings,
+        remembered: {
+          ...(s.settings.remembered as Record<string, unknown>),
+          "buildSession.release": "AmigaOS 3.2.2",
+        },
+      },
+    }));
+    unmount();
+    render(<MaterialProbe />);
+    await userEvent.click(screen.getByText("remove archives"));
+
+    const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
+    expect((bag["buildSession.packages.AmigaOS 3.2.2"] as { folder?: string }).folder).toBeNull();
+    // **3.9's is untouched**, and the user changed nothing about 3.9.
+    expect((bag["buildSession.packages.AmigaOS 3.9"] as { folder?: string }).folder).toBe(
+      "E:\\archives"
+    );
   });
 
   /// A folder the removal did not name keeps its stored value. The guard that
@@ -355,7 +402,11 @@ describe("a folder taken out of the material list is out of the build (F10)", ()
     // survived or not, so asserting the screen alone would pass for a fix
     // that cleared the folder on every list edit.
     const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
-    expect((bag["buildSession.packages"] as { folder?: string }).folder).toBe("E:\\archives");
+    // The **per-release** key the session writes (round 2 review, M3);
+    // the global one below it is only the migration source.
+    const stored = (bag["buildSession.packages.AmigaOS 3.2"] ??
+      bag["buildSession.packages"]) as { folder?: string };
+    expect(stored.folder).toBe("E:\\archives");
     expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\archives");
   });
 });

@@ -11,6 +11,7 @@ import {
   seedTreeRoot,
   seededComponents,
   seededMaterial,
+  LEGACY_KEYS,
   SESSION_KEYS,
   withFolder,
   type MaterialChoice,
@@ -212,7 +213,7 @@ describe("seededMaterial", () => {
       "osinstall.mediaFolder.AmigaOS 3.2.2": "E:\\media\\base",
       "osinstall.extraMediaFolders.AmigaOS 3.2.2": ["E:\\media\\hotfix", "E:\\media\\spare"],
       "osinstall.mediaFolder.update-3.2.2.AmigaOS 3.2.2": "E:\\media\\update",
-      [SESSION_KEYS.packages]: { folder: "E:\\archives", chosen: [] },
+      [LEGACY_KEYS.packagesSession]: { folder: "E:\\archives", chosen: [] },
     };
     expect(seededMaterial(bag, "AmigaOS 3.2.2").folders).toEqual([
       { path: "E:\\media\\base", layer: null },
@@ -263,7 +264,7 @@ describe("seededMaterial", () => {
     const bag = {
       "osinstall.mediaFolder": "E:\\media",
       "osinstall.extraMediaFolders": ["E:/media/", "E:\\MEDIA", "E:\\other"],
-      [SESSION_KEYS.packages]: { folder: "e:\\media", chosen: [] },
+      [LEGACY_KEYS.packagesSession]: { folder: "e:\\media", chosen: [] },
     };
     expect(seededMaterial(bag, "AmigaOS 3.2").folders).toEqual([
       { path: "E:\\media", layer: null },
@@ -281,7 +282,7 @@ describe("seededMaterial", () => {
         folders: [{ path: "E:\\chosen-by-hand", layer: null }],
       },
       "osinstall.mediaFolder": "E:\\media",
-      [SESSION_KEYS.packages]: { folder: "E:\\archives", chosen: [] },
+      [LEGACY_KEYS.packagesSession]: { folder: "E:\\archives", chosen: [] },
     };
     // The seed is what `useRememberedShape` would fall back to; `recallInto`
     // is what it actually reads, and the stored list wins.

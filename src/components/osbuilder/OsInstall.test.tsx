@@ -475,6 +475,7 @@ beforeEach(() => {
       optionalFound: 0,
     },
     unreadableFolders: [],
+    crowdedFolders: [],
   });
   amigaForeverMock.mockReset().mockResolvedValue({ adf: null, rom: null });
   // The honest default for the content-hash pass: it ran, it read the one
@@ -1905,9 +1906,28 @@ describe("the evidence covers the added folders too (ART-256)", () => {
     const unused = await screen.findByTestId("material-unused");
     expect(unused.textContent).toContain(EXTRA);
 
-    // And it really is not scanned as part of the release's evidence, the
-    // way the request does not send it.
-    await waitFor(() => expect(scanMediaMock).toHaveBeenCalledWith("E:\\base322"));
+    // **And its disks are not part of the release's evidence** — the
+    // exclusion this test exists for (ART-256's scope trap), restored as an
+    // assertion after the unified list made the old one untrue (round 2
+    // whole-branch review, L9).
+    //
+    // The material list legitimately scans *every* folder now, because the
+    // readout resolves against all of them, so "was this folder scanned" is
+    // no longer the question. The question is what reaches the **evidence**
+    // line, which `foundVolumeNames` filters to `plannedFolderPaths`: a
+    // layered release's tagged folders alone. `E:\extra` holds `Extras3.2`
+    // and is untagged, so that volume must never be asked about.
+    await waitFor(() => expect(mediaEvidenceMock).toHaveBeenCalled());
+    for (const call of mediaEvidenceMock.mock.calls) {
+      expect(call[1]).not.toContain("Extras3.2");
+    }
+    // The positive half, so this is an exclusion and not an empty answer: the
+    // tagged folder's own disk *is* evidence.
+    expect(
+      mediaEvidenceMock.mock.calls.some((call) =>
+        (call[1] as string[]).includes("Workbench3.2")
+      )
+    ).toBe(true);
   });
 
   // M2 (fix wave 5, 2026-09-06 final review) — `foundVolumeNames`'s own doc
@@ -2809,7 +2829,10 @@ describe("the one material folder list (design § 3.1)", () => {
     // Every legacy key is exactly as it was.
     expect(after["osinstall.mediaFolder"]).toBe("E:\\media");
     expect(after["osinstall.extraMediaFolders"]).toBeUndefined();
+    // Neither the global migration source nor this release's own key was
+    // written: the archives folder here was only ever the list's.
     expect(after["buildSession.packages"]).toBeUndefined();
+    expect(after["buildSession.packages.AmigaOS 3.2"]).toBeUndefined();
   });
 });
 
@@ -2871,8 +2894,12 @@ describe("archives in one folder, disks in another (fix round 1, F1)", () => {
     );
 
     await waitFor(() => expect(packagesMock).toHaveBeenCalledWith("E:\\archives", "AmigaOS 3.2"));
-    // The pick is stored as the packages step's own value …
-    expect(rememberedBag()["buildSession.packages"]).toMatchObject({ folder: "E:\\archives" });
+    // The pick is stored as the packages step's own value, **under this
+    // release's own key** (round 2 review, M3): the archives folder is a
+    // folder for a build, and a build is per release.
+    expect(rememberedBag()["buildSession.packages.AmigaOS 3.2"]).toMatchObject({
+      folder: "E:\\archives",
+    });
     // … and the folder is in the one list too, so the readout and the
     // planner see it.
     const rows = await screen.findAllByTestId("material-folder");

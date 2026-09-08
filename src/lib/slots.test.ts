@@ -23,6 +23,7 @@ import type {
 } from "@/lib/osinstall";
 import {
   candidateLines,
+  crowdedFolderLines,
   readoutRunningLine,
   setLine,
   slotLines,
@@ -65,6 +66,8 @@ interface StateOptions {
   chosenMissing?: string | null;
   blockedBy?: string[];
   notNeeded?: string | null;
+  incomplete?: string | null;
+  expectsDirectories?: string[];
 }
 
 const NOT_READ: BytesRead = { state: "not-read" };
@@ -95,6 +98,7 @@ function state(options: StateOptions = {}): SlotState {
       position: options.position ?? 1,
       requires: options.requires ?? [],
       supersededBy: [],
+      expectsDirectories: options.expectsDirectories ?? [],
     },
     found: options.found ?? null,
     candidates: options.candidates ?? [],
@@ -102,6 +106,7 @@ function state(options: StateOptions = {}): SlotState {
     chosenMissing: options.chosenMissing ?? null,
     blockedBy: options.blockedBy ?? [],
     notNeeded: options.notNeeded ?? null,
+    incomplete: options.incomplete ?? null,
   };
 }
 
@@ -115,7 +120,7 @@ const foundBy = (matchedBy: string, path: string, bytesRead: BytesRead = NO_ROW)
   }) as NonNullable<SlotState["found"]>;
 
 describe("slotLines", () => {
-  it("gives each of the eight endings its own kind and its own key", () => {
+  it("gives each of the eleven endings its own kind and its own key", () => {
     const cases: [string, SlotState][] = [
       ["found-by-hash", state({ found: foundBy("hash", "D:\\a\\BoingBag39-1.lha") })],
       [
@@ -149,6 +154,25 @@ describe("slotLines", () => {
       ],
       ["not-found", state()],
       ["not-needed", state({ notNeeded: "Updater 45.15" })],
+      // The three the round-2 whole-branch review added, each because the
+      // ending it was folded into said something false: a ROM is not missing
+      // from a folder ART never looks in (M1), a slot the set line counts
+      // found is not a red row (M2), and a disc that is here but short is not
+      // absent (L6).
+      [
+        "rom-not-chosen",
+        state({ kind: "rom", id: "rom", name: "Kickstart", identity: "40", filenames: [] }),
+      ],
+      ["installed-elsewhere", state({ installed: { state: "placed", at: null } })],
+      [
+        "incomplete",
+        state({
+          kind: "medium",
+          id: "medium:AmigaOS3.9",
+          found: foundBy("hash", "D:\\a\\AmigaOS39.iso"),
+          incomplete: "Contribution",
+        }),
+      ],
     ];
 
     // Every ending is distinct — no two of these produce the same kind, which
@@ -402,17 +426,33 @@ describe("setLine", () => {
   });
 
   it("counts found over the whole set and names the required shortfall apart", () => {
-    const { phrase, ready } = setLine(summary(), []);
+    const { phrase, ready } = setLine(summary({ requiredFound: 1 }), []);
     expect(phrase.key).toBe("osinstall.slots.setLine");
     expect(phrase.params).toMatchObject({
       release: "AmigaOS 3.9",
-      found: 5,
+      found: 4,
       total: 6,
-      missingRequired: 0,
+      missingRequired: 1,
     });
+    expect(ready).toBe(false);
+  });
+
+  /// **The shortfall is named only when there is one** (round 2 review, L8).
+  /// A complete set read `8 of 8 found · 0 required missing` in a green
+  /// badge — this module's own doc rejecting "0 not needed" one clause along
+  /// while printing "0 required missing".
+  it("says a ready set is ready rather than counting nothing that is missing", () => {
+    const { phrase, ready } = setLine(summary(), []);
+    expect(phrase.key).toBe("osinstall.slots.setLineReady");
+    expect(phrase.params).toMatchObject({ found: 5, total: 6 });
     // A set missing only optional files is ready to build — one fraction
     // cannot say that, which is why `ready` reads the required half alone.
     expect(ready).toBe(true);
+    for (const catalogue of [en, tr]) {
+      expect(leafText(catalogue, "osinstall.slots.setLineReady")).not.toContain(
+        "{{missingRequired}}"
+      );
+    }
   });
 
   it("is not ready the moment a required slot is missing", () => {
@@ -429,18 +469,178 @@ describe("setLine", () => {
       state({ id: "overlay:uae", notNeeded: "Updater 45.15" }),
       state({ id: "package:boingbag-39-1" }),
     ];
-    const { phrase } = setLine(summary({ optionalTotal: 3, optionalFound: 3 }), states);
+    const { phrase } = setLine(
+      summary({ requiredFound: 1, optionalTotal: 3, optionalFound: 3 }),
+      states
+    );
     expect(phrase.key).toBe("osinstall.slots.setLineNotNeeded");
     expect(phrase.params?.notNeeded).toBe(1);
     expect(phrase.params?.total).toBe(5);
 
-    // And says nothing when there is nothing to say: "0 not needed" is noise.
-    expect(setLine(summary(), states.slice(1)).phrase.key).toBe("osinstall.slots.setLine");
+    // The ready half of the same pair (L8).
+    expect(setLine(summary({ optionalTotal: 3, optionalFound: 3 }), states).phrase.key).toBe(
+      "osinstall.slots.setLineReadyNotNeeded"
+    );
 
-    for (const key of ["osinstall.slots.setLine", "osinstall.slots.setLineNotNeeded"]) {
+    // And says nothing when there is nothing to say: "0 not needed" is noise.
+    expect(setLine(summary(), states.slice(1)).phrase.key).toBe(
+      "osinstall.slots.setLineReady"
+    );
+
+    for (const key of [
+      "osinstall.slots.setLine",
+      "osinstall.slots.setLineNotNeeded",
+      "osinstall.slots.setLineReady",
+      "osinstall.slots.setLineReadyNotNeeded",
+    ]) {
       expect(isLeafKey(en, key), `${key} missing from en.json`).toBe(true);
       expect(isLeafKey(tr, key), `${key} missing from tr.json`).toBe(true);
     }
+  });
+});
+
+describe("the ROM row is never about a folder (round 2 review, M1)", () => {
+  const rom = (options: StateOptions = {}) =>
+    state({ kind: "rom", id: "rom", name: "Kickstart", identity: "40", required: true, ...options });
+
+  /// **The first row of every fresh build**, and it said the material was
+  /// short. A ROM slot is not resolved from a folder at all — `resolve_one`
+  /// answers `Chosen` for it and it carries no `filenames` — so
+  /// *"Kickstart 40 is not in the folders you named"* told the user to look
+  /// somewhere ART will never look, and turned the set line red over it.
+  it("says no Kickstart is chosen yet, never that one is missing from a folder", () => {
+    const [line] = slotLines([rom()]);
+    expect(line.kind).toBe("rom-not-chosen");
+    expect(line.phrase.key).toBe("osinstall.slots.romNotChosen");
+    expect(line.phrase.params?.identity).toBe("40");
+    for (const catalogue of [en, tr]) {
+      const text = leafText(catalogue, line.phrase.key);
+      expect(isLeafKey(catalogue, line.phrase.key)).toBe(true);
+      // The sentence a user cannot act on, in either language.
+      expect(text).not.toMatch(/folders you named|adını verdiğiniz klasörlerde/);
+      expect(text).toContain("{{identity}}");
+    }
+  });
+
+  /// A release stating no floor gets the same instruction without a number:
+  /// "a Kickstart  or newer" is what interpolating an empty identity gives.
+  it("drops the floor from the sentence when the release states none", () => {
+    const [line] = slotLines([rom({ identity: "" })]);
+    expect(line.phrase.key).toBe("osinstall.slots.romNotChosenNoFloor");
+    for (const catalogue of [en, tr]) {
+      expect(leafText(catalogue, line.phrase.key)).not.toContain("{{identity}}");
+    }
+  });
+
+  /// And a ROM the user chose says what it satisfies and where it is — not
+  /// the generic *chosen* sentence, whose "ART has not checked it" is noise
+  /// about a file they picked from their own ROM folder.
+  it("names the floor and the path for a Kickstart the user chose", () => {
+    const [line] = slotLines([
+      rom({ found: foundBy("chosen", "E:\\amiga\\Shared\\rom\\kick40068.A1200.rom") }),
+    ]);
+    expect(line.kind).toBe("chosen");
+    expect(line.phrase.key).toBe("osinstall.slots.romChosen");
+    expect(line.phrase.params).toMatchObject({
+      identity: "40",
+      path: "E:\\amiga\\Shared\\rom\\kick40068.A1200.rom",
+    });
+    for (const catalogue of [en, tr]) {
+      expect(isLeafKey(catalogue, line.phrase.key)).toBe(true);
+    }
+  });
+});
+
+describe("a row may not disagree with the count above it (round 2 review, M2)", () => {
+  /// `summarize` counts a slot found when `found.is_some() || installed !=
+  /// No`. `slotLines` never looked at `installed` when picking the row's
+  /// kind, so a tree whose manifest records the medium, with the archive no
+  /// longer in the folders, drew a red ✖ *"not in the folders you named"*
+  /// under a green *"0 required missing"*. The row said problem; the count
+  /// said ready.
+  it("says an installed artefact's archive has gone, and does not call it missing", () => {
+    const [line] = slotLines([state({ installed: { state: "placed", at: null } })]);
+    expect(line.kind).toBe("installed-elsewhere");
+    expect(line.phrase.key).toBe("osinstall.slots.installedArchiveGone");
+    expect(line.installed).not.toBeNull();
+    for (const catalogue of [en, tr]) {
+      expect(isLeafKey(catalogue, line.phrase.key)).toBe(true);
+    }
+  });
+
+  /// The other arm, and what keeps this from swallowing a real absence: a
+  /// slot the manifest says nothing about is still *not found*.
+  it("leaves a slot no manifest mentions as not found", () => {
+    expect(slotLines([state()])[0].kind).toBe("not-found");
+  });
+
+  /// And a file that **is** in the folders still gets its own find sentence,
+  /// with the installed badge beside it rather than instead of it.
+  it("prefers the find when the archive is there as well", () => {
+    const [line] = slotLines([
+      state({
+        installed: { state: "placed", at: null },
+        found: foundBy("hash", "E:\\material\\BoingBag39-1.lha"),
+      }),
+    ]);
+    expect(line.kind).toBe("found-by-hash");
+    expect(line.installed).not.toBeNull();
+  });
+});
+
+describe("matched, and the copy is short (design § 3.6, review L6)", () => {
+  /// A disc ART recognises whose root is missing `Contribution` is a
+  /// re-master or a partial copy: *look at the copy you have* rather than
+  /// *go and find it*, which is what "not found" would have said about a
+  /// disc sitting in the folder.
+  it("names the missing directory and stays a find, never a not-found", () => {
+    const [line] = slotLines([
+      state({
+        kind: "medium",
+        id: "medium:AmigaOS3.9",
+        name: "AmigaOS3.9",
+        identity: "AmigaOS3.9",
+        found: foundBy("hash", "E:\\material\\AmigaOS39.iso"),
+        incomplete: "Contribution",
+      }),
+    ]);
+    expect(line.kind).toBe("incomplete");
+    expect(line.phrase.key).toBe("osinstall.slots.incomplete");
+    expect(line.phrase.params).toMatchObject({
+      file: "AmigaOS39.iso",
+      directory: "Contribution",
+    });
+    for (const catalogue of [en, tr]) {
+      expect(isLeafKey(catalogue, line.phrase.key)).toBe(true);
+    }
+  });
+
+  it("says nothing when the disc carries everything expected", () => {
+    const [line] = slotLines([
+      state({
+        kind: "medium",
+        id: "medium:AmigaOS3.9",
+        found: foundBy("hash", "E:\\material\\AmigaOS39.iso"),
+      }),
+    ]);
+    expect(line.kind).toBe("found-by-hash");
+  });
+});
+
+describe("crowdedFolderLines", () => {
+  /// Design § 6: *"bound the count and **name the bound**."* Stopping is
+  /// right; stopping silently would make an artefact ART never reached read
+  /// as an artefact that is not there.
+  it("names the folder and the number ART stopped at", () => {
+    const [line] = crowdedFolderLines([["E:\\aminet", 200]]);
+    expect(line.folder).toBe("E:\\aminet");
+    expect(line.phrase.key).toBe("osinstall.slots.crowdedFolder");
+    expect(line.phrase.params).toEqual({ folder: "E:\\aminet", bound: 200 });
+    for (const catalogue of [en, tr]) {
+      expect(leafText(catalogue, line.phrase.key)).toContain("{{bound}}");
+    }
+    // Empty is the normal answer and says nothing.
+    expect(crowdedFolderLines([])).toEqual([]);
   });
 });
 

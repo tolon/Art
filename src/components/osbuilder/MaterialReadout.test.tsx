@@ -64,6 +64,8 @@ interface StateOptions {
   chosenMissing?: string | null;
   blockedBy?: string[];
   notNeeded?: string | null;
+  incomplete?: string | null;
+  expectsDirectories?: string[];
 }
 
 function state(options: StateOptions = {}): SlotState {
@@ -80,6 +82,7 @@ function state(options: StateOptions = {}): SlotState {
       position: options.position ?? 1,
       requires: [],
       supersededBy: [],
+      expectsDirectories: options.expectsDirectories ?? [],
     },
     found: options.found ?? null,
     candidates: options.candidates ?? [],
@@ -87,6 +90,7 @@ function state(options: StateOptions = {}): SlotState {
     chosenMissing: options.chosenMissing ?? null,
     blockedBy: options.blockedBy ?? [],
     notNeeded: options.notNeeded ?? null,
+    incomplete: options.incomplete ?? null,
   };
 }
 
@@ -109,6 +113,7 @@ function report(over: Partial<SlotReport> = {}): SlotReport {
     states: [],
     summary: summary(),
     unreadableFolders: [],
+    crowdedFolders: [],
     ...over,
   };
 }
@@ -355,7 +360,9 @@ describe("the set line", () => {
     renderReadout();
     const line = await screen.findByTestId("material-set-line");
     expect(line.textContent).toBe(
-      i18n.t("osinstall.slots.setLineNotNeeded", {
+      // The **ready** pair: this set is complete, so the line says so instead
+      // of counting a shortfall that is not there (round 2 review, L8).
+      i18n.t("osinstall.slots.setLineReadyNotNeeded", {
         release: "AmigaOS 3.9",
         found: 2,
         total: 2,
@@ -574,6 +581,77 @@ describe("the identification pass changes what the readout may say", () => {
 
     settle(report({ states: [state()] }));
     await screen.findByTestId("material-set-line");
+  });
+});
+
+describe("a file the user picked by hand (design § 3.4, review M5)", () => {
+  /// The readout could not see the panel's overrides at all, so a user who
+  /// chose BoingBag 3.9-1's archive on the Amiga-side step and stepped back
+  /// read *"not in the folders you named"* about the file the run was going
+  /// to use. Two screens, one artefact, opposite sentences — and the red one
+  /// was on the screen this round exists to make authoritative.
+  it("asks with the overrides it was given, and says the file was chosen", async () => {
+    slotsMock.mockResolvedValue(
+      report({
+        states: [state({ found: foundBy("chosen", "D:\\pkg\\my-own-copy.lha") })],
+      })
+    );
+    render(
+      <MaterialReadout
+        release="AmigaOS 3.9"
+        folders={["E:\\amiga\\os39"]}
+        treeRoot={null}
+        rom={null}
+        identifiedPass={0}
+        overrides={[["package:boingbag-39-1", "D:\\pkg\\my-own-copy.lha"]]}
+      />
+    );
+
+    await waitFor(() =>
+      expect(slotsMock).toHaveBeenCalledWith("AmigaOS 3.9", ["E:\\amiga\\os39"], null, null, [
+        ["package:boingbag-39-1", "D:\\pkg\\my-own-copy.lha"],
+      ])
+    );
+    expect(await screen.findByTestId("material-row-chosen")).toBeTruthy();
+    expect(
+      screen.getByText(
+        i18n.t("osinstall.slots.chosen", {
+          file: "my-own-copy.lha",
+          name: "BoingBag 3.9-1",
+        })
+      )
+    ).toBeTruthy();
+    // Never the red row about a file ART is holding a path for.
+    expect(screen.queryByTestId("material-row-not-found")).toBeNull();
+  });
+
+  it("sends an empty list when the user has chosen nothing", async () => {
+    renderReadout();
+    await waitFor(() =>
+      expect(slotsMock).toHaveBeenCalledWith("AmigaOS 3.9", ["E:\\amiga\\os39"], null, null, [])
+    );
+  });
+});
+
+describe("a folder ART stopped reading (design § 6, review L7)", () => {
+  /// Design § 6: *"bound the count and **name the bound**."* Silence would
+  /// make an artefact ART never reached read as an artefact that is not
+  /// there.
+  it("names the folder and the number, and says nothing when there is none", async () => {
+    slotsMock.mockResolvedValue(report({ crowdedFolders: [["E:\\aminet", 200]] }));
+    renderReadout();
+
+    const line = await screen.findByTestId("material-readout-crowded");
+    expect(line.textContent).toBe(
+      i18n.t("osinstall.slots.crowdedFolder", { folder: "E:\\aminet", bound: 200 })
+    );
+    expect(line.textContent).toContain("200");
+
+    cleanup();
+    slotsMock.mockResolvedValue(report());
+    renderReadout();
+    await screen.findByTestId("material-set-line");
+    expect(screen.queryByTestId("material-readout-crowded")).toBeNull();
   });
 });
 

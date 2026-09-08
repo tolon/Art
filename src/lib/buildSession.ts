@@ -195,7 +195,6 @@ export const SESSION_KEYS = {
   rom: "buildSession.rom",
   release: "buildSession.release",
   tree: "buildSession.tree",
-  packages: "buildSession.packages",
   card: "buildSession.card",
   firstboot: "buildSession.firstboot",
   /** Per release, for the reason `rememberedComponentKey` exists: a component
@@ -204,6 +203,22 @@ export const SESSION_KEYS = {
   /** Per release too, and for the same reason one level out: a folder means
    *  something only inside the release that reads it (ART-207). */
   material: (release: InstallRelease): string => `buildSession.material.${release}`,
+  /**
+   * **Per release as well** (round 2 whole-branch review, M3).
+   *
+   * It was global while `material` was per release, and F10's guard — which
+   * drops the stored archives folder when the material list no longer holds
+   * it — compares against *the release being built*. So: build 3.9 with
+   * an archives folder stored, switch to 3.2.2 (whose list seeds that folder
+   * too), remove it there because it holds no 3.2 media, and 3.9's archives
+   * folder is silently repointed at its disks folder. F1's own defect,
+   * arriving through F1's own fix.
+   *
+   * A folder for a build, and a build is per release. `chosen` travels with
+   * it for the reason `components` is per release: a package id means
+   * something only inside the recipe that declares it (ART-209).
+   */
+  packages: (release: InstallRelease): string => `buildSession.packages.${release}`,
 } as const;
 
 /**
@@ -224,6 +239,10 @@ export const LEGACY_KEYS = {
   release: "osinstall.release",
   destination: "osinstall.destination",
   packagesTreeRoot: "osinstall.packages.treeRoot",
+  /** The **global** `buildSession.packages` an ART between the two waves
+   *  wrote, now that the section is per release (round 2 review, M3). Read
+   *  once as a migration source and never written again. */
+  packagesSession: "buildSession.packages",
   packagesFolder: "osinstall.packages.folder",
   packagesChosen: "osinstall.packages.chosen",
   /** The card step's own Kickstart, before wave 2 made it one value. */
@@ -559,21 +578,40 @@ export function seededMaterial(store: unknown, release: InstallRelease): Materia
  * The archives folder this session starts with, from whichever key the user's
  * own history put one in.
  *
- * Both spellings, session key first. `buildSession.packages.folder` is what a
- * user who has run any recent ART actually has; the legacy
- * `osinstall.packages.folder` is what an older settings file holds. Taking
- * only one of the two would lose the folder for exactly one of those two
- * populations, and losing it is F1's own defect.
+ * Three spellings now, newest first: the **per-release** key a current ART
+ * writes, the **global** `buildSession.packages` an ART between the two waves
+ * wrote, and the legacy `osinstall.packages.folder` an older settings file
+ * holds. Taking fewer would lose the folder for exactly one population of
+ * users, and losing it is F1's own defect.
  *
- * Stated once and used twice — here for `seededMaterial`'s last entry, and
- * as `useBuildSession`'s fallback for the stored value itself — so the two
- * cannot answer differently.
+ * `release` is optional because `seededMaterial`'s last entry is a migration
+ * source rather than a per-release read: a folder the user once chose belongs
+ * in every release's material list, since the archives in it do not stop
+ * existing when the release picker moves.
+ *
+ * Stated once and used twice — here and as `useBuildSession`'s fallback for
+ * the stored value itself — so the two cannot answer differently.
  */
-export function seedPackagesFolder(store: unknown): string | null {
+export function seedPackagesFolder(store: unknown, release?: InstallRelease): string | null {
   const bag = bagOf(store);
-  const held = bagOf(bag[SESSION_KEYS.packages]);
+  if (release) {
+    const own = bagOf(bag[SESSION_KEYS.packages(release)]);
+    if (isText(own.folder)) return own.folder;
+  }
+  const held = bagOf(bag[LEGACY_KEYS.packagesSession]);
   if (isText(held.folder)) return held.folder;
   return textAt(bag, LEGACY_KEYS.packagesFolder);
+}
+
+/** The packages ticked on the packages step, migrated the same way. */
+export function seedPackagesChosen(store: unknown, release: InstallRelease): string[] {
+  const bag = bagOf(store);
+  const own = bagOf(bag[SESSION_KEYS.packages(release)]);
+  if (isTextList(own.chosen)) return own.chosen;
+  const held = bagOf(bag[LEGACY_KEYS.packagesSession]);
+  if (isTextList(held.chosen)) return held.chosen;
+  const legacy = bag[LEGACY_KEYS.packagesChosen];
+  return isTextList(legacy) ? legacy : DEFAULT_PACKAGES.chosen;
 }
 
 /** The first folder ART scans for everything — what `media.folder` and

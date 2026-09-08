@@ -59,7 +59,34 @@ export type SlotLineKind =
   | "guessed-by-filename"
   | "ambiguous"
   | "not-found"
-  | "not-needed";
+  | "not-needed"
+  /**
+   * Matched, and missing something the artefact is supposed to carry (design
+   * § 3.6; round 2 review, L6). Its own ending because the next step is
+   * different: *not found* means go and get it, this means look at the copy
+   * you have.
+   */
+  | "incomplete"
+  /**
+   * Already in the tree, and the archive it came from is no longer in the
+   * folders (round 2 review, M2).
+   *
+   * **Its own ending because `summarize` counts it found.** A slot the set
+   * line counts as found rendered as a red ✖ *"not in the folders you
+   * named"* — the row saying *problem* under a count saying *ready*, which
+   * is the screen contradicting the core about the same slot.
+   */
+  | "installed-elsewhere"
+  /**
+   * A ROM nobody has chosen yet (round 2 review, M1).
+   *
+   * **Never *not found***: a ROM slot is not resolved from a folder at all —
+   * `resolve_one` answers `Chosen` for it and it carries no `filenames` — so
+   * *"Kickstart 40 is not in the folders you named"* told a user their
+   * material was short and sent them looking in a folder ART will never look
+   * in. It is the first row of every fresh build.
+   */
+  | "rom-not-chosen";
 
 /** One row of the material readout. */
 export interface SlotLine {
@@ -230,6 +257,40 @@ export function slotLines(states: SlotState[]): SlotLine[] {
 
       if (state.found) {
         const file = fileName(state.found.path);
+
+        // **Matched, and missing part of itself** (design § 3.6, review L6).
+        // Above every `matchedBy` arm because it outranks how ART matched it:
+        // the file is the right artefact and the copy is short, and *that* is
+        // the sentence the user can act on. Never *not found* — the disc is
+        // sitting in the folder.
+        if (state.incomplete) {
+          return {
+            ...line,
+            kind: "incomplete" as const,
+            file,
+            phrase: {
+              key: "osinstall.slots.incomplete",
+              params: { file, name, directory: state.incomplete },
+            },
+          };
+        }
+
+        // A ROM the user chose gets its own sentence, not the generic
+        // *chosen* one: what a reader needs is the floor it satisfies and
+        // where the file is, and "ART did not check it" is noise about a
+        // Kickstart they picked from their own ROM folder (M1).
+        if (state.slot.kind === "rom" && state.found.matchedBy === "chosen") {
+          return {
+            ...line,
+            kind: "chosen" as const,
+            file,
+            phrase: {
+              key: "osinstall.slots.romChosen",
+              params: { identity: state.slot.identity, path: state.found.path },
+            },
+          };
+        }
+
         switch (state.found.matchedBy) {
           case "hash":
             return {
@@ -308,6 +369,38 @@ export function slotLines(states: SlotState[]): SlotLine[] {
         };
       }
 
+      // **A ROM nobody has chosen** (M1). It is not missing from a folder,
+      // because ART never looks for one in a folder: `resolve_one` fills a
+      // ROM slot from `Facts::rom` alone, and this row is the first thing a
+      // fresh build shows. The next step is a field a few rows up on the same
+      // step, and the sentence names it.
+      if (state.slot.kind === "rom") {
+        return {
+          ...line,
+          kind: "rom-not-chosen" as const,
+          file: null,
+          phrase: {
+            key: state.slot.identity
+              ? "osinstall.slots.romNotChosen"
+              : "osinstall.slots.romNotChosenNoFloor",
+            params: { identity: state.slot.identity },
+          },
+        };
+      }
+
+      // **Already in the tree, and the archive has gone** (M2). `summarize`
+      // counts this slot *found* (`found.is_some() || installed != No`), so a
+      // red "not in the folders you named" row would be the readout
+      // contradicting its own set line about one slot.
+      if (state.installed.state !== "no") {
+        return {
+          ...line,
+          kind: "installed-elsewhere" as const,
+          file: null,
+          phrase: { key: "osinstall.slots.installedArchiveGone", params: { name } },
+        };
+      }
+
       // Not found. The expected names are said only when ART actually has
       // some — "expected " with nothing after it is the sentence a user
       // cannot act on.
@@ -382,6 +475,13 @@ export function candidateLines(state: SlotState): CandidateLine[] {
  * material vanishing. Saying "1 not needed" beside the counts is what makes
  * the smaller denominator an answer rather than a disappearance. It is said
  * only when there is one: "0 not needed" is noise about nothing.
+ *
+ * **And the same rule, finally applied to the other number** (round 2 review,
+ * L8). A complete set read `AmigaOS 3.9 · 8 of 8 found · 0 required missing`
+ * in a green badge — this function's own doc rejecting "0 not needed" while
+ * printing "0 required missing" one clause along. Four keys now, one per
+ * combination, so a ready set says it is ready and counts nothing that is not
+ * there.
  */
 export function setLine(
   summary: SetSummary,
@@ -398,13 +498,35 @@ export function setLine(
     missingRequired,
     notNeeded,
   };
-  return {
-    ready: missingRequired === 0,
-    phrase: {
-      key: notNeeded > 0 ? "osinstall.slots.setLineNotNeeded" : "osinstall.slots.setLine",
-      params,
-    },
-  };
+  const key =
+    missingRequired > 0
+      ? notNeeded > 0
+        ? "osinstall.slots.setLineNotNeeded"
+        : "osinstall.slots.setLine"
+      : notNeeded > 0
+        ? "osinstall.slots.setLineReadyNotNeeded"
+        : "osinstall.slots.setLineReady";
+  return { ready: missingRequired === 0, phrase: { key, params } };
+}
+
+/**
+ * One line per material folder holding more archives than ART opens in a pass
+ * — design § 6's *"bound the count and **name the bound**"* (round 2 review,
+ * L7).
+ *
+ * **The number is in the sentence.** A folder of 200 `.lha` files is somebody's
+ * Aminet mirror, and ART opens every regular file in a folder to ask what it
+ * is; stopping is right, and stopping silently would make an artefact ART
+ * never reached read as an artefact that is not there. Empty is the normal
+ * answer and renders nothing.
+ */
+export function crowdedFolderLines(
+  folders: [string, number][]
+): { folder: string; phrase: Phrase }[] {
+  return folders.map(([folder, bound]) => ({
+    folder,
+    phrase: { key: "osinstall.slots.crowdedFolder", params: { folder, bound } },
+  }));
 }
 
 /**
