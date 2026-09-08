@@ -731,8 +731,26 @@ pub fn follow_up_path(work_volume_dir: &Path) -> PathBuf {
 /// same reason [`super::run`]'s own reader treats one that way — the honest
 /// reading of bytes ART did not write is that no answer arrived.
 pub fn read_follow_up(work_volume_dir: &Path) -> Option<FollowUpOutcome> {
-    let bytes = std::fs::read(follow_up_path(work_volume_dir)).ok()?;
-    match String::from_utf8_lossy(&bytes).lines().next()?.trim() {
+    // **Bounded, and the bound is the point** (round 3 whole-branch review,
+    // L12). This file is written by a program running inside the emulator on
+    // a volume ART mounts read-write, and ART-278 is filed on exactly what a
+    // damaged package's `Updater` does to such a volume: 170 MB in 30 minutes
+    // without stopping. The longest word this ever holds is
+    // `MARK_FOLLOW_UP_NOT_NEEDED`, ten bytes; 64 is room for a line ending
+    // and a surprise, and nothing after it can matter.
+    //
+    // `run::read_outcome` reads the result word with an unbounded
+    // `std::fs::read` and is the same shape; it is not changed here because a
+    // second thing changed in passing is a second thing nobody measured, and
+    // this one is new code.
+    use std::io::Read;
+    let mut buffer = Vec::new();
+    std::fs::File::open(follow_up_path(work_volume_dir))
+        .ok()?
+        .take(64)
+        .read_to_end(&mut buffer)
+        .ok()?;
+    match String::from_utf8_lossy(&buffer).lines().next()?.trim() {
         MARK_FOLLOW_UP_RAN => Some(FollowUpOutcome::Ran),
         MARK_FOLLOW_UP_NOT_NEEDED => Some(FollowUpOutcome::NotNeeded),
         MARK_FOLLOW_UP_FAILED => Some(FollowUpOutcome::Failed),

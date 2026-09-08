@@ -804,6 +804,32 @@ fn validate_installer(package: &Package) -> CoreResult<()> {
             });
         }
     }
+    // **One follow-up per package, until there is a marker per follow-up**
+    // (round 3 whole-branch review, L9). `workvol::follow_up_lines` writes
+    // every follow-up's word to the same `art-followup.txt` and
+    // `read_follow_up` returns one `FollowUpOutcome`, so two of them would
+    // report only the last: "the first failed, the second was not needed"
+    // would reach the user as *not needed*. That is the collapse this
+    // module's own neighbours refuse one level up, and a recipe author has no
+    // way to see it happening.
+    //
+    // A refusal at parse time rather than a silent last-one-wins, and a cap
+    // rather than a per-follow-up marker file, because exactly one is shipped
+    // and building indexing for a second nobody has asked for is how a
+    // vocabulary grows past what anyone can check. The day a package needs
+    // two, this refusal is what sends whoever writes it to the marker.
+    if installer.follow_ups.len() > 1 {
+        return Err(CoreError::Malformed {
+            format: "package".into(),
+            detail: format!(
+                "'{}': {} follow-ups are declared and ART can report only one — they all write \
+                 the same result file, so the last would be the only one anybody heard about. \
+                 Declare one, or give each its own marker first",
+                package.id,
+                installer.follow_ups.len()
+            ),
+        });
+    }
     // A follow-up reaches the same generated AmigaDOS script as the
     // invocation above, so every one of its fields goes through the same two
     // gates — a path inside the package, and no shell metacharacter. The gate
@@ -2826,6 +2852,65 @@ mod tests {
                 package.id
             );
         }
+    }
+
+    /// **Two follow-ups are refused at parse time, with the reason** (round
+    /// 3 whole-branch review, L9).
+    ///
+    /// `workvol::follow_up_lines` writes every follow-up's word to one
+    /// `art-followup.txt` and `read_follow_up` returns one outcome, so a
+    /// second one would be the only one anybody heard about: "the first
+    /// failed, the second was not needed" would reach the user as *not
+    /// needed*. Refused rather than silently last-one-wins, because a recipe
+    /// author has no way to see that happening.
+    ///
+    /// The control is beside it: **one** follow-up parses, so this is a cap
+    /// and not a ban.
+    #[test]
+    fn a_package_may_declare_only_one_follow_up_until_each_has_its_own_marker() {
+        let one = serde_json::json!([{
+            "program": "C/Updater",
+            "args": ["XAD-Update"],
+            "unless_file_version_at_least": { "path": "Libs/xadmaster.library", "version": 10 },
+        }]);
+        let two = serde_json::json!([
+            {
+                "program": "C/Updater",
+                "args": ["XAD-Update"],
+                "unless_file_version_at_least": { "path": "Libs/xadmaster.library", "version": 10 },
+            },
+            {
+                "program": "C/Updater",
+                "args": ["Other-Update"],
+                "unless_file_version_at_least": { "path": "Libs/other.library", "version": 3 },
+            },
+        ]);
+        let with = |follow_ups: serde_json::Value| {
+            let json = serde_json::json!({
+                "id": "x",
+                "name": "X", "releases": ["AmigaOS 3.9"],
+                "media": "X",
+                "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
+                "amiga_installer": {
+                    "program": "C/Updater",
+                    "args": ["AmigaOS-Update"],
+                    "follow_ups": follow_ups,
+                },
+            });
+            parse(&json.to_string())
+        };
+
+        with(one).expect("one follow-up is the shipped shape and must parse");
+
+        let err = with(two).unwrap_err().to_string();
+        assert!(
+            err.contains("only one"),
+            "must say what the limit is: {err}"
+        );
+        assert!(
+            err.contains("result file"),
+            "and why, so a recipe author knows what would have to change: {err}"
+        );
     }
 
     /// **ART-280: the one follow-up ART ships, asserted whole.**

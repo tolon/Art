@@ -601,10 +601,17 @@ artefact's own answer, which is the only one that counts here:
 | bytes | 105 368 | **110 100** |
 
 Against the control tree the follow-up added **6 files** (`C/exe2arc`,
-`Libs/xad/EPF`, `LU`, `MS-TNEF`, `MakeSFX`, `oe4`) and changed **12**
+`Libs/xad/EPF`, `LU`, `MS-TNEF`, `MakeSFX`, `oe4`), changed **12**
 (`xadmaster.library` itself, seven `C/xad*` tools and four `Libs/xad/*`
-clients) — 4 025 files → 4 030. Every remaining entry of the 39 was already
-present at those bytes.
+clients) and **removed one** — 4 025 files → 4 030. Every remaining entry of
+the 39 was already present at those bytes.
+
+**The removal is a case-rename and is named here for the same reason the
+60 → 57 correction two entries away exists** (whole-branch review, L10):
+`C/Exe2Arc` becomes `C/exe2arc`, so the arithmetic is 4 025 + 6 − 1 = 4 030
+rather than a count that does not add up. It is the *only* only-in-the-control
+entry, so nothing was lost: `XAD-Update` ships the tool under the lowercase
+spelling BoingBag 1's own payload does not.
 
 *Tests:* `workvol::a_follow_up_is_emitted_whole_and_below_the_result_capture`
 (the whole script, entire), `…::the_gate_runs_after_the_branch_is_decided_and_before_the_word_is_written`
@@ -3988,6 +3995,30 @@ this measurement contradicts: `finish.rs` is host file operations that need no
 emulator, ROM or licence, and this is none of those. The day ART offers it, it
 is a second declaration in the recipe and a second run, which is what
 `boingbag-39-2.json` already says.
+
+> **Appended 2026-09-08, fix round 2 (whole-branch review, m5): two sentences
+> in the paragraph above are wrong, and ART has since done the thing they said
+> it would not.** The paragraph stands as written — this is the correction
+> beside it, not a rewrite of it, for the same reason the `version.library`
+> over-claim two bullets down was corrected in place: a wrong elimination
+> costs more than none.
+>
+> - *"that line is gated on a requester the script puts to the user
+>   (`#install-xad-update`)"* — **it is not.** That requester lives in
+>   BoingBag 3.9-2's own `Install` script, and **ART does not run that
+>   script**; it runs `C/Updater` directly, which this same entry's Part B
+>   proves. Nobody is asked anything by the program ART launches.
+> - *"a second declaration in the recipe **and a second run**"* — the
+>   declaration was right and the second run was not. HstWB Installer does it
+>   **in the same boot**, four lines after the first invocation
+>   (`amiga/amiga-os-3.9/S/Amiga-OS-3.9/Install-Boing-Bag-2`, lines 32-36,
+>   MIT), and so does ART now: four more lines in the one script
+>   `workvol::startup_sequence` already writes, ~15 s on top of a 141 s run.
+>
+> The one sentence that survives intact is the load-bearing one — *it is not a
+> host file operation*, so it is not a `finish.rs` `PostStep`. Built and
+> proved as [ART-280](#fixed): `xadmaster.library` `9.1` →
+> **`10.0 (31.03.2001)`** on the owner's own material.
 
 **And the experiment ART-227 asked for: does `Updater` return a usable code?**
 Decided first: the measured quantity is the one word in `ARTWork:art-result.txt`,

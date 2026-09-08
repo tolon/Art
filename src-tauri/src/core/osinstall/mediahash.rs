@@ -1829,7 +1829,8 @@ mod tests {
         assert_eq!(
             (found.hashed, found.remembered),
             (1, 0),
-            "one file read, and it is the known one — this is the count that says              the game disc's bytes were never touched"
+            "one file read, and it is the known one — this count is what says the game \
+             disc's bytes were never touched"
         );
         assert!(found.unreadable.is_empty(), "neither file is unreadable");
 

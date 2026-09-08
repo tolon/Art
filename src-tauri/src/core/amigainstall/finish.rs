@@ -51,6 +51,12 @@
 //! vocabulary grows past what anyone can check. They are recorded in ART-227;
 //! each becomes a variant here on the day a measurement asks for one.
 //!
+//! **Four of five, since 2026-09-08.** `XAD-Update` was measured and it *was*
+//! needed — and it is still not here, because it is not a host file operation.
+//! It ships as [`super::FollowUp`]: recipe data, and four more lines in the one
+//! boot script [`super::workvol::startup_sequence`] already writes
+//! ([ART-280](../../../../docs/ISSUES.md)). See the bullet below.
+//!
 //! ### Three of them were measured on 2026-09-08, and none became a variant
 //!
 //! Round 3, task 3, on the owner's own material: a clean AmigaOS 3.9 tree
@@ -79,23 +85,46 @@
 //!   Which of the two `locale.library` opens first was **not** established from
 //!   any source, so there is no basis for a step — one file, one language, one
 //!   program, out of 597.
-//! - **`XAD-Update` — needed, and it cannot live in this module.**
-//!   `Libs/xadmaster.library` reads `xadmaster 9.0 (25.11.2000)` on the clean
-//!   tree, `9.1 (05.01.2001)` after BoingBag 1 (whose payload carries the
-//!   105 368-byte build) and **`9.1` still** after BoingBag 2. 9.1 < 10, so the
-//!   `XAD-Update` payload was never applied — HstWB's gate
-//!   (`Version SYS:Libs/xadmaster.library 10 FILE`) would fire. But
+//! - **`XAD-Update` — needed, and built, and still not a `PostStep`
+//!   (ART-280).** `Libs/xadmaster.library` reads `xadmaster 9.0 (25.11.2000)`
+//!   on the clean tree, `9.1 (05.01.2001)` after BoingBag 1 (whose payload
+//!   carries the 105 368-byte build) and **`9.1` still** after BoingBag 2.
+//!   9.1 < 10, so the `XAD-Update` payload was never applied.
+//!
 //!   `BoingBag3.9-2/XAD-Update` is a **second ZipCrypto archive** inside the
 //!   same wrapper: 152 837 bytes, 39 entries, every one encrypted, carrying
 //!   `Libs/xadmaster.library` at 110 100 bytes plus 26 `Libs/xad/*` clients and
-//!   10 `C/` tools. Applying it is a second `Updater` run **inside the
-//!   emulator** (`C/Updater XAD-Update "<target>"`, the package's own `Install`
-//!   line 1632), on content ART must not decrypt (ART-166, the owner's
-//!   ruling) — and that line is gated on a requester the script puts to the
-//!   *user* (`#install-xad-update`). None of that is a host file operation, so
-//!   the round-3 design's *"`finish.rs` gains `run-again-with`"* is the one
-//!   instruction the measurement contradicts. When ART offers it, it is a
-//!   second declaration in the recipe and a second run, not a variant here.
+//!   10 `C/` tools. Only the package's own `Updater` can place those files —
+//!   ART writes no bypass (ART-166) — so **it is not a host file operation**,
+//!   and that, alone, is why it is not a variant here.
+//!
+//!   **Two sentences that stood here until 2026-09-08 were wrong, and are
+//!   corrected rather than deleted** (whole-branch review, M1), because a
+//!   wrong elimination in the file a reader is sent to costs more than none:
+//!
+//!   - *"gated on a requester the script puts to the user
+//!     (`#install-xad-update`)"* — that requester is in BoingBag 3.9-2's own
+//!     `Install` script, and **ART does not run that script**; it runs
+//!     `C/Updater` directly. Nobody is asked anything by the program ART
+//!     launches.
+//!   - *"a second declaration in the recipe and a second run"* — the
+//!     declaration was right and *"a second run"* was not. HstWB Installer
+//!     does it **in the same boot**, four lines after the first invocation
+//!     (`amiga/amiga-os-3.9/S/Amiga-OS-3.9/Install-Boing-Bag-2`, lines 32-36,
+//!     MIT), and so does ART.
+//!
+//!   What shipped: [`super::FollowUp`] in `boingbag-39-2.json`'s
+//!   `amiga_installer.follow_ups`, emitted by
+//!   [`super::workvol::startup_sequence`] as
+//!   `If EXISTS <sys>:C/Version` / `Version >NIL: … 10 FILE` / `If Warn` / the
+//!   second invocation, reporting separately in
+//!   [`super::FOLLOW_UP_FILE`]. Proved on the owner's own material: `9.1` →
+//!   **`xadmaster 10.0 (31.03.2001)`**, 105 368 → 110 100 bytes,
+//!   `follow-up: Some(Ran)`, 156.6 s.
+//!
+//!   The round-3 design's *"`finish.rs` gains `run-again-with`"* is still the
+//!   one instruction the measurement contradicts — the mechanism is real, and
+//!   this is not the module it belongs in.
 
 use std::path::{Path, PathBuf};
 
