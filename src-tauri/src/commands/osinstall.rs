@@ -848,6 +848,89 @@ pub fn osinstall_slots(
     })
 }
 
+// ---------------------------------------------------------------------------
+// osinstall_write_material_guide
+// ---------------------------------------------------------------------------
+
+/// What writing the guide did.
+///
+/// **Two endings, and they stay two** — the file is now there because ART
+/// wrote it, or the file was already there and ART did not touch it. A third,
+/// a real failure, is an error and reaches the screen as one.
+///
+/// **Why the refusal is an outcome and not an `Err`.** `SAFE_CREATE` is about
+/// never replacing what is already on disk, and that is exactly what happens
+/// here: the file is opened with `create_new`, so an existing guide keeps
+/// every byte it had. What is answered back is a different question — what
+/// the screen should say — and a `CoreError` sentence is English by
+/// construction (ART-060: `errorText`'s own opening paragraph is that a
+/// free-text English sentence cannot be translated, only rebuilt from parts).
+/// A typed answer lets the screen say *"already there; delete it to write a
+/// fresh one"* in the user's own language without parsing English, which is
+/// the whole reason `Phrase` exists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "state")]
+pub enum GuideOutcome {
+    /// Written, at this path.
+    Written { path: String },
+    /// A file of that name was already in the folder. **Not read, not
+    /// replaced, not appended to** — the path is answered so the screen can
+    /// name the file the user has to delete.
+    AlreadyThere { path: String },
+}
+
+/// Write *"what goes in this folder"* into one of the user's own material
+/// folders (design § 3.7).
+///
+/// **Only on a click, and only into the folder that click named.** ART does
+/// not write into a folder because somebody pointed at it; this command
+/// exists so a person can ask, and it writes exactly one file. The scratch
+/// root does not come into it — this is the user's own folder, not a staging
+/// site.
+///
+/// The text is [`slots::guide_text`]'s, composed from the release's own slots
+/// in position order, so it cannot drift from what ART actually accepts. The
+/// two languages are data beside the recipes (`recipes/guide.<lang>.json`);
+/// `language` is the UI's own code and anything unrecognised falls back to
+/// English rather than refusing.
+///
+/// `SAFE_CREATE`: `create_new`, so a guide already in the folder is never
+/// touched — see [`GuideOutcome`] for why that answer is an outcome rather
+/// than an error.
+#[tauri::command]
+pub fn osinstall_write_material_guide(
+    folder: PathBuf,
+    release: String,
+    language: String,
+) -> AppResult<GuideOutcome> {
+    let slots = slots::slots_for(&release)?;
+    let words = slots::guide_strings(&language)?;
+    let text = slots::guide_text(&slots, &release, &language)?;
+
+    // `safe_join`, and not `folder.join(filename)`: the name comes from a
+    // shipped data file, but the one rule ART keeps about turning a name into
+    // a path has no exceptions for names ART wrote itself (`core/security`).
+    let path = crate::core::security::safe_join(&folder, &words.filename)
+        .map_err(|err| CoreError::InvalidInput(err.to_string()))?;
+    let display = path.display().to_string();
+
+    match std::fs::File::options()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(mut file) => {
+            use std::io::Write;
+            file.write_all(text.as_bytes()).map_err(CoreError::Io)?;
+            Ok(GuideOutcome::Written { path: display })
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Ok(GuideOutcome::AlreadyThere { path: display })
+        }
+        Err(e) => Err(CoreError::Io(e).into()),
+    }
+}
+
 /// What each Amiga-installable package's **own** wrapper archive says its
 /// installer program is, as `(package id, "45.15")`.
 ///
@@ -5494,5 +5577,105 @@ mod tests {
                 expect_keys(&value, fields);
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // osinstall_write_material_guide (design § 3.7)
+    // -----------------------------------------------------------------------
+
+    /// The ordinary case: a folder with nothing in it gets the guide, and the
+    /// guide is the composed text rather than a stub.
+    #[test]
+    fn the_guide_is_written_into_the_folder_the_click_named() {
+        let dir = scratch("guide-write");
+        let outcome =
+            osinstall_write_material_guide(dir.clone(), "AmigaOS 3.9".into(), "en".into()).unwrap();
+
+        let GuideOutcome::Written { path } = &outcome else {
+            panic!("expected a written guide, got {outcome:?}");
+        };
+        let written = PathBuf::from(path);
+        assert_eq!(
+            written.file_name().unwrap().to_string_lossy(),
+            "ART - what goes here.txt",
+            "the name comes from the guide's own data, not from the caller"
+        );
+        assert_eq!(written.parent().unwrap(), dir.as_path());
+
+        let text = std::fs::read_to_string(&written).unwrap();
+        let expected = slots::guide_text(
+            &slots::slots_for("AmigaOS 3.9").unwrap(),
+            "AmigaOS 3.9",
+            "en",
+        )
+        .unwrap();
+        assert_eq!(text, expected, "the file is the composed guide, verbatim");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `SAFE_CREATE`. The point is not that ART says something — it is that
+    /// the bytes already in the folder are still the bytes in the folder
+    /// afterwards. A guide somebody annotated, or a file of that name they
+    /// wrote themselves, is not ART's to replace.
+    #[test]
+    fn a_guide_already_in_the_folder_is_never_replaced() {
+        let dir = scratch("guide-exists");
+        let path = dir.join("ART - what goes here.txt");
+        std::fs::write(&path, b"the owner's own notes").unwrap();
+
+        let outcome =
+            osinstall_write_material_guide(dir.clone(), "AmigaOS 3.9".into(), "en".into()).unwrap();
+
+        assert!(
+            matches!(outcome, GuideOutcome::AlreadyThere { .. }),
+            "expected the already-there ending, got {outcome:?}"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"the owner's own notes",
+            "SAFE_CREATE: not replaced, not appended to, not even opened for writing"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Turkish writes a Turkish file under a Turkish name — the filename is
+    /// part of the guide's own data, which is what lets the command take a
+    /// language and no filename at all.
+    #[test]
+    fn the_turkish_guide_has_its_own_name_and_its_own_words() {
+        let dir = scratch("guide-tr");
+        let outcome =
+            osinstall_write_material_guide(dir.clone(), "AmigaOS 3.9".into(), "tr".into()).unwrap();
+        let GuideOutcome::Written { path } = &outcome else {
+            panic!("expected a written guide, got {outcome:?}");
+        };
+        assert!(
+            path.ends_with("ART - buraya ne konur.txt"),
+            "{path} is not the Turkish name"
+        );
+        let text = std::fs::read_to_string(path).unwrap();
+        assert!(text.contains("GEREKLİ"), "{text}");
+        assert!(!text.contains("REQUIRED"), "no English leaked in: {text}");
+        // And the two really are two files, not one name twice.
+        assert!(!dir.join("ART - what goes here.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The outcome's own wire shape, pinned for the reason every response
+    /// type in this module is: `src/lib/osinstall.ts` writes these key names
+    /// by hand, and the screen switches on `state` with a case per variant.
+    #[test]
+    fn the_guide_outcome_serialises_with_the_keys_this_test_pins() {
+        let written = serde_json::to_value(GuideOutcome::Written {
+            path: "E:\\material\\ART - what goes here.txt".into(),
+        })
+        .unwrap();
+        assert_eq!(written["state"], "written");
+        assert_eq!(written["path"], "E:\\material\\ART - what goes here.txt");
+        let already = serde_json::to_value(GuideOutcome::AlreadyThere {
+            path: "E:\\material\\ART - what goes here.txt".into(),
+        })
+        .unwrap();
+        assert_eq!(already["state"], "alreadyThere");
     }
 }

@@ -41,7 +41,15 @@ interface Component {
 /** Every shipped release recipe, read off disk rather than listed here — a
  *  recipe added to the folder is checked without anybody remembering to add
  *  it. Package recipes live in `recipes/packages/` and are a subdirectory, so
- *  `readdirSync` on the top level picks up releases only. */
+ *  `readdirSync` on the top level picks up releases only.
+ *
+ *  **A file with no `components` is not a release recipe**, and the folder
+ *  now holds two of them: `guide.en.json` / `guide.tr.json`, the drop-folder
+ *  guide's own two languages (design § 3.7), which live beside the recipes
+ *  because that is what they are composed from. Filtered on the shape rather
+ *  than on the names, so the next data file added here does not have to be
+ *  remembered either — and `has recipes` below still fails loudly if the
+ *  filter ever empties the list. */
 function recipes(): { file: string; components: Component[] }[] {
   return readdirSync(RECIPES)
     .filter((name) => name.endsWith(".json"))
@@ -49,10 +57,13 @@ function recipes(): { file: string; components: Component[] }[] {
       file,
       components: (
         JSON.parse(readFileSync(resolve(RECIPES, file), "utf8")) as {
-          components: Component[];
+          components?: Component[];
         }
       ).components,
-    }));
+    }))
+    .filter((entry): entry is { file: string; components: Component[] } =>
+      Array.isArray(entry.components)
+    );
 }
 
 /** Whether a dotted key resolves to a string in a catalogue. */

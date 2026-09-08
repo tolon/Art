@@ -1508,6 +1508,47 @@ export async function osinstallSlots(
   });
 }
 
+/**
+ * What writing the drop-folder guide did. Mirrors
+ * `commands::osinstall::GuideOutcome`.
+ *
+ * **Two endings, and they stay two.** *Written* and *there already* are
+ * different next steps — one is done, the other asks the user to delete a
+ * file — and a third, a real failure, arrives as a rejection rather than as
+ * an outcome. `already-there` is not an error: `SAFE_CREATE` means the file
+ * on disk was not touched, which is the guarantee; what to say about it is a
+ * sentence, and a sentence has to be translatable (ART-060).
+ */
+export type GuideOutcome =
+  | { state: "written"; path: string }
+  | { state: "alreadyThere"; path: string };
+
+/**
+ * Write *"what goes in this folder"* into one of the build's material folders
+ * (design § 3.7).
+ *
+ * **Only ever from a click.** ART does not write into a user's folder because
+ * they pointed at it; this exists so a person can ask for the list, in the
+ * folder where it is useful. The text is composed on the Rust side from the
+ * release's own slots, so it cannot drift from what ART actually accepts, and
+ * its **filename comes from the same data** — which is why this takes a
+ * language and not a name.
+ *
+ * `language` is the UI's own code (`i18n.language`, without its region);
+ * anything Rust has no guide for falls back to English rather than refusing.
+ */
+export async function osinstallWriteMaterialGuide(
+  folder: string,
+  release: InstallRelease,
+  language: string
+): Promise<GuideOutcome> {
+  return invoke<GuideOutcome>("osinstall_write_material_guide", {
+    folder,
+    release,
+    language,
+  });
+}
+
 /** The event `osinstall_collisions`'s own background job answers on. */
 export const OSINSTALL_COLLISIONS_EVENT = "osinstall-collisions-result";
 

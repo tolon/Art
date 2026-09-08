@@ -2243,7 +2243,14 @@
       "readoutHeading": "What this release needs, and what your folders hold",
       "readoutFailed": "ART could not work out what these folders hold: {{detail}}. That is a fault in ART, not a statement about your files.",
       "required": "required",
-      "optional": "optional"
+      "optional": "optional",
+      "guide": {
+        "intro": "ART can write this list into a folder as a text file, so you have it where the files are. Nothing is written until you ask for it.",
+        "button": "Write a guide into {{folder}}",
+        "written": "Written: {{path}}",
+        "alreadyThere": "{{path}} is already there, and ART did not touch it. Delete it and ask again for a fresh one.",
+        "failed": "ART could not write the guide: {{detail}}"
+      }
     },
     "slots": {
       "foundByNameUnread": "{{file}} — this file calls itself {{identity}}, which is what {{name}} is. Nobody has read its bytes yet, so ART has not checked them against its tables — identify this folder by content to confirm it.",

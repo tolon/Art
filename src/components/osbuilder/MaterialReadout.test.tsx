@@ -13,6 +13,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import i18n from "i18next";
 
 // Side-effecting import: initialises the real i18next instance synchronously,
@@ -31,10 +32,12 @@ import type {
 } from "@/lib/osinstall";
 
 const slotsMock = vi.hoisted(() => vi.fn());
+const guideMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
   osinstallSlots: slotsMock,
+  osinstallWriteMaterialGuide: guideMock,
 }));
 
 const { MaterialReadout } = await import("@/components/osbuilder/MaterialReadout");
@@ -124,6 +127,7 @@ function renderReadout() {
 
 beforeEach(() => {
   slotsMock.mockReset().mockResolvedValue(report());
+  guideMock.mockReset();
 });
 
 afterEach(async () => {
@@ -570,5 +574,108 @@ describe("the identification pass changes what the readout may say", () => {
 
     settle(report({ states: [state()] }));
     await screen.findByTestId("material-set-line");
+  });
+});
+
+describe("the list, written into the folder (design § 3.7)", () => {
+  /// **Nothing is written until somebody asks.** The button is the ask; the
+  /// readout rendering is not. ART does not write into a user's folder
+  /// because they pointed at it — `remembered.ts`'s rule about the user's own
+  /// settings, applied to the user's own disk.
+  it("writes nothing at all until the button is pressed", async () => {
+    renderReadout();
+    await screen.findByTestId("material-guide");
+    expect(guideMock).not.toHaveBeenCalled();
+  });
+
+  it("writes one guide per folder, in the folder that button names", async () => {
+    guideMock.mockResolvedValue({
+      state: "written",
+      path: "E:\\second\\ART - what goes here.txt",
+    });
+    render(
+      <MaterialReadout
+        release="AmigaOS 3.9"
+        folders={["E:\\first", "E:\\second"]}
+        treeRoot={null}
+        rom={null}
+        identifiedPass={0}
+      />
+    );
+
+    const buttons = await screen.findAllByTestId("material-guide-write");
+    expect(buttons).toHaveLength(2);
+    await userEvent.setup().click(buttons[1]);
+
+    // The folder that button belongs to, the chosen release, and the UI's own
+    // language — the filename is the guide's own data and never travels.
+    await waitFor(() =>
+      expect(guideMock).toHaveBeenCalledWith("E:\\second", "AmigaOS 3.9", "en")
+    );
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.material.guide.written", {
+          path: "E:\\second\\ART - what goes here.txt",
+        })
+      )
+    ).toBeTruthy();
+    // And only that folder's line says anything: a "written" line under a
+    // folder ART did not touch is the screen claiming what it did not do.
+    expect(screen.queryAllByTestId("material-guide-written")).toHaveLength(1);
+  });
+
+  /// `SAFE_CREATE`, said as its own ending. "Already there" and "ART could
+  /// not write it" are two different next steps — delete a file, or something
+  /// is wrong — and collapsing them is this project's named defect.
+  it("keeps 'already there' apart from a failure, and names the file to delete", async () => {
+    guideMock.mockResolvedValue({
+      state: "alreadyThere",
+      path: "E:\\amiga\\os39\\ART - what goes here.txt",
+    });
+    renderReadout();
+    await userEvent.setup().click(await screen.findByTestId("material-guide-write"));
+
+    const line = await screen.findByTestId("material-guide-alreadyThere");
+    expect(line.textContent).toBe(
+      i18n.t("osinstall.material.guide.alreadyThere", {
+        path: "E:\\amiga\\os39\\ART - what goes here.txt",
+      })
+    );
+    expect(screen.queryByTestId("material-guide-failed")).toBeNull();
+    expect(screen.queryByTestId("material-guide-written")).toBeNull();
+  });
+
+  it("says a real failure is ART's, not a statement about the folder", async () => {
+    guideMock.mockRejectedValue(new Error("access is denied"));
+    renderReadout();
+    await userEvent.setup().click(await screen.findByTestId("material-guide-write"));
+
+    const line = await screen.findByTestId("material-guide-failed");
+    expect(line.textContent).toContain("access is denied");
+    expect(screen.queryByTestId("material-guide-written")).toBeNull();
+  });
+
+  /// The language the *user* is reading in decides which guide is written —
+  /// the Rust side owns the filename and the words, and this is the one thing
+  /// the screen has to get right about it.
+  it("asks for the guide in the language on screen", async () => {
+    await changeLanguage("tr");
+    guideMock.mockResolvedValue({
+      state: "written",
+      path: "E:\\amiga\\os39\\ART - buraya ne konur.txt",
+    });
+    renderReadout();
+    await userEvent.setup().click(await screen.findByTestId("material-guide-write"));
+
+    await waitFor(() =>
+      expect(guideMock).toHaveBeenCalledWith("E:\\amiga\\os39", "AmigaOS 3.9", "tr")
+    );
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.material.guide.written", {
+          path: "E:\\amiga\\os39\\ART - buraya ne konur.txt",
+        })
+      )
+    ).toBeTruthy();
   });
 });

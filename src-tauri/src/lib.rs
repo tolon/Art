@@ -162,6 +162,7 @@ pub fn run() {
             commands::osinstall::osinstall_components,
             commands::osinstall::osinstall_packages,
             commands::osinstall::osinstall_slots,
+            commands::osinstall::osinstall_write_material_guide,
             commands::osinstall::osinstall_collisions,
             commands::osinstall::osinstall_component_collisions,
             commands::osinstall::osinstall_add_package,

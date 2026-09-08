@@ -1123,8 +1123,366 @@ pub fn summarize(release: &str, states: &[SlotState]) -> SetSummary {
     summary
 }
 
+// ---------------------------------------------------------------------------
+// The drop-folder guide (design § 3.7)
+// ---------------------------------------------------------------------------
+
+const GUIDE_EN_JSON: &str = include_str!("recipes/guide.en.json");
+const GUIDE_TR_JSON: &str = include_str!("recipes/guide.tr.json");
+
+/// The guide's own words, in one language.
+///
+/// **Data beside the recipes, not an i18n key.** A Rust module never renders
+/// a key it does not have (CLAUDE.md), and `src/i18n` is the *screen's*
+/// catalogue — reachable only from React, which is not what writes this file.
+/// So the two languages live here, in the same folder as the recipes the
+/// guide is composed from, and `guide_parity_holds_between_the_two_languages`
+/// keeps them saying the same things the way the frontend's own parity test
+/// does for `en.json`/`tr.json`.
+///
+/// Every field is required. `deny_unknown_fields` plus named fields is what
+/// makes "this language is missing a line" a parse failure rather than a
+/// silently empty paragraph in somebody's folder — the same reason
+/// `recipe.rs` deserializes into a struct rather than a map.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GuideStrings {
+    /// What the file is called. **The name is part of the guide's own data**:
+    /// the command takes a language and no filename, and the SAFE_CREATE
+    /// check has to be made against the real name before anything is opened.
+    pub filename: String,
+    pub heading: String,
+    /// `{release}`.
+    pub release: String,
+    pub intro: String,
+    pub no_downloads: String,
+    pub required: String,
+    pub optional: String,
+    /// `{filenames}`.
+    pub expected: String,
+    pub filenames_unknown: String,
+    /// `{provenance}`.
+    pub provenance: String,
+    pub provenance_unknown: String,
+    /// `{needs}`.
+    pub needs_first: String,
+    pub needs_nothing: String,
+    pub without_required: String,
+    pub without_optional: String,
+    pub footer: String,
+}
+
+/// The strings for `language`, or English for anything else.
+///
+/// **A fallback rather than a refusal**, and the direction is deliberate: the
+/// only caller is the UI, which sends its own two language codes, so an
+/// unknown one means ART has grown a third language and nobody has written
+/// this file for it yet. Refusing would take a working button away; falling
+/// back writes a guide the user can read even if it is not in their language,
+/// which is what the guide is for.
+pub fn guide_strings(language: &str) -> CoreResult<GuideStrings> {
+    let json = match language {
+        "tr" => GUIDE_TR_JSON,
+        _ => GUIDE_EN_JSON,
+    };
+    serde_json::from_str(json).map_err(|e| CoreError::Malformed {
+        format: format!("guide.{language}.json"),
+        detail: e.to_string(),
+    })
+}
+
+/// One `{placeholder}` filled in. Deliberately not a template engine: three
+/// substitutions, each with exactly one placeholder, and a missing one leaves
+/// the sentence as its author wrote it rather than half-rendered.
+fn fill(template: &str, placeholder: &str, value: &str) -> String {
+    template.replace(&format!("{{{placeholder}}}"), value)
+}
+
+/// The text of *"what goes in this folder"*, composed from the slots.
+///
+/// **Generated from the slot list, so it cannot drift from what the code
+/// accepts** (design § 3.7). Every line is something the recipes state: the
+/// names ART expects, the source note the media rows carry, and the order
+/// `requires` already encodes. Nothing here is a URL — ART downloads none of
+/// this and the file says so — and nothing is a guess: a slot with no
+/// recorded file name says that, rather than printing "Expected ." at
+/// somebody.
+///
+/// Takes [`Slot`]s and not [`SlotState`]s on purpose. The guide answers *what
+/// this release needs*, which is true of the release wherever it is written;
+/// a state is about one folder set at one moment, and a file dropped into a
+/// folder tomorrow would make a guide composed from states stale in a way the
+/// reader could not see.
+///
+/// `slot_names` is used for the order line so it names a prerequisite the way
+/// the reader will see it in this same file, never by slot id.
+pub fn guide_text(slots: &[Slot], release: &str, language: &str) -> CoreResult<String> {
+    let words = guide_strings(language)?;
+    let names: Vec<(&str, &str)> = slots
+        .iter()
+        .map(|slot| (slot.id.as_str(), slot.name.as_str()))
+        .collect();
+
+    let mut out = String::new();
+    out.push_str(&words.heading);
+    out.push('\n');
+    out.push_str(&"=".repeat(words.heading.chars().count()));
+    out.push_str("\n\n");
+    out.push_str(&fill(&words.release, "release", release));
+    out.push_str("\n\n");
+    out.push_str(&words.intro);
+    out.push_str("\n\n");
+    out.push_str(&words.no_downloads);
+    out.push_str("\n\n");
+
+    // Position order — the order the material actually goes on, which is the
+    // order somebody filling a folder wants to read it in.
+    let mut ordered: Vec<&Slot> = slots.iter().collect();
+    ordered.sort_by_key(|slot| slot.position);
+
+    for slot in ordered {
+        let tag = match slot.required {
+            true => &words.required,
+            false => &words.optional,
+        };
+        out.push_str(&format!("{tag}  {}\n", slot.name));
+        out.push_str(&format!(
+            "  {}\n",
+            match slot.filenames.is_empty() {
+                true => words.filenames_unknown.clone(),
+                false => fill(&words.expected, "filenames", &slot.filenames.join(", ")),
+            }
+        ));
+        out.push_str(&format!(
+            "  {}\n",
+            match &slot.provenance {
+                Some(source) => fill(&words.provenance, "provenance", source),
+                None => words.provenance_unknown.clone(),
+            }
+        ));
+        out.push_str(&format!(
+            "  {}\n",
+            match slot.requires.is_empty() {
+                true => words.needs_nothing.clone(),
+                false => fill(
+                    &words.needs_first,
+                    "needs",
+                    &slot
+                        .requires
+                        .iter()
+                        .map(|id| {
+                            names
+                                .iter()
+                                .find(|(other, _)| other == id)
+                                .map(|(_, name)| (*name).to_string())
+                                .unwrap_or_else(|| id.clone())
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ),
+            }
+        ));
+        out.push_str(&format!(
+            "  {}\n\n",
+            match slot.required {
+                true => &words.without_required,
+                false => &words.without_optional,
+            }
+        ));
+    }
+
+    out.push_str(&words.footer);
+    out.push('\n');
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
+    // -----------------------------------------------------------------------
+    // The drop-folder guide (design § 3.7)
+    // -----------------------------------------------------------------------
+
+    /// The frontend's own `parity.test.ts`, one folder over.
+    ///
+    /// A missing line in one language is a paragraph a Turkish reader simply
+    /// does not get, and nothing about it fails to compile. `deny_unknown_fields`
+    /// plus named fields makes both directions a parse error; this asserts
+    /// the two remaining things a struct cannot: that nothing is blank, and
+    /// that a sentence carrying a placeholder in one language still carries
+    /// it in the other.
+    #[test]
+    fn guide_parity_holds_between_the_two_languages() {
+        let en = guide_strings("en").unwrap();
+        let tr = guide_strings("tr").unwrap();
+
+        let pairs: Vec<(&str, &String, &String)> = vec![
+            ("filename", &en.filename, &tr.filename),
+            ("heading", &en.heading, &tr.heading),
+            ("release", &en.release, &tr.release),
+            ("intro", &en.intro, &tr.intro),
+            ("noDownloads", &en.no_downloads, &tr.no_downloads),
+            ("required", &en.required, &tr.required),
+            ("optional", &en.optional, &tr.optional),
+            ("expected", &en.expected, &tr.expected),
+            (
+                "filenamesUnknown",
+                &en.filenames_unknown,
+                &tr.filenames_unknown,
+            ),
+            ("provenance", &en.provenance, &tr.provenance),
+            (
+                "provenanceUnknown",
+                &en.provenance_unknown,
+                &tr.provenance_unknown,
+            ),
+            ("needsFirst", &en.needs_first, &tr.needs_first),
+            ("needsNothing", &en.needs_nothing, &tr.needs_nothing),
+            (
+                "withoutRequired",
+                &en.without_required,
+                &tr.without_required,
+            ),
+            (
+                "withoutOptional",
+                &en.without_optional,
+                &tr.without_optional,
+            ),
+            ("footer", &en.footer, &tr.footer),
+        ];
+
+        for (name, english, turkish) in &pairs {
+            assert!(!english.trim().is_empty(), "{name} is blank in English");
+            assert!(!turkish.trim().is_empty(), "{name} is blank in Turkish");
+            for placeholder in ["{release}", "{filenames}", "{provenance}", "{needs}"] {
+                assert_eq!(
+                    english.contains(placeholder),
+                    turkish.contains(placeholder),
+                    "{name}: {placeholder} is in one language and not the other"
+                );
+            }
+        }
+
+        // Two files, two names. One name for both would put the Turkish text
+        // under an English name — and, worse, make the SAFE_CREATE check
+        // answer about the wrong file after a language switch.
+        assert_ne!(en.filename, tr.filename);
+        assert!(en.required != tr.required, "REQUIRED is not a Turkish word");
+    }
+
+    /// An unrecognised language answers rather than refusing: the button
+    /// keeps working the day ART grows a third language and nobody has
+    /// written this file for it yet.
+    #[test]
+    fn an_unknown_language_falls_back_to_english_rather_than_refusing() {
+        assert_eq!(guide_strings("de").unwrap(), guide_strings("en").unwrap());
+    }
+
+    /// Every slot gets its own entry, and each entry says the five things
+    /// somebody filling a folder needs: whether they have to have it, what it
+    /// is called, where it comes from, what has to come first, and what
+    /// happens without it.
+    #[test]
+    fn every_slot_gets_a_required_or_optional_entry_in_both_languages() {
+        let slots = slots_for("AmigaOS 3.9").unwrap();
+        assert!(slots.len() > 3, "3.9 has more than three slots");
+
+        for language in ["en", "tr"] {
+            let words = guide_strings(language).unwrap();
+            let text = guide_text(&slots, "AmigaOS 3.9", language).unwrap();
+
+            assert!(
+                text.contains("AmigaOS 3.9"),
+                "{language}: the release is not named"
+            );
+            for slot in &slots {
+                let tag = match slot.required {
+                    true => &words.required,
+                    false => &words.optional,
+                };
+                let line = format!("{tag}  {}", slot.name);
+                assert!(text.contains(&line), "{language}: no entry for {}", slot.id);
+            }
+            // Both tags are really used by 3.9's own slot list — a guide that
+            // said REQUIRED about everything would satisfy the loop above.
+            assert!(
+                text.contains(&words.required),
+                "{language}: nothing required"
+            );
+            assert!(
+                text.contains(&words.optional),
+                "{language}: nothing optional"
+            );
+            assert!(text.contains(&words.without_required));
+            assert!(text.contains(&words.without_optional));
+            // No URL, ever: ART downloads none of this (design § 4).
+            assert!(!text.contains("http"), "{language}: the guide names a URL");
+        }
+    }
+
+    /// The order line names a prerequisite the way the reader will see it in
+    /// this same file — never by slot id, which is ART's own bookkeeping.
+    /// This is fix round 1's F7 one document over.
+    #[test]
+    fn the_order_line_names_what_comes_first_by_name_not_by_slot_id() {
+        let slots = slots_for("AmigaOS 3.9").unwrap();
+        let blocked = slots
+            .iter()
+            .find(|slot| !slot.requires.is_empty())
+            .expect("3.9 has a package that requires another");
+        let prerequisite = slots
+            .iter()
+            .find(|slot| slot.id == blocked.requires[0])
+            .expect("a requires entry names a slot in the same list");
+        let words = guide_strings("en").unwrap();
+        let text = guide_text(&slots, "AmigaOS 3.9", "en").unwrap();
+
+        assert!(
+            text.contains(&fill(&words.needs_first, "needs", &prerequisite.name)),
+            "the order line does not name {} by name:
+{text}",
+            prerequisite.name
+        );
+        assert!(
+            !text.contains(&blocked.requires[0]),
+            "a slot id reached the guide: {}",
+            blocked.requires[0]
+        );
+        // And a slot with no prerequisite says so rather than nothing at all.
+        assert!(text.contains(&words.needs_nothing));
+    }
+
+    /// A slot ART has no recorded file name for says that, instead of
+    /// printing "Expected ." at somebody — the sentence a reader cannot act
+    /// on, which is the same choice `slotLines` makes on screen.
+    #[test]
+    fn a_slot_with_no_recorded_names_says_so_rather_than_expecting_nothing() {
+        let bare = Slot {
+            id: "package:nameless".into(),
+            kind: SlotKind::Package,
+            name: "Nameless".into(),
+            identity: "Nameless".into(),
+            artefact: None,
+            required: false,
+            filenames: Vec::new(),
+            provenance: None,
+            position: 0,
+            requires: Vec::new(),
+            superseded_by: Vec::new(),
+        };
+        let words = guide_strings("en").unwrap();
+        let text = guide_text(&[bare], "AmigaOS 3.9", "en").unwrap();
+
+        assert!(text.contains(&words.filenames_unknown), "{text}");
+        assert!(text.contains(&words.provenance_unknown), "{text}");
+        assert!(
+            !text.contains(
+                "Expected file names: 
+"
+            ),
+            "{text}"
+        );
+    }
+
     use super::*;
     use crate::core::osinstall::apply::{AmigaInstallRecord, FileRecord, MediaRecord};
     use crate::core::osinstall::scan::MediaKind;

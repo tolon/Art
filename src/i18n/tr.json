@@ -2243,7 +2243,14 @@
       "readoutHeading": "Bu sürüm neye ihtiyaç duyuyor, klasörlerinizde ne var",
       "readoutFailed": "ART bu klasörlerde ne olduğunu çıkaramadı: {{detail}}. Bu ART'ın kusuru, dosyalarınız hakkında bir yargı değil.",
       "required": "zorunlu",
-      "optional": "isteğe bağlı"
+      "optional": "isteğe bağlı",
+      "guide": {
+        "intro": "ART bu listeyi bir klasöre metin dosyası olarak yazabilir; böylece dosyaların yanında durur. Siz istemeden hiçbir şey yazılmaz.",
+        "button": "{{folder}} klasörüne bir kılavuz yaz",
+        "written": "Yazıldı: {{path}}",
+        "alreadyThere": "{{path}} zaten orada ve ART ona dokunmadı. Yenisini yazdırmak için onu silin ve yeniden isteyin.",
+        "failed": "ART kılavuzu yazamadı: {{detail}}"
+      }
     },
     "slots": {
       "foundByNameUnread": "{{file}} — bu dosya kendine {{identity}} diyor, {{name}} de zaten bu. Baytlarını henüz kimse okumadı, yani ART onları tablolarıyla karşılaştırmadı — doğrulamak için bu klasörü içeriğine göre tanımlayın.",

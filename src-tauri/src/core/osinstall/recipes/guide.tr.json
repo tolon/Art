@@ -1,0 +1,18 @@
+{
+  "filename": "ART - buraya ne konur.txt",
+  "heading": "Bu klasöre ne konur",
+  "release": "Bu liste, ART'ın {release} kurmak için ihtiyaç duyduklarıdır.",
+  "intro": "ART bu dosyayı biri istediği için yazdı. Bu bir liste, bir talimat değil: elinizde bunlardan ne varsa bu klasöre koyun; ART hangi dosyanın hangisi olduğunu adlarına değil, dosyaların kendisine bakarak bulur. Adlar yalnızca ART'ın görmeyi beklediği adlardır; yeniden adlandırdığınız bir dosya da tanınır.",
+  "noDownloads": "ART bunların hiçbirini indirmez, hiç indirmeyecek. Her birinin nereden geldiği altında yazılıdır; siz gidip alırsınız, ART da elinizdekini okur.",
+  "required": "GEREKLİ",
+  "optional": "İSTEĞE BAĞLI",
+  "expected": "Beklenen dosya adları: {filenames}",
+  "filenamesUnknown": "Beklenen dosya adları: ART bunun için kayıtlı bir ad tutmuyor. İçeriğinden tanınır.",
+  "provenance": "Nereden geldiği: {provenance}",
+  "provenanceUnknown": "Nereden geldiği: ART'ın bir notu yok.",
+  "needsFirst": "Şundan sonra kurulur: {needs}",
+  "needsNothing": "Ondan önce yerinde olması gereken bir şey yok.",
+  "withoutRequired": "O olmadan: yapı hiç kurulamaz.",
+  "withoutOptional": "O olmadan: yapı bu parça olmadan kurulur, başka hiçbir şey aksamaz.",
+  "footer": "Bu dosya ART'ındır, sizin değil: kimse onu geri okumaz, silmeniz hiçbir şeyi değiştirmez. Hangi sürümü kurduğunuzu değiştirdikten sonra yenisini isteyin."
+}
