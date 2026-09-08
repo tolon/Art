@@ -2512,8 +2512,8 @@
         "anotherPackagesUpdateArchive": "Bu, {{other}} paketinin kendi güncelleme arşivi, {{selected}}'ınki değil — ama seçili olan {{selected}}. Onu kurmak için {{other}}'ı seçin, ya da buraya {{selected}} paketinin kendi arşivlerini verin.",
         "otherArtefact": "'{{path}}', Paketler adımının Windows tarafından yerleştirdiği {{media}} arşivi — {{selected}} burada {{expected}} istiyor.",
         "otherArtefactGeneric": "'{{path}}', Paketler adımının Windows tarafından yerleştirdiği {{media}} arşivi, bu ekranın değil. Buradaki alanlardan hiçbirine ait değil.",
-        "wrongFieldOverlay": "Bu, paketin güncelleme arşivi; paketin kendisi değil. Aşağıdaki ikinci alana ait.",
-        "wrongFieldPackage": "Bu, paketin kendi arşivi; güncelleme arşivi değil. Yukarıdaki ilk alana ait."
+        "wrongFieldOverlay": "Bu, paketin güncelleme arşivi; paketin kendisi değil. \"{{overlayLabel}}\" alanına ait, \"{{packageLabel}}\" alanına değil.",
+        "wrongFieldPackage": "Bu, paketin kendi arşivi; güncelleme arşivi değil. \"{{packageLabel}}\" alanına ait, \"{{overlayLabel}}\" alanına değil."
       },
       "kickstart": {
         "label": "Kendi Kickstart ROM'unuz",

@@ -950,4 +950,64 @@ describe("ART-277: switching the selected package does not carry its archives", 
     expect(blockers.textContent).toContain("BoingBag 3.9-1");
     expect(screen.getByRole("checkbox").hasAttribute("disabled")).toBe(true);
   });
+
+  // ART-277 re-review's own finding: these two sentences used to render as a
+  // badge directly beside the field they judged, and said "the second field
+  // below" / "the first field above" — true only at that old position. Moved
+  // into the `blockers` box below *both* fields, "below" became backwards
+  // for one of them and "above" was only right by coincidence for the
+  // other. Both now name the field by its own label instead, and these
+  // tests assert the rendered text — not only the phrase key — so a future
+  // move cannot regress the wording silently again.
+  it("names the update-archive field by its own label, not by direction, when that archive sits in the package field", async () => {
+    classifyMock.mockImplementation(async () => ({
+      kind: "the-update-archive",
+      topLevel: ["BoingBag3.9-1-UAE"],
+      expectedMedia: null,
+      expectedOverlays: [],
+    }));
+    withChoices();
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+
+    const blockers = await screen.findByTestId("amiga-install-blockers");
+    expect(blockers.textContent).toContain(
+      i18n.t("osinstall.amigaInstall.overlayArchive.label")
+    );
+    expect(blockers.textContent).toContain(i18n.t("osinstall.amigaInstall.archive.label"));
+    // The old, position-dependent wording must be gone.
+    expect(blockers.textContent).not.toMatch(/second field below/i);
+    expect(screen.getByRole("checkbox").hasAttribute("disabled")).toBe(true);
+  });
+
+  it("names the package field by its own label, not by direction, when the package's own archive sits in the overlay field", async () => {
+    // Both fields hold the package's own archive — the overlay field is the
+    // wrong one, and this is the mistake `wrongFieldPackage` exists to name.
+    classifyMock.mockImplementation(async () => ({
+      kind: "the-package",
+      topLevel: ["BoingBag3.9-1"],
+      expectedMedia: null,
+      expectedOverlays: [],
+    }));
+    useSettingsStore.setState((state) => ({
+      settings: {
+        ...state.settings,
+        winuaePath: "C:/Program Files/WinUAE/winuae64.exe",
+        remembered: {
+          "amigaInstall.package": "boingbag-39-1",
+          "amigaInstall.archive.boingbag-39-1": "D:/pkg/BoingBag39-1.lha",
+          "amigaInstall.overlayArchive.boingbag-39-1": "D:/pkg/BoingBag39-1.lha",
+          "amigaInstall.kickstart": "D:/roms/kick31.rom",
+        },
+      },
+    }));
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+
+    const blockers = await screen.findByTestId("amiga-install-blockers");
+    expect(blockers.textContent).toContain(i18n.t("osinstall.amigaInstall.archive.label"));
+    expect(blockers.textContent).toContain(
+      i18n.t("osinstall.amigaInstall.overlayArchive.label")
+    );
+    expect(blockers.textContent).not.toMatch(/first field above/i);
+    expect(screen.getByRole("checkbox").hasAttribute("disabled")).toBe(true);
+  });
 });

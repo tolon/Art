@@ -253,10 +253,19 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       ...over,
     });
     const otherName = () => "BoingBag 3.9-2";
+    const fieldLabels = { package: "The package's own archive", overlay: "The package's update archive" };
     const phrasesFor = (
       classification: ArchiveClassification,
       field: "package" | "overlay"
-    ) => archiveFieldBlockerPhrase(classification, field, "D:/pkg/x.lha", "BoingBag 3.9-1", otherName);
+    ) =>
+      archiveFieldBlockerPhrase(
+        classification,
+        field,
+        "D:/pkg/x.lha",
+        "BoingBag 3.9-1",
+        otherName,
+        fieldLabels
+      );
 
     expect(
       resolvesAtRuntime(

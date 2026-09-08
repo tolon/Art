@@ -548,6 +548,15 @@ export function readinessBlockers(preview: AmigaInstallPreview): Phrase[] {
  *   the *overlay* field (Major 1: the mirror of the update archive already
  *   caught by the equivalent case at the other end, which Rust's own preview
  *   refuses on its own) and `the-update-archive` in the *package* field.
+ *   **Named by the field's own label, never by direction** (ART-277
+ *   re-review): the first fix round's "the second field below"/"the first
+ *   field above" were written for a badge that used to sit directly beside
+ *   the specific field; moved into a `blockers` box below *both* fields, one
+ *   became backwards (the overlay field is above the box, not below it) and
+ *   the other was only right by coincidence. `fieldLabels` carries the exact
+ *   strings the two `Field`s themselves render — interpolated in, so the
+ *   sentence cannot say a label the screen does not — and is immune to a
+ *   future reordering of the two fields.
  * - **Nothing** — an archive ART does not recognise, or one that is exactly
  *   right, is accepted silently: Rust still validates the real thing at
  *   `compose`, and inventing a warning for "unknown" would be a confident
@@ -558,7 +567,8 @@ export function archiveFieldBlockerPhrase(
   field: "package" | "overlay",
   path: string,
   selectedName: string,
-  otherName: (id: string) => string
+  otherName: (id: string) => string,
+  fieldLabels: { package: string; overlay: string }
 ): Phrase | null {
   const parsed = parseClassification(classification);
   if (!parsed) return null;
@@ -589,9 +599,19 @@ export function archiveFieldBlockerPhrase(
           };
     }
     case "the-package":
-      return field === "overlay" ? { key: "osinstall.amigaInstall.classify.wrongFieldPackage" } : null;
+      return field === "overlay"
+        ? {
+            key: "osinstall.amigaInstall.classify.wrongFieldPackage",
+            params: { packageLabel: fieldLabels.package, overlayLabel: fieldLabels.overlay },
+          }
+        : null;
     case "the-update-archive":
-      return field === "package" ? { key: "osinstall.amigaInstall.classify.wrongFieldOverlay" } : null;
+      return field === "package"
+        ? {
+            key: "osinstall.amigaInstall.classify.wrongFieldOverlay",
+            params: { packageLabel: fieldLabels.package, overlayLabel: fieldLabels.overlay },
+          }
+        : null;
     default:
       return null;
   }

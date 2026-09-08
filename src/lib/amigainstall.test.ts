@@ -354,10 +354,24 @@ describe("parseClassification", () => {
 
 describe("archiveFieldBlockerPhrase", () => {
   const otherName = (id: string) => (id === "boingbag-39-2" ? "BoingBag 3.9-2" : id);
+  // The real labels the two `Field`s render — not stand-ins — so the
+  // "belongs in ..." assertions below prove the phrase actually carries the
+  // label a reader would see on screen (ART-277 re-review).
+  const labels = {
+    package: "The package's own archive",
+    overlay: "The package's update archive (only if it needs one)",
+  };
 
   it("names both packages when the archive is recognisably another release package's own", () => {
     const c = classification("another-package:boingbag-39-2");
-    const phrase = archiveFieldBlockerPhrase(c, "package", "D:/pkg/x.lha", "BoingBag 3.9-1", otherName);
+    const phrase = archiveFieldBlockerPhrase(
+      c,
+      "package",
+      "D:/pkg/x.lha",
+      "BoingBag 3.9-1",
+      otherName,
+      labels
+    );
     expect(phrase).toEqual({
       key: "osinstall.amigaInstall.classify.anotherPackage",
       params: { other: "BoingBag 3.9-2", selected: "BoingBag 3.9-1" },
@@ -365,13 +379,20 @@ describe("archiveFieldBlockerPhrase", () => {
     // And the same regardless of which field it sits in — a wrong package is
     // wrong wherever it was put.
     expect(
-      archiveFieldBlockerPhrase(c, "overlay", "D:/pkg/x.lha", "BoingBag 3.9-1", otherName)
+      archiveFieldBlockerPhrase(c, "overlay", "D:/pkg/x.lha", "BoingBag 3.9-1", otherName, labels)
     ).toEqual(phrase);
   });
 
   it("says it is that package's own update archive, not its own archive", () => {
     const c = classification("another-packages-update-archive:boingbag-39-2");
-    const phrase = archiveFieldBlockerPhrase(c, "overlay", "D:/pkg/x.lha", "BoingBag 3.9-1", otherName);
+    const phrase = archiveFieldBlockerPhrase(
+      c,
+      "overlay",
+      "D:/pkg/x.lha",
+      "BoingBag 3.9-1",
+      otherName,
+      labels
+    );
     expect(phrase).toEqual({
       key: "osinstall.amigaInstall.classify.anotherPackagesUpdateArchive",
       params: { other: "BoingBag 3.9-2", selected: "BoingBag 3.9-1" },
@@ -380,7 +401,14 @@ describe("archiveFieldBlockerPhrase", () => {
 
   it("names the shared artefact and what this field expects, when the selected package declares it", () => {
     const c = classification("other-artefact:Locale3.9", { expectedMedia: "BoingBag3.9-1" });
-    const phrase = archiveFieldBlockerPhrase(c, "package", "D:/pkg/Locale3.9.lha", "BoingBag 3.9-1", otherName);
+    const phrase = archiveFieldBlockerPhrase(
+      c,
+      "package",
+      "D:/pkg/Locale3.9.lha",
+      "BoingBag 3.9-1",
+      otherName,
+      labels
+    );
     expect(phrase).toEqual({
       key: "osinstall.amigaInstall.classify.otherArtefact",
       params: {
@@ -396,33 +424,54 @@ describe("archiveFieldBlockerPhrase", () => {
     // The overlay field, for a selected package that declares no overlay at
     // all — `expectedOverlays` is empty, so there is nothing to name.
     const c = classification("other-artefact:Locale3.9", { expectedOverlays: [] });
-    const phrase = archiveFieldBlockerPhrase(c, "overlay", "D:/pkg/Locale3.9.lha", "BoingBag 3.9-2", otherName);
+    const phrase = archiveFieldBlockerPhrase(
+      c,
+      "overlay",
+      "D:/pkg/Locale3.9.lha",
+      "BoingBag 3.9-2",
+      otherName,
+      labels
+    );
     expect(phrase).toEqual({
       key: "osinstall.amigaInstall.classify.otherArtefactGeneric",
       params: { path: "D:/pkg/Locale3.9.lha", media: "Locale3.9" },
     });
   });
 
-  it("says the update archive belongs in the second field when it is in the first", () => {
+  it("names the update archive's own field, not by direction, when it is in the package field", () => {
     const phrase = archiveFieldBlockerPhrase(
       classification("the-update-archive"),
       "package",
       "D:/pkg/x.lha",
       "BoingBag 3.9-1",
-      otherName
+      otherName,
+      labels
     );
     expect(phrase?.key).toBe("osinstall.amigaInstall.classify.wrongFieldOverlay");
+    // ART-277 re-review's own finding: the old wording said "the second
+    // field below", which is spatially backwards once this renders in the
+    // `blockers` box below both fields. The label must be carried, not a
+    // direction — asserted on the params a `t()` call actually reads.
+    expect(phrase?.params).toEqual({
+      packageLabel: labels.package,
+      overlayLabel: labels.overlay,
+    });
   });
 
-  it("says the package's own archive belongs in the first field when it is in the second", () => {
+  it("names the package's own field, not by direction, when its archive is in the overlay field", () => {
     const phrase = archiveFieldBlockerPhrase(
       classification("the-package"),
       "overlay",
       "D:/pkg/x.lha",
       "BoingBag 3.9-1",
-      otherName
+      otherName,
+      labels
     );
     expect(phrase?.key).toBe("osinstall.amigaInstall.classify.wrongFieldPackage");
+    expect(phrase?.params).toEqual({
+      packageLabel: labels.package,
+      overlayLabel: labels.overlay,
+    });
   });
 
   it("says nothing for the right archive in the right field, or an unrecognised one", () => {
@@ -432,7 +481,8 @@ describe("archiveFieldBlockerPhrase", () => {
         "package",
         "D:/pkg/x.lha",
         "BoingBag 3.9-1",
-        otherName
+        otherName,
+        labels
       )
     ).toBeNull();
     expect(
@@ -441,7 +491,8 @@ describe("archiveFieldBlockerPhrase", () => {
         "overlay",
         "D:/pkg/x.lha",
         "BoingBag 3.9-1",
-        otherName
+        otherName,
+        labels
       )
     ).toBeNull();
     expect(
@@ -450,11 +501,12 @@ describe("archiveFieldBlockerPhrase", () => {
         "package",
         "D:/pkg/x.lha",
         "BoingBag 3.9-1",
-        otherName
+        otherName,
+        labels
       )
     ).toBeNull();
     expect(
-      archiveFieldBlockerPhrase(null, "package", "D:/pkg/x.lha", "BoingBag 3.9-1", otherName)
+      archiveFieldBlockerPhrase(null, "package", "D:/pkg/x.lha", "BoingBag 3.9-1", otherName, labels)
     ).toBeNull();
   });
 });

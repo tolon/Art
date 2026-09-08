@@ -2009,6 +2009,74 @@ mod tests {
         );
     }
 
+    /// **ART-277 re-review, Medium 1's own gap: the "another package's own
+    /// *update* archive" sentence, asserted directly at this layer.** The
+    /// first fix round pinned this shape only through the command layer's
+    /// `kind` string (`classify_top_level_names_another_packages_update_archive`);
+    /// nothing asserted the *core* sentence text `overlay_mismatch_sentence`
+    /// actually produces when a catalogue match is via `overlay_drawers`
+    /// rather than `media`.
+    #[test]
+    fn a_second_archive_matching_another_known_packages_overlay_drawer_names_it_as_that_packages_update_archive(
+    ) {
+        let dir = scratch("wrong-update-archive-selected");
+        let stock = stock_wrapper(dir.path());
+        // Shaped like *some other* package's own update archive — its top
+        // level is that other package's declared overlay drawer, not
+        // BoingBag 3.9-1's own (`BoingBag3.9-1-UAE`) and not any package's
+        // own `media` either, so the only way this matches anything is
+        // through `KnownPackage::overlay_drawers`.
+        let other = dir.join("OtherPkg-UAE.lha");
+        std::fs::write(
+            &other,
+            make_lha_with(&[
+                ("OtherPkg-UAE.info", b"icon"),
+                (
+                    "OtherPkg-UAE/C/Updater",
+                    b"some other package's own update archive",
+                ),
+            ]),
+        )
+        .unwrap();
+        let into = dir.join("pkg");
+        let overlays = uae_overlay();
+        let catalogue = [KnownPackage {
+            id: "other-pkg".to_string(),
+            name: "Other Package".to_string(),
+            media: "OtherPkg".to_string(),
+            overlay_drawers: vec!["OtherPkg-UAE".to_string()],
+        }];
+        let layout = Layout {
+            drawer: Some("BoingBag3.9-1"),
+            installer: "C/Updater",
+            overlays: &overlays,
+            minimum_installer_version: Some((45, 15)),
+            package_name: "BoingBag 3.9-1",
+            catalogue: &catalogue,
+        };
+
+        let err = unpack(
+            &[stock, other.clone()],
+            &into,
+            &layout,
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap_err();
+
+        let text = err.to_string();
+        assert!(
+            text.contains(&format!(
+                "'{}' is Other Package's own update archive, not the second archive BoingBag \
+                 3.9-1 needs — BoingBag 3.9-1's second archive is \
+                 'BoingBag3.9-1-UAE/BoingBag3.9-1'. Select Other Package to install it, or give \
+                 BoingBag 3.9-1's own second archive here.",
+                other.display()
+            )),
+            "got {text}"
+        );
+    }
+
     /// **ART-277 review, Major 1 — the finding itself, reproduced and
     /// fixed.** BoingBag 3.9-1's own archive, supplied a *second* time while
     /// BoingBag 3.9-1 is selected, used to match itself in the catalogue and

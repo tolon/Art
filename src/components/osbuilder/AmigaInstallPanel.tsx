@@ -581,19 +581,30 @@ export function AmigaInstallPanel({
   // lesson, from this exact screen, is that a reason Run is dead has to say
   // so where the button is (review Medium 2).
   const selectedPackageName = packageId ? nameOf(packageId) : "";
+  // ART-277 re-review: the two fields' own labels, named rather than
+  // "above"/"below" — a "wrong field" sentence rendered a screen away from
+  // either field must say which one by name, and interpolating the exact
+  // label the `Field` below renders is what keeps the two from drifting
+  // apart if either wording ever changes.
+  const fieldLabels = {
+    package: t("osinstall.amigaInstall.archive.label"),
+    overlay: t("osinstall.amigaInstall.overlayArchive.label"),
+  };
   const archiveBlocker = archiveFieldBlockerPhrase(
     archiveClassification,
     "package",
     archive ?? "",
     selectedPackageName,
-    nameOf
+    nameOf,
+    fieldLabels
   );
   const overlayBlocker = archiveFieldBlockerPhrase(
     overlayClassification,
     "overlay",
     overlayArchive ?? "",
     selectedPackageName,
-    nameOf
+    nameOf,
+    fieldLabels
   );
   // One mechanism disables Run and the confirm checkbox: `blockers.length >
   // 0` (review Medium 2 — a second, separate `wrongPackageArchive` boolean

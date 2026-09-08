@@ -2512,8 +2512,8 @@
         "anotherPackagesUpdateArchive": "This is {{other}}'s own update archive, not {{selected}}'s — but {{selected}} is selected. Select {{other}} to install it, or give {{selected}}'s own archives here.",
         "otherArtefact": "'{{path}}' is the {{media}} archive, which the Packages step places from Windows — {{selected}} wants {{expected}} here.",
         "otherArtefactGeneric": "'{{path}}' is the {{media}} archive, which the Packages step places from Windows, not this screen. It does not belong in either field here.",
-        "wrongFieldOverlay": "This is the package's update archive, not the package itself. It belongs in the second field below.",
-        "wrongFieldPackage": "This is the package's own archive, not its update archive. It belongs in the first field above."
+        "wrongFieldOverlay": "This is the package's update archive, not the package itself. It belongs in \"{{overlayLabel}}\", not in \"{{packageLabel}}\".",
+        "wrongFieldPackage": "This is the package's own archive, not its update archive. It belongs in \"{{packageLabel}}\", not in \"{{overlayLabel}}\"."
       },
       "kickstart": {
         "label": "Your own Kickstart ROM",
