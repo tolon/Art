@@ -644,6 +644,37 @@ fn volume_name_for(path: &Path, cache: &ScanCache) -> Option<String> {
     scan::identify(path).map(|found| found.volume_name)
 }
 
+/// What the scan cache **already knows** about the candidates in `folder` —
+/// hashing nothing, reading no bytes of any candidate.
+///
+/// [`identify_media_in`]'s companion, and deliberately not a mode of it. That
+/// function is the pass that *does* the work and takes a
+/// [`ProgressSink`](crate::core::jobs::ProgressSink) because it is long; this
+/// one answers out of what that pass already recorded, so a second screen can
+/// join a hash to a slot without a 490 MB ISO being read a second time on a
+/// command thread (§54: a long operation belongs on a job, and the job that
+/// hashes a media folder already exists — `osinstall_identify_media`).
+///
+/// **A candidate the cache cannot answer for is simply absent from the
+/// result**, and that is a claim about the cache, never about the file: it
+/// means "nobody has hashed this yet", not "these bytes are in no row". A
+/// caller must therefore never render an absence here as *not in the table* —
+/// [`MediaMatch::row`]`: None` is the sentence for that, and it only ever
+/// arrives for a file that really was hashed.
+///
+/// `unreadable` has no counterpart here for the same reason: nothing is read,
+/// so nothing can be found unreadable.
+pub fn remembered_media_in(folder: &Path, cache: &ScanCache) -> CoreResult<Vec<MediaMatch>> {
+    let mut found = Vec::new();
+    for path in candidates_in(folder)? {
+        let Some(md5) = cache.lookup_md5(&path) else {
+            continue;
+        };
+        found.push(match_for(&path, volume_name_for(&path, cache), md5)?);
+    }
+    Ok(found)
+}
+
 /// Identify every candidate file in `folder`, hashing only what the cache
 /// cannot already answer.
 ///

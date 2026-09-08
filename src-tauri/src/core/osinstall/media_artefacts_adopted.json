@@ -1,0 +1,25 @@
+{
+  "$comment": "ART's own map from an ADOPTED install-media row (media_hashes.json, rootrootde/emu68hatcher, MIT) to the artefact id ART's slots are named by. It exists because the adopted table stays exactly as adopted -- mediahash.rs's own rule, so a reader can tell whose claim a row is -- and Hatcher's data names no ART id. Writing an `artefact` field into his rows would be putting ART's bookkeeping into somebody else's claim; shadowing them with duplicate rows in media_hashes_own.json would be the silent-first-wins that module's design forbids. So the join lives here, keyed on the two fields the adopted rows do state about themselves: `version` and `volume` (Hatcher's own identifier for the disk -- NEVER the AmigaDOS volume name a disk states on its root block; see MediaRow::volume for the measurement that separates the two namespaces). Read 2026-09-08 out of media_hashes.json itself: the four AmigaOS 3.9 identifiers below cover all seven of its 3.9 rows -- four ISO masterings under AmigaOS3_9, one BoingBag 1, one BoingBag 2 and one BoingBags 3&4, every one sourced 'Haage and Partners (3.9)'. slots.rs's every_adopted_3_9_row_maps_to_an_artefact re-checks that against the real file rather than against this comment. `boingbags-39-3-4` names an artefact ART ships no recipe for yet, on purpose: the row exists, and a slot list derived from the recipes simply does not ask for it -- an id here is a name for bytes, not a claim that ART can install them.",
+  "artefacts": [
+    {
+      "version": "3.9",
+      "volume": "AmigaOS3_9",
+      "artefact": "amigaos-39-cd"
+    },
+    {
+      "version": "3.9",
+      "volume": "AmigaOS3_9BB1",
+      "artefact": "boingbag-39-1"
+    },
+    {
+      "version": "3.9",
+      "volume": "AmigaOS3_9BB2",
+      "artefact": "boingbag-39-2"
+    },
+    {
+      "version": "3.9",
+      "volume": "AmigaOS3_9BB34",
+      "artefact": "boingbags-39-3-4"
+    }
+  ]
+}

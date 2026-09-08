@@ -102,7 +102,15 @@ use super::package::{self, Package};
 use crate::core::error::{CoreError, CoreResult};
 
 /// Read a distribution tree's own `distribution.json`.
-fn read_manifest(tree: &Path) -> CoreResult<DistributionManifest> {
+///
+/// `pub` rather than private since the slot resolver arrived: a tree's
+/// manifest is the **only** thing allowed to say a slot is installed
+/// (`core::osinstall::slots::Installed` — a file being present is never
+/// "installed"), and `commands::osinstall::osinstall_slots` has to hand the
+/// resolver the whole manifest rather than [`applied`]'s id set. One reader,
+/// so the refusal a manifest-less folder gets is the same sentence wherever
+/// it is asked from.
+pub fn read_manifest(tree: &Path) -> CoreResult<DistributionManifest> {
     let path = tree.join(MANIFEST_FILE_NAME);
     if !path.is_file() {
         return Err(CoreError::SafetyRefused(format!(

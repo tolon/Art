@@ -67,6 +67,7 @@ pub mod plan;
 pub mod recipe;
 pub mod scan;
 pub mod scan_cache;
+pub mod slots;
 pub mod source;
 pub mod source_archive;
 pub mod source_cd;

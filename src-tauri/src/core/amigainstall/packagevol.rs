@@ -973,6 +973,26 @@ fn copy_over(from: &Path, to: &Path, sink: &dyn ProgressSink) -> CoreResult<(usi
     Ok((files, bytes))
 }
 
+/// What a program says about **itself**, read from a bounded window of its
+/// own bytes.
+///
+/// The one place that decides how much of a program is read and what counts
+/// as a statement of version, so the two callers that ask the same question
+/// of the same file cannot drift apart: [`unpack`], which has the program on
+/// disk after an archive was extracted, and
+/// `commands::osinstall::osinstall_slots`, which has the same program's
+/// bytes straight out of the wrapper archive and never writes them anywhere.
+/// A second `amigaver::read` with a second bound is how one of them would
+/// start answering `None` where the other answers `Updater 45.15`.
+///
+/// **Never a size, never a date** — see
+/// [`crate::core::osinstall::package::AmigaInstaller::minimum_version`] for
+/// why the `$VER:` marker is the only acceptable evidence here.
+pub fn stated_version(bytes: &[u8]) -> Option<AmigaVersion> {
+    let bound = VERSION_SEARCH_BOUND as usize;
+    amigaver::read(&bytes[..bytes.len().min(bound)])
+}
+
 /// What the installer says about itself, read from a bounded window.
 fn read_installer_version(program: &Path) -> CoreResult<Option<AmigaVersion>> {
     use std::io::Read as _;
@@ -980,7 +1000,7 @@ fn read_installer_version(program: &Path) -> CoreResult<Option<AmigaVersion>> {
     let file = std::fs::File::open(program)?;
     let mut window = Vec::new();
     file.take(VERSION_SEARCH_BOUND).read_to_end(&mut window)?;
-    Ok(amigaver::read(&window))
+    Ok(stated_version(&window))
 }
 
 /// A package-relative path, resolved under `root` through the same gate an
