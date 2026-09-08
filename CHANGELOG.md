@@ -13,14 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Under the OS Builder's readout there is a button for each folder in the
   list. Press it and ART writes a plain text file into that folder listing
   everything the release you are building can use: whether each piece is
-  required or optional, the file names ART expects, where that piece came
-  from, what has to be in place before it, and what happens if you never find
-  it — so you have the list where the files are, not only on screen. It is
-  written in the language ART is showing, under a name in that language. ART
-  downloads none of this and the note contains no links; it says where each
-  piece comes from so you can go and get it yourself. Nothing is written until
-  you press the button, and if a note is already in that folder ART leaves it
-  exactly as it is and tells you to delete it if you want a fresh one.
+  required or optional, the file names ART expects, where that piece came from
+  when ART has a note of it, what else stops working if you never find it, and
+  what has to be in place before it — so you have the list where the files are,
+  not only on screen. The Kickstart is listed too, saying plainly that it is
+  not a file for that folder and that you choose it in ART. It is written in
+  the language ART is showing, under a name in that language. ART downloads
+  none of this and the note contains no links. Nothing is written until you
+  press the button, and if a note is already in that folder ART leaves it
+  exactly as it is, byte for byte, and tells you to delete it if you want a
+  fresh one.
 - **The commander now has cursor keys.** Up/Down, Home/End and Page Up/Page
   Down move the pane's cursor — no version of ART had ever handled them, so a
   mouse-free session was driven by Insert and letters only. Holding Shift
