@@ -33,6 +33,7 @@ import {
   ROM_SPEC,
   SESSION_KEYS,
   TREE_SPEC,
+  canonicalFolder,
   firstUntaggedFolder,
   isBuildKind,
   seedCardImage,
@@ -187,9 +188,41 @@ export function useBuildSession(): BuildSessionApi {
     DEFAULT_FIRSTBOOT
   );
 
+  /**
+   * Replace the list — and **drop the stored archives folder when the list no
+   * longer holds it** (round 2, task 3's F10).
+   *
+   * `packages.folder` keeps a value of its own as well as being a list entry
+   * (see `PackageChoice.folder`: `PackagePanel` hands a single folder to
+   * `osinstallCollisions` and `osinstallAddPackage`, and neither has a
+   * list-shaped form). So a user who removed that folder from the list used
+   * to leave the stored copy behind, and the step then said two things at
+   * once: the Amiga Forever offer appeared — shown only while the list is
+   * empty, so ART is claiming to have nothing — directly above two package
+   * panels still reading archives out of the folder just removed. One
+   * gesture, half applied.
+   *
+   * **Only the stored value is dropped, and only when it is stored.** When
+   * nothing is stored, `packages.folder` is a *view* onto the list's first
+   * untagged entry and follows the removal by itself; writing `null` there
+   * would create a stored value where the user has none and switch that view
+   * off for good — a setting changing without the user changing it, which is
+   * the rule this is meant to be keeping.
+   *
+   * Compared through `canonicalFolder`, the same rule the list dedupes with,
+   * so `E:\pkg` and `E:/pkg/` are one folder here too.
+   */
   const setMaterial = useCallback(
-    (folders: MaterialFolder[]) => setMaterialShape({ folders }),
-    [setMaterialShape]
+    (folders: MaterialFolder[]) => {
+      setMaterialShape({ folders });
+      const stored = packagesShape.folder;
+      if (!stored) return;
+      const wanted = canonicalFolder(stored);
+      if (!folders.some((entry) => canonicalFolder(entry.path) === wanted)) {
+        setPackagesShape({ folder: null });
+      }
+    },
+    [setMaterialShape, packagesShape.folder, setPackagesShape]
   );
 
   // Reads the store rather than the rendered `material`, exactly as

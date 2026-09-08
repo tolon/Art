@@ -1556,6 +1556,13 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   }
 
   /** Drop one folder out of the list. */
+  /**
+   * Take a folder out of the list.
+   *
+   * The stored archives folder follows it out — in `useBuildSession`, not
+   * here, because the list is the session's own value and every writer of it
+   * owes the same guarantee (round 2, task 3's F10).
+   */
   function removeFolder(path: string) {
     setMaterial(materialFolders.filter((entry) => entry.path !== path));
   }
@@ -2669,10 +2676,16 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           Windows at all (ART-166). They share the tree and the archive
           folder — it is one tree and one folder of downloads — and nothing
           else. */}
+      {/* The material list, whole (design § 3.4). `packageFolder` is still
+          the one folder its dialogs open on and its catalogue is loaded from;
+          the list is what its *slots* are resolved against, which is the
+          question "which of these files is BoingBag 3.9-1" — and that has to
+          be asked of everything the user has, not of one folder. */}
       <AmigaInstallPanel
         treeRoot={packagesTreeRoot}
         onTreeRootChange={(root) => setTree({ root, builtHere: false })}
         packageFolder={packagesFolder}
+        materialFolders={materialFolders.map((entry) => entry.path)}
         release={release}
       />
 

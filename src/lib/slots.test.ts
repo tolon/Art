@@ -21,7 +21,13 @@ import type {
   SlotKind,
   SlotState,
 } from "@/lib/osinstall";
-import { readoutRunningLine, setLine, slotLines, unreadableFolderLines } from "@/lib/slots";
+import {
+  candidateLines,
+  readoutRunningLine,
+  setLine,
+  slotLines,
+  unreadableFolderLines,
+} from "@/lib/slots";
 
 /** Whether `dotted` names a string leaf in `catalogue`. */
 function isLeafKey(catalogue: unknown, dotted: string): boolean {
@@ -435,6 +441,51 @@ describe("setLine", () => {
       expect(isLeafKey(en, key), `${key} missing from en.json`).toBe(true);
       expect(isLeafKey(tr, key), `${key} missing from tr.json`).toBe(true);
     }
+  });
+});
+
+describe("candidateLines", () => {
+  /// The ambiguous row says *that* ART will not choose and lists the paths.
+  /// A screen that offers the choice needs the evidence beside each option,
+  /// and the evidence differs per candidate: one file nobody has hashed and
+  /// one whose bytes the table says are a different artefact are not the same
+  /// offer, and picking between them on the paths alone is picking blind.
+  it("gives every candidate its own sentence, chosen by what is known about its bytes", () => {
+    const lines = candidateLines(
+      state({
+        candidates: [
+          unread("D:\\a\\BoingBag39-1.lha"),
+          read("E:\\b\\BoingBag39-1.lha"),
+          { path: "F:\\c\\BoingBag39-1.lha", bytesRead: OTHER },
+        ],
+      })
+    );
+
+    expect(lines.map((line) => line.path)).toEqual([
+      "D:\\a\\BoingBag39-1.lha",
+      "E:\\b\\BoingBag39-1.lha",
+      "F:\\c\\BoingBag39-1.lha",
+    ]);
+    // Three candidates, three different sentences — never one "these might be
+    // it" covering all three.
+    expect(lines.map((line) => line.phrase.key)).toEqual([
+      "osinstall.slots.guessedByFilenameUnread",
+      "osinstall.slots.guessedByFilename",
+      "osinstall.slots.guessedByFilenameOtherArtefact",
+    ]);
+    // The one entitled to name another artefact names it; the other two pass
+    // an empty string and their sentences never interpolate it.
+    expect(lines[2].phrase.params?.other).toBe("BoingBag 3.9-2");
+    expect(lines[0].phrase.params?.other).toBe("");
+    expect(lines[0].phrase.params?.name).toBe("BoingBag 3.9-1");
+    for (const line of lines) {
+      expect(isLeafKey(en, line.phrase.key), `${line.phrase.key} missing from en.json`).toBe(true);
+      expect(isLeafKey(tr, line.phrase.key), `${line.phrase.key} missing from tr.json`).toBe(true);
+    }
+  });
+
+  it("answers nothing for a slot with no candidates", () => {
+    expect(candidateLines(state())).toEqual([]);
   });
 });
 

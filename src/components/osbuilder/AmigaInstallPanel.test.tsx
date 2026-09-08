@@ -37,13 +37,14 @@ import type {
   ArchiveClassification,
   RunOutcome,
 } from "@/lib/amigainstall";
-import type { PackageSummary } from "@/lib/osinstall";
+import type { PackageSummary, SlotCandidate, SlotReport, SlotState } from "@/lib/osinstall";
 import type { JobProgress } from "@/lib/jobs";
 
 const previewMock = vi.hoisted(() => vi.fn());
 const runMock = vi.hoisted(() => vi.fn());
 const onResultMock = vi.hoisted(() => vi.fn());
 const packagesMock = vi.hoisted(() => vi.fn());
+const slotsMock = vi.hoisted(() => vi.fn());
 const onJobProgressMock = vi.hoisted(() => vi.fn());
 const saveSettingsMock = vi.hoisted(() => vi.fn(async () => {}));
 const classifyMock = vi.hoisted(() => vi.fn());
@@ -59,6 +60,7 @@ vi.mock("@/lib/amigainstall", async (importOriginal) => ({
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
   osinstallPackages: packagesMock,
+  osinstallSlots: slotsMock,
 }));
 
 vi.mock("@/lib/jobs", async (importOriginal) => ({
@@ -171,6 +173,104 @@ function withChoices() {
   }));
 }
 
+// ---------------------------------------------------------------------------
+// The slots (round 2, § 3.4)
+//
+// `osinstall_slots` is one answer about the whole material, and these fixtures
+// state it the way Rust does. Written out rather than derived from the real
+// recipes on purpose: what is under test is *which sentence the panel puts on
+// screen for a given answer*, so the answer has to be stated, not computed by
+// the same code the screen reads.
+// ---------------------------------------------------------------------------
+
+function slot(over: Partial<SlotState["slot"]> = {}): SlotState["slot"] {
+  return {
+    id: "package:boingbag-39-1",
+    kind: "package",
+    name: "BoingBag 3.9-1",
+    identity: "BoingBag3.9-1",
+    artefact: "boingbag-39-1",
+    required: false,
+    filenames: ["BoingBag39-1.lha"],
+    provenance: "the owner's copy, 2026-09-08",
+    position: 1,
+    requires: [],
+    supersededBy: [],
+    ...over,
+  };
+}
+
+function slotState(
+  over: Partial<Omit<SlotState, "slot">> & { slot?: Partial<SlotState["slot"]> } = {}
+): SlotState {
+  const { slot: slotOver, ...rest } = over;
+  return {
+    slot: slot(slotOver),
+    found: null,
+    candidates: [],
+    installed: { state: "no" },
+    chosenMissing: null,
+    blockedBy: [],
+    notNeeded: null,
+    ...rest,
+  };
+}
+
+/** A find. `hash` is the strongest rank and the one the design's own readout
+ *  sketch shows for the owner's real material. */
+function foundByHash(path: string): SlotState["found"] {
+  return { path, matchedBy: "hash", row: null, confirmed: null, bytesRead: { state: "read-no-row" } };
+}
+
+/** One candidate nobody has hashed — the ordinary state before the identify
+ *  pass has run over a folder. */
+const candidate = (path: string): SlotCandidate => ({ path, bytesRead: { state: "not-read" } });
+
+function slotReport(states: SlotState[]): SlotReport {
+  return {
+    states,
+    summary: {
+      release: "AmigaOS 3.9",
+      requiredTotal: 1,
+      requiredFound: 0,
+      optionalTotal: states.length,
+      optionalFound: states.filter((state) => state.found !== null).length,
+    },
+    unreadableFolders: [],
+  };
+}
+
+function emptyReport(): SlotReport {
+  return slotReport([]);
+}
+
+/** The disc BoingBag 3.9-1's own installer verifies, as `slots_for` builds it
+ *  — the package slot names it through `requires`, which is why nothing on
+ *  the screen has to know the volume is called `AmigaOS3.9`. */
+const MEDIUM_SLOT = {
+  id: "medium:AmigaOS3.9",
+  kind: "medium" as const,
+  name: "AmigaOS3.9",
+  identity: "AmigaOS3.9",
+  artefact: "amigaos-3-9-cd",
+  required: true,
+  filenames: ["AmigaOS39.iso", "amigaos3.9.iso"],
+  provenance: "Haage and Partners (3.9)",
+  position: 0,
+};
+
+const OVERLAY_SLOT = {
+  id: "overlay:boingbag-39-1:BoingBag3.9-1-UAE",
+  kind: "overlay" as const,
+  name: "BoingBag3.9-1-UAE",
+  identity: "BoingBag3.9-1-UAE",
+  artefact: "boingbag-39-1-uae",
+  required: false,
+  filenames: ["BoingBag39-1-UAE.lha"],
+  provenance: "the owner's copy, 2026-09-08",
+  position: 2,
+};
+
 /** The one live `onAmigaInstallResult` handler, so a test can deliver an
  *  ending the way the backend would. */
 let deliver: ((result: AmigaInstallResult) => void) | null = null;
@@ -187,6 +287,10 @@ beforeEach(() => {
     settings: { ...state.settings, uxMode: "beginner", winuaePath: null, remembered: {} },
   }));
   packagesMock.mockResolvedValue(PACKAGES);
+  // Nothing resolved, which is the state of a panel nobody has given a
+  // material folder: every field falls back to the browse row it always had.
+  // The block at the end of this file is where slots actually answer.
+  slotsMock.mockResolvedValue(emptyReport());
   previewMock.mockResolvedValue(preview());
   runMock.mockResolvedValue(7);
   // The ordinary answer: an archive named like the real UAE fix is the
@@ -1164,5 +1268,299 @@ describe("ART-277: switching the selected package does not carry its archives", 
     const matching = Array.from(items).filter((li) => li.textContent?.includes("BoingBag 3.9-2"));
     expect(matching).toHaveLength(1);
     expect(screen.getByRole("checkbox").hasAttribute("disabled")).toBe(true);
+  });
+});
+
+describe("the fields are filled from the slots (design § 3.4)", () => {
+  // The three browse buttons were three questions a person had to answer from
+  // memory: which of the forty files in their downloads folder is "the
+  // package's own archive", which is "its update archive", which is "the disc
+  // the installer checks". `core::osinstall::slots` answers all three from
+  // the material folders, and these tests are about what the panel then says
+  // — which is the whole content, exactly as everywhere else on this screen.
+
+  /** The bag as it stands, to prove what a click did (or did not) persist. */
+  const bag = () =>
+    (useSettingsStore.getState().settings.remembered ?? {}) as Record<string, unknown>;
+
+  function withPackageChosen(remembered: Record<string, unknown> = {}) {
+    useSettingsStore.setState((state) => ({
+      settings: {
+        ...state.settings,
+        winuaePath: "C:/Program Files/WinUAE/winuae64.exe",
+        remembered: {
+          "amigaInstall.package": "boingbag-39-1",
+          "amigaInstall.kickstart": "D:/roms/kick31.rom",
+          ...remembered,
+        },
+      },
+    }));
+  }
+
+  function renderPanel(folders: string[] = ["E:/material"]) {
+    return render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.9"
+        treeRoot="D:/amiga/os39"
+        packageFolder="D:/pkg"
+        materialFolders={folders}
+      />
+    );
+  }
+
+  /** The Browse button of one field, by the accessible name `Field` gives it
+   *  — the one way to tell "this field is still asking" from "this field is
+   *  filled", since both render under the same test id. */
+  const browseFor = (label: string) =>
+    screen.queryByRole("button", { name: `${i18n.t("common.browse")} ${label}` });
+
+  it("shows a found archive as ART's own sentence about it, and stops asking", async () => {
+    withPackageChosen();
+    slotsMock.mockResolvedValue(
+      slotReport([slotState({ found: foundByHash("E:/material/BoingBag39-1.lha") })])
+    );
+    renderPanel();
+
+    // The readout's own sentence for that row, verbatim — the panel and the
+    // `kaynak` step must not say two different things about one file.
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.slots.foundByHash", {
+          file: "BoingBag39-1.lha",
+          name: "BoingBag 3.9-1",
+        })
+      )
+    ).toBeTruthy();
+    // The question is gone; the way to change ART's answer remains.
+    expect(browseFor(i18n.t("osinstall.amigaInstall.archive.label"))).toBeNull();
+    expect(screen.getByTestId("amiga-slot-archive-choose-another")).toBeTruthy();
+    // And it is the file the run gets.
+    await waitFor(() =>
+      expect(previewMock).toHaveBeenCalledWith(
+        expect.objectContaining({ packageArchives: ["E:/material/BoingBag39-1.lha"] }),
+        expect.anything()
+      )
+    );
+  });
+
+  it("asks for an archive it could not find by the names it expects, and says so where the button is", async () => {
+    withPackageChosen();
+    slotsMock.mockResolvedValue(slotReport([slotState()]));
+    renderPanel();
+
+    // The hint is no longer a sentence about what the field is *for* — the
+    // one thing a person reading the label already knows. It is what ART
+    // actually expects, from the recipes' own data.
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.amigaInstall.archive.hint", {
+          filenames: "BoingBag39-1.lha",
+          provenance: "the owner's copy, 2026-09-08",
+        })
+      )
+    ).toBeTruthy();
+    expect(browseFor(i18n.t("osinstall.amigaInstall.archive.label"))).toBeTruthy();
+
+    // ART-202's rule: the reason Run is dead is rendered where Run is.
+    const blockers = await screen.findByTestId("amiga-install-blockers");
+    expect(blockers.textContent).toContain(
+      i18n.t("osinstall.amigaInstall.blocker.slotMissing", {
+        name: "BoingBag 3.9-1",
+        filenames: "BoingBag39-1.lha",
+      })
+    );
+    expect(
+      screen.getByRole("button", { name: i18n.t("osinstall.amigaInstall.run") }).hasAttribute("disabled")
+    ).toBe(true);
+    expect(previewMock).not.toHaveBeenCalled();
+  });
+
+  it("says the overlay is not needed in the slot's own words, and passes no second archive", async () => {
+    // ART-186's fact, on screen: the wrapper archive states its own `Updater`
+    // version, and when that is 45.15 there is nothing to obtain. Telling the
+    // owner a file is missing when ART has just proved nobody has to go and
+    // get it is this project's most expensive shape of defect.
+    withPackageChosen();
+    slotsMock.mockResolvedValue(
+      slotReport([
+        slotState({ found: foundByHash("E:/material/BoingBag39-1.lha") }),
+        slotState({ slot: OVERLAY_SLOT, notNeeded: "Updater 45.15" }),
+      ])
+    );
+    renderPanel();
+
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.slots.notNeeded", {
+          name: "BoingBag3.9-1-UAE",
+          carries: "Updater 45.15",
+        })
+      )
+    ).toBeTruthy();
+    expect(browseFor(i18n.t("osinstall.amigaInstall.overlayArchive.label"))).toBeNull();
+    // One archive, not two: an overlay ART measured as unnecessary is not
+    // passed to the run at all.
+    await waitFor(() =>
+      expect(previewMock).toHaveBeenCalledWith(
+        expect.objectContaining({ packageArchives: ["E:/material/BoingBag39-1.lha"] }),
+        expect.anything()
+      )
+    );
+  });
+
+  it("fills the disc field from the medium slot the package's own requires names", async () => {
+    // Never a `medium:AmigaOS3.9` written into this screen: `slots_for` turns
+    // a recipe's `required_medium` into a `requires` entry, so the link is
+    // data and a package for another release naming another disc works
+    // without touching this file.
+    withPackageChosen();
+    slotsMock.mockResolvedValue(
+      slotReport([
+        slotState({ slot: MEDIUM_SLOT, found: foundByHash("E:/material/AmigaOS39.iso") }),
+        slotState({
+          slot: { requires: ["medium:AmigaOS3.9"] },
+          found: foundByHash("E:/material/BoingBag39-1.lha"),
+        }),
+      ])
+    );
+    renderPanel();
+
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.slots.foundByHash", { file: "AmigaOS39.iso", name: "AmigaOS3.9" })
+      )
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(previewMock).toHaveBeenCalledWith(
+        expect.objectContaining({ medium: "E:/material/AmigaOS39.iso" }),
+        expect.anything()
+      )
+    );
+  });
+
+  it("keeps the file the user chose over the one ART found, and a re-scan does not take it back", async () => {
+    // CLAUDE.md, "nothing changes unless the user changes it": a found
+    // artefact pre-fills a field, a chosen one overrides, and a re-scan never
+    // replaces a choice. The override is the remembered per-package key
+    // ART-277 already gave this screen.
+    withPackageChosen({ "amigaInstall.archive.boingbag-39-1": "D:/pkg/my-own-copy.lha" });
+    slotsMock.mockResolvedValue(
+      slotReport([slotState({ found: foundByHash("E:/material/BoingBag39-1.lha") })])
+    );
+    const view = renderPanel();
+
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.slots.chosen", { file: "my-own-copy.lha", name: "BoingBag 3.9-1" })
+      )
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(previewMock).toHaveBeenCalledWith(
+        expect.objectContaining({ packageArchives: ["D:/pkg/my-own-copy.lha"] }),
+        expect.anything()
+      )
+    );
+
+    // The re-scan: another folder added, and ART now resolves the slot to a
+    // different file. Nothing the user did.
+    slotsMock.mockResolvedValue(
+      slotReport([slotState({ found: foundByHash("F:/more/BoingBag39-1.lha") })])
+    );
+    view.rerender(
+      <AmigaInstallPanel
+        release="AmigaOS 3.9"
+        treeRoot="D:/amiga/os39"
+        packageFolder="D:/pkg"
+        materialFolders={["E:/material", "F:/more"]}
+      />
+    );
+    await waitFor(() => expect(slotsMock).toHaveBeenCalledTimes(2));
+
+    expect(
+      screen.getByText(
+        i18n.t("osinstall.slots.chosen", { file: "my-own-copy.lha", name: "BoingBag 3.9-1" })
+      )
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        i18n.t("osinstall.slots.foundByHash", {
+          file: "BoingBag39-1.lha",
+          name: "BoingBag 3.9-1",
+        })
+      )
+    ).toBeNull();
+    for (const call of previewMock.mock.calls) {
+      expect(call[0].packageArchives).toEqual(["D:/pkg/my-own-copy.lha"]);
+    }
+  });
+
+  it("gives the field back to ART when the user asks for the one ART found", async () => {
+    withPackageChosen({ "amigaInstall.archive.boingbag-39-1": "D:/pkg/my-own-copy.lha" });
+    slotsMock.mockResolvedValue(
+      slotReport([slotState({ found: foundByHash("E:/material/BoingBag39-1.lha") })])
+    );
+    renderPanel();
+
+    await screen.findByTestId("amiga-slot-archive-use-found");
+    await userEvent.setup().click(screen.getByTestId("amiga-slot-archive-use-found"));
+
+    // `forget`, not "store null": a stored `null` is itself a decision, and
+    // the found file could then never fill the field again.
+    await waitFor(() =>
+      expect("amigaInstall.archive.boingbag-39-1" in bag()).toBe(false)
+    );
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.slots.foundByHash", {
+          file: "BoingBag39-1.lha",
+          name: "BoingBag 3.9-1",
+        })
+      )
+    ).toBeTruthy();
+  });
+
+  it("lists every candidate of an ambiguous slot, and picking one becomes the choice", async () => {
+    // ART does not choose between two of somebody's files (design § 4). The
+    // paths are the whole of the information — the commonest shape here is
+    // two copies under the *same* name — and each carries its own evidence.
+    withPackageChosen();
+    slotsMock.mockResolvedValue(
+      slotReport([
+        slotState({
+          candidates: [
+            candidate("E:/material/BoingBag39-1.lha"),
+            candidate("F:/more/BoingBag39-1.lha"),
+          ],
+        }),
+      ])
+    );
+    renderPanel(["E:/material", "F:/more"]);
+
+    const rows = await screen.findAllByTestId("amiga-slot-archive-candidate");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain("E:/material/BoingBag39-1.lha");
+    expect(rows[1].textContent).toContain("F:/more/BoingBag39-1.lha");
+    // Each one's own sentence, not one "these might be it" over both.
+    expect(rows[1].textContent).toContain(
+      i18n.t("osinstall.slots.guessedByFilenameUnread", {
+        file: "BoingBag39-1.lha",
+        name: "BoingBag 3.9-1",
+        other: "",
+      })
+    );
+
+    await userEvent.setup().click(rows[1].querySelector("input") as HTMLInputElement);
+
+    await waitFor(() =>
+      expect(bag()["amigaInstall.archive.boingbag-39-1"]).toBe("F:/more/BoingBag39-1.lha")
+    );
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.slots.chosen", {
+          file: "BoingBag39-1.lha",
+          name: "BoingBag 3.9-1",
+        })
+      )
+    ).toBeTruthy();
   });
 });

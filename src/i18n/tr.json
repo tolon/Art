@@ -2263,6 +2263,8 @@
       "ambiguous": "Buradaki {{count}} dosya {{name}} olabilir ve ART aralarında seçim yapmaz: {{candidates}}. Hangisini kastettiğinizi siz seçin.",
       "notFound": "{{name}} adını verdiğiniz klasörlerde yok. Beklenen: {{filenames}}.",
       "notFoundUnnamed": "{{name}} adını verdiğiniz klasörlerde yok.",
+      "filenamesUnknown": "ART'ın onun için kaydettiği hiçbir dosya adı yok",
+      "provenanceUnknown": "ART'ın bunun nereden geldiğine dair bir notu yok",
       "notNeeded": "{{name}} gerekmiyor — bu kopya zaten {{carries}} taşıyor.",
       "installedPlaced": "bu ağaçta zaten var",
       "installedRan": "Amiga’da zaten kuruldu: {{command}}",
@@ -2536,13 +2538,13 @@
         "label": "Paketin kendi arşivi",
         "none": "Arşiv seçilmedi.",
         "chooseTitle": "Paketin kendi arşivini seçin — indirdiğiniz dosyayı",
-        "hint": "İndirdiğiniz hâliyle arşiv, örneğin BoingBag39-1.lha. ART onu açar ve kendi Amiga birimi olarak bağlar; içindeki kilitli bölüm kilitli kalır ve paketin kendi kurucusuna verilir."
+        "hint": "ART {{filenames}} bekliyor. Nereden geldiği: {{provenance}}. ART onu açar ve kendi Amiga birimi olarak bağlar; içindeki kilitli bölüm kilitli kalır ve paketin kendi kurucusuna verilir."
       },
       "overlayArchive": {
         "label": "Paketin güncelleme arşivi (yalnızca gerekiyorsa)",
         "none": "İkinci arşiv seçilmedi.",
         "chooseTitle": "Paketin güncelleme arşivini seçin",
-        "hint": "Birincinin bir bölümünün yerine geçen ikinci bir arşiv — bazı paketlerin kendi kurucusu için ayrıca yayımladığı düzeltme. Aşağıdaki not istemedikçe boş bırakın."
+        "hint": "ART {{filenames}} bekliyor. Nereden geldiği: {{provenance}}. Birinci arşivin bir bölümünün yerine geçer — bazı paketlerin kendi kurucusu için ayrıca yayımladığı düzeltme. Aşağıdaki not istemedikçe boş bırakın."
       },
       "classify": {
         "anotherPackage": "Bu, {{other}} paketinin kendi arşivi — ama seçili olan {{selected}}. Onu kurmak için {{other}}'ı seçin, ya da buraya {{selected}} paketinin kendi arşivini verin.",
@@ -2582,7 +2584,16 @@
         "archiveMissing_one": "Yukarıda seçilen arşiv artık orada değil. ART seçtiğiniz {{count}} dosyaya baktı.",
         "archiveMissing_other": "Yukarıda seçilen arşivlerden biri artık orada değil. ART seçtiğiniz {{count}} dosyanın hepsine baktı.",
         "kickstartMissing": "O Kickstart orada değil: {{path}}",
-        "noEmulator": "Emülatör bulunamadı. WinUAE'nin yolunu Ayarlar'da belirtin — ART zaten sizde olan bir emülatörü başlatır, emülatör kurmaz."
+        "noEmulator": "Emülatör bulunamadı. WinUAE'nin yolunu Ayarlar'da belirtin — ART zaten sizde olan bir emülatörü başlatır, emülatör kurmaz.",
+        "slotMissing": "{{name}}, bu yapının malzemesini tutan klasörlerde yok ve o olmadan burada hiçbir şey çalışamaz. Beklenen: {{filenames}} — içinde bulunduğu klasörü ekleyin ya da dosyayı kendiniz seçin."
+      },
+      "slotField": {
+        "chooseAnother": "Başka bir dosya seç",
+        "chooseAnotherAriaLabel": "{{label}} için başka bir dosya seç",
+        "useFound": "ART'ın bulduğunu kullan",
+        "useFoundAriaLabel": "{{label}} için ART'ın bulduğu dosyayı kullan",
+        "clearAriaLabel": "{{label}} için seçilen dosyayı unut",
+        "pickOne": "Malzeme klasörlerinizdeki {{count}} dosya {{name}} olabilir ve ART bunların arasında seçim yapmaz. Hangisini kastettiğinizi siz seçin."
       },
       "refused": {
         "heading": "ART bunu çalıştırmayacak",
@@ -2615,7 +2626,7 @@
       "medium": {
         "label": "AmigaOS 3.9 CD-ROM'u (disk kalıbı)",
         "none": "Seçilmedi",
-        "hint": "Bazı paketler kurulmadan önce birlikte geldikleri diski doğrular. Her iki BoingBag da AmigaOS3.9: adlı bir birimdeki belirli dosyalara bakar. O diskin kendi kopyanızı .iso olarak seçin; ART onu öykünücünün CD sürücüsüne takar.",
+        "hint": "ART {{filenames}} bekliyor. Nereden geldiği: {{provenance}}. Bazı paketler kurulmadan önce birlikte geldikleri diski doğrular; o diskin kendi kopyanızı seçin, ART onu öykünücünün CD sürücüsüne takar.",
         "chooseTitle": "Kurucunun aradığı disk kalıbını seçin"
       }
     },

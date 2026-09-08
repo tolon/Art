@@ -529,6 +529,15 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // vanishing), the unreadable-folder line (`unreadableFolderLines`), and
     // the running line (`readoutRunningLine`, a count rather than a bar with
     // no total). `slots.test.ts` enumerates every variant of all six.
-    expect(dynamicCalls).toBe(165);
+    // 165 -> 167 (round 2, task 4: `AmigaInstallPanel.tsx`'s `SlotField`):
+    // two, and both are the same `Phrase`-from-Rust pattern one screen over.
+    // A filled field carries the readout's *own* row sentence
+    // (`slotLines([state])[0].phrase`, or the chosen/not-needed phrase) so
+    // the panel and the `kaynak` step cannot say two different things about
+    // one file; an ambiguous field carries `candidateLines`' per-candidate
+    // sentence, which is the evidence beside each option rather than two
+    // paths and nothing else. Resolved by `phrase-keys.test.ts` through
+    // `slotLines`/`candidateLines`.
+    expect(dynamicCalls).toBe(167);
   });
 });

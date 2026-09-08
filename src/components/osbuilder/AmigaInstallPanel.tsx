@@ -92,7 +92,17 @@ import {
   type AmigaInstallResult,
   type ArchiveClassification,
 } from "@/lib/amigainstall";
-import { osinstallPackages, type InstallRelease, type PackageSummary } from "@/lib/osinstall";
+import {
+  fileName,
+  osinstallPackages,
+  osinstallSlots,
+  type InstallRelease,
+  type PackageSummary,
+  type SlotReport,
+  type SlotState,
+} from "@/lib/osinstall";
+import { candidateLines, displayName, slotLines } from "@/lib/slots";
+import type { Phrase } from "@/lib/phrase";
 import { fraction, onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
 import { isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
@@ -111,6 +121,19 @@ export interface AmigaInstallPanelProps {
    *  starting folder. The run itself takes whole file paths, never a folder:
    *  the second archive is chosen deliberately, not guessed at. */
   packageFolder?: string | null;
+  /**
+   * **Every folder this build's material is in** (design § 3.1), in list
+   * order — what the slots are resolved against.
+   *
+   * Separate from `packageFolder` above, which is one folder and stays one:
+   * `PackagePanel`'s own `osinstallCollisions`/`osinstallAddPackage` take a
+   * single folder and this panel's dialogs need a place to open. What this
+   * carries is the *question* — "given everything the user has, which file is
+   * BoingBag 3.9-1?" — and it is a list because that is what the answer has
+   * to be resolved over. A folder the user removed from the list therefore
+   * stops filling these fields, which is the whole of design § 3.4.
+   */
+  materialFolders?: string[];
   /** Which AmigaOS release this build is for — the packages offered are a
    *  function of it (ART-209). This panel runs a package's own installer on
    *  the Amiga, and a BoingBag is AmigaOS 3.9's; offering one on a 3.2 build
@@ -152,10 +175,216 @@ function Refusal({ text, testId }: { text: string; testId: string }) {
   );
 }
 
+/**
+ * One artefact this panel needs, **as the slots already resolved it** (design
+ * § 3.4).
+ *
+ * The panel used to ask three browse buttons three separate questions the
+ * user had to answer from memory — which of the files in their downloads
+ * folder is "the package's own archive", which is "its update archive", which
+ * is "the disc the installer checks". `core::osinstall::slots` answers all
+ * three from the material folders, so the field's job changes: it shows what
+ * ART found and gets out of the way, and only becomes a question again when
+ * ART cannot answer it.
+ *
+ * **Four states, and they stay four** — this screen's own rule, one control
+ * further in:
+ *
+ *   - *filled*, by a find or by the user's own choice — a read-only line
+ *     carrying the readout's own sentence for that row, so the panel and the
+ *     `kaynak` step cannot say two different things about one file;
+ *   - *ambiguous* — every candidate listed with its own evidence, and the
+ *     user picks. ART never picks (design § 4);
+ *   - *not found* — the browse row, with what ART expected as its hint;
+ *   - *not needed* — the slot's own measured sentence, and no field at all.
+ *
+ * **The override always wins, and it survives a re-scan.** A path the user
+ * picked by hand is a decision (`amigaInstallArchiveKey`, ART-277), and a
+ * later answer from the resolver may never overwrite one — CLAUDE.md's
+ * "nothing changes unless the user changes it", which is why *Use the found
+ * one* is a button rather than something ART does when it learns more.
+ */
+function SlotField({
+  testId,
+  label,
+  empty,
+  hint,
+  state,
+  override,
+  found,
+  onChoose,
+  onOverride,
+  onUseFound,
+  onClear,
+}: {
+  testId: string;
+  label: string;
+  /** What to say when the field is empty and ART knows of no slot at all. */
+  empty: string;
+  /** What ART expected here — filenames and provenance, already translated
+   *  by the caller from that field's own `*.hint` key so the key stays a
+   *  literal a test can check. `undefined` when there is no slot to expect
+   *  anything from. */
+  hint?: string;
+  /** The resolved slot, or `null` when nothing has answered — no material
+   *  folders, or the call failed. A `null` here renders exactly the browse
+   *  row this panel always had. */
+  state: SlotState | null;
+  /** The path the user picked by hand for this field, when they did. */
+  override: string | null;
+  /** The path the slot fills the field with — a *find*, never a guess. */
+  found: string | null;
+  onChoose: () => void;
+  onOverride: (path: string) => void;
+  /** Drop the override and go back to what ART found. `forget` on the
+   *  remembered key, and only ever from the user's own click. */
+  onUseFound: () => void;
+  onClear?: () => void;
+}) {
+  const { t } = useTranslation();
+
+  // Nothing has answered. The browse row, exactly as before — a panel usable
+  // with a hand-picked archive is the state ART-212 already ruled must keep
+  // working, and "we have not asked" is not "the answer is no".
+  if (!state) {
+    return (
+      <Field
+        label={label}
+        ariaLabel={label}
+        testId={testId}
+        value={override}
+        empty={empty}
+        hint={hint}
+        onChoose={onChoose}
+        choose={t("common.browse")}
+        clear={override && onClear ? t("common.clear") : undefined}
+        onClear={override && onClear ? onClear : undefined}
+      />
+    );
+  }
+
+  const name = displayName(state);
+
+  /** The sentence a filled field carries, and `null` when it is not filled.
+   *  Three producers, never folded into one: the user's own choice, ART's
+   *  measurement that nobody has to obtain this at all, and the readout's own
+   *  row for the file ART identified. */
+  const filled: Phrase | null = override
+    ? { key: "osinstall.slots.chosen", params: { file: fileName(override), name } }
+    : state.notNeeded
+      ? { key: "osinstall.slots.notNeeded", params: { name, carries: state.notNeeded } }
+      : found
+        ? slotLines([state])[0].phrase
+        : null;
+
+  if (filled) {
+    return (
+      <div data-testid={testId} style={{ margin: "0 0 10px" }}>
+        <div className="muted" style={{ fontSize: 12 }}>
+          {label}
+        </div>
+        <p style={{ fontSize: 12, margin: "2px 0 0", wordBreak: "break-all" }}>
+          {t(filled.key, filled.params)}
+        </p>
+        <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+          <button
+            className="btn"
+            style={{ fontSize: 11 }}
+            data-testid={`${testId}-choose-another`}
+            // ART-240: three of these buttons render on one screen, and a
+            // screen reader user tabbing through would otherwise hear the
+            // same three words with nothing to tell them apart.
+            aria-label={t("osinstall.amigaInstall.slotField.chooseAnotherAriaLabel", { label })}
+            onClick={onChoose}
+          >
+            {t("osinstall.amigaInstall.slotField.chooseAnother")}
+          </button>
+          {override && found && (
+            <button
+              className="btn"
+              style={{ fontSize: 11 }}
+              data-testid={`${testId}-use-found`}
+              aria-label={t("osinstall.amigaInstall.slotField.useFoundAriaLabel", { label })}
+              onClick={onUseFound}
+            >
+              {t("osinstall.amigaInstall.slotField.useFound")}
+            </button>
+          )}
+          {override && !found && onClear && (
+            <button
+              className="btn"
+              style={{ fontSize: 11 }}
+              data-testid={`${testId}-clear`}
+              aria-label={t("osinstall.amigaInstall.slotField.clearAriaLabel", { label })}
+              onClick={onClear}
+            >
+              {t("common.clear")}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Two or more files could be this artefact. **ART does not choose** (design
+  // § 4), and neither does the readout — it says so and stops. Here the user
+  // can settle it, and picking one is exactly the same act as browsing to it:
+  // it sets the override.
+  if (state.candidates.length > 1) {
+    const candidates = candidateLines(state);
+    return (
+      <div data-testid={testId} style={{ margin: "0 0 10px" }}>
+        <div className="muted" style={{ fontSize: 12 }}>
+          {label}
+        </div>
+        <p style={{ fontSize: 11, margin: "2px 0 4px" }}>
+          {t("osinstall.amigaInstall.slotField.pickOne", { name, count: candidates.length })}
+        </p>
+        {candidates.map((candidate) => (
+          <label
+            key={candidate.path}
+            data-testid={`${testId}-candidate`}
+            style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 12, padding: "2px 0" }}
+          >
+            <input
+              type="radio"
+              name={`${testId}-candidates`}
+              checked={false}
+              onChange={() => onOverride(candidate.path)}
+            />
+            <span style={{ wordBreak: "break-all" }}>
+              <code>{candidate.path}</code>
+              <span className="faint" style={{ marginLeft: 6 }}>
+                {t(candidate.phrase.key, candidate.phrase.params)}
+              </span>
+            </span>
+          </label>
+        ))}
+      </div>
+    );
+  }
+
+  // Not found. The browse row, and the hint is now what ART actually expected
+  // rather than a sentence somebody wrote about what the field is for.
+  return (
+    <Field
+      label={label}
+      ariaLabel={label}
+      testId={testId}
+      value={null}
+      empty={empty}
+      hint={hint}
+      onChoose={onChoose}
+      choose={t("common.browse")}
+    />
+  );
+}
+
 export function AmigaInstallPanel({
   treeRoot,
   onTreeRootChange,
   packageFolder = null,
+  materialFolders = [],
   release,
 }: AmigaInstallPanelProps) {
   const { t } = useTranslation();
@@ -178,12 +407,20 @@ export function AmigaInstallPanel({
    * was under its own key. See `amigaInstallArchiveKey`'s own comment for
    * the defect this closes.
    */
-  const [archive, setArchive] = useRemembered<string | null>(
+  //
+  // **Round 2 § 3.4: these are now the *override*, not the answer.** The
+  // fields are filled from the slots; a path here is one the user picked by
+  // hand, it wins over whatever ART resolved, and it survives a re-scan
+  // because nothing but the user's own click ever writes or drops it. That
+  // is why the third element — `forget` — is taken: setting `null` would
+  // store a decision ("no file"), and the found file could then never fill
+  // the field again.
+  const [archive, setArchive, forgetArchive] = useRemembered<string | null>(
     amigaInstallArchiveKey("amigaInstall.archive", packageId),
     isTextOrNothing,
     null
   );
-  const [overlayArchive, setOverlayArchive] = useRemembered<string | null>(
+  const [overlayArchive, setOverlayArchive, forgetOverlayArchive] = useRemembered<string | null>(
     amigaInstallArchiveKey("amigaInstall.overlayArchive", packageId),
     isTextOrNothing,
     null
@@ -215,7 +452,7 @@ export function AmigaInstallPanel({
    * the same file for BoingBag 3.9-2 having just given it for BoingBag
    * 3.9-1, which is exactly the annoyance this module exists to prevent.
    */
-  const [medium, setMedium] = useRemembered<string | null>(
+  const [medium, setMedium, forgetMedium] = useRemembered<string | null>(
     "amigaInstall.medium",
     isTextOrNothing,
     null
@@ -283,11 +520,142 @@ export function AmigaInstallPanel({
   const [lastReported, setLastReported] = useState<string | null>(null);
   const [result, setResult] = useState<AmigaInstallResult | null>(null);
 
+  /**
+   * **What the material folders turn out to hold** (design § 3.4) — the same
+   * single answer the `kaynak` step's readout renders, asked again here
+   * because this panel is the other half of the same question.
+   *
+   * Asked **even with no folders at all**: `slots_for` is derived from the
+   * recipes and is pure, so an empty list still answers with every slot this
+   * release has, its expected filenames and its provenance — which is exactly
+   * what an empty field's hint and a missing-artefact blocker need to say.
+   * The alternative (skip the call, render no hint) would make ART silent
+   * about a fact it holds regardless of where the user has pointed it.
+   *
+   * `null` means the question has not been answered — not that nothing was
+   * found. Every field falls back to the plain browse row on `null`, so a
+   * failed call costs the hints and nothing else.
+   */
+  const [slotReport, setSlotReport] = useState<SlotReport | null>(null);
+  // A primitive dependency rather than the array: two equal strings are the
+  // same value to React's own comparison, two equal arrays are not, and this
+  // effect starts disk work (ART-178/ART-195).
+  const materialKey = materialFolders.join("\n");
+  useEffect(() => {
+    const list = materialKey ? materialKey.split("\n") : [];
+    let cancelled = false;
+    osinstallSlots(release, list, treeRoot, kickstart)
+      .then((answer) => {
+        if (!cancelled) setSlotReport(answer);
+      })
+      .catch(() => {
+        // Silent, and deliberately: this is an *enhancement* to a panel that
+        // works without it. A red box here would report a fault in ART as
+        // though it were a statement about the user's files — which is
+        // exactly what the readout's own `readoutFailed` line exists to keep
+        // apart, on the screen that is about the folders.
+        if (!cancelled) setSlotReport(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [release, materialKey, treeRoot, kickstart]);
+
+  const slotStates = slotReport?.states ?? [];
+  /** The chosen package's own slot. */
+  const packageSlot =
+    (packageId && slotStates.find((state) => state.slot.id === `package:${packageId}`)) || null;
+  /** Its overlay, when the recipe declares one — the id shape is
+   *  `overlay:<package>:<drawer>`, so the package's own prefix is what names
+   *  it without this screen having to know the drawer. */
+  const overlaySlot =
+    (packageId &&
+      slotStates.find(
+        (state) => state.slot.kind === "overlay" && state.slot.id.startsWith(`overlay:${packageId}:`)
+      )) ||
+    null;
+  /**
+   * The disc this package's installer verifies — **read off the package
+   * slot's own `requires`**, never a `medium:AmigaOS3.9` written here.
+   *
+   * `slots_for` turns a recipe's `required_medium` into a `requires` entry
+   * naming the medium slot it already built, so the link is data. A hardcoded
+   * volume name would be this screen knowing something the recipes are the
+   * authority on, and it would be wrong the day a package for another release
+   * declares a disc.
+   */
+  const mediumSlot =
+    (packageSlot &&
+      slotStates.find(
+        (state) => state.slot.kind === "medium" && packageSlot.slot.requires.includes(state.slot.id)
+      )) ||
+    null;
+
+  /**
+   * The path a slot fills a field with.
+   *
+   * **A find, never a guess** — `matched_by: filename` never reaches `found`
+   * in the resolver at all, and `chosen` is the user's own doing rather than
+   * an identification ART made. Filling a field from either would be the
+   * screen out-claiming the core.
+   */
+  function foundPath(state: SlotState | null): string | null {
+    if (!state?.found) return null;
+    switch (state.found.matchedBy) {
+      case "hash":
+      case "volume-name":
+      case "top-level-directory":
+        return state.found.path;
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * What ART expected in a field: the names this artefact ships under and
+   * where it came from.
+   *
+   * **This replaced the three hand-written hints.** They told a person what
+   * the field was *for* — "the archive as you downloaded it" — which is the
+   * one thing somebody reading a field labelled "the package's own archive"
+   * already knows. What they cannot know is which of the forty files in their
+   * downloads folder ART will accept, and the recipes state exactly that.
+   *
+   * Both halves have a fallback rather than an empty interpolation: "Expected
+   * ." is a sentence nobody can act on, and this project's own rule is that a
+   * refusal must name something.
+   */
+  function expectation(state: SlotState): { filenames: string; provenance: string } {
+    return {
+      filenames:
+        state.slot.filenames.length > 0
+          ? state.slot.filenames.join(", ")
+          : t("osinstall.slots.filenamesUnknown"),
+      provenance: state.slot.provenance ?? t("osinstall.slots.provenanceUnknown"),
+    };
+  }
+
+  const archiveFound = foundPath(packageSlot);
+  // A slot ART measured as unnecessary fills nothing: the wrapper already
+  // carries an `Updater` new enough, so there is no second archive to obtain
+  // and none to pass to the run.
+  const overlayFound = overlaySlot?.notNeeded ? null : foundPath(overlaySlot);
+  const mediumFound = foundPath(mediumSlot);
+
+  /** What the run actually uses: the user's own choice where they made one,
+   *  ART's find otherwise. */
+  const chosenArchive = archive ?? archiveFound;
+  const chosenOverlay = overlayArchive ?? overlayFound;
+  const chosenMedium = medium ?? mediumFound;
+
   // The archives, wrapper first. The order is the wire's own: everything
   // after the first is an overlay medium, matched by what it carries.
   const archives = useMemo(
-    () => [archive, overlayArchive].filter((path): path is string => path !== null && path !== ""),
-    [archive, overlayArchive]
+    () =>
+      [chosenArchive, chosenOverlay].filter(
+        (path): path is string => path !== null && path !== ""
+      ),
+    [chosenArchive, chosenOverlay]
   );
 
   // The disc is **not** part of the "have you chosen enough to preview"
@@ -338,8 +706,8 @@ export function AmigaInstallPanel({
       true;
 
   const request: AmigaInstallRequest | null =
-    treeRoot && packageId && packageBelongsHere && archive && kickstart
-      ? { tree: treeRoot, packageId, packageArchives: archives, kickstart, medium }
+    treeRoot && packageId && packageBelongsHere && chosenArchive && kickstart
+      ? { tree: treeRoot, packageId, packageArchives: archives, kickstart, medium: chosenMedium }
       : null;
 
   /**
@@ -401,13 +769,19 @@ export function AmigaInstallPanel({
   // sentence about a file that is not the one it names. Clearing first means
   // the box says nothing while the question is outstanding, which is the
   // honest state.
+  //
+  // Asked of the **effective** path — the user's override where there is one,
+  // ART's own find otherwise. A file ART resolved is still a file this screen
+  // is about to hand to a run, so it gets the same question; the alternative
+  // would be classifying only what the user typed and staying silent about
+  // what ART itself chose.
   useEffect(() => {
     setArchiveClassification(null);
-    if (!archive || !packageId) {
+    if (!chosenArchive || !packageId) {
       return;
     }
     let cancelled = false;
-    amigainstallClassifyArchive(archive, packageId, release)
+    amigainstallClassifyArchive(chosenArchive, packageId, release)
       .then((answer) => {
         if (!cancelled) setArchiveClassification(answer);
       })
@@ -417,15 +791,15 @@ export function AmigaInstallPanel({
     return () => {
       cancelled = true;
     };
-  }, [archive, packageId, release]);
+  }, [chosenArchive, packageId, release]);
 
   useEffect(() => {
     setOverlayClassification(null);
-    if (!overlayArchive || !packageId) {
+    if (!chosenOverlay || !packageId) {
       return;
     }
     let cancelled = false;
-    amigainstallClassifyArchive(overlayArchive, packageId, release)
+    amigainstallClassifyArchive(chosenOverlay, packageId, release)
       .then((answer) => {
         if (!cancelled) setOverlayClassification(answer);
       })
@@ -435,7 +809,7 @@ export function AmigaInstallPanel({
     return () => {
       cancelled = true;
     };
-  }, [overlayArchive, packageId, release]);
+  }, [chosenOverlay, packageId, release]);
 
   // §92's PREVIEW: read-only, recomputed whenever the request changes, and
   // the place every refusal lands — `compose` is shared with the run, so a
@@ -483,8 +857,23 @@ export function AmigaInstallPanel({
     // dependency list without it left the panel previewing nothing for ever —
     // the request became valid and no effect ever noticed. A boolean, so it
     // is a stable dependency and not a fresh identity per render.
+    //
+    // `chosenMedium` is listed where the raw `medium` never was, and that was
+    // a real gap: the disc is part of `request` and the preview names the
+    // volume the image itself states, so choosing one and not re-previewing
+    // left that line describing the previous disc. It matters more now that a
+    // disc can arrive from the slots rather than only from a click.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [treeRoot, packageId, archive, overlayArchive, kickstart, winuaePath, packageBelongsHere]);
+  }, [
+    treeRoot,
+    packageId,
+    chosenArchive,
+    chosenOverlay,
+    chosenMedium,
+    kickstart,
+    winuaePath,
+    packageBelongsHere,
+  ]);
 
   // The job's own progress. `job-progress` is application-wide, so every
   // update is checked against this panel's job id first.
@@ -604,7 +993,7 @@ export function AmigaInstallPanel({
   const archiveBlocker = archiveFieldBlockerPhrase(
     archiveClassification,
     "package",
-    archive ?? "",
+    chosenArchive ?? "",
     selectedPackageName,
     nameOf,
     fieldLabels
@@ -612,11 +1001,40 @@ export function AmigaInstallPanel({
   const overlayBlocker = archiveFieldBlockerPhrase(
     overlayClassification,
     "overlay",
-    overlayArchive ?? "",
+    chosenOverlay ?? "",
     selectedPackageName,
     nameOf,
     fieldLabels
   );
+  /**
+   * **The package's own archive is not there, said where the button is.**
+   *
+   * Run is already dead without one — `request` is `null`, so no preview
+   * exists — but "dead with no reason rendered near it" is ART-202's own
+   * defect on this exact screen. The sentence names the files ART expected,
+   * which is a refusal the user can act on: it is the difference between "you
+   * have not chosen an archive" (which they cannot fix without knowing which)
+   * and "BoingBag39-1.lha is not in the folders you named".
+   *
+   * Only when a slot actually answered. Nothing resolved means nothing was
+   * asked, and a blocker then would be ART claiming a folder is missing a
+   * file it never looked for.
+   */
+  const missingArchiveBlocker: Phrase | null =
+    packageSlot && !chosenArchive
+      ? packageSlot.slot.filenames.length > 0
+        ? {
+            key: "osinstall.amigaInstall.blocker.slotMissing",
+            params: {
+              name: packageSlot.slot.name,
+              filenames: packageSlot.slot.filenames.join(", "),
+            },
+          }
+        : // ART knows of no name this artefact ships under, so it says only
+          // what it does know. "Expected ." is the sentence a user cannot act
+          // on — `slotLines` makes the same choice for the same reason.
+          { key: "osinstall.slots.notFoundUnnamed", params: { name: packageSlot.slot.name } }
+      : null;
   // One mechanism disables Run and the confirm checkbox: `blockers.length >
   // 0` (review Medium 2 — a second, separate `wrongPackageArchive` boolean
   // used to disable Run alone, so the checkbox could still be ticked over a
@@ -633,6 +1051,7 @@ export function AmigaInstallPanel({
   // a producer this screen did not have when that rule was written.
   const blockers = dedupeBlockers([
     ...(preview ? readinessBlockers(preview).map((phrase) => ({ field: "preview", phrase })) : []),
+    ...(missingArchiveBlocker ? [{ field: "slot", phrase: missingArchiveBlocker }] : []),
     ...(archiveBlocker ? [{ field: "package", phrase: archiveBlocker }] : []),
     ...(overlayBlocker ? [{ field: "overlay", phrase: overlayBlocker }] : []),
   ]);
@@ -733,30 +1152,46 @@ export function AmigaInstallPanel({
       */}
       {!nothingRunnableHere && (
       <div style={{ marginTop: 12 }}>
-        <Field
+        {/* Design § 3.4: the three browse buttons become three slots. Each
+            field shows what ART resolved and only asks a question when it
+            could not — and what it asks for is the slot's own expectation,
+            not a sentence somebody wrote about what the field is for. */}
+        <SlotField
+          testId="amiga-slot-archive"
           label={t("osinstall.amigaInstall.archive.label")}
-          value={archive}
           empty={t("osinstall.amigaInstall.archive.none")}
+          hint={packageSlot ? t("osinstall.amigaInstall.archive.hint", expectation(packageSlot)) : undefined}
+          state={packageSlot}
+          override={archive}
+          found={archiveFound}
           onChoose={() =>
             void chooseArchive(setArchive, t("osinstall.amigaInstall.archive.chooseTitle"))
           }
-          choose={t("common.browse")}
-          hint={t("osinstall.amigaInstall.archive.hint")}
+          onOverride={setArchive}
+          onUseFound={forgetArchive}
+          onClear={forgetArchive}
         />
-        <Field
+        <SlotField
+          testId="amiga-slot-overlay"
           label={t("osinstall.amigaInstall.overlayArchive.label")}
-          value={overlayArchive}
           empty={t("osinstall.amigaInstall.overlayArchive.none")}
+          hint={
+            overlaySlot
+              ? t("osinstall.amigaInstall.overlayArchive.hint", expectation(overlaySlot))
+              : undefined
+          }
+          state={overlaySlot}
+          override={overlayArchive}
+          found={overlayFound}
           onChoose={() =>
             void chooseArchive(
               setOverlayArchive,
               t("osinstall.amigaInstall.overlayArchive.chooseTitle")
             )
           }
-          choose={t("common.browse")}
-          hint={t("osinstall.amigaInstall.overlayArchive.hint")}
-          clear={overlayArchive ? t("common.clear") : undefined}
-          onClear={overlayArchive ? () => setOverlayArchive(null) : undefined}
+          onOverride={setOverlayArchive}
+          onUseFound={forgetOverlayArchive}
+          onClear={forgetOverlayArchive}
         />
         <Field
           label={t("osinstall.amigaInstall.kickstart.label")}
@@ -768,15 +1203,18 @@ export function AmigaInstallPanel({
         />
         {/* ART-193. Optional on the screen because it is optional for some
             packages; the refusal above says when it is not. */}
-        <Field
+        <SlotField
+          testId="amiga-slot-medium"
           label={t("osinstall.amigaInstall.medium.label")}
-          value={medium}
           empty={t("osinstall.amigaInstall.medium.none")}
+          hint={mediumSlot ? t("osinstall.amigaInstall.medium.hint", expectation(mediumSlot)) : undefined}
+          state={mediumSlot}
+          override={medium}
+          found={mediumFound}
           onChoose={() => void chooseMedium()}
-          choose={t("common.browse")}
-          hint={t("osinstall.amigaInstall.medium.hint")}
-          clear={medium ? t("common.clear") : undefined}
-          onClear={medium ? () => setMedium(null) : undefined}
+          onOverride={setMedium}
+          onUseFound={forgetMedium}
+          onClear={forgetMedium}
         />
       </div>
       )}

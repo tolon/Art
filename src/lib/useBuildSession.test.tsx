@@ -52,6 +52,39 @@ function Probe() {
   );
 }
 
+/**
+ * The material list and the archives folder, side by side — F10's own two
+ * values, which are one folder wearing two hats.
+ */
+function MaterialProbe() {
+  const { session, setMaterial, setPackages } = useBuildSession();
+  return (
+    <div>
+      <span data-testid="material">
+        {session.material.folders.map((entry) => entry.path).join(",") || "(none)"}
+      </span>
+      <span data-testid="packagesFolder">{session.packages.folder ?? "(none)"}</span>
+      <button onClick={() => setPackages({ folder: "E:\\archives" })}>choose archives</button>
+      <button
+        onClick={() =>
+          setMaterial(
+            session.material.folders.filter((entry) => entry.path !== "E:\\archives")
+          )
+        }
+      >
+        remove archives
+      </button>
+      <button
+        onClick={() =>
+          setMaterial(session.material.folders.filter((entry) => entry.path !== "E:\\disks"))
+        }
+      >
+        remove disks
+      </button>
+    </div>
+  );
+}
+
 /** A second panel. Nothing connects it to `Probe` but the session itself. */
 function OtherPanel() {
   const { session } = useBuildSession();
@@ -246,5 +279,83 @@ describe("one card for the build (ART-197's remaining duplicate)", () => {
     });
     render(<Probe />);
     expect(screen.getByTestId("card").textContent).toBe("E:\\amiga\\somewhere-else.img");
+  });
+});
+
+describe("a folder taken out of the material list is out of the build (F10)", () => {
+  /// **The defect.** `packages.folder` keeps a stored value of its own as
+  /// well as being a list entry, because `PackagePanel` hands one folder to
+  /// `osinstallCollisions` and `osinstallAddPackage`. So removing that folder
+  /// from the list left the stored copy behind, and the step said two things
+  /// at once: the Amiga Forever offer — drawn only while the list is empty,
+  /// so ART is claiming to have nothing — directly above two package panels
+  /// still reading archives out of the folder just removed.
+  it("drops the stored archives folder when the list stops holding it", async () => {
+    seed({ "buildSession.material.AmigaOS 3.2": { folders: [{ path: "E:\\disks", layer: null }] } });
+    render(<MaterialProbe />);
+
+    await userEvent.click(screen.getByText("choose archives"));
+    expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\archives");
+    expect(screen.getByTestId("material").textContent).toBe("E:\\disks,E:\\archives");
+
+    await userEvent.click(screen.getByText("remove archives"));
+
+    expect(screen.getByTestId("material").textContent).toBe("E:\\disks");
+    // Not "E:\archives" any more, and not nothing either: with the stored
+    // value gone the view falls back to the list's first untagged folder,
+    // which is what a user who never kept a separate archives folder has.
+    expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\disks");
+  });
+
+  /// The other half, and the one that decides *where* the fix goes. When
+  /// nothing is stored, `packages.folder` is a **view** onto the list's first
+  /// untagged entry and follows a removal by itself. Writing `null` into the
+  /// store there would create a stored value the user never made and switch
+  /// that view off for good — a setting changing without the user changing
+  /// it, which is the rule this exists to keep.
+  it("writes nothing at all when the folder was only ever the list's own", async () => {
+    seed({
+      "buildSession.material.AmigaOS 3.2": {
+        folders: [
+          { path: "E:\\disks", layer: null },
+          { path: "E:\\second", layer: null },
+        ],
+      },
+    });
+    render(<MaterialProbe />);
+    expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\disks");
+
+    await userEvent.click(screen.getByText("remove disks"));
+
+    expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\second");
+    const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
+    expect(bag["buildSession.packages"]).toBeUndefined();
+  });
+
+  /// A folder the removal did not name keeps its stored value. The guard that
+  /// makes the test above an answer rather than a coincidence: a fix that
+  /// simply cleared the folder on every list edit would pass it.
+  it("keeps the stored folder when some other folder is removed", async () => {
+    seed({
+      "buildSession.material.AmigaOS 3.2": {
+        folders: [
+          { path: "E:\\disks", layer: null },
+          { path: "E:\\archives", layer: null },
+        ],
+      },
+      "buildSession.packages": { folder: "E:\\archives", chosen: [] },
+    });
+    render(<MaterialProbe />);
+
+    await userEvent.click(screen.getByText("remove disks"));
+
+    expect(screen.getByTestId("material").textContent).toBe("E:\\archives");
+    // The **store**, not only the view: with the list down to one folder the
+    // derived value would answer "E:\archives" whether the stored one
+    // survived or not, so asserting the screen alone would pass for a fix
+    // that cleared the folder on every list edit.
+    const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
+    expect((bag["buildSession.packages"] as { folder?: string }).folder).toBe("E:\\archives");
+    expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\archives");
   });
 });

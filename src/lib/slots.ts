@@ -100,7 +100,7 @@ export interface SlotLine {
  * release that states no floor (`rom-older-than` only) leaves `identity`
  * empty and the row simply says "Kickstart".
  */
-function displayName(state: SlotState): string {
+export function displayName(state: SlotState): string {
   const { slot } = state;
   if (slot.kind === "rom" && slot.identity) return `${slot.name} ${slot.identity}`;
   return slot.name;
@@ -324,6 +324,45 @@ export function slotLines(states: SlotState[]): SlotLine[] {
             : { key: "osinstall.slots.notFoundUnnamed", params: { name } },
       };
     });
+}
+
+/** One candidate of an ambiguous slot, with the sentence that candidate alone
+ *  is entitled to. */
+export interface CandidateLine {
+  /** The candidate's **full path** — the whole of the information, since the
+   *  commonest ambiguity here is two copies under the same file name (fix
+   *  round 1, F3). Also the value a screen offering a choice sets. */
+  path: string;
+  phrase: Phrase;
+}
+
+/**
+ * One line per candidate of an ambiguous slot.
+ *
+ * `slotLines` says *that* a slot is ambiguous and lists the paths; this says
+ * what is known about each candidate on its own, so a screen offering the
+ * choice can put the evidence beside each option rather than asking the user
+ * to pick between two paths and nothing else. The three sentences are the
+ * *guess* rank's own — which is exactly what a candidate is: a file that
+ * might be this artefact, and about which ART is either silent, or says the
+ * table does not know its bytes, or says its bytes are some other catalogued
+ * artefact entirely. Reusing those keys rather than writing a fourth set is
+ * deliberate: the situation is the same one, and two catalogues saying it
+ * twice is how they come to say it differently.
+ */
+export function candidateLines(state: SlotState): CandidateLine[] {
+  const name = displayName(state);
+  return state.candidates.map((candidate) => ({
+    path: candidate.path,
+    phrase: {
+      key: guessedByFilenameKey(candidate.bytesRead),
+      params: {
+        file: fileName(candidate.path),
+        name,
+        other: otherArtefactName(candidate.bytesRead),
+      },
+    },
+  }));
 }
 
 /**

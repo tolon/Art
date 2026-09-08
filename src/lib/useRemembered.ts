@@ -11,10 +11,10 @@
 import { useCallback, useRef } from "react";
 
 import { useSettingsStore } from "@/stores/settingsStore";
-import { type Guard, recall, recallInto, remember, sameRemembered } from "@/lib/remembered";
+import { type Guard, forget, recall, recallInto, remember, sameRemembered } from "@/lib/remembered";
 
 /**
- * One remembered value and a setter that persists it.
+ * One remembered value, a setter that persists it, and a way to **drop** it.
  *
  * The setter reads the store through `getState()` rather than closing over the
  * rendered value, so two screens — or two controls in one screen — writing in
@@ -24,12 +24,21 @@ import { type Guard, recall, recallInto, remember, sameRemembered } from "@/lib/
  * only when the user acts, and `settingsStore` keeps a user's change from being
  * undone by a load that lands afterwards. What the screen shows before the load
  * arrives is the fallback, and it re-renders when the real value comes in.
+ *
+ * **The third element is `forget`, and it is not the same as setting the
+ * fallback.** Round 2's Amiga-side panel is the first caller that needs the
+ * difference: a remembered archive there is an *override* of what ART resolved
+ * from the material folders, so "the user took their choice back" has to leave
+ * the key absent — otherwise a stored `null` is itself a decision, and the
+ * slot ART found could never fill the field again. `@/lib/remembered::forget`
+ * is the one implementation; this is its React seam. Destructuring two
+ * elements is still valid, so no existing call site changes.
  */
 export function useRemembered<T>(
   key: string,
   isValid: Guard<T>,
   fallback: T
-): [T, (next: T) => void] {
+): [T, (next: T) => void, () => void] {
   const stored = useSettingsStore((s) => s.settings.remembered);
   const update = useSettingsStore((s) => s.update);
   const stabilised = useStabilised();
@@ -44,7 +53,12 @@ export function useRemembered<T>(
     [key, update]
   );
 
-  return [value, set];
+  const drop = useCallback(() => {
+    const latest = useSettingsStore.getState().settings.remembered;
+    void update({ remembered: forget(latest, key) });
+  }, [key, update]);
+
+  return [value, set, drop];
 }
 
 /**
