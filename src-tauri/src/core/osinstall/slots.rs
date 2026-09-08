@@ -1944,6 +1944,33 @@ mod tests {
         assert!(!text.contains("Kickstart  or newer"), "{text}");
     }
 
+    /// **I15's own sentence, asserted** (fix round 1, m8).
+    ///
+    /// The finding was not that the data was empty — it was that the
+    /// drop-folder guide printed *"Nothing has to be in place before it"*
+    /// about a file whose whole purpose is to patch BoingBag 3.9-1. The
+    /// data-level fix is pinned elsewhere; this pins the sentence the
+    /// finding was about, in both languages, and asserts the false one is
+    /// gone rather than merely that a true one appeared.
+    #[test]
+    fn the_uae_fix_says_what_it_goes_on_after_and_no_longer_says_nothing_does() {
+        for language in ["en", "tr"] {
+            let words = guide_strings(language).unwrap();
+            let text =
+                guide_text(&slots_for("AmigaOS 3.9").unwrap(), "AmigaOS 3.9", language).unwrap();
+            let entry = guide_entry(&text, "BoingBag3.9-1-UAE");
+
+            assert!(
+                entry.contains(&fill(&words.needs_first, "needs", "BoingBag 3.9-1")),
+                "{language}: the UAE fix must name the package it patches:\n{entry}"
+            );
+            assert!(
+                !entry.contains(&words.needs_nothing),
+                "{language}: the UAE fix still says nothing has to be in place first:\n{entry}"
+            );
+        }
+    }
+
     /// **M2.** Every package slot is optional by construction — a package is a
     /// thing the user chooses — so BoingBag 3.9-1 was told "nothing else
     /// fails" four entries above this same file's own statement that BoingBag

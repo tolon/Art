@@ -520,10 +520,11 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
     // no installer for this" and "this one has not been run yet" are
     // different sentences with different next steps, and the second names
     // what would have to happen for it to become the first.
-    if let Some(why) = &installer.not_yet_runnable {
+    if let Some(why) = installer.not_yet_runnable {
         return Err(CoreError::SafetyRefused(format!(
-            "'{}' is not a package ART can run yet: {why}",
-            package.name
+            "'{}' is not a package ART can run yet: {}",
+            package.name,
+            crate::commands::osinstall::describe_not_yet_runnable(why)
         )));
     }
 
@@ -2542,7 +2543,7 @@ mod tests {
         let err = compose(&request_for(&tree, "boingbags-39-3-4")).unwrap_err();
         let text = err.to_string();
         assert!(
-            text.contains("has not been run unattended by ART"),
+            text.contains("nobody has measured whether that script finishes"),
             "the refusal must say what has not been measured: {text}"
         );
         assert!(
@@ -2553,7 +2554,7 @@ mod tests {
         let err = amiga_install_preview(request_for(&tree, "boingbags-39-3-4"), None).unwrap_err();
         assert!(
             err.to_string()
-                .contains("has not been run unattended by ART"),
+                .contains("nobody has measured whether that script finishes"),
             "got {err}"
         );
     }

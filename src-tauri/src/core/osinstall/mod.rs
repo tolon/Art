@@ -1069,7 +1069,30 @@ pub enum RefusalReason {
     /// it in silently would install something the user never asked for
     /// (`package::order`'s own rule, surfaced as a typed refusal rather
     /// than its English sentence — ART-060).
+    /// **Names, never ids** (fix round 1, M1). Every chain sentence this
+    /// round added renders `Package::name`; this one rendered
+    /// `locale-turkish` and `boingbag-39-2` at the user.
     PackageRequirementMissing { package: String, requires: String },
+    /// A package needs another package that **runs on the Amiga**, so the
+    /// advice the ordinary requirement refusal gives — *"tick that one
+    /// too"* — is about a checkbox the Packages step disables.
+    ///
+    /// **The round that created this case did not notice the sentence**
+    /// (fix round 1, M1). Correcting `locale-turkish`'s `requires` to what
+    /// the material states made it need BoingBag 3.9-2, which is
+    /// `EncryptedPayload`-blocked and whose row `PackagePanel` explicitly
+    /// cannot tick; the owner's own Turkish catalogue pack therefore became
+    /// unaddable with *"tick that one too"* as the only guidance. The real
+    /// next step is to run that package from the Amiga-side step, and this
+    /// is the variant that says so.
+    ///
+    /// Both fields carry the package's own **name**, not its id: the
+    /// sentence is rendered verbatim and a name is the package's own
+    /// (ART-060).
+    PackageRequirementNeedsAmigaRun {
+        package: String,
+        requirement: String,
+    },
     /// A package needs a **recipe component** that is not switched on —
     /// `locale-turkish` without `locale-base`, which lands thirty-six
     /// catalogs into a `Locale/Catalogs` drawer nothing can open (ART-162

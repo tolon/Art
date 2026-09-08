@@ -124,10 +124,11 @@
     "that is run and counted; until then this row is a question ART is asking,",
     "not a promise it is making."
   ],
+  "_why_args_is_empty": "Deliberately empty, and not a placeholder. The brief sketched `args: [...]` for an `Installer BoingBag3.9-3&4/Install NOVICE DEFUSER NOVICE` line; nobody has measured whether `Installer` accepts any of those against this script, and none of the AmigaOS 3.9 Installer scripts accepts NOVICE, DEFUSER, LOGFILE, MINUSER or PROMPTUSER (research section 2). Writing arguments ART has never passed would be a declaration about a run that has never happened - the same class of claim `not_yet_runnable` exists to refuse. Round 3 task 3 measures the invocation and fills this in.",
   "amiga_installer": {
     "program": "Install",
     "args": [],
-    "not_yet_runnable": "the Installer script has not been run unattended by ART; round 3 task 3 measures it"
+    "not_yet_runnable": "installer-not-measured"
   },
   "_why_overrides": [
     "Every path the rules below name is one `workbench-base` and `workbench-39`",

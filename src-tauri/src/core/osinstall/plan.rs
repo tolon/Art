@@ -1400,12 +1400,36 @@ pub(crate) fn detect_package_refusals(
         // own account of itself, empty when there is no tree yet — which is
         // `plan()`'s own case and leaves this exactly as it was.
         for need in &package.requires {
-            if !chosen_set.contains(need.as_str()) && !installed_set.contains(need.as_str()) {
-                refusals.push(RefusalReason::PackageRequirementMissing {
-                    package: id.clone(),
-                    requires: need.clone(),
-                });
+            if chosen_set.contains(need.as_str()) || installed_set.contains(need.as_str()) {
+                continue;
             }
+            // **Which refusal depends on what the required package is**
+            // (fix round 1, M1). A requirement that declares an
+            // `amiga_installer` is not something the user can tick here at
+            // all — the Packages step disables its row — so the ordinary
+            // sentence's advice, *"tick that one too"*, is about a checkbox
+            // that is not available. The Amiga-side arm names the step that
+            // can actually do it.
+            //
+            // Both carry the packages' own **names**: the sentence is
+            // rendered verbatim, and `locale-turkish`/`boingbag-39-2` is
+            // ART's bookkeeping read out at somebody.
+            let required = all.iter().find(|other| &other.id == need);
+            let requirement = required
+                .map(|other| other.name.clone())
+                .unwrap_or_else(|| need.clone());
+            refusals.push(match required {
+                Some(other) if other.amiga_installer.is_some() => {
+                    RefusalReason::PackageRequirementNeedsAmigaRun {
+                        package: package.name.clone(),
+                        requirement,
+                    }
+                }
+                _ => RefusalReason::PackageRequirementMissing {
+                    package: package.name.clone(),
+                    requires: requirement,
+                },
+            });
         }
         // Against the **resolved** set, never `InstallRequest::chosen` — a
         // component can be switched on by `required` or by its own

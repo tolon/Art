@@ -98,7 +98,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use super::apply::{AmigaInstallRecord, DistributionManifest, MANIFEST_FILE_NAME};
-use super::package::{self, Package};
+use super::package::{self, NotYetRunnable, Package};
 use super::slots::{Installed, SlotKind, SlotState};
 use crate::core::error::{CoreError, CoreResult};
 
@@ -476,9 +476,10 @@ pub enum ChainState {
     /// ART will not do this row, and says which of the reasons applies.
     Refused { reason: RefusedBecause },
     /// The recipe declares what installs this package and **nobody has run
-    /// it**. Registered rather than hidden (§10), with the recipe's own
-    /// English sentence saying what has not been measured.
-    NotYetRunnable { reason: String },
+    /// it**. Registered rather than hidden (§10), carrying the recipe's own
+    /// typed reason so the screen translates it (fix round 1, m6 — it used
+    /// to carry free English prose and put a Turkish frame around it).
+    NotYetRunnable { reason: NotYetRunnable },
 }
 
 /// Why a row is refused. A value, never a sentence, for the two causes ART
@@ -531,7 +532,10 @@ pub struct ChainRow {
     /// What to call it: the package's own name, or the medium's (ART-060).
     pub name: String,
     pub state: ChainState,
-    pub facts: SentenceFacts,
+    /// The facts the row's sentence needs beside its state. Named as the
+    /// brief named it (fix round 1, m5): it shipped as `facts`, which is
+    /// shorter and says less about what it is for.
+    pub sentence_facts: SentenceFacts,
 }
 
 /// How much of the chain is done — the design's `● 3 of 8 applied` line.
@@ -576,6 +580,23 @@ pub fn rows_for(
     let have: BTreeSet<String> = manifest.map(applied_in).unwrap_or_default();
     let state_of = |id: &str| slots.iter().find(|state| state.slot.id == id);
 
+    // --- the packages that are chain rows, in the material's own order -----
+    let mut chain: Vec<&Package> = packages
+        .iter()
+        .filter(|package| package.chain_position.is_some())
+        .collect();
+
+    // **A release with no chain is an empty list, not a lone CD row** (fix
+    // round 1, m3). AmigaOS 3.2 ships no update package at all, so taking
+    // the first medium slot regardless produced one row built from whichever
+    // floppy happened to sort first, labelled position 1, under a summary
+    // reading *"AmigaOS 3.2 updates — 0 of 1 applied"*. The CD row exists
+    // because it is the **first link of a chain**; with no chain there is no
+    // first link, and a screen showing one would be inventing a step.
+    if chain.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let mut rows: Vec<ChainRow> = Vec::new();
 
     // --- 1: the medium, which is a disc and not a package ------------------
@@ -589,18 +610,13 @@ pub fn rows_for(
             slot_id: Some(medium.slot.id.clone()),
             name: medium.slot.name.clone(),
             state: medium_state(medium),
-            facts: SentenceFacts {
+            sentence_facts: SentenceFacts {
                 file: file_name_of(medium),
                 runs_on_amiga: None,
             },
         });
     }
 
-    // --- the packages that are chain rows, in the material's own order -----
-    let mut chain: Vec<&Package> = packages
-        .iter()
-        .filter(|package| package.chain_position.is_some())
-        .collect();
     chain.sort_by(|a, b| {
         a.chain_position
             .cmp(&b.chain_position)
@@ -616,7 +632,7 @@ pub fn rows_for(
             slot_id: state.map(|state| state.slot.id.clone()),
             name: package.name.clone(),
             state: package_state(package, state, &have, slots, &packages)?,
-            facts: SentenceFacts {
+            sentence_facts: SentenceFacts {
                 file: state.and_then(file_name_of),
                 runs_on_amiga: match (
                     package.amiga_installer.is_some(),
@@ -717,9 +733,7 @@ fn package_state(
         .as_ref()
         .and_then(|installer| installer.not_yet_runnable.as_ref())
     {
-        return Ok(ChainState::NotYetRunnable {
-            reason: why.clone(),
-        });
+        return Ok(ChainState::NotYetRunnable { reason: *why });
     }
 
     // 4 — no route at all: ART cannot place it from the host and there is no
@@ -766,24 +780,39 @@ fn package_state(
     // ART-186's rule, shared with `refuse_unless_installable`; the medium
     // half comes off the slot, which is where a `required_medium` became a
     // `requires` entry in the first place.
-    let mut blocked: Vec<String> = Vec::new();
+    //
+    // **In position order** (fix round 1, m2, and the design says so:
+    // *"blocked_by names rows, in position order"*). The two halves arrive
+    // in two different orders — the packages in `package::order`'s
+    // topological one, the media after them — so BoingBag 3.9-2 blocked on
+    // both answered `["BoingBag 3.9-1", "AmigaOS3.9"]`: rank 2 before rank
+    // 1. A reader told to do things in an order that is not the order is
+    // being given the one thing this screen exists to get right.
+    //
+    // The medium is rank 0 here because the CD is row 1 and every package
+    // starts at 2; a package's own rank is its `chain_position`.
+    let mut blocked: Vec<(u32, String)> = Vec::new();
     for id in unmet_prerequisites(package, have)? {
-        blocked.push(
-            all.iter()
-                .find(|other| other.id == id)
-                .map(|other| other.name.clone())
-                .unwrap_or(id),
-        );
+        let other = all.iter().find(|other| other.id == id);
+        blocked.push((
+            other
+                .and_then(|other| other.chain_position)
+                .unwrap_or(u32::MAX),
+            other.map(|other| other.name.clone()).unwrap_or(id),
+        ));
     }
     for need in &state.blocked_by {
         if let Some(required) = slots.iter().find(|other| &other.slot.id == need) {
             if required.slot.kind == SlotKind::Medium {
-                blocked.push(required.slot.name.clone());
+                blocked.push((0, required.slot.name.clone()));
             }
         }
     }
     if !blocked.is_empty() {
-        return Ok(ChainState::BlockedBy { names: blocked });
+        blocked.sort();
+        return Ok(ChainState::BlockedBy {
+            names: blocked.into_iter().map(|(_, name)| name).collect(),
+        });
     }
 
     Ok(ChainState::Ready)
@@ -1487,7 +1516,72 @@ mod tests {
         // Row 1 is the medium, synthesised from the slot and never from a
         // package — it has no `package_id` and it is fed by the CD's slot.
         assert_eq!(rows[0].slot_id.as_deref(), Some("medium:AmigaOS3.9"));
-        assert_eq!(rows[0].facts.runs_on_amiga, None);
+        assert_eq!(rows[0].sentence_facts.runs_on_amiga, None);
+    }
+
+    /// **A release with no chain is an empty list, not a lone CD row** (fix
+    /// round 1, m3).
+    ///
+    /// AmigaOS 3.2 ships no update package at all, and taking the first
+    /// medium slot regardless produced one row built from whichever floppy
+    /// happened to sort first — position 1, and a summary reading *"AmigaOS
+    /// 3.2 updates — 0 of 1 applied"*. The control is beside it, because a
+    /// `rows_for` that answered empty for everything would pass the first
+    /// assertion and prove nothing.
+    #[test]
+    fn a_release_with_no_chain_rows_has_no_chain_at_all() {
+        let slots = super::super::slots::slots_for("AmigaOS 3.2").unwrap();
+        assert!(
+            slots.iter().any(|slot| slot.kind == SlotKind::Medium),
+            "the premise: 3.2 has medium slots, so a first one exists to be taken by mistake"
+        );
+        let facts = super::super::slots::Facts {
+            media: &[],
+            packages: &[],
+            hashes: &[],
+            manifest: None,
+            rom: None,
+            program_versions: &[],
+            overrides: &[],
+            disc_roots: &[],
+        };
+        let states = super::super::slots::resolve(&slots, &facts);
+        let rows = rows_for("AmigaOS 3.2", None, &states).unwrap();
+        assert!(rows.is_empty(), "3.2 has no update package: {rows:#?}");
+        assert_eq!(summarize_chain("AmigaOS 3.2", &rows).total, 0);
+
+        // The control: the release that does have a chain still has one.
+        assert_eq!(
+            rows_for("AmigaOS 3.9", None, &resolved(None, &[], &[]))
+                .unwrap()
+                .len(),
+            9
+        );
+    }
+
+    /// **What a row waits for is named in the order it goes on** (fix round
+    /// 1, m2, and the design says so: *"blocked_by names rows, in position
+    /// order"*).
+    ///
+    /// The two halves arrive in two different orders — the packages in
+    /// `package::order`'s topological one, the media appended after them —
+    /// so BoingBag 3.9-2 blocked on both answered `["BoingBag 3.9-1",
+    /// "AmigaOS3.9"]`: rank 2 before rank 1. Telling somebody to do things
+    /// in an order that is not the order is the one thing this screen exists
+    /// to get right.
+    #[test]
+    fn a_blocked_row_names_what_it_waits_for_in_the_order_it_goes_on() {
+        let packages = [archive("D:/a/BoingBag39-2.lha", "BoingBag3.9-2")];
+        // No disc and no BoingBag 3.9-1: both halves of the block at once,
+        // which is the only arrangement that can show the order is wrong.
+        let rows = rows_for("AmigaOS 3.9", None, &resolved(None, &packages, &[])).unwrap();
+        assert_eq!(
+            row(&rows, "boingbag-39-2").state,
+            ChainState::BlockedBy {
+                names: vec!["AmigaOS3.9".to_string(), "BoingBag 3.9-1".to_string()]
+            },
+            "the CD is row 1 and BoingBag 3.9-1 is row 2"
+        );
     }
 
     /// **`installed` comes from the manifest and from nothing else.** Two
@@ -1566,11 +1660,14 @@ mod tests {
         .unwrap();
         assert_eq!(row(&rows, "boingbag-39-2").state, ChainState::Ready);
         assert_eq!(
-            row(&rows, "boingbag-39-2").facts.file.as_deref(),
+            row(&rows, "boingbag-39-2").sentence_facts.file.as_deref(),
             Some("BoingBag39-2.lha"),
             "the file travels with the row whatever its state"
         );
-        assert_eq!(row(&rows, "boingbag-39-2").facts.runs_on_amiga, Some(true));
+        assert_eq!(
+            row(&rows, "boingbag-39-2").sentence_facts.runs_on_amiga,
+            Some(true)
+        );
     }
 
     /// **The disc a package's installer verifies is met by having it, not by
@@ -1684,7 +1781,7 @@ mod tests {
                 }
             }
         );
-        assert_eq!(row(&rows, "euro-update").facts.runs_on_amiga, None);
+        assert_eq!(row(&rows, "euro-update").sentence_facts.runs_on_amiga, None);
 
         assert!(
             !matches!(
@@ -1695,7 +1792,9 @@ mod tests {
         );
         // And the one host-placeable row of the chain says so.
         assert_eq!(
-            row(&rows, "boingbag-39-2-contribution").facts.runs_on_amiga,
+            row(&rows, "boingbag-39-2-contribution")
+                .sentence_facts
+                .runs_on_amiga,
             Some(false)
         );
     }
@@ -1717,13 +1816,14 @@ mod tests {
         assert_eq!(
             row(&rows, "boingbags-39-3-4").state,
             ChainState::NotYetRunnable {
-                reason: "the Installer script has not been run unattended by ART; round 3 task 3 \
-                         measures it"
-                    .to_string()
+                reason: NotYetRunnable::InstallerNotMeasured
             }
         );
         assert_eq!(
-            row(&rows, "boingbags-39-3-4").facts.file.as_deref(),
+            row(&rows, "boingbags-39-3-4")
+                .sentence_facts
+                .file
+                .as_deref(),
             Some("BoingBags3&4.lha"),
             "the archive is there, and the row still says what has not been measured"
         );

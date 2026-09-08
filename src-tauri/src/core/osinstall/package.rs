@@ -455,11 +455,42 @@ pub struct AmigaInstaller {
     /// (read from the owner's own archive, 7-Zip 26.02, 2026-09-08). Nobody
     /// has measured whether it can finish without a person at the window.
     ///
-    /// A row carrying this is shown **disabled with this sentence**, never
-    /// hidden: "ART ships no installer for this" would be a different claim,
-    /// and a false one.
+    /// A row carrying this is shown **disabled with its own sentence**,
+    /// never hidden: "ART ships no installer for this" would be a different
+    /// claim, and a false one.
+    ///
+    /// **A value, not prose** (fix round 1, m6). It shipped as a free-text
+    /// English string interpolated into `{{reason}}`, so a Turkish reader got
+    /// a Turkish frame around an English clause — and this is *recipe data
+    /// rendered as a sentence*, not a `CoreError` message, so ART-060's
+    /// "Rust strings stay English" does not cover it. Every other reason on
+    /// these two screens is already a typed value the catalogue translates
+    /// ([`HostPlacementBlock`], `chain::RefusedBecause`); this is now the
+    /// third.
     #[serde(default)]
-    pub not_yet_runnable: Option<String>,
+    pub not_yet_runnable: Option<NotYetRunnable>,
+}
+
+/// Why a declared Amiga-side installer is not one ART will start.
+///
+/// A **closed enum**, like [`HostPlacementBlock`] and for the same reason:
+/// the screens `match` on it, so a second kind is a compile error at every
+/// place that has to say something about it rather than a row with a blank
+/// explanation. Spelled kebab-case in a recipe (`"installer-not-measured"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NotYetRunnable {
+    /// The package installs through an Installer **script**, and nobody has
+    /// measured whether `Installer` can drive it without a person at the
+    /// window.
+    ///
+    /// `boingbags-39-3-4` is the case that bought it: its `Install` calls
+    /// `askoptions` for the languages, `confirm`s the target and can `run
+    /// SYS:Tools/EditPad` on the startup-sequence, and none of the AmigaOS
+    /// 3.9 Installer scripts accepts `NOVICE`, `DEFUSER`, `LOGFILE`,
+    /// `MINUSER` or `PROMPTUSER`. Round 3's task 3 is where that is run and
+    /// counted.
+    InstallerNotMeasured,
 }
 
 /// A disc a package's own installer insists on seeing (ART-193).
@@ -1331,11 +1362,9 @@ mod tests {
             .as_ref()
             .expect("registered unready, never hidden (§10)");
         assert_eq!(
-            installer.not_yet_runnable.as_deref(),
-            Some(
-                "the Installer script has not been run unattended by ART; round 3 task 3 \
-                 measures it"
-            )
+            installer.not_yet_runnable,
+            Some(NotYetRunnable::InstallerNotMeasured),
+            "a value the catalogue translates, never prose (fix round 1, m6)"
         );
         for id in ["boingbag-39-1", "boingbag-39-2"] {
             assert_eq!(

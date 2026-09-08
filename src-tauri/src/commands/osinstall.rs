@@ -646,11 +646,11 @@ pub struct PackageSummary {
     /// carry a list of ids that a fourth recipe would silently not join.
     pub amiga_installable: bool,
     /// `Some` when this package declares an Amiga-side installer that
-    /// **nobody has run** — the recipe's own
-    /// [`AmigaInstaller::not_yet_runnable`](crate::core::osinstall::package::AmigaInstaller::not_yet_runnable)
-    /// sentence, verbatim and in English like every other Rust-side string
-    /// (ART-060); the screen renders the translated one and shows the row
-    /// **disabled**.
+    /// **nobody has run** — the recipe's own typed
+    /// [`NotYetRunnable`](crate::core::osinstall::package::NotYetRunnable),
+    /// which the screen translates and renders on a row it shows
+    /// **disabled** (fix round 1, m6: it used to be free English prose
+    /// interpolated into a translated frame).
     ///
     /// Its own field rather than `amiga_installable: false`, because the two
     /// are different sentences with different next steps: *"ART ships no
@@ -658,7 +658,7 @@ pub struct PackageSummary {
     /// *"this one has not been run unattended yet"* is a fact about what has
     /// been measured. Registering the row unready is what §10/§89 asks for —
     /// never hiding it.
-    pub not_yet_runnable: Option<String>,
+    pub not_yet_runnable: Option<crate::core::osinstall::package::NotYetRunnable>,
     /// Every entry name this package's own archive carries that
     /// [`safe_join`](crate::core::security::safe_join) refused — a `..`, an
     /// absolute path, a Windows prefix — exactly as the archive spelled it,
@@ -722,10 +722,7 @@ pub fn osinstall_packages(
                 available: !matched.is_empty(),
                 host_placement_block: p.host_placement_block,
                 amiga_installable: p.amiga_installer.is_some(),
-                not_yet_runnable: p
-                    .amiga_installer
-                    .as_ref()
-                    .and_then(|i| i.not_yet_runnable.clone()),
+                not_yet_runnable: p.amiga_installer.as_ref().and_then(|i| i.not_yet_runnable),
                 // Every claimant's, not only the first: an ambiguous name
                 // is still offered as available (the refusal comes later,
                 // by name), so saying nothing about the *other* claimant's
@@ -1584,6 +1581,25 @@ fn describe_host_placement_block(package: &str, block: HostPlacementBlock) -> St
              languages it asks for, and edits the startup-sequence. ART places a fixed \
              set of paths and cannot answer those questions for you"
         ),
+    }
+}
+
+/// A plain-English sentence for a declared installer nobody has run — the
+/// `CoreError` half of what the screen renders as a translated one, exactly
+/// as [`describe_host_placement_block`] is for a block (fix round 1, m6).
+///
+/// One `match`, so a second [`NotYetRunnable`] kind cannot arrive with this
+/// sentence missing.
+pub(crate) fn describe_not_yet_runnable(
+    reason: crate::core::osinstall::package::NotYetRunnable,
+) -> &'static str {
+    use crate::core::osinstall::package::NotYetRunnable;
+    match reason {
+        NotYetRunnable::InstallerNotMeasured => {
+            "it installs through an Installer script, and nobody has measured whether that \
+             script finishes without a person at the window; ART will not start it until \
+             somebody has"
+        }
     }
 }
 
@@ -4721,15 +4737,30 @@ mod tests {
             resolve_packages_for_add(&without, &packages_dir, &["locale-turkish".to_string()])
                 .unwrap()
                 .unwrap_err();
+        // **The Amiga-side arm, and by name** (fix round 1, M1). BoingBag
+        // 3.9-2 is `encrypted-payload` blocked and the Packages step
+        // disables its checkbox, so the ordinary requirement refusal's
+        // advice — "tick that one too" — is about a tick that is not
+        // available. Asserted as the whole value, so a fallback to the old
+        // variant fails here rather than slipping through a looser
+        // `matches!`.
         assert!(
-            refusals.iter().any(|r| matches!(
+            refusals.contains(
+                &crate::core::osinstall::RefusalReason::PackageRequirementNeedsAmigaRun {
+                    package: "T\u{FC}rk\u{E7}e catalogs (BoingBag 3.9-2)".to_string(),
+                    requirement: "BoingBag 3.9-2".to_string(),
+                }
+            ),
+            "the refusal must name both packages and send the user to the Amiga-side step, \
+             got {refusals:?}"
+        );
+        assert!(
+            !refusals.iter().any(|r| matches!(
                 r,
-                crate::core::osinstall::RefusalReason::PackageRequirementMissing {
-                    requires,
-                    ..
-                } if requires == "boingbag-39-2"
+                crate::core::osinstall::RefusalReason::PackageRequirementMissing { .. }
             )),
-            "the refusal must name BoingBag 3.9-2, got {refusals:?}"
+            "the 'tick that one too' sentence must not fire for a package that cannot be \
+             ticked: {refusals:?}"
         );
 
         // Arm 2 — the same folder, the same selection, a tree that records
@@ -5919,6 +5950,7 @@ mod tests {
                     | RefusalReason::PackageUnknown { .. }
                     | RefusalReason::PackageFolderMissing { .. }
                     | RefusalReason::PackageRequirementMissing { .. }
+                    | RefusalReason::PackageRequirementNeedsAmigaRun { .. }
                     | RefusalReason::PackageComponentMissing { .. }
                     | RefusalReason::PackageArchiveMissing { .. }
                     | RefusalReason::PackageArchiveAmbiguous { .. }
@@ -6032,8 +6064,8 @@ mod tests {
                 ),
                 (
                     RefusalReason::PackageRequirementMissing {
-                        package: "boingbag-39-2".into(),
-                        requires: "boingbag-39-1".into(),
+                        package: "BoingBag 3.9-2".into(),
+                        requires: "BoingBag 3.9-1".into(),
                     },
                     "package-requirement-missing",
                     &["refusal", "package", "requires"],
@@ -6355,7 +6387,7 @@ mod tests {
             .iter()
             .find(|row| row.package_id.as_deref() == Some("boingbag-39-2"))
             .expect("BoingBag 3.9-2 is a chain row");
-        assert_eq!(bb2.facts.file.as_deref(), Some("BoingBag39-2.lha"));
+        assert_eq!(bb2.sentence_facts.file.as_deref(), Some("BoingBag39-2.lha"));
 
         // The readout, over the same folder, resolves the same file for the
         // same slot. One gathering, two questions.
@@ -6401,10 +6433,17 @@ mod tests {
             assert!(json["summary"].get(key).is_some(), "missing summary.{key}");
         }
         let row = &json["rows"][0];
-        for key in ["position", "packageId", "slotId", "name", "state", "facts"] {
+        for key in [
+            "position",
+            "packageId",
+            "slotId",
+            "name",
+            "state",
+            "sentenceFacts",
+        ] {
             assert!(row.get(key).is_some(), "missing row.{key}: {row}");
         }
-        assert!(row["facts"].get("runsOnAmiga").is_some());
+        assert!(row["sentenceFacts"].get("runsOnAmiga").is_some());
         // Every state carries its own `state` tag, kebab-cased, and the
         // refusal carries a `because` tag inside it.
         let states: Vec<String> = json["rows"]
