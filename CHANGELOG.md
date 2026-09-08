@@ -140,6 +140,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The Amiga-side step is the whole update chain now, with one Run button.**
+  It used to be a list of the two packages ART could run on the Amiga, with
+  nothing to say where they sat in the order the material actually goes on.
+  It now shows every link of the AmigaOS 3.9 chain in that order — the CD, the
+  two BoingBags, the Locale packs, the Contribution drawer, Euro-Update and
+  BoingBags 3&4 — each with the one sentence that is true of it and whether it
+  runs on the Amiga or is placed from Windows. Pick a row to read its facts;
+  press Run to do the row you picked. Pick nothing and Run does the first row
+  that is ready, and says which one that is before you press it. A row that
+  cannot be run — because it is already in your tree, because another row has
+  to go first, because its file is not in the folders you named, because
+  something else already contains it, or because nobody has ever run it — is
+  still there to be read, and Run is switched off with that row's own reason
+  beside it. A row ART places from Windows is placed from this screen, through
+  the same preview and the same refusals as the packages step, and no emulator
+  window opens for it. When a row is done, the list re-reads your tree so that
+  row moves to "already in this tree" and the next one is offered — and the
+  report of what just happened stays on screen, naming the row it is about.
+  The first row, the CD, links back to the source step, which is where a disc
+  is chosen.
+
 - **The OS Builder asks for your files once, and then tells you what it
   found.** Where the source step used to have an install-disks folder, a
   separate list of extra folders and, for AmigaOS 3.2.2, one field per part of

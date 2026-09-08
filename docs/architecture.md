@@ -757,6 +757,22 @@ When you are unsure which kind a value is, one question decides it: **can the
 value ART wrote and the value the next step operates on drift apart?** If yes it
 belongs in the facade, whatever it looks like.
 
+**The `amiga-kurulum` step is the update chain** (round 3 of the intake work):
+one row per link of the release's own order, from `core::osinstall::chain`
+through `osinstallChain` and `src/lib/chain.ts`, with a single Run button that
+runs the row the user selected or, when they selected none, the first *ready*
+row — and names it. Which of two routes a row takes is the **row's** answer,
+`SentenceFacts::runs_on_amiga`: an Amiga-side row goes through `compose →
+install`, a host-placed one through the `paketler` step's own
+`osinstall_collisions` → `osinstall_add_package`, shared as
+`components/osbuilder/HostPlacement.tsx` rather than copied.
+
+**A row's state comes from the manifest and the slots, never from a file being
+present.** `distribution.json` is what makes a row *installed*, and the resolved
+slot is what makes it *ready* or *missing*; a screen that inferred either from a
+file on disk would tell somebody a package was applied because its archive was
+still in the folder.
+
 ### Strings: two catalogues, and `src/lib` never renders one
 
 `react-i18next`, English **and Turkish** (`src/i18n/en.json`, `tr.json`). Add or
