@@ -58,13 +58,7 @@ path by hand and the ones whose `Drop` never runs.
 `core/osinstall`'s **production** code sweeps its own scratch after an hour.
 The test fixtures have no such sweep, and that asymmetry is the whole defect.
 
-*The cause is under investigation as this is written* — a read-only pass was
-running when this entry was filed, and its findings belong here when they
-land. What is already certain is the shape of a fix: the fixtures that leak
-must go through a type that removes itself, and the suite needs a sweep of its
-own scratch root the way production has one. **Nothing here may delete outside
-that root**, and the 764 GB already on disk is the owner's to remove, not
-ART's.
+**The cause, measured the same day** (`.superpowers/sdd/2026-09-08-intake/scratch-leak-investigation.md`, local-only; the numbers are re-runnable): `core::ScratchDir` — the `Drop`-removed scratch ART-184 was written for — is used by **6** of the ~69 files that create a test scratch; the other **63** carry a local `fn scratch(tag) -> PathBuf` that creates the directory and returns a bare path nothing ever removes (`osinstall::fixtures::scratch` is the biggest, its own doc calling the pattern "the repository's own convention"; `core/preload/*`, `core/artwork/*`, `core/archive/*`, `core/layout/*`, `core/volume/**`, `commands/*` likewise) — ~773 call sites. The controlled experiment: one test through `fixtures::scratch` left the directory count **+1** permanently (263 484 → 263 485); one through `ScratchDir` left it **unchanged** (263 485 → 263 485). So this is ART-184's defect copied into sixty-three files after its fix existed, not a `Drop` that fails. **Fix:** every `scratch()` helper returns a `ScratchDir` (a mechanical conversion, its own round — the tests that keep the path past the helper's scope must hold the guard), and a `Drop` whose `remove_dir_all` fails must say so on stderr rather than swallow it; `scratch-counter-sweep.py` gains a sibling that fails on any `fn scratch(` returning a bare `PathBuf`. Everything older than today under `D:	mprt-tests` is a test's own `art-*` scratch (0 other names; one `winuaetemplog.txt`) and can be deleted on the owner's word.
 
 **ART-279** 🟡 **The `TimedOut` next step tells the user to watch the emulator
 window, which is wrong advice for an installer that is hung rather than
