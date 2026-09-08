@@ -10,9 +10,12 @@
   "filenamesUnknown": "Expected file names: ART has no name recorded for this one. It is identified by its contents.",
   "provenance": "Where it comes from: {provenance}",
   "provenanceUnknown": "Where it comes from: ART has no note of it.",
+  "romNotInThisFolder": "Not a file for this folder: you choose your Kickstart in ART itself. It needs Kickstart {major} or newer.",
+  "romNotInThisFolderNoFloor": "Not a file for this folder: you choose your Kickstart in ART itself.",
   "needsFirst": "Goes on after: {needs}",
   "needsNothing": "Nothing has to be in place before it.",
   "withoutRequired": "Without it: the build cannot be made at all.",
+  "withoutNeededBy": "Without it: the build is made without this part, and {dependents} cannot go on either.",
   "withoutOptional": "Without it: the build is made without this part, and nothing else fails.",
   "footer": "This file is ART's, not yours: nothing reads it back, and deleting it changes nothing. Ask again for a fresh one after you change which release you are building."
 }

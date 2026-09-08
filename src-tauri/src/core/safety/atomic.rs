@@ -90,6 +90,83 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> CoreResult<()> {
     Ok(())
 }
 
+/// Whether [`atomic_create_new`] made the file, or found one already there.
+///
+/// Two endings and they stay two: "ART wrote it" and "something of that name
+/// was already on the user's disk and ART did not touch it" are different
+/// next steps, and neither is a failure. A real failure is still an `Err`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Created {
+    Yes,
+    AlreadyThere,
+}
+
+/// Create `path` holding exactly `bytes` — **refusing an existing file, and
+/// never leaving a partial one**.
+///
+/// [`atomic_write`] is the wrong primitive whenever the operation is
+/// `SAFE_CREATE`: it renames over whatever is at the destination, which is
+/// precisely what must not happen to a file the user already has. And a plain
+/// `File::create_new` + `write_all` is the wrong one too, in the other
+/// direction: a write that dies part way leaves a half-written file that the
+/// *next* call then refuses to replace, so ART's own debris becomes something
+/// the user is told to go and delete.
+///
+/// So both halves, in this order:
+///
+/// 1. **Reserve the name exclusively** with `create_new`. That is the
+///    SAFE_CREATE guarantee, and it is a single atomic syscall — there is no
+///    window between asking whether the file exists and taking the name.
+/// 2. Write the bytes to a temporary file **in the same directory**, flush,
+///    `sync_all`.
+/// 3. `rename` the temporary over the reservation. On one volume that is
+///    atomic, so the destination is the empty reservation or the whole file
+///    and never a mix.
+///
+/// Anything failing after step 1 removes **both** the temporary and the
+/// reservation, so a failed call leaves the folder exactly as it found it.
+pub fn atomic_create_new(path: &Path, bytes: &[u8]) -> CoreResult<Created> {
+    match fs::File::create_new(path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Ok(Created::AlreadyThere)
+        }
+        Err(e) => return Err(CoreError::Io(e)),
+    }
+
+    let finish = (|| -> CoreResult<()> {
+        let tmp = temp_path_for(path)?;
+        let written = (|| -> std::io::Result<()> {
+            let mut f = fs::File::create_new(&tmp)?;
+            f.write_all(bytes)?;
+            f.flush()?;
+            f.sync_all()?;
+            Ok(())
+        })();
+        if let Err(e) = written {
+            let _ = fs::remove_file(&tmp);
+            return Err(CoreError::Io(e));
+        }
+        if let Err(e) = fs::rename(&tmp, path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(CoreError::Io(e));
+        }
+        Ok(())
+    })();
+
+    match finish {
+        Ok(()) => Ok(Created::Yes),
+        Err(e) => {
+            // The reservation is ART's own, and only ART's: nothing else can
+            // have opened this name between step 1 and here, because step 1
+            // is what took it. Leaving the empty file would make the next
+            // call answer "already there" about ART's own wreckage.
+            let _ = fs::remove_file(path);
+            Err(e)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +218,84 @@ mod tests {
             leftovers.is_empty(),
             "temp files left behind: {leftovers:?}"
         );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn create_new_writes_a_file_that_is_not_there() {
+        let dir = scratch("create-new");
+        let target = dir.join("ART - what goes here.txt");
+
+        assert_eq!(
+            atomic_create_new(&target, b"the guide").unwrap(),
+            Created::Yes
+        );
+
+        assert_eq!(fs::read(&target).unwrap(), b"the guide");
+        // Atomic means the temporary went with it.
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains("art-tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The half `atomic_write` cannot give: the bytes already on the user's
+    /// disk are still there afterwards, byte for byte, and the answer says so
+    /// rather than being an error.
+    #[test]
+    fn create_new_never_replaces_what_is_already_there() {
+        let dir = scratch("create-new-exists");
+        let target = dir.join("ART - what goes here.txt");
+        fs::write(&target, b"the owner's own notes").unwrap();
+
+        assert_eq!(
+            atomic_create_new(&target, b"the guide").unwrap(),
+            Created::AlreadyThere
+        );
+
+        assert_eq!(fs::read(&target).unwrap(), b"the owner's own notes");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The reservation is never what the caller is left with.** Step 1
+    /// takes the name with a zero-length file; if the rename in step 3 were
+    /// dropped, the destination would exist, be empty, and the *next* call
+    /// would answer "already there" about ART's own wreckage. So the second
+    /// call has to see the first call's real bytes and nothing else.
+    #[test]
+    fn the_reservation_is_replaced_by_the_real_bytes_not_left_empty() {
+        let dir = scratch("create-new-twice");
+        let target = dir.join("guide.txt");
+
+        assert_eq!(atomic_create_new(&target, b"one").unwrap(), Created::Yes);
+        assert_eq!(fs::metadata(&target).unwrap().len(), 3);
+
+        assert_eq!(
+            atomic_create_new(&target, b"two").unwrap(),
+            Created::AlreadyThere
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"one");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A destination in a directory that is not there is an error — not
+    /// `AlreadyThere`, which would be a claim about a file, and not a silent
+    /// success. Nothing is created.
+    #[test]
+    fn a_destination_in_a_missing_directory_is_an_error_and_creates_nothing() {
+        let dir = scratch("create-new-nodir");
+        let target = dir.join("not-here").join("guide.txt");
+
+        assert!(atomic_create_new(&target, b"the guide").is_err());
+        assert!(!target.exists());
+        assert!(!dir.join("not-here").exists());
         fs::remove_dir_all(&dir).ok();
     }
 

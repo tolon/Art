@@ -13,7 +13,7 @@
 pub mod atomic;
 pub mod backup;
 
-pub use atomic::atomic_write;
+pub use atomic::{atomic_create_new, atomic_write, Created};
 pub use backup::{backup_file, BackupPolicy};
 
 use std::path::{Path, PathBuf};

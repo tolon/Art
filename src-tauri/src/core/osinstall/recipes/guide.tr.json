@@ -10,9 +10,12 @@
   "filenamesUnknown": "Beklenen dosya adları: ART bunun için kayıtlı bir ad tutmuyor. İçeriğinden tanınır.",
   "provenance": "Nereden geldiği: {provenance}",
   "provenanceUnknown": "Nereden geldiği: ART'ın bir notu yok.",
+  "romNotInThisFolder": "Bu klasöre konacak bir dosya değil: Kickstart'ı ART'ın kendi içinde seçersiniz. Kickstart {major} ya da daha yenisi gerekiyor.",
+  "romNotInThisFolderNoFloor": "Bu klasöre konacak bir dosya değil: Kickstart'ı ART'ın kendi içinde seçersiniz.",
   "needsFirst": "Şundan sonra kurulur: {needs}",
   "needsNothing": "Ondan önce yerinde olması gereken bir şey yok.",
   "withoutRequired": "O olmadan: yapı hiç kurulamaz.",
+  "withoutNeededBy": "O olmadan: yapı bu parça olmadan kurulur; {dependents} ise hiç kurulamaz.",
   "withoutOptional": "O olmadan: yapı bu parça olmadan kurulur, başka hiçbir şey aksamaz.",
   "footer": "Bu dosya ART'ındır, sizin değil: kimse onu geri okumaz, silmeniz hiçbir şeyi değiştirmez. Hangi sürümü kurduğunuzu değiştirdikten sonra yenisini isteyin."
 }

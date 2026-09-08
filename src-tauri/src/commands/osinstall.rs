@@ -112,6 +112,7 @@ use crate::core::osinstall::verify::{verify_volume, VerifyReport};
 use crate::core::osinstall::{
     destination_key, host_destination, HostPlacementBlock, RefusalReason,
 };
+use crate::core::safety;
 use crate::error::{AppError, AppResult};
 
 use super::jobs::{spawn_job, spawn_job_in_lane, JobRegistry};
@@ -816,6 +817,7 @@ pub fn osinstall_slots(
         hashes.extend(mediahash::remembered_media_in(folder, &cache).unwrap_or_default());
     }
     let media = scan::dedupe_identical_disks(media);
+    let packages = narrow_by_distinguished_by(&release, packages);
 
     let manifest = match tree {
         Some(tree) => Some(chain::read_manifest(&tree)?),
@@ -846,6 +848,73 @@ pub fn osinstall_slots(
         summary,
         unreadable_folders,
     })
+}
+
+/// Drop the archives a package's own `distinguished_by` rejects, before the
+/// slots are resolved against them (fix round 1, m4).
+///
+/// **`core::osinstall::slots` matches on `identity` alone** — a `Slot` carries
+/// the package's `media` and nothing else — while every other reader of the
+/// same folder (`osinstall_packages`, `plan()`, `resolve_package_archive`)
+/// goes through [`package_for`], which applies `distinguished_by` **whether or
+/// not `media` alone was ambiguous**. `package.rs` records why: eight of the
+/// owner's archives carry the top-level `LocaleUpdate`, and with only the
+/// German one present the Turkish package used to resolve to it with no
+/// ambiguity to warn anybody.
+///
+/// So the readout and the panel disagreed with the run about which file a slot
+/// is. For `boingbag-39-2` — the case that can actually reach the Amiga-side
+/// panel — a second archive claiming `BoingBag3.9-2` (its own Contribution
+/// archive does) made the field *ambiguous* where the run's resolver would
+/// have found exactly one, or filled it with a file `resolve_package_archive`
+/// refuses afterwards.
+///
+/// **Only the rejected ones go.** An archive no shipped package claims by
+/// identity is left in `Facts::packages` untouched, because rank 3's *guess*
+/// pool is built from every path the facts carry and an archive the recipes
+/// have never heard of is exactly what that rank exists to report on. What is
+/// removed is precisely: an archive whose top-level directory *is* some
+/// package's `media`, and which that package's own `distinguished_by` then
+/// turns down.
+///
+/// The cost is `archive_carries` re-opening each candidate archive — the same
+/// cost `osinstall_packages` already pays on the packages step, over the same
+/// files.
+fn narrow_by_distinguished_by(release: &str, found: Vec<FoundPackage>) -> Vec<FoundPackage> {
+    let Ok(packages) = package::packages_for(release) else {
+        // A release with no readable recipe list narrows nothing rather than
+        // losing everything: the slots will be empty anyway, and silently
+        // discarding the user's archives on the way is the worse failure.
+        return found;
+    };
+
+    // Every archive some package's `distinguished_by` accepts, by path. Built
+    // per package through the one function that answers "is this archive this
+    // package's", so this cannot come to a different conclusion than the run.
+    let mut accepted: Vec<PathBuf> = Vec::new();
+    for pkg in &packages {
+        let keep: Vec<&FoundPackage> =
+            match package_for(&found, &pkg.media, pkg.distinguished_by.as_deref()) {
+                MediaMatch::Missing => Vec::new(),
+                MediaMatch::Found(one) => vec![one],
+                MediaMatch::Ambiguous(many) => many,
+            };
+        for one in keep {
+            if !accepted.contains(&one.path) {
+                accepted.push(one.path.clone());
+            }
+        }
+    }
+
+    found
+        .into_iter()
+        .filter(|one| {
+            let claimed_by_identity = packages
+                .iter()
+                .any(|pkg| crate::core::osinstall::amiga_names_equal(&one.media, &pkg.media));
+            !claimed_by_identity || accepted.contains(&one.path)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -894,40 +963,76 @@ pub enum GuideOutcome {
 /// `language` is the UI's own code and anything unrecognised falls back to
 /// English rather than refusing.
 ///
-/// `SAFE_CREATE`: `create_new`, so a guide already in the folder is never
-/// touched — see [`GuideOutcome`] for why that answer is an outcome rather
-/// than an error.
+/// `SAFE_CREATE`, through [`safety::atomic_create_new`] (fix round 1, L11).
+/// `core/safety` had no create-new primitive — `atomic_write` renames *over*
+/// the destination, which is the one thing that must not happen here — so it
+/// gained one: the name is reserved exclusively, the bytes go to a sibling
+/// temporary, and the rename swaps them in. A write that dies part way
+/// therefore cannot leave a half-guide that the next call refuses to replace
+/// while the screen says *"already there"* about ART's own debris.
+///
+/// **Logged** (§53). This creates a file in the user's own folder, which is a
+/// change to their data, so it goes through `write_result` like every other
+/// one — including the *already there* answer, which is a real outcome and not
+/// a non-event.
 #[tauri::command]
 pub fn osinstall_write_material_guide(
     folder: PathBuf,
     release: String,
     language: String,
+    oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<GuideOutcome> {
-    let slots = slots::slots_for(&release)?;
-    let words = slots::guide_strings(&language)?;
-    let text = slots::guide_text(&slots, &release, &language)?;
+    let result = write_material_guide(&folder, &release, &language);
+    write(&oplog, guide_record(&folder, &release, &language, &result));
+    result
+}
+
+/// What the operation log records about one guide write.
+///
+/// Its own function, the shape [`verify_record`] already uses in this module
+/// and for the same reason: a `State` cannot be built in a unit test, so the
+/// record has to be answerable without one or it is never checked at all.
+///
+/// **All three endings are logged, including *already there*.** That is not a
+/// non-event — the user asked ART to write into their folder and ART decided
+/// not to, which is exactly the kind of decision §53 exists to leave a trace
+/// of.
+fn guide_record(
+    folder: &Path,
+    release: &str,
+    language: &str,
+    result: &AppResult<GuideOutcome>,
+) -> OperationRecord {
+    let record = user_operation("Write a material guide into a folder")
+        .destination(folder.display().to_string())
+        .detail("Release", release)
+        .detail("Language", language);
+    match result {
+        Ok(GuideOutcome::Written { path }) => record.detail("Wrote", path.clone()),
+        Ok(GuideOutcome::AlreadyThere { path }) => {
+            record.detail("Left alone (already there)", path.clone())
+        }
+        Err(err) => record.failure(err.code(), err.to_string()),
+    }
+}
+
+/// [`osinstall_write_material_guide`] without the log, so the command body
+/// stays one expression and the record is written once whichever way it goes.
+fn write_material_guide(folder: &Path, release: &str, language: &str) -> AppResult<GuideOutcome> {
+    let slots = slots::slots_for(release)?;
+    let words = slots::guide_strings(language)?;
+    let text = slots::guide_text(&slots, release, language)?;
 
     // `safe_join`, and not `folder.join(filename)`: the name comes from a
     // shipped data file, but the one rule ART keeps about turning a name into
     // a path has no exceptions for names ART wrote itself (`core/security`).
-    let path = crate::core::security::safe_join(&folder, &words.filename)
+    let path = crate::core::security::safe_join(folder, &words.filename)
         .map_err(|err| CoreError::InvalidInput(err.to_string()))?;
     let display = path.display().to_string();
 
-    match std::fs::File::options()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-    {
-        Ok(mut file) => {
-            use std::io::Write;
-            file.write_all(text.as_bytes()).map_err(CoreError::Io)?;
-            Ok(GuideOutcome::Written { path: display })
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            Ok(GuideOutcome::AlreadyThere { path: display })
-        }
-        Err(e) => Err(CoreError::Io(e).into()),
+    match safety::atomic_create_new(&path, text.as_bytes())? {
+        safety::Created::Yes => Ok(GuideOutcome::Written { path: display }),
+        safety::Created::AlreadyThere => Ok(GuideOutcome::AlreadyThere { path: display }),
     }
 }
 
@@ -5588,8 +5693,7 @@ mod tests {
     #[test]
     fn the_guide_is_written_into_the_folder_the_click_named() {
         let dir = scratch("guide-write");
-        let outcome =
-            osinstall_write_material_guide(dir.clone(), "AmigaOS 3.9".into(), "en".into()).unwrap();
+        let outcome = write_material_guide(&dir, "AmigaOS 3.9", "en").unwrap();
 
         let GuideOutcome::Written { path } = &outcome else {
             panic!("expected a written guide, got {outcome:?}");
@@ -5623,8 +5727,7 @@ mod tests {
         let path = dir.join("ART - what goes here.txt");
         std::fs::write(&path, b"the owner's own notes").unwrap();
 
-        let outcome =
-            osinstall_write_material_guide(dir.clone(), "AmigaOS 3.9".into(), "en".into()).unwrap();
+        let outcome = write_material_guide(&dir, "AmigaOS 3.9", "en").unwrap();
 
         assert!(
             matches!(outcome, GuideOutcome::AlreadyThere { .. }),
@@ -5644,8 +5747,7 @@ mod tests {
     #[test]
     fn the_turkish_guide_has_its_own_name_and_its_own_words() {
         let dir = scratch("guide-tr");
-        let outcome =
-            osinstall_write_material_guide(dir.clone(), "AmigaOS 3.9".into(), "tr".into()).unwrap();
+        let outcome = write_material_guide(&dir, "AmigaOS 3.9", "tr").unwrap();
         let GuideOutcome::Written { path } = &outcome else {
             panic!("expected a written guide, got {outcome:?}");
         };
@@ -5659,6 +5761,176 @@ mod tests {
         // And the two really are two files, not one name twice.
         assert!(!dir.join("ART - what goes here.txt").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Write both guides where a person can read them.**
+    ///
+    /// The fix round's own lesson: M1, M2 and M3 were three false sentences in
+    /// a file ART leaves on somebody's disk, and 3136 Rust tests read none of
+    /// it as prose. Assertions check the lines somebody thought to check; this
+    /// exists so the artefact itself can be opened and read, and re-run rather
+    /// than re-trusted. `#[ignore]`d and env-gated like every other hook here,
+    /// because it writes two real files into a folder the caller names.
+    ///
+    /// `set ART_GUIDE_OUT=<folder> && cargo test write_both_guides -- --ignored --nocapture`
+    #[test]
+    #[ignore = "writes two real guide files; set ART_GUIDE_OUT to a folder"]
+    fn write_both_guides_for_a_person_to_read() {
+        let Ok(out) = std::env::var("ART_GUIDE_OUT") else {
+            panic!("set ART_GUIDE_OUT to a folder to run this");
+        };
+        let folder = PathBuf::from(out);
+        std::fs::create_dir_all(&folder).unwrap();
+        for language in ["en", "tr"] {
+            match write_material_guide(&folder, "AmigaOS 3.9", language).unwrap() {
+                GuideOutcome::Written { path } => {
+                    println!(
+                        "\n===== {language} =====\n{}",
+                        std::fs::read_to_string(&path).unwrap()
+                    )
+                }
+                GuideOutcome::AlreadyThere { path } => {
+                    println!(
+                        "\n===== {language}: already there at {path}; delete it to rewrite ====="
+                    )
+                }
+            }
+        }
+    }
+
+    /// One archive under a package's own top-level directory, carrying `inner`
+    /// inside that directory — the shape `distinguished_by` is measured
+    /// against.
+    fn write_bb2_archive(folder: &Path, file_name: &str, inner: &str) {
+        let name = format!("BoingBag3.9-2\\{inner}");
+        std::fs::write(
+            folder.join(file_name),
+            crate::core::lha::tests::make_lha_with_raw_names(&[(name.as_bytes(), b"payload")]),
+        )
+        .unwrap();
+    }
+
+    /// **m4.** `core::osinstall::slots` matches an archive on `identity`
+    /// alone; every other reader of the same folder goes through
+    /// `scan::package_for`, which applies `distinguished_by` **whether or not
+    /// `media` alone was ambiguous**. So the readout and the Amiga-side panel
+    /// disagreed with the run about which file a slot is.
+    ///
+    /// The real shape, and the one that reaches the panel: BoingBag 3.9-2's
+    /// own archive and its Contribution archive both call themselves
+    /// `BoingBag3.9-2`, and only the first carries `AmigaOS-Update`.
+    #[test]
+    fn a_second_archive_sharing_a_packages_identity_is_narrowed_by_what_it_carries() {
+        let dir = scratch("slots-distinguished");
+        write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
+        write_bb2_archive(&dir, "BoingBag39-2-Contribution.lha", "Contribution/readme");
+
+        let report =
+            osinstall_slots("AmigaOS 3.9".to_string(), vec![dir.clone()], None, None).unwrap();
+        let state = report
+            .states
+            .iter()
+            .find(|state| state.slot.id == "package:boingbag-39-2")
+            .expect("3.9 has a BoingBag 3.9-2 slot");
+
+        let found = state
+            .found
+            .as_ref()
+            .unwrap_or_else(|| panic!("the slot did not resolve: {state:?}"));
+        assert!(
+            found.path.ends_with("BoingBag39-2.lha"),
+            "resolved to the wrong archive: {}",
+            found.path.display()
+        );
+        assert_eq!(
+            found.matched_by,
+            slots::MatchedBy::TopLevelDirectory,
+            "the archive says what it is; nothing here hashed anything"
+        );
+        assert!(
+            state.candidates.is_empty(),
+            "the Contribution archive is still a candidate: {:?}",
+            state.candidates
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other half of the narrowing rule, and what keeps it from being a
+    /// filter that quietly loses the user's files: an archive **no** shipped
+    /// package claims by identity is left exactly where it was, because
+    /// rank 3's *guess* pool is built from every path the facts carry and an
+    /// archive the recipes have never heard of is what that rank reports on.
+    #[test]
+    fn an_archive_no_package_claims_survives_the_narrowing() {
+        let dir = scratch("slots-unclaimed");
+        std::fs::write(
+            dir.join("SomethingElse.lha"),
+            crate::core::lha::tests::make_lha_with_raw_names(&[(
+                b"SomethingElse\\readme".as_slice(),
+                b"payload",
+            )]),
+        )
+        .unwrap();
+
+        let kept =
+            narrow_by_distinguished_by("AmigaOS 3.9", find_packages(&dir).unwrap_or_default());
+
+        assert_eq!(
+            kept.len(),
+            1,
+            "an unclaimed archive was thrown away: {kept:?}"
+        );
+        assert_eq!(kept[0].media, "SomethingElse");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **L11.** Writing into the user's own folder is a change to their data,
+    /// so it is logged (§53) — and *already there* is logged too. The user
+    /// asked ART to write and ART decided not to; a log with no trace of that
+    /// is a log that cannot answer why the file is a week old.
+    #[test]
+    fn every_guide_ending_leaves_its_own_line_in_the_operation_log() {
+        let folder = PathBuf::from("E:\\material");
+        let written = guide_record(
+            &folder,
+            "AmigaOS 3.9",
+            "en",
+            &Ok(GuideOutcome::Written {
+                path: "E:\\material\\ART - what goes here.txt".into(),
+            }),
+        );
+        assert_eq!(written.destination.as_deref(), Some("E:\\material"));
+        assert!(written
+            .details
+            .iter()
+            .any(|(k, v)| k == "Release" && v == "AmigaOS 3.9"));
+        assert!(written.details.iter().any(|(k, _)| k == "Wrote"));
+        assert!(matches!(written.outcome, OperationOutcome::Success { .. }));
+
+        let already = guide_record(
+            &folder,
+            "AmigaOS 3.9",
+            "tr",
+            &Ok(GuideOutcome::AlreadyThere {
+                path: "E:\\material\\ART - buraya ne konur.txt".into(),
+            }),
+        );
+        assert!(already
+            .details
+            .iter()
+            .any(|(k, _)| k == "Left alone (already there)"));
+        assert!(
+            !already.details.iter().any(|(k, _)| k == "Wrote"),
+            "a guide ART did not write must not be logged as written"
+        );
+
+        let failed = guide_record(
+            &folder,
+            "AmigaOS 3.9",
+            "en",
+            &Err(AppError::Core(CoreError::InvalidInput("no".into()))),
+        );
+        assert!(matches!(failed.outcome, OperationOutcome::Failure { .. }));
     }
 
     /// The outcome's own wire shape, pinned for the reason every response

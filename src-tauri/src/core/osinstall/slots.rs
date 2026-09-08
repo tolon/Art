@@ -241,8 +241,12 @@ pub struct Slot {
     /// rows for its artefact. A hint for the drop-folder guide and for rank
     /// 3's *guess*, never a requirement — see the module doc.
     pub filenames: Vec<String>,
-    /// The row's own `source`, as the table states it. `None` when no row
-    /// names this artefact.
+    /// Where the **artefact** comes from, for somebody who has to go and get
+    /// it: an adopted row's own `source`, verbatim (`"Haage and Partners
+    /// (3.9)"`). `None` when no adopted row names this artefact — including
+    /// when one of ART's own rows does, because that field records where
+    /// *this machine's dump* came from and not where the artefact comes from.
+    /// See [`provenance_for`].
     pub provenance: Option<String>,
     /// Chain order: media first, then the packages in
     /// [`package::order`](super::package::order)'s requires-respecting order
@@ -521,13 +525,34 @@ fn filenames_for(rows: &[MediaRow], artefact: Option<&str>) -> Vec<String> {
     names
 }
 
-/// The first row for `artefact`, as the tables are ordered (adopted, then
-/// ART's own), and its `source` exactly as that table states it — never
-/// re-worded here.
+/// Where the **artefact** comes from — and only when a row is entitled to say
+/// so.
+///
+/// **`MediaRow::source` is not one field with one meaning** (fix round 1, M3).
+/// Its own doc says what it is: *"where Hatcher's table says this dump came
+/// from"*. On an **adopted** row that is a statement about the artefact —
+/// `"Haage and Partners (3.9)"` — and it is exactly what somebody trying to
+/// obtain the file needs. On one of **ART's own** rows it is a statement about
+/// *this machine*: `"the owner's copy, 2026-09-08"`. Rendering that behind the
+/// words *"where it comes from"* — in a field hint, and worse, in a text file
+/// ART writes into a stranger's folder — is a date-stamped claim about
+/// somebody else's disk and no help in obtaining anything. It is the
+/// confident, wrong sentence this project is most expensive at, and it was
+/// already pinned by a test before anybody read it as prose.
+///
+/// So an own-table row answers `None`, and the caller says *"ART has no note
+/// of where this one comes from"*, which is true. The rows are searched in
+/// table order (adopted first), so an artefact with rows in both tables still
+/// gets the adopted row's sentence.
+///
+/// Closing this properly means a real *where to obtain* note per artefact,
+/// which belongs on the adopted-artefact map beside `filenames` — the place
+/// the brief's `homepage` was heading for. Until somebody writes those notes,
+/// silence is the honest answer.
 fn provenance_for(rows: &[MediaRow], artefact: Option<&str>) -> Option<String> {
     let artefact = artefact?;
     rows_for_artefact(rows, artefact)
-        .next()
+        .find(|row| row.table_origin == mediahash::Origin::Adopted)
         .map(|row| row.source.clone())
 }
 
@@ -1164,10 +1189,34 @@ pub struct GuideStrings {
     /// `{provenance}`.
     pub provenance: String,
     pub provenance_unknown: String,
+    /// The ROM's own line, in place of the expected/provenance pair —
+    /// `{major}` (fix round 1, M1).
+    ///
+    /// **A ROM slot is never resolved from a folder at all**: `resolve_one`'s
+    /// rank 2 answers `MatchedBy::Chosen` for it and rank 3 is keyed on
+    /// `filenames`, which a ROM slot has none of. It is filled from
+    /// [`Facts::rom`] — the Kickstart the user chose in ART — and from
+    /// nothing else. So the generic lines told a reader to put a Kickstart in
+    /// this folder and promised ART would identify it by its contents; both
+    /// claims were false, and this is the file ART leaves on somebody's disk.
+    pub rom_not_in_this_folder: String,
+    /// The same, for a release that states no floor — `rom-older-than` alone
+    /// gives an optional ROM slot with no number, and interpolating an empty
+    /// `{major}` would read "Kickstart  or newer".
+    pub rom_not_in_this_folder_no_floor: String,
     /// `{needs}`.
     pub needs_first: String,
     pub needs_nothing: String,
     pub without_required: String,
+    /// `{dependents}` — a slot another slot's `requires` names (fix round 1,
+    /// M2).
+    ///
+    /// Every package slot is `required: false` by construction (a package is
+    /// a thing the user chooses), so BoingBag 3.9-1 used to be told it could
+    /// be skipped with "nothing else fails" four lines above the guide's own
+    /// statement that BoingBag 3.9-2 goes on after it. The file contradicted
+    /// itself and the half a reader acts on was the wrong half.
+    pub without_needed_by: String,
     pub without_optional: String,
     pub footer: String,
 }
@@ -1214,14 +1263,26 @@ fn fill(template: &str, placeholder: &str, value: &str) -> String {
 /// folder tomorrow would make a guide composed from states stale in a way the
 /// reader could not see.
 ///
-/// `slot_names` is used for the order line so it names a prerequisite the way
-/// the reader will see it in this same file, never by slot id.
+/// A prerequisite or a dependent is named the way the reader will see it in
+/// this same file, never by slot id.
+///
+/// **The line endings are CRLF** (fix round 1, L8). This is a `.txt` a Windows
+/// user opens in whatever they have; every other file ART writes for a machine
+/// to read keeps its own convention, and this one is written for a person on
+/// this platform.
 pub fn guide_text(slots: &[Slot], release: &str, language: &str) -> CoreResult<String> {
     let words = guide_strings(language)?;
-    let names: Vec<(&str, &str)> = slots
+    let names: Vec<(&str, String)> = slots
         .iter()
-        .map(|slot| (slot.id.as_str(), slot.name.as_str()))
+        .map(|slot| (slot.id.as_str(), guide_name(slot)))
         .collect();
+    let name_of = |id: &str| -> String {
+        names
+            .iter()
+            .find(|(other, _)| *other == id)
+            .map(|(_, name)| name.clone())
+            .unwrap_or_else(|| id.to_string())
+    };
 
     let mut out = String::new();
     out.push_str(&words.heading);
@@ -1245,21 +1306,37 @@ pub fn guide_text(slots: &[Slot], release: &str, language: &str) -> CoreResult<S
             true => &words.required,
             false => &words.optional,
         };
-        out.push_str(&format!("{tag}  {}\n", slot.name));
-        out.push_str(&format!(
-            "  {}\n",
-            match slot.filenames.is_empty() {
-                true => words.filenames_unknown.clone(),
-                false => fill(&words.expected, "filenames", &slot.filenames.join(", ")),
-            }
-        ));
-        out.push_str(&format!(
-            "  {}\n",
-            match &slot.provenance {
-                Some(source) => fill(&words.provenance, "provenance", source),
-                None => words.provenance_unknown.clone(),
-            }
-        ));
+        out.push_str(&format!("{tag}  {}\n", guide_name(slot)));
+
+        // **The ROM is not a file for this folder** (M1). Its own line
+        // replaces the expected/provenance pair, because both of those
+        // answers would be about looking in a folder ART never looks in for
+        // it.
+        if slot.kind == SlotKind::Rom {
+            out.push_str(&format!(
+                "  {}\n",
+                match slot.identity.is_empty() {
+                    true => words.rom_not_in_this_folder_no_floor.clone(),
+                    false => fill(&words.rom_not_in_this_folder, "major", &slot.identity),
+                }
+            ));
+        } else {
+            out.push_str(&format!(
+                "  {}\n",
+                match slot.filenames.is_empty() {
+                    true => words.filenames_unknown.clone(),
+                    false => fill(&words.expected, "filenames", &slot.filenames.join(", ")),
+                }
+            ));
+            out.push_str(&format!(
+                "  {}\n",
+                match &slot.provenance {
+                    Some(source) => fill(&words.provenance, "provenance", source),
+                    None => words.provenance_unknown.clone(),
+                }
+            ));
+        }
+
         out.push_str(&format!(
             "  {}\n",
             match slot.requires.is_empty() {
@@ -1270,30 +1347,58 @@ pub fn guide_text(slots: &[Slot], release: &str, language: &str) -> CoreResult<S
                     &slot
                         .requires
                         .iter()
-                        .map(|id| {
-                            names
-                                .iter()
-                                .find(|(other, _)| other == id)
-                                .map(|(_, name)| (*name).to_string())
-                                .unwrap_or_else(|| id.clone())
-                        })
+                        .map(|id| name_of(id))
                         .collect::<Vec<_>>()
                         .join(", "),
                 ),
             }
         ));
+
+        // Who else stops working. **Not derivable from `required` alone**
+        // (M2): every package slot is optional by construction, so BoingBag
+        // 3.9-1 was told "nothing else fails" four lines above this same
+        // file's own statement that BoingBag 3.9-2 goes on after it.
+        let dependents: Vec<String> = slots
+            .iter()
+            .filter(|other| other.requires.iter().any(|id| id == &slot.id))
+            .map(guide_name)
+            .collect();
         out.push_str(&format!(
             "  {}\n\n",
-            match slot.required {
-                true => &words.without_required,
-                false => &words.without_optional,
+            match (slot.required, dependents.is_empty()) {
+                // A required slot's own sentence outranks it: "the build
+                // cannot be made at all" already covers everything that would
+                // have gone on after it.
+                (true, _) => words.without_required.clone(),
+                (false, false) => fill(
+                    &words.without_needed_by,
+                    "dependents",
+                    &dependents.join(", ")
+                ),
+                (false, true) => words.without_optional.clone(),
             }
         ));
     }
 
     out.push_str(&words.footer);
     out.push('\n');
-    Ok(out)
+    // Composed with `\n` and converted once, rather than threading `\r\n`
+    // through every `push_str`: there is exactly one place to be wrong, and
+    // nothing above ever writes a `\r`.
+    Ok(out.replace('\n', "\r\n"))
+}
+
+/// What the guide calls a slot — **the same name the screen shows**.
+///
+/// `slots.ts::displayName`'s rule, and it exists for the ROM: the recipe names
+/// that slot only *"Kickstart"* and states the major it needs in `identity`,
+/// so the guide printing `slot.name` raw dropped the one actionable fact the
+/// slot holds (M1). Two data values placed side by side, not a sentence.
+fn guide_name(slot: &Slot) -> String {
+    match slot.kind == SlotKind::Rom && !slot.identity.is_empty() {
+        true => format!("{} {}", slot.name, slot.identity),
+        false => slot.name.clone(),
+    }
 }
 
 #[cfg(test)]
@@ -1449,6 +1554,178 @@ mod tests {
         );
         // And a slot with no prerequisite says so rather than nothing at all.
         assert!(text.contains(&words.needs_nothing));
+    }
+
+    /// The entry for one slot, as a reader sees it: its heading line and the
+    /// indented lines under it, up to the blank line. Written for the fix
+    /// round's three findings, all of which are *"the guide says a true-looking
+    /// thing about the wrong slot"* and none of which a `contains` over the
+    /// whole file could have caught.
+    fn guide_entry(text: &str, heading_ends_with: &str) -> String {
+        let mut out = String::new();
+        let mut inside = false;
+        for line in text.lines() {
+            if inside {
+                if line.trim().is_empty() {
+                    break;
+                }
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            if !line.starts_with(' ') && line.trim_end().ends_with(heading_ends_with) {
+                inside = true;
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        assert!(
+            !out.is_empty(),
+            "no entry ending '{heading_ends_with}' in:\n{text}"
+        );
+        out
+    }
+
+    /// **M1.** A ROM slot is filled from the Kickstart the user chose in ART
+    /// and from nothing else — `resolve_one` answers `MatchedBy::Chosen` for
+    /// it at rank 2 and it carries no `filenames` for rank 3. The guide used
+    /// to print the generic lines for it, so a file ART writes into somebody's
+    /// folder, headed *"What goes in this folder"*, told them to put a
+    /// Kickstart there and promised it would be "identified by its contents".
+    /// Two claims, both false, on a person's own disk.
+    #[test]
+    fn the_rom_entry_says_it_is_not_a_file_for_this_folder_and_names_the_floor() {
+        for language in ["en", "tr"] {
+            let words = guide_strings(language).unwrap();
+            let text =
+                guide_text(&slots_for("AmigaOS 3.9").unwrap(), "AmigaOS 3.9", language).unwrap();
+            // The heading carries the floor, exactly as the screen's own
+            // `displayName` joins it — the recipe names the slot "Kickstart"
+            // and states the major separately.
+            let entry = guide_entry(&text, "Kickstart 40");
+
+            assert!(
+                entry.contains(&fill(&words.rom_not_in_this_folder, "major", "40")),
+                "{language}: the ROM entry does not say where the Kickstart is chosen:\n{entry}"
+            );
+            // And it makes neither of the two false claims any more.
+            assert!(
+                !entry.contains(&words.filenames_unknown),
+                "{language}: the ROM entry still promises identification by contents:\n{entry}"
+            );
+            assert!(
+                !entry.contains(&words.provenance_unknown),
+                "{language}: the ROM entry still answers a where-from question:\n{entry}"
+            );
+        }
+    }
+
+    /// A release stating no Kickstart floor gets the same instruction without
+    /// a number — `"Kickstart  or newer"` is what interpolating an empty
+    /// identity would have produced.
+    #[test]
+    fn a_rom_slot_with_no_floor_still_says_it_is_chosen_in_art() {
+        let rom = Slot {
+            id: "rom".into(),
+            kind: SlotKind::Rom,
+            name: "Kickstart".into(),
+            identity: String::new(),
+            artefact: None,
+            required: false,
+            filenames: Vec::new(),
+            provenance: None,
+            position: 0,
+            requires: Vec::new(),
+            superseded_by: Vec::new(),
+        };
+        let words = guide_strings("en").unwrap();
+        let text = guide_text(&[rom], "AmigaOS 3.9", "en").unwrap();
+
+        assert!(
+            text.contains(&words.rom_not_in_this_folder_no_floor),
+            "{text}"
+        );
+        assert!(!text.contains("Kickstart  or newer"), "{text}");
+    }
+
+    /// **M2.** Every package slot is optional by construction — a package is a
+    /// thing the user chooses — so BoingBag 3.9-1 was told "nothing else
+    /// fails" four entries above this same file's own statement that BoingBag
+    /// 3.9-2 goes on after it. The file contradicted itself, and the half a
+    /// reader acts on ("I can skip this one") was the wrong half.
+    #[test]
+    fn a_slot_another_slot_needs_says_who_stops_working_without_it() {
+        for language in ["en", "tr"] {
+            let words = guide_strings(language).unwrap();
+            let text =
+                guide_text(&slots_for("AmigaOS 3.9").unwrap(), "AmigaOS 3.9", language).unwrap();
+            let entry = guide_entry(&text, "BoingBag 3.9-1");
+
+            assert!(
+                entry.contains(&fill(
+                    &words.without_needed_by,
+                    "dependents",
+                    "BoingBag 3.9-2"
+                )),
+                "{language}: BoingBag 3.9-1 does not name what needs it:\n{entry}"
+            );
+            assert!(
+                !entry.contains(&words.without_optional),
+                "{language}: BoingBag 3.9-1 still says nothing else fails:\n{entry}"
+            );
+        }
+        // The other arm, so this is not a rule that fires for everything: a
+        // package nothing else requires still gets the plain optional line.
+        let words = guide_strings("en").unwrap();
+        let text = guide_text(&slots_for("AmigaOS 3.9").unwrap(), "AmigaOS 3.9", "en").unwrap();
+        assert!(
+            text.contains(&words.without_optional),
+            "no slot got the plain optional sentence at all:\n{text}"
+        );
+    }
+
+    /// **M3.** `MediaRow::source` is where the *dump* came from. On an adopted
+    /// row that is a statement about the artefact; on one of ART's own rows it
+    /// is `"the owner's copy, 2026-09-08"` — a date-stamped claim about this
+    /// machine, rendered behind the words "where it comes from" in a file ART
+    /// writes into a stranger's folder.
+    #[test]
+    fn the_guide_never_puts_this_machines_own_dump_note_behind_where_it_comes_from() {
+        for language in ["en", "tr"] {
+            let text =
+                guide_text(&slots_for("AmigaOS 3.9").unwrap(), "AmigaOS 3.9", language).unwrap();
+            assert!(
+                !text.contains("the owner's copy"),
+                "{language}: the owner's own dump note reached the guide:\n{text}"
+            );
+        }
+
+        // Both arms, on the real shipped tables. An artefact an adopted row
+        // names keeps its provenance; one only ART's own table names answers
+        // "no note", because that is what is true.
+        let rows = mediahash::rows().unwrap();
+        assert_eq!(
+            provenance_for(rows, Some("amigaos-39-cd")).as_deref(),
+            Some("Haage and Partners (3.9)"),
+            "an adopted row still says where the artefact comes from"
+        );
+        assert_eq!(
+            provenance_for(rows, Some("boingbag-39-1-uae-fix")),
+            None,
+            "an own-table row is a note about this machine, not about the artefact"
+        );
+    }
+
+    /// **L8.** A `.txt` a Windows user opens in whatever they have.
+    #[test]
+    fn the_guide_is_written_with_windows_line_endings() {
+        let text = guide_text(&slots_for("AmigaOS 3.9").unwrap(), "AmigaOS 3.9", "en").unwrap();
+        assert!(text.contains("\r\n"));
+        assert_eq!(
+            text.matches('\n').count(),
+            text.matches("\r\n").count(),
+            "a bare newline got through"
+        );
     }
 
     /// A slot ART has no recorded file name for says that, instead of
