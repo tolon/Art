@@ -99,7 +99,9 @@ use serde::Serialize;
 
 use super::apply::{AmigaInstallRecord, DistributionManifest, MANIFEST_FILE_NAME};
 use super::package::{self, NotYetRunnable, Package};
+use super::recipe;
 use super::slots::{Installed, SlotKind, SlotState};
+use super::Component;
 use crate::core::error::{CoreError, CoreResult};
 
 /// Read a distribution tree's own `distribution.json`.
@@ -501,6 +503,24 @@ pub enum ChainState {
     /// **rows'** own names and in chain order — never by slot id, and never
     /// as a bare count.
     BlockedBy { names: Vec<String> },
+    /// The tree was not built with a **component** this package needs
+    /// ([`Package::requires_components`], ART-162).
+    ///
+    /// **Its own variant and not [`BlockedBy`](Self::BlockedBy), because the
+    /// next step is somewhere else entirely** (round 3 whole-branch review,
+    /// M4). Every name in `BlockedBy` is another row on this same screen and
+    /// the advice is *do that one first*; a component is not a row here at
+    /// all — it is a tick-box on the Packages/components step, and a tree
+    /// already built without it has to be rebuilt or have the component
+    /// added. Folding the two together would send somebody looking down a
+    /// list of nine rows for something that is not in it.
+    ///
+    /// Before this existed the row read **`Ready`**, the one Run button armed
+    /// on it — taking the button from a later row that really was ready — and
+    /// `resolve_packages_for_add` then refused with `PackageComponentMissing`.
+    /// That is the screen out-claiming the core, which is the defect this
+    /// whole file is written against.
+    BlockedByComponent { components: Vec<BlockedComponent> },
     /// Its artefact is not in the folders the user named. `expected` is the
     /// file names ART has recorded for it, which may be empty: *"Expected ."*
     /// is a sentence nobody can act on, so the screen picks a different one.
@@ -516,6 +536,24 @@ pub enum ChainState {
     /// typed reason so the screen translates it (fix round 1, m6 — it used
     /// to carry free English prose and put a Turkish frame around it).
     NotYetRunnable { reason: NotYetRunnable },
+}
+
+/// A component a package needs and the tree does not have — its id, and the
+/// **i18n key** the components screen labels it by.
+///
+/// A key and not a rendered name, for the reason [`Component::label_key`]
+/// itself is a key (ART-224): the recipe is data in the Rust tree and the
+/// words belong in the catalogue (ART-060). `label_key` is `None` for a
+/// component that labels itself by its medium, and the screen then shows the
+/// id — which is what the components screen shows for it too, so the two
+/// cannot disagree about what the thing is called.
+///
+/// [`Component::label_key`]: super::Component::label_key
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedComponent {
+    pub id: String,
+    pub label_key: Option<String>,
 }
 
 /// Why a row is refused. A value, never a sentence, for the two causes ART
@@ -614,6 +652,14 @@ pub fn rows_for(
 ) -> CoreResult<Vec<ChainRow>> {
     let packages = package::packages_for(release)?;
     let have: BTreeSet<String> = manifest.map(applied_in).unwrap_or_default();
+    // ART-162 / M4: what the release's own components are called, so a row
+    // blocked on one can name it the way the components step names it. An
+    // unreadable recipe answers *no components* rather than refusing the
+    // whole chain: the worst it costs is a component named by its id, and a
+    // screen that renders nothing is worse than one that renders an id.
+    let components: Vec<Component> = recipe::by_release(release)
+        .map(|recipe| recipe.components)
+        .unwrap_or_default();
     let state_of = |id: &str| slots.iter().find(|state| state.slot.id == id);
 
     // --- the packages that are chain rows, in the material's own order -----
@@ -667,7 +713,7 @@ pub fn rows_for(
             package_id: Some(package.id.clone()),
             slot_id: state.map(|state| state.slot.id.clone()),
             name: package.name.clone(),
-            state: package_state(package, state, &have, slots, &packages)?,
+            state: package_state(package, state, &have, slots, &packages, &components)?,
             sentence_facts: SentenceFacts {
                 file: state.and_then(file_name_of),
                 runs_on_amiga: match (
@@ -701,22 +747,35 @@ pub fn summarize_chain(release: &str, rows: &[ChainRow]) -> ChainSummary {
     }
 }
 
-/// The CD row's state. Three answers and no fourth: the tree was built from
-/// it, the disc is in hand, or it is not — and several claimants is a
-/// refusal like anywhere else.
+/// The CD row's state. **Two answers, and `Ready` is deliberately not one of
+/// them** (round 3 whole-branch review, M3).
+///
+/// The design says it plainly — *"the CD row is never run here"* — and this
+/// function used to contradict it: a tree whose manifest names no
+/// `AmigaOS3.9` in `built_from`, with the ISO sitting in a named folder,
+/// answered `Ready`. `chainLines` marks the first ready row runnable, so the
+/// single Run button landed on a disc, `runLabel` read *"Next: AmigaOS3.9"*
+/// over a button that could never fire (the request needs a package id), and
+/// the BoingBag below it that really was ready was never offered.
+///
+/// The two answers are the only two this screen can act on:
+///
+/// - **`Installed`** — the manifest's `built_from` names this volume. That is
+///   the whole of what the row is *for*: the first link of the chain is "this
+///   tree came off that disc".
+/// - **`Missing`** — it does not. Finding the ISO in a folder does not change
+///   that and must not read as though it did: **this screen cannot build a
+///   tree from a disc**, and the row's action is the `kaynak` link the panel
+///   renders beside it. The screen substitutes its own sentence for this one
+///   (`chain.mediumNotBuiltFrom`) rather than *"not in the folders you
+///   named"*, which would be false with the file right there.
+///
+/// The old `Ready` and `Ambiguous` arms went with it. Ambiguity is a question
+/// about *which file to use*, and this row never uses one; the source step's
+/// own `slotLines` reports it where it can be acted on.
 fn medium_state(state: &SlotState) -> ChainState {
     if state.installed != Installed::No {
         return ChainState::Installed { when: None };
-    }
-    if state.found.is_some() {
-        return ChainState::Ready;
-    }
-    if state.candidates.len() > 1 {
-        return ChainState::Refused {
-            reason: RefusedBecause::Ambiguous {
-                candidates: candidate_paths(state),
-            },
-        };
     }
     ChainState::Missing {
         expected: state.slot.filenames.clone(),
@@ -729,6 +788,7 @@ fn package_state(
     have: &BTreeSet<String>,
     slots: &[SlotState],
     all: &[Package],
+    components: &[Component],
 ) -> CoreResult<ChainState> {
     // 1 — what actually happened, and it outranks every other check.
     //
@@ -848,6 +908,43 @@ fn package_state(
         blocked.sort();
         return Ok(ChainState::BlockedBy {
             names: blocked.into_iter().map(|(_, name)| name).collect(),
+        });
+    }
+
+    // 8 — the tree has to have been *built* with something (ART-162).
+    //
+    // **Below step 7 on purpose.** Both are "something else first", and they
+    // differ in where that something is: step 7 names rows on this screen,
+    // which a reader can act on here and now; a component is a tick-box on
+    // the components step and a tree already built without it needs the
+    // component added or the tree rebuilt. Naming the reachable one first is
+    // the same rule that puts *missing* above *blocked*.
+    //
+    // `have` already carries component ids — `applied_in` unions the
+    // manifest's `files[].component` with its `amiga_installed` — so this
+    // asks the manifest and never the filesystem, exactly as step 1 does.
+    //
+    // Without it the three `locale-*` packages read **`Ready`** on any tree
+    // built without `locale-base`, which is `required: false` in
+    // `amigaos-3.9.json` and so an ordinary tree rather than an exotic one:
+    // the row said ready, the one Run button armed on it, and
+    // `resolve_packages_for_add` refused with `PackageComponentMissing`
+    // (round 3 whole-branch review, M4).
+    let missing_components: Vec<BlockedComponent> = package
+        .requires_components
+        .iter()
+        .filter(|id| !have.contains(*id))
+        .map(|id| BlockedComponent {
+            id: id.clone(),
+            label_key: components
+                .iter()
+                .find(|component| &component.id == id)
+                .and_then(|component| component.label_key.clone()),
+        })
+        .collect();
+    if !missing_components.is_empty() {
+        return Ok(ChainState::BlockedByComponent {
+            components: missing_components,
         });
     }
 
@@ -1553,6 +1650,118 @@ mod tests {
         // package — it has no `package_id` and it is fed by the CD's slot.
         assert_eq!(rows[0].slot_id.as_deref(), Some("medium:AmigaOS3.9"));
         assert_eq!(rows[0].sentence_facts.runs_on_amiga, None);
+    }
+
+    /// **The CD row never takes the Run button, in the one state where it
+    /// used to** (round 3 whole-branch review, M3).
+    ///
+    /// The state is ordinary, not exotic: a 3.9 tree whose manifest records
+    /// no `AmigaOS3.9` in `built_from` — an imported tree, or one built
+    /// before ART recorded media — with the ISO sitting in a folder the user
+    /// named. `medium_state` answered `Ready`, `chainLines` marks the first
+    /// ready row runnable, and the single Run button landed on a disc it can
+    /// never run while the BoingBag below it was never offered.
+    ///
+    /// Asserted at both ends, because either alone would pass a defect: the
+    /// medium row is not `Ready` **and** the first ready row is a package.
+    #[test]
+    fn the_cd_row_is_never_ready_so_the_run_button_reaches_the_first_ready_package() {
+        let media = [super::super::scan::FoundMedia {
+            path: std::path::PathBuf::from("D:/a/AmigaOS39.iso"),
+            kind: super::super::scan::MediaKind::Disc,
+            volume_name: "AmigaOS3.9".to_string(),
+            layer: None,
+        }];
+        let packages = [archive("D:/a/BoingBag39-1.lha", "BoingBag3.9-1")];
+        // Built from nothing ART recorded, and carrying every component, so
+        // the BoingBag below is genuinely ready and the comparison is real.
+        let tree = manifest(&[], &["workbench-base", "locale-base"], &[]);
+        let rows = rows_for(
+            "AmigaOS 3.9",
+            Some(&tree),
+            &resolved(Some(&tree), &packages, &media),
+        )
+        .unwrap();
+
+        assert_eq!(rows[0].package_id, None, "the premise: row 1 is the medium");
+        assert!(
+            !matches!(rows[0].state, ChainState::Ready),
+            "the CD row may never be ready — the Run button would land on a disc: {:?}",
+            rows[0].state
+        );
+        assert!(
+            matches!(rows[0].state, ChainState::Missing { .. }),
+            "and it says what is actually true of the tree: {:?}",
+            rows[0].state
+        );
+
+        // The control, and the half that says the button has somewhere to
+        // go: the first row that *is* ready is a package, and it is the one
+        // whose archive is in the folder.
+        let first_ready = rows
+            .iter()
+            .find(|row| matches!(row.state, ChainState::Ready))
+            .expect("a ready row, or this proves nothing");
+        assert_eq!(first_ready.package_id.as_deref(), Some("boingbag-39-1"));
+    }
+
+    /// **A tree built without a component a package needs reads
+    /// `BlockedByComponent`, not `Ready`** (round 3 whole-branch review, M4).
+    ///
+    /// `locale-base` is `required: false` in `amigaos-3.9.json`, so a tree
+    /// without it is ordinary. Before this the three `locale-*` rows read
+    /// *ready*, the one Run button armed on the first of them — taking it
+    /// from a later row that really was ready — and
+    /// `resolve_packages_for_add` then refused with
+    /// `PackageComponentMissing`. The screen out-claiming the core.
+    ///
+    /// The control is the same tree with the component, because a check that
+    /// blocked every row would pass the first assertion and prove nothing.
+    #[test]
+    fn a_package_whose_component_the_tree_lacks_is_blocked_by_that_component() {
+        let packages = [archive("D:/a/Locale3_9.lha", "Locale3.9")];
+        let media = [super::super::scan::FoundMedia {
+            path: std::path::PathBuf::from("D:/a/AmigaOS39.iso"),
+            kind: super::super::scan::MediaKind::Disc,
+            volume_name: "AmigaOS3.9".to_string(),
+            layer: None,
+        }];
+
+        let without = manifest(&["AmigaOS3.9"], &["workbench-base"], &[]);
+        let rows = rows_for(
+            "AmigaOS 3.9",
+            Some(&without),
+            &resolved(Some(&without), &packages, &media),
+        )
+        .unwrap();
+        match &row(&rows, "locale-39").state {
+            ChainState::BlockedByComponent { components } => {
+                assert_eq!(components.len(), 1, "one component, named: {components:?}");
+                assert_eq!(components[0].id, "locale-base");
+                // The key, not a rendered name: the words are the
+                // catalogue's, and this is the key the components screen
+                // labels the same component by.
+                assert_eq!(
+                    components[0].label_key.as_deref(),
+                    Some("osinstall.components.name.os39.locale")
+                );
+            }
+            other => panic!("locale-39 must be blocked on its component, got {other:?}"),
+        }
+
+        // The control: add the component and the same row reads ready.
+        let with = manifest(&["AmigaOS3.9"], &["workbench-base", "locale-base"], &[]);
+        let rows = rows_for(
+            "AmigaOS 3.9",
+            Some(&with),
+            &resolved(Some(&with), &packages, &media),
+        )
+        .unwrap();
+        assert_eq!(
+            row(&rows, "locale-39").state,
+            ChainState::Ready,
+            "with the component, the same row is ready"
+        );
     }
 
     /// **A release with no chain is an empty list, not a lone CD row** (fix

@@ -2293,8 +2293,10 @@
       "ready": "{{name}} — hazır: {{file}}.",
       "readyUnnamed": "{{name}} — hazır.",
       "blocked": "{{name}} — önce {{needs}} girmeli.",
+      "blockedComponent": "{{name}} için önce ağaçta {{components}} bileşeninin kurulu olması gerekiyor — bu, ağaç kurulurken seçilir, burada değil.",
       "missing": "{{name}} adını verdiğiniz klasörlerde yok. Beklenen: {{filenames}}.",
       "missingUnnamed": "{{name}} adını verdiğiniz klasörlerde yok.",
+      "mediumNotBuiltFrom": "Bu ağaç {{name}} diskinden kurulmamış. Bu işlem kaynak adımında yapılır, bu ekranda değil.",
       "notNeeded": "{{name}} gerekmiyor — {{supersededBy}} bunu zaten içeriyor.",
       "refusedAmbiguous": "Buradaki {{count}} dosya {{name}} olabilir ve ART aralarında seçim yapmaz: {{candidates}}. Hangisini kastettiğinizi siz seçin.",
       "notYetRunnable": {

@@ -2300,6 +2300,52 @@ describe("the chain", () => {
     expect(runButton().hasAttribute("disabled")).toBe(true);
   });
 
+  // **The CD row's own sentence** (round 3 whole-branch review, M3). A tree
+  // whose manifest names no such volume answers `missing`, and "not in the
+  // folders you named" would be false with the ISO sitting right there — the
+  // row says what is actually true and the link beside it is the action.
+  it("tells a tree that was not built from the disc so, rather than blaming the folders", async () => {
+    const rows = THE_CHAIN();
+    rows[0] = { ...rows[0], state: { state: "missing", expected: ["AmigaOS39.iso"] } };
+    renderChain(rows, 1);
+    const row = (await screen.findAllByTestId("amiga-chain-row"))[0];
+
+    expect(row.textContent).toContain(
+      i18n.t("osinstall.chain.mediumNotBuiltFrom", { name: "AmigaOS3.9" })
+    );
+    expect(row.textContent).not.toContain(i18n.t("osinstall.chain.missingUnnamed", { name: "AmigaOS3.9" }));
+    // And the link is still there, because it is the row's only action.
+    expect(screen.getByTestId("amiga-chain-cd-link").getAttribute("href")).toBe(
+      "/os-builder/kaynak"
+    );
+  });
+
+  // **A row blocked on a component names the component the way the
+  // components step names it** (M4). `@/lib/chain` carries the key and never
+  // renders; the screen translates it here.
+  it("names the component a row is waiting on, translated, not by its id", async () => {
+    const rows = THE_CHAIN();
+    rows[3] = {
+      ...rows[3],
+      state: {
+        state: "blocked-by-component",
+        components: [{ id: "locale-base", labelKey: "osinstall.components.name.os39.locale" }],
+      },
+    };
+    renderChain(rows, 2);
+    const row = (await screen.findAllByTestId("amiga-chain-row"))[3];
+
+    expect(row.textContent).toContain(
+      i18n.t("osinstall.chain.blockedComponent", {
+        name: "AmigaOS 3.9 Locale update",
+        components: i18n.t("osinstall.components.name.os39.locale"),
+      })
+    );
+    // Not the id, and not the row-blocking sentence — this is a different
+    // next step and must not read like "do row 4 first".
+    expect(row.textContent).not.toContain("locale-base");
+  });
+
   it("says which tree the count is about, and says so when there is none", async () => {
     renderChain();
     await screen.findAllByTestId("amiga-chain-row");

@@ -2293,8 +2293,10 @@
       "ready": "{{name}} — ready: {{file}}.",
       "readyUnnamed": "{{name}} — ready.",
       "blocked": "{{name}} — {{needs}} has to go on first.",
+      "blockedComponent": "{{name}} needs the {{components}} component installed on the tree first — that is chosen when the tree is built, not here.",
       "missing": "{{name}} is not in the folders you named. Expected {{filenames}}.",
       "missingUnnamed": "{{name}} is not in the folders you named.",
+      "mediumNotBuiltFrom": "This tree was not built from {{name}}. That happens on the source step, not on this screen.",
       "notNeeded": "{{name}} is not needed — {{supersededBy}} already contains it.",
       "refusedAmbiguous": "{{count}} files here could be {{name}}, and ART will not choose between them: {{candidates}}. Pick the one you mean.",
       "notYetRunnable": {

@@ -84,13 +84,22 @@ const EVERY_STATE: ChainRow[] = [
     name: "BoingBags 3&4",
     state: { state: "not-yet-runnable", reason: "installer-not-measured" },
   }),
+  row({
+    packageId: "locale-39",
+    name: "Locale 3.9",
+    sentenceFacts: { file: "Locale3_9.lha", runsOnAmiga: false },
+    state: {
+      state: "blocked-by-component",
+      components: [{ id: "locale-base", labelKey: "osinstall.components.name.os39.locale" }],
+    },
+  }),
 ];
 
 describe("chainLines", () => {
-  it("gives each of the seven endings its own kind and its own key", () => {
+  it("gives each of the eight endings its own kind and its own key", () => {
     const lines = chainLines(EVERY_STATE);
     const kinds = lines.map((line) => line.kind);
-    expect(new Set(kinds).size).toBe(7);
+    expect(new Set(kinds).size).toBe(8);
     expect(kinds).toEqual([
       "installed",
       "ready",
@@ -99,11 +108,63 @@ describe("chainLines", () => {
       "not-needed",
       "refused",
       "not-yet-runnable",
+      // Round 3 whole-branch review, M4. Its own ending and not `blocked`,
+      // because the next step is somewhere else: every name in `blocked` is
+      // another row on this screen, and a component is not.
+      "blocked-component",
     ] satisfies ChainLineKind[]);
 
     // Distinct keys, so no two endings can render the same sentence.
     const keys = lines.map((line) => line.phrase.key);
-    expect(new Set(keys).size).toBe(7);
+    expect(new Set(keys).size).toBe(8);
+  });
+
+  // **The Run button never lands on the CD row** (round 3 whole-branch
+  // review, M3). `chain::medium_state` no longer answers `ready`, and this
+  // is the other half of the guard: even if it did, "which row is next" is
+  // decided here and the answer must be a row the button can fire on —
+  // `request` needs a package id, so a disc leaves a dead button and the
+  // ready package below it unoffered.
+  it("passes the Run button over a ready medium row to the first ready package", () => {
+    const lines = chainLines([
+      row({ position: 1, packageId: null, slotId: "medium:AmigaOS3.9", name: "AmigaOS3.9", state: { state: "ready" } }),
+      row({ packageId: "boingbag-39-1", state: { state: "ready" } }),
+      row({ packageId: "boingbag-39-2", state: { state: "ready" } }),
+    ]);
+    expect(lines.map((line) => line.runnable)).toEqual([false, true, false]);
+    expect(lines[0].isMedium).toBe(true);
+    expect(lines[1].isMedium).toBe(false);
+  });
+
+  // And a chain whose only ready row is the medium offers nothing at all,
+  // rather than a button that cannot fire.
+  it("offers no Run at all when the only ready row is the medium", () => {
+    const lines = chainLines([
+      row({ position: 1, packageId: null, slotId: "medium:AmigaOS3.9", name: "AmigaOS3.9", state: { state: "ready" } }),
+      row({ packageId: "boingbag-39-1", state: { state: "missing", expected: ["BoingBag39-1.lha"] } }),
+    ]);
+    expect(lines.some((line) => line.runnable)).toBe(false);
+  });
+
+  // The component's name is **not** resolved here: this module does not
+  // render, so the key travels and the screen translates it.
+  it("carries the blocking components rather than a rendered name", () => {
+    const [line] = chainLines([
+      row({
+        state: {
+          state: "blocked-by-component",
+          components: [{ id: "locale-base", labelKey: "osinstall.components.name.os39.locale" }],
+        },
+      }),
+    ]);
+    expect(line.kind).toBe("blocked-component");
+    expect(line.components).toEqual([
+      { id: "locale-base", labelKey: "osinstall.components.name.os39.locale" },
+    ]);
+    expect(line.runnable).toBe(false);
+    for (const catalogue of [en, tr]) {
+      expect(leafText(catalogue, line.phrase.key)).toContain("{{components}}");
+    }
   });
 
   it("puts every sentence it can produce in both catalogues", () => {

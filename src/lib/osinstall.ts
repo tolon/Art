@@ -1633,10 +1633,25 @@ export type ChainState =
   | { state: "installed"; when: string | null }
   | { state: "ready" }
   | { state: "blocked-by"; names: string[] }
+  | { state: "blocked-by-component"; components: BlockedComponent[] }
   | { state: "missing"; expected: string[] }
   | { state: "not-needed"; supersededBy: string }
   | { state: "refused"; reason: RefusedBecause }
   | { state: "not-yet-runnable"; reason: NotYetRunnable };
+
+/**
+ * A component a package needs and the tree was not built with (ART-162).
+ * Mirrors `chain::BlockedComponent`.
+ *
+ * `labelKey` is an i18n key, not a name: the recipe is data in the Rust tree
+ * and the words are the catalogue's (ART-060). `null` for a component the
+ * components screen labels by its medium, and the screen then shows `id` —
+ * the same thing that screen shows, so the two cannot disagree.
+ */
+export interface BlockedComponent {
+  id: string;
+  labelKey: string | null;
+}
 
 /** Why a chain row is refused. A value, never a sentence — this file turns it
  *  into one. Mirrors `chain::RefusedBecause`. */

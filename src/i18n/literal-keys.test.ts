@@ -600,6 +600,12 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // — into the key, and the panel only renders it. Four words that must
     // never collapse: "not needed" is not a failure, and "ART could not
     // check" is neither. `amigainstall.test.ts` enumerates all four.
-    expect(dynamicCalls).toBe(177);
+    // 177 -> 178 (round 3 whole-branch review, M4). One, and the same rule
+    // once more: a row blocked on a component names that component by the
+    // **key** the components step labels it with, and `sentenceFor` resolves
+    // it — `@/lib/chain` carries the key because that module never renders.
+    // A component with no `label_key` shows its id, which is what the
+    // components step shows for it too.
+    expect(dynamicCalls).toBe(178);
   });
 });

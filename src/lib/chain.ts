@@ -34,6 +34,7 @@
 import {
   hostPlacementBlockChainKey,
   notYetRunnableChainKey,
+  type BlockedComponent,
   type ChainReport,
   type ChainRow,
 } from "@/lib/osinstall";
@@ -46,6 +47,7 @@ export type ChainLineKind =
   | "installed"
   | "ready"
   | "blocked"
+  | "blocked-component"
   | "missing"
   | "not-needed"
   | "refused"
@@ -83,6 +85,25 @@ export interface ChainLine {
    * somebody to start row 6 before row 4.
    */
   runnable: boolean;
+  /**
+   * The components this row is waiting on, for `blocked-component` and empty
+   * for every other kind (M4).
+   *
+   * The **names are not resolved here**: each carries an i18n key, and this
+   * module never renders (`CLAUDE.md`'s "src/lib never renders one"). The
+   * screen translates each key and joins them, exactly as it does for every
+   * other catalogue phrase.
+   */
+  components: BlockedComponent[];
+  /**
+   * Whether this row is the medium — the CD, not a package.
+   *
+   * On the object rather than derived from `packageId === null` at each use
+   * site, for the reason `kind` is: the screen already asks it twice (the
+   * `kaynak` link, and the sentence a `missing` medium row gets) and two
+   * hand-written derivations of one fact is how they come to disagree.
+   */
+  isMedium: boolean;
 }
 
 /**
@@ -104,6 +125,8 @@ export function chainLines(rows: ChainRow[]): ChainLine[] {
       file: row.sentenceFacts.file,
       where: wherePhrase(row),
       runnable: false,
+      components: [],
+      isMedium: row.packageId === null,
     };
 
     switch (row.state.state) {
@@ -117,9 +140,22 @@ export function chainLines(rows: ChainRow[]): ChainLine[] {
         };
 
       case "ready": {
-        // The one Run button, on the first ready row, and only there.
-        const runnable = runNext;
-        runNext = false;
+        // **The one Run button, on the first ready row that is a package**
+        // (round 3 whole-branch review, M3). The medium row can no longer
+        // read `ready` at all — `chain::medium_state` has two answers now —
+        // but the guard stays here as well, because this is where "which row
+        // is next" is decided and the answer must never be a row the Run
+        // button cannot fire on: `request` needs a package id, so a disc
+        // would leave *"Next: AmigaOS3.9"* over a dead button while the
+        // BoingBag below it, which really is ready, was never offered. The
+        // CD row's own action is the `kaynak` link beside it.
+        //
+        // `runNext` is only spent when it is actually taken, so a medium row
+        // passes the button on rather than swallowing it.
+        const runnable = runNext && row.packageId !== null;
+        if (runnable) {
+          runNext = false;
+        }
         return {
           ...base,
           kind: "ready" as const,
@@ -137,6 +173,25 @@ export function chainLines(rows: ChainRow[]): ChainLine[] {
           phrase: {
             key: "osinstall.chain.blocked",
             params: { name, needs: row.state.names.join(", ") },
+          },
+        };
+
+      case "blocked-by-component":
+        return {
+          ...base,
+          kind: "blocked-component" as const,
+          components: row.state.components,
+          // The sentence needs the component's *translated* name, and this
+          // module does not translate — so the phrase is completed by the
+          // screen, which fills `components` in from the field above. The
+          // key is chosen here, because which sentence this row gets is a
+          // decision and not a rendering: "the tree was not built with X" is
+          // a different next step from "do row 4 first", and folding it into
+          // `chain.blocked` would send somebody looking for a row that is
+          // not in the list.
+          phrase: {
+            key: "osinstall.chain.blockedComponent",
+            params: { name, components: "" },
           },
         };
 

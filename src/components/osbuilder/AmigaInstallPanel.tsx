@@ -602,6 +602,31 @@ export function AmigaInstallPanel({
    * and by F1's "nothing can run yet" line, so the three cannot disagree.
    */
   function sentenceFor(line: ChainLine): Phrase {
+    // **The CD row's own sentence** (round 3 whole-branch review, M3).
+    // `chain::medium_state` answers `Missing` for a tree whose `built_from`
+    // names no such volume — including when the ISO is sitting in a folder
+    // the user named, because this screen cannot build a tree from a disc
+    // and finding the file changes nothing about that. *"…is not in the
+    // folders you named"* would then be false with the file right there, so
+    // the row says what is actually true and the `kaynak` link beside it is
+    // the action.
+    if (line.kind === "missing" && line.isMedium) {
+      return { key: "osinstall.chain.mediumNotBuiltFrom", params: { name: line.name } };
+    }
+    // The component's own name, translated here because `@/lib/chain` does
+    // not render (M4). A component with no `labelKey` shows its id — which
+    // is what the components step shows for it too.
+    if (line.kind === "blocked-component") {
+      return {
+        ...line.phrase,
+        params: {
+          ...line.phrase.params,
+          components: line.components
+            .map((component) => (component.labelKey ? t(component.labelKey) : component.id))
+            .join(", "),
+        },
+      };
+    }
     return noFolders && line.kind === "missing"
       ? { key: "osinstall.chain.missingNoFolders", params: { name: line.name } }
       : line.phrase;
