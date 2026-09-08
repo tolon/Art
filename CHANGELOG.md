@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **BoingBag 1 and BoingBag 2 install from Windows now, in seconds, with no
+  emulator.** Tick them on the OS Builder's packages step the way you tick
+  anything else, press Add, and the files are on your tree — no Kickstart ROM
+  for that step, no WinUAE window to watch, no waiting two and a half minutes
+  per BoingBag, and nothing to do on a machine that has no ROM at all. The
+  emulator route is still there and still works if you would rather the
+  package's own installer did the job; it is simply no longer the only way.
+
+  ART checks its work against the real thing rather than against itself. The
+  tree it builds this way was compared file by file with a tree two genuine
+  emulator runs produced — all 4 030 files — and every single file the
+  package's own installer wrote comes out identical. The two places they
+  differ on purpose are ART's own record of the build and one configuration
+  file, `Devs/NSDPatch.cfg`, which ART updates to the version BoingBag 2
+  ships while keeping your old one beside it as `NSDPatch.cfg.old`.
+
+  BoingBag 2's XAD update comes along too, exactly as before: ART reads what
+  your tree's `xadmaster.library` says about itself and applies the extra
+  update only if it is older, and the report says which of those happened. And
+  if the BoingBag file in your folder turns out to be a different build from
+  the one ART knows, it says so in one sentence and stops — nothing is
+  half-written.
+
 - **A BoingBag 3.9-2 run now applies the XAD update too, in the same sitting.**
   BoingBag 3.9-2 carries a second update inside itself — a newer
   `xadmaster.library` and the two dozen little readers that go with it, for

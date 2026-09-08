@@ -190,6 +190,34 @@ mechanism ran both BoingBags in five minutes on this owner's material. If the ru
 it changes in writing in ART-166 with the date, and the design is Hatcher's shape with the
 curated list cross-checked against HstWB's fix-up scripts. Nothing in this document builds it.
 
+**The ruling changed on 2026-09-08, and this paragraph is the record this section asked for.**
+The owner reversed it in their own words: *"inatla BoingBag'ı Windows üzerinden yerleştirmedin;
+diğer proje yapıyor bu işi, bu yüzden iş kilitlendi"* / *"avukatlık yapma, mühendisiz biz"*. ART
+now places BoingBag 1 and 2 from the host, the way Emu68 Hatcher and Emu68-Imager (both MIT) do.
+The full record, with the measurements, is in ART-166, now **Fixed**. Four things this section
+predicted and got wrong, corrected here rather than left standing:
+
+1. **The `zip` crate question was the right first thing to check, and the answer is yes.** 8.6
+   carries ZipCrypto ungated (`src/zipcrypto.rs`; only AES sits behind `aes-crypto`), so
+   `by_index_decrypt` is available as ART builds it.
+2. **"A curated file list" is not what shipped, and the oracle is why.** Hatcher curates —
+   whole drawers plus named `Devs/*` files. The round-3 hashed snapshots of what the real
+   `Updater` produced say it does something simpler: of BoingBag 3.9-1's 210 payload files it
+   wrote 166 and the other 44 were **already byte-identical in the tree**; 0 differed. So the
+   `Updater` copies its payload whole, and ART's existing subtree rules — which say exactly
+   that — were already right. Hatcher's curation would have missed
+   `Devs/NSDPatch.cfg-BB3.9-1`.
+3. **"Only BB1 and BB2 would move — two of the eight steps"** is right, and it was the two the
+   owner was blocked on. Nothing else in the chain changed.
+4. **The 2026-08-25 finding — *the emulator is the installer's native environment* — is still
+   true and is no longer a reason.** ART does not run the installer at all on this route; it
+   places the files the installer would have placed, and the oracle says which files those are.
+
+What the oracle answered, on the owner's own material: **4 030 files expected, 4 031 produced;
+2 added, 1 missing, 2 differing**, and all five are the deliberate `NSDPatch.cfg` rename (which
+keeps the user's file at `.old`) plus ART's own `distribution.json`. Every path the `Updater`
+wrote hashes identically.
+
 ---
 
 ## 6. What ART takes — mechanisms and functions, ranked

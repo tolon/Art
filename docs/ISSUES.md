@@ -129,185 +129,6 @@ bound), ending the run with an outcome that says *the installer was writing
 without stopping* rather than *nobody answered*. Report:
 `.superpowers/sdd/2026-09-08-intake/r3-task-3-report.md` § 2.1.
 
-**ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
-neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
-8's real run, on `content-layer`*
-`src-tauri/src/core/osinstall/recipes/packages/boingbag-39-1.json` ·
-`…/boingbag-39-2.json`
-
-Both recipes name `member: "AmigaOS-Update"` — the payload archive stored
-inside the wrapper LHA. That member is a ZIP, and every entry in it is
-**ZipCrypto-encrypted**: 233 of 233 entries in BoingBag 3.9-1's payload
-(210 files, 23 folders) and 147 of 147 in 3.9-2's (121 files, 26 folders).
-Confirmed three independent ways — ART's own reader
-(`entry 42 of this ZIP cannot be read: Password required to decrypt file`;
-entry 128 for 3.9-2), 7-Zip 26.02 (`Encrypted = +`, `Method = ZipCrypto
-Deflate`, and `ERROR: Wrong password` on extraction), and the raw local file
-header, whose general-purpose flag word reads `0x0003` with bit 0 set.
-
-The password belongs to the BoingBag's own `Updater`, which the wrapper LHA
-carries beside the payload (`BoingBag3.9-1/C/Updater`, `C/GetLocale`) — an
-Amiga executable that has to run *on* an Amiga. Nothing about this is a bug in
-`core/archive`: the reader is right and the recipes are asking for bytes that
-are not readable on the host.
-
-Task 4 measured these recipes from the payload's **listing**, which ZipCrypto
-leaves in clear, and every test since has been synthetic — so the first time
-anything asked for the bytes was this run. That is exactly the gap Task 8
-exists to close.
-
-Left open, and deliberately not "fixed": circumventing the encryption is not
-ART's business, and the honest options are all design decisions rather than
-code changes — place the wrapper's loose files and let the Amiga's own
-`Updater` run at first boot, or withdraw both BoingBag recipes until there is
-a path that works. Whichever is chosen, spec §10/§89 says ART must not offer a
-package it cannot apply, and today it offers two.
-
-**The owner's decision, taken 2026-08-19 after external research and recorded
-here so nobody re-opens it by accident: no bypass of the password will be
-written.** The research is what settled it rather than taste — every
-established distribution builder (HstWB Installer, AmiKit, AmigaSYS,
-ClassicWB) installs a BoingBag by running the package's **own `Updater` inside
-an emulator**, where the password already lives, rather than by decrypting
-anything; HstWB's own README says so outright (*"HstWB Installer uses WinUAE
-or FS-UAE emulator to run the installation process"*). So the supported path
-exists and it is an Amiga-side one. That becomes **its own round**, not a
-continuation of this one, and it is cheaper than it sounds because
-`core/winuae::launch_winuae` already exists — what is missing is running it
-unattended and reading the result back.
-
-**What the screen does today, checked in the code rather than assumed
-(corrected 2026-08-19 by the final whole-branch review's M3 — the sentence
-that stood here said "the screen says so" and the screen did not).** When
-this was first written, `osinstall_packages` set `available` from
-`found.iter().any(|f| f.media == p.media)` alone, so a user with the real
-`BoingBag39-1.lha` in the folder got a live checkbox, no warning, and — on
-confirming — the reader's own raw English sentence, `entry 42 of this ZIP
-cannot be read: Password required to decrypt file`, whatever language they
-had chosen. The entry was right in its body about §10/§89 and wrong in its
-last line.
-
-Both are now true instead:
-
-- Both BoingBag recipes declare `"host_placement_block": "encrypted-payload"`
-  in their own JSON — data, not code, so the day the Amiga-side round lands
-  the block is deleted rather than an `if` hunted down.
-- The checklist gives such a package its own badge and its own sentence,
-  in both catalogues, naming what it needs (*its own Amiga-side Updater*)
-  rather than reporting that ART failed — and the row is **untickable**.
-  "Archive not found" is deliberately not reused: the archive is right
-  there.
-- A pick remembered from an earlier run still arrives checked, so the
-  preview is suppressed for that selection and the Add button is disabled;
-  the row stays tickable *off*, which is F3's rule and is not weakened.
-- `plan()` refuses the selection by type
-  (`RefusalReason::PackageNotPlaceableOnHost`) before the package folder is
-  even scanned, and `osinstall_collisions` refuses before opening an
-  archive — so a caller reaching the commands directly gets the same
-  answer, not the ZIP reader's.
-
-So the shipped BoingBag recipes stay, unplaceable and **said to be** so.
-
-Also worth recording as *my own* mistake rather than the material's: the
-payload's 234 entries were listed with 7-Zip early in the round and read as
-plain files. **ZipCrypto does not encrypt names** — listing works, extraction
-does not — so the first fact was true and the second was inferred from it. The
-first thing that ever asked for bytes was Task 8's run.
-
-**The Amiga-side route works, and this entry is now the record of why the
-host-side one still cannot** — *2026-08-21*. [ART-193](#fixed) is fixed, and
-both BoingBags installed on the owner's own material through ART's own
-`compose` → `install` path: BoingBag 1 in 169.1 s (3 795 → 3 859 files),
-BoingBag 2 on that result in 138.1 s, and the tree booted and answered
-`Workbench 45.3 (07-Dec-01)` where it used to answer `Workbench 45.1`.
-
-**So the files reach a tree — and not one of them was placed by `apply`.**
-The Amiga's own `Updater` writes them, inside the emulator, after the
-package's own code decrypts its own payload. Nothing here decrypts anything
-and no password is bypassed; the payload is as encrypted as it ever was, and
-host-side placement is as impossible as it ever was. This entry therefore
-stays open as the reason a BoingBag's rows are refused on the host screen —
-`host_placement_block: "encrypted-payload"` is still correct and still
-shipped. What has changed is that the sentence ART tells the user now has an
-answer to give: the package installs, through the emulator, the way every
-established distribution builder installs one.
-
-**Re-researched 2026-08-25 at the owner's request, and the decision stands —
-with a better reason than the one recorded.** HstWB Installer's README says
-why it uses an emulator, and it is not the password: *"AmigaDOS scripts and
-uses binaries for 68000 CPU to support as many Amiga models as possible."*
-**The emulator is the installer's native environment, not a workaround for
-encryption.** Even an unencrypted BoingBag would still be 68k code that has to
-execute somewhere. That makes ART's host-side placement the unusual thing
-rather than the obvious thing — it works only because ART reads each release's
-own Installer script and reimplements the placement, which is possible for a
-release laid out as files and impossible for one delivered as a program.
-
-Three routes were checked and none is one:
-
-- **`jit06/emu68-bootstrap`** — the one comparable host-side, no-emulator card
-  builder — does not solve this. It supports **AmigaOS 3.2 only**; 3.9 and the
-  BoingBags are outside its scope entirely. Avoiding the problem is a
-  legitimate answer for that project and is not one for ART, which builds 3.9
-  trees today.
-- **The community Boing Bags 3 & 4** (James Jacobs, `amigansoftware`) are
-  *unencrypted* — and their own readme requires *"Boing Bags #1 and #2 first"*.
-  They sit on top of the problem rather than around it.
-- **`BoingBag39-2-Contribution.lha`**, which the owner also has, is genuinely
-  unencrypted — verified by **extracting** it rather than listing it (445
-  files, 2.8 MB, ClassAction · OpenURL · cddb-lib), which is this entry's own
-  lesson applied. It carries **no payload member at all**, so it is contributed
-  third-party extras beside the update rather than any part of it. Already
-  measured on 2026-08-20 by `scripts/lha-package-identity.py` and already named
-  in `boingbag-39-2.json`'s `_why_distinguished_by_repeats_the_member`; found
-  again here and recorded so a third pass does not repeat it.
-
-**And a decrypted payload would not be enough anyway — measured 2026-08-25,
-which settles a question that had only ever been reasoned about.** The owner
-asked whether an unencrypted copy, if somebody had uploaded one, would let ART
-place a BoingBag from the host. The package's own Installer script answers it.
-
-`BoingBag39-2.lha` carries one — `BoingBag3.9-2/Install`, 65 180 bytes,
-`$VER: Boing Bag 3.9-2 Install 45.13 (20.3.2002)`, plain text and readable
-without decrypting anything. **It does not place the payload's files.** Its own
-line is `(run (cat "C/Updater AmigaOS-Update ..." #target))`: it hands the
-whole payload to the 42 676-byte `C/Updater` binary with the target path, and
-that binary does both jobs — decrypts *and* decides where every file goes. The
-script's five `copyfiles` calls place none of the payload: two rename
-`Devs/AmigaOS ROM Update` inside the target, two put the `C/Installer` binary
-into `C` and `Utilities`, one handles an `Internet` drawer. Of roughly 121
-payload files, **zero** are placed by anything ART could read.
-
-`BoingBag39-1.lha` does not even have a script — `C/Updater` (25 588 bytes),
-its catalogs, the payload, and nothing that says where anything goes.
-
-So the placement logic lives in a 68k executable, which is HstWB's general
-sentence made specific. Holding every decrypted file, ART would still not know
-which goes where, which are conditional on the machine or the language, or
-which replace rather than skip — and **guessing where operating-system files
-go is this project's most expensive defect class.** ART reads Installer
-*scripts*; a BoingBag is delivered as a *program*.
-
-That is why the emulator route is not second best. It is the only route that
-knows the answer, it is built, and it works.
-
-No search was made for the password itself, and none for a decrypted
-re-upload. The owner's decision forbids a bypass; obtaining somebody else's is
-the same bypass with an extra step, and the measurement above says it would
-buy nothing.
-
-**The Amiga-side path now has two vehicles, added 2026-09-07 (round 5,
-first-boot phases 1–2, `art-firstboot`).** The 2026-08-21 paragraph above is
-`core/amigainstall` launching WinUAE unattended and running a package's own
-`Updater` inside it. Round 5 built the second: a `run` action for the
-first-boot mechanism (`core/firstboot`, `S/FirstBoot/50-pkg-<id>`), planned
-for phase 4 and not yet built — phases 1–2 land the dispatcher, the steps and
-the report only. This entry stays open as the host-placement entry it is:
-neither vehicle places a BoingBag's files from the host, and
-`host_placement_block: "encrypted-payload"` is unchanged. What has widened is
-where the Amiga-side alternative can run — WinUAE today, a real machine once
-phase 4 exists.
-
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
 the crash itself is still unresolved** — *found 2026-08-15/16, Task 13's
@@ -508,6 +329,275 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-166** 🟡 ✅ **Both BoingBag payload archives are password-encrypted ZIPs, so
+neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
+8's real run, on `content-layer`*
+`src-tauri/src/core/osinstall/recipes/packages/boingbag-39-1.json` ·
+`…/boingbag-39-2.json`
+
+Both recipes name `member: "AmigaOS-Update"` — the payload archive stored
+inside the wrapper LHA. That member is a ZIP, and every entry in it is
+**ZipCrypto-encrypted**: 233 of 233 entries in BoingBag 3.9-1's payload
+(210 files, 23 folders) and 147 of 147 in 3.9-2's (121 files, 26 folders).
+Confirmed three independent ways — ART's own reader
+(`entry 42 of this ZIP cannot be read: Password required to decrypt file`;
+entry 128 for 3.9-2), 7-Zip 26.02 (`Encrypted = +`, `Method = ZipCrypto
+Deflate`, and `ERROR: Wrong password` on extraction), and the raw local file
+header, whose general-purpose flag word reads `0x0003` with bit 0 set.
+
+The password belongs to the BoingBag's own `Updater`, which the wrapper LHA
+carries beside the payload (`BoingBag3.9-1/C/Updater`, `C/GetLocale`) — an
+Amiga executable that has to run *on* an Amiga. Nothing about this is a bug in
+`core/archive`: the reader is right and the recipes are asking for bytes that
+are not readable on the host.
+
+Task 4 measured these recipes from the payload's **listing**, which ZipCrypto
+leaves in clear, and every test since has been synthetic — so the first time
+anything asked for the bytes was this run. That is exactly the gap Task 8
+exists to close.
+
+Left open, and deliberately not "fixed": circumventing the encryption is not
+ART's business, and the honest options are all design decisions rather than
+code changes — place the wrapper's loose files and let the Amiga's own
+`Updater` run at first boot, or withdraw both BoingBag recipes until there is
+a path that works. Whichever is chosen, spec §10/§89 says ART must not offer a
+package it cannot apply, and today it offers two.
+
+**The owner's decision, taken 2026-08-19 after external research and recorded
+here so nobody re-opens it by accident: no bypass of the password will be
+written.** The research is what settled it rather than taste — every
+established distribution builder (HstWB Installer, AmiKit, AmigaSYS,
+ClassicWB) installs a BoingBag by running the package's **own `Updater` inside
+an emulator**, where the password already lives, rather than by decrypting
+anything; HstWB's own README says so outright (*"HstWB Installer uses WinUAE
+or FS-UAE emulator to run the installation process"*). So the supported path
+exists and it is an Amiga-side one. That becomes **its own round**, not a
+continuation of this one, and it is cheaper than it sounds because
+`core/winuae::launch_winuae` already exists — what is missing is running it
+unattended and reading the result back.
+
+**What the screen does today, checked in the code rather than assumed
+(corrected 2026-08-19 by the final whole-branch review's M3 — the sentence
+that stood here said "the screen says so" and the screen did not).** When
+this was first written, `osinstall_packages` set `available` from
+`found.iter().any(|f| f.media == p.media)` alone, so a user with the real
+`BoingBag39-1.lha` in the folder got a live checkbox, no warning, and — on
+confirming — the reader's own raw English sentence, `entry 42 of this ZIP
+cannot be read: Password required to decrypt file`, whatever language they
+had chosen. The entry was right in its body about §10/§89 and wrong in its
+last line.
+
+Both are now true instead:
+
+- Both BoingBag recipes declare `"host_placement_block": "encrypted-payload"`
+  in their own JSON — data, not code, so the day the Amiga-side round lands
+  the block is deleted rather than an `if` hunted down.
+- The checklist gives such a package its own badge and its own sentence,
+  in both catalogues, naming what it needs (*its own Amiga-side Updater*)
+  rather than reporting that ART failed — and the row is **untickable**.
+  "Archive not found" is deliberately not reused: the archive is right
+  there.
+- A pick remembered from an earlier run still arrives checked, so the
+  preview is suppressed for that selection and the Add button is disabled;
+  the row stays tickable *off*, which is F3's rule and is not weakened.
+- `plan()` refuses the selection by type
+  (`RefusalReason::PackageNotPlaceableOnHost`) before the package folder is
+  even scanned, and `osinstall_collisions` refuses before opening an
+  archive — so a caller reaching the commands directly gets the same
+  answer, not the ZIP reader's.
+
+So the shipped BoingBag recipes stay, unplaceable and **said to be** so.
+
+Also worth recording as *my own* mistake rather than the material's: the
+payload's 234 entries were listed with 7-Zip early in the round and read as
+plain files. **ZipCrypto does not encrypt names** — listing works, extraction
+does not — so the first fact was true and the second was inferred from it. The
+first thing that ever asked for bytes was Task 8's run.
+
+**The Amiga-side route works, and this entry is now the record of why the
+host-side one still cannot** — *2026-08-21*. [ART-193](#fixed) is fixed, and
+both BoingBags installed on the owner's own material through ART's own
+`compose` → `install` path: BoingBag 1 in 169.1 s (3 795 → 3 859 files),
+BoingBag 2 on that result in 138.1 s, and the tree booted and answered
+`Workbench 45.3 (07-Dec-01)` where it used to answer `Workbench 45.1`.
+
+**So the files reach a tree — and not one of them was placed by `apply`.**
+The Amiga's own `Updater` writes them, inside the emulator, after the
+package's own code decrypts its own payload. Nothing here decrypts anything
+and no password is bypassed; the payload is as encrypted as it ever was, and
+host-side placement is as impossible as it ever was. This entry therefore
+stays open as the reason a BoingBag's rows are refused on the host screen —
+`host_placement_block: "encrypted-payload"` is still correct and still
+shipped. What has changed is that the sentence ART tells the user now has an
+answer to give: the package installs, through the emulator, the way every
+established distribution builder installs one.
+
+**Re-researched 2026-08-25 at the owner's request, and the decision stands —
+with a better reason than the one recorded.** HstWB Installer's README says
+why it uses an emulator, and it is not the password: *"AmigaDOS scripts and
+uses binaries for 68000 CPU to support as many Amiga models as possible."*
+**The emulator is the installer's native environment, not a workaround for
+encryption.** Even an unencrypted BoingBag would still be 68k code that has to
+execute somewhere. That makes ART's host-side placement the unusual thing
+rather than the obvious thing — it works only because ART reads each release's
+own Installer script and reimplements the placement, which is possible for a
+release laid out as files and impossible for one delivered as a program.
+
+Three routes were checked and none is one:
+
+- **`jit06/emu68-bootstrap`** — the one comparable host-side, no-emulator card
+  builder — does not solve this. It supports **AmigaOS 3.2 only**; 3.9 and the
+  BoingBags are outside its scope entirely. Avoiding the problem is a
+  legitimate answer for that project and is not one for ART, which builds 3.9
+  trees today.
+- **The community Boing Bags 3 & 4** (James Jacobs, `amigansoftware`) are
+  *unencrypted* — and their own readme requires *"Boing Bags #1 and #2 first"*.
+  They sit on top of the problem rather than around it.
+- **`BoingBag39-2-Contribution.lha`**, which the owner also has, is genuinely
+  unencrypted — verified by **extracting** it rather than listing it (445
+  files, 2.8 MB, ClassAction · OpenURL · cddb-lib), which is this entry's own
+  lesson applied. It carries **no payload member at all**, so it is contributed
+  third-party extras beside the update rather than any part of it. Already
+  measured on 2026-08-20 by `scripts/lha-package-identity.py` and already named
+  in `boingbag-39-2.json`'s `_why_distinguished_by_repeats_the_member`; found
+  again here and recorded so a third pass does not repeat it.
+
+**And a decrypted payload would not be enough anyway — measured 2026-08-25,
+which settles a question that had only ever been reasoned about.** The owner
+asked whether an unencrypted copy, if somebody had uploaded one, would let ART
+place a BoingBag from the host. The package's own Installer script answers it.
+
+`BoingBag39-2.lha` carries one — `BoingBag3.9-2/Install`, 65 180 bytes,
+`$VER: Boing Bag 3.9-2 Install 45.13 (20.3.2002)`, plain text and readable
+without decrypting anything. **It does not place the payload's files.** Its own
+line is `(run (cat "C/Updater AmigaOS-Update ..." #target))`: it hands the
+whole payload to the 42 676-byte `C/Updater` binary with the target path, and
+that binary does both jobs — decrypts *and* decides where every file goes. The
+script's five `copyfiles` calls place none of the payload: two rename
+`Devs/AmigaOS ROM Update` inside the target, two put the `C/Installer` binary
+into `C` and `Utilities`, one handles an `Internet` drawer. Of roughly 121
+payload files, **zero** are placed by anything ART could read.
+
+`BoingBag39-1.lha` does not even have a script — `C/Updater` (25 588 bytes),
+its catalogs, the payload, and nothing that says where anything goes.
+
+So the placement logic lives in a 68k executable, which is HstWB's general
+sentence made specific. Holding every decrypted file, ART would still not know
+which goes where, which are conditional on the machine or the language, or
+which replace rather than skip — and **guessing where operating-system files
+go is this project's most expensive defect class.** ART reads Installer
+*scripts*; a BoingBag is delivered as a *program*.
+
+That is why the emulator route is not second best. It is the only route that
+knows the answer, it is built, and it works.
+
+No search was made for the password itself, and none for a decrypted
+re-upload. The owner's decision forbids a bypass; obtaining somebody else's is
+the same bypass with an extra step, and the measurement above says it would
+buy nothing.
+
+**The Amiga-side path now has two vehicles, added 2026-09-07 (round 5,
+first-boot phases 1–2, `art-firstboot`).** The 2026-08-21 paragraph above is
+`core/amigainstall` launching WinUAE unattended and running a package's own
+`Updater` inside it. Round 5 built the second: a `run` action for the
+first-boot mechanism (`core/firstboot`, `S/FirstBoot/50-pkg-<id>`), planned
+for phase 4 and not yet built — phases 1–2 land the dispatcher, the steps and
+the report only. This entry stays open as the host-placement entry it is:
+neither vehicle places a BoingBag's files from the host, and
+`host_placement_block: "encrypted-payload"` is unchanged. What has widened is
+where the Amiga-side alternative can run — WinUAE today, a real machine once
+phase 4 exists.
+
+---
+
+**Fixed 2026-09-08 — the owner reversed the decision, and ART now places
+BoingBag 1 and 2 from Windows.** Their words, recorded verbatim because the
+ruling above was theirs too: *"inatla BoingBag'i Windows uzerinden
+yerlestirmedin; diger proje yapiyor bu isi, bu yuzden is kilitlendi"* /
+*"avukatlik yapma, muhendisiz biz"*.
+
+**What was wrong in everything above, and it was one clause.** The measurement
+was right — 233 of 233 entries and 147 of 147 are ZipCrypto-encrypted, and the
+listing being in clear is exactly the trap this entry records. The *conclusion*
+rested on a survey of distribution builders that was true when it was made and
+had stopped being true: **Emu68 Hatcher** and **Emu68-Imager**, both MIT, both
+building AmigaOS 3.9 for the same hardware ART targets, open the payload with
+a password they publish in their own source and copy the files onto the tree
+(`src/main/python/emu68hatcher/builder/staging/boingbag.py`, read whole on
+2026-09-08). "Every established builder runs the Updater in an emulator" was
+one source, checked once, and it decayed.
+
+The other half of the argument — *"a decrypted payload would not be enough
+anyway; the placement logic lives in a 68k executable"* — was **wrong, and the
+oracle is what settles it** rather than an argument. The round-3 measurement
+had already hashed every file of a clean AmigaOS 3.9 tree, of that tree after
+a real BoingBag 3.9-1 emulator run, and of that after BoingBag 3.9-2 with its
+`XAD-Update` follow-up (`E:\amiga\ProjeART\r3-measure\logs`). Comparing the
+payloads against those snapshots on 2026-09-08:
+
+- Of BoingBag 3.9-1's 210 payload files the `Updater` wrote **166**, every one
+  byte-identical to the payload's own copy, and the other **44 were already
+  byte-identical in the tree** — nothing to write. Same for 3.9-2: 77 written,
+  46 already identical, 0 differing.
+- So the `Updater` copies its payload onto the tree and does not choose. The
+  "placement logic in a program" reading came from reading the `Install`
+  script, which indeed places nothing — and from never asking the two trees
+  what actually changed between them.
+
+**What shipped.** `payload_password` on a package (recipe data, attributed to
+Emu68 Hatcher in `THIRD_PARTY_LICENSES.md`), `host_placement_block` removed
+from both BoingBag recipes, ZipCrypto decryption through
+`core::archive::zip::ZipBackend::open_with_password` with the key **verified at
+open** and a wrong one refused as `ART-PAYLOAD-PASSWORD` — its own ending, not
+`ART-FORMAT-MALFORMED`. `post_place` runs each package's host-side after-steps
+(BoingBag 1's ten protection bits, BoingBag 2's `Devs/AmigaOS ROM Update`
+rotation and, following Hatcher, its `Devs/NSDPatch.cfg` rename), and
+`extra_members` places BoingBag 2's `XAD-Update` behind the gate HstWB states
+(`Libs/xadmaster.library` older than 10, read on the host).
+
+**The oracle, run on the owner's own material 2026-09-08.**
+`E:\amiga\ProjeART\art226-tree` copied to `E:\amiga\ProjeART\bb-host\tree`
+(never the original), BoingBag 1 then BoingBag 2 placed through `add_package`,
+the result hashed file for file against `run8-followup-xad-fixed.after.json` —
+the tree two real emulator runs produced:
+
+    oracle: 4030 files expected, 4031 produced - added 2, missing 1, differing 2
+      added:     devs/nsdpatch.cfg.old
+      added:     devs/nsdpatch.cfg.old.uaem
+      missing:   devs/nsdpatch.cfg.uaem
+      differing: devs/nsdpatch.cfg
+      differing: distribution.json
+
+**Every one of the five is explained and none is a defect.** Four are the one
+step ART deliberately does and the `Updater` does not — Hatcher's
+`NSDPatch.cfg` rename, which keeps the user's own file at
+`Devs/NSDPatch.cfg.old` (and takes its `.uaem` sidecar with it, so the old
+sidecar is removed rather than left describing bytes that are gone). The
+fifth is ART's own `distribution.json`, which records this run. **Every path
+the `Updater` wrote hashes identically**, including all five files it renamed
+by case (`C/exe2arc`, `C/WBInfo`, `Utilities/More`, `Utilities/MultiView`,
+`WBStartup/RAWBInfo` — checked by name on disk, not only by hash).
+
+Re-runnable: `the_host_placement_hashes_to_the_updaters_own_tree` in
+`core::osinstall::apply`, `#[ignore]`d and env-gated like the other
+real-material hooks. The command line is in its own doc comment.
+
+**One defect the oracle found on its first run**, which is what an oracle is
+for: both BoingBag recipes declared `overrides: ["workbench-base"]` on a
+measurement about the *media* (*"100%, not merely 'some'"*), and `overrides`
+is a claim about the **tree's manifest** — AmigaOS 3.9's recipe splits the
+Workbench between `workbench-base` and `workbench-39`. The first placement
+refused with *"would write over 122 file(s) it never declared it may
+replace"*. Both recipes now name `workbench-39` too, and each `_why_overrides`
+records the count and corrects the old claim in place.
+
+**The Amiga-side route is not withdrawn.** Both packages keep their
+`amiga_installer`, and everything this entry records about it stays true. What
+changed is which route a chain row takes: `chain::rows_for`'s `runs_on_amiga`
+now reads the **block** first and the installer only as a tie-break, so a
+package ART can place is placed.
+
 **ART-282** 🟡 ✅ **Ticking `locale-turkish` on the Packages step, on a tree
 BoingBag 3.9-2 had not been run on, read the engine's own bookkeeping out at
 the owner** — *found 2026-09-08 by the owner on the 0.9.1 candidate build*
