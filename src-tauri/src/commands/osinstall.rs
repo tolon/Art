@@ -730,6 +730,15 @@ pub fn osinstall_packages(
 pub struct SlotReport {
     pub states: Vec<SlotState>,
     pub summary: SetSummary,
+    /// Material folders ART could not read at all, as the user spelled them.
+    ///
+    /// **Reported rather than swallowed** (fix round 1, F2). A remembered
+    /// path on a drive nobody plugged in is the ordinary case here, and a
+    /// readout that simply showed every medium as *not found* would be saying
+    /// something false about disks sitting in the folder next to it. Empty is
+    /// the normal answer, and it is a different sentence from "found
+    /// nothing".
+    pub unreadable_folders: Vec<String>,
 }
 
 /// Resolve every slot of `release` against `folders`, the chosen tree and the
@@ -740,24 +749,37 @@ pub struct SlotReport {
 /// file at all; this adapter gathers the facts and every one of them comes
 /// from a reader that already exists:
 ///
-/// - [`find_media_across`](scan::find_media_across) reads each disk's own
-///   volume name, as the `kaynak` step already does;
+/// - [`find_media`] reads each disk's own volume name, as the `kaynak` step
+///   already does;
 /// - [`find_packages`] reads each archive's single top-level directory, as the
 ///   `paketler` step already does;
 /// - [`mediahash::remembered_media_in`] answers **out of the scan cache
 ///   only**. Hashing a 490 MB ISO belongs on the job `osinstall_identify_media`
 ///   already runs (§54), never on the command thread, so a folder nobody has
-///   identified yet simply resolves at rank 2 and the readout says so.
+///   identified yet resolves at rank 2 — and `Found::bytes_read` is what lets
+///   the readout say that is why, rather than claiming a lookup nobody made.
 /// - the tree's own `distribution.json`, through
 ///   [`chain::read_manifest`] — the one reader, so "installed" means the same
 ///   thing here as everywhere else.
 ///
-/// An unreadable folder is answered rather than refused, the same way
-/// [`osinstall_packages`] answers one: the readout itself always renders, and
-/// what a missing folder changes is which slots are filled. A chosen *tree*
-/// that carries no manifest is different and does propagate — the user just
+/// **Each folder is scanned on its own** (fix round 1, F2). `find_media_across`
+/// propagates the first folder's error, so one unreadable path used to discard
+/// the disks found in every *other* folder and the readout then said, of media
+/// sitting right there, that they were not in the folders the user named. The
+/// folders that failed come back on [`SlotReport::unreadable_folders`] instead,
+/// and `scan::dedupe_identical_disks` — the same rule `find_media_across`
+/// applies — folds the result.
+///
+/// A chosen *tree* that carries no manifest does propagate: the user just
 /// pointed at it, and `chain::read_manifest`'s refusal names what is wrong
 /// with it.
+///
+/// **The ROM's existence is checked here**, because `core::osinstall::slots`
+/// opens nothing and the brief assigns the check to the caller (F5). A
+/// remembered path whose file has gone comes back as its own ending — not as
+/// *chosen*, which would be a sentence about a file that is not there, and not
+/// counted in `required_found`, which would turn the set line green on a build
+/// that cannot run.
 #[tauri::command]
 pub fn osinstall_slots(
     release: String,
@@ -767,15 +789,15 @@ pub fn osinstall_slots(
 ) -> AppResult<SlotReport> {
     let slots = slots::slots_for(&release)?;
 
-    let media = scan::find_media_across(&folders).unwrap_or_default();
-
-    // `find_packages` per folder, the same folder never twice: a user who
-    // adds their material folder a second time must not be told every archive
+    // Per folder, and the same folder never twice: a user who adds their
+    // material folder a second time must not be told every disk and archive
     // in it is ambiguous with itself (`find_media_across`'s own rule, which
     // has no package-side counterpart to call).
     let mut seen: Vec<PathBuf> = Vec::new();
+    let mut media: Vec<FoundMedia> = Vec::new();
     let mut packages: Vec<FoundPackage> = Vec::new();
     let mut hashes: Vec<mediahash::MediaMatch> = Vec::new();
+    let mut unreadable_folders: Vec<String> = Vec::new();
     let cache = ScanCache::in_dir(crate::scratch::root()?);
     for folder in &folders {
         let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.clone());
@@ -783,9 +805,17 @@ pub fn osinstall_slots(
             continue;
         }
         seen.push(canonical);
+        match find_media(folder) {
+            Ok(found) => media.extend(found),
+            // Only this folder is lost, and it is named. `find_media` skips
+            // an unreadable *file* itself, so an error here is about the
+            // folder — the one thing the user can act on.
+            Err(_) => unreadable_folders.push(folder.display().to_string()),
+        }
         packages.extend(find_packages(folder).unwrap_or_default());
         hashes.extend(mediahash::remembered_media_in(folder, &cache).unwrap_or_default());
     }
+    let media = scan::dedupe_identical_disks(media);
 
     let manifest = match tree {
         Some(tree) => Some(chain::read_manifest(&tree)?),
@@ -794,17 +824,28 @@ pub fn osinstall_slots(
 
     let program_versions = installer_versions(&release, &packages);
 
+    let rom = rom.map(|path| match path.is_file() {
+        true => (path, true),
+        false => (path, false),
+    });
     let facts = Facts {
         media: &media,
         packages: &packages,
         hashes: &hashes,
         manifest: manifest.as_ref(),
-        rom: rom.as_deref(),
+        rom: rom.as_ref().map(|(path, on_disk)| match on_disk {
+            true => slots::ChosenRom::OnDisk(path.as_path()),
+            false => slots::ChosenRom::Absent(path.as_path()),
+        }),
         program_versions: &program_versions,
     };
     let states = slots::resolve(&slots, &facts);
     let summary = slots::summarize(&release, &states);
-    Ok(SlotReport { states, summary })
+    Ok(SlotReport {
+        states,
+        summary,
+        unreadable_folders,
+    })
 }
 
 /// What each Amiga-installable package's **own** wrapper archive says its
@@ -4481,21 +4522,31 @@ mod tests {
         #[test]
         fn a_slot_report_serializes_with_the_keys_this_test_pins() {
             let slots = crate::core::osinstall::slots::slots_for("AmigaOS 3.9").unwrap();
+            // A **filled** `found`, not an empty fixture (fix round 1, F9):
+            // with every slice empty, `found` was `null` on every state, so
+            // neither `Found`'s own camelCase keys nor `MatchedBy`'s
+            // kebab-case values were pinned at all — and `slots.ts` switches
+            // on `matchedBy` with no default, so a rename would have dropped
+            // through and rendered a *found* slot as not-found. Silently,
+            // which is the class of defect this whole test module exists for.
+            let rom = PathBuf::from("D:\\roms\\kick40068.A1200.rom");
             let facts = Facts {
                 media: &[],
                 packages: &[],
                 hashes: &[],
                 manifest: None,
-                rom: None,
+                rom: Some(slots::ChosenRom::OnDisk(&rom)),
                 program_versions: &[],
             };
             let states = crate::core::osinstall::slots::resolve(&slots, &facts);
             let report = SlotReport {
                 summary: crate::core::osinstall::slots::summarize("AmigaOS 3.9", &states),
                 states,
+                unreadable_folders: vec!["E:\\gone".to_string()],
             };
             let value = serde_json::to_value(&report).unwrap();
-            expect_keys(&value, &["states", "summary"]);
+            expect_keys(&value, &["states", "summary", "unreadableFolders"]);
+            assert_eq!(value["unreadableFolders"][0], "E:\\gone");
             expect_keys(
                 &value["summary"],
                 &[
@@ -4513,6 +4564,7 @@ mod tests {
                     "found",
                     "candidates",
                     "installed",
+                    "chosenMissing",
                     "blockedBy",
                     "notNeeded",
                 ],
@@ -4537,6 +4589,102 @@ mod tests {
             // The tagged shape the frontend switches on — `state`, not a bare
             // string, so a future variant can carry its own fields.
             assert_eq!(value["states"][0]["installed"]["state"], "no");
+
+            // The ROM is the last slot, and the only one this fixture fills.
+            let rom_state = value["states"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|state| state["slot"]["id"] == "rom")
+                .expect("AmigaOS 3.9 has a ROM slot");
+            expect_keys(
+                &rom_state["found"],
+                &["path", "matchedBy", "row", "confirmed", "bytesRead"],
+            );
+            assert_eq!(rom_state["found"]["matchedBy"], "chosen");
+            assert_eq!(rom_state["found"]["bytesRead"], false);
+            assert_eq!(rom_state["slot"]["kind"], "rom");
+        }
+
+        /// A chosen ROM whose file is not on disk (fix round 1, F5) — its own
+        /// ending on the wire, and **not** counted as found.
+        #[test]
+        fn a_chosen_rom_that_is_not_there_is_its_own_state_and_is_not_counted_found() {
+            let slots = crate::core::osinstall::slots::slots_for("AmigaOS 3.9").unwrap();
+            let gone = PathBuf::from("D:\\roms\\this-drive-is-not-plugged-in.rom");
+            assert!(!gone.is_file(), "the fixture must really be absent");
+            let facts = Facts {
+                media: &[],
+                packages: &[],
+                hashes: &[],
+                manifest: None,
+                rom: Some(slots::ChosenRom::Absent(&gone)),
+                program_versions: &[],
+            };
+            let states = crate::core::osinstall::slots::resolve(&slots, &facts);
+            let rom = states
+                .iter()
+                .find(|state| state.slot.id == "rom")
+                .expect("AmigaOS 3.9 has a ROM slot");
+            assert!(rom.found.is_none(), "a file that is not there is not found");
+            assert_eq!(rom.chosen_missing.as_deref(), Some(gone.as_path()));
+            // The set line must not go green on a build that cannot run.
+            let summary = crate::core::osinstall::slots::summarize("AmigaOS 3.9", &states);
+            assert_eq!(summary.required_found, 0);
+            let value = serde_json::to_value(&states).unwrap();
+            assert_eq!(
+                value
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|s| s["slot"]["id"] == "rom")
+                    .unwrap()["chosenMissing"],
+                gone.display().to_string()
+            );
+        }
+
+        /// The command itself, over two real folders, one of which is not
+        /// there (fix round 1, F2): the good folder's disk still resolves and
+        /// the bad folder is named.
+        #[test]
+        fn one_unreadable_material_folder_does_not_empty_the_others() {
+            use crate::core::osinstall::fixtures;
+
+            let dir = fixtures::scratch("slots-unreadable-folder");
+            fixtures::media(
+                &dir,
+                "AmigaOS3.9",
+                "cd-lookalike.adf",
+                &[("C/Version", b"x" as &[u8], 0x00)],
+            );
+            let gone = dir.join("not-a-folder-at-all");
+            assert!(!gone.exists());
+
+            let report = osinstall_slots(
+                "AmigaOS 3.9".to_string(),
+                vec![gone.clone(), dir.clone()],
+                None,
+                None,
+            )
+            .expect("an unreadable folder is answered, never refused");
+
+            assert_eq!(
+                report.unreadable_folders,
+                vec![gone.display().to_string()],
+                "the folder ART could not read is named"
+            );
+            // And the *other* folder's disk still fills its slot — the whole
+            // defect was that it did not.
+            let cd = report
+                .states
+                .iter()
+                .find(|state| state.slot.id == "medium:AmigaOS3.9")
+                .expect("the 3.9 recipe has a CD slot");
+            let found = cd
+                .found
+                .as_ref()
+                .expect("a disk in a readable folder survives an unreadable one beside it");
+            assert_eq!(found.path, dir.join("cd-lookalike.adf"));
         }
 
         /// `ComponentSummary` is the checklist on screen, so a key renamed

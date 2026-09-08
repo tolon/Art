@@ -1380,6 +1380,26 @@ export interface SlotFound {
    *  would present one artefact's provenance as another's. */
   row: MediaRow | null;
   confirmed: MediaConfirmation | null;
+  /**
+   * Whether **anybody has hashed this file yet**.
+   *
+   * The readout needs it to keep two sentences apart. Rank 1 not firing has
+   * more than one cause, and the commonest is that nothing has read the
+   * bytes: `osinstallSlots` asks the scan cache and hashes nothing, so until
+   * `osinstallIdentifyMedia`'s job has run over a folder every file in it
+   * lands at rank 2 with nothing at all known about its bytes. Saying "its
+   * bytes are in no table ART has" there would be reporting a lookup nobody
+   * made.
+   */
+  bytesRead: boolean;
+}
+
+/** One file that might fill a slot. Mirrors `slots::Candidate`. */
+export interface SlotCandidate {
+  path: string;
+  /** See {@link SlotFound.bytesRead} — a guess nobody has hashed and one that
+   *  was hashed and matched nothing are two different rows. */
+  bytesRead: boolean;
 }
 
 /**
@@ -1403,8 +1423,14 @@ export interface SlotState {
   found: SlotFound | null;
   /** Everything that might fill it, in sorted path order. Empty when `found`
    *  is set. */
-  candidates: string[];
+  candidates: SlotCandidate[];
   installed: Installed;
+  /** The path the user chose for this slot when **that file is not there** —
+   *  a remembered ROM on a drive nobody plugged in. Its own ending: not
+   *  *chosen* (a sentence about a file that is not there) and not *not found*
+   *  (which would say nothing about the choice already made). `found` is
+   *  `null` alongside it, so it is not counted. */
+  chosenMissing: string | null;
   /** Every requirement that is not installed yet, by slot id. */
   blockedBy: string[];
   /** What ART measured that makes this slot unnecessary — the artefact's own
@@ -1432,6 +1458,11 @@ export interface SetSummary {
 export interface SlotReport {
   states: SlotState[];
   summary: SetSummary;
+  /** Material folders ART could not read at all, as the user spelled them.
+   *  Empty is the normal answer, and it is a different sentence from "found
+   *  nothing": a remembered path on a drive nobody plugged in must not make
+   *  the disks in the folder beside it read as missing. */
+  unreadableFolders: string[];
 }
 
 /**
