@@ -535,12 +535,27 @@ export interface ExtraMemberVerdict {
   files: number;
 }
 
-/** What one host-side after-step actually did — `core::amigainstall::finish`'s
- *  `AppliedStep`, tagged by `step` exactly as the recipe spells it. */
+/**
+ * What one host-side after-step actually did — `core::amigainstall::finish`'s
+ * `AppliedStep`, tagged by `step` with **that enum's own variant names**.
+ *
+ * **Corrected 2026-09-08 (review F2).** These used to read `"protect"` and
+ * `"replace-keeping-backup"`, which are `PostStep`'s spellings — a different
+ * enum, the one a *recipe* writes. `finish::AppliedStep` derives
+ * `#[serde(tag = "step", rename_all = "kebab-case")]` over `Protected` and
+ * `Replaced`, so the wire carries `"protected"` and `"replaced"`, and the
+ * second arm carries `replacement` as well. Nothing consumed `postPlace` yet,
+ * which is exactly why it would have bitten: the first screen to render what
+ * the after-steps did would have matched neither arm and rendered nothing —
+ * a screen saying less than the core did, silently.
+ *
+ * `apply_outcome_serializes_with_the_keys_the_frontend_declares`
+ * (`commands/osinstall.rs`) pins both tags against a non-empty list.
+ */
 export type AppliedStep =
-  | { step: "protect"; path: string; was: string; now: string }
+  | { step: "protected"; path: string; was: string; now: string }
   | {
-      step: "replace-keeping-backup";
+      step: "replaced";
       target: string;
       replacement: string;
       backup: string | null;
@@ -1579,10 +1594,6 @@ export interface SlotState {
   chosenMissing: string | null;
   /** Every requirement that is not installed yet, by slot id. */
   blockedBy: string[];
-  /** What ART measured that makes this slot unnecessary — the artefact's own
-   *  statement about itself, e.g. `"Updater 45.15"`. A measurement, not a
-   *  sentence: the words go in the catalogue. */
-  notNeeded: string | null;
   /**
    * The first directory {@link Slot.expectsDirectories} names that the disc
    * filling this slot does **not** carry (design § 3.6).
@@ -1790,18 +1801,27 @@ export interface ChainReport {
  *
  * A chosen `tree` with no `distribution.json` is a refusal rather than an
  * empty chain — every *installed* state here comes from that file alone.
+ *
+ * `overrides` is the user's own per-slot file choices, in the same shape
+ * `osinstallSlots` takes them (`slotOverrides` in `@/lib/amigainstall`).
+ * **ART-284**: without them the source step's readout said *the file you
+ * chose* about the owner's own BoingBag 1 build while this screen called the
+ * same slot ambiguous and blocked the row — one resolver, two callers, one of
+ * them not handed the decision.
  */
 export async function osinstallChain(
   release: InstallRelease,
   folders: string[],
   tree?: string | null,
-  rom?: string | null
+  rom?: string | null,
+  overrides?: SlotOverride[]
 ): Promise<ChainReport> {
   return invoke<ChainReport>("osinstall_chain", {
     release,
     folders,
     tree: tree || null,
     rom: rom || null,
+    overrides: overrides && overrides.length > 0 ? overrides : null,
   });
 }
 

@@ -83,7 +83,6 @@ function rowClass(kind: SlotLineKind): string {
     case "installed-elsewhere":
       return "badge badge-ok";
     case "rom-not-chosen":
-    case "not-needed":
       return "badge badge-muted";
   }
 }
@@ -107,8 +106,6 @@ function rowMark(kind: SlotLineKind): string {
       return "✖";
     case "rom-not-chosen":
       return "?";
-    case "not-needed":
-      return "—";
   }
 }
 
@@ -266,7 +263,7 @@ export function MaterialReadout({
   if (folders.length === 0) return null;
 
   const rows = report ? slotLines(report.states) : [];
-  const set = report ? setLine(report.summary, report.states) : null;
+  const set = report ? setLine(report.summary) : null;
   const unreadable = report ? unreadableFolderLines(report.unreadableFolders) : [];
   const crowded = report ? crowdedFolderLines(report.crowdedFolders) : [];
 

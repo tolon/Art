@@ -606,6 +606,10 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // it — `@/lib/chain` carries the key because that module never renders.
     // A component with no `label_key` shows its id, which is what the
     // components step shows for it too.
-    expect(dynamicCalls).toBe(178);
+    // 178 -> 176 (2026-09-08, the BoingBag cleanup). Two went, and both with
+    // the emulator route for the two BoingBags: `followUpPhrase` (the
+    // version-gated second invocation the host-side `extra_members` unit
+    // replaced) and `overlayAdvicePhrase` (the UAE fix's own advice line).
+    expect(dynamicCalls).toBe(176);
   });
 });

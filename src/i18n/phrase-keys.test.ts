@@ -124,7 +124,6 @@ import {
   archiveFieldBlockerPhrase,
   outcomeNextStepPhrase as amigaNextStepPhrase,
   outcomePhrase as amigaOutcomePhrase,
-  overlayAdvicePhrase,
   readinessBlockers,
   settlementPhrase,
   type AmigaInstallPreview,
@@ -241,14 +240,9 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       args: ["AmigaOS-Update", "DH0:"],
       workVolume: "ARTWork",
       packageVolume: "ARTPkg",
-      packageArchives: ["a.lha"],
-      packageArchivesPresent: false,
-      declaredOverlays: ["BoingBag3.9-1-UAE/BoingBag3.9-1"],
-      minimumInstallerVersion: "45.15",
+      packageArchive: "a.lha",
+      packageArchivePresent: false,
       packageDir: "BoingBag3.9-1",
-      medium: "E:/amiga/os39/AmigaOS39.iso",
-      mediumVolume: "AmigaOS3.9",
-      requiredMedium: "the original AmigaOS 3.9 CD-ROM",
       resultFile: "art-result.txt",
       deadlineSeconds: 1800,
       kickstart: "D:/kick.rom",
@@ -260,27 +254,17 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     for (const blocker of readinessBlockers(preview)) {
       expect(resolvesAtRuntime(blocker.key)).toBe(true);
     }
-    // Fix round 1's m5: the same list again for an archive **ART** resolved,
-    // which picks a different key for the missing-archive case. Pluralised,
-    // so both arms have to resolve.
-    for (const archives of [["a.lha"], ["a.lha", "b.lha"]]) {
-      for (const blocker of readinessBlockers(
-        { ...preview, packageArchives: archives, packageArchivesPresent: false },
-        archives
-      )) {
-        expect(resolvesAtRuntime(blocker.key)).toBe(true);
-      }
-    }
-    for (const archives of [["a.lha"], ["a.lha", "b.lha"]]) {
-      const advice = overlayAdvicePhrase({ ...preview, packageArchives: archives });
-      expect(advice).not.toBeNull();
-      expect(resolvesAtRuntime(advice!.key)).toBe(true);
+    // Fix round 1's m5: the same preview again for an archive **ART**
+    // resolved, which picks a different key for the missing-archive case.
+    for (const blocker of readinessBlockers(
+      { ...preview, packageArchive: "a.lha", packageArchivePresent: false },
+      ["a.lha"]
+    )) {
+      expect(resolvesAtRuntime(blocker.key)).toBe(true);
     }
 
-    // ART-277: which package a picked archive really belongs to. Both
-    // fields, and every non-null shape `archiveFieldBlockerPhrase` can
-    // answer — including the two the review round added (Major 2's
-    // `other-artefact`, Medium 1's `another-packages-update-archive`).
+    // ART-277: which package a picked archive really belongs to — every
+    // non-null shape `archiveFieldBlockerPhrase` can answer.
     const archiveClassification = (
       kind: ArchiveClassification["kind"],
       over: Partial<ArchiveClassification> = {}
@@ -288,66 +272,34 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       kind,
       topLevel: [],
       expectedMedia: null,
-      expectedOverlays: [],
       sharedBy: [],
       ...over,
     });
     const otherName = () => "BoingBag 3.9-2";
-    const fieldLabels = { package: "The package's own archive", overlay: "The package's update archive" };
-    const phrasesFor = (
-      classification: ArchiveClassification,
-      field: "package" | "overlay"
-    ) =>
-      archiveFieldBlockerPhrase(
-        classification,
-        field,
-        "D:/pkg/x.lha",
-        "BoingBag 3.9-1",
-        otherName,
-        fieldLabels
-      );
+    const phrasesFor = (classification: ArchiveClassification) =>
+      archiveFieldBlockerPhrase(classification, "D:/pkg/x.lha", "BoingBag 3.9-1", otherName);
 
     expect(
-      resolvesAtRuntime(
-        phrasesFor(archiveClassification("another-package:boingbag-39-2"), "package")!.key
-      )
+      resolvesAtRuntime(phrasesFor(archiveClassification("another-package:boingbag-39-2"))!.key)
     ).toBe(true);
     expect(
       resolvesAtRuntime(
         phrasesFor(
           archiveClassification("shared-artefact:Locale3.9", {
             sharedBy: ["locale-39", "locale-39-turkish"],
-          }),
-          "package"
+          })
         )!.key
       )
     ).toBe(true);
     expect(
       resolvesAtRuntime(
         phrasesFor(
-          archiveClassification("another-packages-update-archive:boingbag-39-1"),
-          "overlay"
+          archiveClassification("other-artefact:Locale3.9", { expectedMedia: "BoingBag3.9-1" })
         )!.key
       )
     ).toBe(true);
     expect(
-      resolvesAtRuntime(
-        phrasesFor(
-          archiveClassification("other-artefact:Locale3.9", { expectedMedia: "BoingBag3.9-1" }),
-          "package"
-        )!.key
-      )
-    ).toBe(true);
-    expect(
-      resolvesAtRuntime(
-        phrasesFor(archiveClassification("other-artefact:Locale3.9"), "overlay")!.key
-      )
-    ).toBe(true);
-    expect(
-      resolvesAtRuntime(phrasesFor(archiveClassification("the-update-archive"), "package")!.key)
-    ).toBe(true);
-    expect(
-      resolvesAtRuntime(phrasesFor(archiveClassification("the-package"), "overlay")!.key)
+      resolvesAtRuntime(phrasesFor(archiveClassification("other-artefact:Locale3.9"))!.key)
     ).toBe(true);
   });
 

@@ -2263,9 +2263,7 @@
       "guessedByFilenameOtherArtefact": "{{file}} is named like {{name}}, and its bytes say otherwise: they are the table's {{other}}. The name is somebody's, the bytes are the file's — go by the bytes.",
       "unreadableFolder": "ART could not read {{folder}}; its contents are not counted.",
       "setLine": "{{release}} · {{found}} of {{total}} found · {{missingRequired}} required missing",
-      "setLineNotNeeded": "{{release}} · {{found}} of {{total}} found · {{missingRequired}} required missing · {{notNeeded}} not needed",
       "setLineReady": "{{release}} · {{found}} of {{total}} found · everything required is here",
-      "setLineReadyNotNeeded": "{{release}} · {{found}} of {{total}} found · everything required is here · {{notNeeded}} not needed",
       "romChosen": "Kickstart {{identity}} or newer: {{path}}, chosen for this build.",
       "romNotChosen": "No Kickstart chosen yet — choose a Kickstart {{identity}} or newer in the field on this step. ART does not look for one in your material folders.",
       "romNotChosenNoFloor": "No Kickstart chosen yet — choose one in the field on this step. ART does not look for one in your material folders.",
@@ -2283,7 +2281,6 @@
       "notFoundUnnamed": "{{name}} is not in the folders you named.",
       "filenamesUnknown": "no file name ART has ever recorded for it",
       "provenanceUnknown": "ART has no note of where this one comes from",
-      "notNeeded": "{{name}} is not needed — this copy already carries {{carries}}.",
       "installedPlaced": "already in this tree",
       "installedRan": "already installed on the Amiga: {{command}}",
       "blocked": "needs {{needs}} first"
@@ -2599,20 +2596,11 @@
         "chooseTitle": "Choose the package's own archive — the file you downloaded",
         "hint": "ART expects {{filenames}}. Where it comes from: {{provenance}}. ART unpacks it and mounts it as its own Amiga volume; the locked part inside stays locked and is handed to the package's own installer."
       },
-      "overlayArchive": {
-        "label": "The package's update archive (only if it needs one)",
-        "none": "No second archive chosen.",
-        "chooseTitle": "Choose the package's update archive",
-        "hint": "ART expects {{filenames}}. Where it comes from: {{provenance}}. It replaces part of the first archive — the fix some packages shipped separately for their own installer. Leave it empty unless the note below asks for it."
-      },
       "classify": {
         "anotherPackage": "This is {{other}}'s own archive — but {{selected}} is selected. Select {{other}} to install it, or give {{selected}}'s own archive here.",
-        "anotherPackagesUpdateArchive": "This is {{other}}'s own update archive, not {{selected}}'s — but {{selected}} is selected. Select {{other}} to install it, or give {{selected}}'s own archives here.",
         "sharedArtefact": "'{{path}}' is the {{media}} archive, which the Packages step places from Windows — {{packages}} all read it.",
         "otherArtefact": "'{{path}}' is the {{media}} archive, which this step does not run — {{selected}} wants {{expected}} here.",
-        "otherArtefactGeneric": "'{{path}}' is the {{media}} archive, which this step does not run.",
-        "wrongFieldOverlay": "This is the package's update archive, not the package itself. It belongs in \"{{overlayLabel}}\", not in \"{{packageLabel}}\".",
-        "wrongFieldPackage": "This is the package's own archive, not its update archive. It belongs in \"{{packageLabel}}\", not in \"{{overlayLabel}}\"."
+        "otherArtefactGeneric": "'{{path}}' is the {{media}} archive, which this step does not run."
       },
       "kickstart": {
         "label": "Your own Kickstart ROM",
@@ -2631,12 +2619,7 @@
         "deadline": "If nothing answers within {{minutes}} minutes, ART ends the emulator it started and reports that nobody answered — it never leaves a run waiting for ever.",
         "program": "Command",
         "volumes": "The Amiga will see {{system}}: (your tree), {{package}}: (the package, unpacked) and {{work}}: (ART's own boot volume, which carries the script and nothing of yours).",
-        "resultFile": "The Amiga writes {{file}} on ART's volume and ART reads it back; that file is the installer's own answer, not ART's opinion of it.",
-        "medium": "Disc: {{volume}}"
-      },
-      "overlay": {
-        "needed": "This package's installer has to state at least {{version}} to work inside an emulator, and the build inside the original download is older than that. If yours is that build, ART refuses the run and copies nothing. The fix is one more download — the package's own update archive, the one carrying {{overlays}}. Choose it as the second archive above and ART copies it over the package's drawer before the run.",
-        "supplied": "ART will copy {{overlays}} out of your second archive over the package's own drawer before the run, so the installer that runs is at least {{version}} — the build that works inside an emulator."
+        "resultFile": "The Amiga writes {{file}} on ART's volume and ART reads it back; that file is the installer's own answer, not ART's opinion of it."
       },
       "blocker": {
         "heading": "Not ready to run yet",
@@ -2673,12 +2656,6 @@
         "timedOut": "Nobody answered. The installer was still waiting {{seconds}} seconds in, so ART ended the emulator it had started.",
         "emulatorClosed": "The emulator window was closed {{seconds}} seconds in, before the installer had reported anything."
       },
-      "followUp": {
-        "ran": "The package also applied its second update, which the tree did not have yet.",
-        "notNeeded": "The package's second update was not needed — this tree already carries that version.",
-        "failed": "The package's second update ran and said no. The install itself worked; only that extra part did not.",
-        "notChecked": "ART could not tell whether the package's second update was needed — this tree has no C/Version — so it was not run."
-      },
       "next": {
         "succeeded": "Boot the tree and ask the running system what it is — the version it states about itself, not a copyright line on a screen.",
         "failed": "Look inside the copy: whatever the installer wrote is there, and its own messages are what say why it refused.",
@@ -2689,12 +2666,6 @@
         "promoted": "Your tree at {{tree}} is the installed one now.",
         "promotedLeftBehind": "Your tree at {{tree}} is the installed one now. The tree it replaced could not be deleted — something still has it open — and is sitting at {{leftBehind}}; it is yours to remove when you want to.",
         "kept": "Your own tree at {{original}} was not touched. The copy the installer worked on is at {{copy}}, kept exactly as it was left, so you can look at what happened."
-      },
-      "medium": {
-        "label": "AmigaOS 3.9 CD-ROM (disc image)",
-        "none": "Not chosen",
-        "hint": "ART expects {{filenames}}. Where it comes from: {{provenance}}. Some packages verify the disc they shipped on before they will install; choose your own copy of it and ART puts it in the emulated machine's CD drive.",
-        "chooseTitle": "Choose the disc image the installer checks for"
       }
     },
     "replaces": {

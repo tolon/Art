@@ -2263,9 +2263,7 @@
       "guessedByFilenameOtherArtefact": "{{file}} adı {{name}} gibi duruyor ama baytları başka şey söylüyor: onlar tablodaki {{other}}. Ad birinin verdiği şeydir, baytlar dosyanın kendisidir — baytlara bakın.",
       "unreadableFolder": "ART {{folder}} klasörünü okuyamadı; içindekiler sayılmadı.",
       "setLine": "{{release}} · {{total}} taneden {{found}} tanesi bulundu · {{missingRequired}} zorunlu eksik",
-      "setLineNotNeeded": "{{release}} · {{total}} taneden {{found}} tanesi bulundu · {{missingRequired}} zorunlu eksik · {{notNeeded}} tanesi gerekmiyor",
       "setLineReady": "{{release}} · {{total}} taneden {{found}} tanesi bulundu · zorunlu olan her şey burada",
-      "setLineReadyNotNeeded": "{{release}} · {{total}} taneden {{found}} tanesi bulundu · zorunlu olan her şey burada · {{notNeeded}} tanesi gerekmiyor",
       "romChosen": "Kickstart {{identity}} ya da daha yenisi: {{path}}, bu yapı için seçildi.",
       "romNotChosen": "Henüz Kickstart seçilmedi — bu adımdaki alandan Kickstart {{identity}} ya da daha yenisini seçin. ART malzeme klasörlerinizde Kickstart aramaz.",
       "romNotChosenNoFloor": "Henüz Kickstart seçilmedi — bu adımdaki alandan birini seçin. ART malzeme klasörlerinizde Kickstart aramaz.",
@@ -2283,7 +2281,6 @@
       "notFoundUnnamed": "{{name}} adını verdiğiniz klasörlerde yok.",
       "filenamesUnknown": "ART'ın onun için kaydettiği hiçbir dosya adı yok",
       "provenanceUnknown": "ART'ın bunun nereden geldiğine dair bir notu yok",
-      "notNeeded": "{{name}} gerekmiyor — bu kopya zaten {{carries}} taşıyor.",
       "installedPlaced": "bu ağaçta zaten var",
       "installedRan": "Amiga’da zaten kuruldu: {{command}}",
       "blocked": "önce {{needs}} gerekiyor"
@@ -2599,20 +2596,11 @@
         "chooseTitle": "Paketin kendi arşivini seçin — indirdiğiniz dosyayı",
         "hint": "ART {{filenames}} bekliyor. Nereden geldiği: {{provenance}}. ART onu açar ve kendi Amiga birimi olarak bağlar; içindeki kilitli bölüm kilitli kalır ve paketin kendi kurucusuna verilir."
       },
-      "overlayArchive": {
-        "label": "Paketin güncelleme arşivi (yalnızca gerekiyorsa)",
-        "none": "İkinci arşiv seçilmedi.",
-        "chooseTitle": "Paketin güncelleme arşivini seçin",
-        "hint": "ART {{filenames}} bekliyor. Nereden geldiği: {{provenance}}. Birinci arşivin bir bölümünün yerine geçer — bazı paketlerin kendi kurucusu için ayrıca yayımladığı düzeltme. Aşağıdaki not istemedikçe boş bırakın."
-      },
       "classify": {
         "anotherPackage": "Bu, {{other}} paketinin kendi arşivi — ama seçili olan {{selected}}. Onu kurmak için {{other}}'ı seçin, ya da buraya {{selected}} paketinin kendi arşivini verin.",
-        "anotherPackagesUpdateArchive": "Bu, {{other}} paketinin kendi güncelleme arşivi, {{selected}}'ınki değil — ama seçili olan {{selected}}. Onu kurmak için {{other}}'ı seçin, ya da buraya {{selected}} paketinin kendi arşivlerini verin.",
         "sharedArtefact": "'{{path}}', Paketler adımının Windows tarafında yerleştirdiği {{media}} arşivi — bunu {{packages}} okuyor.",
         "otherArtefact": "'{{path}}', bu adımın çalıştırmadığı {{media}} arşivi — {{selected}} burada {{expected}} istiyor.",
-        "otherArtefactGeneric": "'{{path}}', bu adımın çalıştırmadığı {{media}} arşivi.",
-        "wrongFieldOverlay": "Bu, paketin güncelleme arşivi; paketin kendisi değil. \"{{overlayLabel}}\" alanına ait, \"{{packageLabel}}\" alanına değil.",
-        "wrongFieldPackage": "Bu, paketin kendi arşivi; güncelleme arşivi değil. \"{{packageLabel}}\" alanına ait, \"{{overlayLabel}}\" alanına değil."
+        "otherArtefactGeneric": "'{{path}}', bu adımın çalıştırmadığı {{media}} arşivi."
       },
       "kickstart": {
         "label": "Kendi Kickstart ROM'unuz",
@@ -2631,12 +2619,7 @@
         "deadline": "{{minutes}} dakika içinde hiçbir yanıt gelmezse ART başlattığı emülatörü sonlandırır ve kimsenin yanıt vermediğini bildirir — bir koşuyu sonsuza dek bekler hâlde bırakmaz.",
         "program": "Komut",
         "volumes": "Amiga şunları görecek: {{system}}: (ağacınız), {{package}}: (açılmış hâliyle paket) ve {{work}}: (ART'ın kendi açılış birimi — betiği taşır, sizden hiçbir şey taşımaz).",
-        "resultFile": "Amiga, ART'ın birimine {{file}} dosyasını yazar ve ART onu geri okur; o dosya kurucunun kendi yanıtıdır, ART'ın onun hakkındaki yorumu değil.",
-        "medium": "Disk: {{volume}}"
-      },
-      "overlay": {
-        "needed": "Bu paketin kurucusunun bir emülatör içinde çalışabilmesi için en az {{version}} sürümünü bildirmesi gerekir ve ilk indirmenin içindeki yapı bundan eskidir. Sizinki o eski yapıysa ART koşuyu geri çevirir ve hiçbir şey kopyalamaz. Çözüm tek bir indirme daha: paketin kendi güncelleme arşivi, yani {{overlays}} taşıyan arşiv. Onu yukarıda ikinci arşiv olarak seçin; ART koşudan önce paketin çekmecesinin üzerine kopyalar.",
-        "supplied": "ART, koşudan önce ikinci arşivinizden {{overlays}} içeriğini paketin kendi çekmecesinin üzerine kopyalayacak; böylece çalışan kurucu en az {{version}} olacak — emülatör içinde çalışan yapı."
+        "resultFile": "Amiga, ART'ın birimine {{file}} dosyasını yazar ve ART onu geri okur; o dosya kurucunun kendi yanıtıdır, ART'ın onun hakkındaki yorumu değil."
       },
       "blocker": {
         "heading": "Henüz çalıştırmaya hazır değil",
@@ -2673,12 +2656,6 @@
         "timedOut": "Kimse yanıt vermedi. Kurucu {{seconds}} saniye sonra hâlâ bekliyordu, bu yüzden ART başlattığı emülatörü sonlandırdı.",
         "emulatorClosed": "Emülatör penceresi {{seconds}} saniye sonra, kurucu daha hiçbir şey bildirmeden kapatıldı."
       },
-      "followUp": {
-        "ran": "Paket ikinci güncellemesini de uyguladı; ağaçta henüz yoktu.",
-        "notNeeded": "Paketin ikinci güncellemesi gerekmedi — bu ağaç o sürümü zaten taşıyor.",
-        "failed": "Paketin ikinci güncellemesi çalıştı ve hayır dedi. Kurulumun kendisi başarılı; yalnızca bu ek bölüm olmadı.",
-        "notChecked": "ART paketin ikinci güncellemesinin gerekip gerekmediğini anlayamadı — bu ağaçta C/Version yok — bu yüzden çalıştırılmadı."
-      },
       "next": {
         "succeeded": "Ağacı açın ve çalışan sisteme ne olduğunu sorun — ekrandaki bir telif satırını değil, sistemin kendisi hakkında söylediği sürümü.",
         "failed": "Kopyanın içine bakın: kurucunun yazdığı her şey orada ve neden reddettiğini söyleyen şey onun kendi iletileri.",
@@ -2689,12 +2666,6 @@
         "promoted": "{{tree}} konumundaki ağacınız artık kurulmuş olan ağaç.",
         "promotedLeftBehind": "{{tree}} konumundaki ağacınız artık kurulmuş olan ağaç. Yerine geçtiği ağaç silinemedi — bir şey onu hâlâ açık tutuyor — ve {{leftBehind}} konumunda duruyor; istediğinizde silmek size kalmış.",
         "kept": "{{original}} konumundaki kendi ağacınıza dokunulmadı. Kurucunun üzerinde çalıştığı kopya {{copy}} konumunda, bırakıldığı hâliyle duruyor; ne olduğuna bakabilirsiniz."
-      },
-      "medium": {
-        "label": "AmigaOS 3.9 CD-ROM'u (disk kalıbı)",
-        "none": "Seçilmedi",
-        "hint": "ART {{filenames}} bekliyor. Nereden geldiği: {{provenance}}. Bazı paketler kurulmadan önce birlikte geldikleri diski doğrular; o diskin kendi kopyanızı seçin, ART onu öykünücünün CD sürücüsüne takar.",
-        "chooseTitle": "Kurucunun aradığı disk kalıbını seçin"
       }
     },
     "replaces": {

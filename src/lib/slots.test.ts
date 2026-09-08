@@ -65,7 +65,6 @@ interface StateOptions {
   installed?: Installed;
   chosenMissing?: string | null;
   blockedBy?: string[];
-  notNeeded?: string | null;
   incomplete?: string | null;
   expectsDirectories?: string[];
 }
@@ -105,7 +104,6 @@ function state(options: StateOptions = {}): SlotState {
     installed: options.installed ?? { state: "no" },
     chosenMissing: options.chosenMissing ?? null,
     blockedBy: options.blockedBy ?? [],
-    notNeeded: options.notNeeded ?? null,
     incomplete: options.incomplete ?? null,
   };
 }
@@ -153,7 +151,6 @@ describe("slotLines", () => {
         state({ candidates: [read("D:\\a\\one.lha"), read("D:\\b\\two.lha")] }),
       ],
       ["not-found", state()],
-      ["not-needed", state({ notNeeded: "Updater 45.15" })],
       // The three the round-2 whole-branch review added, each because the
       // ending it was folded into said something false: a ROM is not missing
       // from a folder ART never looks in (M1), a slot the set line counts
@@ -385,17 +382,6 @@ describe("slotLines", () => {
     expect(line.file).toBe("kick40068.rom");
   });
 
-  it("a not-needed slot is never reported as missing, even with nothing found", () => {
-    // The row the design shows for BoingBag 1's UAE fix: present or absent,
-    // an artefact ART has measured as unnecessary is neither found nor
-    // missing, and "not found" here would be the confident wrong sentence.
-    const [line] = slotLines([
-      state({ kind: "overlay", filenames: ["BoingBag39-1-UAE.lha"], notNeeded: "Updater 45.15" }),
-    ]);
-    expect(line.kind).toBe("not-needed");
-    expect(line.phrase.key).toBe("osinstall.slots.notNeeded");
-    expect(line.phrase.params?.carries).toBe("Updater 45.15");
-  });
 });
 
 describe("chosenMissing states only what was checked", () => {
@@ -426,7 +412,7 @@ describe("setLine", () => {
   });
 
   it("counts found over the whole set and names the required shortfall apart", () => {
-    const { phrase, ready } = setLine(summary({ requiredFound: 1 }), []);
+    const { phrase, ready } = setLine(summary({ requiredFound: 1 }));
     expect(phrase.key).toBe("osinstall.slots.setLine");
     expect(phrase.params).toMatchObject({
       release: "AmigaOS 3.9",
@@ -442,7 +428,7 @@ describe("setLine", () => {
   /// badge — this module's own doc rejecting "0 not needed" one clause along
   /// while printing "0 required missing".
   it("says a ready set is ready rather than counting nothing that is missing", () => {
-    const { phrase, ready } = setLine(summary(), []);
+    const { phrase, ready } = setLine(summary());
     expect(phrase.key).toBe("osinstall.slots.setLineReady");
     expect(phrase.params).toMatchObject({ found: 5, total: 6 });
     // A set missing only optional files is ready to build — one fraction
@@ -456,42 +442,15 @@ describe("setLine", () => {
   });
 
   it("is not ready the moment a required slot is missing", () => {
-    const { phrase, ready } = setLine(summary({ requiredFound: 1 }), []);
+    const { phrase, ready } = setLine(summary({ requiredFound: 1 }));
     expect(ready).toBe(false);
     expect(phrase.params?.missingRequired).toBe(1);
   });
 
-  it("says how many are not needed, so a shrinking denominator is not a disappearance", () => {
-    // `slots::summarize` leaves a not-needed slot out of **both** totals, so
-    // "5 of 6" legitimately becomes "5 of 5" as ART learns more. Without this
-    // clause on the line, that reads as material vanishing.
-    const states = [
-      state({ id: "overlay:uae", notNeeded: "Updater 45.15" }),
-      state({ id: "package:boingbag-39-1" }),
-    ];
-    const { phrase } = setLine(
-      summary({ requiredFound: 1, optionalTotal: 3, optionalFound: 3 }),
-      states
-    );
-    expect(phrase.key).toBe("osinstall.slots.setLineNotNeeded");
-    expect(phrase.params?.notNeeded).toBe(1);
-    expect(phrase.params?.total).toBe(5);
-
-    // The ready half of the same pair (L8).
-    expect(setLine(summary({ optionalTotal: 3, optionalFound: 3 }), states).phrase.key).toBe(
-      "osinstall.slots.setLineReadyNotNeeded"
-    );
-
-    // And says nothing when there is nothing to say: "0 not needed" is noise.
-    expect(setLine(summary(), states.slice(1)).phrase.key).toBe(
-      "osinstall.slots.setLineReady"
-    );
-
+  it("has both its own keys in both catalogues", () => {
     for (const key of [
       "osinstall.slots.setLine",
-      "osinstall.slots.setLineNotNeeded",
       "osinstall.slots.setLineReady",
-      "osinstall.slots.setLineReadyNotNeeded",
     ]) {
       expect(isLeafKey(en, key), `${key} missing from en.json`).toBe(true);
       expect(isLeafKey(tr, key), `${key} missing from tr.json`).toBe(true);

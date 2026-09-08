@@ -73,48 +73,6 @@ describe("the four endings reach the frontend", () => {
     expect([...ts].sort()).toEqual([...rust].sort());
   });
 
-  it("carries the overlay a BoingBag 1 run may need (ART-186)", () => {
-    // The wrapper takes a **list**, not one path: BoingBag 3.9-1's own
-    // `Updater` is 45.13 and cannot install under an emulator, so a second
-    // archive supplies 45.15. A TypeScript declaration still saying `string`
-    // would make the one screen that matters unable to offer the second file.
-    expect(WRAPPER).toContain("packageArchives: string[];");
-    // And the preview says what that second file would have to be, and why —
-    // so the screen can name it before the user goes looking.
-    expect(COMMAND).toMatch(/pub declared_overlays: Vec<String>,/);
-    expect(COMMAND).toMatch(/pub minimum_installer_version: Option<String>,/);
-    expect(WRAPPER).toContain("declaredOverlays: string[];");
-    expect(WRAPPER).toContain("minimumInstallerVersion: string | null;");
-    expect(WRAPPER).toContain("packageArchivesPresent: boolean;");
-  });
-
-  /**
-   * **ART-280.** A follow-up's word is a second Rust enum on the same wire,
-   * so it needs the same parity check the endings have: a fifth word added
-   * in Rust and not here would fall through every branch `followUpPhrase`
-   * knows, and the screen would say nothing about something that happened.
-   */
-  it("declares every FollowUpOutcome the Rust has, spelled the same way", () => {
-    const rust = variants(enumBody(CORE, "FollowUpOutcome")).map(kebab);
-    expect(rust).toEqual(["ran", "not-needed", "failed", "not-checked"]);
-
-    const start = WRAPPER.indexOf("export type FollowUpOutcome");
-    expect(start, "the TypeScript union must exist").toBeGreaterThan(-1);
-    const line = WRAPPER.slice(start, WRAPPER.indexOf(";", start));
-    for (const word of rust) {
-      expect(line).toContain(`"${word}"`);
-    }
-    // Exactly those, not a superset: a word TypeScript knows and Rust never
-    // writes is a branch nobody can reach and a sentence nobody will read.
-    expect([...line.matchAll(/"([a-z-]+)"/g)].map((m) => m[1]).sort()).toEqual([...rust].sort());
-
-    // And the field it arrives in, on both sides. It is `follow_up` on the
-    // wire — snake_case like `job_id` — and it is nullable, because all but
-    // one package declares no follow-up at all.
-    expect(COMMAND).toMatch(/pub follow_up: Option<FollowUpOutcome>,/);
-    expect(WRAPPER).toContain("follow_up: FollowUpOutcome | null;");
-  });
-
   it("names the same event as the Rust", () => {
     const declared = COMMAND.match(/AMIGA_INSTALL_EVENT: &str = "([^"]+)"/);
     expect(declared?.[1]).toBe(AMIGA_INSTALL_EVENT);
@@ -128,10 +86,16 @@ describe("the four endings reach the frontend", () => {
     // required here too. Without the archive the installer is on no mounted
     // volume and the run reports that it said no about a program that never
     // started, which is the whole of ART-185.
-    expect(COMMAND).toMatch(/pub package_archives: Vec<PathBuf>,/);
-    expect(COMMAND).not.toMatch(/#\[serde\(default\)\]\s*\r?\n\s*pub package_archives/);
-    expect(WRAPPER).toContain("packageArchives: string[];");
-    expect(WRAPPER).not.toContain("packageArchives?");
+    expect(COMMAND).toMatch(/pub package_archive: PathBuf,/);
+    expect(COMMAND).not.toMatch(/#\[serde\(default\)\]\s*\r?\n\s*pub package_archive/);
+    expect(WRAPPER).toContain("packageArchive: string;");
+    expect(WRAPPER).not.toContain("packageArchive?");
+    // **One archive, not a list** (2026-09-08). The second slot was the
+    // overlay medium ART-186's UAE fix needed, and it went with the emulator
+    // route for the two BoingBags. A `Vec` still declared on either side
+    // would be a field the screen could fill and the run could not use.
+    expect(COMMAND).not.toContain("package_archives");
+    expect(WRAPPER).not.toContain("packageArchives");
 
     // And the third volume the run mounts is named on both sides, because
     // the user will see it on the Workbench (design §4).
@@ -163,18 +127,15 @@ import {
   amigaInstallArchiveKey,
   archiveFieldBlockerPhrase,
   dedupeBlockers,
-  followUpPhrase,
   outcomeNextStepPhrase,
   outcomePhrase,
   outcomeTone,
-  overlayAdvicePhrase,
   parseClassification,
   readinessBlockers,
   settlementPhrase,
   waitedSeconds,
   type AmigaInstallPreview,
   type ArchiveClassification,
-  type FollowUpOutcome,
   type RunOutcome,
   type SettlementReport,
 } from "@/lib/amigainstall";
@@ -199,14 +160,9 @@ function preview(over: Partial<AmigaInstallPreview> = {}): AmigaInstallPreview {
     args: ["AmigaOS-Update", "DH0:"],
     workVolume: "ARTWork",
     packageVolume: "ARTPkg",
-    packageArchives: ["D:/amiga/pkg/BoingBag39-1.lha"],
-    packageArchivesPresent: true,
-    declaredOverlays: ["BoingBag3.9-1-UAE/BoingBag3.9-1"],
-    minimumInstallerVersion: "45.15",
+    packageArchive: "D:/amiga/pkg/BoingBag39-1.lha",
+    packageArchivePresent: true,
     packageDir: "BoingBag3.9-1",
-    medium: "E:/amiga/os39/AmigaOS39.iso",
-    mediumVolume: "AmigaOS3.9",
-    requiredMedium: "the original AmigaOS 3.9 CD-ROM",
     resultFile: "art-result.txt",
     deadlineSeconds: 1800,
     kickstart: "D:/roms/kick31.rom",
@@ -250,28 +206,6 @@ describe("the four endings stay four sentences", () => {
   });
 });
 
-describe("the follow-up's four words stay four sentences (ART-280)", () => {
-  const WORDS: FollowUpOutcome[] = ["ran", "not-needed", "failed", "not-checked"];
-
-  it("gives every word its own key, and none of them an ending's", () => {
-    const said = WORDS.map((w) => followUpPhrase(w).key);
-    expect(new Set(said).size).toBe(WORDS.length);
-    // No follow-up key may be one of the install's own endings. The whole
-    // point is that a follow-up saying no is not the installer saying no —
-    // reusing `outcome.failed` here would say it was.
-    const endings = new Set(ENDINGS.map((o) => outcomePhrase(o).key));
-    for (const key of said) {
-      expect(endings.has(key)).toBe(false);
-    }
-  });
-
-  it("keeps 'not needed' and 'could not check' apart", () => {
-    // Two states a careless reading collapses: "the tree already has it" and
-    // "ART could not find out". Only the second is worth acting on.
-    expect(followUpPhrase("not-needed").key).not.toBe(followUpPhrase("not-checked").key);
-  });
-});
-
 describe("where the tree and the copy are afterwards", () => {
   it("names the copy and says the original is untouched when a run did not succeed", () => {
     const kept: SettlementReport = {
@@ -298,30 +232,6 @@ describe("where the tree and the copy are afterwards", () => {
   });
 });
 
-describe("the second archive a BoingBag 1 run needs (ART-186)", () => {
-  it("names the archive to go and find when only the wrapper was chosen", () => {
-    const advice = overlayAdvicePhrase(preview());
-    expect(advice?.key).toBe("osinstall.amigaInstall.overlay.needed");
-    expect(advice?.params).toEqual({
-      version: "45.15",
-      overlays: "BoingBag3.9-1-UAE/BoingBag3.9-1",
-    });
-  });
-
-  it("says something different once that archive is there", () => {
-    const advice = overlayAdvicePhrase(
-      preview({ packageArchives: ["a.lha", "BoingBag39-1-UAE.lha"] })
-    );
-    expect(advice?.key).toBe("osinstall.amigaInstall.overlay.supplied");
-  });
-
-  it("invents no requirement for a package that declares none", () => {
-    expect(
-      overlayAdvicePhrase(preview({ minimumInstallerVersion: null, declaredOverlays: [] }))
-    ).toBeNull();
-  });
-});
-
 describe("what a previewed run still lacks", () => {
   it("says nothing when everything ART cannot supply is there", () => {
     expect(readinessBlockers(preview())).toEqual([]);
@@ -329,7 +239,7 @@ describe("what a previewed run still lacks", () => {
 
   it("names each missing thing separately rather than one 'not ready'", () => {
     const keys = readinessBlockers(
-      preview({ packageArchivesPresent: false, kickstartPresent: false, emulator: null })
+      preview({ packageArchivePresent: false, kickstartPresent: false, emulator: null })
     ).map((p) => p.key);
     expect(new Set(keys).size).toBe(3);
     expect(keys).toContain("osinstall.amigaInstall.blocker.noEmulator");
@@ -346,8 +256,8 @@ describe("what a previewed run still lacks", () => {
   /// the file was identified by its bytes.
   it("keeps an archive ART found apart from one the user chose, when it has gone", () => {
     const gone = preview({
-      packageArchivesPresent: false,
-      packageArchives: ["E:/material/BoingBag39-1.lha"],
+      packageArchivePresent: false,
+      packageArchive: "E:/material/BoingBag39-1.lha",
     });
 
     const [artsOwn] = readinessBlockers(gone, ["E:/material/BoingBag39-1.lha"]);
@@ -362,29 +272,7 @@ describe("what a previewed run still lacks", () => {
     expect(theirs.params).toEqual({ count: 1 });
   });
 
-  /// Which of two archives is gone is not knowable from `packageArchivesPresent`
-  /// — one boolean over all of them — so the plural sentence says "one of" and
-  /// lists them, and nothing here names a single file as *the* missing one.
-  it("does not claim which of several archives is the missing one", () => {
-    const [blocker] = readinessBlockers(
-      preview({
-        packageArchivesPresent: false,
-        packageArchives: ["E:/material/one.lha", "D:/pkg/two.lha"],
-      }),
-      ["E:/material/one.lha"]
-    );
-    expect(blocker.key).toBe("osinstall.amigaInstall.blocker.archiveMissingFound");
-    expect(blocker.params).toEqual({
-      count: 2,
-      path: "E:/material/one.lha, D:/pkg/two.lha",
-    });
-  });
 });
-
-// ---------------------------------------------------------------------------
-// ART-277: per-package remembered keys, and classifying an archive before
-// it ever reaches a request.
-// ---------------------------------------------------------------------------
 
 describe("amigaInstallArchiveKey", () => {
   it("scopes the key by package once one is chosen", () => {
@@ -410,7 +298,7 @@ function classification(
   kind: ArchiveClassification["kind"],
   over: Partial<ArchiveClassification> = {}
 ): ArchiveClassification {
-  return { kind, topLevel: [], expectedMedia: null, expectedOverlays: [], sharedBy: [], ...over };
+  return { kind, topLevel: [], expectedMedia: null, sharedBy: [], ...over };
 }
 
 describe("parseClassification", () => {
@@ -419,12 +307,6 @@ describe("parseClassification", () => {
       kind: "another-package",
       id: "boingbag-39-2",
     });
-  });
-
-  it("reads the id out of an another-packages-update-archive classification", () => {
-    expect(
-      parseClassification(classification("another-packages-update-archive:boingbag-39-1"))
-    ).toEqual({ kind: "another-packages-update-archive", id: "boingbag-39-1" });
   });
 
   it("reads the media out of an other-artefact classification", () => {
@@ -441,11 +323,8 @@ describe("parseClassification", () => {
     });
   });
 
-  it("passes the three plain kinds through unchanged, and null through null", () => {
+  it("passes the two plain kinds through unchanged, and null through null", () => {
     expect(parseClassification(classification("the-package"))).toEqual({ kind: "the-package" });
-    expect(parseClassification(classification("the-update-archive"))).toEqual({
-      kind: "the-update-archive",
-    });
     expect(parseClassification(classification("unknown"))).toEqual({ kind: "unknown" });
     expect(parseClassification(null)).toBeNull();
   });
@@ -453,47 +332,12 @@ describe("parseClassification", () => {
 
 describe("archiveFieldBlockerPhrase", () => {
   const otherName = (id: string) => (id === "boingbag-39-2" ? "BoingBag 3.9-2" : id);
-  // The real labels the two `Field`s render — not stand-ins — so the
-  // "belongs in ..." assertions below prove the phrase actually carries the
-  // label a reader would see on screen (ART-277 re-review).
-  const labels = {
-    package: "The package's own archive",
-    overlay: "The package's update archive (only if it needs one)",
-  };
 
   it("names both packages when the archive is recognisably another release package's own", () => {
     const c = classification("another-package:boingbag-39-2");
-    const phrase = archiveFieldBlockerPhrase(
-      c,
-      "package",
-      "D:/pkg/x.lha",
-      "BoingBag 3.9-1",
-      otherName,
-      labels
-    );
+    const phrase = archiveFieldBlockerPhrase(c, "D:/pkg/x.lha", "BoingBag 3.9-1", otherName);
     expect(phrase).toEqual({
       key: "osinstall.amigaInstall.classify.anotherPackage",
-      params: { other: "BoingBag 3.9-2", selected: "BoingBag 3.9-1" },
-    });
-    // And the same regardless of which field it sits in — a wrong package is
-    // wrong wherever it was put.
-    expect(
-      archiveFieldBlockerPhrase(c, "overlay", "D:/pkg/x.lha", "BoingBag 3.9-1", otherName, labels)
-    ).toEqual(phrase);
-  });
-
-  it("says it is that package's own update archive, not its own archive", () => {
-    const c = classification("another-packages-update-archive:boingbag-39-2");
-    const phrase = archiveFieldBlockerPhrase(
-      c,
-      "overlay",
-      "D:/pkg/x.lha",
-      "BoingBag 3.9-1",
-      otherName,
-      labels
-    );
-    expect(phrase).toEqual({
-      key: "osinstall.amigaInstall.classify.anotherPackagesUpdateArchive",
       params: { other: "BoingBag 3.9-2", selected: "BoingBag 3.9-1" },
     });
   });
@@ -509,11 +353,9 @@ describe("archiveFieldBlockerPhrase", () => {
       id === "locale-39" ? "Locale 3.9" : id === "locale-39-turkish" ? "Türkçe Locale 3.9" : id;
     const phrase = archiveFieldBlockerPhrase(
       c,
-      "package",
       "D:/pkg/Locale3.9.lha",
       "BoingBag 3.9-1",
-      otherPackageName,
-      labels
+      otherPackageName
     );
     expect(phrase).toEqual({
       key: "osinstall.amigaInstall.classify.sharedArtefact",
@@ -529,11 +371,9 @@ describe("archiveFieldBlockerPhrase", () => {
     const c = classification("other-artefact:Locale3.9", { expectedMedia: "BoingBag3.9-1" });
     const phrase = archiveFieldBlockerPhrase(
       c,
-      "package",
       "D:/pkg/Locale3.9.lha",
       "BoingBag 3.9-1",
-      otherName,
-      labels
+      otherName
     );
     expect(phrase).toEqual({
       key: "osinstall.amigaInstall.classify.otherArtefact",
@@ -547,16 +387,14 @@ describe("archiveFieldBlockerPhrase", () => {
   });
 
   it("falls back to a generic sentence when the field expects nothing in particular", () => {
-    // The overlay field, for a selected package that declares no overlay at
-    // all — `expectedOverlays` is empty, so there is nothing to name.
-    const c = classification("other-artefact:Locale3.9", { expectedOverlays: [] });
+    // A selected id this release does not ship, so `expectedMedia` is null
+    // and there is nothing to name.
+    const c = classification("other-artefact:Locale3.9", { expectedMedia: null });
     const phrase = archiveFieldBlockerPhrase(
       c,
-      "overlay",
       "D:/pkg/Locale3.9.lha",
       "BoingBag 3.9-2",
-      otherName,
-      labels
+      otherName
     );
     expect(phrase).toEqual({
       key: "osinstall.amigaInstall.classify.otherArtefactGeneric",
@@ -564,75 +402,25 @@ describe("archiveFieldBlockerPhrase", () => {
     });
   });
 
-  it("names the update archive's own field, not by direction, when it is in the package field", () => {
-    const phrase = archiveFieldBlockerPhrase(
-      classification("the-update-archive"),
-      "package",
-      "D:/pkg/x.lha",
-      "BoingBag 3.9-1",
-      otherName,
-      labels
-    );
-    expect(phrase?.key).toBe("osinstall.amigaInstall.classify.wrongFieldOverlay");
-    // ART-277 re-review's own finding: the old wording said "the second
-    // field below", which is spatially backwards once this renders in the
-    // `blockers` box below both fields. The label must be carried, not a
-    // direction — asserted on the params a `t()` call actually reads.
-    expect(phrase?.params).toEqual({
-      packageLabel: labels.package,
-      overlayLabel: labels.overlay,
-    });
-  });
-
-  it("names the package's own field, not by direction, when its archive is in the overlay field", () => {
-    const phrase = archiveFieldBlockerPhrase(
-      classification("the-package"),
-      "overlay",
-      "D:/pkg/x.lha",
-      "BoingBag 3.9-1",
-      otherName,
-      labels
-    );
-    expect(phrase?.key).toBe("osinstall.amigaInstall.classify.wrongFieldPackage");
-    expect(phrase?.params).toEqual({
-      packageLabel: labels.package,
-      overlayLabel: labels.overlay,
-    });
-  });
-
-  it("says nothing for the right archive in the right field, or an unrecognised one", () => {
+  it("says nothing for the right archive, or an unrecognised one", () => {
     expect(
       archiveFieldBlockerPhrase(
         classification("the-package"),
-        "package",
         "D:/pkg/x.lha",
         "BoingBag 3.9-1",
-        otherName,
-        labels
-      )
-    ).toBeNull();
-    expect(
-      archiveFieldBlockerPhrase(
-        classification("the-update-archive"),
-        "overlay",
-        "D:/pkg/x.lha",
-        "BoingBag 3.9-1",
-        otherName,
-        labels
+        otherName
       )
     ).toBeNull();
     expect(
       archiveFieldBlockerPhrase(
         classification("unknown"),
-        "package",
         "D:/pkg/x.lha",
         "BoingBag 3.9-1",
-        otherName,
-        labels
+        otherName
       )
     ).toBeNull();
     expect(
-      archiveFieldBlockerPhrase(null, "package", "D:/pkg/x.lha", "BoingBag 3.9-1", otherName, labels)
+      archiveFieldBlockerPhrase(null, "D:/pkg/x.lha", "BoingBag 3.9-1", otherName)
     ).toBeNull();
   });
 });
