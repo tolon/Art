@@ -185,12 +185,27 @@ export interface AmigaInstallPreview {
   profileName: string;
 }
 
+/**
+ * What a package's version-gated follow-up did (ART-280).
+ *
+ * BoingBag 3.9-2 carries a second payload, `XAD-Update`, that its own
+ * `Updater` applies when `Libs/xadmaster.library` is older than 10. Four
+ * words because they mean four things: `not-needed` is not a failure, and
+ * `not-checked` — the tree has no `C/Version`, so ART could not ask — is not
+ * the same as either.
+ */
+export type FollowUpOutcome = "ran" | "not-needed" | "failed" | "not-checked";
+
 /** A finished run's own answer. `job_id` is snake_case to match every other
- *  job result in ART. */
+ *  job result in ART; `follow_up` matches its Rust field for the same reason. */
 export interface AmigaInstallResult {
   job_id: number;
   outcome: RunOutcome;
   settlement: SettlementReport;
+  /** `null` when the package declares no follow-up, which is all but one.
+   *  **Beside the ending, never inside it**: a follow-up that said no is not
+   *  the installer saying no. */
+  follow_up: FollowUpOutcome | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -433,6 +448,29 @@ export function outcomeNextStepPhrase(outcome: RunOutcome): Phrase {
       return { key: "osinstall.amigaInstall.next.timedOut" };
     case "emulator-closed":
       return { key: "osinstall.amigaInstall.next.emulatorClosed" };
+  }
+}
+
+/**
+ * What the package's follow-up did, in one sentence — one key per word, and
+ * **none of them says the install failed** (ART-280).
+ *
+ * It sits beside the ending rather than replacing it, because the two are
+ * different facts: the installer's own verdict is `outcomePhrase`, and this
+ * is what the package went on to do afterwards. `notNeeded` in particular
+ * must not read as a problem — it means the tree already carries that
+ * version, which is the ordinary case on a tree that has been updated before.
+ */
+export function followUpPhrase(followUp: FollowUpOutcome): Phrase {
+  switch (followUp) {
+    case "ran":
+      return { key: "osinstall.amigaInstall.followUp.ran" };
+    case "not-needed":
+      return { key: "osinstall.amigaInstall.followUp.notNeeded" };
+    case "failed":
+      return { key: "osinstall.amigaInstall.followUp.failed" };
+    case "not-checked":
+      return { key: "osinstall.amigaInstall.followUp.notChecked" };
   }
 }
 

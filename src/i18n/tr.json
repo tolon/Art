@@ -2670,6 +2670,12 @@
         "timedOut": "Kimse yanıt vermedi. Kurucu {{seconds}} saniye sonra hâlâ bekliyordu, bu yüzden ART başlattığı emülatörü sonlandırdı.",
         "emulatorClosed": "Emülatör penceresi {{seconds}} saniye sonra, kurucu daha hiçbir şey bildirmeden kapatıldı."
       },
+      "followUp": {
+        "ran": "Paket ikinci güncellemesini de uyguladı; ağaçta henüz yoktu.",
+        "notNeeded": "Paketin ikinci güncellemesi gerekmedi — bu ağaç o sürümü zaten taşıyor.",
+        "failed": "Paketin ikinci güncellemesi çalıştı ve hayır dedi. Kurulumun kendisi başarılı; yalnızca bu ek bölüm olmadı.",
+        "notChecked": "ART paketin ikinci güncellemesinin gerekip gerekmediğini anlayamadı — bu ağaçta C/Version yok — bu yüzden çalıştırılmadı."
+      },
       "next": {
         "succeeded": "Ağacı açın ve çalışan sisteme ne olduğunu sorun — ekrandaki bir telif satırını değil, sistemin kendisi hakkında söylediği sürümü.",
         "failed": "Kopyanın içine bakın: kurucunun yazdığı her şey orada ve neden reddettiğini söyleyen şey onun kendi iletileri.",

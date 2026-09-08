@@ -813,7 +813,7 @@ describe("the four endings stay four sentences on screen", () => {
         ending.kind === "succeeded"
           ? ({ kind: "promoted", tree: "D:/amiga/os39", leftBehind: null } as const)
           : ({ kind: "kept", copy: "D:/amiga/os39.art-run", original: "D:/amiga/os39" } as const);
-      deliver!({ job_id: 7, outcome: ending, settlement });
+      deliver!({ job_id: 7, outcome: ending, settlement, follow_up: null });
 
       const outcome = await screen.findByTestId("amiga-install-outcome");
       expect(outcome.textContent).toBe(SAID[ending.kind]);
@@ -836,12 +836,51 @@ describe("the four endings stay four sentences on screen", () => {
     });
   }
 
+  // ART-280: the package's own second step, beside the ending and never
+  // instead of it.
+  it("says what the package's follow-up did, on its own line, without touching the ending", async () => {
+    const WORDS = ["ran", "not-needed", "failed", "not-checked"] as const;
+    const said = new Set<string>();
+    for (const word of WORDS) {
+      await runToConfirmation();
+      deliver!({
+        job_id: 7,
+        outcome: { kind: "succeeded" },
+        settlement: { kind: "promoted", tree: "D:/amiga/os39", leftBehind: null },
+        follow_up: word,
+      });
+      const line = await screen.findByTestId("amiga-install-follow-up");
+      said.add(line.textContent ?? "");
+      // The ending is the installer's own verdict and the follow-up is not
+      // part of it — including for `failed`, which is the row that would go
+      // wrong first.
+      expect(screen.getByTestId("amiga-install-outcome").textContent).toBe(SAID.succeeded);
+      cleanup();
+    }
+    expect(said.size).toBe(WORDS.length);
+    // And the one that must not read as a problem.
+    expect([...said]).toContain(i18n.t("osinstall.amigaInstall.followUp.notNeeded"));
+  });
+
+  it("says nothing at all about a follow-up when the package declares none", async () => {
+    await runToConfirmation();
+    deliver!({
+      job_id: 7,
+      outcome: { kind: "succeeded" },
+      settlement: { kind: "promoted", tree: "D:/amiga/os39", leftBehind: null },
+      follow_up: null,
+    });
+    await screen.findByTestId("amiga-install-outcome");
+    expect(screen.queryByTestId("amiga-install-follow-up")).toBeNull();
+  });
+
   it("gives the four endings four different next steps", async () => {
     const steps = new Set<string>();
     for (const ending of ENDINGS) {
       await runToConfirmation();
       deliver!({
         job_id: 7,
+        follow_up: null,
         outcome: ending,
         settlement: { kind: "kept", copy: "D:/c", original: "D:/o" },
       });
@@ -864,6 +903,7 @@ describe("where the copy is", () => {
       await runToConfirmation();
       deliver!({
         job_id: 7,
+        follow_up: null,
         outcome: ending,
         settlement: { kind: "kept", copy: "D:/amiga/os39.art-run", original: "D:/amiga/os39" },
       });
@@ -878,6 +918,7 @@ describe("where the copy is", () => {
     await runToConfirmation();
     deliver!({
       job_id: 7,
+      follow_up: null,
       outcome: { kind: "succeeded" },
       settlement: { kind: "promoted", tree: "D:/amiga/os39", leftBehind: "D:/amiga/os39.art-old" },
     });
@@ -2186,6 +2227,7 @@ describe("the chain", () => {
     await act(async () => {
       deliver!({
         job_id: 7,
+        follow_up: null,
         outcome: { kind: "succeeded" },
         settlement: { kind: "promoted", tree: "D:/amiga/os39", leftBehind: null },
       });
@@ -2393,6 +2435,7 @@ describe("the chain", () => {
     await act(async () => {
       deliver!({
         job_id: 7,
+        follow_up: null,
         outcome: { kind: "succeeded" },
         settlement: { kind: "promoted", tree: "D:/amiga/os39", leftBehind: null },
       });
@@ -2469,6 +2512,7 @@ describe("the chain", () => {
     await act(async () => {
       deliver!({
         job_id: 7,
+        follow_up: null,
         outcome: { kind: "failed" },
         settlement: { kind: "kept", copy: "D:/amiga/os39.art-run", original: "D:/amiga/os39" },
       });

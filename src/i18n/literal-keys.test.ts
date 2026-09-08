@@ -594,6 +594,12 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // through `sentenceFor` too — F6, which substitutes one catalogue phrase
     // for another when the material list is empty — but they were already
     // dynamic call sites and the count does not move for them.
-    expect(dynamicCalls).toBe(176);
+    // 176 -> 177 (round 3 task 3, fix round 1: ART-280). One, and it is the
+    // same rule again: `followUpPhrase` in `@/lib/amigainstall` turns the
+    // word the Amiga wrote — `ran` / `not-needed` / `failed` / `not-checked`
+    // — into the key, and the panel only renders it. Four words that must
+    // never collapse: "not needed" is not a failure, and "ART could not
+    // check" is neither. `amigainstall.test.ts` enumerates all four.
+    expect(dynamicCalls).toBe(177);
   });
 });

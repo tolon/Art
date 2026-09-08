@@ -442,6 +442,24 @@ pub struct AmigaInstaller {
     /// appending AmigaDOS lines to the boot script.
     #[serde(default)]
     pub post_install: Vec<crate::core::amigainstall::finish::PostStep>,
+    /// A second, version-gated invocation of this same installer, in the
+    /// **same boot** (ART-280).
+    ///
+    /// Distinct from [`post_install`](Self::post_install) in kind, not only in
+    /// degree: a `PostStep` is a host file operation on the staged copy, and
+    /// this is the package's own program running again on the Amiga — the only
+    /// thing that can, because the second payload is ZipCrypto too and ART
+    /// writes no bypass (ART-166).
+    ///
+    /// Measured before it was declared, and taken from the one distribution
+    /// builder whose source can be read: `Libs/xadmaster.library` reads 9.0 on
+    /// a clean AmigaOS 3.9 tree, 9.1 after BoingBag 1 and **9.1 still** after
+    /// BoingBag 2 (2026-09-08, every file of every state hashed), and HstWB
+    /// Installer's `Install-Boing-Bag-2` lines 32-36 gate exactly this
+    /// invocation on `Version … 10 FILE`. See
+    /// [`crate::core::amigainstall::FollowUp`].
+    #[serde(default)]
+    pub follow_ups: Vec<crate::core::amigainstall::FollowUp>,
     /// `Some` when this declaration is written down but **nobody has run
     /// it** — the sentence says what has not been measured yet.
     ///
@@ -781,6 +799,65 @@ fn validate_installer(package: &Package) -> CoreResult<()> {
                 detail: format!(
                     "'{}': the installer's minimum_version '{minimum}' is not a version and a \
                      revision — AmigaOS writes one as '45.15'",
+                    package.id
+                ),
+            });
+        }
+    }
+    // A follow-up reaches the same generated AmigaDOS script as the
+    // invocation above, so every one of its fields goes through the same two
+    // gates — a path inside the package, and no shell metacharacter. The gate
+    // file is checked as a path too: it is joined to the system volume by the
+    // script, so `../` in it would reach outside the tree exactly as it would
+    // anywhere else ART turns a recipe name into a path.
+    for follow_up in &installer.follow_ups {
+        if follow_up.program.contains(':') {
+            return Err(CoreError::Malformed {
+                format: "package".into(),
+                detail: format!(
+                    "'{}': the follow-up path '{}' names a volume; it must be a path inside \
+                     the package, and the volume it is reached under is ART's to decide",
+                    package.id, follow_up.program
+                ),
+            });
+        }
+        validate_path(
+            "package",
+            &package.id,
+            "amiga_installer.follow_ups[].program",
+            &follow_up.program,
+            false,
+        )?;
+        refuse_shell_metacharacters("follow-up path", &follow_up.program)?;
+        for arg in &follow_up.args {
+            if arg.trim().is_empty() {
+                return Err(CoreError::Malformed {
+                    format: "package".into(),
+                    detail: format!("'{}': a follow-up argument is empty", package.id),
+                });
+            }
+            refuse_shell_metacharacters("follow-up argument", arg)?;
+        }
+        validate_path(
+            "package",
+            &package.id,
+            "amiga_installer.follow_ups[].unless_file_version_at_least.path",
+            &follow_up.unless_file_version_at_least.path,
+            false,
+        )?;
+        refuse_shell_metacharacters(
+            "follow-up version gate",
+            &follow_up.unless_file_version_at_least.path,
+        )?;
+        // Zero would make the gate always closed — `Version … 0 FILE` never
+        // warns — so a follow-up declared with it could never run, which is
+        // the same shape as declaring nothing while looking like something.
+        if follow_up.unless_file_version_at_least.version == 0 {
+            return Err(CoreError::Malformed {
+                format: "package".into(),
+                detail: format!(
+                    "'{}': a follow-up's version gate of 0 can never open; declare the version \
+                     the file has to already state, or drop the follow-up",
                     package.id
                 ),
             });
@@ -1861,6 +1938,7 @@ mod tests {
             minimum_version: None,
             overlays: Vec::new(),
             required_medium: None,
+            follow_ups: Vec::new(),
             post_install: Vec::new(),
             not_yet_runnable: None,
         };
@@ -2745,6 +2823,72 @@ mod tests {
             assert_eq!(
                 steps, 0,
                 "'{}' declares post-install steps nobody has measured a need for",
+                package.id
+            );
+        }
+    }
+
+    /// **ART-280: the one follow-up ART ships, asserted whole.**
+    ///
+    /// Same shape and same reason as the `post_install` pin above: the list
+    /// is the measurement, so a second follow-up cannot arrive without
+    /// meeting this test and, through it, the requirement that somebody
+    /// measured the need. What was measured here (2026-09-08, a chain ART
+    /// produced itself, every file of every state hashed):
+    /// `Libs/xadmaster.library` reads `9.0` clean, `9.1` after BoingBag 1 and
+    /// **`9.1` still** after BoingBag 2 — below the `10` HstWB's own
+    /// `Install-Boing-Bag-2` gates on.
+    ///
+    /// The values are written out as literals rather than read back off the
+    /// recipe, because a test that builds its expectation from the file it
+    /// checks proves only that the file equals itself.
+    #[test]
+    fn boingbag_two_declares_the_xad_follow_up_and_nothing_else_declares_one_art_280() {
+        use crate::core::amigainstall::{FileVersionGate, FollowUp};
+
+        let packages = packages().expect("the shipped packages must parse");
+        let follow_ups_of = |id: &str| {
+            packages
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap_or_else(|| panic!("no shipped package '{id}'"))
+                .amiga_installer
+                .as_ref()
+                .map(|i| i.follow_ups.clone())
+                .unwrap_or_default()
+        };
+
+        assert_eq!(
+            follow_ups_of("boingbag-39-2"),
+            vec![FollowUp {
+                program: "C/Updater".into(),
+                args: vec!["XAD-Update".into()],
+                unless_file_version_at_least: FileVersionGate {
+                    path: "Libs/xadmaster.library".into(),
+                    version: 10,
+                },
+            }],
+            "the second payload the first invocation never applies"
+        );
+
+        // The target volume is a fact about the run, not about the package —
+        // the same rule `amiga_installer.args` follows — so it must not be
+        // written here. `compose` appends it.
+        assert!(
+            !follow_ups_of("boingbag-39-2")[0]
+                .args
+                .iter()
+                .any(|a| a.contains(':')),
+            "a recipe may not name the volume; that is the composer's"
+        );
+
+        for package in &packages {
+            if package.id == "boingbag-39-2" {
+                continue;
+            }
+            assert!(
+                follow_ups_of(&package.id).is_empty(),
+                "'{}' declares a follow-up nobody has measured a need for",
                 package.id
             );
         }

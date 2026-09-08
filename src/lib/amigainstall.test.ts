@@ -88,6 +88,33 @@ describe("the four endings reach the frontend", () => {
     expect(WRAPPER).toContain("packageArchivesPresent: boolean;");
   });
 
+  /**
+   * **ART-280.** A follow-up's word is a second Rust enum on the same wire,
+   * so it needs the same parity check the endings have: a fifth word added
+   * in Rust and not here would fall through every branch `followUpPhrase`
+   * knows, and the screen would say nothing about something that happened.
+   */
+  it("declares every FollowUpOutcome the Rust has, spelled the same way", () => {
+    const rust = variants(enumBody(CORE, "FollowUpOutcome")).map(kebab);
+    expect(rust).toEqual(["ran", "not-needed", "failed", "not-checked"]);
+
+    const start = WRAPPER.indexOf("export type FollowUpOutcome");
+    expect(start, "the TypeScript union must exist").toBeGreaterThan(-1);
+    const line = WRAPPER.slice(start, WRAPPER.indexOf(";", start));
+    for (const word of rust) {
+      expect(line).toContain(`"${word}"`);
+    }
+    // Exactly those, not a superset: a word TypeScript knows and Rust never
+    // writes is a branch nobody can reach and a sentence nobody will read.
+    expect([...line.matchAll(/"([a-z-]+)"/g)].map((m) => m[1]).sort()).toEqual([...rust].sort());
+
+    // And the field it arrives in, on both sides. It is `follow_up` on the
+    // wire — snake_case like `job_id` — and it is nullable, because all but
+    // one package declares no follow-up at all.
+    expect(COMMAND).toMatch(/pub follow_up: Option<FollowUpOutcome>,/);
+    expect(WRAPPER).toContain("follow_up: FollowUpOutcome | null;");
+  });
+
   it("names the same event as the Rust", () => {
     const declared = COMMAND.match(/AMIGA_INSTALL_EVENT: &str = "([^"]+)"/);
     expect(declared?.[1]).toBe(AMIGA_INSTALL_EVENT);
@@ -136,6 +163,7 @@ import {
   amigaInstallArchiveKey,
   archiveFieldBlockerPhrase,
   dedupeBlockers,
+  followUpPhrase,
   outcomeNextStepPhrase,
   outcomePhrase,
   outcomeTone,
@@ -146,6 +174,7 @@ import {
   waitedSeconds,
   type AmigaInstallPreview,
   type ArchiveClassification,
+  type FollowUpOutcome,
   type RunOutcome,
   type SettlementReport,
 } from "@/lib/amigainstall";
@@ -218,6 +247,28 @@ describe("the four endings stay four sentences", () => {
     expect(timedOut.params).toEqual({ seconds: 1800 });
     // Sub-second nanos still round to a whole second rather than printing 0.
     expect(waitedSeconds({ secs: 0, nanos: 900_000_000 })).toBe(1);
+  });
+});
+
+describe("the follow-up's four words stay four sentences (ART-280)", () => {
+  const WORDS: FollowUpOutcome[] = ["ran", "not-needed", "failed", "not-checked"];
+
+  it("gives every word its own key, and none of them an ending's", () => {
+    const said = WORDS.map((w) => followUpPhrase(w).key);
+    expect(new Set(said).size).toBe(WORDS.length);
+    // No follow-up key may be one of the install's own endings. The whole
+    // point is that a follow-up saying no is not the installer saying no —
+    // reusing `outcome.failed` here would say it was.
+    const endings = new Set(ENDINGS.map((o) => outcomePhrase(o).key));
+    for (const key of said) {
+      expect(endings.has(key)).toBe(false);
+    }
+  });
+
+  it("keeps 'not needed' and 'could not check' apart", () => {
+    // Two states a careless reading collapses: "the tree already has it" and
+    // "ART could not find out". Only the second is worth acting on.
+    expect(followUpPhrase("not-needed").key).not.toBe(followUpPhrase("not-checked").key);
   });
 });
 

@@ -2670,6 +2670,12 @@
         "timedOut": "Nobody answered. The installer was still waiting {{seconds}} seconds in, so ART ended the emulator it had started.",
         "emulatorClosed": "The emulator window was closed {{seconds}} seconds in, before the installer had reported anything."
       },
+      "followUp": {
+        "ran": "The package also applied its second update, which the tree did not have yet.",
+        "notNeeded": "The package's second update was not needed — this tree already carries that version.",
+        "failed": "The package's second update ran and said no. The install itself worked; only that extra part did not.",
+        "notChecked": "ART could not tell whether the package's second update was needed — this tree has no C/Version — so it was not run."
+      },
       "next": {
         "succeeded": "Boot the tree and ask the running system what it is — the version it states about itself, not a copyright line on a screen.",
         "failed": "Look inside the copy: whatever the installer wrote is there, and its own messages are what say why it refused.",

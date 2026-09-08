@@ -120,6 +120,70 @@
         "replacement": "Devs/AmigaOS ROM Update.BB39-2"
       }
     ],
+    "_why_follow_ups": [
+      "ART-280, and it was measured before it was declared. On a chain ART",
+      "itself produced (clean AmigaOS 3.9 tree -> BoingBag 1 -> BoingBag 2,",
+      "every file of every state hashed, 2026-09-08) `Libs/xadmaster.library`",
+      "reads `xadmaster 9.0 (25.11.2000)` clean, `9.1 (05.01.2001)` after",
+      "BoingBag 1 - whose payload carries that 105 368-byte build - and",
+      "**9.1 still** after BoingBag 2. So this package's second payload was",
+      "never applied, and 9.1 is below the 10 the gate names.",
+      "",
+      "What it applies: `BoingBag3.9-2/XAD-Update` is a second ZipCrypto",
+      "archive inside the same wrapper, 152 837 bytes, 39 entries, every one",
+      "encrypted - `Libs/xadmaster.library` at 110 100 bytes, 26 `Libs/xad/*`",
+      "clients and 10 `C/` tools. Nothing here decrypts it: the package's own",
+      "`Updater` does, on the Amiga, exactly as it does for `AmigaOS-Update`",
+      "(ART-166, and the owner's recorded ruling that ART writes no bypass).",
+      "",
+      "The shape is HstWB Installer's, read from its own source rather than",
+      "reasoned about - the one distribution builder whose scripts can be",
+      "read (MIT), `amiga/amiga-os-3.9/S/Amiga-OS-3.9/Install-Boing-Bag-2`",
+      "lines 32-36:",
+      "",
+      "  ; run xad updater, if xadmaster.library version is less than 10",
+      "  Version >>SYS:hstwb-installer.log \"SYS:Libs/xadmaster.library\" 10 FILE",
+      "  IF WARN",
+      "    SYS:T/BoingBags/BoingBag3.9-2/C/Updater SYS:T/BoingBags/BoingBag3.9-2/XAD-Update \"SYS:\"",
+      "  ENDIF",
+      "",
+      "Two things this is NOT, both of which an earlier round got wrong and",
+      "which are corrected here rather than left standing (2026-09-08):",
+      "",
+      "  1. NOT a second emulator run. HstWB does it in the same boot, four",
+      "     lines after the first invocation, and so does ART - it is more",
+      "     lines in the one script `workvol::startup_sequence` already",
+      "     writes, not another ~140 s cycle.",
+      "  2. NOT behind a requester. The `#install-xad-update` requester lives",
+      "     in this package's own `Install` script, and ART does not run that",
+      "     script: it runs `C/Updater` directly. Nobody is asked anything by",
+      "     the program ART actually launches.",
+      "",
+      "`program` and `args` are relative to this package's drawer, exactly",
+      "like `amiga_installer.program` above; the target volume is appended by",
+      "the composer because it is a fact about the run. The gate's `path` is",
+      "relative to the **system** volume, and the script prefixes it.",
+      "",
+      "One trap, recorded because it is the reason this is a designed change",
+      "and not a one-line append: `Version ... FILE` signals `older than",
+      "that` by SETTING WARN - it is the answer, not an error - so a gate",
+      "emitted above the script's own `If Warn` would overwrite the",
+      "installer's verdict with the gate's, and every successful run on a",
+      "tree with an old `xadmaster` would be reported as `the installer said",
+      "no`. The follow-up block is emitted strictly below the result capture."
+    ],
+    "follow_ups": [
+      {
+        "program": "C/Updater",
+        "args": [
+          "XAD-Update"
+        ],
+        "unless_file_version_at_least": {
+          "path": "Libs/xadmaster.library",
+          "version": 10
+        }
+      }
+    ],
     "program": "C/Updater",
     "args": [
       "AmigaOS-Update"

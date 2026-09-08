@@ -100,7 +100,8 @@ use crate::core::amigainstall::finish;
 use crate::core::amigainstall::run::{run_with, RealClock, RunLimits, RunRequest};
 use crate::core::amigainstall::stage::{settle, stage_with, Settlement};
 use crate::core::amigainstall::{
-    packagevol, workvol, PlannedRun, RunOutcome, PACKAGE_VOLUME, RESULT_FILE, WORK_VOLUME,
+    packagevol, workvol, FollowUp, FollowUpOutcome, PlannedRun, RunOutcome, PACKAGE_VOLUME,
+    RESULT_FILE, WORK_VOLUME,
 };
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::iso::IsoImage;
@@ -342,6 +343,14 @@ pub struct AmigaInstallResult {
     /// Which of the four endings it was. Mirrored exactly in TypeScript.
     pub outcome: RunOutcome,
     pub settlement: SettlementReport,
+    /// What the package's version-gated follow-up did, or `None` when it
+    /// declared none (ART-280).
+    ///
+    /// **Beside the ending, never folded into it.** A follow-up that said no
+    /// is not the installer saying no, and a screen that showed one as the
+    /// other would be collapsing two endings into one sentence — the defect
+    /// `docs/lessons.md` opens with.
+    pub follow_up: Option<FollowUpOutcome>,
 }
 
 // ---------------------------------------------------------------------------
@@ -579,12 +588,35 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
     // it because it is a fact about the run.
     args.push(format!("{volume}:"));
 
+    // ART-280. A follow-up's `program` is relative to the package's drawer
+    // exactly as the first invocation's is, and its target volume is a fact
+    // about the run and not about the package — so both are composed here, by
+    // the same two lines, rather than written into the recipe. Its gate path
+    // is left alone: it is relative to the *system* volume, and
+    // `workvol::follow_up_lines` prefixes that itself.
+    let mut follow_ups = Vec::with_capacity(installer.follow_ups.len());
+    for declared in &installer.follow_ups {
+        let program = join_amigados(&location, declared.program.trim());
+        one_token("a follow-up's path", &program)?;
+        let mut args = declared.args.clone();
+        for arg in &args {
+            one_token("a follow-up's argument", arg)?;
+        }
+        args.push(format!("{volume}:"));
+        follow_ups.push(FollowUp {
+            program,
+            args,
+            unless_file_version_at_least: declared.unless_file_version_at_least.clone(),
+        });
+    }
+
     let plan = PlannedRun {
         package_id: package.id.clone(),
         system_volume: volume,
         program,
         args,
         working_directory: Some(location),
+        follow_ups,
     };
 
     workvol::startup_sequence(&plan)?;
@@ -1307,7 +1339,7 @@ fn install(
     emulator: &Path,
     scratch_root: &Path,
     sink: &dyn ProgressSink,
-) -> CoreResult<(RunOutcome, SettlementReport)> {
+) -> CoreResult<(RunOutcome, SettlementReport, Option<FollowUpOutcome>)> {
     let plan = &composed.plan;
     let work = Scratch::in_dir(scratch_root)?;
     workvol::build(work.path(), plan)?;
@@ -1376,7 +1408,7 @@ fn install(
     // process-spawning decision, and `core/amigainstall::run` may not make it
     // (ART-274) — it takes an `EmulatorLauncher` directly instead.
     let launcher = WinUaeLauncher::new(emulator, scratch_root);
-    perform(tree, &composed.post_install, sink, |copy, sink| {
+    let (outcome, settlement) = perform(tree, &composed.post_install, sink, |copy, sink| {
         let request = RunRequest {
             plan,
             work_volume_dir: work.path(),
@@ -1391,7 +1423,39 @@ fn install(
         let outcome = run_with(&request, &launcher, &RealClock::new(), sink)?;
         record_if_succeeded(copy, plan, &outcome)?;
         Ok(outcome)
-    })
+    })?;
+
+    // ART-280. Read **after** `perform`, while `work` is still alive — the
+    // scratch removes itself on `Drop`, so this is the last moment the word
+    // exists. Deliberately not folded into `RunOutcome`: a follow-up is the
+    // package doing a second thing, and the install's own ending is unchanged
+    // by it. Said out loud for the same reason a `PostStep` is: nothing else
+    // reports it.
+    let follow_up = workvol::read_follow_up(work.path());
+    if let Some(word) = follow_up {
+        sink.report(0, None, describe_follow_up(word));
+    }
+    Ok((outcome, settlement, follow_up))
+}
+
+/// One sentence per follow-up word, English like every other engine string
+/// (ART-060); the user's own sentence is the screen's.
+fn describe_follow_up(word: FollowUpOutcome) -> &'static str {
+    match word {
+        FollowUpOutcome::Ran => {
+            "The package's follow-up was needed and ran: its second payload is applied"
+        }
+        FollowUpOutcome::NotNeeded => {
+            "The package's follow-up was not needed — the tree already carries that version"
+        }
+        FollowUpOutcome::Failed => {
+            "The package's follow-up ran and said no; the install itself is unaffected"
+        }
+        FollowUpOutcome::NotChecked => {
+            "The tree has no C/Version, so ART could not check whether the package's \
+             follow-up was needed; it was not run"
+        }
+    }
 }
 
 /// ART-186's other half: a run that says it worked writes that into the
@@ -1558,7 +1622,7 @@ pub fn amiga_install_run(
                 .detail("Command", command_line)
                 .detail("Machine", profile.id.clone());
             let record = match &result {
-                Ok((outcome, settlement)) => {
+                Ok((outcome, settlement, _)) => {
                     let record = record.detail("Ending", ending_of(outcome));
                     let record = match settlement {
                         SettlementReport::Promoted { left_behind, .. } => match left_behind {
@@ -1584,13 +1648,14 @@ pub fn amiga_install_run(
             };
             write_to_path(&log_path, &record);
 
-            let (outcome, settlement) = result?;
+            let (outcome, settlement, follow_up) = result?;
             let _ = emit_app.emit(
                 AMIGA_INSTALL_EVENT,
                 AmigaInstallResult {
                     job_id,
                     outcome,
                     settlement,
+                    follow_up,
                 },
             );
             Ok(())
@@ -3240,6 +3305,130 @@ mod tests {
         );
     }
 
+    // -- ART-280: the follow-up, composed and reported ---------------------
+
+    /// **The composition, pinned against the shipped recipe.** The recipe
+    /// says `C/Updater` and `XAD-Update` and deliberately names no volume;
+    /// what turns that into a runnable line is this layer, exactly as it is
+    /// for the first invocation, and it is asserted here for the same reason.
+    ///
+    /// Both volumes appear and they are different ones: the program is on
+    /// `ARTPkg:`, where ART unpacked the wrapper, and the target is `DH0:`,
+    /// the tree being installed into (ART-185). The gate's path carries
+    /// **neither** — it is relative to the system volume and the script
+    /// prefixes it, so a colon here would mean the composer had reached a
+    /// field that is not its own.
+    #[test]
+    fn the_follow_up_is_composed_onto_both_volumes_and_the_gate_is_left_alone() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "follow-up-compose");
+        let tree = tree_with_manifest(&scratch, &["workbench-base", "boingbag-39-1"]);
+        let composed = compose(&request_for(&tree, "boingbag-39-2")).unwrap();
+
+        assert_eq!(composed.plan.follow_ups.len(), 1, "one, from the recipe");
+        let follow_up = &composed.plan.follow_ups[0];
+        assert_eq!(follow_up.program, "ARTPkg:BoingBag3.9-2/C/Updater");
+        assert_eq!(
+            follow_up.args,
+            vec!["XAD-Update".to_string(), "DH0:".into()]
+        );
+        assert_eq!(
+            follow_up.unless_file_version_at_least.path,
+            "Libs/xadmaster.library"
+        );
+        assert_eq!(follow_up.unless_file_version_at_least.version, 10);
+
+        // And the package that declares none composes none, so the assertion
+        // above is about this recipe rather than about every recipe.
+        let one = compose(&request(&tree)).unwrap();
+        assert!(one.plan.follow_ups.is_empty(), "BoingBag 1 declares none");
+    }
+
+    /// The word reaches the screen under the name the frontend reads, beside
+    /// the ending and never folded into it.
+    ///
+    /// Asserted on the serialized form because that is the contract: a
+    /// renamed field or a re-cased variant is invisible to Rust and breaks
+    /// `src/lib/amigainstall.ts` silently. `outcome` stays exactly what it
+    /// was — a follow-up that said no is **not** the installer saying no.
+    #[test]
+    fn the_follow_ups_word_travels_beside_the_ending_and_not_inside_it() {
+        for (word, wire) in [
+            (FollowUpOutcome::Ran, "\"ran\""),
+            (FollowUpOutcome::NotNeeded, "\"not-needed\""),
+            (FollowUpOutcome::Failed, "\"failed\""),
+            (FollowUpOutcome::NotChecked, "\"not-checked\""),
+        ] {
+            let json = serde_json::to_string(&AmigaInstallResult {
+                job_id: 7,
+                outcome: RunOutcome::Succeeded,
+                settlement: SettlementReport::Kept {
+                    copy: PathBuf::from("copy"),
+                    original: PathBuf::from("tree"),
+                },
+                follow_up: Some(word),
+            })
+            .unwrap();
+            assert!(
+                json.contains(&format!("\"follow_up\":{wire}")),
+                "for {word:?}: {json}"
+            );
+            assert!(
+                json.contains("\"kind\":\"succeeded\""),
+                "the ending is untouched by the follow-up: {json}"
+            );
+        }
+
+        let none = serde_json::to_string(&AmigaInstallResult {
+            job_id: 7,
+            outcome: RunOutcome::Succeeded,
+            settlement: SettlementReport::Kept {
+                copy: PathBuf::from("copy"),
+                original: PathBuf::from("tree"),
+            },
+            follow_up: None,
+        })
+        .unwrap();
+        assert!(none.contains("\"follow_up\":null"), "got {none}");
+    }
+
+    /// Four words, four sentences, and none of them says the install failed.
+    ///
+    /// `NotNeeded` is the row that matters: "the tree already carries that
+    /// version" is not a failure and must never read as one, which is the
+    /// whole reason it is a separate word rather than an absent file.
+    #[test]
+    fn every_follow_up_word_has_its_own_sentence() {
+        let said: Vec<&str> = [
+            FollowUpOutcome::Ran,
+            FollowUpOutcome::NotNeeded,
+            FollowUpOutcome::Failed,
+            FollowUpOutcome::NotChecked,
+        ]
+        .into_iter()
+        .map(describe_follow_up)
+        .collect();
+
+        let mut unique = said.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            said.len(),
+            "four distinct sentences: {said:?}"
+        );
+
+        assert!(
+            said[1].contains("not needed"),
+            "'not needed' must not read as a failure: {}",
+            said[1]
+        );
+        assert!(
+            said[2].contains("the install itself is unaffected"),
+            "a failed follow-up must not read as a failed install: {}",
+            said[2]
+        );
+    }
+
     /// A file that is not an archive at all — or is not there — answers
     /// `"unknown"` rather than an error: this is asked on every file pick,
     /// and a query must not turn "I could not tell" into something the user
@@ -3450,9 +3639,10 @@ mod real_install_hook {
         let elapsed = started.elapsed();
 
         match result {
-            Ok((outcome, settlement)) => {
+            Ok((outcome, settlement, follow_up)) => {
                 println!("outcome: {outcome:?}");
                 println!("settlement: {settlement:?}");
+                println!("follow-up: {follow_up:?}");
             }
             Err(err) => println!("ERROR after {elapsed:?}: {err}"),
         }

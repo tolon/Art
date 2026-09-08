@@ -114,6 +114,7 @@ import {
   archiveFieldBlockerPhrase,
   dedupeBlockers,
   onAmigaInstallResult,
+  followUpPhrase,
   outcomeNextStepPhrase,
   outcomePhrase,
   outcomeTone,
@@ -1505,6 +1506,10 @@ export function AmigaInstallPanel({
   const outcome = result ? outcomePhrase(result.outcome) : null;
   const nextStep = result ? outcomeNextStepPhrase(result.outcome) : null;
   const settlement = result ? settlementPhrase(result.settlement) : null;
+  // ART-280. `null` for every package that declares no follow-up, which is
+  // all but one — so the line simply is not there rather than saying nothing
+  // happened, which would be a claim about a thing nobody declared.
+  const followUp = result?.follow_up ? followUpPhrase(result.follow_up) : null;
   const tone = result ? outcomeTone(result.outcome) : null;
 
   const chainSummary = chain ? chainSummaryLine(chain) : null;
@@ -2117,6 +2122,15 @@ export function AmigaInstallPanel({
           <p data-testid="amiga-install-outcome" style={{ margin: "0 0 6px" }}>
             {t(outcome.key, outcome.params)}
           </p>
+          {/* ART-280: the package's own second step, on its own line and
+              **below the ending**, because it is a different fact. A
+              follow-up that said no does not make the install a failure, and
+              the badge's colour still comes from `outcome` alone. */}
+          {followUp && (
+            <p data-testid="amiga-install-follow-up" style={{ margin: "0 0 6px" }}>
+              {t(followUp.key, followUp.params)}
+            </p>
+          )}
           <p data-testid="amiga-install-settlement" style={{ margin: "0 0 6px", wordBreak: "break-all" }}>
             {t(settlement.key, settlement.params)}
           </p>

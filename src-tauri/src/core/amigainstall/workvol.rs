@@ -14,8 +14,10 @@
 use std::path::{Path, PathBuf};
 
 use super::{
-    claims_package_volume, claims_work_volume, PlannedRun, INVOKED_FILE, MARK_FAILED, MARK_INVOKED,
-    MARK_OK, MARK_STARTED, PACKAGE_VOLUME, RESULT_FILE, WORK_VOLUME,
+    claims_package_volume, claims_work_volume, FollowUpOutcome, PlannedRun, FOLLOW_UP_FILE,
+    INVOKED_FILE, MARK_FAILED, MARK_FOLLOW_UP_FAILED, MARK_FOLLOW_UP_NOT_CHECKED,
+    MARK_FOLLOW_UP_NOT_NEEDED, MARK_FOLLOW_UP_RAN, MARK_INVOKED, MARK_OK, MARK_STARTED,
+    PACKAGE_VOLUME, RESULT_FILE, WORK_VOLUME,
 };
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::safety::atomic_write;
@@ -407,10 +409,11 @@ pub fn result_path(work_volume_dir: &Path) -> PathBuf {
 ///   Both runs: only `started` was ever written, `TimedOut` at 1 800.7 s /
 ///   1 800.7 s, and the emulator's own screen showed its progress window
 ///   stopped on `PlayCD` — the exact payload entry the flipped byte lands in —
-///   pixel-identical across five minutes. It also wrote a runaway
-///   `Utilities/PlayCD.BB1` of 170 328 064 and 173 408 256 bytes into the copy.
-///   So a broken payload is not a `Warn`; it is a hang, and `RunOutcome::TimedOut`
-///   is what the user gets.
+///   **unchanged for 28 minutes of the first run and across the whole of the
+///   second**. It also wrote a runaway `Utilities/PlayCD.BB1` of 170 328 064
+///   and 173 408 256 bytes into the copy (ART-278). So a broken payload is not
+///   a `Warn`; it is a hang, and `RunOutcome::TimedOut` is what the user gets —
+///   with the wrong next step attached to it (ART-279).
 /// - **Wrong target** (the real archive against a tree that never had BoingBag
 ///   3.9-1 — reachable only by doctoring the copy's own manifest, because
 ///   `chain::refuse_unless_installable` refuses it in 17.6 ms first): **`ok`,
@@ -423,17 +426,23 @@ pub fn result_path(work_volume_dir: &Path) -> PathBuf {
 /// 1. **The word is not evidence that the right thing happened.** It is
 ///    evidence that the program returned without `Warn`, which is all this
 ///    script claims and all [`RunOutcome`](super::RunOutcome) says.
-/// 2. **Asking the artefact afterwards would not have caught the wrong
-///    target either.** `Libs/version.library` reads `version 45.3 (7.12.2001)`
-///    on the correctly chained tree *and* on the tree that skipped BoingBag 1 —
-///    the same 352 bytes, the same sha256 — while that tree is missing 60 files
-///    and carries 51 at older bytes. A `leaves_version` check would have passed
-///    the broken tree, so it is deliberately not built.
+/// 2. **The version string the package updates is not evidence; a file the
+///    package changes can be.** `Libs/version.library` reads
+///    `version 45.3 (7.12.2001)` on the correctly chained tree *and* on the
+///    tree that skipped BoingBag 1 — the same 352 bytes, the same sha256 —
+///    while that tree is missing **57** files (60 paths differ, three of them
+///    only in case) and carries 51 at older bytes. So a `leaves_version` check
+///    **on `version.library`** would have passed the broken tree, and is
+///    deliberately not built. `Libs/xadmaster.library` would have caught it —
+///    9.0 there, 9.1 on the chained tree — so this is a statement about *which*
+///    artefact, not about asking artefacts.
 ///
-/// `core::osinstall::chain::refuse_unless_installable` is therefore the *only*
-/// thing standing between a user and that tree — named in prose rather than
-/// linked, because a lower-level `core/` module does not reach upwards — which
-/// is why it is a refusal before anything is copied and not a warning.
+/// `core::osinstall::chain::refuse_unless_installable` is what protects a user
+/// here — named in prose rather than linked, because a lower-level `core/`
+/// module does not reach upwards. It is a **bookkeeping** guard: it reads a
+/// `distribution.json` only a successful ART run writes, so the wrong-target
+/// state is unreachable through ART at all, which is why it is a refusal
+/// before anything is copied rather than a check afterwards.
 ///
 /// ## Why a `CD` may sit between the assigns and the installer
 ///
@@ -471,6 +480,37 @@ pub fn startup_sequence(run: &PlannedRun) -> CoreResult<String> {
             "an Amiga-side install needs a program to run".into(),
         ));
     }
+    // A follow-up reaches the same generated script through the same
+    // `format!`, so it goes through the same gate — every field of it, the
+    // gate's own path included. Written as its own loop rather than folded
+    // into the chain below because a follow-up that is refused must be
+    // refused *by name*: "an installer argument" would tell a recipe author
+    // to look at the wrong line.
+    for follow_up in &run.follow_ups {
+        refuse_shell_metacharacters("a follow-up's program", &follow_up.program)?;
+        for arg in &follow_up.args {
+            refuse_shell_metacharacters("a follow-up's argument", arg)?;
+        }
+        refuse_shell_metacharacters(
+            "a follow-up's version gate",
+            &follow_up.unless_file_version_at_least.path,
+        )?;
+        if follow_up.program.trim().is_empty() {
+            return Err(CoreError::InvalidInput(
+                "a follow-up needs a program to run".into(),
+            ));
+        }
+        if follow_up
+            .unless_file_version_at_least
+            .path
+            .trim()
+            .is_empty()
+        {
+            return Err(CoreError::InvalidInput(
+                "a follow-up's version gate needs a file to ask".into(),
+            ));
+        }
+    }
     // An empty `system_volume` is not a harmless blank: it generates
     // `:C/Assign C: :C` and `Assign SYS: :`, a script that parses cleanly and
     // assigns nothing — the ART-118 failure shape again, and this time silent.
@@ -496,6 +536,24 @@ pub fn startup_sequence(run: &PlannedRun) -> CoreResult<String> {
             run.working_directory
                 .iter()
                 .map(|d| ("working directory", d)),
+        )
+        // A follow-up runs from the same shell and writes to the same volume,
+        // so the confinement is the same one. Left in this chain rather than
+        // in the loop above because the rule is `claims_work_volume`'s and a
+        // second application of it is how the mount planner's weaker copy got
+        // written the first time.
+        .chain(
+            run.follow_ups
+                .iter()
+                .flat_map(|f| {
+                    std::iter::once(("a follow-up's program", &f.program))
+                        .chain(f.args.iter().map(|a| ("a follow-up's argument", a)))
+                        .chain(std::iter::once((
+                            "a follow-up's version gate",
+                            &f.unless_file_version_at_least.path,
+                        )))
+                })
+                .collect::<Vec<(&str, &String)>>(),
         )
     {
         if claims_work_volume(value) {
@@ -549,6 +607,7 @@ pub fn startup_sequence(run: &PlannedRun) -> CoreResult<String> {
     let result = RESULT_FILE;
     let invoked = INVOKED_FILE;
     let package = &run.package_id;
+    let follow_ups = follow_up_lines(run);
 
     Ok(format!(
         "; Written by ART to install '{package}'. One run, then a result.\n\
@@ -582,10 +641,104 @@ pub fn startup_sequence(run: &PlannedRun) -> CoreResult<String> {
          \x20 If Warn\n\
          \x20   Echo >{work}:{result} \"{MARK_FAILED}\"\n\
          \x20 Else\n\
+         {follow_ups}\
          \x20   Echo >{work}:{result} \"{MARK_OK}\"\n\
          \x20 EndIf\n\
          EndIf\n"
     ))
+}
+
+/// The follow-up block, or the empty string when the recipe declares none.
+///
+/// ## Where it goes, and why the position is the whole design
+///
+/// It sits **inside the `Else` arm** of the `If Warn` that reads the
+/// installer's return code, and **above** the line that writes
+/// [`MARK_OK`]. Two separate hazards meet there and only that one position
+/// answers both.
+///
+/// 1. **`Version … FILE` sets `WARN` as its answer**, not as an error. A gate
+///    emitted above the `If Warn` would make the installer's own verdict the
+///    gate's, and every successful run on a tree whose gated file happened to
+///    be old would be reported as *the installer said no*. Here the branch is
+///    already decided before any gate runs, so nothing the follow-up returns
+///    can reach the result word.
+/// 2. **The host stops the emulator the moment the result word appears** —
+///    `run::poll_until_ending` reads [`RESULT_FILE`] first thing round the
+///    loop and `run_with` terminates the session on the way out. Measured, not
+///    reasoned about: the first version of this emitted the block *below* the
+///    completed `If`/`Else`/`EndIf`, and a real run on the owner's own
+///    material (2026-09-08, BoingBag 3.9-2 on a BoingBag-1 tree) produced
+///    `Succeeded` in **141.1 s** against the same run without a follow-up at
+///    **141.5 s**, no `art-followup.txt` at all, and a tree byte-identical to
+///    the one that had no follow-up declared. The lines were never reached.
+///    Writing [`MARK_OK`] **last** is what keeps the emulator alive long
+///    enough to run them.
+///
+/// A failed install runs no follow-up, deliberately: the copy is discarded
+/// unpromoted anyway, and a second updater let loose on a tree whose first
+/// update said no is work nobody asked for on a tree nobody will keep.
+///
+/// The gate is itself guarded by `If EXISTS <sys>:C/Version`, because a disk
+/// command is a thing to check for rather than assume — `C:Reboot` is present
+/// on the owner's AmigaOS 3.2 tree and absent on both his 3.9 trees
+/// (ART-272/273). Without the guard an unknown command returns a code that
+/// *also* sets WARN, so a tree with no `Version` would run the follow-up
+/// unconditionally — the gate failing open, silently.
+fn follow_up_lines(run: &PlannedRun) -> String {
+    let sys = &run.system_volume;
+    let work = WORK_VOLUME;
+    let file = FOLLOW_UP_FILE;
+    let mut out = String::new();
+    for follow_up in &run.follow_ups {
+        let command = std::iter::once(follow_up.program.as_str())
+            .chain(follow_up.args.iter().map(String::as_str))
+            .collect::<Vec<&str>>()
+            .join(" ");
+        let gate = &follow_up.unless_file_version_at_least;
+        let (path, least) = (&gate.path, gate.version);
+        out.push_str(&format!(
+            "\x20   If EXISTS {sys}:C/Version\n\
+             \x20     Version >NIL: {sys}:{path} {least} FILE\n\
+             \x20     If Warn\n\
+             \x20       {command}\n\
+             \x20       If Warn\n\
+             \x20         Echo >{work}:{file} \"{MARK_FOLLOW_UP_FAILED}\"\n\
+             \x20       Else\n\
+             \x20         Echo >{work}:{file} \"{MARK_FOLLOW_UP_RAN}\"\n\
+             \x20       EndIf\n\
+             \x20     Else\n\
+             \x20       Echo >{work}:{file} \"{MARK_FOLLOW_UP_NOT_NEEDED}\"\n\
+             \x20     EndIf\n\
+             \x20   Else\n\
+             \x20     Echo >{work}:{file} \"{MARK_FOLLOW_UP_NOT_CHECKED}\"\n\
+             \x20   EndIf\n"
+        ));
+    }
+    out
+}
+
+/// Where the follow-up writes its word, given ART's work volume on the host.
+pub fn follow_up_path(work_volume_dir: &Path) -> PathBuf {
+    work_volume_dir.join(FOLLOW_UP_FILE)
+}
+
+/// What the follow-up said, or `None` when it wrote nothing.
+///
+/// `None` is a real state and not an error: a package declaring no follow-up
+/// never writes the file, and a run that ended before the block was reached
+/// leaves it absent too. A word ART does not recognise reads as `None` for the
+/// same reason [`super::run`]'s own reader treats one that way — the honest
+/// reading of bytes ART did not write is that no answer arrived.
+pub fn read_follow_up(work_volume_dir: &Path) -> Option<FollowUpOutcome> {
+    let bytes = std::fs::read(follow_up_path(work_volume_dir)).ok()?;
+    match String::from_utf8_lossy(&bytes).lines().next()?.trim() {
+        MARK_FOLLOW_UP_RAN => Some(FollowUpOutcome::Ran),
+        MARK_FOLLOW_UP_NOT_NEEDED => Some(FollowUpOutcome::NotNeeded),
+        MARK_FOLLOW_UP_FAILED => Some(FollowUpOutcome::Failed),
+        MARK_FOLLOW_UP_NOT_CHECKED => Some(FollowUpOutcome::NotChecked),
+        _ => None,
+    }
 }
 
 /// Build ART's own boot volume into `at`.
@@ -626,6 +779,7 @@ pub fn build(at: &Path, run: &PlannedRun) -> CoreResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::amigainstall::{FileVersionGate, FollowUp};
 
     /// A scratch directory that removes itself, including when the test
     /// panics (ART-184).
@@ -681,6 +835,7 @@ mod tests {
             program: command.to_string(),
             args: Vec::new(),
             working_directory: None,
+            follow_ups: Vec::new(),
         }
     }
 
@@ -741,6 +896,284 @@ mod tests {
         );
 
         assert_eq!(startup_sequence(&run).unwrap(), expected);
+    }
+
+    // ----------------------------------------------------------------
+    // ART-280: the version-gated follow-up, and the ordering that makes
+    // it safe.
+    // ----------------------------------------------------------------
+
+    /// BoingBag 3.9-2's own follow-up, composed as the command layer composes
+    /// it — the program already joined to the package volume, the target
+    /// volume already appended.
+    fn xad_follow_up() -> FollowUp {
+        FollowUp {
+            program: "ARTPkg:BoingBag3.9-2/C/Updater".to_string(),
+            args: vec!["XAD-Update".to_string(), "DH0:".to_string()],
+            unless_file_version_at_least: FileVersionGate {
+                path: "Libs/xadmaster.library".to_string(),
+                version: 10,
+            },
+        }
+    }
+
+    /// **The whole script again, with a follow-up — the same pin and the same
+    /// reason.** Asserted entire rather than by substring: a substring check
+    /// cannot notice a line that moved, and *where* these lines sit is the
+    /// whole safety property. See `follow_up_lines` for what moving them
+    /// costs.
+    #[test]
+    fn a_follow_up_is_emitted_whole_and_below_the_result_capture() {
+        let mut run = planned("ARTPkg:BoingBag3.9-2/C/Updater");
+        run.package_id = "boingbag-39-2".to_string();
+        run.args = vec!["AmigaOS-Update".to_string(), "DH0:".to_string()];
+        run.follow_ups = vec![xad_follow_up()];
+
+        let expected = [
+            "; Written by ART to install 'boingbag-39-2'. One run, then a result.",
+            "DH0:C/Assign C: DH0:C",
+            "FailAt 2000000000",
+            "If EXISTS ARTWork:art-invoked.txt",
+            "  Echo \"ART: the installer already ran on an earlier pass. Not repeating it.\"",
+            "Else",
+            "  Echo >ARTWork:art-result.txt \"started\"",
+            "  Assign SYS: DH0:",
+            "  Assign S: DH0:S",
+            "  Assign L: DH0:L",
+            "  Assign LIBS: DH0:Libs",
+            "  Assign LIBS: DH0:Classes ADD",
+            "  Assign DEVS: DH0:Devs",
+            "  Assign FONTS: DH0:Fonts",
+            "  MakeDir RAM:T RAM:Clipboards RAM:ENV RAM:ENV/Sys",
+            "  Assign T: RAM:T",
+            "  Assign CLIPS: RAM:Clipboards",
+            "  Assign ENV: RAM:ENV",
+            "  Copy ENVARC: RAM:ENV ALL QUIET NOREQ",
+            "  If EXISTS DH0:C/SetPatch",
+            "    DH0:C/SetPatch QUIET",
+            "  EndIf",
+            "  If EXISTS DH0:C/AddDataTypes",
+            "    DH0:C/AddDataTypes REFRESH QUIET",
+            "  EndIf",
+            "  Echo >ARTWork:art-invoked.txt \"invoked\"",
+            "  ARTPkg:BoingBag3.9-2/C/Updater AmigaOS-Update DH0:",
+            "  If Warn",
+            "    Echo >ARTWork:art-result.txt \"failed\"",
+            "  Else",
+            "    If EXISTS DH0:C/Version",
+            "      Version >NIL: DH0:Libs/xadmaster.library 10 FILE",
+            "      If Warn",
+            "        ARTPkg:BoingBag3.9-2/C/Updater XAD-Update DH0:",
+            "        If Warn",
+            "          Echo >ARTWork:art-followup.txt \"failed\"",
+            "        Else",
+            "          Echo >ARTWork:art-followup.txt \"ran\"",
+            "        EndIf",
+            "      Else",
+            "        Echo >ARTWork:art-followup.txt \"not-needed\"",
+            "      EndIf",
+            "    Else",
+            "      Echo >ARTWork:art-followup.txt \"not-checked\"",
+            "    EndIf",
+            "    Echo >ARTWork:art-result.txt \"ok\"",
+            "  EndIf",
+            "EndIf",
+            "",
+        ]
+        .join(
+            "
+",
+        );
+
+        assert_eq!(startup_sequence(&run).unwrap(), expected);
+    }
+
+    /// **Two orderings, asserted as orderings and not only as a text — and
+    /// they pull in opposite directions, which is why the position is the
+    /// design.**
+    ///
+    /// 1. The branch that reads the installer's return code — `If Warn` —
+    ///    must be decided **before** any `Version … FILE`, because that
+    ///    command sets `WARN` to *mean* "older than that". A gate above it
+    ///    would make the result word the gate's answer instead of the
+    ///    installer's: every successful run on a tree with an old `xadmaster`
+    ///    reported as *the installer said no*.
+    /// 2. The word itself — `ok` — must be written **after** the follow-up,
+    ///    because `run::poll_until_ending` returns the instant that word
+    ///    appears and `run_with` then terminates the emulator. A real run on
+    ///    2026-09-08 proved this the expensive way: with the block below the
+    ///    completed `If`, the emulator was killed before a single follow-up
+    ///    line executed (141.1 s against the follow-up-less run's 141.5 s, no
+    ///    `art-followup.txt`, a byte-identical tree).
+    ///
+    /// The whole-script pin above catches a break in either, but it catches it
+    /// as "some line moved". This says which relationship broke.
+    #[test]
+    fn the_gate_runs_after_the_branch_is_decided_and_before_the_word_is_written() {
+        let mut run = planned("ARTPkg:BoingBag3.9-2/C/Updater");
+        run.args = vec!["AmigaOS-Update".to_string(), "DH0:".to_string()];
+        run.follow_ups = vec![xad_follow_up()];
+        let script = startup_sequence(&run).unwrap();
+        let lines: Vec<&str> = script.lines().map(str::trim).collect();
+
+        let at = |needle: &str| {
+            lines
+                .iter()
+                .position(|l| l.contains(needle))
+                .unwrap_or_else(|| panic!("no line containing {needle:?} in:\n{script}"))
+        };
+
+        let invocation = at("AmigaOS-Update");
+        let branch = lines
+            .iter()
+            .enumerate()
+            .find(|(i, l)| *i > invocation && l.starts_with("If Warn"))
+            .map(|(i, _)| i)
+            .expect("the installer's own If Warn");
+        let failed_word = at("Echo >ARTWork:art-result.txt \"failed\"");
+        let gate = at("Version >NIL:");
+        let second_run = at("XAD-Update");
+        let ok_word = at("Echo >ARTWork:art-result.txt \"ok\"");
+
+        assert!(
+            branch < gate && failed_word < gate,
+            "the installer's own branch must be decided before a command that also sets WARN; \
+             If Warn at {branch}, failed at {failed_word}, gate at {gate}"
+        );
+        assert!(
+            gate < second_run,
+            "the second invocation only runs when the gate opened: {gate} vs {second_run}"
+        );
+        assert!(
+            second_run < ok_word,
+            "the word the host stops on must be written last, or the emulator is terminated \
+             before the follow-up runs: XAD-Update at {second_run}, ok at {ok_word}"
+        );
+    }
+
+    /// **A failed install runs no follow-up at all**, and the `failed` word is
+    /// still written immediately.
+    ///
+    /// Not tidiness: the copy is discarded unpromoted, so a second updater
+    /// there is work nobody asked for on a tree nobody keeps — and it would
+    /// hold the emulator open for as long as it took.
+    #[test]
+    fn the_failed_arm_carries_no_follow_up() {
+        let mut run = planned("ARTPkg:BoingBag3.9-2/C/Updater");
+        run.args = vec!["AmigaOS-Update".to_string(), "DH0:".to_string()];
+        run.follow_ups = vec![xad_follow_up()];
+        let script = startup_sequence(&run).unwrap();
+        let lines: Vec<&str> = script.lines().map(str::trim).collect();
+
+        let failed = lines
+            .iter()
+            .position(|l| l.contains("art-result.txt \"failed\""))
+            .expect("the failed word");
+        let else_after = failed
+            + 1
+            + lines[failed + 1..]
+                .iter()
+                .position(|l| *l == "Else")
+                .unwrap();
+        assert_eq!(
+            else_after,
+            failed + 1,
+            "nothing may sit between the failed word and the Else: {:?}",
+            &lines[failed..=else_after]
+        );
+    }
+
+    /// A package with no follow-up gets **no follow-up lines at all** — not
+    /// an empty block, and no marker written unconditionally. Otherwise every
+    /// existing package's script would change, and somebody reading the work
+    /// volume would find a word about something nobody declared.
+    #[test]
+    fn a_package_with_no_follow_up_emits_nothing_extra() {
+        let mut run = planned("ARTPkg:BoingBag3.9-1/C/Updater");
+        run.args = vec!["AmigaOS-Update".to_string(), "DH0:".to_string()];
+        let script = startup_sequence(&run).unwrap();
+
+        assert!(!script.contains(FOLLOW_UP_FILE), "got:\n{script}");
+        assert!(!script.contains("Version >NIL:"), "got:\n{script}");
+    }
+
+    /// The metacharacter gate reaches a follow-up's fields too, and says
+    /// which field it refused. A follow-up is recipe data formatted into the
+    /// same generated script, so an unguarded one would be the hole every
+    /// guarded field exists to close.
+    #[test]
+    fn a_follow_ups_own_fields_go_through_the_metacharacter_gate() {
+        for (label, which) in [
+            ("a follow-up's program", 0usize),
+            ("a follow-up's argument", 1),
+            ("a follow-up's version gate", 2),
+        ] {
+            let mut follow_up = xad_follow_up();
+            match which {
+                0 => follow_up.program = "C/Updater; Delete DH0:C/#?".to_string(),
+                1 => follow_up.args[0] = "XAD-Update > DH0:S/Startup-Sequence".to_string(),
+                // A backtick, not `|`: AmigaDOS's pattern characters are
+                // deliberately *not* in the refused set (they cannot change
+                // which command runs), and a test that used one would have
+                // asserted a refusal that is not ART's rule. Measured by
+                // writing it the wrong way first — `|` passed straight
+                // through and produced a script.
+                _ => {
+                    follow_up.unless_file_version_at_least.path =
+                        "Libs/xadmaster.library`Format`".to_string()
+                }
+            }
+            let mut run = planned("ARTPkg:BoingBag3.9-2/C/Updater");
+            run.follow_ups = vec![follow_up];
+
+            let err = startup_sequence(&run)
+                .expect_err("a metacharacter in a follow-up must be refused")
+                .to_string();
+            assert!(err.contains(label), "must name the field: {err}");
+        }
+    }
+
+    /// And ART's own work volume is out of a follow-up's reach, exactly as it
+    /// is out of the first invocation's: the running script and the result
+    /// file live there, and a second command writing over either would make a
+    /// run report an outcome nothing produced.
+    #[test]
+    fn a_follow_up_may_not_reach_into_arts_own_volume() {
+        let mut follow_up = xad_follow_up();
+        follow_up.args[0] = format!("{WORK_VOLUME}:art-result.txt");
+        let mut run = planned("ARTPkg:BoingBag3.9-2/C/Updater");
+        run.follow_ups = vec![follow_up];
+
+        let err = startup_sequence(&run).unwrap_err().to_string();
+        assert!(err.contains(WORK_VOLUME), "got {err}");
+        assert!(err.contains("a follow-up's argument"), "got {err}");
+    }
+
+    /// Every word reads back as itself, and only those four words do.
+    ///
+    /// The last rows are the ones that matter: an unrecognised word and a
+    /// missing file both read as `None`, because the honest reading of bytes
+    /// ART did not write is *no answer*, not a failure — the same rule
+    /// `run::read_outcome` already follows for the install's own word.
+    #[test]
+    fn the_follow_up_word_reads_back_as_itself_and_nothing_else_does() {
+        let scratch = crate::core::ScratchDir::new("art-workvol", "follow-up-word");
+        let dir = scratch.path();
+
+        assert_eq!(read_follow_up(dir), None, "no file at all");
+        for (word, expected) in [
+            (MARK_FOLLOW_UP_RAN, FollowUpOutcome::Ran),
+            (MARK_FOLLOW_UP_NOT_NEEDED, FollowUpOutcome::NotNeeded),
+            (MARK_FOLLOW_UP_FAILED, FollowUpOutcome::Failed),
+            (MARK_FOLLOW_UP_NOT_CHECKED, FollowUpOutcome::NotChecked),
+        ] {
+            std::fs::write(follow_up_path(dir), format!("{word}\n")).unwrap();
+            assert_eq!(read_follow_up(dir), Some(expected), "for {word:?}");
+        }
+        for other in ["", "ok", "started", "not-run"] {
+            std::fs::write(follow_up_path(dir), other).unwrap();
+            assert_eq!(read_follow_up(dir), None, "for {other:?}");
+        }
     }
 
     /// The installer runs **from the package's own drawer**, and that line
