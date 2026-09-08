@@ -2303,7 +2303,13 @@
       "onAmiga": "runs on the Amiga",
       "onWindows": "placed from Windows",
       "setLine": "{{release}} updates — {{installed}} of {{total}} applied",
-      "setLineNotNeeded": "{{release}} updates — {{installed}} of {{total}} applied — {{notNeeded}} not needed"
+      "setLineNotNeeded": "{{release}} updates — {{installed}} of {{total}} applied — {{notNeeded}} not needed",
+      "tree": "tree {{root}}",
+      "treeNone": "No distribution tree chosen yet — nothing here can be recorded as applied until one is.",
+      "cdLink": "Choose the disc on the source step",
+      "next": "Next: {{name}}",
+      "reportRow": "This report is about {{name}}.",
+      "updatesLink": "{{release}} updates"
     },
     "mediaId": {
       "heading": "What these files are, by content",

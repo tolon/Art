@@ -22,9 +22,11 @@
 // same seam `commands/amigainstall.rs` gave its own tests for exactly this
 // reason.
 
+import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import i18n from "i18next";
 
 // Side-effecting: gives `useTranslation` a real, synchronously-initialised
@@ -37,7 +39,16 @@ import type {
   ArchiveClassification,
   RunOutcome,
 } from "@/lib/amigainstall";
-import type { PackageSummary, SlotCandidate, SlotReport, SlotState } from "@/lib/osinstall";
+import type { ApplyOutcome } from "@/lib/osinstall";
+import type {
+  ChainReport,
+  ChainRow,
+  ChainState,
+  PackageSummary,
+  SlotCandidate,
+  SlotReport,
+  SlotState,
+} from "@/lib/osinstall";
 import type { JobProgress } from "@/lib/jobs";
 
 const previewMock = vi.hoisted(() => vi.fn());
@@ -48,6 +59,10 @@ const slotsMock = vi.hoisted(() => vi.fn());
 const onJobProgressMock = vi.hoisted(() => vi.fn());
 const saveSettingsMock = vi.hoisted(() => vi.fn(async () => {}));
 const classifyMock = vi.hoisted(() => vi.fn());
+const chainMock = vi.hoisted(() => vi.fn());
+const collisionsMock = vi.hoisted(() => vi.fn());
+const addPackageMock = vi.hoisted(() => vi.fn());
+const onAddPackageResultMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/amigainstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/amigainstall")>()),
@@ -61,6 +76,12 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
   osinstallPackages: packagesMock,
   osinstallSlots: slotsMock,
+  // The chain (round 3, task 2) and the host-placed route it runs a row
+  // through — the `paketler` step's own two calls, reached from this screen.
+  osinstallChain: chainMock,
+  osinstallCollisions: collisionsMock,
+  osinstallAddPackage: addPackageMock,
+  onOsInstallAddPackageResult: onAddPackageResultMock,
 }));
 
 vi.mock("@/lib/jobs", async (importOriginal) => ({
@@ -81,7 +102,22 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
 }));
 
-const { AmigaInstallPanel } = await import("@/components/osbuilder/AmigaInstallPanel");
+const { AmigaInstallPanel: Panel } = await import("@/components/osbuilder/AmigaInstallPanel");
+
+/**
+ * Every render below goes through a router, because the chain's first row —
+ * the CD — is a `<Link>` to the source step, and `react-router`'s `Link`
+ * throws outside a `Router`. Wrapping the component here rather than at each
+ * of the twenty-five render sites keeps this file's history readable: not one
+ * existing case changed a line to gain a router.
+ */
+function AmigaInstallPanel(props: ComponentProps<typeof Panel>) {
+  return (
+    <MemoryRouter>
+      <Panel {...props} />
+    </MemoryRouter>
+  );
+}
 
 /** The two shipped BoingBags plus the one package that has no Amiga-side
  *  installer — the real catalogue's own shape, so the "only what a recipe
@@ -285,6 +321,113 @@ let deliver: ((result: AmigaInstallResult) => void) | null = null;
  *  job event — the channel the Major of fix round 1 lives on. */
 let report: ((progress: JobProgress) => void) | null = null;
 
+/** The one live `onOsInstallAddPackageResult` handler — how a host-placed
+ *  row's own ending arrives. */
+let place: ((result: { job_id: number; outcome: ApplyOutcome }) => void) | null = null;
+
+// ---------------------------------------------------------------------------
+// The chain (round 3 § 2)
+//
+// Stated the way Rust states it, never computed: what is under test is which
+// sentence the screen puts on screen for a given answer, so the answer is a
+// fixture and not something `chain::rows_for` worked out on the way past.
+// ---------------------------------------------------------------------------
+
+function chainRow(
+  position: number,
+  name: string,
+  state: ChainState,
+  over: Partial<ChainRow> = {}
+): ChainRow {
+  return {
+    position,
+    packageId: null,
+    slotId: null,
+    name,
+    state,
+    sentenceFacts: { file: null, runsOnAmiga: null },
+    ...over,
+  };
+}
+
+function chainReport(rows: ChainRow[], installed = 0): ChainReport {
+  return {
+    rows,
+    summary: {
+      release: "AmigaOS 3.9",
+      total: rows.length,
+      installed,
+      notNeeded: rows.filter((row) => row.state.state === "not-needed").length,
+    },
+    unreadableFolders: [],
+    crowdedFolders: [],
+  };
+}
+
+/**
+ * The owner's own material, as `chain::rows_for` answers for it: the disc,
+ * two BoingBags, the two locale packages the material gives one rank to,
+ * Contribution, Euro-Update and the community BoingBags 3&4.
+ *
+ * **Ranks 4 and 4 are two rows**, and that is the material's own word — it
+ * states no order between Locale 3.9 and the Turkish slice. A screen that
+ * renumbered them 1..8 would be inventing an order.
+ */
+function THE_CHAIN(): ChainRow[] {
+  return [
+    chainRow(1, "AmigaOS3.9", { state: "installed", when: null }, {
+      slotId: "medium:AmigaOS3.9",
+    }),
+    chainRow(2, "BoingBag 3.9-1", { state: "installed", when: null }, {
+      packageId: "boingbag-39-1",
+      slotId: "package:boingbag-39-1",
+      sentenceFacts: { file: "BoingBag39-1.lha", runsOnAmiga: true },
+    }),
+    chainRow(3, "BoingBag 3.9-2", { state: "ready" }, {
+      packageId: "boingbag-39-2",
+      slotId: "package:boingbag-39-2",
+      sentenceFacts: { file: "BoingBag39-2.lha", runsOnAmiga: true },
+    }),
+    chainRow(4, "AmigaOS 3.9 Locale update", { state: "ready" }, {
+      packageId: "locale-39",
+      slotId: "package:locale-39",
+      sentenceFacts: { file: "Locale3_9.lha", runsOnAmiga: false },
+    }),
+    chainRow(4, "Türkçe catalogs (BoingBag 3.9-2)", {
+      state: "blocked-by",
+      names: ["BoingBag 3.9-2"],
+    }, {
+      packageId: "locale-turkish",
+      slotId: "package:locale-turkish",
+      sentenceFacts: { file: "BoingBag39-2-turkce.lha", runsOnAmiga: false },
+    }),
+    chainRow(6, "BoingBag 3.9-2 Contribution", {
+      state: "missing",
+      expected: ["BoingBag39-2-Contribution.lha"],
+    }, {
+      packageId: "boingbag-39-2-contribution",
+      slotId: "package:boingbag-39-2-contribution",
+      sentenceFacts: { file: null, runsOnAmiga: false },
+    }),
+    chainRow(7, "Euro-Update", {
+      state: "not-needed",
+      supersededBy: "BoingBags 3&4 for AmigaOS 3.9",
+    }, {
+      packageId: "euro-update",
+      slotId: "package:euro-update",
+      sentenceFacts: { file: "Euro-Update.lha", runsOnAmiga: null },
+    }),
+    chainRow(8, "BoingBags 3&4 for AmigaOS 3.9", {
+      state: "not-yet-runnable",
+      reason: "installer-not-measured",
+    }, {
+      packageId: "boingbags-39-3-4",
+      slotId: "package:boingbags-39-3-4",
+      sentenceFacts: { file: "BoingBags3&4.lha", runsOnAmiga: true },
+    }),
+  ];
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   deliver = null;
@@ -319,6 +462,19 @@ beforeEach(() => {
     deliver = handler;
     return () => {};
   });
+  // **No chain by default**, which is a real answer and not an absence: a
+  // release ART knows no update chain for answers with no rows, and the
+  // panel then shows the package list it had before the chain existed. Every
+  // case written before round 3 therefore reads exactly as it did.
+  chainMock.mockResolvedValue(chainReport([]));
+  collisionsMock.mockResolvedValue([]);
+  addPackageMock.mockResolvedValue({ outcome: "started", job_id: 11 });
+  onAddPackageResultMock.mockImplementation(
+    async (handler: (r: { job_id: number; outcome: ApplyOutcome }) => void) => {
+      place = handler;
+      return () => {};
+    }
+  );
 });
 
 afterEach(() => {
@@ -1701,5 +1857,437 @@ describe("the fields are filled from the slots (design § 3.4)", () => {
         })
       )
     ).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The chain is the list (round 3, task 2)
+//
+// Every assertion below is about *which sentence a person reads* and *which
+// row the one Run button is about* — the two things this screen can get
+// confidently wrong. A test that only counted rows would pass just as
+// happily if every row said the same thing.
+// ---------------------------------------------------------------------------
+
+describe("the chain", () => {
+  /**
+   * The catalogue as `osinstall_packages` really answers for AmigaOS 3.9:
+   * every package of the release, host-placeable ones included, with
+   * `amigaInstallable` marking the two that are not.
+   *
+   * The three-package fixture above is this screen's *old* question — which
+   * packages can be run on the Amiga. The chain asks about all of them, and
+   * a catalogue missing a chain row's package would have ART-212's
+   * sanitiser drop the user's own selection the moment they made it.
+   */
+  const CHAIN_PACKAGES: PackageSummary[] = [
+    ...PACKAGES,
+    ...["locale-39", "boingbag-39-2-contribution", "euro-update", "boingbags-39-3-4"].map(
+      (id) => ({
+        id,
+        name: id,
+        requires: [],
+        requiresComponents: [],
+        available: true,
+        hostPlacementBlock: null,
+        amigaInstallable: id === "boingbags-39-3-4",
+        refusedNames: [],
+        notYetRunnable: null,
+      })
+    ),
+  ];
+
+  /**
+   * The archive one row needs, remembered under **that row's own key**
+   * (ART-277). Deliberately not `withChoices`, which also pre-selects
+   * BoingBag 3.9-1: half of what is under test here is what the screen does
+   * when the user has selected *nothing*.
+   */
+  function withArchiveFor(id: string, file: string) {
+    useSettingsStore.setState((state) => ({
+      settings: {
+        ...state.settings,
+        winuaePath: "C:/Program Files/WinUAE/winuae64.exe",
+        remembered: {
+          ...(state.settings.remembered as Record<string, unknown>),
+          [`amigaInstall.archive.${id}`]: file,
+          "amigaInstall.kickstart": "D:/roms/kick31.rom",
+        },
+      },
+    }));
+  }
+
+  beforeEach(() => {
+    packagesMock.mockResolvedValue(CHAIN_PACKAGES);
+  });
+
+  function renderChain(rows: ChainRow[] = THE_CHAIN(), installed = 2) {
+    chainMock.mockResolvedValue(chainReport(rows, installed));
+    return render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.9"
+        treeRoot="D:/amiga/os39"
+        packageFolder="D:/pkg"
+        materialFolders={["E:/material"]}
+      />
+    );
+  }
+
+  /** The radio of one row, by position in the list. */
+  const radioAt = (index: number) =>
+    screen.getAllByTestId("amiga-chain-row")[index].querySelector("input") as HTMLInputElement;
+
+  /** The radio of one row, by the row's own name. */
+  function radioFor(name: string): HTMLInputElement {
+    const row = screen
+      .getAllByTestId("amiga-chain-row")
+      .find((element) => (element.textContent ?? "").includes(name));
+    if (!row) throw new Error(`no chain row named ${name}`);
+    return row.querySelector("input") as HTMLInputElement;
+  }
+
+  const runButton = () =>
+    screen.getByRole("button", {
+      name: new RegExp(
+        `${i18n.t("osinstall.amigaInstall.run")}|${i18n.t("osinstall.packages.apply.run")}`
+      ),
+    });
+
+  it("renders one row per link, in the material's own order and in the state's own words", async () => {
+    renderChain();
+    const rows = await screen.findAllByTestId("amiga-chain-row");
+    expect(rows).toHaveLength(8);
+
+    // The order is the material's, and the two rank-4 rows are two rows
+    // sharing one number — never renumbered 1..8, which would invent an
+    // order the material does not state.
+    const text = rows.map((row) => row.textContent ?? "");
+    expect(text.map((line) => line.trim().slice(0, 1))).toEqual([
+      "1",
+      "2",
+      "3",
+      "4",
+      "4",
+      "6",
+      "7",
+      "8",
+    ]);
+
+    // Each state's own sentence, and seven different ones.
+    expect(text[0]).toContain(i18n.t("osinstall.chain.installed", { name: "AmigaOS3.9" }));
+    expect(text[2]).toContain(
+      i18n.t("osinstall.chain.ready", { name: "BoingBag 3.9-2", file: "BoingBag39-2.lha" })
+    );
+    expect(text[4]).toContain(
+      i18n.t("osinstall.chain.blocked", {
+        name: "Türkçe catalogs (BoingBag 3.9-2)",
+        needs: "BoingBag 3.9-2",
+      })
+    );
+    expect(text[5]).toContain(
+      i18n.t("osinstall.chain.missing", {
+        name: "BoingBag 3.9-2 Contribution",
+        filenames: "BoingBag39-2-Contribution.lha",
+      })
+    );
+    expect(text[6]).toContain(
+      i18n.t("osinstall.chain.notNeeded", {
+        name: "Euro-Update",
+        supersededBy: "BoingBags 3&4 for AmigaOS 3.9",
+      })
+    );
+    expect(text[7]).toContain(
+      i18n.t("osinstall.chain.notYetRunnable.installerNotMeasured", {
+        name: "BoingBags 3&4 for AmigaOS 3.9",
+      })
+    );
+    // Where each row happens, beside its state and not folded into it.
+    expect(text[2]).toContain(i18n.t("osinstall.chain.onAmiga"));
+    expect(text[3]).toContain(i18n.t("osinstall.chain.onWindows"));
+
+    // The set line above them, and the tree it is about — a fraction with no
+    // tree named is true of nothing in particular.
+    expect(screen.getByTestId("amiga-chain").textContent).toContain(
+      i18n.t("osinstall.chain.setLine", {
+        release: "AmigaOS 3.9",
+        installed: 2,
+        total: 8,
+      })
+    );
+    expect(screen.getByTestId("amiga-chain-tree").textContent).toBe(
+      i18n.t("osinstall.chain.tree", { root: "D:/amiga/os39" })
+    );
+
+    // The chain *is* the list: the package radio it replaced is gone.
+    expect(screen.queryAllByTestId("amiga-package-row")).toHaveLength(0);
+  });
+
+  it("renders the same eight rows in Turkish", async () => {
+    await act(async () => {
+      await i18n.changeLanguage("tr");
+    });
+    try {
+      renderChain();
+      const rows = await screen.findAllByTestId("amiga-chain-row");
+      expect(rows).toHaveLength(8);
+      expect(rows[4].textContent).toContain(
+        i18n.t("osinstall.chain.blocked", {
+          name: "Türkçe catalogs (BoingBag 3.9-2)",
+          needs: "BoingBag 3.9-2",
+        })
+      );
+      // …and it is really Turkish, not the English catalogue answering.
+      expect(rows[4].textContent).not.toContain("has to go on first");
+    } finally {
+      await act(async () => {
+        await i18n.changeLanguage("en");
+      });
+    }
+  });
+
+  it("selects the package when a row is selected", async () => {
+    // BoingBag 3.9-1 is **installed** — deliberately not the row the button
+    // already points at. Selecting it has to make the whole panel about it
+    // (its own archive is the one ART asks about) *and* leave Run refusing
+    // it in the row's own words.
+    withArchiveFor("boingbag-39-1", "D:/pkg/BoingBag39-1.lha");
+    renderChain();
+    await screen.findAllByTestId("amiga-chain-row");
+    classifyMock.mockClear();
+
+    await userEvent.setup().click(radioFor("BoingBag 3.9-1"));
+
+    await waitFor(() =>
+      expect(classifyMock).toHaveBeenCalledWith(
+        "D:/pkg/BoingBag39-1.lha",
+        "boingbag-39-1",
+        "AmigaOS 3.9"
+      )
+    );
+    expect(radioFor("BoingBag 3.9-1").checked).toBe(true);
+    expect(screen.getByTestId("amiga-chain-cannot-run").textContent).toBe(
+      i18n.t("osinstall.chain.installed", { name: "BoingBag 3.9-1" })
+    );
+    // A row already in the tree is never composed: no emulator run plan is
+    // asked for on the strength of a selection alone.
+    expect(previewMock).not.toHaveBeenCalled();
+  });
+
+  it("targets the first ready row when nothing is selected, and says which", async () => {
+    withArchiveFor("boingbag-39-2", "D:/pkg/BoingBag39-2.lha");
+    renderChain();
+    await screen.findAllByTestId("amiga-chain-row");
+
+    // Named beside the button: a Run button that does not say which row it
+    // will run is the confident action this screen exists to prevent.
+    expect(screen.getByTestId("amiga-chain-next").textContent).toBe(
+      i18n.t("osinstall.chain.next", { name: "BoingBag 3.9-2" })
+    );
+    // …and it is the row the request is actually about.
+    await waitFor(() =>
+      expect(previewMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        packageId: "boingbag-39-2",
+      })
+    );
+
+    await screen.findByTestId("amiga-install-preview");
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(i18n.t("osinstall.amigaInstall.confirm")));
+    await user.click(runButton());
+    await waitFor(() => expect(runMock).toHaveBeenCalled());
+    expect(runMock.mock.calls[0][0]).toMatchObject({ packageId: "boingbag-39-2" });
+  });
+
+  it("runs a host-placed row through the packages path, not through an emulator", async () => {
+    slotsMock.mockResolvedValue(
+      slotReport([
+        slotState({
+          slot: { id: "package:locale-39", name: "AmigaOS 3.9 Locale update" },
+          // Found in a material folder that is *not* the archives folder —
+          // which folder `add_package` is given has to come from the find.
+          found: foundByHash("E:/material/locale/Locale3_9.lha"),
+        }),
+      ])
+    );
+    renderChain();
+    await screen.findAllByTestId("amiga-chain-row");
+    const user = userEvent.setup();
+    await user.click(radioFor("AmigaOS 3.9 Locale update"));
+
+    await waitFor(() =>
+      expect(collisionsMock).toHaveBeenCalledWith("D:/amiga/os39", "E:/material/locale", [
+        "locale-39",
+      ])
+    );
+    // No emulator anywhere near this row: no window warning, no emulator
+    // confirmation, and no `compose`.
+    expect(screen.queryByTestId("emulator-window-warning")).toBeNull();
+    expect(screen.queryByText(i18n.t("osinstall.amigaInstall.confirm"))).toBeNull();
+    expect(runMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByLabelText(i18n.t("osinstall.packages.confirm", { count: 1 })));
+    await user.click(runButton());
+    await waitFor(() =>
+      expect(addPackageMock).toHaveBeenCalledWith("D:/amiga/os39", "E:/material/locale", [
+        "locale-39",
+      ])
+    );
+
+    // Its ending is the `paketler` step's own, and it names the row.
+    await act(async () => {
+      place!({
+        job_id: 11,
+        outcome: {
+          root: "D:/amiga/os39",
+          files: 12,
+          directories: 3,
+          bytes: 4096,
+          removed: [],
+          icons: [],
+          iconMergeFailures: 0,
+        },
+      });
+      await Promise.resolve();
+    });
+    expect((await screen.findByTestId("host-placement-outcome")).textContent).toContain(
+      i18n.t("osinstall.packages.apply.done")
+    );
+    expect(screen.getByTestId("amiga-placement-report-row").textContent).toBe(
+      i18n.t("osinstall.chain.reportRow", { name: "AmigaOS 3.9 Locale update" })
+    );
+  });
+
+  it("asks the chain again after a run, and offers the next ready row", async () => {
+    withArchiveFor("boingbag-39-2", "D:/pkg/BoingBag39-2.lha");
+    renderChain();
+    await screen.findAllByTestId("amiga-chain-row");
+    const asked = chainMock.mock.calls.length;
+
+    // BoingBag 3.9-2 has gone on: the row is installed and the next ready
+    // one is the Locale update.
+    const after = THE_CHAIN();
+    after[2] = { ...after[2], state: { state: "installed", when: null } };
+    chainMock.mockResolvedValue(chainReport(after, 3));
+
+    await screen.findByTestId("amiga-install-preview");
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(i18n.t("osinstall.amigaInstall.confirm")));
+    await user.click(runButton());
+    await waitFor(() => expect(runMock).toHaveBeenCalled());
+    await act(async () => {
+      deliver!({
+        job_id: 7,
+        outcome: { kind: "succeeded" },
+        settlement: { kind: "promoted", tree: "D:/amiga/os39", leftBehind: null },
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(chainMock.mock.calls.length).toBeGreaterThan(asked));
+    // The row moved, and the button moved with it.
+    await waitFor(() =>
+      expect(screen.getByTestId("amiga-chain-next").textContent).toBe(
+        i18n.t("osinstall.chain.next", { name: "AmigaOS 3.9 Locale update" })
+      )
+    );
+    // …and the report of the run that just finished is still on screen, and
+    // still says which row it was about. A report wiped by the button moving
+    // on is the screen saying nothing about work it did.
+    expect(screen.getByTestId("amiga-install-report-row").textContent).toBe(
+      i18n.t("osinstall.chain.reportRow", { name: "BoingBag 3.9-2" })
+    );
+  });
+
+  it("refuses to run a blocked row, in the row's own words", async () => {
+    // **The mutation this case is written against.** Make Run ignore
+    // `BlockedBy` — drop `targetReady` from `canRun` — and this fails: the
+    // Turkish catalogue pack would be offered on a tree BoingBag 3.9-2 has
+    // never touched, which is the one thing ART-186 exists to prevent.
+    renderChain();
+    await screen.findAllByTestId("amiga-chain-row");
+    await userEvent.setup().click(radioFor("Türkçe catalogs"));
+
+    expect(runButton().hasAttribute("disabled")).toBe(true);
+    expect(screen.getByTestId("amiga-chain-cannot-run").textContent).toBe(
+      i18n.t("osinstall.chain.blocked", {
+        name: "Türkçe catalogs (BoingBag 3.9-2)",
+        needs: "BoingBag 3.9-2",
+      })
+    );
+    // Nothing was asked of either route about a row that cannot run.
+    expect(collisionsMock).not.toHaveBeenCalled();
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses to run a row nobody has measured, and says what is unmeasured", async () => {
+    renderChain();
+    await screen.findAllByTestId("amiga-chain-row");
+    // By position, not by name: Euro-Update's own sentence names BoingBags
+    // 3&4 as the package that supersedes it, so a name match would find the
+    // wrong row — and finding the wrong row is what this file is about.
+    await userEvent.setup().click(radioAt(7));
+
+    expect(runButton().hasAttribute("disabled")).toBe(true);
+    expect(screen.getByTestId("amiga-chain-cannot-run").textContent).toBe(
+      i18n.t("osinstall.chain.notYetRunnable.installerNotMeasured", {
+        name: "BoingBags 3&4 for AmigaOS 3.9",
+      })
+    );
+    // §10: listed rather than hidden — the row is there to be read.
+    expect(radioAt(7).checked).toBe(true);
+  });
+
+  it("sends the CD row to the step where a disc is chosen, and never runs it", async () => {
+    renderChain();
+    await screen.findAllByTestId("amiga-chain-row");
+
+    const link = screen.getByTestId("amiga-chain-cd-link");
+    expect(link.getAttribute("href")).toBe("/os-builder/kaynak");
+    expect(link.textContent).toBe(i18n.t("osinstall.chain.cdLink"));
+
+    await userEvent.setup().click(radioFor("AmigaOS3.9"));
+    expect(runButton().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("says which tree the count is about, and says so when there is none", async () => {
+    renderChain();
+    await screen.findAllByTestId("amiga-chain-row");
+    expect(screen.getByTestId("amiga-chain-tree").textContent).toBe(
+      i18n.t("osinstall.chain.tree", { root: "D:/amiga/os39" })
+    );
+
+    cleanup();
+    chainMock.mockResolvedValue(chainReport(THE_CHAIN(), 0));
+    render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.9"
+        treeRoot={null}
+        packageFolder="D:/pkg"
+        materialFolders={["E:/material"]}
+      />
+    );
+    await screen.findAllByTestId("amiga-chain-row");
+    expect(screen.getByTestId("amiga-chain-tree").textContent).toBe(
+      i18n.t("osinstall.chain.treeNone")
+    );
+  });
+
+  it("falls back to the package list when ART knows no chain for this release", async () => {
+    // A release with no chain answers with no rows, which is a fact and not
+    // a failure — and a screen with no list at all would be one nobody can
+    // select a package from.
+    chainMock.mockResolvedValue(chainReport([]));
+    render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.9"
+        treeRoot="D:/amiga/os39"
+        packageFolder="D:/pkg"
+        materialFolders={["E:/material"]}
+      />
+    );
+    // Three, because this describe's catalogue is the real one: the two
+    // BoingBags and BoingBags 3&4, which is listed and disabled (§10).
+    expect(await screen.findAllByTestId("amiga-package-row")).toHaveLength(3);
+    expect(screen.queryByTestId("amiga-chain")).toBeNull();
   });
 });

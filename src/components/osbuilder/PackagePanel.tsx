@@ -98,33 +98,29 @@
 // now gets its own row, always checked, always tickable off, once the
 // catalogue has actually loaded.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 
 import {
   collisionCounts,
-  collisionGroupHeadingKey,
-  collisionPhrase,
-  groupCollisionsForPreview,
   hostPlacementBlockKey,
-  onOsInstallAddPackageResult,
-  osinstallAddPackage,
-  osinstallCollisions,
+  isInstallRelease,
+  osinstallChain,
   osinstallDescribeTree,
   osinstallPackages,
   osinstallTreesIn,
-  refusalPhrase,
-  type ApplyOutcome,
-  type CollisionReport,
   type FoundTree,
   type InstallRelease, type PackageSummary,
-  type RefusalReason,
 } from "@/lib/osinstall";
-import { fraction, onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
-import { formatBytes } from "@/lib/panel";
+import { fraction } from "@/lib/jobs";
 import { Field } from "@/components/osbuilder/Field";
-import { errorText } from "@/lib/errorText";
+import {
+  HostPlacementPreview,
+  HostPlacementReport,
+  useHostPlacement,
+} from "@/components/osbuilder/HostPlacement";
 
 export interface PackagePanelProps {
   /** The distribution tree's own root — where `distribution.json` lives.
@@ -168,18 +164,6 @@ export function PackagePanel({
 
   const [catalogue, setCatalogue] = useState<PackageSummary[] | null>(null);
   const [catalogueError, setCatalogueError] = useState(false);
-  const [collisions, setCollisions] = useState<CollisionReport[] | null>(null);
-  const [collisionsError, setCollisionsError] = useState<string | null>(null);
-  const [confirmed, setConfirmed] = useState(false);
-
-  const applyJob = useRef<number | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState<JobProgress | null>(null);
-  const [applyError, setApplyError] = useState<string | null>(null);
-  const [applyOutcome, setApplyOutcome] = useState<ApplyOutcome | null>(null);
-  /** F2: a refused selection, resolved and typed before anything was
-   *  written — never a job, never `busy`, never progress. */
-  const [refusals, setRefusals] = useState<RefusalReason[] | null>(null);
 
   // The checklist: loaded whenever the package folder changes. Left `null`
   // (never `[]`) while nothing has arrived, so a row is never dropped just
@@ -219,95 +203,29 @@ export function PackagePanel({
   );
   const blockedCount = (catalogue ?? []).filter((pkg) => pkg.hostPlacementBlock !== null).length;
 
-  // The preview: read-only (§3's PREVIEW), recomputed whenever the request
-  // changes, and only once at least one package is chosen — an empty
-  // selection previews nothing rather than asking the engine a question
-  // with no content. F3/F5: a chosen set with no package folder yet is its
-  // own, explained state — never a call asking the backend to scan `""`.
-  useEffect(() => {
-    setConfirmed(false);
-    setApplyOutcome(null);
-    setRefusals(null);
-    if (!treeRoot || chosen.length === 0 || !packageFolder) {
-      setCollisions(null);
-      setCollisionsError(null);
-      return;
-    }
-    // M3: never ask the engine to preview a selection it has already said
-    // it cannot place. Without this the call reaches the payload's own
-    // reader and comes back as a raw, English `Password required to decrypt
-    // file` — after the user has already committed to the selection, in a
-    // language they may not read.
-    //
-    // `!catalogue` is part of the same guard, not a separate nicety: the
-    // catalogue and this preview are two independent async loads started by
-    // the same `packageFolder` change, so previewing before the catalogue
-    // has landed is previewing without knowing what is placeable — which is
-    // exactly the race that would let a *remembered* blocked pick through
-    // on the very first render. `catalogue` is in the dependency list below
-    // so the preview runs the moment it does land.
-    if (!catalogue || blockedChosen.length > 0) {
-      setCollisions(null);
-      setCollisionsError(null);
-      return;
-    }
-    let cancelled = false;
-    osinstallCollisions(treeRoot, packageFolder, chosen)
-      .then((reports) => {
-        if (!cancelled) {
-          setCollisions(reports);
-          setCollisionsError(null);
-        }
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          setCollisions(null);
-          setCollisionsError(errorText(t, e));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [treeRoot, packageFolder, chosen, catalogue]);
-
-  // The add job's own progress — `job-progress` is application-wide, so
-  // every update is checked against this panel's own job id first.
-  useEffect(() => {
-    return subscribeSafely(() =>
-      onJobProgress((job) => {
-        if (job.id !== applyJob.current) return;
-        setProgress(job);
-        if (job.state.state === "running") return;
-
-        applyJob.current = null;
-        setBusy(false);
-        if (job.state.state === "failed") {
-          setApplyError(`${job.state.message} (${job.state.error_code})`);
-        } else if (job.state.state === "cancelled") {
-          setApplyError(t("osinstall.packages.apply.cancelled"));
-        }
-        // A clean finish says nothing here — its own outcome (files,
-        // directories, bytes) arrives on `OSINSTALL_ADD_PACKAGE_EVENT`
-        // below, and that is what flips this panel into "done".
-      })
-    );
-  }, [t]);
-
-  // The add job's own outcome (F10) — logged before this task's fix round,
-  // and nowhere else; this is what lets the panel say more than "Added."
-  useEffect(() => {
-    return subscribeSafely(() =>
-      onOsInstallAddPackageResult((result) => {
-        if (result.job_id !== applyJob.current) return;
-        setApplyOutcome(result.outcome);
-        // F10: confirming describes the run that was on screen when it was
-        // ticked; once that run has finished, the tick is stale — the same
-        // rule `OsInstall.tsx`'s own build confirmation follows.
-        setConfirmed(false);
-      })
-    );
-  }, []);
+  /**
+   * The preview → confirm → apply → report machine, **shared with the chain
+   * screen** (round 3, task 2). It was this panel's own until the chain's
+   * host-placed rows needed the same thing; a second copy of "what would
+   * this replace" would be a second answer to one question.
+   *
+   * `enabled` is this screen's own guard and stays here. M3: never ask the
+   * engine to preview a selection it has already said it cannot place —
+   * without it the call reaches the payload's own reader and comes back as a
+   * raw, English `Password required to decrypt file`, after the user has
+   * already committed to the selection and in a language they may not read.
+   * `!catalogue` is part of the same guard rather than a separate nicety:
+   * the catalogue and the preview are two independent async loads started by
+   * the same `packageFolder` change, so previewing before the catalogue has
+   * landed is previewing without knowing what is placeable — the race that
+   * would let a *remembered* blocked pick through on the very first render.
+   */
+  const placement = useHostPlacement({
+    treeRoot,
+    packageFolder,
+    chosen,
+    enabled: catalogue !== null && blockedChosen.length === 0,
+  });
 
   /**
    * **The artefact picker** (ART-197 wave 2, row 1).
@@ -328,6 +246,45 @@ export function PackagePanel({
    * which is the rule `useTreeCheck` already follows for `isTree`.
    */
   const [siblingTrees, setSiblingTrees] = useState<FoundTree[] | null>(null);
+
+  /**
+   * Which of the listed builds' releases ART knows an **update chain** for
+   * (round 3, task 2 § 3) — the one link from here to the chain screen.
+   *
+   * Asked of the chain itself, with no folders and no tree, so the answer is
+   * the recipes' own (`chain_position` on any package of that release) and
+   * never a list of release names written into a screen: the day a fourth
+   * release grows a chain, this link follows it without a code change. With
+   * nothing to resolve against, `osinstall_chain` scans no disk.
+   *
+   * A release absent from this map is one nobody has answered for yet, and
+   * no link is offered — "we have not asked" is not "there is no chain".
+   */
+  const [releasesWithChain, setReleasesWithChain] = useState<Record<string, boolean>>({});
+  const listedReleases = (siblingTrees ?? [])
+    .map((found) => found.summary.release)
+    .filter((value): value is InstallRelease => isInstallRelease(value));
+  const listedReleasesKey = [...new Set(listedReleases)].sort().join("\n");
+  useEffect(() => {
+    if (!listedReleasesKey) return;
+    let cancelled = false;
+    for (const named of listedReleasesKey.split("\n")) {
+      const forRelease = named as InstallRelease;
+      osinstallChain(forRelease, [])
+        .then((report) => {
+          if (cancelled) return;
+          setReleasesWithChain((held) => ({ ...held, [forRelease]: report.rows.length > 0 }));
+        })
+        .catch(() => {
+          // Silent: this is one extra link on a row that works without it.
+          // An error box here would report a fault in ART as though it were
+          // a statement about the user's build.
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [listedReleasesKey]);
 
   async function chooseTreeRoot() {
     const picked = await open({
@@ -362,35 +319,8 @@ export function PackagePanel({
     onChosenChange?.(next);
   }
 
-  async function runApply() {
-    if (!treeRoot || !packageFolder || chosen.length === 0) return;
-    setBusy(true);
-    setApplyError(null);
-    setProgress(null);
-    setApplyOutcome(null);
-    setRefusals(null);
-    try {
-      const result = await osinstallAddPackage(treeRoot, packageFolder, chosen);
-      if (result.outcome === "refused") {
-        // F2: typed, not a job that could only have failed later with
-        // Rust's own debug text — nothing was written.
-        setBusy(false);
-        setRefusals(result.refusals);
-        return;
-      }
-      applyJob.current = result.job_id;
-      // `busy` clears on the job's own progress event, or here if the job
-      // never actually started.
-    } catch (e) {
-      setApplyError(errorText(t, e));
-      setBusy(false);
-      applyJob.current = null;
-    }
-  }
-
-  const counts = collisions ? collisionCounts(collisions) : null;
-  const groups = collisions ? groupCollisionsForPreview(collisions) : [];
-  const pct = progress ? fraction(progress) : null;
+  const counts = placement.collisions ? collisionCounts(placement.collisions) : null;
+  const pct = placement.progress ? fraction(placement.progress) : null;
   const shippedCount = catalogue?.length ?? 3;
   const previewNeedsFolder = treeRoot !== null && chosen.length > 0 && !packageFolder;
 
@@ -431,9 +361,18 @@ export function PackagePanel({
           </p>
           {siblingTrees.map((found) => {
             const chosenTree = found.path === treeRoot;
+            // The one link from a build to its own update chain. Rendered
+            // **beside** the row's button rather than inside it: a link
+            // nested in a button is neither reachable by keyboard as itself
+            // nor valid, and picking the tree and going to its updates are
+            // two different acts.
+            const updates =
+              isInstallRelease(found.summary.release) && releasesWithChain[found.summary.release]
+                ? found.summary.release
+                : null;
             return (
+              <div key={found.path}>
               <button
-                key={found.path}
                 type="button"
                 className={chosenTree ? "btn btn-primary" : "btn"}
                 onClick={() => {
@@ -468,6 +407,14 @@ export function PackagePanel({
                   </span>
                 )}
               </button>
+              {updates && (
+                <p style={{ fontSize: 11, margin: "0 0 6px" }}>
+                  <Link data-testid="tree-picker-updates" to="/os-builder/amiga-kurulum">
+                    {t("osinstall.chain.updatesLink", { release: updates })}
+                  </Link>
+                </p>
+              )}
+              </div>
             );
           })}
         </div>
@@ -642,140 +589,51 @@ export function PackagePanel({
             </p>
           )}
 
-          {collisionsError && (
-            <p className="badge badge-err" style={{ display: "block", padding: "6px 12px", fontSize: 12, marginBottom: 12 }}>
-              {collisionsError}
-            </p>
-          )}
-
-          {collisions && (
-            <div
-              style={{
-                maxHeight: 360,
-                overflowY: "auto",
-                border: "1px solid var(--border)",
-                borderRadius: 4,
-                padding: "6px 10px",
-                marginBottom: 10,
-              }}
-            >
-              {groups.length === 0 && (
-                <p className="faint" style={{ fontSize: 11, margin: "4px 0" }}>
-                  {t("osinstall.packages.preview.nothing")}
-                </p>
-              )}
-              {groups.map((group) => (
-                <div key={group.kind} style={{ marginBottom: 10 }}>
-                  {/* F1: a real heading per class, not a flat sorted list —
-                      downgrades' own heading is styled with the error
-                      palette so it is marked by more than colour alone
-                      (its text already says "Downgrades", not just red). */}
-                  <div
-                    className={group.kind === "downgrade" ? "badge badge-err" : "muted"}
-                    style={{
-                      fontSize: 11,
-                      fontWeight: 600,
-                      margin: "4px 0",
-                      display: group.kind === "downgrade" ? "inline-block" : "block",
-                    }}
-                  >
-                    {t(collisionGroupHeadingKey(group.kind), { count: group.reports.length })}
-                  </div>
-                  {group.reports.map((report) => {
-                    const phrase = collisionPhrase(report.collision);
-                    return (
-                      <div
-                        key={report.path}
-                        data-testid="collision-row"
-                        style={{ fontSize: 11, padding: "3px 0", borderBottom: "1px solid var(--border)" }}
-                      >
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                          <span style={{ wordBreak: "break-all" }}>{report.path}</span>
-                          <span
-                            className={group.kind === "downgrade" ? undefined : "faint"}
-                            style={group.kind === "downgrade" ? { color: "var(--err-text)" } : undefined}
-                          >
-                            {t(phrase.key, phrase.params)}
-                          </span>
-                        </div>
-                        {!report.declared && (
-                          <span className="badge badge-warn" style={{ fontSize: 10 }}>
-                            {t("osinstall.packages.undeclared")}
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {refusals && refusals.length > 0 && (
-            <div
-              className="badge badge-err"
-              style={{ display: "block", padding: "8px 10px", margin: "0 0 12px", fontSize: 11 }}
-            >
-              <p style={{ margin: "0 0 6px", fontWeight: 600 }}>{t("osinstall.packages.refused.heading")}</p>
-              <ul style={{ margin: 0, paddingLeft: 18 }}>
-                {refusals.map((reason, i) => {
-                  const phrase = refusalPhrase(reason);
-                  return (
-                    <li key={i} style={{ padding: "2px 0" }}>
-                      {t(phrase.key, phrase.params)}
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          )}
+          {/* What this would replace, and any refusal — the shared blocks
+              the chain screen renders too, so the two screens cannot come to
+              say different things about one placement. */}
+          <HostPlacementPreview placement={placement} />
 
           {/* One confirmation for the whole set — never one per file (see
               the module doc comment's requirement 3). */}
           <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, margin: "0 0 10px" }}>
             <input
               type="checkbox"
-              checked={confirmed}
-              disabled={!collisions}
-              onChange={(e) => setConfirmed(e.target.checked)}
+              checked={placement.confirmed}
+              disabled={!placement.collisions}
+              onChange={(e) => placement.setConfirmed(e.target.checked)}
             />
             {t("osinstall.packages.confirm", { count: chosen.length })}
           </label>
 
-          {applyError && (
-            <div className="badge badge-err" style={{ display: "block", padding: "6px 12px", fontSize: 12, marginBottom: 12 }}>
-              {applyError}
-            </div>
-          )}
-          {applyOutcome && (
-            <div className="badge badge-ok" style={{ display: "block", padding: "6px 12px", fontSize: 12, marginBottom: 12 }}>
-              {t("osinstall.packages.apply.done")}{" "}
-              {t("osinstall.packages.apply.outcome", {
-                files: applyOutcome.files,
-                directories: applyOutcome.directories,
-                bytes: formatBytes(applyOutcome.bytes),
-              })}
-            </div>
-          )}
+          <HostPlacementReport outcome={placement.outcome} error={placement.applyError} />
 
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <button
               className="btn btn-primary"
-              onClick={() => void runApply()}
+              onClick={() => void placement.run()}
               disabled={
-                busy || !confirmed || !treeRoot || !packageFolder || blockedChosen.length > 0
+                placement.busy ||
+                !placement.confirmed ||
+                !treeRoot ||
+                !packageFolder ||
+                blockedChosen.length > 0
               }
             >
-              {t(busy ? "osinstall.packages.apply.running" : "osinstall.packages.apply.run")}
+              {t(
+                placement.busy
+                  ? "osinstall.packages.apply.running"
+                  : "osinstall.packages.apply.run"
+              )}
             </button>
-            {busy && (
+            {placement.busy && (
               <span className="faint" style={{ fontSize: 11 }}>
                 {pct === null
                   ? t("osinstall.packages.apply.progressStarting")
                   : t("osinstall.packages.apply.progressPercent", {
                       percent: Math.round(pct * 100),
-                      done: progress?.done ?? 0,
-                      total: progress?.total ?? 0,
+                      done: placement.progress?.done ?? 0,
+                      total: placement.progress?.total ?? 0,
                     })}
               </span>
             )}

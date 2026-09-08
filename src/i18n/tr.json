@@ -2303,7 +2303,13 @@
       "onAmiga": "Amiga'da çalışır",
       "onWindows": "Windows'tan yerleştirilir",
       "setLine": "{{release}} güncellemeleri — {{total}} satırın {{installed}} tanesi uygulandı",
-      "setLineNotNeeded": "{{release}} güncellemeleri — {{total}} satırın {{installed}} tanesi uygulandı — {{notNeeded}} tanesi gerekmiyor"
+      "setLineNotNeeded": "{{release}} güncellemeleri — {{total}} satırın {{installed}} tanesi uygulandı — {{notNeeded}} tanesi gerekmiyor",
+      "tree": "ağaç {{root}}",
+      "treeNone": "Henüz bir dağıtım ağacı seçilmedi — biri seçilene kadar buradaki hiçbir şey uygulanmış olarak kaydedilemez.",
+      "cdLink": "Diski kaynak adımında seçin",
+      "next": "Sıradaki: {{name}}",
+      "reportRow": "Bu rapor {{name}} hakkında.",
+      "updatesLink": "{{release}} güncellemeleri"
     },
     "mediaId": {
       "heading": "Bu dosyalar, içeriklerine göre ne",

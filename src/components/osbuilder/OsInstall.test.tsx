@@ -84,6 +84,7 @@ const packagesMock = vi.hoisted(() => vi.fn());
 const identifyMediaMock = vi.hoisted(() => vi.fn());
 const slotsMock = vi.hoisted(() => vi.fn());
 const amigaForeverMock = vi.hoisted(() => vi.fn());
+const chainMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
@@ -97,6 +98,11 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   osinstallMediaEvidence: mediaEvidenceMock,
   osinstallIdentifyMedia: identifyMediaMock,
   osinstallSlots: slotsMock,
+  // `AmigaInstallPanel` asks for the chain on mount (round 3, task 2).
+  // Mocked at the same boundary as everything else here; the default is a
+  // release ART knows no chain for, which is what this screen's own
+  // fixtures are.
+  osinstallChain: chainMock,
   osinstallPackages: packagesMock,
   osinstallComponentCollisions: componentCollisionsMock,
   osinstallApply: applyMock,
@@ -461,6 +467,12 @@ beforeEach(() => {
     missingRequired: ["Install3.2"],
   });
   packagesMock.mockReset().mockResolvedValue([]);
+  chainMock.mockReset().mockResolvedValue({
+    rows: [],
+    summary: { release: "AmigaOS 3.2", total: 0, installed: 0, notNeeded: 0 },
+    unreadableFolders: [],
+    crowdedFolders: [],
+  });
   // The material readout's own round trip. The honest default is an empty
   // release: no slots, nothing found, nothing unreadable — so the readout
   // renders its heading and an all-zero set line and takes nothing away from
@@ -583,14 +595,21 @@ describe("OsInstall renders past its headings", () => {
     expect(screen.getByText(i18n.t("osinstall.destination.label"))).toBeTruthy();
 
     // The component checklist is the screen's real input (requirement 4) —
-    // one row per component of the release's own loaded recipe. `+ 3` are the
-    // tickboxes that are not components: the run card's confirmation,
-    // `AmigaInstallPanel`'s own (the Amiga-side install round's task 6), and
-    // the media section's "reuse the last scan" (ART-194). `PackagePanel`'s
+    // one row per component of the release's own loaded recipe. `+ 2` are the
+    // tickboxes that are not components: the run card's confirmation and the
+    // media section's "reuse the last scan" (ART-194). `PackagePanel`'s
     // confirmation is not among them — it renders only once a package has been
     // ticked, and nothing here ticks one.
+    //
+    // **`AmigaInstallPanel`'s own is not among them either, and that changed
+    // in round 3.** This fixture is AmigaOS 3.2, whose catalogue answers with
+    // no runnable package at all, so that panel renders no form — and its
+    // emulator confirmation is part of the form. It used to render on its own
+    // under the "nothing runnable for this release" sentence, which is
+    // ART-212's own complaint one control further on: a confirmation for a
+    // run that cannot be configured.
     const checkboxes = screen.getAllByRole("checkbox");
-    expect(checkboxes.length).toBe(COMPONENTS_32.length + 3);
+    expect(checkboxes.length).toBe(COMPONENTS_32.length + 2);
     expect(
       screen.getByRole("checkbox", { name: i18n.t("osinstall.media.reuseScan") })
     ).toBeTruthy();

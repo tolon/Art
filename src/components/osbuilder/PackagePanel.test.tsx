@@ -15,6 +15,8 @@ import userEvent from "@testing-library/user-event";
 // `useTranslation` inside the component has nothing to read from and every
 // string renders as its own raw key.
 import "@/i18n";
+import i18n from "i18next";
+import { MemoryRouter } from "react-router-dom";
 import type { CollisionReport, PackageSummary } from "@/lib/osinstall";
 
 const packagesMock = vi.hoisted(() => vi.fn());
@@ -25,6 +27,7 @@ const collisionsMock = vi.hoisted(() => vi.fn());
 const addPackageMock = vi.hoisted(() => vi.fn());
 const onJobProgressMock = vi.hoisted(() => vi.fn());
 const onAddPackageResultMock = vi.hoisted(() => vi.fn());
+const chainMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
@@ -34,6 +37,9 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   onOsInstallAddPackageResult: onAddPackageResultMock,
   osinstallDescribeTree: describeTreeMock,
   osinstallTreesIn: treesInMock,
+  // The tree picker asks whether a listed build's release has an update
+  // chain, and links to it when it does (round 3, task 2 § 3).
+  osinstallChain: chainMock,
 }));
 
 vi.mock("@/lib/jobs", async (importOriginal) => ({
@@ -109,6 +115,14 @@ beforeEach(() => {
   addPackageMock.mockReset().mockResolvedValue({ outcome: "started", job_id: 1 });
   onJobProgressMock.mockReset().mockResolvedValue(() => {});
   onAddPackageResultMock.mockReset().mockResolvedValue(() => {});
+  // No chain by default: the link is one extra thing on a row, and a test
+  // that did not ask for it should not get it.
+  chainMock.mockReset().mockResolvedValue({
+    rows: [],
+    summary: { release: "AmigaOS 3.9", total: 0, installed: 0, notNeeded: 0 },
+    unreadableFolders: [],
+    crowdedFolders: [],
+  });
   describeTreeMock.mockReset().mockResolvedValue({
     isTree: false,
     release: null,
@@ -562,5 +576,99 @@ describe("the artefact picker", () => {
     const picker = await screen.findByTestId("tree-picker");
     expect(picker.textContent).not.toMatch(/osinstall\.packages\.treePicker/);
     expect(picker.textContent).not.toMatch(/\{\{[^}]+\}\}/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The one link from a build to its own update chain (round 3, task 2 § 3)
+//
+// The picker is where somebody has just found their builds. A build whose
+// release ART knows an update chain for is one click from the screen that
+// runs it; a build whose release ART knows no chain for gets no link, because
+// a link to an empty screen is worse than none.
+// ---------------------------------------------------------------------------
+
+describe("the link to a build's updates", () => {
+  const chainFor = (release: string, rows: number) => ({
+    rows: Array.from({ length: rows }, (_, index) => ({
+      position: index + 1,
+      packageId: `p${index}`,
+      slotId: null,
+      name: `p${index}`,
+      state: { state: "ready" as const },
+      sentenceFacts: { file: null, runsOnAmiga: true },
+    })),
+    summary: { release, total: rows, installed: 0, notNeeded: 0 },
+    unreadableFolders: [],
+    crowdedFolders: [],
+  });
+
+  const BUILD_OF = (name: string, release: string) => ({
+    path: `E:/builds/${name}`,
+    name,
+    summary: {
+      isTree: true,
+      release,
+      files: 3868,
+      components: ["workbench-base"],
+      amigaInstalled: [],
+      problem: null,
+    },
+  });
+
+  function renderRouted() {
+    return render(
+      <MemoryRouter>
+        <PackagePanel release="AmigaOS 3.9" treeRoot={null} chosen={[]} />
+      </MemoryRouter>
+    );
+  }
+
+  it("offers it for a release whose packages have a chain, and not for one without", async () => {
+    dialogOpenMock.mockResolvedValue("E:/builds");
+    treesInMock.mockResolvedValue([
+      BUILD_OF("dist-3.9", "AmigaOS 3.9"),
+      BUILD_OF("dist-3.2", "AmigaOS 3.2"),
+    ]);
+    // Asked of the chain itself rather than of a list of release names
+    // written into the screen: 3.9 has one, 3.2 has none.
+    chainMock.mockImplementation(async (release: string) =>
+      chainFor(release, release === "AmigaOS 3.9" ? 9 : 0)
+    );
+
+    renderRouted();
+    await userEvent.click(screen.getAllByRole("button", { name: /browse/i })[0]);
+    await screen.findByTestId("tree-picker");
+
+    const link = await screen.findByRole("link", {
+      name: i18n.t("osinstall.chain.updatesLink", { release: "AmigaOS 3.9" }),
+    });
+    expect(link.getAttribute("href")).toBe("/os-builder/amiga-kurulum");
+    // The other build's release was asked about and answered "no chain" —
+    // so this is a measured absence, not a question nobody put.
+    await waitFor(() => expect(chainMock).toHaveBeenCalledWith("AmigaOS 3.2", []));
+    expect(
+      screen.queryByRole("link", {
+        name: i18n.t("osinstall.chain.updatesLink", { release: "AmigaOS 3.2" }),
+      })
+    ).toBeNull();
+    expect(screen.getAllByTestId("tree-picker-updates")).toHaveLength(1);
+  });
+
+  it("offers nothing when the chain cannot be asked", async () => {
+    // "We could not ask" is not "there is no chain", and a link to a screen
+    // ART cannot vouch for is the confident-wrong kind of offer.
+    dialogOpenMock.mockResolvedValue("E:/builds");
+    treesInMock.mockResolvedValue([BUILD_OF("dist-3.9", "AmigaOS 3.9")]);
+    chainMock.mockRejectedValue(new Error("no IPC bridge"));
+
+    renderRouted();
+    await userEvent.click(screen.getAllByRole("button", { name: /browse/i })[0]);
+    await screen.findByTestId("tree-picker");
+    await waitFor(() => expect(chainMock).toHaveBeenCalled());
+
+    expect(screen.queryAllByTestId("tree-picker-updates")).toHaveLength(0);
+    // …and the row itself is untouched: the picker still does its own job.
+    expect(screen.getByRole("button", { name: /dist-3\.9/ })).toBeTruthy();
   });
 });

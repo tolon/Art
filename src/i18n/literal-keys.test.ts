@@ -559,6 +559,24 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // enumerated in `phrase-keys.test.ts` (`notYetRunnable: every reason
     // resolves on both screens`) from a `Record` keyed by the union, so a
     // second reason is a compile error there rather than an untested key.
-    expect(dynamicCalls).toBe(169);
+    // 169 -> 173 (round 3, task 2: the chain screen). Four, and all four are
+    // one `Phrase` produced by `@/lib/chain` from what
+    // `core::osinstall::chain` decided — the rule this whole count exists to
+    // keep: the sentence is Rust's, the rendering is the screen's.
+    //   - the row's own state sentence, `t(line.phrase.key, …)`: seven
+    //     endings that must never collapse into "not done", each with its own
+    //     next step (go and get this file / do that row first / you already
+    //     have it / nobody has measured this);
+    //   - the row's `where` — *runs on the Amiga* / *placed from Windows* —
+    //     its own field rather than part of the state, because it is true of
+    //     the row whatever state the row is in;
+    //   - the set line (`chainSummaryLine`), which names the redundant rows
+    //     apart from the fraction so a shrinking denominator is not read as
+    //     material vanishing;
+    //   - the selected row's sentence repeated beside a disabled Run button,
+    //     so the reason the button is dead is the row's own words and never a
+    //     second wording composed in the component.
+    // `chain.test.ts` enumerates every variant of all four.
+    expect(dynamicCalls).toBe(173);
   });
 });
