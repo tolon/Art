@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A BoingBag 3.9-2 run now applies the XAD update too, in the same sitting.**
+  BoingBag 3.9-2 carries a second update inside itself — a newer
+  `xadmaster.library` and the two dozen little readers that go with it, for
+  `.lzx`, `.rar`, `.cab`, `.zoom` and the rest — and ART used to leave it
+  behind: the tree came out saying it was fully BoingBag'd while its archive
+  handling was a version older than the disc you had just installed from. ART
+  now checks what your tree's `xadmaster.library` says about itself and, if it
+  is older than 10, lets the package apply its own update straight after the
+  first one, in the same emulator session. Nothing extra to choose, and about
+  fifteen seconds longer.
+
+  The report afterwards says which of four things happened, and they are four
+  because they need four different reactions: **it ran** (your tree got the
+  update), **it was not needed** (your tree already had that version — not a
+  problem), **it ran and said no** (the install itself still worked; only that
+  extra part did not), or **ART could not check** (this tree has no
+  `C/Version`, so nothing was run rather than something being run blind). None
+  of them changes what the install itself reported.
+
+- **A folder of games is no longer read from end to end when you ask ART to
+  identify your install media.** ART asks each disc image for its own name
+  first — a few bytes near the front of the file — and only reads the whole of
+  one if that name is a disc some AmigaOS recipe actually installs from. The
+  rest are listed as *left alone*, by name, so you can see ART did not simply
+  miss them. On a material folder with a few CD32 images in it this is the
+  difference between a pass that reads a gigabyte and one that reads none of
+  it.
+
 - **The AmigaOS 3.9 updates are one ordered list now, and ART knows five more
   of them.** The BoingBags, the Locale packs, the Contribution drawer, the
   Euro-Update and the community BoingBags 3&4 are a chain: each one goes on
