@@ -114,6 +114,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::system::ping,
             commands::system::app_info,
+            commands::system::host_amiga_forever_folders,
             commands::scratch::scratch_root,
             commands::scratch::scratch_set_root,
             commands::workflow::plan_path,

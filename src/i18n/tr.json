@@ -2213,10 +2213,7 @@
       "label": "AmigaOS sürümü"
     },
     "media": {
-      "label": "Kurulum diskleri klasörü",
-      "ariaLabel": "AmigaOS kurulum medyası klasörü",
       "none": "Klasör seçilmedi.",
-      "chooseTitle": "AmigaOS kurulum disk ya da CD imgelerinin bulunduğu klasörü seç",
       "unreadable": "ART bu klasörü okuyamadı — yolu kontrol et.",
       "empty": "Bu klasörde kurulum diski bulunamadı.",
       "found_one": "{{count}} kurulum diski bulundu: {{names}}.",
@@ -2232,6 +2229,20 @@
       "removeFolderAriaLabel": "{{folder}} klasörünü kaldır",
       "addTitle": "Bu sürümün disketlerini tutan başka bir klasör seçin",
       "addHint": "AmigaOS 3.2.2.1, 3.2 disketleriniz artı Update ve Hotfix klasörleri — her birini ekleyin."
+    },
+    "material": {
+      "label": "Bu yapımın malzemesini tutan klasörler",
+      "layerAny": "Her şey",
+      "layerAriaLabel": "{{folder}} klasörü sürümün hangi parçasını tutuyor",
+      "unusedForPlan_one": "Bu sürüm her parça için ayrı bir klasör okur; bu yüzden ART listedeki {{count}} klasörden kurulum yapmayacak: {{folders}}. Hangi parçayı tuttuğunu belirtin ya da listeden çıkarın.",
+      "unusedForPlan_other": "Bu sürüm her parça için ayrı bir klasör okur; bu yüzden ART listedeki {{count}} klasörden kurulum yapmayacak: {{folders}}. Her birinin hangi parçayı tuttuğunu belirtin ya da listeden çıkarın.",
+      "amigaForever": "Amiga Forever'ın disketleri {{path}} konumunda.",
+      "amigaForeverAdd": "Ekle",
+      "amigaForeverDismiss": "Şimdi değil",
+      "readoutHeading": "Bu sürüm neye ihtiyaç duyuyor, klasörlerinizde ne var",
+      "readoutFailed": "ART bu klasörlerde ne olduğunu çıkaramadı: {{detail}}. Bu ART'ın kusuru, dosyalarınız hakkında bir yargı değil.",
+      "required": "zorunlu",
+      "optional": "isteğe bağlı"
     },
     "slots": {
       "foundByNameUnread": "{{file}} — bu dosya kendine {{identity}} diyor, {{name}} de zaten bu. Baytlarını henüz kimse okumadı, yani ART onları tablolarıyla karşılaştırmadı — doğrulamak için bu klasörü içeriğine göre tanımlayın.",

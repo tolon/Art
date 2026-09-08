@@ -82,6 +82,8 @@ const releaseForMediaMock = vi.hoisted(() => vi.fn());
 const mediaEvidenceMock = vi.hoisted(() => vi.fn());
 const packagesMock = vi.hoisted(() => vi.fn());
 const identifyMediaMock = vi.hoisted(() => vi.fn());
+const slotsMock = vi.hoisted(() => vi.fn());
+const amigaForeverMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
@@ -94,6 +96,7 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   osinstallReleaseForMedia: releaseForMediaMock,
   osinstallMediaEvidence: mediaEvidenceMock,
   osinstallIdentifyMedia: identifyMediaMock,
+  osinstallSlots: slotsMock,
   osinstallPackages: packagesMock,
   osinstallComponentCollisions: componentCollisionsMock,
   osinstallApply: applyMock,
@@ -118,6 +121,15 @@ vi.mock("@/lib/pistorm", async (importOriginal) => ({
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: dialogOpenMock,
+}));
+
+// The Amiga Forever offer (design § 3.5) asks the host on mount. Mocked at
+// the same `@/lib/*` boundary as everything else here; the default is a
+// machine that does not have it, so no test gets an offer line it did not
+// ask for.
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  hostAmigaForeverFolders: amigaForeverMock,
 }));
 
 // The one real Tauri IPC boundary `useRemembered` reaches on every tick
@@ -372,6 +384,12 @@ const REFUSAL: RefusalReason = {
   volume_name: "Workbench3.2",
 };
 
+/** The remembered bag, typed, for the tests that assert on storage rather
+ *  than on the screen. */
+function rememberedBag(): Record<string, unknown> {
+  return useSettingsStore.getState().settings.remembered as Record<string, unknown>;
+}
+
 function seedRemembered(overrides: Record<string, unknown>) {
   useSettingsStore.setState({
     loaded: true,
@@ -443,6 +461,22 @@ beforeEach(() => {
     missingRequired: ["Install3.2"],
   });
   packagesMock.mockReset().mockResolvedValue([]);
+  // The material readout's own round trip. The honest default is an empty
+  // release: no slots, nothing found, nothing unreadable — so the readout
+  // renders its heading and an all-zero set line and takes nothing away from
+  // any other test on this screen.
+  slotsMock.mockReset().mockResolvedValue({
+    states: [],
+    summary: {
+      release: "AmigaOS 3.2",
+      requiredTotal: 0,
+      requiredFound: 0,
+      optionalTotal: 0,
+      optionalFound: 0,
+    },
+    unreadableFolders: [],
+  });
+  amigaForeverMock.mockReset().mockResolvedValue({ adf: null, rom: null });
   // The honest default for the content-hash pass: it ran, it read the one
   // disk the media scan above reports, and no row in the table claims it.
   // **A miss is the default on purpose** — every other test in this file
@@ -494,14 +528,35 @@ function renderOsInstall(options: { release?: InstallRelease } = {}) {
   return render(<OsInstall />);
 }
 
-/** One layer's own "Browse" button, clicked through its own field — found by
- *  `data-testid` (ART-237: the field's accessible name moved onto the
- *  button itself, so a bare `aria-label` on the wrapping div is no longer
- *  there for a test to query by). */
-async function browseLayerFolder(layerId: string, path: string) {
+/** Add one folder through the screen's single folder picker (design § 3.1).
+ *  There is one Add button now, not one Browse per field, so every test that
+ *  used to point a field at a folder goes through here. */
+async function addFolder(path: string) {
   dialogOpenMock.mockResolvedValueOnce(path);
-  const field = await screen.findByTestId(`layer-field-${layerId}`);
-  await userEvent.click(within(field).getByRole("button"));
+  await userEvent.click(await screen.findByTestId("material-add-folder"));
+  // The path is on screen more than once once the packages panel below reads
+  // the same list, so `findAllByText` — what this waits for is the row
+  // having landed, not how many places show it.
+  await screen.findAllByText(path);
+}
+
+/** Say which part of a layered release a folder in the list holds — the
+ *  labelled question the per-layer fields used to ask, attached to the folder
+ *  rather than to a field. Found by the select's own accessible name, which
+ *  names the folder (ART-240's rule: several rows, several controls, and a
+ *  screen reader user must be able to tell them apart). */
+async function tagFolder(path: string, layerId: string) {
+  const select = await screen.findByRole("combobox", {
+    name: i18n.t("osinstall.material.layerAriaLabel", { folder: path }),
+  });
+  await userEvent.selectOptions(select, layerId);
+}
+
+/** Add a folder and tag it with the layer it holds — what pointing a
+ *  per-layer field at a folder used to be. */
+async function browseLayerFolder(layerId: string, path: string) {
+  await addFolder(path);
+  await tagFolder(path, layerId);
 }
 
 /** Renders on AmigaOS 3.2.2, browses every named layer's own folder in turn,
@@ -522,7 +577,7 @@ describe("OsInstall renders past its headings", () => {
     // The five headings a browser probe once confirmed are not the news
     // here — everything below them, which the probe never survived to see,
     // is.
-    expect(screen.getByText(i18n.t("osinstall.media.label"))).toBeTruthy();
+    expect(screen.getByText(i18n.t("osinstall.material.label"))).toBeTruthy();
     expect(screen.getByText(i18n.t("osinstall.rom.label"))).toBeTruthy();
     expect(screen.getByText(i18n.t("osinstall.destination.label"))).toBeTruthy();
 
@@ -945,15 +1000,11 @@ describe("a media folder belongs to the release it holds (ART-207)", () => {
     await userEvent.selectOptions(picker, "AmigaOS 3.9");
     await waitFor(() => expect(componentsMock).toHaveBeenCalledWith("AmigaOS 3.9"));
 
-    // The media field, found by its own `data-testid` (ART-237: its Browse
-    // button's accessible name is no longer the bare, generic "Browse…"
-    // every `Field` on this screen used to share, so a plain role/name
-    // lookup can no longer tell it apart from the ROM or destination one by
-    // position alone).
-    dialogOpenMock.mockResolvedValue("E:\\os39");
-    await userEvent.click(
-      within(await screen.findByTestId("osinstall-media-field")).getByRole("button")
-    );
+    // Through the one folder picker (design § 3.1) rather than the flat
+    // field's own Browse button, which no longer exists. The 3.9 list is
+    // seeded from that release's own remembered folder, so this adds a
+    // second row to it.
+    await addFolder("E:\\os39");
     // `findAllByText`: since the one material list (design § 3.1) a folder is
     // shown by the list row and by the packages panel below, which reads the
     // same list rather than keeping a folder of its own.
@@ -1791,25 +1842,43 @@ describe("the evidence covers the added folders too (ART-256)", () => {
   // not carry — the layered fields have their own scans (`layerScans`), and
   // counting a folder twice would be the mistake this fix is preventing in
   // the other direction.
-  it("does not scan the added folders for a layered release, the way the request does not send them", async () => {
+  it("plans a layered release from its tagged folders and names the ones it will not read", async () => {
     scanPerFolder();
     seedRemembered({
       ...FULL_FIELDS,
       "buildSession.release": "AmigaOS 3.2.2",
       "osinstall.extraMediaFolders.AmigaOS 3.2.2": [EXTRA],
-      // `osinstall.mediaFolder.<layerId>.<release>` — see `layerFolderKey`.
+      // `osinstall.mediaFolder.<layerId>.<release>` — the per-layer key
+      // `seededMaterial` migrates into a tagged entry.
       "osinstall.mediaFolder.base.AmigaOS 3.2.2": "E:\\base322",
     });
     render(<OsInstall />);
 
-    await waitFor(() => expect(planMock).toHaveBeenCalled());
+    // Waits for the request made **once the recipe's layers have landed**:
+    // `layers === []` is one value with two causes, and until `layersFor`
+    // answers, a layered release honestly looks unlayered from here
+    // (ART-256/ART-257's own `layersKnown` reasoning).
+    await waitFor(() => {
+      const last = planMock.mock.calls.at(-1)![0] as InstallRequest;
+      expect(Object.keys(last.mediaFolders ?? {}).length).toBeGreaterThan(0);
+    });
     const request = planMock.mock.calls.at(-1)![0] as InstallRequest;
+    // A layered request is the map alone: `plan.rs` ignores the flat fields
+    // outright for one.
     expect(request.extraMediaFolders).toEqual([]);
+    expect(request.mediaFolder).toBe("");
+    expect(request.mediaFolders).toEqual({ base: "E:\\base322" });
 
-    // The base layer's own folder is scanned; the remembered extra folder is
-    // not asked about at all.
+    // **The untagged folder is named, not dropped.** It is in the list, ART
+    // resolves it in the readout, and the plan cannot carry it — a screen
+    // that said nothing would be contradicting the core about what it is
+    // going to do.
+    const unused = await screen.findByTestId("material-unused");
+    expect(unused.textContent).toContain(EXTRA);
+
+    // And it really is not scanned as part of the release's evidence, the
+    // way the request does not send it.
     await waitFor(() => expect(scanMediaMock).toHaveBeenCalledWith("E:\\base322"));
-    expect(scanMediaMock).not.toHaveBeenCalledWith(EXTRA);
   });
 
   // M2 (fix wave 5, 2026-09-06 final review) — `foundVolumeNames`'s own doc
@@ -2584,13 +2653,12 @@ describe("Task 9: the tree's own release marker gets its own line", () => {
 // folder they named, every component from the other one came back
 // `MediaMissing` -- so the install could not be expressed at all.
 
-describe("media in more than one folder", () => {
-  it("sends every added folder to the planner, not only the first", async () => {
+describe("the one material folder list (design § 3.1)", () => {
+  it("sends every folder in the list to the planner, not only the first", async () => {
     await renderFull();
     planMock.mockClear();
 
-    dialogOpenMock.mockResolvedValue("E:\\media\\Update");
-    await userEvent.click(screen.getByRole("button", { name: /add another folder/i }));
+    await addFolder("E:\\media\\Update");
 
     await waitFor(() => expect(planMock).toHaveBeenCalled());
     const sent = planMock.mock.calls.at(-1)![0] as InstallRequest;
@@ -2598,46 +2666,43 @@ describe("media in more than one folder", () => {
     expect(sent.extraMediaFolders).toEqual(["E:\\media\\Update"]);
   });
 
-  it("shows what was added, so the user can see what ART will read", async () => {
+  it("shows one row per folder, so the user can see what ART will read", async () => {
     await renderFull();
-    dialogOpenMock.mockResolvedValue("E:\\media\\Hotfix");
-    await userEvent.click(screen.getByRole("button", { name: /add another folder/i }));
+    expect(screen.getAllByTestId("material-folder")).toHaveLength(1);
 
-    const rows = await screen.findAllByTestId("extra-media-folder");
-    expect(rows).toHaveLength(1);
-    expect(rows[0].textContent).toContain("E:\\media\\Hotfix");
+    await addFolder("E:\\media\\Hotfix");
+
+    const rows = await screen.findAllByTestId("material-folder");
+    expect(rows).toHaveLength(2);
+    expect(rows[1].textContent).toContain("E:\\media\\Hotfix");
   });
 
   it("takes one back out again", async () => {
     await renderFull();
-    dialogOpenMock.mockResolvedValue("E:\\media\\Update");
-    await userEvent.click(screen.getByRole("button", { name: /add another folder/i }));
-    await screen.findAllByTestId("extra-media-folder");
+    await addFolder("E:\\media\\Update");
 
     planMock.mockClear();
-    // ART-240: the accessible name now names which folder ("Remove
-    // E:\media\Update"), not just "Remove" — see `Field`'s own sibling fix
-    // (ART-237) for the same reason on the Browse buttons.
-    await userEvent.click(screen.getByRole("button", { name: /^remove /i }));
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: i18n.t("osinstall.media.removeFolderAriaLabel", { folder: "E:\\media\\Update" }),
+      })
+    );
 
-    await waitFor(() => expect(screen.queryAllByTestId("extra-media-folder")).toHaveLength(0));
+    await waitFor(() => expect(screen.queryAllByTestId("material-folder")).toHaveLength(1));
     await waitFor(() => expect(planMock).toHaveBeenCalled());
     const sent = planMock.mock.calls.at(-1)![0] as InstallRequest;
     expect(sent.extraMediaFolders).toEqual([]);
   });
 
   // ART-240 (found by the media-step accessibility sweep filed alongside
-  // ART-237): with more than one extra folder, every "Remove" button used
-  // to carry the identical accessible name "Remove" — a screen reader user
-  // tabbing through them could not tell which row any one of them belonged
-  // to. Each button's own folder is now part of its accessible name.
+  // ART-237): with more than one row, every "Remove" button used to carry
+  // the identical accessible name "Remove" — a screen reader user tabbing
+  // through them could not tell which row any one of them belonged to.
   it("names which folder each Remove button removes, once there is more than one", async () => {
     await renderFull();
-    dialogOpenMock.mockResolvedValueOnce("E:\\media\\Update");
-    await userEvent.click(screen.getByRole("button", { name: /add another folder/i }));
-    dialogOpenMock.mockResolvedValueOnce("E:\\media\\Hotfix");
-    await userEvent.click(screen.getByRole("button", { name: /add another folder/i }));
-    await waitFor(() => expect(screen.queryAllByTestId("extra-media-folder")).toHaveLength(2));
+    await addFolder("E:\\media\\Update");
+    await addFolder("E:\\media\\Hotfix");
+    await waitFor(() => expect(screen.queryAllByTestId("material-folder")).toHaveLength(3));
 
     const removeUpdate = screen.getByRole("button", { name: /remove.*update/i });
     const removeHotfix = screen.getByRole("button", { name: /remove.*hotfix/i });
@@ -2654,40 +2719,152 @@ describe("media in more than one folder", () => {
     expect(sent.extraMediaFolders).toEqual(["E:\\media\\Hotfix"]);
   });
 
-  it("does not add the same folder twice, nor the one already chosen above", async () => {
+  it("does not add the same folder twice, in any spelling", async () => {
     // The core reads a folder named twice exactly once; a screen that showed
-    // it twice would be contradicting the core about what it is going to do.
+    // it twice would be contradicting the core about what it is going to do,
+    // and `find_media_across` would refuse every disk in it as ambiguous with
+    // itself.
     await renderFull();
-    dialogOpenMock.mockResolvedValue("E:\\media\\Update");
-    const add = screen.getByRole("button", { name: /add another folder/i });
-    await userEvent.click(add);
-    await screen.findAllByTestId("extra-media-folder");
-    await userEvent.click(add);
+    await addFolder("E:\\media\\Update");
+    expect(screen.queryAllByTestId("material-folder")).toHaveLength(2);
 
-    expect(screen.queryAllByTestId("extra-media-folder")).toHaveLength(1);
+    dialogOpenMock.mockResolvedValueOnce("E:\\media\\Update");
+    await userEvent.click(screen.getByTestId("material-add-folder"));
+    expect(screen.queryAllByTestId("material-folder")).toHaveLength(2);
 
-    dialogOpenMock.mockResolvedValue("E:\\media");
-    await userEvent.click(add);
-    expect(screen.queryAllByTestId("extra-media-folder")).toHaveLength(1);
+    // Case and separators are not two folders on Windows (`canonicalFolder`).
+    dialogOpenMock.mockResolvedValueOnce("e:/MEDIA/");
+    await userEvent.click(screen.getByTestId("material-add-folder"));
+    expect(screen.queryAllByTestId("material-folder")).toHaveLength(2);
   });
 
-  /// Per release, like the media folder itself (ART-207): a 3.2.2.1 install's
-  /// update folder means nothing to a 3.9 one.
-  it("remembers them per release", async () => {
+  /// Per release, like everything else keyed by one (ART-207): a 3.2.2.1
+  /// install's update folder means nothing to a 3.9 one.
+  it("remembers the list per release", async () => {
     seedRemembered({
       ...FULL_FIELDS,
       "osinstall.extraMediaFolders": ["E:\\media\\Update"],
-      "osinstall.extraMediaFolders.AmigaOS 3.9": [],
     });
     render(<OsInstall />);
     await screen.findByText(i18n.t("osinstall.plan.heading"));
-    expect(screen.queryAllByTestId("extra-media-folder")).toHaveLength(1);
+    // The 3.2 list migrates to two folders: its flat one and its extra.
+    expect(screen.queryAllByTestId("material-folder")).toHaveLength(2);
 
     await userEvent.selectOptions(
       screen.getByRole("combobox", { name: i18n.t("osinstall.release.label") }),
       "AmigaOS 3.9"
     );
-    await waitFor(() => expect(screen.queryAllByTestId("extra-media-folder")).toHaveLength(0));
+    // 3.9's own list is its own flat folder alone.
+    await waitFor(() => expect(screen.queryAllByTestId("material-folder")).toHaveLength(1));
+    expect(screen.getAllByTestId("material-folder")[0].textContent).toContain("E:\\media39");
+  });
+
+  /// **The legacy keys are read once and never written again.** A migration
+  /// that wrote back would make the old keys a second live store of the same
+  /// folders, and a user who rolled back to an earlier ART would find their
+  /// list edits half-applied there.
+  it("edits the list without ever writing a legacy key", async () => {
+    await renderFull();
+    const before = rememberedBag();
+    expect(before["osinstall.mediaFolder"]).toBe("E:\\media");
+
+    await addFolder("E:\\media\\Update");
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: i18n.t("osinstall.media.removeFolderAriaLabel", { folder: "E:\\media" }),
+      })
+    );
+    await waitFor(() => expect(screen.queryAllByTestId("material-folder")).toHaveLength(1));
+
+    const after = rememberedBag();
+    // The list is the session's own key, and it holds the edit.
+    expect(after["buildSession.material.AmigaOS 3.2"]).toEqual({
+      folders: [{ path: "E:\\media\\Update", layer: null }],
+    });
+    // Every legacy key is exactly as it was.
+    expect(after["osinstall.mediaFolder"]).toBe("E:\\media");
+    expect(after["osinstall.extraMediaFolders"]).toBeUndefined();
+    expect(after["buildSession.packages"]).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Amiga Forever, offered — design § 3.5
+// ---------------------------------------------------------------------------
+//
+// `AMIGAFOREVERDATA` is set by Amiga Forever itself, so ART can find the
+// disks without asking. What it may not do is *use* them: adding a folder
+// nobody chose is the settings-change-without-a-user the remembered-settings
+// rule forbids outright.
+
+describe("Amiga Forever, offered and never added", () => {
+  const AF = "E:\\amiga\\Shared\\adf";
+
+  /** An empty material list plus a host that has Amiga Forever. */
+  function renderWithOffer() {
+    amigaForeverMock.mockResolvedValue({ adf: AF, rom: "E:\\amiga\\Shared\\rom" });
+    seedRemembered({});
+    return render(<OsInstall />);
+  }
+
+  it("offers the folder, and adds nothing at all until the click", async () => {
+    renderWithOffer();
+    const offer = await screen.findByTestId("amiga-forever-offer");
+    expect(offer.textContent).toContain(AF);
+
+    // **Nothing is in the session.** Asserted against the store rather than
+    // the screen: a readout that happened not to render the row would pass a
+    // DOM-only check while the folder had already been written.
+    expect(
+      rememberedBag()["buildSession.material.AmigaOS 3.2"]
+    ).toBeUndefined();
+    expect(screen.queryAllByTestId("material-folder")).toHaveLength(0);
+  });
+
+  it("adds it on the click, and stops offering once the list is not empty", async () => {
+    renderWithOffer();
+    await screen.findByTestId("amiga-forever-offer");
+
+    await userEvent.click(
+      screen.getByRole("button", { name: i18n.t("osinstall.material.amigaForeverAdd") })
+    );
+
+    const rows = await screen.findAllByTestId("material-folder");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain(AF);
+    expect(screen.queryByTestId("amiga-forever-offer")).toBeNull();
+  });
+
+  it("goes away when dismissed, without adding anything and without remembering the refusal", async () => {
+    renderWithOffer();
+    await screen.findByTestId("amiga-forever-offer");
+
+    await userEvent.click(
+      screen.getByRole("button", { name: i18n.t("osinstall.material.amigaForeverDismiss") })
+    );
+
+    await waitFor(() => expect(screen.queryByTestId("amiga-forever-offer")).toBeNull());
+    expect(screen.queryAllByTestId("material-folder")).toHaveLength(0);
+    // **A suggestion is not a setting.** Nothing about the dismissal is
+    // written anywhere: remembering "they said no once" would be storing a
+    // choice about every future build from one click.
+    const bag = rememberedBag();
+    expect(Object.keys(bag).filter((key) => key.includes("amigaForever"))).toEqual([]);
+  });
+
+  it("says nothing at all on a machine that does not have it", async () => {
+    seedRemembered({});
+    render(<OsInstall />);
+    await screen.findByTestId("material-folders");
+    await waitFor(() => expect(amigaForeverMock).toHaveBeenCalled());
+    expect(screen.queryByTestId("amiga-forever-offer")).toBeNull();
+  });
+
+  it("says nothing when the user has already pointed ART somewhere", async () => {
+    amigaForeverMock.mockResolvedValue({ adf: AF, rom: null });
+    await renderFull();
+    await waitFor(() => expect(amigaForeverMock).toHaveBeenCalled());
+    expect(screen.queryByTestId("amiga-forever-offer")).toBeNull();
   });
 });
 
@@ -2787,28 +2964,23 @@ describe("choosing the keyboard the system boots with", () => {
 // `layersFor` carries that shape from the recipe (Task 8's own `label_key`s)
 // to the screen; an unlayered release answers empty, and the screen must
 // render exactly what it always has for one.
-describe("one folder field per media layer the release declares (Task 10)", () => {
-  it("shows one labelled folder field per layer, in the recipe's own order", async () => {
+describe("saying which part of a layered release a folder holds (Task 10)", () => {
+  it("offers every layer the recipe declares, in the recipe's own order", async () => {
     renderOsInstall({ release: "AmigaOS 3.2.2" });
+    await addFolder("E:\\media\\3.2");
 
-    // The real accessible name lives on each field's own Browse button
-    // (ART-237) — asserted here by role and name, not merely by presence of
-    // a `data-testid`, since this test's whole point is that the field is
-    // genuinely *labelled*, not just that it renders.
-    const base = await screen.findByRole("button", {
-      name: (name) => name.includes(i18n.t("osinstall.layer.base32")),
-    });
-    const update = await screen.findByRole("button", {
-      name: (name) => name.includes(i18n.t("osinstall.layer.update322")),
-    });
-    expect(base).toBeTruthy();
-    expect(update).toBeTruthy();
-
-    // Declaration order, not merely presence — a screen rendering the
-    // recipe's own layers in reverse would still pass the two lines above.
-    expect(
-      Boolean(base.compareDocumentPosition(update) & Node.DOCUMENT_POSITION_FOLLOWING)
-    ).toBe(true);
+    const select = (await screen.findByRole("combobox", {
+      name: i18n.t("osinstall.material.layerAriaLabel", { folder: "E:\\media\\3.2" }),
+    })) as HTMLSelectElement;
+    // Declaration order, not merely presence — a screen offering the
+    // recipe's own layers in reverse would still pass a contains check. The
+    // first option is "scan it for everything", which is what an untagged
+    // folder means.
+    expect([...select.querySelectorAll("option")].map((o) => o.textContent)).toEqual([
+      i18n.t("osinstall.material.layerAny"),
+      layerFieldLabel("base"),
+      layerFieldLabel("update-3.2.2"),
+    ]);
   });
 
   it("sends one folder per layer", async () => {
@@ -2822,51 +2994,44 @@ describe("one folder field per media layer the release declares (Task 10)", () =
     });
   });
 
-  it("keeps the single folder field for an unlayered release", async () => {
+  it("offers no layer at all for an unlayered release", async () => {
     renderOsInstall({ release: "AmigaOS 3.2" });
-
-    // A real accessible-name assertion, not merely a `data-testid` presence
-    // check (review Finding 1) — this is the very control ART-237 fixed, so
-    // a test that only proves *something* rendered would pass again with
-    // the `aria-label` back on the wrapping, role-less `<div>`.
-    expect(
-      await screen.findByRole("button", {
-        name: (name) => name.includes(i18n.t("osinstall.media.ariaLabel")),
-      })
-    ).toBeTruthy();
-    // The layered screen's own add-folder list must not appear at all — see
-    // the module doc comment on `layers` in `OsInstall.tsx`.
-    expect(screen.queryByTestId("extra-media-folder")).toBeNull();
+    await addFolder("E:\\media");
+    // A release whose recipe declares no layers has no part to ask about, so
+    // the row is a path and a Remove button and nothing else.
+    expect(screen.queryAllByRole("combobox", { name: /E:..media/ })).toHaveLength(0);
   });
 
-  it("remembers each layer's folder separately across a remount", async () => {
+  it("remembers each folder's own layer across a remount", async () => {
     // ART's standing rule: nothing changes unless the user changes it — and
-    // per layer, since a single shared key would hand the update field the
-    // base folder the first time somebody switched releases.
+    // per folder, since a tag that moved would hand the update part the base
+    // disks the first time somebody switched releases.
     const { unmount } = renderOsInstall({ release: "AmigaOS 3.2.2" });
     await browseLayerFolder("base", "E:\\a");
     await browseLayerFolder("update-3.2.2", "E:\\b");
-    expect((await screen.findByTestId("layer-field-base")).textContent).toContain("E:\\a");
-    expect((await screen.findByTestId("layer-field-update-3.2.2")).textContent).toContain("E:\\b");
 
-    // Remount **without re-seeding**: `renderOsInstall`'s own `seedRemembered`
-    // replaces the whole remembered bag, which would defeat the point of this
-    // test by wiping the very writes it is asking about. A real remount reads
-    // back whatever `settings.json` actually holds — here, the live Zustand
-    // store the two browses above just wrote into, release included.
+    // Remount **without re-seeding**: `renderOsInstall`'s own
+    // `seedRemembered` replaces the whole remembered bag, which would defeat
+    // the point of this test by wiping the very writes it is asking about. A
+    // real remount reads back whatever `settings.json` actually holds.
     unmount();
     render(<OsInstall />);
 
-    expect((await screen.findByTestId("layer-field-base")).textContent).toContain("E:\\a");
-    expect((await screen.findByTestId("layer-field-update-3.2.2")).textContent).toContain("E:\\b");
+    await screen.findByText("E:\\a");
+    expect(rememberedBag()["buildSession.material.AmigaOS 3.2.2"]).toEqual({
+      folders: [
+        { path: "E:\\a", layer: "base" },
+        { path: "E:\\b", layer: "update-3.2.2" },
+      ],
+    });
   });
 
-  // Fix round 1, Finding 1: the mistake a two-field screen invites most —
-  // the update disks pointed at the base field, or the reverse — is still
+  // Fix round 1, Finding 1: the mistake this screen invites most — the
+  // update disks tagged as the base part, or the reverse — is still
   // "AmigaOS 3.2.2 media" at the release level, so `wrongMediaFolder` and
   // `osinstallReleaseForMedia` cannot see it. `layerForMedia` is the
   // per-layer question that can.
-  it("warns a layer's own field when its folder holds a different layer's own disks", async () => {
+  it("warns a row when its folder holds a different part's own disks", async () => {
     const UPDATE_FOLDER = "E:\\media\\Update3.2.2";
     scanMediaMock.mockReset().mockImplementation((folder: string) =>
       Promise.resolve(
@@ -2885,18 +3050,18 @@ describe("one folder field per media layer the release declares (Task 10)", () =
       );
 
     renderOsInstall({ release: "AmigaOS 3.2.2" });
-    // The mistake itself: the update disks, in the base field.
+    // The mistake itself: the update disks, tagged as the base part.
     await browseLayerFolder("base", UPDATE_FOLDER);
 
     const hint = await screen.findByTestId("layer-wrong-hint-base");
     expect(hint.textContent).toContain("Update3.2.2");
     // Named by what the media actually is, not a bare id.
     expect(hint.textContent).toContain(layerFieldLabel("update-3.2.2"));
-    // The field that is actually right must carry no hint of its own.
+    // The row that is actually right must carry no hint of its own.
     expect(screen.queryByTestId("layer-wrong-hint-update-3.2.2")).toBeNull();
   });
 
-  it("carries no hint once every field's own folder holds what it expects", async () => {
+  it("carries no hint once every row holds what its tag says", async () => {
     // The default `beforeEach` wiring already answers this way; asserted
     // explicitly so a change to that default cannot silently start every
     // other test in this file with a hint nobody wrote.
@@ -2904,38 +3069,38 @@ describe("one folder field per media layer the release declares (Task 10)", () =
     await browseLayerFolder("base", "E:\\media\\3.2");
     await browseLayerFolder("update-3.2.2", "E:\\media\\Update3.2.2");
 
-    await screen.findByTestId("layer-field-base");
     expect(screen.queryByTestId("layer-wrong-hint-base")).toBeNull();
     expect(screen.queryByTestId("layer-wrong-hint-update-3.2.2")).toBeNull();
   });
 
   /**
-   * **Two layers pointed at one folder identify it once, not once per layer**
-   * (final-review.md M5, fix wave 2). `identifyFoldersKey` used to be built
-   * from every layer's own folder with no de-duplication, so a user who
-   * pointed both `base` and `update-3.2.2` at the same disks — a plausible
-   * mistake on a screen that shows two fields for one folder of media —
-   * hashed that folder twice and rendered every line twice under the same
-   * `key={line.path}`.
+   * **One folder in the list is one folder to identify** (final-review.md M5,
+   * fix wave 2). `identifyFoldersKey` used to be built from every layer's own
+   * remembered folder with no de-duplication, so a user who pointed both
+   * `base` and `update-3.2.2` at the same disks hashed that folder twice and
+   * rendered every line twice under the same `key={line.path}`. The list
+   * cannot hold one folder twice at all now (`withFolder`), and the
+   * de-duplication stays because a hand-edited settings file need not obey
+   * it.
    *
    * Asserted as an exact count on both sides, never by presence alone: "one
    * line" must not be satisfiable by the line simply being absent, and one
    * call must not be satisfiable by the mock never having been asked at all.
    */
-  it("identifies a folder once when two layers are pointed at it (M5)", async () => {
+  it("identifies a folder once, however many parts name it (M5)", async () => {
     const SHARED = "E:\\media\\Shared";
     renderOsInstall({ release: "AmigaOS 3.2.2" });
-    await browseLayerFolder("base", SHARED);
-    await browseLayerFolder("update-3.2.2", SHARED);
+    await addFolder(SHARED);
+    // A second attempt at the same folder is not a second folder.
+    dialogOpenMock.mockResolvedValueOnce(SHARED);
+    await userEvent.click(screen.getByTestId("material-add-folder"));
+    expect(screen.queryAllByTestId("material-folder")).toHaveLength(1);
 
     await waitFor(() => expect(identifyMediaMock).toHaveBeenCalledWith(SHARED));
-    // Not one call per layer: the de-duplicated key never asks the shared
-    // folder to be identified twice, however many layers name it.
     expect(identifyMediaMock.mock.calls.filter((call) => call[0] === SHARED)).toHaveLength(1);
 
     // And exactly one line for the one file the (mocked) pass reports in
-    // that folder -- two would be the duplicate-key defect rendering both
-    // layers' identical answers.
+    // that folder -- two would be the duplicate-key defect.
     const lines = await screen.findAllByTestId("media-identity-not-in-table");
     expect(lines).toHaveLength(1);
   });

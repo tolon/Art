@@ -518,6 +518,17 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // a second box beside the field. Net zero new call sites; the two the
     // first round added are gone. `phrase-keys.test.ts` still resolves every
     // shape `archiveFieldBlockerPhrase` can answer.
-    expect(dynamicCalls).toBe(159);
+    // 159 -> 165 (round 2 of the intake work, task 3: `MaterialReadout.tsx`,
+    // the per-slot readout on the `kaynak` step): six. Every one of them is a
+    // `Phrase` `src/lib/slots.ts` produced from what Rust measured, and every
+    // one is a list of endings that must never collapse: the row's own
+    // sentence (eight endings, `slotLines`), the `installed` badge (from the
+    // tree's manifest alone, never inferred), the `blocked` line (what a row
+    // waits for, by name), the set line (`setLine`, which says "N not needed"
+    // beside the counts so a shrinking denominator is not read as material
+    // vanishing), the unreadable-folder line (`unreadableFolderLines`), and
+    // the running line (`readoutRunningLine`, a count rather than a bar with
+    // no total). `slots.test.ts` enumerates every variant of all six.
+    expect(dynamicCalls).toBe(165);
   });
 });

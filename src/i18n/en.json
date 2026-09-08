@@ -2213,10 +2213,7 @@
       "label": "AmigaOS release"
     },
     "media": {
-      "label": "Install disks folder",
-      "ariaLabel": "AmigaOS install media folder",
       "none": "No folder chosen.",
-      "chooseTitle": "Choose the folder holding your AmigaOS install disk or disc images",
       "unreadable": "ART could not read that folder — check the path.",
       "empty": "No install disks found in that folder.",
       "found_one": "{{count}} install disk found: {{names}}.",
@@ -2232,6 +2229,20 @@
       "removeFolderAriaLabel": "Remove {{folder}}",
       "addTitle": "Choose another folder holding this release's disks",
       "addHint": "AmigaOS 3.2.2.1 is your 3.2 disks plus the Update and Hotfix folders — add each one."
+    },
+    "material": {
+      "label": "Folders holding this build's material",
+      "layerAny": "Everything",
+      "layerAriaLabel": "Which part of the release {{folder}} holds",
+      "unusedForPlan_one": "This release reads one folder per part, so ART will not install from {{count}} folder in this list: {{folders}}. Say which part it holds, or take it out.",
+      "unusedForPlan_other": "This release reads one folder per part, so ART will not install from {{count}} folders in this list: {{folders}}. Say which part each holds, or take them out.",
+      "amigaForever": "Amiga Forever's disks are at {{path}}.",
+      "amigaForeverAdd": "Add it",
+      "amigaForeverDismiss": "Not now",
+      "readoutHeading": "What this release needs, and what your folders hold",
+      "readoutFailed": "ART could not work out what these folders hold: {{detail}}. That is a fault in ART, not a statement about your files.",
+      "required": "required",
+      "optional": "optional"
     },
     "slots": {
       "foundByNameUnread": "{{file}} — this file calls itself {{identity}}, which is what {{name}} is. Nobody has read its bytes yet, so ART has not checked them against its tables — identify this folder by content to confirm it.",

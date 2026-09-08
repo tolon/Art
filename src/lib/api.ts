@@ -41,3 +41,31 @@ export async function runWorkflow(
 ): Promise<WorkflowOutcome> {
   return invoke<WorkflowOutcome>("run_workflow", { path, workflowId });
 }
+
+/**
+ * Where Cloanto's Amiga Forever keeps its shared material on this machine.
+ * Mirrors `commands::system::AmigaForeverFolders`.
+ *
+ * Both fields are `null` on a machine that does not have it, which is the
+ * ordinary answer and never an error.
+ */
+export interface AmigaForeverFolders {
+  /** `%AMIGAFOREVERDATA%\Shared\adf`, when that folder is really there. */
+  adf: string | null;
+  /** `%AMIGAFOREVERDATA%\Shared\rom`, likewise. */
+  rom: string | null;
+}
+
+/**
+ * Ask the host where Amiga Forever's shared folders are (design § 3.5).
+ *
+ * Read-only in the strongest sense: it reads one environment variable and
+ * asks whether two folders exist. It opens nothing and lists nothing, and
+ * **nothing is added anywhere by calling it** — the OS Builder shows the
+ * answer as one suggestion line with an Add button, and the click is the
+ * user acting. `remembered.ts`'s rule: nothing changes unless the user
+ * changes it.
+ */
+export async function hostAmigaForeverFolders(): Promise<AmigaForeverFolders> {
+  return invoke<AmigaForeverFolders>("host_amiga_forever_folders");
+}
