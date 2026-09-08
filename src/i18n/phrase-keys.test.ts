@@ -102,6 +102,8 @@ import {
   conditionalReasonText,
   hostPlacementBlockKey,
   mediaEvidence,
+  notYetRunnableChainKey,
+  notYetRunnablePanelKey,
   mediaIdentityFolderLines,
   mediaIdentityLines,
   mediaIdentitySummary,
@@ -111,6 +113,7 @@ import {
   type ConditionalReason,
   type HostPlacementBlock,
   type InstallPlan as OsInstallPlan,
+  type NotYetRunnable,
   type MediaFolderOutcome,
   type MediaIdentification,
   type MediaIdentityState,
@@ -118,12 +121,14 @@ import {
   type RefusalReason as OsInstallRefusalReason,
 } from "@/lib/osinstall";
 import {
+  archiveFieldBlockerPhrase,
   outcomeNextStepPhrase as amigaNextStepPhrase,
   outcomePhrase as amigaOutcomePhrase,
   overlayAdvicePhrase,
   readinessBlockers,
   settlementPhrase,
   type AmigaInstallPreview,
+  type ArchiveClassification,
   type RunOutcome,
   type SettlementReport,
 } from "@/lib/amigainstall";
@@ -174,6 +179,31 @@ function isLeafKey(dotted: string): boolean {
 function resolvesAtRuntime(dotted: string): boolean {
   return isLeafKey(dotted) || isLeafKey(`${dotted}_one`) || isLeafKey(`${dotted}_other`);
 }
+
+/**
+ * **Every** value of a closed union, built so a new member is a *compile*
+ * error here rather than a key nobody tested (fix round 1, M2).
+ *
+ * A hand-written array is a copy of the union, and copies drift: round 3
+ * added two `HostPlacementBlock` kinds and the array below used to read
+ * `["encrypted-payload"]`, so two refusal keys and two checklist keys went
+ * untested while the test's own name still said "every". A `Record` keyed by
+ * the union has to carry a property per member or `pnpm lint` fails before
+ * any test runs, and `Object.keys` then *is* the union.
+ */
+function everyValueOf<T extends string>(members: Record<T, true>): T[] {
+  return Object.keys(members) as T[];
+}
+
+const EVERY_HOST_PLACEMENT_BLOCK = everyValueOf<HostPlacementBlock>({
+  "encrypted-payload": true,
+  "needs-fixfonts": true,
+  "needs-installer-script": true,
+});
+
+const EVERY_NOT_YET_RUNNABLE = everyValueOf<NotYetRunnable>({
+  "installer-not-measured": true,
+});
 
 describe("Phrase keys returned by the discriminated-union mappers", () => {
   it("amigainstall: every ending, every settlement, every blocker resolves", () => {
@@ -230,11 +260,95 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     for (const blocker of readinessBlockers(preview)) {
       expect(resolvesAtRuntime(blocker.key)).toBe(true);
     }
+    // Fix round 1's m5: the same list again for an archive **ART** resolved,
+    // which picks a different key for the missing-archive case. Pluralised,
+    // so both arms have to resolve.
+    for (const archives of [["a.lha"], ["a.lha", "b.lha"]]) {
+      for (const blocker of readinessBlockers(
+        { ...preview, packageArchives: archives, packageArchivesPresent: false },
+        archives
+      )) {
+        expect(resolvesAtRuntime(blocker.key)).toBe(true);
+      }
+    }
     for (const archives of [["a.lha"], ["a.lha", "b.lha"]]) {
       const advice = overlayAdvicePhrase({ ...preview, packageArchives: archives });
       expect(advice).not.toBeNull();
       expect(resolvesAtRuntime(advice!.key)).toBe(true);
     }
+
+    // ART-277: which package a picked archive really belongs to. Both
+    // fields, and every non-null shape `archiveFieldBlockerPhrase` can
+    // answer — including the two the review round added (Major 2's
+    // `other-artefact`, Medium 1's `another-packages-update-archive`).
+    const archiveClassification = (
+      kind: ArchiveClassification["kind"],
+      over: Partial<ArchiveClassification> = {}
+    ): ArchiveClassification => ({
+      kind,
+      topLevel: [],
+      expectedMedia: null,
+      expectedOverlays: [],
+      sharedBy: [],
+      ...over,
+    });
+    const otherName = () => "BoingBag 3.9-2";
+    const fieldLabels = { package: "The package's own archive", overlay: "The package's update archive" };
+    const phrasesFor = (
+      classification: ArchiveClassification,
+      field: "package" | "overlay"
+    ) =>
+      archiveFieldBlockerPhrase(
+        classification,
+        field,
+        "D:/pkg/x.lha",
+        "BoingBag 3.9-1",
+        otherName,
+        fieldLabels
+      );
+
+    expect(
+      resolvesAtRuntime(
+        phrasesFor(archiveClassification("another-package:boingbag-39-2"), "package")!.key
+      )
+    ).toBe(true);
+    expect(
+      resolvesAtRuntime(
+        phrasesFor(
+          archiveClassification("shared-artefact:Locale3.9", {
+            sharedBy: ["locale-39", "locale-39-turkish"],
+          }),
+          "package"
+        )!.key
+      )
+    ).toBe(true);
+    expect(
+      resolvesAtRuntime(
+        phrasesFor(
+          archiveClassification("another-packages-update-archive:boingbag-39-1"),
+          "overlay"
+        )!.key
+      )
+    ).toBe(true);
+    expect(
+      resolvesAtRuntime(
+        phrasesFor(
+          archiveClassification("other-artefact:Locale3.9", { expectedMedia: "BoingBag3.9-1" }),
+          "package"
+        )!.key
+      )
+    ).toBe(true);
+    expect(
+      resolvesAtRuntime(
+        phrasesFor(archiveClassification("other-artefact:Locale3.9"), "overlay")!.key
+      )
+    ).toBe(true);
+    expect(
+      resolvesAtRuntime(phrasesFor(archiveClassification("the-update-archive"), "package")!.key)
+    ).toBe(true);
+    expect(
+      resolvesAtRuntime(phrasesFor(archiveClassification("the-package"), "overlay")!.key)
+    ).toBe(true);
   });
 
   it("describeUpdate: every PackageUpdate.state variant resolves", () => {
@@ -1280,10 +1394,18 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         refusal: "package-folder-missing",
         packages: ["locale-turkish"],
       },
+      // Fix round 1, M1: both fields carry display *names* now, and the
+      // Amiga-side split is its own variant because "tick that one too" is
+      // advice about a checkbox `PackagePanel` disables.
       "package-requirement-missing": {
         refusal: "package-requirement-missing",
-        package: "boingbag-39-2",
-        requires: "boingbag-39-1",
+        package: "BoingBag 3.9-2",
+        requires: "BoingBag 3.9-1",
+      },
+      "package-requirement-needs-amiga-run": {
+        refusal: "package-requirement-needs-amiga-run",
+        package: "T\u00fcrk\u00e7e catalogs (BoingBag 3.9-2)",
+        requirement: "BoingBag 3.9-2",
       },
       "package-component-missing": {
         refusal: "package-component-missing",
@@ -1302,6 +1424,13 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         paths: ["a", "b"],
       },
       // ---- M3 / ART-166: a package ART cannot place from the host at all.
+      //
+      // The mapped type above pins the *variant*; `block` has three values
+      // and one entry can only carry one of them, so
+      // `every_host_placement_block_has_a_refusal_sentence` below walks
+      // `EVERY_HOST_PLACEMENT_BLOCK` for the other two (fix round 1, M2 —
+      // two kinds arrived in round 3 and this entry did not move, so their
+      // refusal keys had no test at all).
       "package-not-placeable-on-host": {
         refusal: "package-not-placeable-on-host",
         package: "boingbag-39-1",
@@ -1316,6 +1445,24 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     };
     for (const reason of Object.values(reasonsByVariant)) {
       const phrase = osinstallRefusalPhrase(reason);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  // **M2 (fix round 1).** `package-not-placeable-on-host` carries a `block`,
+  // and the mapped type above can only pin one of its values. Round 3 added
+  // two more kinds and nothing enumerated them, so
+  // `osinstall.refusal.packageNotPlaceableOnHost.needsFixfonts` and
+  // `.needsInstallerScript` had no test asserting they are leaves in either
+  // catalogue — `chain.ts` reads the `osinstall.packages.blocked.*` keys, so
+  // `chain.test.ts` did not cover them either.
+  it("osinstall refusalPhrase: every HostPlacementBlock has its own refusal sentence", () => {
+    for (const block of EVERY_HOST_PLACEMENT_BLOCK) {
+      const phrase = osinstallRefusalPhrase({
+        refusal: "package-not-placeable-on-host",
+        package: "BoingBag 3.9-1",
+        block,
+      });
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
     }
   });
@@ -1416,6 +1563,10 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       name: "Workbench 3.2",
       source: "Hyperion (3.2 base)",
       sequence: 1,
+      kind: "floppy" as const,
+      artefact: null,
+      filenames: [] as string[],
+      tableOrigin: "adopted" as const,
     };
     const base = { path: "a.adf", volumeName: "Workbench3.2", md5: "0".repeat(32) };
     const identification: MediaIdentification = {
@@ -1427,6 +1578,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       unreadable: ["d.adf"],
       hashed: 3,
       remembered: 1,
+      skipped: [],
     };
     const lines = mediaIdentityLines({ kind: "identified", identification });
     expect(lines).toHaveLength(4);
@@ -1522,12 +1674,27 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
   });
 
   // M3, ART-166: the *other* sentence about the same fact — the one the
-  // checklist row shows before the tick. Two keys, one `switch`, so a
-  // second kind of block cannot arrive with one of them missing.
+  // checklist row shows before the tick. **Every** kind, from
+  // `EVERY_HOST_PLACEMENT_BLOCK`, so a fourth is a compile error at the
+  // record rather than a silently unchecked key (fix round 1, M2: this list
+  // was written `["encrypted-payload"]` and did not move when two more
+  // arrived, while its own comment still said "a second kind of block
+  // cannot arrive with one of them missing").
   it("hostPlacementBlockKey: every HostPlacementBlock resolves", () => {
-    const blocks: HostPlacementBlock[] = ["encrypted-payload"];
-    for (const block of blocks) {
+    expect(EVERY_HOST_PLACEMENT_BLOCK.length).toBe(3);
+    for (const block of EVERY_HOST_PLACEMENT_BLOCK) {
       expect(isLeafKey(hostPlacementBlockKey(block)), hostPlacementBlockKey(block)).toBe(true);
+    }
+  });
+
+  // The third sentence a recipe-declared value produces (fix round 1, m6):
+  // an Amiga-side installer nobody has run. Two keys per reason — the chain
+  // row names the package, the panel row sits under it — so both are walked.
+  it("notYetRunnable: every reason resolves on both screens", () => {
+    for (const reason of EVERY_NOT_YET_RUNNABLE) {
+      for (const key of [notYetRunnablePanelKey(reason), notYetRunnableChainKey(reason)]) {
+        expect(isLeafKey(key), key).toBe(true);
+      }
     }
   });
 

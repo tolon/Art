@@ -255,6 +255,8 @@
       "name": "the original AmigaOS 3.9 CD-ROM"
     }
   },
+  "_why_chain_position": "2 of the material's own order (design section 1 of 2026-09-08-os-builder-chain-design.md): the CD is 1, and BoingBag 3.9-1 is the first thing that goes on it. Its own Install script reads version.library off the target and refuses anything but 45, which is the arrow the chain draws between rows 1 and 2.",
+  "chain_position": 2,
   "requires": [],
   "overrides": [
     "workbench-base"

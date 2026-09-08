@@ -2199,11 +2199,14 @@
       "packageUnknown": "\"{{package}}\" is not a package ART ships a recipe for — it cannot be applied. Untick it; this is usually a choice saved by an older version of ART.",
       "packageFolderMissing": "Packages were chosen ({{packages}}), but no update packages folder was given — choose the folder holding their archives.",
       "packageRequirementMissing": "\"{{package}}\" needs \"{{requires}}\" applied first — tick that one too, or untick \"{{package}}\" on its own.",
+      "packageRequirementNeedsAmigaRun": "\"{{package}}\" needs \"{{requirement}}\" installed first, and \"{{requirement}}\" is run on the Amiga from the Amiga-side step — it cannot be ticked on this list. Do that one there first, then add \"{{package}}\" here.",
       "packageComponentMissing": "\"{{package}}\" needs the \"{{component}}\" component, and this tree was not built with it. Untick \"{{package}}\", or build a new tree with \"{{component}}\" switched on and add \"{{package}}\" to that one instead.",
       "packageArchiveMissing": "No archive in the update packages folder carries \"{{media}}\", the media \"{{package}}\" needs — put that archive in the folder and try again.",
       "packageArchiveAmbiguous": "More than one archive in the update packages folder carries the media name {{media}} that \"{{package}}\" needs: {{paths}}. Remove all but the one you want.",
       "packageNotPlaceableOnHost": {
-        "encryptedPayload": "\"{{package}}\" cannot be placed from Windows: its files are locked and only the package's own Amiga-side Updater has the key. Untick it, and install it on the Amiga with that Updater instead."
+        "encryptedPayload": "\"{{package}}\" cannot be placed from Windows: its files are locked and only the package's own Amiga-side Updater has the key. Untick it, and install it on the Amiga with that Updater instead.",
+        "needsFixfonts": "\"{{package}}\" cannot be placed from Windows: it replaces bitmap fonts, and its own installer rebuilds the font index afterwards with FixFonts. ART cannot rebuild that index, so it would leave your Fonts drawer listing only the sizes this package ships. Untick it, and install it on the Amiga with its own installer.",
+        "needsInstallerScript": "\"{{package}}\" cannot be placed from Windows: its own Installer script picks which files to copy from your processor, your machine and the languages you ask for, and edits the startup-sequence. ART places a fixed set of paths and cannot answer those questions for you. Untick it, and run its Install script on the Amiga."
       },
       "activationSourceMissing": "'{{component}}' asks to switch on {{name}}, but nothing on this plan puts '{{from}}' on the tree. Choose the component that supplies it, or take the activation out of the recipe."
     },
@@ -2213,10 +2216,7 @@
       "label": "AmigaOS release"
     },
     "media": {
-      "label": "Install disks folder",
-      "ariaLabel": "AmigaOS install media folder",
       "none": "No folder chosen.",
-      "chooseTitle": "Choose the folder holding your AmigaOS install disk or disc images",
       "unreadable": "ART could not read that folder — check the path.",
       "empty": "No install disks found in that folder.",
       "found_one": "{{count}} install disk found: {{names}}.",
@@ -2233,12 +2233,105 @@
       "addTitle": "Choose another folder holding this release's disks",
       "addHint": "AmigaOS 3.2.2.1 is your 3.2 disks plus the Update and Hotfix folders — add each one."
     },
+    "material": {
+      "label": "Folders holding this build's material",
+      "layerAny": "Everything",
+      "layerAriaLabel": "Which part of the release {{folder}} holds",
+      "unusedForPlan_one": "This release reads one folder per part, so ART will not install from {{count}} folder in this list: {{folders}}. Say which part it holds, or take it out.",
+      "unusedForPlan_other": "This release reads one folder per part, so ART will not install from {{count}} folders in this list: {{folders}}. Say which part each holds, or take them out.",
+      "amigaForever": "Amiga Forever's disks are at {{path}}.",
+      "amigaForeverRom": "Amiga Forever's Kickstart ROMs are in {{path}}.",
+      "amigaForeverAdd": "Add it",
+      "amigaForeverDismiss": "Not now",
+      "readoutHeading": "What this release needs, and what your folders hold",
+      "readoutFailed": "ART could not work out what these folders hold: {{detail}}. That is a fault in ART, not a statement about your files.",
+      "required": "required",
+      "optional": "optional",
+      "guide": {
+        "intro": "ART can write this list into a folder as a text file, so you have it where the files are. Nothing is written until you ask for it.",
+        "button": "Write a guide into {{folder}}",
+        "written": "Written: {{path}}",
+        "alreadyThere": "{{path}} is already there, and ART did not touch it. Delete it and ask again for a fresh one.",
+        "failed": "ART could not write the guide: {{detail}}"
+      }
+    },
+    "slots": {
+      "foundByNameUnread": "{{file}} — this file calls itself {{identity}}, which is what {{name}} is. Nobody has read its bytes yet, so ART has not checked them against its tables — identify this folder by content to confirm it.",
+      "guessedByFilenameUnread": "{{file}} is named like {{name}}, and nothing else says so: the name inside it is not {{name}}, and nobody has read its bytes yet. Identify this folder by content, or open the file, before relying on this row.",
+      "chosenMissing": "The file you chose for {{name}} is not there: {{path}}.",
+      "foundByNameOtherArtefact": "{{file}} — this file calls itself {{identity}}, which is what {{name}} is. But its bytes are the table's {{other}}, not what this slot expects — so the disk has been relabelled, or it is not the disk its name says. Check it before relying on this row.",
+      "guessedByFilenameOtherArtefact": "{{file}} is named like {{name}}, and its bytes say otherwise: they are the table's {{other}}. The name is somebody's, the bytes are the file's — go by the bytes.",
+      "unreadableFolder": "ART could not read {{folder}}; its contents are not counted.",
+      "setLine": "{{release}} · {{found}} of {{total}} found · {{missingRequired}} required missing",
+      "setLineNotNeeded": "{{release}} · {{found}} of {{total}} found · {{missingRequired}} required missing · {{notNeeded}} not needed",
+      "setLineReady": "{{release}} · {{found}} of {{total}} found · everything required is here",
+      "setLineReadyNotNeeded": "{{release}} · {{found}} of {{total}} found · everything required is here · {{notNeeded}} not needed",
+      "romChosen": "Kickstart {{identity}} or newer: {{path}}, chosen for this build.",
+      "romNotChosen": "No Kickstart chosen yet — choose a Kickstart {{identity}} or newer in the field on this step. ART does not look for one in your material folders.",
+      "romNotChosenNoFloor": "No Kickstart chosen yet — choose one in the field on this step. ART does not look for one in your material folders.",
+      "installedArchiveGone": "{{name}} is already in this tree, and the archive it came from is no longer in the folders you named. It is not needed again.",
+      "incomplete": "{{file}} is {{name}}, and this copy is incomplete: it does not carry {{directory}}. Look at the copy you have rather than going to find another.",
+      "crowdedFolder": "{{folder}} holds more files than ART opens in one pass; ART looked at the first {{bound}}. A folder with that many archives in it is not a material folder — point ART at a smaller one, or expect something in it to be missed.",
+      "reading_one": "Reading {{count}} folder — working out which artefact each file is…",
+      "reading_other": "Reading {{count}} folders — working out which artefact each file is…",
+      "foundByHash": "{{file}} — identified by its bytes: they are the ones ART’s table records for {{name}}.",
+      "foundByName": "{{file}} — this file calls itself {{identity}}, which is what {{name}} is. Its bytes were hashed and are in no table ART has, so that is the file’s own word rather than a check.",
+      "chosen": "{{file}} — the file you chose for {{name}}. ART has not checked that it is one.",
+      "guessedByFilename": "{{file}} is named like {{name}}, and that is all ART can say: its bytes were hashed and match nothing ART knows, and the name inside it is not {{name}} either. Open it or replace it before relying on this row.",
+      "ambiguous": "{{count}} files here could be {{name}}, and ART will not choose between them: {{candidates}}. Pick the one you mean.",
+      "notFound": "{{name}} is not in the folders you named. Expected {{filenames}}.",
+      "notFoundUnnamed": "{{name}} is not in the folders you named.",
+      "filenamesUnknown": "no file name ART has ever recorded for it",
+      "provenanceUnknown": "ART has no note of where this one comes from",
+      "notNeeded": "{{name}} is not needed — this copy already carries {{carries}}.",
+      "installedPlaced": "already in this tree",
+      "installedRan": "already installed on the Amiga: {{command}}",
+      "blocked": "needs {{needs}} first"
+    },
+    "chain": {
+      "installed": "{{name}} — already in this tree.",
+      "ready": "{{name}} — ready: {{file}}.",
+      "readyUnnamed": "{{name}} — ready.",
+      "blocked": "{{name}} — {{needs}} has to go on first.",
+      "blockedComponent": "{{name}} needs the {{components}} component installed on the tree first — that is chosen when the tree is built, not here.",
+      "missing": "{{name}} is not in the folders you named. Expected {{filenames}}.",
+      "missingUnnamed": "{{name}} is not in the folders you named.",
+      "mediumNotBuiltFrom": "This tree was not built from {{name}}. That happens on the source step, not on this screen.",
+      "notNeeded": "{{name}} is not needed — {{supersededBy}} already contains it.",
+      "refusedAmbiguous": "{{count}} files here could be {{name}}, and ART will not choose between them: {{candidates}}. Pick the one you mean.",
+      "notYetRunnable": {
+        "installerNotMeasured": "{{name}} — ART has never run this one: it installs through an Installer script, and nobody has measured whether that script finishes without somebody at the window. It is listed rather than hidden, so you can see the recipe exists."
+      },
+      "onAmiga": "runs on the Amiga",
+      "onWindows": "placed from Windows",
+      "setLine": "{{release}} updates — {{installed}} of {{total}} applied",
+      "setLineNotNeeded": "{{release}} updates — {{installed}} of {{total}} applied — {{notNeeded}} not needed",
+      "tree": "tree {{root}}",
+      "treeNone": "No distribution tree chosen yet — nothing here can be recorded as applied until one is.",
+      "cdLink": "Choose the disc on the source step",
+      "next": "Next: {{name}}",
+      "reportRow": "This report is about {{name}}.",
+      "updatesLink": "{{release}} updates",
+      "noneReady": "Nothing here can run yet.",
+      "allApplied": "Every link of this chain is accounted for — there is nothing left to run.",
+      "noFolders": "ART has nowhere to look for these files: add the folders your archives are in on the source step.",
+      "missingNoFolders": "{{name}} — no material folders chosen yet.",
+      "runRow": "Run this row",
+      "refusedNotPlaceable": {
+        "encryptedPayload": "{{name}} cannot be placed from Windows: the files inside it are locked and only the package's own Amiga program has the key. Run it on the Amiga instead.",
+        "needsFixfonts": "{{name}} cannot be placed from Windows: it replaces bitmap fonts and its own installer rebuilds the .font index afterwards, which ART cannot do — placing it would quietly drop any font size this package does not itself ship. Run the package's own installer on the Amiga, or install BoingBags 3&4, which already contains this update.",
+        "needsInstallerScript": "{{name}} cannot be placed from Windows: its own Installer script chooses what to copy from your processor, your machine and the languages you pick, and ART cannot answer those questions for you."
+      }
+    },
     "mediaId": {
       "heading": "What these files are, by content",
       "confirmed": "{{file}} — matches the row Emu68 Hatcher's install-media table calls “{{name}}” ({{version}}, {{source}}). That row has been checked against a real disk here: {{against}}, {{checked}}.",
       "unconfirmed": "{{file}} — matches the row Emu68 Hatcher's install-media table calls “{{name}}” ({{version}}, {{source}}). Nobody has checked that row against a real disk here — 151 of the table's 186 rows are unchecked, so the claim is the table's alone.",
+      "confirmedOwn": "{{file}} — matches the row ART's own install-media table calls “{{name}}” ({{version}}, {{source}}). That row has been checked against a real disk here: {{against}}, {{checked}}.",
+      "unconfirmedOwn": "{{file}} — matches the row ART's own install-media table calls “{{name}}” ({{version}}, {{source}}). Nobody has checked that row against a real disk here since it was recorded — it is this table's own claim, not yet confirmed by a second source.",
       "notInTable": "{{file}} — not in Emu68 Hatcher's install-media table. That is a fact about the table, not about the disk: re-imaging it, changing one byte of it or owning a different revision all change the hash. What the disk calls itself still stands.",
       "unreadable": "{{file}} — ART could not read this file's bytes, so it was never hashed. This is not “not in the table”: the table was never asked.",
+      "skipped": "{{file}} — not an install medium ART knows, so it was left alone. ART read only the disc's own name, never its contents: no recipe ART ships installs from a disc called that, so hashing half a gigabyte of it would tell nobody anything. If this really is install media, its name is not one ART recognises.",
       "notHashedYet": "Nothing has been identified by content yet.",
       "identifying": "Reading these files and hashing them…",
       "failed": "ART could not read {{folder}}, so the pass stopped there. Folders identified by content before that: {{identified}} of {{total}}. Whatever they found is still listed above, and what the disks call themselves is unaffected.",
@@ -2437,6 +2530,8 @@
       "blocked": {
         "badge": "Cannot be placed from Windows",
         "encryptedPayload": "The files inside this package are locked, and only the package's own Amiga-side Updater has the key. That Updater is an Amiga program: it has to run on the Amiga itself, which is how every other distribution builder installs this package too. ART will not break the lock, so it cannot place a single file from here — put the archive on your Amiga and run its own Updater there instead.",
+        "needsFixfonts": "This package replaces the bitmap fonts, and its own installer runs FixFonts afterwards to rebuild the .font index files from whatever your Fonts drawer really holds. ART cannot rebuild one of those indexes, and placing the files without it would quietly drop any font size this package does not itself ship — nothing would fail, and a font would simply stop being available. So ART places nothing from here: run the package's own installer on the Amiga, or install BoingBags 3&4, which already contains this update.",
+        "needsInstallerScript": "This package is plain files with an Installer script that decides which of them you get: it picks the build that matches your processor, asks which languages to install, asks which machine's SCSI driver you need, copies into whatever AmiTCP: and AWeb happen to be, and edits your startup-sequence. ART places a fixed set of paths and cannot answer any of that for you — a half-placed tree would boot and quietly be short of what it thinks it has. Run its Install script on the Amiga instead.",
         "chosen": "{{names}} cannot be placed from Windows, so nothing can be previewed or added for this selection. Untick it, or add it on the Amiga with the package's own Updater."
       },
       "refusedNames": "This archive carries {{count}} entry name(s) ART refuses to use, because they point outside the folder they belong in: {{names}}. Nothing will ever be placed from them — the rest of the archive is unaffected.",
@@ -2493,19 +2588,31 @@
         "label": "Package",
         "needsFolder": "Choose the update packages folder above to see which packages ART can run on the Amiga.",
         "none": "None of the packages ART ships carries an installer it can run on the Amiga.",
+        "notYetRunnable": {
+          "installerNotMeasured": "Not ready yet: it installs through an Installer script, and nobody has measured whether that script finishes without somebody at the window. ART shows it here rather than hiding it, so you know the recipe exists and what is missing before it can be run."
+        },
         "unavailableHint": "ART could not read the shipped package list."
       },
       "archive": {
         "label": "The package's own archive",
         "none": "No archive chosen.",
         "chooseTitle": "Choose the package's own archive — the file you downloaded",
-        "hint": "The archive as you downloaded it, e.g. BoingBag39-1.lha. ART unpacks it and mounts it as its own Amiga volume; the locked part inside stays locked and is handed to the package's own installer."
+        "hint": "ART expects {{filenames}}. Where it comes from: {{provenance}}. ART unpacks it and mounts it as its own Amiga volume; the locked part inside stays locked and is handed to the package's own installer."
       },
       "overlayArchive": {
         "label": "The package's update archive (only if it needs one)",
         "none": "No second archive chosen.",
         "chooseTitle": "Choose the package's update archive",
-        "hint": "A second archive that replaces part of the first — the fix some packages shipped separately for their own installer. Leave it empty unless the note below asks for it."
+        "hint": "ART expects {{filenames}}. Where it comes from: {{provenance}}. It replaces part of the first archive — the fix some packages shipped separately for their own installer. Leave it empty unless the note below asks for it."
+      },
+      "classify": {
+        "anotherPackage": "This is {{other}}'s own archive — but {{selected}} is selected. Select {{other}} to install it, or give {{selected}}'s own archive here.",
+        "anotherPackagesUpdateArchive": "This is {{other}}'s own update archive, not {{selected}}'s — but {{selected}} is selected. Select {{other}} to install it, or give {{selected}}'s own archives here.",
+        "sharedArtefact": "'{{path}}' is the {{media}} archive, which the Packages step places from Windows — {{packages}} all read it.",
+        "otherArtefact": "'{{path}}' is the {{media}} archive, which this step does not run — {{selected}} wants {{expected}} here.",
+        "otherArtefactGeneric": "'{{path}}' is the {{media}} archive, which this step does not run.",
+        "wrongFieldOverlay": "This is the package's update archive, not the package itself. It belongs in \"{{overlayLabel}}\", not in \"{{packageLabel}}\".",
+        "wrongFieldPackage": "This is the package's own archive, not its update archive. It belongs in \"{{packageLabel}}\", not in \"{{overlayLabel}}\"."
       },
       "kickstart": {
         "label": "Your own Kickstart ROM",
@@ -2535,8 +2642,19 @@
         "heading": "Not ready to run yet",
         "archiveMissing_one": "The archive chosen above is not there any more. ART checked the {{count}} file you chose.",
         "archiveMissing_other": "One of the archives chosen above is not there any more. ART checked all {{count}} files you chose.",
+        "archiveMissingFound_one": "The archive ART found is not there any more: {{path}}. Scan again, or choose the file yourself.",
+        "archiveMissingFound_other": "One of the {{count}} archives this run would use is not there any more: {{path}}. Scan again, or choose the file yourself.",
         "kickstartMissing": "That Kickstart is not there: {{path}}",
-        "noEmulator": "No emulator was found. Set WinUAE's path in Settings — ART starts an emulator you already have, it does not install one."
+        "noEmulator": "No emulator was found. Set WinUAE's path in Settings — ART starts an emulator you already have, it does not install one.",
+        "slotMissing": "{{name}} is not in the folders holding this build's material, and nothing here can run without it. Expected {{filenames}} — add the folder it is in, or choose the file yourself."
+      },
+      "slotField": {
+        "chooseAnother": "Choose another",
+        "chooseAnotherAriaLabel": "Choose another file for {{label}}",
+        "useFound": "Use the one ART found",
+        "useFoundAriaLabel": "Use the file ART found for {{label}}",
+        "clearAriaLabel": "Forget the file chosen for {{label}}",
+        "pickOne": "{{count}} files in your material folders could be {{name}}, and ART will not choose between them. Pick the one you mean."
       },
       "refused": {
         "heading": "ART will not run this",
@@ -2555,6 +2673,12 @@
         "timedOut": "Nobody answered. The installer was still waiting {{seconds}} seconds in, so ART ended the emulator it had started.",
         "emulatorClosed": "The emulator window was closed {{seconds}} seconds in, before the installer had reported anything."
       },
+      "followUp": {
+        "ran": "The package also applied its second update, which the tree did not have yet.",
+        "notNeeded": "The package's second update was not needed — this tree already carries that version.",
+        "failed": "The package's second update ran and said no. The install itself worked; only that extra part did not.",
+        "notChecked": "ART could not tell whether the package's second update was needed — this tree has no C/Version — so it was not run."
+      },
       "next": {
         "succeeded": "Boot the tree and ask the running system what it is — the version it states about itself, not a copyright line on a screen.",
         "failed": "Look inside the copy: whatever the installer wrote is there, and its own messages are what say why it refused.",
@@ -2569,7 +2693,7 @@
       "medium": {
         "label": "AmigaOS 3.9 CD-ROM (disc image)",
         "none": "Not chosen",
-        "hint": "Some packages verify the disc they shipped on before they will install. Both BoingBags check named files on a volume called AmigaOS3.9:. Choose your own copy of that disc as an .iso and ART puts it in the emulated machine's CD drive.",
+        "hint": "ART expects {{filenames}}. Where it comes from: {{provenance}}. Some packages verify the disc they shipped on before they will install; choose your own copy of it and ART puts it in the emulated machine's CD drive.",
         "chooseTitle": "Choose the disc image the installer checks for"
       }
     },

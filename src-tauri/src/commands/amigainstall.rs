@@ -100,7 +100,8 @@ use crate::core::amigainstall::finish;
 use crate::core::amigainstall::run::{run_with, RealClock, RunLimits, RunRequest};
 use crate::core::amigainstall::stage::{settle, stage_with, Settlement};
 use crate::core::amigainstall::{
-    packagevol, workvol, PlannedRun, RunOutcome, PACKAGE_VOLUME, RESULT_FILE, WORK_VOLUME,
+    packagevol, workvol, FollowUp, FollowUpOutcome, PlannedRun, RunOutcome, PACKAGE_VOLUME,
+    RESULT_FILE, WORK_VOLUME,
 };
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::iso::IsoImage;
@@ -342,6 +343,14 @@ pub struct AmigaInstallResult {
     /// Which of the four endings it was. Mirrored exactly in TypeScript.
     pub outcome: RunOutcome,
     pub settlement: SettlementReport,
+    /// What the package's version-gated follow-up did, or `None` when it
+    /// declared none (ART-280).
+    ///
+    /// **Beside the ending, never folded into it.** A follow-up that said no
+    /// is not the installer saying no, and a screen that showed one as the
+    /// other would be collapsing two endings into one sentence — the defect
+    /// `docs/lessons.md` opens with.
+    pub follow_up: Option<FollowUpOutcome>,
 }
 
 // ---------------------------------------------------------------------------
@@ -386,6 +395,15 @@ struct Composed {
     /// the user supplied really is the disc the recipe named. `None` when the
     /// package requires none *and* the user supplied none.
     medium: Option<ComposedMedium>,
+    /// Every *other* package `overlay_mismatch_sentence` may name in a
+    /// wrong-archive refusal — scoped to the releases the selected package's
+    /// own recipe declares, and with the selected package's own id already
+    /// removed (ART-277 re-review, L3/L4: this used to be *every* shipped
+    /// package regardless of release, which could name a package a
+    /// different-release build can never reach). Built once, here, so
+    /// `install` does not recompute it and cannot drift from what `compose`
+    /// already decided was reachable.
+    catalogue: Vec<packagevol::KnownPackage>,
 }
 
 /// A disc `compose` has opened and vouched for (ART-193).
@@ -499,6 +517,26 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
         )));
     };
 
+    // **Declared, and never run.** A recipe may say what installs a package
+    // before anybody has measured that ART can drive it — §10's "register an
+    // unready action rather than hiding it", from the side that has to be
+    // guarded. The panel already renders such a row disabled with this
+    // sentence; this is the guard that means a request built any other way
+    // is refused too, rather than reaching the emulator on the strength of a
+    // greyed-out checkbox.
+    //
+    // Its own refusal, deliberately not folded into the one above: "ART ships
+    // no installer for this" and "this one has not been run yet" are
+    // different sentences with different next steps, and the second names
+    // what would have to happen for it to become the first.
+    if let Some(why) = installer.not_yet_runnable {
+        return Err(CoreError::SafetyRefused(format!(
+            "'{}' is not a package ART can run yet: {}",
+            package.name,
+            crate::commands::osinstall::describe_not_yet_runnable(why)
+        )));
+    }
+
     // ART-186, and it is **before** anything is copied, unpacked or written:
     // `perform` makes the tree copy, `install` builds two scratch volumes, and
     // all of it happens after this line. A BoingBag 2 run against a tree
@@ -550,26 +588,42 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
     // it because it is a fact about the run.
     args.push(format!("{volume}:"));
 
+    // ART-280. A follow-up's `program` is relative to the package's drawer
+    // exactly as the first invocation's is, and its target volume is a fact
+    // about the run and not about the package — so both are composed here, by
+    // the same two lines, rather than written into the recipe. Its gate path
+    // is left alone: it is relative to the *system* volume, and
+    // `workvol::follow_up_lines` prefixes that itself.
+    let mut follow_ups = Vec::with_capacity(installer.follow_ups.len());
+    for declared in &installer.follow_ups {
+        let program = join_amigados(&location, declared.program.trim());
+        one_token("a follow-up's path", &program)?;
+        let mut args = declared.args.clone();
+        for arg in &args {
+            one_token("a follow-up's argument", arg)?;
+        }
+        args.push(format!("{volume}:"));
+        follow_ups.push(FollowUp {
+            program,
+            args,
+            unless_file_version_at_least: declared.unless_file_version_at_least.clone(),
+        });
+    }
+
     let plan = PlannedRun {
         package_id: package.id.clone(),
         system_volume: volume,
         program,
         args,
         working_directory: Some(location),
+        follow_ups,
     };
 
     workvol::startup_sequence(&plan)?;
 
     // The recipe's own declarations, translated — never carried across as the
     // recipe's own type. See `Composed::overlays`.
-    let overlays: Vec<packagevol::Overlay> = installer
-        .overlays
-        .iter()
-        .map(|overlay| packagevol::Overlay {
-            from: overlay.from.clone(),
-            to: overlay.to.clone(),
-        })
-        .collect();
+    let overlays = translate_overlays(&installer);
     // `validate_installer` already refused a `minimum_version` that is not two
     // integers, so a shipped recipe always parses. A `None` here can therefore
     // only mean the recipe declared none.
@@ -578,10 +632,21 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
         .as_deref()
         .and_then(package::parse_version_pair);
 
+    // ART-277 re-review, L3/L4: release-scoped and self-excluding, built
+    // once here (before the refusal below, which now also reads it — I11)
+    // rather than recomputed (and re-drifting) in `install`.
+    let catalogue = known_packages_for(&package);
+
     // ART-200/ART-201: is the file in the package's own field actually the
     // package? Asked here, so the preview refuses it too and the answer names
-    // the field to move it to when ART can tell.
-    refuse_wrong_package_archive(&package.media, &overlays, &request.package_archives)?;
+    // the field to move it to when ART can tell — and, when it recognises the
+    // archive as a whole other package's own (I11), names that package too.
+    refuse_wrong_package_archive(
+        &package.media,
+        &overlays,
+        &request.package_archives,
+        &catalogue,
+    )?;
 
     let medium = compose_medium(
         &package.id,
@@ -599,7 +664,359 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
         post_install: installer.post_install.clone(),
         minimum_installer_version,
         minimum_installer_version_text: installer.minimum_version.clone(),
+        catalogue,
     })
+}
+
+/// A recipe's own overlay declarations, translated into
+/// `core::amigainstall`'s own record — never carried across as
+/// `core::osinstall::package::InstallerOverlay` (CLAUDE.md's inward-dependency
+/// rule). One place for the translation `compose` and `classify_archive` both
+/// need.
+fn translate_overlays(installer: &package::AmigaInstaller) -> Vec<packagevol::Overlay> {
+    installer
+        .overlays
+        .iter()
+        .map(|overlay| packagevol::Overlay {
+            from: overlay.from.clone(),
+            to: overlay.to.clone(),
+        })
+        .collect()
+}
+
+/// Every *other* package ART's catalogue ships an Amiga-side installer for
+/// and that shares a release with `selected`, as the small record
+/// `core/amigainstall` is allowed to read (ART-277) — never the whole
+/// recipe. An unreadable catalogue answers empty rather than refusing: this
+/// is only ever used to make a refusal *friendlier*, never to decide whether
+/// a run may happen, so losing it costs a nicety and not a correctness
+/// guarantee.
+///
+/// **Release-scoped and self-excluding (ART-277 re-review, L3/L4).** The
+/// first round built this from every shipped package regardless of release
+/// and did not remove `selected` — harmless only because `overlay_
+/// mismatch_sentence`'s own `layout.drawer` check runs first, but a doc
+/// comment claiming this discipline while nothing here kept it was found by
+/// reading the two, not by a test. `classify_top_level`
+/// (`amigainstall_classify_archive`) already answers over exactly this
+/// scope — `package::packages_for(&release)`, minus the selected id — so
+/// this gives the core refusal the same one.
+fn known_packages_for(selected: &package::Package) -> Vec<packagevol::KnownPackage> {
+    known_packages_from(selected, &package::packages().unwrap_or_default())
+}
+
+/// [`known_packages_for`]'s own filter, parameterised over the candidate
+/// list so a test can hand it a package from a release the shipped catalogue
+/// does not otherwise have one for (ART-277 re-review, L3: a test that a
+/// package of another release is never named) without inventing shipped
+/// JSON to do it.
+fn known_packages_from(
+    selected: &package::Package,
+    all: &[package::Package],
+) -> Vec<packagevol::KnownPackage> {
+    all.iter()
+        .filter(|p| p.id != selected.id)
+        .filter(|p| p.amiga_installer.is_some())
+        .filter(|p| p.releases.iter().any(|r| selected.releases.contains(r)))
+        .cloned()
+        .map(known_package)
+        .collect()
+}
+
+/// One `package::Package`, translated into `core/amigainstall`'s own record
+/// — the single place that does it, so [`known_packages_for`] (the core
+/// refusal's catalogue) and `classify_top_level`'s release-scoped list
+/// (ART-277 review, Major 2) build the same shape.
+fn known_package(p: package::Package) -> packagevol::KnownPackage {
+    let overlay_drawers = p
+        .amiga_installer
+        .as_ref()
+        .map(|installer| {
+            installer
+                .overlays
+                .iter()
+                .map(|overlay| overlay.from.split('/').next().unwrap_or("").to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    packagevol::KnownPackage {
+        id: p.id,
+        name: p.name,
+        media: p.media,
+        overlay_drawers,
+    }
+}
+
+/// What a chosen archive is, judged **before** it goes into a request —
+/// ART-277's second cause. `AmigaInstallPanel` calls this the moment a file
+/// picker returns, so a BoingBag 2 archive supplied while BoingBag 1 is still
+/// selected is named on screen immediately, rather than discovered as a
+/// refusal after the round trip through [`compose`].
+///
+/// **Scoped to `release`** (ART-277 review, Major 2) — the exact list the
+/// radio offers (`osinstall_packages`), never every shipped recipe: a hint
+/// naming a package a different release's build cannot even reach would be
+/// unactionable in a new way.
+///
+/// Read-only and lenient: nothing is unpacked (the archive's listing alone is
+/// read, once — [`packagevol::archive_listing`] never opens the encrypted
+/// payload a second archive might carry, and never opens the archive twice
+/// for the two questions this asks of it), and an archive this cannot make
+/// sense of — missing, unreadable, not carrying a single top-level directory
+/// — answers `"unknown"` rather than refusing. A query the panel asks on
+/// every file pick must not turn "I could not tell" into a hard error the
+/// user cannot get past.
+#[tauri::command]
+pub fn amigainstall_classify_archive(
+    path: PathBuf,
+    package_id: String,
+    release: String,
+) -> AppResult<ArchiveClassification> {
+    let (top_level, identity) = packagevol::archive_listing(&path).unwrap_or_default();
+
+    // Parsed once (review finding 7): `selected` is looked up in the same
+    // release-scoped list the ambiguity/other-package scan below reads,
+    // rather than `by_id` (every release) plus `packages()` (every release,
+    // again) each re-parsing the shipped JSON.
+    let release_packages = package::packages_for(&release).unwrap_or_default();
+    let selected = release_packages.iter().find(|p| p.id == package_id.trim());
+
+    let expected_media = selected.map(|p| p.media.clone());
+    let expected_overlays: Vec<String> = selected
+        .and_then(|p| p.amiga_installer.as_ref())
+        .map(|installer| {
+            installer
+                .overlays
+                .iter()
+                .map(|overlay| overlay.from.split('/').next().unwrap_or("").to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let Classified { kind, shared_by } = match identity {
+        None => Classified {
+            kind: "unknown".to_string(),
+            shared_by: Vec::new(),
+        },
+        Some(top) => classify_top_level(&top, selected, &release_packages, Some(&path)),
+    };
+
+    Ok(ArchiveClassification {
+        kind,
+        top_level,
+        expected_media,
+        expected_overlays,
+        shared_by,
+    })
+}
+
+/// [`classify_top_level`]'s answer: a `kind` string plus the one thing it
+/// cannot embed as an id list and stay a plain string — every package id
+/// that shares an identity, for the `shared-artefact` shape.
+struct Classified {
+    kind: String,
+    /// Every release package that reads this exact identity, when `kind` is
+    /// `` `shared-artefact:<media>` `` — empty for every other kind. The
+    /// panel resolves these to display names to say *both* packages'
+    /// (ART-277 re-review, L5).
+    shared_by: Vec<String>,
+}
+
+impl Classified {
+    fn plain(kind: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            shared_by: Vec::new(),
+        }
+    }
+}
+
+/// [`amigainstall_classify_archive`]'s own decision, parameterised so it can
+/// be tested without a real archive on disk. `release_packages` is the exact
+/// list the radio offers' recipes come from (`package::packages_for`), not
+/// every shipped package — see the command's own doc comment.
+///
+/// **ART-277 review, Major 2 and Medium 1.** The first round scanned every
+/// shipped package regardless of release, compared `media` only, and picked
+/// whichever matching package happened to come first when more than one
+/// recipe declared the same `media` — `locale-39` and `locale-39-turkish`
+/// both declare `"Locale3.9"` on purpose (`recipes/packages/locale-39-turkish.json`'s
+/// own comment). That produced a hint naming a package **not on this
+/// screen's radio at all** (neither Locale package is Amiga-installable) and
+/// then hard-disabled Run over an instruction the user cannot act on — the
+/// exact shared-medium ambiguity ART-276 was filed for the night before,
+/// arriving through a different door.
+///
+/// So: every match against this archive's identity — this package's own
+/// drawer, or (Medium 1) one of its own declared overlays' drawer — is
+/// collected first, and **more than one match is never resolved by picking
+/// one**.
+///
+/// **ART-277 re-review, L5: two different causes, two different kinds.**
+/// The first round folded "two or more packages share this identity" and
+/// "the one package that does is not Amiga-installable" into the same
+/// `other-artefact` kind and the same sentence — *"which the Packages step
+/// places from Windows"*, which is only true of the second cause. Today
+/// both causes happen to be the same two non-installable `Locale3.9`
+/// packages, so the sentence read true by accident of the shipped data; an
+/// Amiga-installable package sharing a `media` with another would have made
+/// it a confident, wrong claim about which step handles a file. Now:
+/// `` `shared-artefact:<top>` `` for the ambiguous case (names both packages,
+/// says nothing about which step runs them — the panel does not know that
+/// yet either), `` `other-artefact:<top>` `` only for a single match this
+/// screen's radio does not offer at all (naming it by id would produce
+/// "select `<pkg>`" for a package that is not selectable here).
+fn classify_top_level(
+    top: &str,
+    selected: Option<&package::Package>,
+    release_packages: &[package::Package],
+    archive: Option<&std::path::Path>,
+) -> Classified {
+    if let Some(selected) = selected {
+        let overlays: Vec<packagevol::Overlay> = selected
+            .amiga_installer
+            .as_ref()
+            .map(translate_overlays)
+            .unwrap_or_default();
+        match packagevol::archive_is(&selected.media, &overlays, top) {
+            packagevol::ArchiveIs::ThePackage => return Classified::plain("the-package"),
+            packagevol::ArchiveIs::TheUpdateArchive => {
+                return Classified::plain("the-update-archive")
+            }
+            packagevol::ArchiveIs::Neither => {}
+        }
+    }
+
+    /// Which fact about a candidate package matched this archive's top
+    /// level — its own identity, or one of its own overlays'.
+    enum Matched {
+        Own,
+        Overlay,
+    }
+
+    // ART-277 re-review, I9: one implementation of "which archive is this",
+    // not two — `archive_is` already answers `ThePackage`/`TheUpdateArchive`/
+    // `Neither` for the *selected* package above; the first round re-derived
+    // the same media/overlay-drawer comparison by hand for every *other*
+    // catalogue candidate instead of asking `archive_is` the identical
+    // question about each of them.
+    let matches: Vec<(&package::Package, Matched)> = release_packages
+        .iter()
+        .filter(|pkg| Some(pkg.id.as_str()) != selected.map(|s| s.id.as_str()))
+        .filter_map(|pkg| {
+            let overlays: Vec<packagevol::Overlay> = pkg
+                .amiga_installer
+                .as_ref()
+                .map(translate_overlays)
+                .unwrap_or_default();
+            match packagevol::archive_is(&pkg.media, &overlays, top) {
+                packagevol::ArchiveIs::ThePackage => Some((pkg, Matched::Own)),
+                packagevol::ArchiveIs::TheUpdateArchive => Some((pkg, Matched::Overlay)),
+                packagevol::ArchiveIs::Neither => None,
+            }
+        })
+        .collect();
+
+    // **Narrowed by what is inside the archive before it is called
+    // ambiguous** (round 3). Two of the shipped 3.9 packages now share the
+    // top level `BoingBag3.9-2` — `BoingBag39-2.lha` and
+    // `BoingBag39-2-Contribution.lha` — which is exactly the collision
+    // `Package::distinguished_by` was measured for. Stopping at the top
+    // level here would tell somebody holding the plain BoingBag 2 archive
+    // that ART cannot say which package it is, about a file that carries
+    // `AmigaOS-Update` and says so itself.
+    //
+    // Only when a path is in hand (the command's case), and only to *drop*
+    // candidates whose declared path this archive does not carry: a package
+    // that declares no distinguisher survives, and narrowing never picks a
+    // winner — a still-ambiguous list is still ambiguous.
+    let matches: Vec<(&package::Package, Matched)> = match archive {
+        None => matches,
+        Some(path) => {
+            let narrowed: Vec<(&package::Package, Matched)> = matches
+                .iter()
+                .filter(|(pkg, _)| match pkg.distinguished_by.as_deref() {
+                    Some(inner) => crate::core::osinstall::scan::archive_carries(path, inner),
+                    None => true,
+                })
+                .map(|(pkg, matched)| {
+                    (
+                        *pkg,
+                        match matched {
+                            Matched::Own => Matched::Own,
+                            Matched::Overlay => Matched::Overlay,
+                        },
+                    )
+                })
+                .collect();
+            // Narrowing to nothing is never an improvement: an unreadable
+            // archive makes `archive_carries` answer `false` for every
+            // candidate, and answering "unknown" about a file two packages
+            // do claim would be worse than saying they both do.
+            match narrowed.is_empty() {
+                true => matches,
+                false => narrowed,
+            }
+        }
+    };
+
+    // More than one release package claims this exact top level: never pick
+    // one arbitrarily (ART-276's own trap, arriving here too) — named as
+    // what it is, and named to the user as *both* packages (L5).
+    if matches.len() > 1 {
+        return Classified {
+            kind: format!("shared-artefact:{top}"),
+            shared_by: matches.into_iter().map(|(pkg, _)| pkg.id.clone()).collect(),
+        };
+    }
+
+    match matches.into_iter().next() {
+        Some((pkg, Matched::Own)) if pkg.amiga_installer.is_some() => {
+            Classified::plain(format!("another-package:{}", pkg.id))
+        }
+        Some((pkg, Matched::Overlay)) if pkg.amiga_installer.is_some() => {
+            Classified::plain(format!("another-packages-update-archive:{}", pkg.id))
+        }
+        // A real, single match — just not one this screen's radio offers at
+        // all (every Locale package, today). Naming it by id would produce
+        // "select <pkg>" for a package that is not selectable here.
+        Some(_) => Classified::plain(format!("other-artefact:{top}")),
+        None => Classified::plain("unknown"),
+    }
+}
+
+/// [`amigainstall_classify_archive`]'s answer: what the archive is, and what
+/// it actually carries at its top level — the latter so a refusal or a hint
+/// can say what it held even when ART recognises none of it.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveClassification {
+    /// `"the-package"`, `"the-update-archive"`, `` "another-package:<id>" ``,
+    /// `` "another-packages-update-archive:<id>" `` (ART-277 review, Medium
+    /// 1 — the archive is recognisably a *different* package's own update
+    /// archive), `` "shared-artefact:<top-level-name>" `` (ART-277
+    /// re-review, L5 — two or more release packages declare this exact
+    /// identity; `shared_by` names which), `` "other-artefact:<top-level-name>"
+    /// `` (a single, real match, but not a package this screen can select —
+    /// not Amiga-installable), or `"unknown"`.
+    pub kind: String,
+    pub top_level: Vec<String>,
+    /// The **selected** package's own `media` — what the package field
+    /// itself expects — so a panel that cannot read a recipe's `media`
+    /// directly (`PackageSummary` never carries it) can still say what this
+    /// field wants when the archive turns out to be something else's.
+    /// `None` when the selected id is not a package this release ships.
+    pub expected_media: Option<String>,
+    /// The selected package's own declared overlay drawers — what the
+    /// *update-archive* field expects. Empty for a package (every one but
+    /// BoingBag 3.9-1, today) that declares none.
+    pub expected_overlays: Vec<String>,
+    /// Every release package that reads this exact identity, when `kind` is
+    /// `` `shared-artefact:<top>` `` (ART-277 re-review, L5) — empty for
+    /// every other kind. Ids, not names: `PackageSummary`'s own list is
+    /// where the panel resolves a display name, the same way it already
+    /// does for `another-package`'s id.
+    pub shared_by: Vec<String>,
 }
 
 /// Ask the supplied archive what it carries, **before anything is unpacked**.
@@ -621,28 +1038,45 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
 /// cannot open at all is left to `unpack` — refusing here on a file this
 /// reader merely does not understand would turn a working run into a false
 /// refusal, which is worse than the message this exists to improve.
+///
+/// **Every slot, not only the first (ART-277 review, Major 1).** The first
+/// round checked `archives.first()` alone, so the package's own archive
+/// supplied a *second* time — as if it were the update archive — reached
+/// `apply_overlay` unrefused at preview time, and the only sentence that
+/// caught it there could, before this round's fix, match the selected
+/// package itself and tell the user to "select" the package that is already
+/// selected. The first slot must be exactly the package's own archive; every
+/// slot after it must not be — an update archive there is correct and
+/// `packagevol::unpack`'s own matching decides which declared overlay it is,
+/// which this function does not need to know.
 fn refuse_wrong_package_archive(
     media: &str,
     overlays: &[packagevol::Overlay],
     archives: &[PathBuf],
+    catalogue: &[packagevol::KnownPackage],
 ) -> CoreResult<()> {
-    let Some(first) = archives.first() else {
-        return Ok(());
-    };
-    if !first.is_file() {
-        return Ok(());
+    for (index, archive) in archives.iter().enumerate() {
+        if !archive.is_file() {
+            continue;
+        }
+        let Ok(source) = ArchiveSource::open(archive) else {
+            continue;
+        };
+        let holds = MediaSource::volume_name(&source).to_string();
+        let role = packagevol::archive_is(media, overlays, &holds);
+        let wrong = if index == 0 {
+            role != packagevol::ArchiveIs::ThePackage
+        } else {
+            role == packagevol::ArchiveIs::ThePackage
+        };
+        if !wrong {
+            continue;
+        }
+        return Err(CoreError::InvalidInput(packagevol::wrong_archive_sentence(
+            archive, media, &role, &holds, catalogue,
+        )));
     }
-    let Ok(source) = ArchiveSource::open(first) else {
-        return Ok(());
-    };
-    let holds = MediaSource::volume_name(&source).to_string();
-    let role = packagevol::archive_is(media, overlays, &holds);
-    if role == packagevol::ArchiveIs::ThePackage {
-        return Ok(());
-    }
-    Err(CoreError::InvalidInput(packagevol::wrong_archive_sentence(
-        first, media, &role, &holds,
-    )))
+    Ok(())
 }
 
 /// Match what the package's installer requires against what the user
@@ -905,7 +1339,7 @@ fn install(
     emulator: &Path,
     scratch_root: &Path,
     sink: &dyn ProgressSink,
-) -> CoreResult<(RunOutcome, SettlementReport)> {
+) -> CoreResult<(RunOutcome, SettlementReport, Option<FollowUpOutcome>)> {
     let plan = &composed.plan;
     let work = Scratch::in_dir(scratch_root)?;
     workvol::build(work.path(), plan)?;
@@ -914,6 +1348,10 @@ fn install(
     // no volume the emulator can see.
     sink.report(0, None, "Unpacking the package's own files");
     let package = Scratch::in_dir(scratch_root)?;
+    // ART-277: named so a wrong-package refusal can say whose archive it
+    // really is, not only what the selected package expected. `compose`
+    // already built this release-scoped and self-excluding (L3/L4) — used
+    // as `compose` left it, not recomputed here.
     let unpacked = packagevol::unpack(
         package_archives,
         package.path(),
@@ -922,6 +1360,8 @@ fn install(
             installer: &composed.installer_in_package,
             overlays: &composed.overlays,
             minimum_installer_version: composed.minimum_installer_version,
+            package_name: &composed.package_name,
+            catalogue: &composed.catalogue,
         },
         scratch_root,
         sink,
@@ -968,7 +1408,7 @@ fn install(
     // process-spawning decision, and `core/amigainstall::run` may not make it
     // (ART-274) — it takes an `EmulatorLauncher` directly instead.
     let launcher = WinUaeLauncher::new(emulator, scratch_root);
-    perform(tree, &composed.post_install, sink, |copy, sink| {
+    let (outcome, settlement) = perform(tree, &composed.post_install, sink, |copy, sink| {
         let request = RunRequest {
             plan,
             work_volume_dir: work.path(),
@@ -983,7 +1423,39 @@ fn install(
         let outcome = run_with(&request, &launcher, &RealClock::new(), sink)?;
         record_if_succeeded(copy, plan, &outcome)?;
         Ok(outcome)
-    })
+    })?;
+
+    // ART-280. Read **after** `perform`, while `work` is still alive — the
+    // scratch removes itself on `Drop`, so this is the last moment the word
+    // exists. Deliberately not folded into `RunOutcome`: a follow-up is the
+    // package doing a second thing, and the install's own ending is unchanged
+    // by it. Said out loud for the same reason a `PostStep` is: nothing else
+    // reports it.
+    let follow_up = workvol::read_follow_up(work.path());
+    if let Some(word) = follow_up {
+        sink.report(0, None, describe_follow_up(word));
+    }
+    Ok((outcome, settlement, follow_up))
+}
+
+/// One sentence per follow-up word, English like every other engine string
+/// (ART-060); the user's own sentence is the screen's.
+fn describe_follow_up(word: FollowUpOutcome) -> &'static str {
+    match word {
+        FollowUpOutcome::Ran => {
+            "The package's follow-up was needed and ran: its second payload is applied"
+        }
+        FollowUpOutcome::NotNeeded => {
+            "The package's follow-up was not needed — the tree already carries that version"
+        }
+        FollowUpOutcome::Failed => {
+            "The package's follow-up ran and said no; the install itself is unaffected"
+        }
+        FollowUpOutcome::NotChecked => {
+            "The tree has no C/Version, so ART could not check whether the package's \
+             follow-up was needed; it was not run"
+        }
+    }
 }
 
 /// ART-186's other half: a run that says it worked writes that into the
@@ -1150,7 +1622,7 @@ pub fn amiga_install_run(
                 .detail("Command", command_line)
                 .detail("Machine", profile.id.clone());
             let record = match &result {
-                Ok((outcome, settlement)) => {
+                Ok((outcome, settlement, _)) => {
                     let record = record.detail("Ending", ending_of(outcome));
                     let record = match settlement {
                         SettlementReport::Promoted { left_behind, .. } => match left_behind {
@@ -1176,13 +1648,14 @@ pub fn amiga_install_run(
             };
             write_to_path(&log_path, &record);
 
-            let (outcome, settlement) = result?;
+            let (outcome, settlement, follow_up) = result?;
             let _ = emit_app.emit(
                 AMIGA_INSTALL_EVENT,
                 AmigaInstallResult {
                     job_id,
                     outcome,
                     settlement,
+                    follow_up,
                 },
             );
             Ok(())
@@ -2111,6 +2584,46 @@ mod tests {
         assert!(err.to_string().contains("BoingBag 3.9-1"), "got {err}");
     }
 
+    /// **A declaration nobody has run is refused here, not only greyed out
+    /// on a screen** (round 3, §10/§89).
+    ///
+    /// `boingbags-39-3-4` declares an `amiga_installer` so the row exists at
+    /// all — hiding it would be ART claiming it ships nothing for a package
+    /// it ships a whole recipe for — and declares `not_yet_runnable` because
+    /// its `Install` is an Installer script nobody has driven unattended. The
+    /// panel renders that row disabled; this is the guard that means a
+    /// request built any other way is refused too.
+    ///
+    /// The refusal is checked to be *this* one and not the chain's: the
+    /// tree carries BoingBag 3.9-2, so prerequisites are met and the only
+    /// thing left standing in the way is the declaration itself.
+    #[test]
+    fn a_package_whose_installer_nobody_has_run_is_refused_and_says_so() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "not-yet-runnable");
+        let tree = tree_with_manifest(
+            &scratch,
+            &["workbench-base", "boingbag-39-1", "boingbag-39-2"],
+        );
+
+        let err = compose(&request_for(&tree, "boingbags-39-3-4")).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("nobody has measured whether that script finishes"),
+            "the refusal must say what has not been measured: {text}"
+        );
+        assert!(
+            !text.contains("ART ships no Amiga-side installer"),
+            "that is a different sentence about a different package: {text}"
+        );
+        // The screen the user is looking at refuses identically.
+        let err = amiga_install_preview(request_for(&tree, "boingbags-39-3-4"), None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("nobody has measured whether that script finishes"),
+            "got {err}"
+        );
+    }
+
     /// The same package on a tree that has BoingBag 1 composes. A refusal that
     /// fired either way would be no check at all.
     #[test]
@@ -2548,6 +3061,424 @@ mod tests {
             "the second one is not, and the screen has to say so before the confirm button"
         );
     }
+
+    // -----------------------------------------------------------------
+    // ART-277: classifying an archive at the moment it is picked, before
+    // it ever reaches a request.
+    // -----------------------------------------------------------------
+
+    /// A wrapper shaped like the owner's own `BoingBag39-2.lha` — the archive
+    /// this round's defect was about: chosen while BoingBag 3.9-1 was still
+    /// selected.
+    fn boingbag2_lha() -> Vec<u8> {
+        crate::core::lha::tests::make_lha_with(&[
+            ("BoingBag3.9-2.info", b"icon"),
+            ("BoingBag3.9-2/AmigaOS-Update", b"PK encrypted"),
+            ("BoingBag3.9-2/C/Updater", b"boingbag 2's own updater"),
+        ])
+    }
+
+    const RELEASE: &str = "AmigaOS 3.9";
+
+    fn release_packages() -> Vec<package::Package> {
+        package::packages_for(RELEASE).unwrap()
+    }
+
+    fn boingbag_1() -> package::Package {
+        package::by_id("boingbag-39-1").unwrap()
+    }
+
+    // -----------------------------------------------------------------
+    // ART-277 re-review, L3/L4: the core refusal's own catalogue is
+    // release-scoped and excludes the selected package, the same discipline
+    // `classify_top_level` already keeps.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn known_packages_from_excludes_a_package_from_a_different_release() {
+        let selected = boingbag_1();
+        // A package sharing BoingBag 3.9-2's own shape but declared for a
+        // release this build is not — the shipped catalogue has only one
+        // release today, so this is built rather than found, per the
+        // review's own note that it is otherwise untestable.
+        let other_release = package::Package {
+            id: "other-release-pkg".to_string(),
+            releases: vec!["AmigaOS 3.2".to_string()],
+            ..package::by_id("boingbag-39-2").unwrap()
+        };
+        let same_release = package::Package {
+            id: "same-release-pkg".to_string(),
+            releases: vec!["AmigaOS 3.9".to_string()],
+            media: "SameRelease".to_string(),
+            ..package::by_id("boingbag-39-2").unwrap()
+        };
+        let all = vec![selected.clone(), other_release, same_release];
+
+        let names: Vec<String> = known_packages_from(&selected, &all)
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(
+            names,
+            vec!["same-release-pkg".to_string()],
+            "must exclude the selected package itself and any package of a different release"
+        );
+    }
+
+    #[test]
+    fn classify_top_level_recognises_the_selected_packages_own_archive() {
+        let selected = boingbag_1();
+        let catalogue = release_packages();
+        assert_eq!(
+            classify_top_level("BoingBag3.9-1", Some(&selected), &catalogue, None).kind,
+            "the-package"
+        );
+    }
+
+    #[test]
+    fn classify_top_level_recognises_the_selected_packages_update_archive() {
+        let selected = boingbag_1();
+        let catalogue = release_packages();
+        assert_eq!(
+            classify_top_level("BoingBag3.9-1-UAE", Some(&selected), &catalogue, None).kind,
+            "the-update-archive"
+        );
+    }
+
+    /// The whole of ART-277: BoingBag 3.9-2's own archive, offered while
+    /// BoingBag 3.9-1 is still the selected package, is named by id rather
+    /// than folded into "unknown".
+    #[test]
+    fn classify_top_level_names_another_catalogued_package() {
+        let selected = boingbag_1();
+        let catalogue = release_packages();
+        // Read from the archive, because round 3 gave `BoingBag3.9-2` a
+        // second claimant and the top level alone can no longer say which
+        // package this is — see
+        // `an_archive_that_can_be_read_is_narrowed_by_what_is_inside_it`.
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "classify-another");
+        let archive = scratch.join("BoingBag39-2.lha");
+        std::fs::write(&archive, boingbag2_lha()).unwrap();
+        assert_eq!(
+            classify_top_level("BoingBag3.9-2", Some(&selected), &catalogue, Some(&archive)).kind,
+            "another-package:boingbag-39-2"
+        );
+    }
+
+    /// **ART-277 review, Medium 1.** BoingBag 3.9-1's own update archive,
+    /// offered while BoingBag 3.9-2 is selected, is named as *that* package's
+    /// update archive — not folded into "unknown" (the shape found reachable
+    /// with only the media comparison) and not "another-package" (it is not
+    /// BoingBag 3.9-1's own archive, it is the fix for it).
+    #[test]
+    fn classify_top_level_names_another_packages_update_archive() {
+        let selected = package::by_id("boingbag-39-2").unwrap();
+        let catalogue = release_packages();
+        assert_eq!(
+            classify_top_level("BoingBag3.9-1-UAE", Some(&selected), &catalogue, None).kind,
+            "another-packages-update-archive:boingbag-39-1"
+        );
+    }
+
+    #[test]
+    fn classify_top_level_answers_unknown_for_an_archive_nothing_recognises() {
+        let selected = boingbag_1();
+        let catalogue = release_packages();
+        // `NDK39` rather than `Euro-Update`: round 3 ships a recipe whose
+        // own media *is* `Euro-Update`, and the NDK installs nothing and is
+        // outside the chain (research section 2), so it is an archive ART
+        // genuinely does not recognise.
+        assert_eq!(
+            classify_top_level("NDK39", Some(&selected), &catalogue, None).kind,
+            "unknown"
+        );
+    }
+
+    /// **ART-277 re-review, L5 (was Major 2's `other-artefact`, split in
+    /// two).** `locale-39` and `locale-39-turkish` both declare `"media":
+    /// "Locale3.9"` on purpose (`recipes/packages/locale-39-turkish.json`'s
+    /// own comment): two components sharing one archive is ART-276's own
+    /// shape. Naming either one arbitrarily here would be that same trap
+    /// wearing this round's clothes — the answer has to say what the
+    /// archive *is* and name **both** packages, not guess which one it
+    /// means or claim a single cause ("the Packages step places it") that
+    /// is only true of the *other* kind (`other-artefact`, below).
+    #[test]
+    fn classify_top_level_answers_shared_artefact_when_two_packages_share_the_media() {
+        let selected = boingbag_1();
+        let catalogue = release_packages();
+        let classified = classify_top_level("Locale3.9", Some(&selected), &catalogue, None);
+        assert_eq!(classified.kind, "shared-artefact:Locale3.9");
+        let mut shared_by = classified.shared_by;
+        shared_by.sort();
+        assert_eq!(
+            shared_by,
+            vec!["locale-39".to_string(), "locale-39-turkish".to_string()]
+        );
+    }
+
+    /// **ART-277 review, Major 2 — the other half; re-review L5 keeps this
+    /// one `other-artefact`.** `locale-turkish` declares `"media":
+    /// "LocaleUpdate"` uniquely — a single, unambiguous match — but it is
+    /// not `amiga_installable` and so is not on this screen's radio at all.
+    /// "select locale-turkish" would be an instruction the user cannot
+    /// follow here; this answers with what the archive is instead of a
+    /// package id nobody can act on, and carries no `shared_by` (there is
+    /// only the one match).
+    #[test]
+    fn classify_top_level_answers_other_artefact_for_a_match_the_radio_does_not_offer() {
+        let selected = boingbag_1();
+        let catalogue = release_packages();
+        let classified = classify_top_level("LocaleUpdate", Some(&selected), &catalogue, None);
+        assert_eq!(classified.kind, "other-artefact:LocaleUpdate");
+        assert!(classified.shared_by.is_empty());
+    }
+
+    /// No package selected yet (a fresh panel, or an archive picked by hand):
+    /// still names another catalogued package rather than only ever
+    /// answering `"unknown"` — a query with no selected package is not the
+    /// same question as one that already knows something is wrong.
+    #[test]
+    fn classify_top_level_without_a_selected_package_still_names_a_catalogued_one() {
+        let catalogue = release_packages();
+        assert_eq!(
+            classify_top_level("BoingBag3.9-1", None, &catalogue, None).kind,
+            "another-package:boingbag-39-1"
+        );
+    }
+
+    /// **The top level alone cannot separate BoingBag 3.9-2 from its own
+    /// Contribution archive, and the archive's contents can** (round 3).
+    ///
+    /// Both arms, on the same top level, because the whole point is that the
+    /// second fact changes the answer: without a file to read, two packages
+    /// claim `BoingBag3.9-2` and saying which would be a guess; with the
+    /// file, `AmigaOS-Update` is in it and the Contribution's declared
+    /// `Contribution/ClassAction/ClassAction` is not.
+    #[test]
+    fn an_archive_that_can_be_read_is_narrowed_by_what_is_inside_it() {
+        let catalogue = release_packages();
+        assert_eq!(
+            classify_top_level("BoingBag3.9-2", None, &catalogue, None).kind,
+            "shared-artefact:BoingBag3.9-2",
+            "two packages claim this top level and nothing here can tell them apart"
+        );
+
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "classify-narrow");
+        let archive = scratch.join("BoingBag39-2.lha");
+        std::fs::write(&archive, boingbag2_lha()).unwrap();
+        assert_eq!(
+            classify_top_level("BoingBag3.9-2", None, &catalogue, Some(&archive)).kind,
+            "another-package:boingbag-39-2",
+            "this archive carries AmigaOS-Update and not the Contribution's ClassAction"
+        );
+    }
+
+    /// End to end, through the command itself: a real file on disk, read by
+    /// its listing alone. This is the one test in the group that proves
+    /// `amigainstall_classify_archive` actually opens the archive rather than
+    /// merely wiring `classify_top_level` correctly.
+    #[test]
+    fn the_command_classifies_a_real_archive_on_disk() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "classify-archive");
+        let archive = scratch.join("BoingBag39-2.lha");
+        std::fs::write(&archive, boingbag2_lha()).unwrap();
+
+        let answer = amigainstall_classify_archive(
+            archive,
+            "boingbag-39-1".to_string(),
+            RELEASE.to_string(),
+        )
+        .unwrap();
+        assert_eq!(answer.kind, "another-package:boingbag-39-2");
+        assert!(
+            answer.top_level.iter().any(|n| n == "BoingBag3.9-2"),
+            "got {:?}",
+            answer.top_level
+        );
+        // The selected package's own expectations travel with the answer —
+        // BoingBag 3.9-1's own drawer, and its one declared overlay.
+        assert_eq!(answer.expected_media.as_deref(), Some("BoingBag3.9-1"));
+        assert_eq!(
+            answer.expected_overlays,
+            vec!["BoingBag3.9-1-UAE".to_string()]
+        );
+    }
+
+    // -- ART-280: the follow-up, composed and reported ---------------------
+
+    /// **The composition, pinned against the shipped recipe.** The recipe
+    /// says `C/Updater` and `XAD-Update` and deliberately names no volume;
+    /// what turns that into a runnable line is this layer, exactly as it is
+    /// for the first invocation, and it is asserted here for the same reason.
+    ///
+    /// Both volumes appear and they are different ones: the program is on
+    /// `ARTPkg:`, where ART unpacked the wrapper, and the target is `DH0:`,
+    /// the tree being installed into (ART-185). The gate's path carries
+    /// **neither** — it is relative to the system volume and the script
+    /// prefixes it, so a colon here would mean the composer had reached a
+    /// field that is not its own.
+    #[test]
+    fn the_follow_up_is_composed_onto_both_volumes_and_the_gate_is_left_alone() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "follow-up-compose");
+        let tree = tree_with_manifest(&scratch, &["workbench-base", "boingbag-39-1"]);
+        let composed = compose(&request_for(&tree, "boingbag-39-2")).unwrap();
+
+        assert_eq!(composed.plan.follow_ups.len(), 1, "one, from the recipe");
+        let follow_up = &composed.plan.follow_ups[0];
+        assert_eq!(follow_up.program, "ARTPkg:BoingBag3.9-2/C/Updater");
+        assert_eq!(
+            follow_up.args,
+            vec!["XAD-Update".to_string(), "DH0:".into()]
+        );
+        assert_eq!(
+            follow_up.unless_file_version_at_least.path,
+            "Libs/xadmaster.library"
+        );
+        assert_eq!(follow_up.unless_file_version_at_least.version, 10);
+
+        // And the package that declares none composes none, so the assertion
+        // above is about this recipe rather than about every recipe.
+        let one = compose(&request(&tree)).unwrap();
+        assert!(one.plan.follow_ups.is_empty(), "BoingBag 1 declares none");
+    }
+
+    /// The word reaches the screen under the name the frontend reads, beside
+    /// the ending and never folded into it.
+    ///
+    /// Asserted on the serialized form because that is the contract: a
+    /// renamed field or a re-cased variant is invisible to Rust and breaks
+    /// `src/lib/amigainstall.ts` silently. `outcome` stays exactly what it
+    /// was — a follow-up that said no is **not** the installer saying no.
+    #[test]
+    fn the_follow_ups_word_travels_beside_the_ending_and_not_inside_it() {
+        for (word, wire) in [
+            (FollowUpOutcome::Ran, "\"ran\""),
+            (FollowUpOutcome::NotNeeded, "\"not-needed\""),
+            (FollowUpOutcome::Failed, "\"failed\""),
+            (FollowUpOutcome::NotChecked, "\"not-checked\""),
+        ] {
+            let json = serde_json::to_string(&AmigaInstallResult {
+                job_id: 7,
+                outcome: RunOutcome::Succeeded,
+                settlement: SettlementReport::Kept {
+                    copy: PathBuf::from("copy"),
+                    original: PathBuf::from("tree"),
+                },
+                follow_up: Some(word),
+            })
+            .unwrap();
+            assert!(
+                json.contains(&format!("\"follow_up\":{wire}")),
+                "for {word:?}: {json}"
+            );
+            assert!(
+                json.contains("\"kind\":\"succeeded\""),
+                "the ending is untouched by the follow-up: {json}"
+            );
+        }
+
+        let none = serde_json::to_string(&AmigaInstallResult {
+            job_id: 7,
+            outcome: RunOutcome::Succeeded,
+            settlement: SettlementReport::Kept {
+                copy: PathBuf::from("copy"),
+                original: PathBuf::from("tree"),
+            },
+            follow_up: None,
+        })
+        .unwrap();
+        assert!(none.contains("\"follow_up\":null"), "got {none}");
+    }
+
+    /// Four words, four sentences, and none of them says the install failed.
+    ///
+    /// `NotNeeded` is the row that matters: "the tree already carries that
+    /// version" is not a failure and must never read as one, which is the
+    /// whole reason it is a separate word rather than an absent file.
+    #[test]
+    fn every_follow_up_word_has_its_own_sentence() {
+        let said: Vec<&str> = [
+            FollowUpOutcome::Ran,
+            FollowUpOutcome::NotNeeded,
+            FollowUpOutcome::Failed,
+            FollowUpOutcome::NotChecked,
+        ]
+        .into_iter()
+        .map(describe_follow_up)
+        .collect();
+
+        let mut unique = said.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            said.len(),
+            "four distinct sentences: {said:?}"
+        );
+
+        assert!(
+            said[1].contains("not needed"),
+            "'not needed' must not read as a failure: {}",
+            said[1]
+        );
+        assert!(
+            said[2].contains("the install itself is unaffected"),
+            "a failed follow-up must not read as a failed install: {}",
+            said[2]
+        );
+    }
+
+    /// A file that is not an archive at all — or is not there — answers
+    /// `"unknown"` rather than an error: this is asked on every file pick,
+    /// and a query must not turn "I could not tell" into something the user
+    /// cannot get past.
+    #[test]
+    fn the_command_is_lenient_about_a_file_it_cannot_read() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "classify-unreadable");
+        let answer = amigainstall_classify_archive(
+            scratch.join("nothing-here.lha"),
+            "boingbag-39-1".to_string(),
+            RELEASE.to_string(),
+        )
+        .unwrap();
+        assert_eq!(answer.kind, "unknown");
+        assert!(answer.top_level.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // ART-277 review, Major 1: every archive slot is checked against its
+    // own role, not only the first.
+    // -----------------------------------------------------------------
+
+    /// The package's own archive, supplied a *second* time as if it were the
+    /// update archive, is refused before the tree is copied — the exact
+    /// mistake the first round's `refuse_wrong_package_archive` (checking
+    /// `archives.first()` alone) let straight through to `apply_overlay`,
+    /// where the sentence could name the selected package and then tell the
+    /// user to select it.
+    #[test]
+    fn a_wrong_second_archive_is_refused_before_the_tree_is_copied() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "wrong-second-archive");
+        let tree = tree_in(&scratch);
+        let own_archive = scratch.join("BoingBag39-1.lha");
+        std::fs::write(&own_archive, boingbag_lha()).unwrap();
+        let duplicate = scratch.join("BoingBag39-1-again.lha");
+        std::fs::write(&duplicate, boingbag_lha()).unwrap();
+
+        let mut req = request(&tree);
+        req.package_archives = vec![own_archive, duplicate];
+
+        let said = amiga_install_preview(req, None).unwrap_err().to_string();
+        assert!(
+            said.contains("package's own archive"),
+            "must name what it really is: {said}"
+        );
+        assert!(
+            said.contains("belongs in the package's own field"),
+            "must say where it belongs: {said}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2708,9 +3639,10 @@ mod real_install_hook {
         let elapsed = started.elapsed();
 
         match result {
-            Ok((outcome, settlement)) => {
+            Ok((outcome, settlement, follow_up)) => {
                 println!("outcome: {outcome:?}");
                 println!("settlement: {settlement:?}");
+                println!("follow-up: {follow_up:?}");
             }
             Err(err) => println!("ERROR after {elapsed:?}: {err}"),
         }

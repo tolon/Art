@@ -12,6 +12,7 @@ import {
   insertToggle,
   invertSelection,
   markByMask,
+  markThrough,
   selectOnly,
   selectRange,
   selectedEntriesForBatch,
@@ -87,6 +88,55 @@ describe("selectRange (shift+click)", () => {
     const ranged = selectRange(ENTRIES, new Set(), "Nonexistent", "Gamma");
     expect([...ranged.selected]).toEqual(["Gamma"]);
     expect(ranged.anchor).toBe("Gamma");
+  });
+});
+
+describe("markThrough (Shift+cursor movement, ART-275)", () => {
+  it("Shift+Down marks just the row left behind, same as Insert", () => {
+    const update = markThrough(ENTRIES, new Set(), "Alpha", "Beta");
+    expect([...update.selected]).toEqual(["Alpha"]);
+    expect(update.anchor).toBe("Beta");
+  });
+
+  it("Shift+Up marks the row left behind, not the one landed on", () => {
+    const update = markThrough(ENTRIES, new Set(), "Gamma", "Beta");
+    expect([...update.selected]).toEqual(["Gamma"]);
+    expect(update.anchor).toBe("Beta");
+  });
+
+  it("a longer span (Home/End/Page) marks every row between, excluding the landing row", () => {
+    const down = markThrough(ENTRIES, new Set(), "Alpha", "Delta");
+    expect([...down.selected].sort()).toEqual(["Alpha", "Beta", "Gamma"]);
+
+    const up = markThrough(ENTRIES, new Set(), "Delta", "Alpha");
+    expect([...up.selected].sort()).toEqual(["Beta", "Delta", "Gamma"]);
+  });
+
+  it("adds to what was already marked rather than replacing it", () => {
+    const preSelected = new Set(["Epsilon"]);
+    const update = markThrough(ENTRIES, preSelected, "Alpha", "Beta");
+    expect([...update.selected].sort()).toEqual(["Alpha", "Epsilon"]);
+  });
+
+  it("repeated presses build up the run, the way repeated Inserts do", () => {
+    const first = markThrough(ENTRIES, new Set(), "Alpha", "Beta");
+    expect(first.anchor).toBe("Beta");
+    const second = markThrough(ENTRIES, first.selected, "Beta", "Gamma");
+    expect([...second.selected].sort()).toEqual(["Alpha", "Beta"]);
+    expect(second.anchor).toBe("Gamma");
+  });
+
+  it("marks nothing when from and to are the same row (no movement happened)", () => {
+    const update = markThrough(ENTRIES, new Set(), "Alpha", "Alpha");
+    expect(update.selected.size).toBe(0);
+    expect(update.anchor).toBe("Alpha");
+  });
+
+  it("falls back to carrying the anchor through when from or to is stale", () => {
+    const selected = new Set(["Beta"]);
+    const update = markThrough(ENTRIES, selected, "Nonexistent", "Gamma");
+    expect(update.selected).toBe(selected);
+    expect(update.anchor).toBe("Gamma");
   });
 });
 

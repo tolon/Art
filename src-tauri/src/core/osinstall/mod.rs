@@ -67,6 +67,7 @@ pub mod plan;
 pub mod recipe;
 pub mod scan;
 pub mod scan_cache;
+pub mod slots;
 pub mod source;
 pub mod source_archive;
 pub mod source_cd;
@@ -845,6 +846,45 @@ pub enum HostPlacementBlock {
     /// The package's payload archive is encrypted, and only the package's
     /// own Amiga-side `Updater` holds the password (ART-166).
     EncryptedPayload,
+    /// The package replaces bitmap fonts and ships its own `.font`
+    /// descriptors, and its installer runs `FixFonts` afterwards to rebuild
+    /// them from what the drawer actually holds. **ART cannot rebuild a
+    /// `.font` index**, so placing the files alone would leave the index
+    /// listing only the sizes this package happens to ship.
+    ///
+    /// **Measured, 2026-09-08, on the owner's own material.**
+    /// `Euro-Update.lha` carries ten `.font` descriptors beside its size
+    /// files; each is a `FontContentsHeader` (`0x0f00`, an entry count, then
+    /// 260-byte entries carrying a name, a `ysize`, a `style` and `flags`).
+    /// Compared against the tree ART's own 3.9 build produced: every one
+    /// names exactly the sizes that tree already has and differs **only in
+    /// entry order** (`courier.font` lists 24 first, the tree's lists 11
+    /// first; `topaz.font` is byte-identical), so on a standard tree the
+    /// rebuild is a no-op. That is the measurement — and it is a
+    /// measurement about *one* tree. ART cannot ask an arbitrary tree
+    /// whether its `Fonts` drawer holds a size this package's descriptor
+    /// omits, and where it does, placing the descriptor silently removes
+    /// that size from the index: nothing fails, nothing is logged, and a
+    /// font stops being available. Rebuilding the index honestly means
+    /// reading each size file's own `DiskFontHeader` for the `style` and
+    /// `flags` no descriptor can invent — a second binary format ART has
+    /// never parsed and has no oracle for. So the row is refused and says
+    /// why, rather than half-placed.
+    NeedsFixfonts,
+    /// The package installs through its **own Installer script**, which
+    /// decides what to copy from answers only a person can give.
+    ///
+    /// **Measured, 2026-09-08, on the owner's own `BoingBags3&4.lha`.** Its
+    /// `Install` picks the CPU-specific `xadmaster`, `mpega` and datatype
+    /// builds, asks `askoptions` which languages to install, asks which SCSI
+    /// device the machine wants, copies into whatever `AmiTCP:` and
+    /// `SYS:Internet/AWeb3SE` happen to be assigned, deletes
+    /// `L/CrossDOSFileSystem`, renames files inside its own source drawer
+    /// and offers to open `SYS:Tools/EditPad` on the startup-sequence. None
+    /// of that is a set of `PathRule`s, and a recipe that declared the
+    /// unconditional half as if it were the whole would produce a tree that
+    /// boots and is quietly short — this project's named defect.
+    NeedsInstallerScript,
 }
 
 /// Why an install cannot proceed. A value, never a sentence — the UI
@@ -1029,7 +1069,30 @@ pub enum RefusalReason {
     /// it in silently would install something the user never asked for
     /// (`package::order`'s own rule, surfaced as a typed refusal rather
     /// than its English sentence — ART-060).
+    /// **Names, never ids** (fix round 1, M1). Every chain sentence this
+    /// round added renders `Package::name`; this one rendered
+    /// `locale-turkish` and `boingbag-39-2` at the user.
     PackageRequirementMissing { package: String, requires: String },
+    /// A package needs another package that **runs on the Amiga**, so the
+    /// advice the ordinary requirement refusal gives — *"tick that one
+    /// too"* — is about a checkbox the Packages step disables.
+    ///
+    /// **The round that created this case did not notice the sentence**
+    /// (fix round 1, M1). Correcting `locale-turkish`'s `requires` to what
+    /// the material states made it need BoingBag 3.9-2, which is
+    /// `EncryptedPayload`-blocked and whose row `PackagePanel` explicitly
+    /// cannot tick; the owner's own Turkish catalogue pack therefore became
+    /// unaddable with *"tick that one too"* as the only guidance. The real
+    /// next step is to run that package from the Amiga-side step, and this
+    /// is the variant that says so.
+    ///
+    /// Both fields carry the package's own **name**, not its id: the
+    /// sentence is rendered verbatim and a name is the package's own
+    /// (ART-060).
+    PackageRequirementNeedsAmigaRun {
+        package: String,
+        requirement: String,
+    },
     /// A package needs a **recipe component** that is not switched on —
     /// `locale-turkish` without `locale-base`, which lands thirty-six
     /// catalogs into a `Locale/Catalogs` drawer nothing can open (ART-162
@@ -1583,6 +1646,8 @@ pub(crate) mod fixtures {
             amiga_installer: None,
             requires: Vec::new(),
             requires_components: Vec::new(),
+            chain_position: None,
+            superseded_by: Vec::new(),
             host_placement_block: None,
             component,
         }
@@ -1667,6 +1732,8 @@ pub(crate) mod fixtures {
             amiga_installer: None,
             requires: vec!["test-package".to_string()],
             requires_components: Vec::new(),
+            chain_position: None,
+            superseded_by: Vec::new(),
             host_placement_block: None,
             component,
         }

@@ -126,11 +126,15 @@ import {
   type MediaScanResult,
   type OsInstallResult,
   type PlanResult,
+  type SlotOverride,
 } from "@/lib/osinstall";
-import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
-import { isFlag, isText, isTextList, isTextOrNothing, recall, remember } from "@/lib/remembered";
-import { useRemembered } from "@/lib/useRemembered";
+import { slotOverrides } from "@/lib/amigainstall";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
+import { isFlag, isText, isTextList, isTextOrNothing } from "@/lib/remembered";
+import { useRemembered } from "@/lib/useRemembered";
+import { foldersForPlan, type MaterialFolder } from "@/lib/buildSession";
+import { hostAmigaForeverFolders } from "@/lib/api";
 import { useBuildSession } from "@/lib/useBuildSession";
 import {
   fraction,
@@ -140,6 +144,7 @@ import {
   type JobProgress,
 } from "@/lib/jobs";
 import { Field } from "@/components/osbuilder/Field";
+import { MaterialReadout } from "@/components/osbuilder/MaterialReadout";
 import { PackagePanel } from "@/components/osbuilder/PackagePanel";
 import { AmigaInstallPanel } from "@/components/osbuilder/AmigaInstallPanel";
 
@@ -274,50 +279,47 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    *
    * **First, because the folders below are keyed on it** (ART-207).
    */
-  const { session, setTree, setPackages, setRelease, setRom: setSessionRom } = useBuildSession();
+  const {
+    session,
+    setTree,
+    setPackages,
+    setRelease,
+    setRom: setSessionRom,
+    setMaterial,
+    addMaterialFolder,
+  } = useBuildSession();
   const release = session.release;
 
   /**
-   * The folder holding this release's install media — remembered **per
-   * release** (ART-207), for the reason `rememberedComponentKey` already
-   * exists: a folder means something only inside the recipe that reads it.
+   * **The one list of folders this build's material is in** (design § 3.1) —
+   * the build session's own value, per release.
    *
-   * The owner chose AmigaOS 3.2 with the folder their 3.9 disc lives in
-   * still remembered, and every one of the 3.2 recipe's sixteen components
-   * refused `MediaMissing`. Sixteen true sentences that together said "a lot
-   * of programs are missing" about a folder that was simply the wrong one.
-   * A media folder cannot serve two releases — the owner keeps 3.9's disc in
-   * `Amigatolon\iso` and 3.2's ADFs in `Amigatolon\paketler` — so carrying
-   * one into the other can only ever produce that screen.
-   */
-  const [mediaFolder, setMediaFolder] = useRemembered<string | null>(
-    rememberedComponentKey("osinstall.mediaFolder", release),
-    isTextOrNothing,
-    null
-  );
-
-  /**
-   * **More folders holding this release's media** (work-list item 8).
+   * It replaces three separate questions this screen used to ask: the
+   * install-disks field (`osinstall.mediaFolder.<release>`), the bag of added
+   * folders under it (`osinstall.extraMediaFolders.<release>`), and one
+   * labelled field per media layer. They were three shapes for one thing, and
+   * a person who simply *has* the files had to work out which sentence each
+   * field wanted. `buildSession.material.<release>` seeds from all three (and
+   * from the packages step's folder) once, in `seededMaterial`.
    *
-   * AmigaOS 3.2.2.1 is not one folder of disks: it is the user's own 3.2 ADFs
-   * plus the update disks plus the hotfix disk, and Hyperion ships the last
-   * two as `ADFs/Update/` and `ADFs/Hotfix/` inside a single download. Until
-   * this existed, whichever folder they named, every component from the other
-   * came back `MediaMissing`.
-   *
-   * Per release, for the same reason `mediaFolder` is (ART-207): a 3.2.2.1
-   * install's update folder means nothing to a 3.9 one.
+   * Per release, for the reason ART-207 bought: the owner chose AmigaOS 3.2
+   * with the folder their 3.9 disc lives in still remembered, and every one
+   * of the 3.2 recipe's sixteen components refused `MediaMissing` — sixteen
+   * true sentences that together said "a lot of programs are missing" about a
+   * folder that was simply the wrong one.
    *
    * **Order is not precedence.** The same volume name in two folders is
    * refused by name (`scan::media_for`), never resolved by which was added
    * first — picking one would be ART choosing between two of somebody's disks
    * on the strength of the order they clicked.
    */
-  const [extraMediaFolders, setExtraMediaFolders] = useRemembered<string[]>(
-    rememberedComponentKey("osinstall.extraMediaFolders", release),
-    isTextList,
-    []
-  );
+  const materialFolders = session.material.folders;
+  /** Every folder in the list, in order, as a primitive dependency — two
+   *  equal strings are the same value to React, unlike two equal arrays
+   *  (ART-178/ART-195). */
+  const materialKey = materialFolders
+    .map((entry) => `${entry.layer ?? ""}=${entry.path}`)
+    .join("\n");
 
   /**
    * The media layers the chosen release's own recipe declares, in the
@@ -371,49 +373,39 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const layersKnown = layersRelease === release;
 
   /**
-   * **Per layer, not per release** (the rest of ART-207's own rule, one level
-   * finer). A layer's folder is remembered under
-   * `osinstall.mediaFolder.<release>.<layerId>` rather than through
-   * `useRemembered` itself — the number of layers varies with the release (0
-   * today, 2 for AmigaOS 3.2.2), and a hook cannot be called a variable
-   * number of times per render. `recall`/`remember` are the plain functions
-   * underneath `useRemembered`, not hooks, so calling them once per layer
-   * inside a loop is safe; the single hook call below is the one thing that
-   * must stay fixed, and it is — one subscription to the whole remembered
-   * bag, read per layer as needed.
+   * **What the request carries, built from the one list** — `foldersForPlan`,
+   * which is also what `unusedForPlan` below is read from.
    *
-   * **Why per layer and not one map keyed by layer id under one remembered
-   * key.** The owner's 3.2 base and 3.2.2 update sets live in two different
-   * folders they picked separately; a single key holding both would mean
-   * `recallInto`'s field-by-field guard has to know every layer id a recipe
-   * could ever declare in advance, and a stale field from a dropped layer id
-   * would sit in the settings file forever. A key per layer costs nothing a
-   * user notices and never needs a schema.
+   * A layer's folder used to be its own remembered key
+   * (`osinstall.mediaFolder.<layerId>.<release>`) and the flat field another;
+   * both are now entries in `material.folders`, an entry's `layer` being the
+   * tag that says which labelled question it answers. `seededMaterial`
+   * migrates each of those keys once and they are never written again.
    */
-  const rememberedBag = useSettingsStore((s) => s.settings.remembered);
-  const updateSettings = useSettingsStore((s) => s.update);
+  const plannedFolders = useMemo(
+    () => foldersForPlan(session.material, layers),
+    [session.material, layers]
+  );
 
   /**
-   * Composed through `rememberedComponentKey` (fix round 1, Finding 2)
-   * rather than a hand-built template — every sibling field on this screen
-   * (`mediaFolder`, `extraMediaFolders`, `keymap`, `chosen`, …) keys its
-   * per-release variant through that one helper, and a second, hand-rolled
-   * naming convention here bought nothing: `rememberedComponentKey` already
-   * does exactly "one base, suffixed by what it must not be confused with",
-   * and a layer id is one more thing this key must not be confused across,
-   * the same shape release already is.
+   * The folders the request actually reads, in list order — a layered
+   * release's tagged ones, an unlayered release's whole list. Memoized so it
+   * is one identity per plan-folder answer rather than one per render, since
+   * two effects below depend on it (ART-178/ART-195).
    */
-  function layerFolderKey(layerId: string): string {
-    return rememberedComponentKey(`osinstall.mediaFolder.${layerId}`, release);
-  }
+  const plannedFolderPaths = useMemo(
+    () =>
+      layers.length > 0
+        ? layers.map((layer) => plannedFolders.mediaFolders[layer.id]).filter((f): f is string => !!f)
+        : [plannedFolders.mediaFolder, ...plannedFolders.extraMediaFolders].filter((f) => !!f),
+    [layers, plannedFolders]
+  );
 
+  /** The folder a layer is tagged with, or `null` when nobody has tagged one
+   *  yet. Read off `plannedFolders` so there is one answer to "which folder
+   *  is this layer's" and the plan request cannot disagree with the screen. */
   function folderForLayer(layerId: string): string | null {
-    return recall(rememberedBag, layerFolderKey(layerId), isTextOrNothing, null);
-  }
-
-  function setFolderForLayer(layerId: string, value: string | null) {
-    const latest = useSettingsStore.getState().settings.remembered;
-    void updateSettings({ remembered: remember(latest, layerFolderKey(layerId), value) });
+    return plannedFolders.mediaFolders[layerId] ?? null;
   }
 
   /** A stable, primitive dependency for the layers' own folders — see the
@@ -422,19 +414,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    *  dependency comparison, so this needs no `useStabilised`-style memo the
    *  way an array or object read off the remembered bag would (ART-178). */
   const layerFoldersKey = layers.map((l) => `${l.id}=${folderForLayer(l.id) ?? ""}`).join("|");
-
-  /** Every layer with a folder actually chosen, as `InstallRequest.mediaFolders`
-   *  wants it — a layer nobody has pointed at yet is simply absent, which
-   *  `core::osinstall::plan::plan` already reads as "this layer's own
-   *  components report media-missing", never as a hard refusal (Task 3). */
-  function mediaFoldersForRequest(): Record<string, string> {
-    const result: Record<string, string> = {};
-    for (const layer of layers) {
-      const folder = folderForLayer(layer.id);
-      if (folder) result[layer.id] = folder;
-    }
-    return result;
-  }
 
   /** A layer's own field label — the recipe's own `labelKey`, translated,
    *  when it names one, the bare layer id otherwise (a recipe with no
@@ -449,113 +428,119 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   }
 
   /**
-   * Each layer's own scan of its own folder — fix round 1, Finding 1. The
-   * single flat field has always scanned itself (`mediaScan` below) to say
-   * "N install disks found" and to feed `wrongMediaFolder`'s release-level
-   * check; a layered release's own fields did neither, which is exactly the
-   * gap the review named: a two-field screen invites pointing the update
-   * disks at the base field, and nothing said so.
+   * **One scan per folder in the list, keyed by the folder's own path.**
    *
-   * The same `osinstallScanMedia` the flat field already calls, once per
-   * layer's own chosen folder rather than once for the whole request. Keyed
-   * by layer id; a layer with no folder chosen holds no entry, and a scan
-   * that throws is treated the same way the flat field's own effect treats
-   * one — absence, not a badge (a folder ART cannot read is the ordinary
-   * case here too).
+   * This used to be three states — `mediaScan` for the flat field,
+   * `extraScans` for the folders added under it (ART-256), `layerScans` for a
+   * layered release's own fields (fix round 1, Finding 1) — because there
+   * were three folder controls. There is one control now, so there is one
+   * record, and the three ways a folder could end up unscanned collapse into
+   * the one they always were.
+   *
+   * The same `osinstallScanMedia` all three called, once per folder. A folder
+   * that throws holds `null` — absence, not a badge, since a folder ART
+   * cannot read is the ordinary case here — and the row itself says so from
+   * its own `folder-unreadable` outcome.
    */
-  const [layerScans, setLayerScans] = useState<Record<string, MediaScanResult | null>>({});
+  const [folderScans, setFolderScans] = useState<Record<string, MediaScanResult | null>>({});
   useEffect(() => {
-    if (layers.length === 0) {
-      // The previous object is kept when it is already empty — the same
-      // guard `extraScans` below carries, and for the same reason now that
-      // `foundVolumeNames` is memoized on this one too (ART-257): a fresh
-      // `{}` per run is a new identity for nothing, and the two evidence
-      // lookups downstream would be asked again for it (ART-178/ART-195).
-      setLayerScans(resetIfEmpty);
+    const folders = materialFolders.map((entry) => entry.path);
+    if (folders.length === 0) {
+      // The previous object is kept when it is already empty (ART-260): a
+      // fresh `{}` per run is a new identity for nothing, and
+      // `foundVolumeNames` is memoized on this one — ART-178/ART-195 were
+      // exactly a per-render identity driving an effect that starts disk
+      // work.
+      setFolderScans(resetIfEmpty);
       return;
     }
     let cancelled = false;
     Promise.all(
-      layers.map(async (layer) => {
-        const folder = folderForLayer(layer.id);
-        if (!folder) return [layer.id, null] as const;
+      folders.map(async (folder) => {
         try {
-          return [layer.id, await osinstallScanMedia(folder)] as const;
+          return [folder, await osinstallScanMedia(folder)] as const;
         } catch {
-          return [layer.id, null] as const;
+          return [folder, null] as const;
         }
       })
     ).then((entries) => {
-      if (!cancelled) setLayerScans(Object.fromEntries(entries));
+      if (!cancelled) setFolderScans(Object.fromEntries(entries));
     });
     return () => {
       cancelled = true;
     };
-    // `layerFoldersKey`, not the individual folders — see its own doc
-    // comment on why a derived string is the dependency rather than an
-    // object or array built off the remembered bag (ART-178).
+    // `materialKey`, not `materialFolders` — see its own doc comment on why
+    // a derived string is the dependency rather than the array (ART-178).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layers, layerFoldersKey]);
+  }, [materialKey]);
 
-  /** The volume names one layer's own scan actually found — `[]` when
-   *  nothing was scanned, nothing was found, or the folder could not be
-   *  read, the same three-ways-to-nothing `foundVolumeNames` below already
-   *  collapses for the flat field. */
-  function layerFoundVolumeNames(layerId: string): string[] {
-    const scan = layerScans[layerId];
+  /** The volume names one **folder** actually holds — `[]` when nothing was
+   *  scanned, nothing was found, or the folder could not be read, which are
+   *  three ways to nothing the wrong-layer hint below deliberately collapses
+   *  (it is not that hint's question). */
+  function folderVolumeNames(folder: string): string[] {
+    const scan = folderScans[folder];
     return scan?.outcome === "found" ? scan.media.map((m) => m.volumeName) : [];
   }
 
   /**
-   * Which layer each layer's own scan actually looks like — `osinstall_layer_for_media`'s
-   * own answer, asked only once a scan has found something (an empty pile
-   * decides nothing, the same gate `layer_holding` itself applies). A layer
-   * whose own scan agrees with itself, or that found nothing to compare,
-   * holds no entry.
+   * Which layer each **folder** actually looks like —
+   * `osinstall_layer_for_media`'s own answer, asked only once a scan has
+   * found something (an empty pile decides nothing, the same gate
+   * `layer_holding` itself applies).
+   *
+   * **Keyed by the folder's own path, not by layer id** (fix round 1, F5).
+   * Two rows may carry the same tag — `foldersForPlan`'s `unusedForPlan`
+   * exists precisely because that state is reachable — and keying by layer
+   * meant the second row rendered a sentence computed from the *first* row's
+   * scan, under the same DOM id. A hint is a claim about the folder in front
+   * of it, so it is measured from that folder.
    */
-  const [layerIdentified, setLayerIdentified] = useState<Record<string, string | null>>({});
+  const [folderIdentified, setFolderIdentified] = useState<Record<string, string | null>>({});
   useEffect(() => {
-    if (layers.length === 0) {
-      // Same guard as `layerScans` and `extraScans` (ART-260): keep the
-      // previous object when it is already empty, so a no-op reset does not
-      // manufacture a fresh identity for nothing.
-      setLayerIdentified(resetIfEmpty);
+    const tagged = materialFolders.filter((entry) => entry.layer !== null);
+    if (layers.length === 0 || tagged.length === 0) {
+      // Same guard as `folderScans` (ART-260): keep the previous object when
+      // it is already empty, so a no-op reset does not manufacture a fresh
+      // identity for nothing.
+      setFolderIdentified(resetIfEmpty);
       return;
     }
     let cancelled = false;
     Promise.all(
-      layers.map(async (layer) => {
-        const found = layerFoundVolumeNames(layer.id);
-        if (found.length === 0) return [layer.id, null] as const;
+      tagged.map(async (entry) => {
+        const found = folderVolumeNames(entry.path);
+        if (found.length === 0) return [entry.path, null] as const;
         try {
-          return [layer.id, await layerForMedia(release, found)] as const;
+          return [entry.path, await layerForMedia(release, found)] as const;
         } catch {
-          return [layer.id, null] as const;
+          return [entry.path, null] as const;
         }
       })
     ).then((entries) => {
-      if (!cancelled) setLayerIdentified(Object.fromEntries(entries));
+      if (!cancelled) setFolderIdentified(Object.fromEntries(entries));
     });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layers, layerScans, release]);
+  }, [layers, folderScans, materialKey, release]);
 
   /**
-   * The sentence for one layer's own field, when its folder's media
-   * identifies as a **different** layer of this same release — `null`
-   * otherwise, which covers "nothing scanned yet", "scan agrees with this
-   * field" and "scan found nothing distinguishing" alike, none of which are
-   * this field's problem to report.
+   * The sentence for one **row**, when the media in that row's own folder
+   * identifies as a different layer of this same release — `null` otherwise,
+   * which covers "nothing scanned yet", "the scan agrees with the tag" and
+   * "the scan found nothing distinguishing" alike, none of which are this
+   * row's problem to report.
    */
-  function wrongLayerHint(layer: InstallLayer): string | null {
-    const actualId = layerIdentified[layer.id];
-    if (!actualId || actualId === layer.id) return null;
+  function wrongLayerHintFor(entry: MaterialFolder): string | null {
+    if (!entry.layer) return null;
+    const actualId = folderIdentified[entry.path];
+    if (!actualId || actualId === entry.layer) return null;
     const actual = layerById(actualId);
     return t("osinstall.layer.wrongLayer", {
       actual: actual ? layerLabel(actual) : actualId,
-      found: layerFoundVolumeNames(layer.id).join(", "),
+      found: folderVolumeNames(entry.path).join(", "),
     });
   }
 
@@ -582,19 +567,24 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   // A disc dropped on the panel names a *file*; the scanner takes the folder
   // that holds it, which is also where its sibling discs and ADFs live. The
   // user dropped it, so this is them setting the value — it goes through the
-  // remembered setter and is kept, like every other choice on this screen.
+  // session's own setter and is kept, like every other choice on this screen.
   //
-  // Do NOT clear `mediaFolder` when `droppedMedia` is null — arriving at this
-  // screen without a drop must leave the remembered folder alone (ART-089).
+  // **Appended, never replacing** (design § 3.1). The flat field had one slot,
+  // so a drop overwrote whatever was in it; the list has room, and a person
+  // dropping a second disc from a second folder means both folders. A folder
+  // already in the list is not added twice (`withFolder`).
+  //
+  // Do NOT touch the list when `droppedMedia` is null — arriving at this
+  // screen without a drop must leave the remembered folders alone (ART-089).
   //
   // Depends on `arrivalKey`, not just `path`: dropping the same disc twice —
-  // with the folder changed by hand in between — must set it back, and a
+  // with the list changed by hand in between — must add it back, and a
   // dependency array keyed only on the (unchanged) path string would never
   // re-run for that second, identical-looking drop.
   useEffect(() => {
     const folder = droppedMedia ? hostParentDir(droppedMedia.path) : null;
-    if (folder) setMediaFolder(folder);
-  }, [droppedMedia?.path, droppedMedia?.arrivalKey, setMediaFolder]);
+    if (folder) addMaterialFolder(folder);
+  }, [droppedMedia?.path, droppedMedia?.arrivalKey, addMaterialFolder]);
   /**
    * **Not** per release, and that is the decision rather than an oversight
    * (ART-207). A Kickstart is a property of the machine the tree is being
@@ -757,26 +747,64 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     const key = componentDef(catalogue ?? [], id)?.labelKey;
     return key ? t(key) : componentLabel(catalogue ?? [], id);
   }
-  const [mediaScan, setMediaScan] = useState<MediaScanResult | null>(null);
   /**
-   * **The added folders' own scans** (ART-256), keyed by folder path — the
-   * same `osinstallScanMedia`, once per folder, exactly the shape
-   * `layerScans` above already has for a layered release's own fields.
+   * **Amiga Forever, offered** (design § 3.5) — the path the host answers
+   * with, or `null` when there is nothing to offer or the user has said no.
    *
-   * Why it has to exist: the plan request carries `extraMediaFolders`
-   * alongside `mediaFolder`, so `plan()` reads every one of them, while the
-   * evidence was computed from the main folder alone. A user with
-   * `Workbench3.2` in the main folder and `Extras3.2` in an added one got an
-   * evidence line describing a strictly smaller pile of disks than the plan
-   * beside it had reasoned about — the screen out-claiming the core, from
-   * the direction where the screen knows *less*.
+   * `AMIGAFOREVERDATA` is set by Amiga Forever itself and is a fact about
+   * this machine, so ART can find the disks without asking. What it may not
+   * do is *use* them: adding a folder nobody chose is exactly the
+   * settings-change-without-a-user the remembered-settings rule forbids. So
+   * this is a sentence with an Add button, shown only while the material list
+   * is empty — a person who has already pointed ART somewhere is not
+   * looking for a suggestion.
    *
-   * A layered release holds none of these: it passes `extraMediaFolders: []`
-   * on the wire and never renders the add-folder control, so the set scanned
-   * here is exactly the set the request carries, and the layered case cannot
-   * double-count a folder its own `layerScans` already covers.
+   * Dismissal is a `useState`, never a remembered key: **a suggestion is not
+   * a setting**, and writing "they said no once" to disk would be storing a
+   * choice about every future build from one click.
    */
-  const [extraScans, setExtraScans] = useState<Record<string, MediaScanResult | null>>({});
+  const [amigaForeverAdf, setAmigaForeverAdf] = useState<string | null>(null);
+  const [amigaForeverRom, setAmigaForeverRom] = useState<string | null>(null);
+  const [amigaForeverDismissed, setAmigaForeverDismissed] = useState(false);
+  const [amigaForeverRomDismissed, setAmigaForeverRomDismissed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    hostAmigaForeverFolders()
+      .then((found) => {
+        if (cancelled) return;
+        setAmigaForeverAdf(found.adf);
+        setAmigaForeverRom(found.rom);
+      })
+      // A host that cannot answer is a host with nothing to suggest. There is
+      // no sentence to write about a suggestion that could not be made.
+      .catch(() => {
+        if (cancelled) return;
+        setAmigaForeverAdf(null);
+        setAmigaForeverRom(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const amigaForeverOffer =
+    materialFolders.length === 0 && !amigaForeverDismissed ? amigaForeverAdf : null;
+  /**
+   * **The ROM half of the same offer** (fix round 1, F6). `Shared\rom` is the
+   * one folder that answers the Kickstart field on this very step, and the
+   * command was already returning it while nothing consumed it — a value on
+   * the wire that nothing reads is a later reader's wrong assumption.
+   *
+   * Its own dismissal, because it is its own suggestion: somebody who has a
+   * ROM and no disks should not have to refuse a sentence about disks to get
+   * rid of a sentence about ROMs. Offered only while no Kickstart is chosen,
+   * for `amigaForeverOffer`'s reason.
+   *
+   * It names the **folder**, not a file: ART does not pick somebody's
+   * Kickstart for them, and a folder of ROMs is what the picker opens on.
+   */
+  const amigaForeverRomOffer =
+    !romPath && !amigaForeverRomDismissed ? amigaForeverRom : null;
+
   const [rom, setRom] = useState<RomInfo | null>(null);
   const [romError, setRomError] = useState(false);
   /**
@@ -908,26 +936,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     setConfirmed(false);
   }, [release]);
 
-  // Re-scan whatever folder was remembered, so one since emptied or moved is
-  // noticed rather than shown as still holding what it held last run.
-  useEffect(() => {
-    if (!mediaFolder) {
-      setMediaScan(null);
-      return;
-    }
-    let cancelled = false;
-    osinstallScanMedia(mediaFolder)
-      .then((r) => {
-        if (!cancelled) setMediaScan(r);
-      })
-      .catch(() => {
-        if (!cancelled) setMediaScan(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [mediaFolder]);
-
   /**
    * **What the files in those folders are by content**, additively to the
    * volume names read above (design §4.3).
@@ -960,23 +968,19 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    *  the remembered listings — so the pass has to run again to say anything
    *  true. */
   const [identifyNonce, setIdentifyNonce] = useState(0);
-  // De-duplicated: two layers pointed at one folder (M5, fix wave 2) must
-  // identify it once, not once per layer. `extraMediaFolders` already
-  // dedupes on add (`addMediaFolder` above); a layered release has no such
-  // gate — two layer fields are two independent remembered keys, and nothing
-  // stops a user pointing both at the same disks. Without this, every file in
-  // that folder was hashed and reported twice, under the same `path`, which
-  // is both wasted work and a duplicate React key at the render site.
-  const identifyFoldersKey = !layersKnown
-    ? ""
-    : Array.from(
-        new Set(
-          (layers.length > 0
-            ? layers.map((layer) => folderForLayer(layer.id))
-            : [mediaFolder, ...extraMediaFolders]
-          ).filter((folder): folder is string => !!folder)
-        )
-      ).join("\n");
+  // **Every folder in the list**, whatever the plan can do with it. The
+  // identify pass answers what a file *is*, which is a question about the
+  // folder the user pointed at rather than about the request — and the
+  // material readout reads its answers (`bytesRead`), so a folder left out
+  // here would leave that readout saying nobody had looked.
+  //
+  // De-duplicated all the same: `withFolder` folds two spellings of one
+  // folder on add, but a hand-edited settings file need not have, and hashing
+  // one folder twice is both wasted work and a duplicate React key at the
+  // render site (M5, fix wave 2).
+  const identifyFoldersKey = Array.from(
+    new Set(materialFolders.map((entry) => entry.path).filter((folder) => !!folder))
+  ).join("\n");
   useEffect(() => {
     const folders = identifyFoldersKey ? identifyFoldersKey.split("\n") : [];
     if (folders.length === 0) {
@@ -986,13 +990,14 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     let cancelled = false;
     setMediaIdentity({ kind: "identifying" });
     void (async () => {
-      // Merged across folders, because the four endings are per *file* and a
+      // Merged across folders, because the five endings are per *file* and a
       // user who added a second folder is looking at one pile of disks.
       const merged: MediaIdentification = {
         matches: [],
         unreadable: [],
         hashed: 0,
         remembered: 0,
+        skipped: [],
       };
       // What became of each folder, by name. `core/hostfs.rs`'s rule one
       // layer up: the loop below is per entry and a folder already hashed
@@ -1012,6 +1017,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           merged.unreadable.push(...found.unreadable);
           merged.hashed += found.hashed;
           merged.remembered += found.remembered;
+          merged.skipped.push(...found.skipped);
           outcomes[i] = { folder: folders[i], result: "identified" };
         } catch (err) {
           // ART-089's guard first, and before anything is put on screen: a
@@ -1056,48 +1062,42 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     () => mediaIdentityFolderLines(mediaIdentity),
     [mediaIdentity]
   );
+  /**
+   * **What tells the material readout that the scan cache has moved** (fix
+   * round 1, F2).
+   *
+   * `osinstall_slots` hashes nothing: it reads the cache the pass above
+   * fills. Nothing in the readout's own dependency list changed when that
+   * pass finished, so a first visit with a cold cache told the user "nobody
+   * has read its bytes yet -- identify this folder by content" directly above
+   * a section reporting that it had just hashed them. Two halves of one
+   * screen disagreeing about the same files.
+   *
+   * A primitive, and one that moves exactly once per completed pass: the
+   * "Scan again" nonce plus one while the pass is settled. It deliberately
+   * does **not** move when a pass *starts* -- re-asking mid-pass would read
+   * the same cold cache and put the same wrong sentence back.
+   */
+  const identifiedPass = identifyNonce + (mediaIdentity.kind === "identified" ? 1 : 0);
 
-  // ART-256. Every added folder scanned the same way, one round trip each,
-  // so `foundVolumeNames` below can cover the same disks `plan()` does.
-  useEffect(() => {
-    // The layered case scopes itself out here rather than in the reader, so
-    // there is one statement of "which folders is this about" and it is the
-    // same one the plan request makes (`extraMediaFolders: []` when layered).
-    //
-    // `layersKnown` is the other half, and a test found it rather than a
-    // reading: until `layersFor` answers, `layers` is `[]` and a layered
-    // release looks unlayered from here, so this scanned a folder AmigaOS
-    // 3.2.2 never sends. Not knowing is also what clears the previous
-    // release's extras on a switch, so `foundVolumeNames` never carries one
-    // release's added folder into another's plan.
-    const folders = !layersKnown || layers.length > 0 ? [] : extraMediaFolders;
-    if (folders.length === 0) {
-      // The previous object is kept when it is already empty. A fresh `{}`
-      // would be a new identity for nothing, and `foundVolumeNames` is
-      // memoized on this — ART-178/ART-195 were exactly a per-render identity
-      // driving an effect, and the evidence lookup below is one of those
-      // effects.
-      setExtraScans(resetIfEmpty);
-      return;
-    }
-    let cancelled = false;
-    Promise.all(
-      folders.map(async (folder) => {
-        try {
-          return [folder, await osinstallScanMedia(folder)] as const;
-        } catch {
-          // Absence, not a badge — the same way the main folder's own effect
-          // above treats a folder it cannot read.
-          return [folder, null] as const;
-        }
-      })
-    ).then((entries) => {
-      if (!cancelled) setExtraScans(Object.fromEntries(entries));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [layersKnown, layers, extraMediaFolders]);
+  /**
+   * **The archives the user picked by hand on the Amiga-side step** (design
+   * § 3.4; round 2 review, M5).
+   *
+   * This step is the one place that can see both: the readout below and the
+   * remembered keys the panel writes. Without them the two screens said
+   * opposite things about one artefact — *"not in the folders you named"*
+   * here about a file the run over there was going to use.
+   *
+   * A string dependency rather than the array, for `MaterialReadout`'s own
+   * reason: this effect chain starts disk work (ART-178/ART-195).
+   */
+  const remembered = useSettingsStore((s) => s.settings.remembered);
+  const overridesKey = JSON.stringify(slotOverrides(remembered));
+  const materialOverrides = useMemo(
+    () => JSON.parse(overridesKey) as SlotOverride[],
+    [overridesKey]
+  );
 
   // Re-identify whatever ROM was remembered, for the same reason.
   useEffect(() => {
@@ -1130,13 +1130,15 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   // explain a conditional tick immediately, not only after a manual preview
   // step.
   useEffect(() => {
-    // A layered release asks nothing of `mediaFolder`/`extraMediaFolders` —
-    // it is gated on **any** layer folder being chosen instead, the same way
-    // the unlayered case gates on the one folder it has. Partial is fine:
-    // `plan()` reads a layer nobody has pointed at yet as that layer's own
-    // components reporting media-missing (Task 3), not as a reason to refuse
-    // planning altogether.
-    const hasMedia = layers.length > 0 ? layers.some((l) => folderForLayer(l.id)) : !!mediaFolder;
+    // Whether the request has any folder at all to read. A layered release
+    // is gated on **any** tagged folder, the same way an unlayered one is
+    // gated on the list holding anything. Partial is fine: `plan()` reads a
+    // layer nobody has tagged yet as that layer's own components reporting
+    // media-missing (Task 3), not as a reason to refuse planning altogether.
+    const hasMedia =
+      layers.length > 0
+        ? Object.keys(plannedFolders.mediaFolders).length > 0
+        : !!plannedFolders.mediaFolder;
     if (!hasMedia) {
       setBasePlanResult(null);
       setEffectivePlanResult(null);
@@ -1161,17 +1163,16 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     }
 
     const shared = {
-      // A layered release reads `mediaFolders` below instead — these two stay
-      // at their unlayered values (an empty folder, no extras) rather than
-      // whatever the single-field state happens to hold, so a wire capture
-      // can never show a layered request carrying a stray flat folder.
-      mediaFolder: layers.length > 0 ? "" : (mediaFolder ?? ""),
-      // Work-list item 8: a 3.2.2.1 install reads from three folders.
-      extraMediaFolders: layers.length > 0 ? [] : extraMediaFolders,
-      // Task 3/Task 10: one folder per layer the recipe declares, keyed by
-      // the layer's own id — empty (and therefore omitted on the wire's own
-      // `is_empty()` check) for an unlayered release.
-      mediaFolders: layers.length > 0 ? mediaFoldersForRequest() : {},
+      // **All three from `foldersForPlan`**, which is the one place the
+      // material list becomes a request (design § 3.1). A layered release
+      // reads `mediaFolders` alone and gets an empty flat folder and no
+      // extras; an unlayered one gets the list's first folder plus the rest.
+      // Two hand-written branches here and one in `src/lib` is how the folder
+      // list the readout resolves and the folders the planner reads would
+      // drift apart.
+      mediaFolder: plannedFolders.mediaFolder,
+      extraMediaFolders: plannedFolders.extraMediaFolders,
+      mediaFolders: plannedFolders.mediaFolders,
       // ART-226: empty means "leave it on the ROM's usa", so it is sent as
       // null rather than as an empty string the Rust side would have to trim.
       keymap: keymap.trim() ? keymap : null,
@@ -1253,8 +1254,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   // for a layered release's own folders here, the same role `mediaFolder`
   // and `extraMediaFolders` play for an unlayered one.
   }, [
-    mediaFolder,
-    extraMediaFolders,
+    plannedFolders,
     layers,
     layerFoldersKey,
     keymap,
@@ -1434,33 +1434,22 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         names.push(medium.volumeName);
       }
     };
-    // **Which folders this release actually reads**, said once, the same way
-    // the plan request and the extra-folder scan say it (ART-256's own rule,
-    // and `layersKnown` for the same reason: `layers === []` is one value
-    // with two causes, and the wrong branch here would describe a folder set
-    // the request never carries).
+    // **Which folders this release actually reads**, said once and read off
+    // the same `foldersForPlan` answer the request is built from (ART-256's
+    // rule, now structural rather than repeated): a layered release plans
+    // from its tagged folders alone, an unlayered one from every folder in
+    // the list. A line here counting disks the request never sees is the
+    // screen out-claiming the core.
     //
-    // ART-257: a layered release sets no flat folder at all — `mediaFolder`
-    // is remembered per release and its field is never drawn — so before
-    // this, `foundVolumeNames` was `[]` for every AmigaOS 3.2.2 build and
-    // the whole evidence line was silent for the one release most likely to
-    // arrive part-complete. The per-layer scans are the same
-    // `osinstallScanMedia` results; the union across them is what the
-    // release-level question is about (`evidence_for` and `release_holding`
-    // both answer for a *release*, never for one layer — `layer_holding`
-    // owns the per-field question and still does, beside this).
+    // `layersKnown` for the reason a test found rather than a reading:
+    // `layers === []` is one value with two causes — "this release is
+    // unlayered" and "nobody has asked yet" — and the wrong branch
+    // describes a folder set the request never carries (ART-256/ART-257).
     if (!layersKnown) return names;
-    if (layers.length > 0) {
-      // Recipe order, which is the order the fields are drawn in.
-      for (const layer of layers) take(layerScans[layer.id]);
-      return names;
-    }
-    take(mediaScan);
-    // Walked in the order the user added them rather than over the record's
-    // own keys, so the listing reads in the order the fields are drawn in.
-    for (const folder of extraMediaFolders) take(extraScans[folder]);
+    // In list order, so the sentence reads in the order the rows are drawn.
+    for (const folder of plannedFolderPaths) take(folderScans[folder]);
     return names;
-  }, [layersKnown, layers, layerScans, mediaScan, extraScans, extraMediaFolders]);
+  }, [layersKnown, plannedFolderPaths, folderScans]);
   /**
    * ART-208. Non-null when the folder holds media and this release wants
    * none of it — the owner's own screen, where sixteen `MediaMissing`
@@ -1559,15 +1548,13 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     if (effectivePlan) setAvailableKeymaps(keymapsIn(effectivePlan));
   }, [effectivePlan]);
 
-  // `osinstallBlocker` asks one question of `mediaFolder`: has *any* media
-  // been pointed at yet. A layered release answers that from its own layers
-  // instead of the flat field it never sets — never the flat field's own
-  // value, which stays empty for a layered release and would otherwise say
-  // "no folder chosen" forever, however many of the release's own layers the
-  // user has actually filled in.
+  // `osinstallBlocker` asks one question of `mediaFolder`: has *any* material
+  // been pointed at yet. Answered from the folders the request actually
+  // carries, so a layered release with two tagged folders is not told "no
+  // folder chosen" because it sets no flat one, and an unlayered release
+  // with a list is not told it either.
   const blocker = osinstallBlocker({
-    mediaFolder:
-      layers.length > 0 ? (layers.some((l) => folderForLayer(l.id)) ? release : null) : mediaFolder,
+    mediaFolder: plannedFolderPaths.length > 0 ? (plannedFolderPaths[0] ?? release) : null,
     destination,
     destinationTaken,
     plan: effectivePlanResult,
@@ -1577,38 +1564,41 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   });
   const baseRomUnknown = basePlan ? hasRomUnknownRefusal(basePlan) : false;
 
-  async function chooseMediaFolder() {
-    const picked = await open({
-      directory: true,
-      multiple: false,
-      title: t("osinstall.media.chooseTitle"),
-    });
-    if (typeof picked === "string") setMediaFolder(picked);
-  }
-
-  async function addMediaFolder() {
+  /**
+   * The one folder picker (design § 3.1). Adding the same folder twice is
+   * not an error and not a second folder: the core reads it once either way,
+   * and `withFolder` folds it, which is the screen agreeing with the core
+   * rather than contradicting it.
+   */
+  async function addFolder() {
     const picked = await open({
       directory: true,
       multiple: false,
       title: t("osinstall.media.addTitle"),
     });
-    if (typeof picked !== "string") return;
-    // Adding the same folder twice is not an error and not a second folder.
-    // The core reads it once either way; not showing it twice is the screen
-    // agreeing with the core rather than contradicting it.
-    if (picked === mediaFolder || extraMediaFolders.includes(picked)) return;
-    setExtraMediaFolders([...extraMediaFolders, picked]);
+    if (typeof picked === "string") addMaterialFolder(picked);
   }
 
-  /** One layer's own "Browse" — a labelled question rather than a folder plus
-   *  a bag of extras, which is this whole task's point. */
-  async function chooseLayerFolder(layer: InstallLayer) {
-    const picked = await open({
-      directory: true,
-      multiple: false,
-      title: layerLabel(layer),
-    });
-    if (typeof picked === "string") setFolderForLayer(layer.id, picked);
+  /** Drop one folder out of the list. */
+  /**
+   * Take a folder out of the list.
+   *
+   * The stored archives folder follows it out — in `useBuildSession`, not
+   * here, because the list is the session's own value and every writer of it
+   * owes the same guarantee (round 2, task 3's F10).
+   */
+  function removeFolder(path: string) {
+    setMaterial(materialFolders.filter((entry) => entry.path !== path));
+  }
+
+  /** Tag a folder with the layer it holds, or untag it (`""` from the
+   *  select). Only ever offered for a release whose recipe declares layers. */
+  function tagFolder(path: string, layer: string) {
+    setMaterial(
+      materialFolders.map((entry) =>
+        entry.path === path ? { path: entry.path, layer: layer || null } : entry
+      )
+    );
   }
 
   /**
@@ -1637,19 +1627,42 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       // the stale answer this button exists to escape, still being shown
       // after the user pressed the escape hatch.
       setIdentifyNonce((n) => n + 1);
-      if (mediaFolder) void osinstallScanMedia(mediaFolder).then(setMediaScan).catch(() => {});
+      // Every folder in the list, not the first alone: they are all read on
+      // the next plan, and a screen showing one folder's fresh listing beside
+      // another's stale one is the same stale answer this button exists to
+      // escape, half-hidden.
+      void Promise.all(
+        materialFolders.map(async (entry) => {
+          try {
+            return [entry.path, await osinstallScanMedia(entry.path)] as const;
+          } catch {
+            return [entry.path, null] as const;
+          }
+        })
+      ).then((entries) => setFolderScans(Object.fromEntries(entries)));
     } catch (e) {
       setPlanError(errorText(t, e));
     }
   }
 
   async function chooseRom() {
+    return chooseRomIn(undefined);
+  }
+
+  /** The Kickstart picker, optionally opened on a folder ART already knows
+   *  about (fix round 1, F6: Amiga Forever's `Shared\rom`). The **user**
+   *  still picks the file; ART only says where to look. */
+  async function chooseRomIn(defaultPath?: string) {
     const picked = await open({
       multiple: false,
       title: t("osinstall.rom.chooseTitle"),
+      defaultPath,
       filters: [{ name: "Kickstart ROM", extensions: ["rom", "bin"] }],
     });
-    if (typeof picked === "string") setRomPath(picked);
+    if (typeof picked === "string") {
+      setRomPath(picked);
+      setAmigaForeverRomDismissed(true);
+    }
   }
 
   async function chooseDestination() {
@@ -1708,25 +1721,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     }
   }
 
-  // ART-241: which of the three media-scan outcome paragraphs below will
-  // actually render, computed once here rather than three times, so the
-  // single unlayered `Field` further down can name it through
-  // `describedBy` — the sweep's third finding, alongside the layer
-  // wrong-hint and the ROM error/identified lines. Bounded to the unlayered
-  // case on purpose: a layered release's media-scan outcome describes every
-  // layer's folder together, and there is no single `Field` among several
-  // that it is *this* row's own answer rather than another's — associating
-  // it with one arbitrarily would claim a relationship that is not actually
-  // there.
-  const mediaScanOutcomeId =
-    mediaScan?.outcome === "folder-unreadable"
-      ? "osinstall-media-unreadable"
-      : mediaScan?.outcome === "found" && foundVolumeNames.length === 0
-        ? "osinstall-media-empty"
-        : foundVolumeNames.length > 0
-          ? "osinstall-media-found"
-          : undefined;
-
   return (
     <>
       <section className="card" style={{ marginBottom: 16 }}>
@@ -1753,36 +1747,106 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           </select>
         </label>
 
-        {layers.length > 0 ? (
-          // **One labelled folder question per layer the recipe declares**,
-          // in the recipe's own order — this whole task's point. Not the
-          // single field plus the add-folder list below: those are the
-          // unlayered screen's own shape, and a layered release does not
-          // render them at all (see the module doc comment on `layers`).
-          layers.map((layer) => {
-            const hint = wrongLayerHint(layer);
-            // ART-241: the id this paragraph is named by when it renders —
-            // `Field`'s Browse button reads it through `describedBy` so a
-            // screen reader user hears the warning without hunting forward
-            // in the page for it.
-            const hintId = `layer-wrong-hint-${layer.id}`;
+        {/*
+          **One list, one row per folder** (design § 3.1). This replaced three
+          controls: the install-disks field, the bag of added folders under
+          it, and one labelled field per media layer. They were three shapes
+          for one question, and a person who simply has the files had to work
+          out which sentence each field wanted.
+
+          A row is the folder's own path, the layer it holds (a select, and
+          only for a release whose recipe declares layers), and Remove. The
+          layer select is what carries the labelled question the per-layer
+          fields used to ask — it is the same information, attached to the
+          folder rather than to a field.
+        */}
+        <div data-testid="material-folders" style={{ margin: "0 0 8px" }}>
+          <p className="muted" style={{ fontSize: 12, margin: "0 0 6px" }}>
+            {t("osinstall.material.label")}
+          </p>
+          {materialFolders.length === 0 && (
+            <p className="faint" style={{ fontSize: 11, margin: "0 0 8px" }}>
+              {t("osinstall.media.none")}
+            </p>
+          )}
+          {materialFolders.map((entry, index) => {
+            const scan = folderScans[entry.path];
+            const hint = wrongLayerHintFor(entry);
+            // **The row's index, not its layer tag** (fix round 1, F5). Two
+            // rows may carry one tag — `unusedForPlan` exists because that
+            // state is reachable — and keying the id by the tag gave two
+            // DOM elements one `id`, which is an accessibility fault in its
+            // own right as well as a `data-testid` that matched either.
+            const hintId = `layer-wrong-hint-${index}`;
+            const unreadableId = `material-folder-unreadable-${index}`;
+            // ART-241: the controls on this row are described by whichever
+            // of the row's own paragraphs actually renders, so a screen
+            // reader user hears the warning with the control rather than
+            // having to hunt forward in the page for it. The fix originally
+            // landed on the `Field`s these rows replaced, and putting it back
+            // is not optional: the entry stays Fixed only while it is true.
+            const describedBy =
+              [scan?.outcome === "folder-unreadable" ? unreadableId : null, hint ? hintId : null]
+                .filter(Boolean)
+                .join(" ") || undefined;
             return (
-              <div key={layer.id}>
-                <Field
-                  label={layerLabel(layer)}
-                  ariaLabel={layerLabel(layer)}
-                  value={folderForLayer(layer.id)}
-                  empty={t("osinstall.media.none")}
-                  onChoose={() => void chooseLayerFolder(layer)}
-                  choose={t("common.browse")}
-                  testId={`layer-field-${layer.id}`}
-                  describedBy={hint ? hintId : undefined}
-                />
+              <div key={entry.path} data-testid="material-folder" style={{ margin: "0 0 6px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span
+                    style={{ fontSize: 12, wordBreak: "break-all", flex: 1, minWidth: "12em" }}
+                  >
+                    {entry.path}
+                  </span>
+                  {layers.length > 0 && (
+                    <select
+                      className="btn"
+                      style={{ fontSize: 11 }}
+                      value={entry.layer ?? ""}
+                      // Named by the folder, not by the word "layer": with
+                      // several rows every select would otherwise carry the
+                      // identical accessible name, which is ART-240's own
+                      // defect one control along.
+                      aria-label={t("osinstall.material.layerAriaLabel", { folder: entry.path })}
+                      aria-describedby={describedBy}
+                      onChange={(e) => tagFolder(entry.path, e.target.value)}
+                    >
+                      <option value="">{t("osinstall.material.layerAny")}</option>
+                      {layers.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {layerLabel(option)}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <button
+                    className="btn"
+                    style={{ fontSize: 11 }}
+                    onClick={() => removeFolder(entry.path)}
+                    // ART-240: every Remove button on this screen used to
+                    // carry the identical visible text, so a screen reader
+                    // user tabbing through heard the same word once per row
+                    // with nothing to tell them apart.
+                    aria-label={t("osinstall.media.removeFolderAriaLabel", { folder: entry.path })}
+                    aria-describedby={describedBy}
+                  >
+                    {t("osinstall.media.removeFolder")}
+                  </button>
+                </div>
+                {scan?.outcome === "folder-unreadable" && (
+                  <p
+                    id={unreadableId}
+                    className="badge badge-err"
+                    data-testid={unreadableId}
+                    style={{ fontSize: 11, margin: "2px 0 0", display: "inline-block" }}
+                  >
+                    {t("osinstall.media.unreadable")}
+                  </p>
+                )}
                 {hint && (
                   <p
                     id={hintId}
                     className="badge badge-err"
-                    style={{ fontSize: 11, margin: "-8px 0 12px", display: "inline-block" }}
+                    style={{ fontSize: 11, margin: "2px 0 0", display: "inline-block" }}
                     data-testid={hintId}
                   >
                     {hint}
@@ -1790,74 +1854,84 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
                 )}
               </div>
             );
-          })
-        ) : (
-          <>
-            <Field
-              label={t("osinstall.media.label")}
-              ariaLabel={t("osinstall.media.ariaLabel")}
-              value={mediaFolder}
-              empty={t("osinstall.media.none")}
-              onChoose={() => void chooseMediaFolder()}
-              choose={t("common.browse")}
-              testId="osinstall-media-field"
-              describedBy={mediaScanOutcomeId}
-            />
-            {extraMediaFolders.map((folder) => (
-              <div
-                key={folder}
-                data-testid="extra-media-folder"
-                style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 6px" }}
-              >
-                <span className="faint" style={{ fontSize: 11, wordBreak: "break-all", flex: 1 }}>
-                  {folder}
-                </span>
-                <button
-                  className="btn"
-                  style={{ fontSize: 11 }}
-                  onClick={() =>
-                    setExtraMediaFolders(extraMediaFolders.filter((kept) => kept !== folder))
-                  }
-                  // ART-240's own sweep: with more than one extra folder, every
-                  // one of these buttons carries the identical visible text
-                  // "Remove" — a screen reader tabbing through hears the same
-                  // word once per row with nothing to tell them apart, the
-                  // same defect class ART-237 fixed for the Browse buttons
-                  // above. `aria-label` names which folder this one removes.
-                  aria-label={t("osinstall.media.removeFolderAriaLabel", { folder })}
-                >
-                  {t("osinstall.media.removeFolder")}
-                </button>
-              </div>
-            ))}
-            <div style={{ margin: "0 0 12px" }}>
-              <button className="btn" style={{ fontSize: 11 }} onClick={() => void addMediaFolder()}>
-                {t("osinstall.media.addFolder")}
-              </button>
-              <span className="faint" style={{ fontSize: 10, marginLeft: 8 }}>
-                {t("osinstall.media.addHint")}
-              </span>
-            </div>
-          </>
-        )}
-        {mediaScan?.outcome === "folder-unreadable" && (
+          })}
+          <div style={{ margin: "6px 0 0" }}>
+            <button
+              className="btn"
+              style={{ fontSize: 11 }}
+              data-testid="material-add-folder"
+              onClick={() => void addFolder()}
+            >
+              {t("osinstall.media.addFolder")}
+            </button>
+            <span className="faint" style={{ fontSize: 10, marginLeft: 8 }}>
+              {t("osinstall.media.addHint")}
+            </span>
+          </div>
+          {/*
+            **Folders the plan will not read, named rather than dropped.** A
+            layered request is a map of one folder per layer, so an untagged
+            folder, a second folder under a tag already taken and a tag this
+            release does not declare are all folders ART resolves in the
+            readout and never plans from. Dropping one silently would be the
+            screen contradicting the core about what it is going to do.
+          */}
+          {plannedFolders.unusedForPlan.length > 0 && (
+            <p
+              className="badge badge-warn"
+              data-testid="material-unused"
+              style={{ fontSize: 11, margin: "6px 0 0", display: "inline-block" }}
+            >
+              {t("osinstall.material.unusedForPlan", {
+                count: plannedFolders.unusedForPlan.length,
+                folders: plannedFolders.unusedForPlan.join(", "),
+              })}
+            </p>
+          )}
+        </div>
+        {/*
+          **Amiga Forever, offered — never added** (design § 3.5). Shown only
+          while the list is empty, and only when the environment variable is
+          set and the folders are really there; the Add button is the user
+          acting, which is the whole of `remembered.ts`'s rule. Dismissing it
+          is a `useState` rather than a remembered key: a suggestion is not a
+          setting, and remembering a refusal would be storing a choice nobody
+          made about their next machine.
+        */}
+        {amigaForeverOffer && (
           <p
-            id="osinstall-media-unreadable"
-            className="badge badge-err"
-            style={{ fontSize: 11, margin: "0 0 12px", display: "inline-block" }}
+            className="faint"
+            data-testid="amiga-forever-offer"
+            style={{ fontSize: 11, margin: "0 0 12px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
           >
-            {t("osinstall.media.unreadable")}
+            <span>{t("osinstall.material.amigaForever", { path: amigaForeverOffer })}</span>
+            <button
+              className="btn"
+              style={{ fontSize: 11 }}
+              onClick={() => {
+                addMaterialFolder(amigaForeverOffer);
+                setAmigaForeverDismissed(true);
+              }}
+            >
+              {t("osinstall.material.amigaForeverAdd")}
+            </button>
+            <button
+              className="btn"
+              style={{ fontSize: 11 }}
+              onClick={() => setAmigaForeverDismissed(true)}
+            >
+              {t("osinstall.material.amigaForeverDismiss")}
+            </button>
           </p>
         )}
         {/*
           ART-256. Both lines read `foundVolumeNames`, which is every folder
-          the request carries, not `mediaScan` alone. Two sentences on one
-          screen counting the same disks differently — "1 install disk found"
-          above an evidence line naming two — is the same contradiction from
-          the inside, and there is no reading of "this folder holds" that
-          makes it right.
+          the request carries. Two sentences on one screen counting the same
+          disks differently — "1 install disk found" above an evidence line
+          naming two — is a contradiction from the inside, and there is no
+          reading of "this folder holds" that makes it right.
         */}
-        {mediaScan?.outcome === "found" && foundVolumeNames.length === 0 && (
+        {materialFolders.length > 0 && foundVolumeNames.length === 0 && (
           <p id="osinstall-media-empty" className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
             {t("osinstall.media.empty")}
           </p>
@@ -1870,6 +1944,21 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
             })}
           </p>
         )}
+        {/*
+          **The readout: one row per artefact this release can use** (design
+          § 3.3). Above the per-file identity lines below, and separate from
+          them on purpose: those are per *file* — what the bytes in this
+          folder are — and this is per *slot* — what the release needs and
+          which file fills it.
+        */}
+        <MaterialReadout
+          release={release}
+          folders={materialFolders.map((entry) => entry.path)}
+          treeRoot={packagesTreeRoot}
+          rom={romPath}
+          identifiedPass={identifiedPass}
+          overrides={materialOverrides}
+        />
 
         {/*
           **What the same files are by content** — design §4.3, and the whole
@@ -1990,6 +2079,38 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
             romError ? "osinstall-rom-unreadable" : rom ? "osinstall-rom-identified" : undefined
           }
         />
+        {/*
+          **Amiga Forever's ROM folder, offered** (fix round 1, F6; design
+          § 3.5). `Shared\rom` is the one folder that answers this very
+          field, and the command already knew where it was. Its own dismissal
+          rather than the disks offer's: somebody who has a Kickstart and no
+          disks should not have to refuse a sentence about disks to be rid of
+          a sentence about ROMs. The Add button opens the picker on that
+          folder — ART does not choose somebody's Kickstart for them.
+        */}
+        {amigaForeverRomOffer && (
+          <p
+            className="faint"
+            data-testid="amiga-forever-rom-offer"
+            style={{ fontSize: 11, margin: "0 0 12px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
+          >
+            <span>{t("osinstall.material.amigaForeverRom", { path: amigaForeverRomOffer })}</span>
+            <button
+              className="btn"
+              style={{ fontSize: 11 }}
+              onClick={() => void chooseRomIn(amigaForeverRomOffer)}
+            >
+              {t("osinstall.material.amigaForeverAdd")}
+            </button>
+            <button
+              className="btn"
+              style={{ fontSize: 11 }}
+              onClick={() => setAmigaForeverRomDismissed(true)}
+            >
+              {t("osinstall.material.amigaForeverDismiss")}
+            </button>
+          </p>
+        )}
         {romError && (
           <p
             id="osinstall-rom-unreadable"
@@ -2580,10 +2701,16 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           Windows at all (ART-166). They share the tree and the archive
           folder — it is one tree and one folder of downloads — and nothing
           else. */}
+      {/* The material list, whole (design § 3.4). `packageFolder` is still
+          the one folder its dialogs open on and its catalogue is loaded from;
+          the list is what its *slots* are resolved against, which is the
+          question "which of these files is BoingBag 3.9-1" — and that has to
+          be asked of everything the user has, not of one folder. */}
       <AmigaInstallPanel
         treeRoot={packagesTreeRoot}
         onTreeRootChange={(root) => setTree({ root, builtHere: false })}
         packageFolder={packagesFolder}
+        materialFolders={materialFolders.map((entry) => entry.path)}
         release={release}
       />
 

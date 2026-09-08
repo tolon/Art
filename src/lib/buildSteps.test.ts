@@ -4,6 +4,7 @@ import {
   DEFAULT_COMPONENTS,
   DEFAULT_CARD,
   DEFAULT_FIRSTBOOT,
+  DEFAULT_MATERIAL,
   DEFAULT_MEDIA,
   DEFAULT_PACKAGES,
   type BuildSession,
@@ -13,6 +14,7 @@ import { readiness, stepLabelKey, stepsFor, STEP_IDS } from "./buildSteps";
 function sessionWith(over: Partial<BuildSession> = {}): BuildSession {
   return {
     kind: "install",
+    material: DEFAULT_MATERIAL,
     media: DEFAULT_MEDIA,
     rom: { path: null },
     release: "AmigaOS 3.2",

@@ -55,6 +55,20 @@
     "consulted either way."
   ],
   "media": "Locale3.9",
+  "_why_chain_position": [
+    "4 of the material's own order, and it shares that rank with",
+    "`locale-39-turkish`, which reads the same archive. Rank rather than",
+    "sequence number because the material states no order among the four",
+    "things that go on after BoingBag 3.9-2 and before BoingBags 3&4 -",
+    "Locale 3.9, the BoingBag 3.9-2 language packs, Contribution and",
+    "Euro-Update (research section 2). Inventing one would be ART claiming",
+    "a fact nobody measured.",
+    "",
+    "`requires` stays empty on purpose: this package depends on a release",
+    "recipe *component* (`locale-base`), never on another package, and the",
+    "section below says why that cannot be spelled as a `requires` entry."
+  ],
+  "chain_position": 4,
   "requires": [],
   "_why_requires_components_locale_base": [
     "The same reasoning `locale-turkish` records. This package writes `.language`",

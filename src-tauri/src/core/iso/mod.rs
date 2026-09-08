@@ -1795,7 +1795,7 @@ pub(crate) mod fixture {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::fixture::{dir, file, rock_dir, rock_file, IsoBuilder, RockRidge};
     use super::*;
     use std::fs;
@@ -1835,6 +1835,20 @@ mod tests {
     }
 
     /// A small disc: two files at the root and one subdirectory holding one.
+    /// A minimal, valid ISO 9660 image stating `volume` as its volume name.
+    ///
+    /// `pub(crate)` so another module's tests can build a disc without a
+    /// second, weaker copy of the descriptor layout — the same reason
+    /// `core::lha::tests::make_lha_with` and
+    /// `core::archive::zip::tests::make_zip_with` are shared. A copy here
+    /// would drift from the real builder, and a fixture that drifts from the
+    /// thing it stands in for is a test about itself.
+    pub(crate) fn iso_named(volume: &str) -> Vec<u8> {
+        let mut builder = sample_builder(SectorLayout::Cooked, false);
+        builder.volume = volume.to_string();
+        builder.build()
+    }
+
     fn sample_builder(layout: SectorLayout, joliet: bool) -> IsoBuilder {
         IsoBuilder {
             volume: "AMIGA_TEST".to_string(),

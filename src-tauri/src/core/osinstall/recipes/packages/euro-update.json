@@ -1,0 +1,174 @@
+{
+  "_why_this_package_exists": [
+    "Haage & Partner's Euro-Update for AmigaOS 2.1+ - updated keymaps, updated",
+    "bitmap fonts and updated `.country` files, so that Alt-E types the Euro",
+    "sign. It is row 7 of the AmigaOS 3.9 chain and the one row the material",
+    "itself declares redundant under row 8: BoingBags 3&4's own readme lists",
+    "*\"These official updates are incorporated: Euro-Update, ShellUpdate 45.39\"*.",
+    "So it is worth having only where BoingBags 3&4 will not be installed - see",
+    "`superseded_by` below."
+  ],
+  "_why_the_tree_measured": [
+    "Read with 7-Zip 26.02 on 2026-09-08 from the owner's own",
+    "`E:\\amiga\\Amigatolon\\os39\\Euro-Update.lha`, read-only: 106 entries,",
+    "20 of them `.info`.",
+    "",
+    "    Euro-Update.info",
+    "    Euro-Update/Readme + .info, Liesmich + .info",
+    "    Euro-Update/Euro-Install                    the Installer script",
+    "    Euro-Update/C/FixFonts, C/Installer         its own bundled helpers",
+    "    Euro-Update/Installation/logo_{big,small}.i24",
+    "    Euro-Update/Workbench/Devs/Keymaps          16 keymaps + 16 .info",
+    "    Euro-Update/Workbench/Fonts                 10 families, 10 .font",
+    "                                                descriptors, 30 size files",
+    "    Euro-Update/Workbench/Locale/Countries      9 .country files",
+    "    Euro-Update/Workbench/Locale/Flags/Keymaps  14 flag images",
+    "",
+    "And `Euro-Update/Euro-Install` itself, read in full, does exactly four",
+    "things after asking for a volume:",
+    "",
+    "    (copyfiles (source \"Workbench/Devs/Keymaps\") (dest <target>/Devs/Keymaps) (all) (infos))",
+    "    (copyfiles (source \"Workbench/Fonts\")        (dest <target>/Fonts)        (all) (fonts))",
+    "    (run \"C/FixFonts\")",
+    "    (copyfiles (source \"Workbench/Locale/Countries\") (dest <target>/Locale/Countries) (all))",
+    "",
+    "The nine `.country` files the brief asked about are there and are placed:",
+    "belgie, belgique, deutschland, españa, france, italia, nederland, portugal,",
+    "österreich. **`Workbench/Locale/Flags/Keymaps` is shipped and never copied**",
+    "by the package's own script; ART does not place it either, because doing",
+    "more than the artefact's own installer does is ART inventing a step nobody",
+    "measured."
+  ],
+  "_why_sources_and_eliminations": [
+    "**Where the rules come from, and what was eliminated.** HstWB Installer",
+    "(henrikstengaard, MIT) covers the 3.9 base and both official BoingBags and",
+    "**not this package** — none of its ten AmigaDOS scripts under",
+    "`amiga/amiga-os-3.9/S/Amiga-OS-3.9/` mentions Euro-Update (grepped",
+    "2026-09-08). So the rules are the archive's own `Euro-Install`, quoted",
+    "above, and they agree with the research pass recorded independently in",
+    "`.superpowers/sdd/2026-09-07-osbuilder-research/material.md` section 8:",
+    "Euro-Update runs the bundled `C/FixFonts`, *\"rebuilds `.font` files after",
+    "copying updated bitmap fonts\"*, over plain files that are not an archive."
+  ],
+  "id": "euro-update",
+  "name": "Euro-Update for AmigaOS 2.1+",
+  "releases": [
+    "AmigaOS 3.9"
+  ],
+  "media": "Euro-Update",
+  "_why_no_distinguished_by": [
+    "`Euro-Update` is this archive's own single top-level directory and no other",
+    "archive in the owner's folder claims it (the same 44-archive pass",
+    "`scripts/lha-package-identity.py` recorded, re-read 2026-09-08). A",
+    "distinguisher that separates nothing can only refuse an archive that would",
+    "have worked - `boingbag-39-1`'s own recipe states the rule."
+  ],
+  "_why_chain_position_and_requires": [
+    "7 of the material's own order. `requires` is **empty**, and that is the",
+    "measurement rather than an oversight: the archive's own `Readme` says",
+    "*\"Euro-Update for AmigaOS 2.1+\"* and *\"to support the Euro currency on",
+    "AmigaOS version 2.1 or higher\"*, and `Euro-Install` checks no version at",
+    "all - it asks for a volume and copies. So no BoingBag has to be on the",
+    "tree first. It is placed at 7 because that is where the chain shows it,",
+    "not because anything before it is required."
+  ],
+  "chain_position": 7,
+  "requires": [],
+  "_why_superseded_by": [
+    "BoingBags 3&4's own readme, read from the owner's `BoingBags3&4.lha` on",
+    "2026-09-08: *\"These official updates are incorporated: Euro-Update,",
+    "ShellUpdate 45.39\"*. So a tree that has had BoingBags 3&4 installed",
+    "already carries this, and the chain row reads *not needed* rather than",
+    "*missing* - which is the difference between telling somebody to go and",
+    "find a file and telling them they already have what is in it.",
+    "",
+    "The direction is deliberate: the **older** package names the newer one, so",
+    "a package added later never has to be edited to keep this true."
+  ],
+  "superseded_by": [
+    "boingbags-39-3-4"
+  ],
+  "_why_host_placement_block_needs_fixfonts": [
+    "**The decision this recipe exists to record, and it went the other way.**",
+    "The brief asked whether ART can rebuild the `.font` index files the",
+    "package's own installer rebuilds with `FixFonts`, and to declare a block",
+    "only if it cannot. It cannot, and here is what was read.",
+    "",
+    "`grep -rn '\\.font' src-tauri/src/core` (2026-09-08) finds `.font` in three",
+    "places - `apply.rs` and `recipe.rs`, which check that a *placed* descriptor",
+    "is spelled `.font` exactly because `diskfont.library` matches the suffix",
+    "case-sensitively (ART-225), and a test fixture in `source.rs`. Nothing in",
+    "ART parses or writes a `FontContentsHeader`. The layered-release and",
+    "locale rounds placed descriptors as opaque bytes; neither built one.",
+    "",
+    "**What building one would take, measured rather than recalled.** The ten",
+    "descriptors in this archive were dumped byte by byte and compared with the",
+    "tree ART's own AmigaOS 3.9 build produced. Each is `0f 00`, an entry count,",
+    "then 260-byte entries of a 256-byte name, a `ysize`, a `style` and `flags`:",
+    "`courier.font` is 1304 bytes for 5 sizes on both sides, `ruby.font` 784 for",
+    "3, `helvetica.font` 1564 for 6. Every family names exactly the sizes that",
+    "tree already has, and nine of the ten differ from the tree's **only in",
+    "entry order** (this archive lists `courier/24` first, the tree lists",
+    "`courier/11` first); `topaz.font` is byte-identical. The `flags` byte is",
+    "not constant - `0x42` for courier, `0x62` for ruby - and it comes from each",
+    "size file's own `DiskFontHeader`, a second binary format ART has never read",
+    "and has no independent oracle for.",
+    "",
+    "**So why block at all, if the rebuild is a no-op on that tree?** Because",
+    "that is a measurement about *one* tree. On a tree whose `Fonts` drawer",
+    "holds a size this archive's descriptor does not name, placing the",
+    "descriptor removes that size from the index: the size file stays on disk,",
+    "nothing fails, nothing is logged, and a font quietly stops being available.",
+    "ART cannot ask an arbitrary tree that question, and a half-placement that",
+    "boots is this project's most expensive defect. The row is therefore",
+    "untickable and says why, which is what section 89 asks for - never hidden,",
+    "and never silently short.",
+    "",
+    "The rules below are still declared, and they are what a future",
+    "`rebuild-font-index` step would place the day somebody measures a",
+    "`FontContentsHeader` writer against real material."
+  ],
+  "host_placement_block": "needs-fixfonts",
+  "_why_no_amiga_installer": [
+    "`Euro-Update/Euro-Install` is an Installer **script**, not a program, and",
+    "`AmigaInstaller::program` is a path to a program inside the package. The",
+    "script asks `askdir` for the target volume and `confirm`s every copy, so",
+    "nobody knows whether it finishes without a person at the window either.",
+    "Declaring `program: \"C/Installer\"` would be worse than declaring nothing:",
+    "the archive's `C/Installer` is the helper the *script* is run by, and",
+    "naming it here would tell the engine to launch an installer with no script",
+    "to install."
+  ],
+  "_why_overrides": [
+    "Every destination below is one the AmigaOS 3.9 recipe already writes:",
+    "`workbench-base` places the CD's `WORKBENCH3.5/FONTS`, `workbench-39` its",
+    "`WORKBENCH3.9/DEVS` and `LOCALE`, `keymaps` the CD's own keymaps and",
+    "`locale-euro` the CD's `LOCALE.EURO/COUNTRIES`. This package replaces files",
+    "at those paths on purpose - that is what an update is - so the components",
+    "are named rather than left for a later stage to read as a surprise, the",
+    "same call `boingbag-39-1`'s own recipe records at length."
+  ],
+  "overrides": [
+    "workbench-base",
+    "workbench-39",
+    "keymaps",
+    "locale-euro"
+  ],
+  "rules": [
+    {
+      "from": "Workbench/Devs/Keymaps",
+      "to": "Devs/Keymaps",
+      "kind": "subtree"
+    },
+    {
+      "from": "Workbench/Fonts",
+      "to": "Fonts",
+      "kind": "subtree"
+    },
+    {
+      "from": "Workbench/Locale/Countries",
+      "to": "Locale/Countries",
+      "kind": "subtree"
+    }
+  ]
+}

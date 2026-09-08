@@ -2199,11 +2199,14 @@
       "packageUnknown": "\"{{package}}\", ART'ın tarifini gönderdiği bir paket değil — uygulanamaz. Tikini kaldır; bu genelde ART'ın eski bir sürümünün kaydettiği bir seçimdir.",
       "packageFolderMissing": "Paketler seçildi ({{packages}}), ama bir güncelleme paketleri klasörü verilmedi — arşivlerinin bulunduğu klasörü seç.",
       "packageRequirementMissing": "\"{{package}}\", önce \"{{requires}}\"in uygulanmasına ihtiyaç duyuyor — onu da tikle, ya da \"{{package}}\"in tikini tek başına kaldır.",
+      "packageRequirementNeedsAmigaRun": "\"{{package}}\" için önce \"{{requirement}}\" kurulmuş olmalı ve \"{{requirement}}\" Amiga tarafındaki adımdan Amiga'da çalıştırılır — bu listeden tiklenemez. Önce onu orada yap, sonra \"{{package}}\" paketini buraya ekle.",
       "packageComponentMissing": "\"{{package}}\", \"{{component}}\" bileşenine ihtiyaç duyuyor, ve bu ağaç onunla kurulmadı. \"{{package}}\"in tikini kaldır, ya da \"{{component}}\" açıkken yeni bir ağaç kur ve \"{{package}}\"i o ağaca ekle.",
       "packageArchiveMissing": "Güncelleme paketleri klasöründe, \"{{package}}\"in ihtiyaç duyduğu \"{{media}}\" medyasını taşıyan bir arşiv yok — o arşivi klasöre koy ve yeniden dene.",
       "packageArchiveAmbiguous": "Güncelleme paketleri klasöründe \"{{package}}\"in ihtiyaç duyduğu {{media}} medya adını taşıyan birden fazla arşiv var: {{paths}}. İstediğin biri dışında hepsini kaldır.",
       "packageNotPlaceableOnHost": {
-        "encryptedPayload": "\"{{package}}\" Windows üzerinden yerleştirilemez: dosyaları kilitli ve anahtar yalnızca paketin kendi Amiga tarafındaki Updater'ında. Tikini kaldır ve onun yerine Amiga'da o Updater ile kur."
+        "encryptedPayload": "\"{{package}}\" Windows üzerinden yerleştirilemez: dosyaları kilitli ve anahtar yalnızca paketin kendi Amiga tarafındaki Updater'ında. Tikini kaldır ve onun yerine Amiga'da o Updater ile kur.",
+        "needsFixfonts": "\"{{package}}\" Windows üzerinden yerleştirilemez: bitmap yazı tiplerini değiştiriyor ve kendi kurucusu sonrasında FixFonts ile yazı tipi dizinini yeniden kuruyor. ART o dizini yeniden kuramaz, dolayısıyla Fonts çekmecende yalnızca bu paketin getirdiği boyutlar listeli kalırdı. Tikini kaldır ve Amiga'da kendi kurucusuyla kur.",
+        "needsInstallerScript": "\"{{package}}\" Windows üzerinden yerleştirilemez: kendi Installer betiği hangi dosyaları kopyalayacağını işlemcinden, makinenden ve istediğin dillerden seçiyor ve startup-sequence'ı düzenliyor. ART sabit bir yol kümesi yerleştirir, bu soruları senin yerine yanıtlayamaz. Tikini kaldır ve Install betiğini Amiga'da çalıştır."
       },
       "activationSourceMissing": "'{{component}}' {{name}} öğesini açmayı istiyor, ama bu planda '{{from}}' dosyasını ağaca koyan hiçbir şey yok. Onu sağlayan bileşeni seçin ya da etkinleştirmeyi reçeteden çıkarın."
     },
@@ -2213,10 +2216,7 @@
       "label": "AmigaOS sürümü"
     },
     "media": {
-      "label": "Kurulum diskleri klasörü",
-      "ariaLabel": "AmigaOS kurulum medyası klasörü",
       "none": "Klasör seçilmedi.",
-      "chooseTitle": "AmigaOS kurulum disk ya da CD imgelerinin bulunduğu klasörü seç",
       "unreadable": "ART bu klasörü okuyamadı — yolu kontrol et.",
       "empty": "Bu klasörde kurulum diski bulunamadı.",
       "found_one": "{{count}} kurulum diski bulundu: {{names}}.",
@@ -2233,12 +2233,105 @@
       "addTitle": "Bu sürümün disketlerini tutan başka bir klasör seçin",
       "addHint": "AmigaOS 3.2.2.1, 3.2 disketleriniz artı Update ve Hotfix klasörleri — her birini ekleyin."
     },
+    "material": {
+      "label": "Bu yapımın malzemesini tutan klasörler",
+      "layerAny": "Her şey",
+      "layerAriaLabel": "{{folder}} klasörü sürümün hangi parçasını tutuyor",
+      "unusedForPlan_one": "Bu sürüm her parça için ayrı bir klasör okur; bu yüzden ART listedeki {{count}} klasörden kurulum yapmayacak: {{folders}}. Hangi parçayı tuttuğunu belirtin ya da listeden çıkarın.",
+      "unusedForPlan_other": "Bu sürüm her parça için ayrı bir klasör okur; bu yüzden ART listedeki {{count}} klasörden kurulum yapmayacak: {{folders}}. Her birinin hangi parçayı tuttuğunu belirtin ya da listeden çıkarın.",
+      "amigaForever": "Amiga Forever'ın disketleri {{path}} konumunda.",
+      "amigaForeverRom": "Amiga Forever'ın Kickstart ROM'ları {{path}} klasöründe.",
+      "amigaForeverAdd": "Ekle",
+      "amigaForeverDismiss": "Şimdi değil",
+      "readoutHeading": "Bu sürüm neye ihtiyaç duyuyor, klasörlerinizde ne var",
+      "readoutFailed": "ART bu klasörlerde ne olduğunu çıkaramadı: {{detail}}. Bu ART'ın kusuru, dosyalarınız hakkında bir yargı değil.",
+      "required": "zorunlu",
+      "optional": "isteğe bağlı",
+      "guide": {
+        "intro": "ART bu listeyi bir klasöre metin dosyası olarak yazabilir; böylece dosyaların yanında durur. Siz istemeden hiçbir şey yazılmaz.",
+        "button": "{{folder}} klasörüne bir kılavuz yaz",
+        "written": "Yazıldı: {{path}}",
+        "alreadyThere": "{{path}} zaten orada ve ART ona dokunmadı. Yenisini yazdırmak için onu silin ve yeniden isteyin.",
+        "failed": "ART kılavuzu yazamadı: {{detail}}"
+      }
+    },
+    "slots": {
+      "foundByNameUnread": "{{file}} — bu dosya kendine {{identity}} diyor, {{name}} de zaten bu. Baytlarını henüz kimse okumadı, yani ART onları tablolarıyla karşılaştırmadı — doğrulamak için bu klasörü içeriğine göre tanımlayın.",
+      "guessedByFilenameUnread": "{{file}} adı {{name}} gibi duruyor ve bunu söyleyen başka bir şey yok: içindeki ad {{name}} değil ve baytlarını henüz kimse okumadı. Bu satıra güvenmeden önce klasörü içeriğine göre tanımlayın ya da dosyayı açın.",
+      "chosenMissing": "{{name}} için seçtiğiniz dosya orada yok: {{path}}.",
+      "foundByNameOtherArtefact": "{{file}} — bu dosya kendine {{identity}} diyor, {{name}} de zaten bu. Ama baytları tablodaki {{other}}, bu yuvanın beklediği şey değil — yani disk yeniden adlandırılmış ya da adının söylediği disk değil. Bu satıra güvenmeden önce kontrol edin.",
+      "guessedByFilenameOtherArtefact": "{{file}} adı {{name}} gibi duruyor ama baytları başka şey söylüyor: onlar tablodaki {{other}}. Ad birinin verdiği şeydir, baytlar dosyanın kendisidir — baytlara bakın.",
+      "unreadableFolder": "ART {{folder}} klasörünü okuyamadı; içindekiler sayılmadı.",
+      "setLine": "{{release}} · {{total}} taneden {{found}} tanesi bulundu · {{missingRequired}} zorunlu eksik",
+      "setLineNotNeeded": "{{release}} · {{total}} taneden {{found}} tanesi bulundu · {{missingRequired}} zorunlu eksik · {{notNeeded}} tanesi gerekmiyor",
+      "setLineReady": "{{release}} · {{total}} taneden {{found}} tanesi bulundu · zorunlu olan her şey burada",
+      "setLineReadyNotNeeded": "{{release}} · {{total}} taneden {{found}} tanesi bulundu · zorunlu olan her şey burada · {{notNeeded}} tanesi gerekmiyor",
+      "romChosen": "Kickstart {{identity}} ya da daha yenisi: {{path}}, bu yapı için seçildi.",
+      "romNotChosen": "Henüz Kickstart seçilmedi — bu adımdaki alandan Kickstart {{identity}} ya da daha yenisini seçin. ART malzeme klasörlerinizde Kickstart aramaz.",
+      "romNotChosenNoFloor": "Henüz Kickstart seçilmedi — bu adımdaki alandan birini seçin. ART malzeme klasörlerinizde Kickstart aramaz.",
+      "installedArchiveGone": "{{name}} bu ağaçta zaten var ve geldiği arşiv artık adını verdiğiniz klasörlerde değil. Yeniden gerekmiyor.",
+      "incomplete": "{{file}} dosyası {{name}}, ama bu kopya eksik: {{directory}} taşımıyor. Başka bir kopya aramak yerine elinizdekine bakın.",
+      "crowdedFolder": "{{folder}} klasörü ART’ın tek seferde açtığından fazla dosya tutuyor; ART ilk {{bound}} tanesine baktı. Bu kadar arşiv tutan bir klasör malzeme klasörü değildir — ART’ı daha küçük bir klasöre yöneltin, yoksa içindeki bir şeyin gözden kaçmasını bekleyin.",
+      "reading_one": "{{count}} klasör okunuyor — her dosyanın hangi parça olduğu çıkarılıyor…",
+      "reading_other": "{{count}} klasör okunuyor — her dosyanın hangi parça olduğu çıkarılıyor…",
+      "foundByHash": "{{file}} — baytlarından tanındı: ART’ın tablosunun {{name}} için kaydettiği baytlar bunlar.",
+      "foundByName": "{{file}} — bu dosya kendine {{identity}} diyor, {{name}} de zaten bu. Baytları özetlendi ve ART’ın hiçbir tablosunda yok; yani bu bir doğrulama değil, dosyanın kendi beyanı.",
+      "chosen": "{{file}} — {{name}} için sizin seçtiğiniz dosya. ART onun o olduğunu doğrulamadı.",
+      "guessedByFilename": "{{file}} adı {{name}} gibi duruyor; ART’ın söyleyebileceği bundan ibaret: baytları özetlendi ve ART’ın bildiği hiçbir şeyle eşleşmiyor, içindeki ad da {{name}} değil. Bu satıra güvenmeden önce dosyayı açın ya da değiştirin.",
+      "ambiguous": "Buradaki {{count}} dosya {{name}} olabilir ve ART aralarında seçim yapmaz: {{candidates}}. Hangisini kastettiğinizi siz seçin.",
+      "notFound": "{{name}} adını verdiğiniz klasörlerde yok. Beklenen: {{filenames}}.",
+      "notFoundUnnamed": "{{name}} adını verdiğiniz klasörlerde yok.",
+      "filenamesUnknown": "ART'ın onun için kaydettiği hiçbir dosya adı yok",
+      "provenanceUnknown": "ART'ın bunun nereden geldiğine dair bir notu yok",
+      "notNeeded": "{{name}} gerekmiyor — bu kopya zaten {{carries}} taşıyor.",
+      "installedPlaced": "bu ağaçta zaten var",
+      "installedRan": "Amiga’da zaten kuruldu: {{command}}",
+      "blocked": "önce {{needs}} gerekiyor"
+    },
+    "chain": {
+      "installed": "{{name}} — bu ağaçta zaten var.",
+      "ready": "{{name}} — hazır: {{file}}.",
+      "readyUnnamed": "{{name}} — hazır.",
+      "blocked": "{{name}} — önce {{needs}} girmeli.",
+      "blockedComponent": "{{name}} için önce ağaçta {{components}} bileşeninin kurulu olması gerekiyor — bu, ağaç kurulurken seçilir, burada değil.",
+      "missing": "{{name}} adını verdiğiniz klasörlerde yok. Beklenen: {{filenames}}.",
+      "missingUnnamed": "{{name}} adını verdiğiniz klasörlerde yok.",
+      "mediumNotBuiltFrom": "Bu ağaç {{name}} diskinden kurulmamış. Bu işlem kaynak adımında yapılır, bu ekranda değil.",
+      "notNeeded": "{{name}} gerekmiyor — {{supersededBy}} bunu zaten içeriyor.",
+      "refusedAmbiguous": "Buradaki {{count}} dosya {{name}} olabilir ve ART aralarında seçim yapmaz: {{candidates}}. Hangisini kastettiğinizi siz seçin.",
+      "notYetRunnable": {
+        "installerNotMeasured": "{{name}} — ART bunu hiç çalıştırmadı: bir Installer betiği ile kuruluyor ve o betiğin pencerede biri olmadan bitip bitmediğini kimse ölçmedi. Gizlemek yerine listeleniyor, böylece tarifin var olduğunu görebilirsiniz."
+      },
+      "onAmiga": "Amiga'da çalışır",
+      "onWindows": "Windows'tan yerleştirilir",
+      "setLine": "{{release}} güncellemeleri — {{total}} satırın {{installed}} tanesi uygulandı",
+      "setLineNotNeeded": "{{release}} güncellemeleri — {{total}} satırın {{installed}} tanesi uygulandı — {{notNeeded}} tanesi gerekmiyor",
+      "tree": "ağaç {{root}}",
+      "treeNone": "Henüz bir dağıtım ağacı seçilmedi — biri seçilene kadar buradaki hiçbir şey uygulanmış olarak kaydedilemez.",
+      "cdLink": "Diski kaynak adımında seçin",
+      "next": "Sıradaki: {{name}}",
+      "reportRow": "Bu rapor {{name}} hakkında.",
+      "updatesLink": "{{release}} güncellemeleri",
+      "noneReady": "Burada henüz çalıştırılabilecek bir şey yok.",
+      "allApplied": "Bu zincirin her halkası hesaba katıldı — çalıştırılacak bir şey kalmadı.",
+      "noFolders": "ART bu dosyaları arayacak bir yer bilmiyor: arşivlerinizin bulunduğu klasörleri kaynak adımında ekleyin.",
+      "missingNoFolders": "{{name}} — henüz hiçbir malzeme klasörü seçilmedi.",
+      "runRow": "Bu satırı çalıştır",
+      "refusedNotPlaceable": {
+        "encryptedPayload": "{{name}} Windows'tan yerleştirilemez: içindeki dosyalar kilitli ve anahtar yalnızca paketin kendi Amiga programında. Bunun yerine Amiga'da çalıştırın.",
+        "needsFixfonts": "{{name}} Windows'tan yerleştirilemez: bitmap yazı tiplerini değiştiriyor ve kendi kurucusu ardından .font dizinini yeniden kuruyor; ART bunu yapamaz, dolayısıyla yerleştirmek bu paketin kendisinin getirmediği yazı tipi boylarını sessizce düşürürdü. Paketin kendi kurucusunu Amiga'da çalıştırın ya da bu güncellemeyi zaten içeren BoingBags 3&4'ü kurun.",
+        "needsInstallerScript": "{{name}} Windows'tan yerleştirilemez: kendi Installer betiği neyin kopyalanacağını işlemcinize, makinenize ve seçtiğiniz dillere göre belirliyor ve ART bu soruları sizin yerinize yanıtlayamaz."
+      }
+    },
     "mediaId": {
       "heading": "Bu dosyalar, içeriklerine göre ne",
       "confirmed": "{{file}} — Emu68 Hatcher'ın kurulum ortamı tablosunun “{{name}}” dediği satırla eşleşiyor ({{version}}, {{source}}). O satır burada gerçek bir disketle karşılaştırıldı: {{against}}, {{checked}}.",
       "unconfirmed": "{{file}} — Emu68 Hatcher'ın kurulum ortamı tablosunun “{{name}}” dediği satırla eşleşiyor ({{version}}, {{source}}). O satırı burada hiç kimse gerçek bir disketle karşılaştırmadı — tablonun 186 satırından 151'i denenmemiş durumda, yani bu iddia yalnızca tablonun.",
+      "confirmedOwn": "{{file}} — ART'ın kendi kurulum ortamı tablosunun “{{name}}” dediği satırla eşleşiyor ({{version}}, {{source}}). O satır burada gerçek bir disketle karşılaştırıldı: {{against}}, {{checked}}.",
+      "unconfirmedOwn": "{{file}} — ART'ın kendi kurulum ortamı tablosunun “{{name}}” dediği satırla eşleşiyor ({{version}}, {{source}}). O satır kaydedildiğinden beri burada hiç kimse gerçek bir disketle karşılaştırmadı — bu, yalnızca tablonun kendi iddiası, ikinci bir kaynakça henüz doğrulanmadı.",
       "notInTable": "{{file}} — Emu68 Hatcher'ın kurulum ortamı tablosunda yok. Bu, tablo hakkında bir bilgidir, disket hakkında değil: yeniden imaj almak da, tek bir baytını değiştirmek de, başka bir sürümüne sahip olmak da özeti değiştirir. Disketin kendi adı olduğu gibi geçerlidir.",
       "unreadable": "{{file}} — ART bu dosyanın baytlarını okuyamadı, dolayısıyla özeti hiç alınmadı. Bu “tabloda yok” demek değildir: tabloya hiç sorulmadı.",
+      "skipped": "{{file}} — ART'ın tanıdığı bir kurulum ortamı değil, bu yüzden dokunulmadı. ART yalnızca diskin kendi adını okudu, içeriğini değil: ART'ın hiçbir tarifi bu adı taşıyan bir diskten kurulum yapmıyor, dolayısıyla yarım gigabaytını özetlemek kimseye bir şey söylemezdi. Bu gerçekten kurulum ortamıysa, adı ART'ın tanıdığı adlardan biri değil.",
       "notHashedYet": "İçeriğine göre henüz hiçbir şey tanımlanmadı.",
       "identifying": "Dosyalar okunuyor ve özetleri alınıyor…",
       "failed": "ART {{folder}} klasörünü okuyamadı, tarama orada durdu. Bundan önce içeriğine göre tanımlanan klasörler: {{total}} klasörün {{identified}} tanesi. Onların bulduğu yukarıda duruyor ve disketlerin kendi adları bundan etkilenmez.",
@@ -2437,6 +2530,8 @@
       "blocked": {
         "badge": "Windows üzerinden yerleştirilemez",
         "encryptedPayload": "Bu paketin içindeki dosyalar kilitli ve anahtar yalnızca paketin kendi Amiga tarafındaki Updater'ında. O Updater bir Amiga programı: Amiga'nın kendisinde çalışmak zorunda — diğer bütün dağıtım kurucuları da bu paketi böyle kuruyor. ART kilidi kırmaz, dolayısıyla buradan tek bir dosya bile yerleştiremez — arşivi Amiga'na koy ve kendi Updater'ını orada çalıştır.",
+        "needsFixfonts": "Bu paket bitmap yazı tiplerini değiştiriyor ve kendi kurucusu sonrasında FixFonts çalıştırıp .font dizin dosyalarını Fonts çekmecende gerçekten ne varsa ona göre yeniden kuruyor. ART böyle bir dizini yeniden kuramaz; onsuz yerleştirmek, bu paketin kendisinin getirmediği her yazı tipi boyutunu sessizce düşürürdü — hiçbir şey hata vermez, bir yazı tipi sadece artık bulunmaz olurdu. Bu yüzden ART buradan hiçbir şey yerleştirmiyor: paketin kendi kurucusunu Amiga'da çalıştır, ya da bu güncellemeyi zaten içeren BoingBags 3&4'ü kur.",
+        "needsInstallerScript": "Bu paket düz dosyalardan oluşuyor, ama hangilerini alacağını bir Installer betiği kararlaştırıyor: işlemcine uyan yapıyı seçiyor, hangi dilleri kuracağını soruyor, hangi makinenin SCSI sürücüsünü istediğini soruyor, AmiTCP: ve AWeb neredeyse oraya kopyalıyor ve startup-sequence'ını düzenliyor. ART sabit bir yol kümesi yerleştirir ve bunların hiçbirini senin yerine yanıtlayamaz — yarım yerleştirilmiş bir ağaç açılır ve sessizce eksik olur. Bunun yerine Install betiğini Amiga'da çalıştır.",
         "chosen": "{{names}} Windows üzerinden yerleştirilemez, bu yüzden bu seçim için hiçbir şey önizlenemez ve eklenemez. Tikini kaldır, ya da paketin kendi Updater'ı ile Amiga'da ekle."
       },
       "refusedNames": "Bu arşiv, ART'ın kullanmayı reddettiği {{count}} giriş adı taşıyor; çünkü ait oldukları klasörün dışını gösteriyorlar: {{names}}. Onlardan hiçbir şey yerleştirilmeyecek — arşivin geri kalanı bundan etkilenmez.",
@@ -2493,19 +2588,31 @@
         "label": "Paket",
         "needsFolder": "ART'ın Amiga tarafında hangi paketleri çalıştırabildiğini görmek için yukarıdan güncelleme paketleri klasörünü seçin.",
         "none": "ART'ın getirdiği paketlerin hiçbiri Amiga tarafında çalıştırabileceği bir kurucu taşımıyor.",
+        "notYetRunnable": {
+          "installerNotMeasured": "Henüz hazır değil: bir Installer betiği ile kuruluyor ve o betiğin pencerede biri olmadan bitip bitmediğini kimse ölçmedi. ART bunu gizlemek yerine burada gösteriyor, böylece tarifin var olduğunu ve çalıştırılabilmesi için neyin eksik olduğunu biliyorsun."
+        },
         "unavailableHint": "ART, birlikte gelen paket listesini okuyamadı."
       },
       "archive": {
         "label": "Paketin kendi arşivi",
         "none": "Arşiv seçilmedi.",
         "chooseTitle": "Paketin kendi arşivini seçin — indirdiğiniz dosyayı",
-        "hint": "İndirdiğiniz hâliyle arşiv, örneğin BoingBag39-1.lha. ART onu açar ve kendi Amiga birimi olarak bağlar; içindeki kilitli bölüm kilitli kalır ve paketin kendi kurucusuna verilir."
+        "hint": "ART {{filenames}} bekliyor. Nereden geldiği: {{provenance}}. ART onu açar ve kendi Amiga birimi olarak bağlar; içindeki kilitli bölüm kilitli kalır ve paketin kendi kurucusuna verilir."
       },
       "overlayArchive": {
         "label": "Paketin güncelleme arşivi (yalnızca gerekiyorsa)",
         "none": "İkinci arşiv seçilmedi.",
         "chooseTitle": "Paketin güncelleme arşivini seçin",
-        "hint": "Birincinin bir bölümünün yerine geçen ikinci bir arşiv — bazı paketlerin kendi kurucusu için ayrıca yayımladığı düzeltme. Aşağıdaki not istemedikçe boş bırakın."
+        "hint": "ART {{filenames}} bekliyor. Nereden geldiği: {{provenance}}. Birinci arşivin bir bölümünün yerine geçer — bazı paketlerin kendi kurucusu için ayrıca yayımladığı düzeltme. Aşağıdaki not istemedikçe boş bırakın."
+      },
+      "classify": {
+        "anotherPackage": "Bu, {{other}} paketinin kendi arşivi — ama seçili olan {{selected}}. Onu kurmak için {{other}}'ı seçin, ya da buraya {{selected}} paketinin kendi arşivini verin.",
+        "anotherPackagesUpdateArchive": "Bu, {{other}} paketinin kendi güncelleme arşivi, {{selected}}'ınki değil — ama seçili olan {{selected}}. Onu kurmak için {{other}}'ı seçin, ya da buraya {{selected}} paketinin kendi arşivlerini verin.",
+        "sharedArtefact": "'{{path}}', Paketler adımının Windows tarafında yerleştirdiği {{media}} arşivi — bunu {{packages}} okuyor.",
+        "otherArtefact": "'{{path}}', bu adımın çalıştırmadığı {{media}} arşivi — {{selected}} burada {{expected}} istiyor.",
+        "otherArtefactGeneric": "'{{path}}', bu adımın çalıştırmadığı {{media}} arşivi.",
+        "wrongFieldOverlay": "Bu, paketin güncelleme arşivi; paketin kendisi değil. \"{{overlayLabel}}\" alanına ait, \"{{packageLabel}}\" alanına değil.",
+        "wrongFieldPackage": "Bu, paketin kendi arşivi; güncelleme arşivi değil. \"{{packageLabel}}\" alanına ait, \"{{overlayLabel}}\" alanına değil."
       },
       "kickstart": {
         "label": "Kendi Kickstart ROM'unuz",
@@ -2535,8 +2642,19 @@
         "heading": "Henüz çalıştırmaya hazır değil",
         "archiveMissing_one": "Yukarıda seçilen arşiv artık orada değil. ART seçtiğiniz {{count}} dosyaya baktı.",
         "archiveMissing_other": "Yukarıda seçilen arşivlerden biri artık orada değil. ART seçtiğiniz {{count}} dosyanın hepsine baktı.",
+        "archiveMissingFound_one": "ART'ın bulduğu arşiv artık orada değil: {{path}}. Yeniden tarayın ya da dosyayı kendiniz seçin.",
+        "archiveMissingFound_other": "Bu çalıştırmanın kullanacağı {{count}} arşivden biri artık orada değil: {{path}}. Yeniden tarayın ya da dosyayı kendiniz seçin.",
         "kickstartMissing": "O Kickstart orada değil: {{path}}",
-        "noEmulator": "Emülatör bulunamadı. WinUAE'nin yolunu Ayarlar'da belirtin — ART zaten sizde olan bir emülatörü başlatır, emülatör kurmaz."
+        "noEmulator": "Emülatör bulunamadı. WinUAE'nin yolunu Ayarlar'da belirtin — ART zaten sizde olan bir emülatörü başlatır, emülatör kurmaz.",
+        "slotMissing": "{{name}}, bu yapının malzemesini tutan klasörlerde yok ve o olmadan burada hiçbir şey çalışamaz. Beklenen: {{filenames}} — içinde bulunduğu klasörü ekleyin ya da dosyayı kendiniz seçin."
+      },
+      "slotField": {
+        "chooseAnother": "Başka bir dosya seç",
+        "chooseAnotherAriaLabel": "{{label}} için başka bir dosya seç",
+        "useFound": "ART'ın bulduğunu kullan",
+        "useFoundAriaLabel": "{{label}} için ART'ın bulduğu dosyayı kullan",
+        "clearAriaLabel": "{{label}} için seçilen dosyayı unut",
+        "pickOne": "Malzeme klasörlerinizdeki {{count}} dosya {{name}} olabilir ve ART bunların arasında seçim yapmaz. Hangisini kastettiğinizi siz seçin."
       },
       "refused": {
         "heading": "ART bunu çalıştırmayacak",
@@ -2555,6 +2673,12 @@
         "timedOut": "Kimse yanıt vermedi. Kurucu {{seconds}} saniye sonra hâlâ bekliyordu, bu yüzden ART başlattığı emülatörü sonlandırdı.",
         "emulatorClosed": "Emülatör penceresi {{seconds}} saniye sonra, kurucu daha hiçbir şey bildirmeden kapatıldı."
       },
+      "followUp": {
+        "ran": "Paket ikinci güncellemesini de uyguladı; ağaçta henüz yoktu.",
+        "notNeeded": "Paketin ikinci güncellemesi gerekmedi — bu ağaç o sürümü zaten taşıyor.",
+        "failed": "Paketin ikinci güncellemesi çalıştı ve hayır dedi. Kurulumun kendisi başarılı; yalnızca bu ek bölüm olmadı.",
+        "notChecked": "ART paketin ikinci güncellemesinin gerekip gerekmediğini anlayamadı — bu ağaçta C/Version yok — bu yüzden çalıştırılmadı."
+      },
       "next": {
         "succeeded": "Ağacı açın ve çalışan sisteme ne olduğunu sorun — ekrandaki bir telif satırını değil, sistemin kendisi hakkında söylediği sürümü.",
         "failed": "Kopyanın içine bakın: kurucunun yazdığı her şey orada ve neden reddettiğini söyleyen şey onun kendi iletileri.",
@@ -2569,7 +2693,7 @@
       "medium": {
         "label": "AmigaOS 3.9 CD-ROM'u (disk kalıbı)",
         "none": "Seçilmedi",
-        "hint": "Bazı paketler kurulmadan önce birlikte geldikleri diski doğrular. Her iki BoingBag da AmigaOS3.9: adlı bir birimdeki belirli dosyalara bakar. O diskin kendi kopyanızı .iso olarak seçin; ART onu öykünücünün CD sürücüsüne takar.",
+        "hint": "ART {{filenames}} bekliyor. Nereden geldiği: {{provenance}}. Bazı paketler kurulmadan önce birlikte geldikleri diski doğrular; o diskin kendi kopyanızı seçin, ART onu öykünücünün CD sürücüsüne takar.",
         "chooseTitle": "Kurucunun aradığı disk kalıbını seçin"
       }
     },

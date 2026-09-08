@@ -209,6 +209,10 @@ const BOINGBAG_39_2_JSON: &str = include_str!("recipes/packages/boingbag-39-2.js
 const LOCALE_TURKISH_JSON: &str = include_str!("recipes/packages/locale-turkish.json");
 const LOCALE_39_JSON: &str = include_str!("recipes/packages/locale-39.json");
 const LOCALE_39_TURKISH_JSON: &str = include_str!("recipes/packages/locale-39-turkish.json");
+const BOINGBAG_39_2_CONTRIBUTION_JSON: &str =
+    include_str!("recipes/packages/boingbag-39-2-contribution.json");
+const EURO_UPDATE_JSON: &str = include_str!("recipes/packages/euro-update.json");
+const BOINGBAGS_39_3_4_JSON: &str = include_str!("recipes/packages/boingbags-39-3-4.json");
 
 /// Every package JSON this project ships. The one list a new package JSON
 /// has to join — see the module doc comment.
@@ -218,6 +222,9 @@ const SHIPPED_JSON: &[&str] = &[
     LOCALE_TURKISH_JSON,
     LOCALE_39_JSON,
     LOCALE_39_TURKISH_JSON,
+    BOINGBAG_39_2_CONTRIBUTION_JSON,
+    EURO_UPDATE_JSON,
+    BOINGBAGS_39_3_4_JSON,
 ];
 
 /// An update package on top of an installed AmigaOS tree — an official
@@ -278,6 +285,38 @@ pub struct Package {
     /// packages; see the module doc comment's "`requires_components` is not
     /// `requires`" section.
     pub requires_components: Vec<String>,
+    /// This row's place in **the material's own order** — the chain the
+    /// packages' own `Install` scripts enforce by reading `version.library`
+    /// off the target (design § 1 of
+    /// `2026-09-08-os-builder-chain-design.md`).
+    ///
+    /// `None` is not "last": it means *this package is not a chain row at
+    /// all* and belongs only on the Packages step. Stated rather than
+    /// derived, because the order is a fact about the material and not
+    /// about ART's data — `requires` says what is *forbidden* before what,
+    /// and that is a weaker statement: Locale 3.9, the Turkish locale
+    /// update, Contribution and Euro-Update may go on in any order among
+    /// themselves, and every one of them goes on before BoingBags 3&4.
+    /// A topological sort of `requires` alone would put them in whatever
+    /// order the shipped list happened to have.
+    ///
+    /// **Two packages may share a rank**, and that is the point of a rank
+    /// rather than a sequence number: `locale-39` and `locale-39-turkish`
+    /// are both 4 because the material states no order between them. The
+    /// chain sorts by `(chain_position, id)` so the list is the same list
+    /// twice running.
+    pub chain_position: Option<u32>,
+    /// Packages that make this one unnecessary — `euro-update` is
+    /// superseded by `boingbags-39-3-4`, whose own readme states
+    /// *"These official updates are incorporated: Euro-Update, ShellUpdate
+    /// 45.39"* (read from the owner's own `BoingBags3&4.lha`, 7-Zip 26.02,
+    /// 2026-09-08).
+    ///
+    /// A superseded row whose superseder is **installed** reads *not
+    /// needed*; one whose superseder is not installed is an ordinary row.
+    /// The direction matters: this names the *newer* package, so a package
+    /// added later declares nothing here and the older one is edited once.
+    pub superseded_by: Vec<String>,
     /// `Some` when ART **cannot place this package's files from the host at
     /// all**, whatever the user's folder holds — see
     /// [`HostPlacementBlock`]. `None` is the ordinary case.
@@ -403,6 +442,73 @@ pub struct AmigaInstaller {
     /// appending AmigaDOS lines to the boot script.
     #[serde(default)]
     pub post_install: Vec<crate::core::amigainstall::finish::PostStep>,
+    /// A second, version-gated invocation of this same installer, in the
+    /// **same boot** (ART-280).
+    ///
+    /// Distinct from [`post_install`](Self::post_install) in kind, not only in
+    /// degree: a `PostStep` is a host file operation on the staged copy, and
+    /// this is the package's own program running again on the Amiga — the only
+    /// thing that can, because the second payload is ZipCrypto too and ART
+    /// writes no bypass (ART-166).
+    ///
+    /// Measured before it was declared, and taken from the one distribution
+    /// builder whose source can be read: `Libs/xadmaster.library` reads 9.0 on
+    /// a clean AmigaOS 3.9 tree, 9.1 after BoingBag 1 and **9.1 still** after
+    /// BoingBag 2 (2026-09-08, every file of every state hashed), and HstWB
+    /// Installer's `Install-Boing-Bag-2` lines 32-36 gate exactly this
+    /// invocation on `Version … 10 FILE`. See
+    /// [`crate::core::amigainstall::FollowUp`].
+    #[serde(default)]
+    pub follow_ups: Vec<crate::core::amigainstall::FollowUp>,
+    /// `Some` when this declaration is written down but **nobody has run
+    /// it** — the sentence says what has not been measured yet.
+    ///
+    /// **§10/§89, from the side that is easy to miss.** Leaving the
+    /// declaration out would hide the package; leaving it in without this
+    /// would offer a Run button for a program ART has never seen finish.
+    /// `boingbags-39-3-4` is the case that bought the field: its `Install`
+    /// is an Installer *script* — not a program the engine can launch — and
+    /// the script calls `askoptions` for the languages, `confirm` for the
+    /// target, and `(run "SYS:Tools/EditPad …")` on the startup-sequence
+    /// (read from the owner's own archive, 7-Zip 26.02, 2026-09-08). Nobody
+    /// has measured whether it can finish without a person at the window.
+    ///
+    /// A row carrying this is shown **disabled with its own sentence**,
+    /// never hidden: "ART ships no installer for this" would be a different
+    /// claim, and a false one.
+    ///
+    /// **A value, not prose** (fix round 1, m6). It shipped as a free-text
+    /// English string interpolated into `{{reason}}`, so a Turkish reader got
+    /// a Turkish frame around an English clause — and this is *recipe data
+    /// rendered as a sentence*, not a `CoreError` message, so ART-060's
+    /// "Rust strings stay English" does not cover it. Every other reason on
+    /// these two screens is already a typed value the catalogue translates
+    /// ([`HostPlacementBlock`], `chain::RefusedBecause`); this is now the
+    /// third.
+    #[serde(default)]
+    pub not_yet_runnable: Option<NotYetRunnable>,
+}
+
+/// Why a declared Amiga-side installer is not one ART will start.
+///
+/// A **closed enum**, like [`HostPlacementBlock`] and for the same reason:
+/// the screens `match` on it, so a second kind is a compile error at every
+/// place that has to say something about it rather than a row with a blank
+/// explanation. Spelled kebab-case in a recipe (`"installer-not-measured"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NotYetRunnable {
+    /// The package installs through an Installer **script**, and nobody has
+    /// measured whether `Installer` can drive it without a person at the
+    /// window.
+    ///
+    /// `boingbags-39-3-4` is the case that bought it: its `Install` calls
+    /// `askoptions` for the languages, `confirm`s the target and can `run
+    /// SYS:Tools/EditPad` on the startup-sequence, and none of the AmigaOS
+    /// 3.9 Installer scripts accepts `NOVICE`, `DEFUSER`, `LOGFILE`,
+    /// `MINUSER` or `PROMPTUSER`. Round 3's task 3 is where that is run and
+    /// counted.
+    InstallerNotMeasured,
 }
 
 /// A disc a package's own installer insists on seeing (ART-193).
@@ -524,6 +630,10 @@ struct RawPackage {
     #[serde(default)]
     requires_components: Vec<String>,
     #[serde(default)]
+    chain_position: Option<u32>,
+    #[serde(default)]
+    superseded_by: Vec<String>,
+    #[serde(default)]
     host_placement_block: Option<HostPlacementBlock>,
     #[serde(default)]
     amiga_installer: Option<AmigaInstaller>,
@@ -599,6 +709,8 @@ impl RawPackage {
             distinguished_by: self.distinguished_by,
             requires: self.requires,
             requires_components: self.requires_components,
+            chain_position: self.chain_position,
+            superseded_by: self.superseded_by,
             host_placement_block: self.host_placement_block,
             component,
             amiga_installer: self.amiga_installer,
@@ -687,6 +799,91 @@ fn validate_installer(package: &Package) -> CoreResult<()> {
                 detail: format!(
                     "'{}': the installer's minimum_version '{minimum}' is not a version and a \
                      revision — AmigaOS writes one as '45.15'",
+                    package.id
+                ),
+            });
+        }
+    }
+    // **One follow-up per package, until there is a marker per follow-up**
+    // (round 3 whole-branch review, L9). `workvol::follow_up_lines` writes
+    // every follow-up's word to the same `art-followup.txt` and
+    // `read_follow_up` returns one `FollowUpOutcome`, so two of them would
+    // report only the last: "the first failed, the second was not needed"
+    // would reach the user as *not needed*. That is the collapse this
+    // module's own neighbours refuse one level up, and a recipe author has no
+    // way to see it happening.
+    //
+    // A refusal at parse time rather than a silent last-one-wins, and a cap
+    // rather than a per-follow-up marker file, because exactly one is shipped
+    // and building indexing for a second nobody has asked for is how a
+    // vocabulary grows past what anyone can check. The day a package needs
+    // two, this refusal is what sends whoever writes it to the marker.
+    if installer.follow_ups.len() > 1 {
+        return Err(CoreError::Malformed {
+            format: "package".into(),
+            detail: format!(
+                "'{}': {} follow-ups are declared and ART can report only one — they all write \
+                 the same result file, so the last would be the only one anybody heard about. \
+                 Declare one, or give each its own marker first",
+                package.id,
+                installer.follow_ups.len()
+            ),
+        });
+    }
+    // A follow-up reaches the same generated AmigaDOS script as the
+    // invocation above, so every one of its fields goes through the same two
+    // gates — a path inside the package, and no shell metacharacter. The gate
+    // file is checked as a path too: it is joined to the system volume by the
+    // script, so `../` in it would reach outside the tree exactly as it would
+    // anywhere else ART turns a recipe name into a path.
+    for follow_up in &installer.follow_ups {
+        if follow_up.program.contains(':') {
+            return Err(CoreError::Malformed {
+                format: "package".into(),
+                detail: format!(
+                    "'{}': the follow-up path '{}' names a volume; it must be a path inside \
+                     the package, and the volume it is reached under is ART's to decide",
+                    package.id, follow_up.program
+                ),
+            });
+        }
+        validate_path(
+            "package",
+            &package.id,
+            "amiga_installer.follow_ups[].program",
+            &follow_up.program,
+            false,
+        )?;
+        refuse_shell_metacharacters("follow-up path", &follow_up.program)?;
+        for arg in &follow_up.args {
+            if arg.trim().is_empty() {
+                return Err(CoreError::Malformed {
+                    format: "package".into(),
+                    detail: format!("'{}': a follow-up argument is empty", package.id),
+                });
+            }
+            refuse_shell_metacharacters("follow-up argument", arg)?;
+        }
+        validate_path(
+            "package",
+            &package.id,
+            "amiga_installer.follow_ups[].unless_file_version_at_least.path",
+            &follow_up.unless_file_version_at_least.path,
+            false,
+        )?;
+        refuse_shell_metacharacters(
+            "follow-up version gate",
+            &follow_up.unless_file_version_at_least.path,
+        )?;
+        // Zero would make the gate always closed — `Version … 0 FILE` never
+        // warns — so a follow-up declared with it could never run, which is
+        // the same shape as declaring nothing while looking like something.
+        if follow_up.unless_file_version_at_least.version == 0 {
+            return Err(CoreError::Malformed {
+                format: "package".into(),
+                detail: format!(
+                    "'{}': a follow-up's version gate of 0 can never open; declare the version \
+                     the file has to already state, or drop the follow-up",
                     package.id
                 ),
             });
@@ -850,6 +1047,42 @@ fn parse_all(jsons: &[&str]) -> CoreResult<Vec<Package>> {
             });
         }
     }
+
+    // **A relationship that names nothing is a relationship that does
+    // nothing**, and neither of these two can be checked by [`parse`],
+    // which sees one JSON at a time. `requires` had this check only as a
+    // test over the shipped list; `superseded_by` gets it here, where it
+    // also covers a caller that builds its own list.
+    //
+    // A `superseded_by` naming an unshipped id would leave its row reading
+    // *ready* for ever with no way to reach *not needed* — the quiet
+    // unreachability §89 exists to stop, and the exact failure an empty
+    // `overrides` produced once already.
+    let ids: HashSet<&str> = all.iter().map(|p| p.id.as_str()).collect();
+    for package in &all {
+        for (field, named) in [
+            ("requires", &package.requires),
+            ("superseded_by", &package.superseded_by),
+        ] {
+            for other in named {
+                if !ids.contains(other.as_str()) {
+                    return Err(CoreError::Malformed {
+                        format: "package".into(),
+                        detail: format!(
+                            "'{}': {field} names '{other}', which ART ships no package for",
+                            package.id
+                        ),
+                    });
+                }
+            }
+        }
+        if package.superseded_by.iter().any(|id| id == &package.id) {
+            return Err(CoreError::Malformed {
+                format: "package".into(),
+                detail: format!("'{}': supersedes itself", package.id),
+            });
+        }
+    }
     Ok(all)
 }
 
@@ -917,6 +1150,32 @@ pub fn by_id(id: &str) -> CoreResult<Package> {
 /// `result.len() != chosen.len()` fires for the wrong reason, and the actual
 /// mistake — the caller chose the same package twice — is never named.
 pub(super) fn order_over(chosen: &[String], all: &[Package]) -> CoreResult<Vec<String>> {
+    order_over_with_installed(chosen, all, &[])
+}
+
+/// [`order_over`], plus the ids the **tree already carries**.
+///
+/// **A requirement can be met by the tree instead of by the selection, and
+/// until round 3 it could not be.** `locale-turkish` and
+/// `boingbag-39-2-contribution` are host-placeable and both go on after
+/// BoingBag 3.9-2, which is Amiga-side and can never appear in a host
+/// selection (ART-166). Checking `requires` against `chosen` alone therefore
+/// made the owner's own Turkish catalogue pack unaddable the moment its
+/// `requires` was corrected to what its readme states: ticking it alone was
+/// refused for a missing package, and ticking both was refused because the
+/// other cannot be placed from Windows. Two refusals, no path through.
+///
+/// `installed` is the tree's own account of itself
+/// ([`super::chain::applied_in`] — components **and** Amiga-side runs), so a
+/// requirement already on the volume is satisfied and contributes **no
+/// edge**: it is not being applied in this run and cannot be ordered against.
+/// An empty `installed` is the old behaviour exactly, which is what every
+/// caller with no tree in hand passes.
+pub(super) fn order_over_with_installed(
+    chosen: &[String],
+    all: &[Package],
+    installed: &[String],
+) -> CoreResult<Vec<String>> {
     let mut seen_chosen = HashSet::new();
     for id in chosen {
         if !seen_chosen.insert(id.as_str()) {
@@ -928,13 +1187,14 @@ pub(super) fn order_over(chosen: &[String], all: &[Package]) -> CoreResult<Vec<S
 
     let index: HashMap<&str, &Package> = all.iter().map(|p| (p.id.as_str(), p)).collect();
     let chosen_set: HashSet<&str> = chosen.iter().map(|s| s.as_str()).collect();
+    let installed_set: HashSet<&str> = installed.iter().map(|s| s.as_str()).collect();
 
     for id in chosen {
         let package = index
             .get(id.as_str())
             .ok_or_else(|| CoreError::InvalidInput(format!("ART ships no package '{id}'")))?;
         for need in &package.requires {
-            if !chosen_set.contains(need.as_str()) {
+            if !chosen_set.contains(need.as_str()) && !installed_set.contains(need.as_str()) {
                 return Err(CoreError::InvalidInput(format!(
                     "'{id}' requires '{need}', which was not chosen"
                 )));
@@ -949,7 +1209,13 @@ pub(super) fn order_over(chosen: &[String], all: &[Package]) -> CoreResult<Vec<S
     for id in chosen {
         let package = index[id.as_str()];
         for need in &package.requires {
-            dependents.get_mut(need.as_str()).unwrap().push(id.as_str());
+            // A requirement met by the tree is not being applied in this
+            // run, so it is not a node in this graph and cannot carry an
+            // edge. Only a requirement that is *also chosen* orders anything.
+            let Some(dependents) = dependents.get_mut(need.as_str()) else {
+                continue;
+            };
+            dependents.push(id.as_str());
             *in_degree.get_mut(id.as_str()).unwrap() += 1;
         }
     }
@@ -999,6 +1265,12 @@ pub(super) fn order_over(chosen: &[String], all: &[Package]) -> CoreResult<Vec<S
 /// the order the user happened to tick the boxes in.
 pub fn order(chosen: &[String]) -> CoreResult<Vec<String>> {
     order_over(chosen, &packages()?)
+}
+
+/// [`order`], with the ids a tree already carries treated as satisfied — see
+/// [`order_over_with_installed`] for the defect that bought it.
+pub fn order_with_installed(chosen: &[String], installed: &[String]) -> CoreResult<Vec<String>> {
+    order_over_with_installed(chosen, &packages()?, installed)
 }
 
 #[cfg(test)]
@@ -1075,8 +1347,193 @@ mod tests {
                 // copies whatever languages the user picks.
                 "locale-39",
                 "locale-39-turkish",
+                // Round 3: the rest of the chain the material states — the
+                // one genuinely host-placeable archive, the update BoingBags
+                // 3&4 incorporates, and BoingBags 3&4 itself.
+                "boingbag-39-2-contribution",
+                "euro-update",
+                "boingbags-39-3-4",
             ],
             "the shipped packages for AmigaOS 3.9"
+        );
+    }
+
+    /// **The chain, as the material states it** — design § 1 of
+    /// `2026-09-08-os-builder-chain-design.md`, read back out of the shipped
+    /// recipes rather than out of a list in code.
+    ///
+    /// The CD is rank 1 and is not a package, so the packages start at 2. Two
+    /// rows share rank 4 on purpose: `locale-39` and `locale-39-turkish` read
+    /// one archive and the material states no order between them.
+    #[test]
+    fn every_chain_row_states_its_place_in_the_materials_own_order() {
+        let mut rows: Vec<(Option<u32>, String)> = super::packages_for("AmigaOS 3.9")
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.chain_position, p.id))
+            .collect();
+        rows.sort();
+        assert_eq!(
+            rows,
+            vec![
+                (Some(2), "boingbag-39-1".to_string()),
+                (Some(3), "boingbag-39-2".to_string()),
+                (Some(4), "locale-39".to_string()),
+                (Some(4), "locale-39-turkish".to_string()),
+                (Some(5), "locale-turkish".to_string()),
+                (Some(6), "boingbag-39-2-contribution".to_string()),
+                (Some(7), "euro-update".to_string()),
+                (Some(8), "boingbags-39-3-4".to_string()),
+            ],
+            "the AmigaOS 3.9 chain, ranked as the material ranks it"
+        );
+    }
+
+    /// **Euro-Update is folded into BoingBags 3&4, and only that one row
+    /// says so.** Both directions: a `superseded_by` that spread would turn
+    /// rows *not needed* that nobody has measured as redundant, which is the
+    /// same confident-wrong sentence from the opposite side.
+    #[test]
+    fn only_euro_update_declares_a_superseder() {
+        assert_eq!(
+            super::by_id("euro-update").unwrap().superseded_by,
+            vec!["boingbags-39-3-4".to_string()],
+            "BoingBags 3&4's own readme: \"These official updates are incorporated: \
+             Euro-Update, ShellUpdate 45.39\""
+        );
+        for package in super::packages().unwrap() {
+            if package.id == "euro-update" {
+                continue;
+            }
+            assert!(
+                package.superseded_by.is_empty(),
+                "{} declares a superseder nobody measured",
+                package.id
+            );
+        }
+    }
+
+    /// A `superseded_by` naming an id ART ships no package for would leave
+    /// its row unable ever to reach *not needed* — the quiet unreachability
+    /// § 89 exists to stop. Checked over a hand-built pair, so it is the
+    /// *gate* being tested and not today's shipped data.
+    #[test]
+    fn a_superseder_that_names_no_shipped_package_is_refused() {
+        let json = |id: &str, superseded: &str| {
+            format!(
+                r#"{{ "id": "{id}", "name": "X", "releases": ["AmigaOS 3.9"], "media": "{id}",
+                      "superseded_by": [{superseded}],
+                      "rules": [ {{ "from": "C/A", "to": "C/A", "kind": "file" }} ] }}"#
+            )
+        };
+        let good = json("a", "\"b\"");
+        let other = json("b", "");
+        super::parse_all(&[&good, &other]).expect("a superseder that is shipped is accepted");
+
+        let bad = json("a", "\"nobody\"");
+        let err = super::parse_all(&[&bad, &other])
+            .expect_err("a superseder ART ships no package for must be refused");
+        assert!(
+            format!("{err}").contains("nobody"),
+            "the refusal must name the id it did not recognise, got: {err}"
+        );
+    }
+
+    /// `requires` gets the same cross-package check, at parse time rather
+    /// than only as an assertion over today's shipped list.
+    #[test]
+    fn a_requirement_that_names_no_shipped_package_is_refused() {
+        let bad = r#"{ "id": "a", "name": "X", "releases": ["AmigaOS 3.9"], "media": "a",
+                       "requires": ["nobody"],
+                       "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ] }"#;
+        let err = super::parse_all(&[bad])
+            .expect_err("a requirement ART ships no package for must be refused");
+        assert!(
+            format!("{err}").contains("nobody"),
+            "the refusal must name the id it did not recognise, got: {err}"
+        );
+    }
+
+    /// **The Amiga-side declaration nobody has run says so.** Both
+    /// directions, because a `not_yet_runnable` that spread would disable
+    /// two runs this project has measured end to end (ART-193).
+    #[test]
+    fn only_boingbags_three_and_four_declare_an_installer_nobody_has_run() {
+        let bb34 = super::by_id("boingbags-39-3-4").unwrap();
+        let installer = bb34
+            .amiga_installer
+            .as_ref()
+            .expect("registered unready, never hidden (§10)");
+        assert_eq!(
+            installer.not_yet_runnable,
+            Some(NotYetRunnable::InstallerNotMeasured),
+            "a value the catalogue translates, never prose (fix round 1, m6)"
+        );
+        for id in ["boingbag-39-1", "boingbag-39-2"] {
+            assert_eq!(
+                super::by_id(id)
+                    .unwrap()
+                    .amiga_installer
+                    .unwrap()
+                    .not_yet_runnable,
+                None,
+                "{id} has been run on the owner's own material (ART-193)"
+            );
+        }
+    }
+
+    /// **The three packages ART cannot place from Windows each say a
+    /// different thing about why**, and the two that it can say nothing.
+    /// A block that spread would silently turn the feature off and still
+    /// look safe; a block that collapsed into one variant would send half
+    /// its readers to the wrong fix.
+    #[test]
+    fn each_blocked_package_names_the_reason_that_is_true_of_it() {
+        use super::super::HostPlacementBlock;
+        let block = |id: &str| super::by_id(id).unwrap().host_placement_block;
+        assert_eq!(
+            block("euro-update"),
+            Some(HostPlacementBlock::NeedsFixfonts),
+            "its installer runs FixFonts after the bitmap fonts and ART cannot rebuild a \
+             '.font' index"
+        );
+        assert_eq!(
+            block("boingbags-39-3-4"),
+            Some(HostPlacementBlock::NeedsInstallerScript),
+            "its Install script chooses files by CPU, machine and language"
+        );
+        assert_eq!(
+            block("boingbag-39-1"),
+            Some(HostPlacementBlock::EncryptedPayload)
+        );
+        assert_eq!(
+            block("boingbag-39-2-contribution"),
+            None,
+            "plain files, no program, no script — the one host-placeable archive of the chain"
+        );
+        assert_eq!(block("locale-turkish"), None);
+    }
+
+    /// The Contribution archive shares its top-level directory with
+    /// `BoingBag39-2.lha`, so it has to name a path only its own archive
+    /// carries — measured in the listing its recipe records.
+    #[test]
+    fn the_contribution_archive_is_told_apart_by_a_file_only_it_carries() {
+        let package = super::by_id("boingbag-39-2-contribution").unwrap();
+        assert_eq!(package.media, "BoingBag3.9-2");
+        assert_eq!(
+            package.distinguished_by.as_deref(),
+            Some("Contribution/ClassAction/ClassAction"),
+            "`media` alone cannot separate it from BoingBag39-2.lha"
+        );
+        assert_eq!(
+            package.component.rules.len(),
+            1,
+            "one subtree rule, beside the disc's own Contribution rather than over it"
+        );
+        assert_eq!(
+            package.component.rules[0].to, "Contribution/BoingBag3.9-2",
+            "no component of amigaos-3.9.json places the disc's own Contribution drawer"
         );
     }
 
@@ -1507,7 +1964,9 @@ mod tests {
             minimum_version: None,
             overlays: Vec::new(),
             required_medium: None,
+            follow_ups: Vec::new(),
             post_install: Vec::new(),
+            not_yet_runnable: None,
         };
         let json = serde_json::json!({
             "id": "x",
@@ -1996,6 +2455,8 @@ mod tests {
             amiga_installer: None,
             requires: requires.iter().map(|s| s.to_string()).collect(),
             requires_components: Vec::new(),
+            chain_position: None,
+            superseded_by: Vec::new(),
             host_placement_block: None,
             component: Component {
                 id: id.to_string(),
@@ -2164,8 +2625,20 @@ mod tests {
             vec!["locale-base".to_string()],
             "without locale-base this package writes catalogs nothing can open"
         );
+        // The two say different things and both are true of this package.
+        // `requires` names the **package** the material puts before it —
+        // BoingBag 3.9-2, whose catalogs these are; `requires_components`
+        // names the **release component** without which they land in a
+        // drawer nothing can open. `locale-base` is a component and must
+        // never appear in `requires`: `order` would refuse a correct
+        // selection by a name no package answers to.
+        assert_eq!(
+            package.requires,
+            vec!["boingbag-39-2".to_string()],
+            "the BoingBag 3.9-2 language packs go on after BoingBag 3.9-2"
+        );
         assert!(
-            package.requires.is_empty(),
+            !package.requires.iter().any(|need| need == "locale-base"),
             "'locale-base' is a recipe component, not a package — naming it in \
              `requires` would make `order` refuse a correct selection by name"
         );
@@ -2292,6 +2765,25 @@ mod tests {
     /// `Updater` leaves a 321 768-byte ROM update under a name `SetPatch`
     /// does not load, and without this step a tree reports itself updated
     /// while running the ROM update it had before.
+    ///
+    /// **The lists are asserted whole rather than "contains", and that is what
+    /// makes them the guard for the three steps HstWB has and ART does not.**
+    /// All three were measured on 2026-09-08 (round 3, task 3) on the owner's
+    /// own material, and none of them may be added here without a measurement
+    /// of its own — this test is what would fail:
+    ///
+    /// - `C/Installer`: the tree's `Utilities/Installer` is **byte-identical**
+    ///   to BoingBag 3.9-2's own (154 804 bytes, sha256 `6e28d173…`,
+    ///   `$VER: installer 44.10 (1.10.99)`). Not older. *Measured, not needed.*
+    /// - Locale catalogs: **597 catalog files in 20 languages, 0 added, 0
+    ///   removed, 0 changed** by both BoingBags; neither payload carries a
+    ///   single `Locale/` entry. *Measured, not needed.*
+    /// - `XAD-Update`: needed — `Libs/xadmaster.library` is still
+    ///   `xadmaster 9.1 (05.01.2001)` after both, and 9.1 < 10 — but it is a
+    ///   second `Updater` run inside the emulator on a second ZipCrypto
+    ///   archive, gated on a requester the package puts to the user. It is not
+    ///   a `PostStep` and must not become one; see
+    ///   `core::amigainstall::finish`'s module documentation.
     #[test]
     fn the_boingbags_declare_what_their_updater_leaves_undone_art_227() {
         use crate::core::amigainstall::finish::PostStep;
@@ -2357,6 +2849,131 @@ mod tests {
             assert_eq!(
                 steps, 0,
                 "'{}' declares post-install steps nobody has measured a need for",
+                package.id
+            );
+        }
+    }
+
+    /// **Two follow-ups are refused at parse time, with the reason** (round
+    /// 3 whole-branch review, L9).
+    ///
+    /// `workvol::follow_up_lines` writes every follow-up's word to one
+    /// `art-followup.txt` and `read_follow_up` returns one outcome, so a
+    /// second one would be the only one anybody heard about: "the first
+    /// failed, the second was not needed" would reach the user as *not
+    /// needed*. Refused rather than silently last-one-wins, because a recipe
+    /// author has no way to see that happening.
+    ///
+    /// The control is beside it: **one** follow-up parses, so this is a cap
+    /// and not a ban.
+    #[test]
+    fn a_package_may_declare_only_one_follow_up_until_each_has_its_own_marker() {
+        let one = serde_json::json!([{
+            "program": "C/Updater",
+            "args": ["XAD-Update"],
+            "unless_file_version_at_least": { "path": "Libs/xadmaster.library", "version": 10 },
+        }]);
+        let two = serde_json::json!([
+            {
+                "program": "C/Updater",
+                "args": ["XAD-Update"],
+                "unless_file_version_at_least": { "path": "Libs/xadmaster.library", "version": 10 },
+            },
+            {
+                "program": "C/Updater",
+                "args": ["Other-Update"],
+                "unless_file_version_at_least": { "path": "Libs/other.library", "version": 3 },
+            },
+        ]);
+        let with = |follow_ups: serde_json::Value| {
+            let json = serde_json::json!({
+                "id": "x",
+                "name": "X", "releases": ["AmigaOS 3.9"],
+                "media": "X",
+                "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
+                "amiga_installer": {
+                    "program": "C/Updater",
+                    "args": ["AmigaOS-Update"],
+                    "follow_ups": follow_ups,
+                },
+            });
+            parse(&json.to_string())
+        };
+
+        with(one).expect("one follow-up is the shipped shape and must parse");
+
+        let err = with(two).unwrap_err().to_string();
+        assert!(
+            err.contains("only one"),
+            "must say what the limit is: {err}"
+        );
+        assert!(
+            err.contains("result file"),
+            "and why, so a recipe author knows what would have to change: {err}"
+        );
+    }
+
+    /// **ART-280: the one follow-up ART ships, asserted whole.**
+    ///
+    /// Same shape and same reason as the `post_install` pin above: the list
+    /// is the measurement, so a second follow-up cannot arrive without
+    /// meeting this test and, through it, the requirement that somebody
+    /// measured the need. What was measured here (2026-09-08, a chain ART
+    /// produced itself, every file of every state hashed):
+    /// `Libs/xadmaster.library` reads `9.0` clean, `9.1` after BoingBag 1 and
+    /// **`9.1` still** after BoingBag 2 — below the `10` HstWB's own
+    /// `Install-Boing-Bag-2` gates on.
+    ///
+    /// The values are written out as literals rather than read back off the
+    /// recipe, because a test that builds its expectation from the file it
+    /// checks proves only that the file equals itself.
+    #[test]
+    fn boingbag_two_declares_the_xad_follow_up_and_nothing_else_declares_one_art_280() {
+        use crate::core::amigainstall::{FileVersionGate, FollowUp};
+
+        let packages = packages().expect("the shipped packages must parse");
+        let follow_ups_of = |id: &str| {
+            packages
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap_or_else(|| panic!("no shipped package '{id}'"))
+                .amiga_installer
+                .as_ref()
+                .map(|i| i.follow_ups.clone())
+                .unwrap_or_default()
+        };
+
+        assert_eq!(
+            follow_ups_of("boingbag-39-2"),
+            vec![FollowUp {
+                program: "C/Updater".into(),
+                args: vec!["XAD-Update".into()],
+                unless_file_version_at_least: FileVersionGate {
+                    path: "Libs/xadmaster.library".into(),
+                    version: 10,
+                },
+            }],
+            "the second payload the first invocation never applies"
+        );
+
+        // The target volume is a fact about the run, not about the package —
+        // the same rule `amiga_installer.args` follows — so it must not be
+        // written here. `compose` appends it.
+        assert!(
+            !follow_ups_of("boingbag-39-2")[0]
+                .args
+                .iter()
+                .any(|a| a.contains(':')),
+            "a recipe may not name the volume; that is the composer's"
+        );
+
+        for package in &packages {
+            if package.id == "boingbag-39-2" {
+                continue;
+            }
+            assert!(
+                follow_ups_of(&package.id).is_empty(),
+                "'{}' declares a follow-up nobody has measured a need for",
                 package.id
             );
         }

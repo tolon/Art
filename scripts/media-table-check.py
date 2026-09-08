@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""ART's install-media hash table, checked against the owner's own media (§4.2).
+"""ART's install-media hash tables, checked against the owner's own media (§4.2).
 
 Sibling of `scripts/rom-table-check.py` (ART-104): that script re-verifies the
 Kickstart table against an independent database. This one re-verifies the
-186-row install-media table (`core/osinstall/media_hashes.json`, adopted from
-`rootrootde/emu68hatcher`, MIT) against real disks — the check ART's own unit
-tests cannot do, because a mistake shared between `mediahash.rs`'s reader and
-the JSON it reads would pass every test in the suite and still be wrong.
+install-media tables — **two of them**, since
+`docs/superpowers/specs/2026-09-08-os-builder-intake-design.md` §3.6: the
+186-row adopted table (`core/osinstall/media_hashes.json`, from
+`rootrootde/emu68hatcher`, MIT) and ART's own 8-row table
+(`core/osinstall/media_hashes_own.json`, the AmigaOS 3.9 CD-ROM and its update
+archives the adopted table does not carry) — against real disks. The check
+ART's own unit tests cannot do, because a mistake shared between
+`mediahash.rs`'s reader and the JSON it reads would pass every test in the
+suite and still be wrong. Rows from both tables are checked together, adopted
+first, mirroring `mediahash.rs::rows()`; each reported row says which table
+answered.
 
 **Read-only where it matters: the media directory is never written to.** This
 script only ever opens a file inside the given directory in `"rb"` mode to hash
@@ -96,10 +103,12 @@ Not in CI, ever: it needs media ART must never ship — the same reason
 Usage:
     python scripts/media-table-check.py DIR
     python scripts/media-table-check.py DIR --expect-verified 35
+    python scripts/media-table-check.py DIR --kind disc
     python scripts/media-table-check.py DIR --emit-confirmed --against "..."
 
-DIR is walked recursively for `.adf`, `.iso` and `.lha` files (case-insensitive
-extension match, per the design's own recipe-media shapes).
+DIR is walked recursively for `.adf`, `.iso`, `.lha`, `.lzh`, `.zip` and `.7z`
+files (case-insensitive extension match, per `mediahash.rs::MEDIA_EXTENSIONS`
+and the design's own recipe-media shapes).
 """
 
 from __future__ import annotations
@@ -116,16 +125,42 @@ TODAY = datetime.date.today().isoformat()
 
 REPO = Path(__file__).resolve().parent.parent
 TABLE_PATH = REPO / "src-tauri" / "src" / "core" / "osinstall" / "media_hashes.json"
+OWN_TABLE_PATH = REPO / "src-tauri" / "src" / "core" / "osinstall" / "media_hashes_own.json"
 CONFIRMED_PATH = (
     REPO / "src-tauri" / "src" / "core" / "osinstall" / "media_hashes_confirmed.json"
 )
-MEDIA_EXTENSIONS = {".adf", ".iso", ".lha"}
+MEDIA_EXTENSIONS = {".adf", ".iso", ".lha", ".lzh", ".zip", ".7z"}
 CHUNK_SIZE = 1024 * 1024
+MEDIA_KINDS = ("floppy", "disc", "archive")
 
 
 def load_table() -> list[dict]:
+    """The adopted table's rows, each tagged `_table` = `"adopted"` — an
+    internal bookkeeping key, never part of either file's real schema, that
+    lets every row in the combined list say which file it came from (mirrors
+    `mediahash.rs::MediaRow::table_origin`).
+    """
     data = json.loads(TABLE_PATH.read_text(encoding="utf-8"))
-    return data["media"]
+    rows = data["media"]
+    for row in rows:
+        row["_table"] = "adopted"
+    return rows
+
+
+def load_own_table() -> list[dict]:
+    """ART's own table's rows, tagged `_table` = `"own"` — see [`load_table`]."""
+    data = json.loads(OWN_TABLE_PATH.read_text(encoding="utf-8"))
+    rows = data["rows"]
+    for row in rows:
+        row["_table"] = "own"
+    return rows
+
+
+def load_all_rows() -> list[dict]:
+    """Both tables, adopted first — the same order `mediahash.rs::rows()`
+    serves them in, so a row's position here matches its position there.
+    """
+    return load_table() + load_own_table()
 
 
 def md5_of(path: Path) -> str:
@@ -152,12 +187,26 @@ def find_media(directory: Path) -> list[Path]:
     return sorted(found)
 
 
+def row_kind(row: dict) -> str:
+    """The row's own `kind`, or `"floppy"` when it states none — the same
+    default `mediahash.rs::MediaKindTag` gives an adopted row. Never treated
+    as a fact worth printing for an adopted row (see `describe_row` below):
+    this default exists so filtering and schema-checking have one answer to
+    ask, not so a screen can claim Hatcher's data says something it does not.
+    """
+    return row.get("kind") or "floppy"
+
+
 def row_schema_problem(row: dict) -> str | None:
     """Mirrors `mediahash.rs`'s own invariant tests
     (`every_md5_is_32_lowercase_hex_characters`,
     `every_row_has_its_descriptive_fields_filled_in`) — checked again here,
     independently, against whatever table this script is actually pointed at,
-    rather than trusted from the Rust suite.
+    rather than trusted from the Rust suite. Extended for the two-table shape
+    (design's §3.6): `kind`, `artefact` and `filenames` are optional — an
+    adopted row states none of them — but when a row does state one, its
+    shape is checked the same way `mediahash.rs`'s own `MediaKindTag`/
+    `Option<String>`/`Vec<String>` fields are.
     """
     md5 = row.get("md5", "")
     if len(md5) != 32 or not all(c in "0123456789abcdef" for c in md5):
@@ -165,7 +214,31 @@ def row_schema_problem(row: dict) -> str | None:
     for field in ("version", "volume", "name", "source"):
         if not row.get(field):
             return f"'{field}' is empty"
+    if "kind" in row and row["kind"] not in MEDIA_KINDS:
+        return f"'kind' {row['kind']!r} is not one of {MEDIA_KINDS}"
+    if "artefact" in row and row["artefact"] is not None and not isinstance(row["artefact"], str):
+        return "'artefact' is neither a string nor null"
+    if "filenames" in row and not isinstance(row["filenames"], list):
+        return "'filenames' is not a list"
     return None
+
+
+def describe_row(row: dict) -> str:
+    """The bracketed tail of a report line: which table answered, and — only
+    for an own-table row, which is the only one that really states them —
+    its kind and artefact id. Printing `kind`/`artefact` for an *adopted* row
+    would put a claim on screen that Hatcher's data never made (this
+    project's own named failure: a confident sentence with nothing behind
+    it) — `row_kind`'s "floppy" default is for filtering, not for a report.
+    """
+    table = row.get("_table", "?")
+    if table != "own":
+        return f"[{table}]"
+    bits = [f"[{table}", f"kind={row_kind(row)}"]
+    artefact = row.get("artefact")
+    if artefact:
+        bits.append(f"artefact={artefact}")
+    return " ".join(bits) + "]"
 
 
 CONFIRMED_COMMENT = (
@@ -271,6 +344,13 @@ def main() -> int:
         help="what this run checked the table against, in the words the screen will show "
         '(e.g. "the ART author\'s own AmigaOS 3.2 install set, 35 ADFs")',
     )
+    parser.add_argument(
+        "--kind",
+        choices=MEDIA_KINDS,
+        default=None,
+        help="only check rows of this kind (design's §3.6) -- an adopted row that states "
+        "none defaults to 'floppy', the same default mediahash.rs::MediaKindTag gives it",
+    )
     args = parser.parse_args()
 
     directory = Path(args.directory)
@@ -278,12 +358,21 @@ def main() -> int:
         print(f"{directory} is not a directory")
         return 2
 
-    rows = load_table()
+    adopted_rows = load_table()
+    own_rows = load_own_table()
+    rows = adopted_rows + own_rows
+    if args.kind is not None:
+        rows = [row for row in rows if row_kind(row) == args.kind]
     try:
         table_shown = os.path.relpath(TABLE_PATH, REPO)
+        own_table_shown = os.path.relpath(OWN_TABLE_PATH, REPO)
     except ValueError:  # a different drive on Windows -- relpath cannot express it
         table_shown = str(TABLE_PATH)
-    print(f"table: {len(rows)} row(s) from {table_shown}")
+        own_table_shown = str(OWN_TABLE_PATH)
+    print(f"adopted table: {len(adopted_rows)} row(s) from {table_shown}")
+    print(f"own table:     {len(own_rows)} row(s) from {own_table_shown}")
+    if args.kind is not None:
+        print(f"(--kind {args.kind}: {len(rows)} row(s) considered)")
 
     # Which real hash a row's md5 belongs to more than one row for — a table
     # defect, not something a missing disk could ever produce.
@@ -296,9 +385,11 @@ def main() -> int:
     print(f"media directory: {len(files)} file(s) with a recognised extension\n")
 
     files_by_hash: dict[str, list[Path]] = {}
+    hash_of_file: dict[Path, str] = {}
     for path in files:
         digest = md5_of(path)
         files_by_hash.setdefault(digest, []).append(path)
+        hash_of_file[path] = digest
 
     verified: list[tuple[dict, list[Path]]] = []
     unverified: list[dict] = []
@@ -329,13 +420,37 @@ def main() -> int:
 
     for row, matches in verified:
         names = ", ".join(str(p.relative_to(directory)) for p in matches)
-        print(f"  ok   {row['name']} ({row['version']}, {row['source']})  <- {names}")
+        print(
+            f"  ok   {row['name']} ({row['version']}, {row['source']}) "
+            f"{describe_row(row)}  <- {names}"
+        )
 
     for row, why in conflicting:
-        print(f"  FAIL {row['name']} ({row.get('md5', '')}): {why}")
+        print(f"  FAIL {row['name']} ({row.get('md5', '')}) {describe_row(row)}: {why}")
 
     for row in unverified:
-        print(f"  --   {row['name']} ({row['version']}, {row['source']}, {row['md5']})")
+        print(
+            f"  --   {row['name']} ({row['version']}, {row['source']}, {row['md5']}) "
+            f"{describe_row(row)}"
+        )
+
+    # Files in the folder that match no row **in either table**, regardless
+    # of `--kind` — a file must never be called "not in the table" just
+    # because this run was scoped to one kind. This is the other half of the
+    # question `unverified` answers (a row nobody's file claims); this is a
+    # file nobody's row claims, and the two are not the same list read
+    # backwards: a schema-broken or cross-table-duplicated row's file would
+    # show up here too, correctly, rather than being silently counted as a
+    # match.
+    every_md5 = {row.get("md5", "") for row in adopted_rows + own_rows}
+    claimed_paths = {p for _row, matches in verified for p in matches}
+    not_in_table = [
+        p for p in files if p not in claimed_paths and hash_of_file[p] not in every_md5
+    ]
+    if not_in_table:
+        print(f"\nnot in the table: {len(not_in_table)} file(s)")
+        for path in not_in_table:
+            print(f"  ??   {path.relative_to(directory)}")
 
     print(
         f"\n{len(files)} file(s) hashed against {len(rows)} row(s): "

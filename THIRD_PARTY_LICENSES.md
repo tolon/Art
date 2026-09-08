@@ -125,6 +125,16 @@ ART ships one table it did not measure itself:
   that distinction, confirmed versus merely adopted, is ART's own and is not
   in Hatcher's table.
 
+- **`src-tauri/src/core/osinstall/media_hashes_own.json`** — ART's own
+  8-row table of AmigaOS 3.9 update media the adopted table above does not
+  carry (design's §3.6, 2026-09-08). One of the eight hashes — the AmigaOS
+  3.9 CD-ROM's second accepted mastering — is taken from **HstWB
+  Installer**'s own
+  [`henrikstengaard/hstwb-installer`](https://github.com/henrikstengaard/hstwb-installer)
+  (**MIT**), file `data/amiga-os-entries.csv`, and is attributed to it in the
+  row's own `source` field; the remaining seven rows are recorded from the
+  owner's own material, measured 2026-09-08, and carry no third-party data.
+
 - **`src-tauri/src/core/firstboot/scripts/SD0pi3`** and **`SD0pi4`** — the two
   DOSDriver mountlists for Emu68's FAT boot partition. Adopted, not measured
   by ART, from [`rootrootde/emu68hatcher`](https://github.com/rootrootde/emu68hatcher)

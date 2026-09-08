@@ -140,6 +140,12 @@ export function StepAmigaKurulum() {
         treeRoot={session.tree.root}
         onTreeRootChange={(root) => setTree({ root, builtHere: false })}
         packageFolder={session.packages.folder}
+        // **The whole material list** (round 3, task 2). The chain and the
+        // slots are both resolved against everything the user has, not
+        // against the one folder this panel's dialogs open on — and this
+        // step is the route the chain screen actually lives at, so a list
+        // that stopped here would leave the chain resolving against nothing.
+        materialFolders={session.material.folders.map((entry) => entry.path)}
         release={session.release}
       />
     </>

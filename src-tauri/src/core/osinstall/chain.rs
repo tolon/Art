@@ -98,11 +98,22 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use super::apply::{AmigaInstallRecord, DistributionManifest, MANIFEST_FILE_NAME};
-use super::package::{self, Package};
+use super::package::{self, NotYetRunnable, Package};
+use super::recipe;
+use super::slots::{Installed, SlotKind, SlotState};
+use super::Component;
 use crate::core::error::{CoreError, CoreResult};
 
 /// Read a distribution tree's own `distribution.json`.
-fn read_manifest(tree: &Path) -> CoreResult<DistributionManifest> {
+///
+/// `pub` rather than private since the slot resolver arrived: a tree's
+/// manifest is the **only** thing allowed to say a slot is installed
+/// (`core::osinstall::slots::Installed` — a file being present is never
+/// "installed"), and `commands::osinstall::osinstall_slots` has to hand the
+/// resolver the whole manifest rather than [`applied`]'s id set. One reader,
+/// so the refusal a manifest-less folder gets is the same sentence wherever
+/// it is asked from.
+pub fn read_manifest(tree: &Path) -> CoreResult<DistributionManifest> {
     let path = tree.join(MANIFEST_FILE_NAME);
     if !path.is_file() {
         return Err(CoreError::SafetyRefused(format!(
@@ -272,14 +283,25 @@ pub fn trees_in(folder: &Path) -> CoreResult<Vec<FoundTree>> {
 /// the same string by construction — `RawPackage::into_package` builds the
 /// component from the package's own `id` — so one set answers it.
 pub fn applied(tree: &Path) -> CoreResult<BTreeSet<String>> {
-    let manifest = read_manifest(tree)?;
+    Ok(applied_in(&read_manifest(tree)?))
+}
+
+/// [`applied`] over a manifest the caller already holds.
+///
+/// The same answer from the same rule, for the callers that have read the
+/// tree once and must not read it a second time to ask a second question —
+/// `osinstall_chain` resolves slots and rows off one manifest, and
+/// `resolve_packages_for_add` derives both `components_on` and this from the
+/// manifest it already opened. A second inline union is how the two would
+/// come to disagree about what "already there" means.
+pub fn applied_in(manifest: &DistributionManifest) -> BTreeSet<String> {
     let mut ids: BTreeSet<String> = manifest
         .files
         .iter()
         .map(|file| file.component.clone())
         .collect();
     ids.extend(manifest.amiga_installed.iter().map(|r| r.package.clone()));
-    Ok(ids)
+    ids
 }
 
 /// Every package `package` needs before it, transitively, in the order they
@@ -318,7 +340,19 @@ fn prerequisite_chain(package: &Package) -> CoreResult<Vec<String>> {
 /// read. See the module documentation for the ending that disagreement
 /// produced.
 pub fn missing_prerequisites(package: &Package, tree: &Path) -> CoreResult<Vec<String>> {
-    let have = applied(tree)?;
+    unmet_prerequisites(package, &applied(tree)?)
+}
+
+/// [`missing_prerequisites`] over an already-read account of the tree.
+///
+/// **The one implementation of the BoingBag-1-before-BoingBag-2 rule.**
+/// [`refuse_unless_installable`] reaches it through
+/// [`missing_prerequisites`], which reads the tree; [`rows_for`] reaches it
+/// directly, because the chain screen has already read the manifest once and
+/// asks about every package rather than one. Two entry points, one rule — a
+/// second implementation is how a refusal and the row above it would come to
+/// disagree about the same package.
+fn unmet_prerequisites(package: &Package, have: &BTreeSet<String>) -> CoreResult<Vec<String>> {
     Ok(prerequisite_chain(package)?
         .into_iter()
         .filter(|id| !have.contains(id))
@@ -341,6 +375,42 @@ pub fn missing_prerequisites(package: &Package, tree: &Path) -> CoreResult<Vec<S
 /// Called **before anything is copied** — the copy, the work volume and the
 /// package unpack all happen after this, so a refused run has changed
 /// nothing at all.
+///
+/// ## This is the only thing that stops it — measured 2026-09-08
+///
+/// Until round 3 the sentence below rested on reasoning: BoingBag 3.9-2's own
+/// `Install` script reads `version.library` off the target and wants revision
+/// 2, so the package would presumably decline. **ART does not run that script;
+/// it runs `C/Updater` directly**, and the experiment in round 3, task 3 asked
+/// the program itself. On a tree that had never had BoingBag 3.9-1 — reachable
+/// only by doctoring the copy's own `distribution.json`, because this function
+/// refuses it in 17.6 ms with nothing copied and no emulator started — the
+/// `Updater` ran to completion and wrote **`ok`**, twice, `Succeeded` and
+/// `Promoted` in 142.2 s and 140.7 s, producing two byte-identical trees.
+///
+/// Those trees are the "boots and is quietly wrong" case, and the numbers are
+/// worth carrying: against a correctly chained tree they are **missing 57
+/// files** (60 paths differ, three of which — `C/Exe2Arc`, `C/WBInfo`,
+/// `Utilities/More` — exist in both under a different case, because BoingBag 1
+/// re-cases them rather than adding them), carry **51 at older bytes**, and
+/// leave `Libs/xadmaster.library` at `9.0` where the chained tree has `9.1`.
+///
+/// **What that refutes, stated narrowly.** `Libs/version.library` reads
+/// `version 45.3 (7.12.2001)` on **both** — the same 352 bytes and the same
+/// sha256 — so *the version string the package updates* is not evidence that
+/// the right thing happened. It does **not** follow that no artefact could
+/// separate them: `xadmaster.library` is an artefact and it does, 9.0 against
+/// 9.1. What the round refused to build was a `leaves_version` check **on
+/// `version.library`**, which would have passed the broken tree.
+///
+/// So an after-the-fact artefact check is *possible*; it is simply not what is
+/// protecting anyone here. This refusal is — and the bound on that claim
+/// belongs beside it: it is a **bookkeeping** guard, not an artefact guard.
+/// [`missing_prerequisites`] reads `distribution.json`, which only a
+/// successful ART run writes, so the wrong-target state is unreachable through
+/// ART at all. That is why it is a refusal before anything is copied rather
+/// than a warning after, and why the package's own judgement — measured to be
+/// `ok` — is not something to lean on.
 pub fn refuse_unless_installable(package: &Package, tree: &Path) -> CoreResult<()> {
     let missing = missing_prerequisites(package, tree)?;
     let Some(first) = missing.first() else {
@@ -396,6 +466,511 @@ pub fn record_amiga_install(tree: &Path, package_id: &str, command: &str) -> Cor
         detail: err.to_string(),
     })?;
     crate::core::safety::atomic::atomic_write(&tree.join(MANIFEST_FILE_NAME), text.as_bytes())
+}
+
+// ---------------------------------------------------------------------------
+// The whole chain, as rows
+// ---------------------------------------------------------------------------
+
+/// What one link of the chain is, and it is exactly the design's own table
+/// (`2026-09-08-os-builder-chain-design.md` § 2).
+///
+/// **Seven states, and they never collapse.** *Installed*, *ready*, *blocked
+/// by something else*, *the file is not here*, *the material itself makes it
+/// redundant*, *ART will not do it and here is why*, and *nobody has
+/// measured this yet* are seven different next steps. A screen that folded
+/// any two of them would tell somebody to go and find a file they already
+/// have, or to wait for something that has already happened — this project's
+/// named defect, in the one place it is most likely to be committed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum ChainState {
+    /// The tree's own `distribution.json` records it — `amiga_installed` for
+    /// a run, `files`/`built_from` for a placement. **Never a file being
+    /// present**, which is the whole reason this comes from the manifest.
+    ///
+    /// `when` is always `None` today and is on the wire anyway: the manifest
+    /// records no date against a component, a medium or a run (round 2
+    /// whole-branch review, I14, which corrected the design's own sketch for
+    /// the same reason). The field exists so the shape does not change under
+    /// the screen the day a record carries one, and the sentence must render
+    /// nothing rather than a guess when it is absent.
+    Installed { when: Option<String> },
+    /// Its own artefact is in hand, everything it goes on after is
+    /// installed, and the disc its installer verifies is in hand too.
+    Ready,
+    /// Something earlier in the chain has to happen first, named by the
+    /// **rows'** own names and in chain order — never by slot id, and never
+    /// as a bare count.
+    BlockedBy { names: Vec<String> },
+    /// The tree was not built with a **component** this package needs
+    /// ([`Package::requires_components`], ART-162).
+    ///
+    /// **Its own variant and not [`BlockedBy`](Self::BlockedBy), because the
+    /// next step is somewhere else entirely** (round 3 whole-branch review,
+    /// M4). Every name in `BlockedBy` is another row on this same screen and
+    /// the advice is *do that one first*; a component is not a row here at
+    /// all — it is a tick-box on the Packages/components step, and a tree
+    /// already built without it has to be rebuilt or have the component
+    /// added. Folding the two together would send somebody looking down a
+    /// list of nine rows for something that is not in it.
+    ///
+    /// Before this existed the row read **`Ready`**, the one Run button armed
+    /// on it — taking the button from a later row that really was ready — and
+    /// `resolve_packages_for_add` then refused with `PackageComponentMissing`.
+    /// That is the screen out-claiming the core, which is the defect this
+    /// whole file is written against.
+    BlockedByComponent { components: Vec<BlockedComponent> },
+    /// Its artefact is not in the folders the user named. `expected` is the
+    /// file names ART has recorded for it, which may be empty: *"Expected ."*
+    /// is a sentence nobody can act on, so the screen picks a different one.
+    Missing { expected: Vec<String> },
+    /// The material's own rule makes it redundant — `superseded_by` names a
+    /// package the tree already has. The **name** of that package, not a
+    /// sentence: the words belong in the catalogue (ART-060).
+    NotNeeded { superseded_by: String },
+    /// ART will not do this row, and says which of the reasons applies.
+    Refused { reason: RefusedBecause },
+    /// The recipe declares what installs this package and **nobody has run
+    /// it**. Registered rather than hidden (§10), carrying the recipe's own
+    /// typed reason so the screen translates it (fix round 1, m6 — it used
+    /// to carry free English prose and put a Turkish frame around it).
+    NotYetRunnable { reason: NotYetRunnable },
+}
+
+/// A component a package needs and the tree does not have — its id, and the
+/// **i18n key** the components screen labels it by.
+///
+/// A key and not a rendered name, for the reason [`Component::label_key`]
+/// itself is a key (ART-224): the recipe is data in the Rust tree and the
+/// words belong in the catalogue (ART-060). `label_key` is `None` for a
+/// component that labels itself by its medium, and the screen then shows the
+/// id — which is what the components screen shows for it too, so the two
+/// cannot disagree about what the thing is called.
+///
+/// [`Component::label_key`]: super::Component::label_key
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedComponent {
+    pub id: String,
+    pub label_key: Option<String>,
+}
+
+/// Why a row is refused. A value, never a sentence, for the two causes ART
+/// can state as data; the screen translates it (ART-060).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "because", rename_all = "kebab-case")]
+pub enum RefusedBecause {
+    /// Several files in the folders could be this row's artefact and ART
+    /// will not choose between them. The candidates travel with it, because
+    /// *"pick the one you mean"* without the list is not a next step.
+    Ambiguous { candidates: Vec<String> },
+    /// ART cannot place this package's files from the host at all and it has
+    /// no Amiga-side installer either — so there is no route, and the block
+    /// says which. See [`HostPlacementBlock`](super::HostPlacementBlock).
+    NotPlaceable { block: super::HostPlacementBlock },
+}
+
+/// The facts a row's sentence needs beside its state, and nothing more.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SentenceFacts {
+    /// The file filling this row's slot, by name alone. `None` when nothing
+    /// fills it — including for a row that is installed and whose archive
+    /// has since left the folder, which is an ordinary state.
+    pub file: Option<String>,
+    /// Where this row happens: `Some(true)` on the Amiga, through the
+    /// package's own installer; `Some(false)` placed from Windows by ART;
+    /// `None` for a row that is neither — the CD, and a package ART can
+    /// neither place nor run (Euro-Update).
+    ///
+    /// Three states rather than a boolean, because "ART places it" and "ART
+    /// can do neither" are not the same claim and a boolean would have to
+    /// tell one of them as the other.
+    pub runs_on_amiga: Option<bool>,
+}
+
+/// One row of the chain screen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChainRow {
+    /// The rank the material gives this link — the CD is 1, and two rows may
+    /// share a rank where the material states no order between them
+    /// (`Package::chain_position`). Rows come sorted by `(position, id)`, so
+    /// the list is the same list twice running.
+    pub position: u32,
+    /// The package's own id, or `None` for the CD row, which is a medium.
+    pub package_id: Option<String>,
+    /// The slot this row is fed by, when the release has one for it.
+    pub slot_id: Option<String>,
+    /// What to call it: the package's own name, or the medium's (ART-060).
+    pub name: String,
+    pub state: ChainState,
+    /// The facts the row's sentence needs beside its state. Named as the
+    /// brief named it (fix round 1, m5): it shipped as `facts`, which is
+    /// shorter and says less about what it is for.
+    pub sentence_facts: SentenceFacts,
+}
+
+/// How much of the chain is done — the design's `● 3 of 8 applied` line.
+///
+/// **A row the material makes redundant is counted apart, never as done and
+/// never as outstanding.** Counting Euro-Update as outstanding under an
+/// installed BoingBags 3&4 would send somebody looking for a file whose
+/// contents they already have; counting it as applied would claim ART did
+/// something it did not. `summarize` keeps the same rule one field over.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChainSummary {
+    pub release: String,
+    pub total: u32,
+    pub installed: u32,
+    pub not_needed: u32,
+}
+
+/// The whole chain for `release`, resolved against the tree's own manifest
+/// and round 2's slot states.
+///
+/// **The order of the checks is the design's, and each one is why the next
+/// cannot fire.** A row the manifest records is not waiting for anything; a
+/// row the material makes redundant is not *missing*; a row nobody has run
+/// cannot be *ready* whatever the folders hold. The two that come last
+/// are the pair a reader is most likely to want the other way round, and the
+/// choice is deliberate: **an artefact ART cannot find comes before an order
+/// it cannot yet keep**, because "go and get this file" is something a
+/// person can act on now and "install 4 first" is advice about a run they
+/// could not start anyway.
+///
+/// The **CD row is synthesised** from the release's own medium slot and the
+/// manifest's `built_from` — never from a package, because it is not one.
+/// Where the release has no medium slot at all there is no CD row, rather
+/// than an invented one.
+pub fn rows_for(
+    release: &str,
+    manifest: Option<&DistributionManifest>,
+    slots: &[SlotState],
+) -> CoreResult<Vec<ChainRow>> {
+    let packages = package::packages_for(release)?;
+    let have: BTreeSet<String> = manifest.map(applied_in).unwrap_or_default();
+    // ART-162 / M4: what the release's own components are called, so a row
+    // blocked on one can name it the way the components step names it. An
+    // unreadable recipe answers *no components* rather than refusing the
+    // whole chain: the worst it costs is a component named by its id, and a
+    // screen that renders nothing is worse than one that renders an id.
+    let components: Vec<Component> = recipe::by_release(release)
+        .map(|recipe| recipe.components)
+        .unwrap_or_default();
+    let state_of = |id: &str| slots.iter().find(|state| state.slot.id == id);
+
+    // --- the packages that are chain rows, in the material's own order -----
+    let mut chain: Vec<&Package> = packages
+        .iter()
+        .filter(|package| package.chain_position.is_some())
+        .collect();
+
+    // **A release with no chain is an empty list, not a lone CD row** (fix
+    // round 1, m3). AmigaOS 3.2 ships no update package at all, so taking
+    // the first medium slot regardless produced one row built from whichever
+    // floppy happened to sort first, labelled position 1, under a summary
+    // reading *"AmigaOS 3.2 updates — 0 of 1 applied"*. The CD row exists
+    // because it is the **first link of a chain**; with no chain there is no
+    // first link, and a screen showing one would be inventing a step.
+    if chain.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut rows: Vec<ChainRow> = Vec::new();
+
+    // --- 1: the medium, which is a disc and not a package ------------------
+    if let Some(medium) = slots
+        .iter()
+        .find(|state| state.slot.kind == SlotKind::Medium)
+    {
+        rows.push(ChainRow {
+            position: 1,
+            package_id: None,
+            slot_id: Some(medium.slot.id.clone()),
+            name: medium.slot.name.clone(),
+            state: medium_state(medium),
+            sentence_facts: SentenceFacts {
+                file: file_name_of(medium),
+                runs_on_amiga: None,
+            },
+        });
+    }
+
+    chain.sort_by(|a, b| {
+        a.chain_position
+            .cmp(&b.chain_position)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    for package in chain {
+        let slot_id = format!("package:{}", package.id);
+        let state = state_of(&slot_id);
+        rows.push(ChainRow {
+            position: package.chain_position.unwrap_or_default(),
+            package_id: Some(package.id.clone()),
+            slot_id: state.map(|state| state.slot.id.clone()),
+            name: package.name.clone(),
+            state: package_state(package, state, &have, slots, &packages, &components)?,
+            sentence_facts: SentenceFacts {
+                file: state.and_then(file_name_of),
+                runs_on_amiga: match (
+                    package.amiga_installer.is_some(),
+                    package.host_placement_block.is_some(),
+                ) {
+                    (true, _) => Some(true),
+                    (false, false) => Some(false),
+                    (false, true) => None,
+                },
+            },
+        });
+    }
+
+    Ok(rows)
+}
+
+/// [`ChainSummary`] over what [`rows_for`] answered.
+pub fn summarize_chain(release: &str, rows: &[ChainRow]) -> ChainSummary {
+    ChainSummary {
+        release: release.to_string(),
+        total: rows.len() as u32,
+        installed: rows
+            .iter()
+            .filter(|row| matches!(row.state, ChainState::Installed { .. }))
+            .count() as u32,
+        not_needed: rows
+            .iter()
+            .filter(|row| matches!(row.state, ChainState::NotNeeded { .. }))
+            .count() as u32,
+    }
+}
+
+/// The CD row's state. **Two answers, and `Ready` is deliberately not one of
+/// them** (round 3 whole-branch review, M3).
+///
+/// The design says it plainly — *"the CD row is never run here"* — and this
+/// function used to contradict it: a tree whose manifest names no
+/// `AmigaOS3.9` in `built_from`, with the ISO sitting in a named folder,
+/// answered `Ready`. `chainLines` marks the first ready row runnable, so the
+/// single Run button landed on a disc, `runLabel` read *"Next: AmigaOS3.9"*
+/// over a button that could never fire (the request needs a package id), and
+/// the BoingBag below it that really was ready was never offered.
+///
+/// The two answers are the only two this screen can act on:
+///
+/// - **`Installed`** — the manifest's `built_from` names this volume. That is
+///   the whole of what the row is *for*: the first link of the chain is "this
+///   tree came off that disc".
+/// - **`Missing`** — it does not. Finding the ISO in a folder does not change
+///   that and must not read as though it did: **this screen cannot build a
+///   tree from a disc**, and the row's action is the `kaynak` link the panel
+///   renders beside it. The screen substitutes its own sentence for this one
+///   (`chain.mediumNotBuiltFrom`) rather than *"not in the folders you
+///   named"*, which would be false with the file right there.
+///
+/// The old `Ready` and `Ambiguous` arms went with it. Ambiguity is a question
+/// about *which file to use*, and this row never uses one; the source step's
+/// own `slotLines` reports it where it can be acted on.
+fn medium_state(state: &SlotState) -> ChainState {
+    if state.installed != Installed::No {
+        return ChainState::Installed { when: None };
+    }
+    ChainState::Missing {
+        expected: state.slot.filenames.clone(),
+    }
+}
+
+fn package_state(
+    package: &Package,
+    state: Option<&SlotState>,
+    have: &BTreeSet<String>,
+    slots: &[SlotState],
+    all: &[Package],
+    components: &[Component],
+) -> CoreResult<ChainState> {
+    // 1 — what actually happened, and it outranks every other check.
+    //
+    // **The brief put `not_yet_runnable` first and running the test moved
+    // it.** *"ART has never driven this one"* about a row the tree already
+    // records is the screen out-claiming the core: it tells somebody to wait
+    // for something that has already happened. The manifest is the only
+    // thing that knows what was done, so it is asked first — and only the
+    // manifest, never a file being present.
+    if have.contains(&package.id) {
+        return Ok(ChainState::Installed { when: None });
+    }
+
+    // 2 — the material itself says it is redundant. Above *missing* on
+    // purpose: telling somebody to go and find Euro-Update on a tree that
+    // has BoingBags 3&4 is sending them after a file whose contents they
+    // already have. Below *installed*, for the reason above.
+    for superseder in &package.superseded_by {
+        if have.contains(superseder) {
+            return Ok(ChainState::NotNeeded {
+                superseded_by: all
+                    .iter()
+                    .find(|other| &other.id == superseder)
+                    .map(|other| other.name.clone())
+                    .unwrap_or_else(|| superseder.clone()),
+            });
+        }
+    }
+
+    // 3 — declared and never run. Above everything that is still to come,
+    // because whatever the folders hold, ART cannot do this row (§10:
+    // registered, not hidden), and `commands::amigainstall::compose` refuses
+    // it too. A row here with its archive sitting in the folder would
+    // otherwise read *ready* and offer a Run button for a program ART has
+    // never seen finish.
+    if let Some(why) = package
+        .amiga_installer
+        .as_ref()
+        .and_then(|installer| installer.not_yet_runnable.as_ref())
+    {
+        return Ok(ChainState::NotYetRunnable { reason: *why });
+    }
+
+    // 4 — no route at all: ART cannot place it from the host and there is no
+    // installer to run either. Before the folder is consulted, because it is
+    // a property of the package and true however many copies of the archive
+    // the user holds (the same order `detect_package_refusals` uses).
+    if let Some(block) = package.host_placement_block {
+        if package.amiga_installer.is_none() {
+            return Ok(ChainState::Refused {
+                reason: RefusedBecause::NotPlaceable { block },
+            });
+        }
+    }
+
+    let Some(state) = state else {
+        // A package this release ships no slot for. Not reachable through
+        // `slots_for`, which derives its list from the same `packages_for`;
+        // answered rather than panicked because a caller may pass a slot
+        // list it built itself.
+        return Ok(ChainState::Missing {
+            expected: Vec::new(),
+        });
+    };
+
+    // 5 — several files could be it, and ART never picks one.
+    if state.found.is_none() && state.candidates.len() > 1 {
+        return Ok(ChainState::Refused {
+            reason: RefusedBecause::Ambiguous {
+                candidates: candidate_paths(state),
+            },
+        });
+    }
+
+    // 6 — the artefact is not in hand. See this function's own doc comment
+    // for why this comes before the order check rather than after it.
+    if state.found.is_none() {
+        return Ok(ChainState::Missing {
+            expected: state.slot.filenames.clone(),
+        });
+    }
+
+    // 7 — everything it goes on after, plus the disc its installer verifies.
+    // The package half is `unmet_prerequisites` — the one implementation of
+    // ART-186's rule, shared with `refuse_unless_installable`; the medium
+    // half comes off the slot, which is where a `required_medium` became a
+    // `requires` entry in the first place.
+    //
+    // **In position order** (fix round 1, m2, and the design says so:
+    // *"blocked_by names rows, in position order"*). The two halves arrive
+    // in two different orders — the packages in `package::order`'s
+    // topological one, the media after them — so BoingBag 3.9-2 blocked on
+    // both answered `["BoingBag 3.9-1", "AmigaOS3.9"]`: rank 2 before rank
+    // 1. A reader told to do things in an order that is not the order is
+    // being given the one thing this screen exists to get right.
+    //
+    // The medium is rank 0 here because the CD is row 1 and every package
+    // starts at 2; a package's own rank is its `chain_position`.
+    let mut blocked: Vec<(u32, String)> = Vec::new();
+    for id in unmet_prerequisites(package, have)? {
+        let other = all.iter().find(|other| other.id == id);
+        blocked.push((
+            other
+                .and_then(|other| other.chain_position)
+                .unwrap_or(u32::MAX),
+            other.map(|other| other.name.clone()).unwrap_or(id),
+        ));
+    }
+    for need in &state.blocked_by {
+        if let Some(required) = slots.iter().find(|other| &other.slot.id == need) {
+            if required.slot.kind == SlotKind::Medium {
+                blocked.push((0, required.slot.name.clone()));
+            }
+        }
+    }
+    if !blocked.is_empty() {
+        blocked.sort();
+        return Ok(ChainState::BlockedBy {
+            names: blocked.into_iter().map(|(_, name)| name).collect(),
+        });
+    }
+
+    // 8 — the tree has to have been *built* with something (ART-162).
+    //
+    // **Below step 7 on purpose.** Both are "something else first", and they
+    // differ in where that something is: step 7 names rows on this screen,
+    // which a reader can act on here and now; a component is a tick-box on
+    // the components step and a tree already built without it needs the
+    // component added or the tree rebuilt. Naming the reachable one first is
+    // the same rule that puts *missing* above *blocked*.
+    //
+    // `have` already carries component ids — `applied_in` unions the
+    // manifest's `files[].component` with its `amiga_installed` — so this
+    // asks the manifest and never the filesystem, exactly as step 1 does.
+    //
+    // Without it the three `locale-*` packages read **`Ready`** on any tree
+    // built without `locale-base`, which is `required: false` in
+    // `amigaos-3.9.json` and so an ordinary tree rather than an exotic one:
+    // the row said ready, the one Run button armed on it, and
+    // `resolve_packages_for_add` refused with `PackageComponentMissing`
+    // (round 3 whole-branch review, M4).
+    let missing_components: Vec<BlockedComponent> = package
+        .requires_components
+        .iter()
+        .filter(|id| !have.contains(*id))
+        .map(|id| BlockedComponent {
+            id: id.clone(),
+            label_key: components
+                .iter()
+                .find(|component| &component.id == id)
+                .and_then(|component| component.label_key.clone()),
+        })
+        .collect();
+    if !missing_components.is_empty() {
+        return Ok(ChainState::BlockedByComponent {
+            components: missing_components,
+        });
+    }
+
+    Ok(ChainState::Ready)
+}
+
+/// The file filling a slot, by name alone — the whole path is the readout's
+/// business, and a chain row has one line.
+fn file_name_of(state: &SlotState) -> Option<String> {
+    state.found.as_ref().and_then(|found| {
+        found
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    })
+}
+
+/// Whole paths, because the commonest ambiguity is two copies under the same
+/// name and the folder is then the only information there is (round 2's own
+/// finding, F3).
+fn candidate_paths(state: &SlotState) -> Vec<String> {
+    state
+        .candidates
+        .iter()
+        .map(|candidate| candidate.path.display().to_string())
+        .collect()
 }
 
 #[cfg(test)]
@@ -975,6 +1550,559 @@ mod tests {
             missing_prerequisites(&two, &tree).unwrap(),
             vec!["boingbag-39-1".to_string()]
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Round 3: the whole chain, as rows
+    // -----------------------------------------------------------------
+
+    /// A manifest built inline, so a test can say exactly what a tree
+    /// records without writing one to disk. `rows_for` takes the manifest
+    /// rather than a path for precisely this reason: the chain screen has
+    /// already read it once.
+    fn manifest(built_from: &[&str], components: &[&str], ran: &[&str]) -> DistributionManifest {
+        DistributionManifest {
+            release: "AmigaOS 3.9".into(),
+            built_from: built_from
+                .iter()
+                .map(|volume| super::super::apply::MediaRecord {
+                    volume_name: (*volume).to_string(),
+                    sha256: "0".repeat(64),
+                })
+                .collect(),
+            files: components.iter().map(|c| file_from(c)).collect(),
+            paired_rom: None,
+            amiga_installed: ran
+                .iter()
+                .map(|package| AmigaInstallRecord {
+                    package: (*package).to_string(),
+                    command: "PKG:C/Updater AmigaOS-Update SYS:".into(),
+                })
+                .collect(),
+            layers: Vec::new(),
+        }
+    }
+
+    /// Every fact empty — nothing in any folder, no ROM, no chosen file.
+    /// `slots::resolve` opens nothing, so this is the whole of it.
+    fn resolved(
+        manifest: Option<&DistributionManifest>,
+        packages: &[super::super::scan::FoundPackage],
+        media: &[super::super::scan::FoundMedia],
+    ) -> Vec<SlotState> {
+        let slots = super::super::slots::slots_for("AmigaOS 3.9").unwrap();
+        let facts = super::super::slots::Facts {
+            media,
+            packages,
+            hashes: &[],
+            manifest,
+            rom: None,
+            program_versions: &[],
+            overrides: &[],
+            disc_roots: &[],
+        };
+        super::super::slots::resolve(&slots, &facts)
+    }
+
+    /// An archive in a folder, identified by the top-level directory it
+    /// states — rank 2, which is all a test needs to make a slot `found`.
+    fn archive(path: &str, top_level: &str) -> super::super::scan::FoundPackage {
+        super::super::scan::FoundPackage {
+            path: std::path::PathBuf::from(path),
+            media: top_level.to_string(),
+            refused_names: Vec::new(),
+        }
+    }
+
+    fn row<'a>(rows: &'a [ChainRow], id: &str) -> &'a ChainRow {
+        rows.iter()
+            .find(|row| row.package_id.as_deref() == Some(id))
+            .unwrap_or_else(|| panic!("no row for {id} in {rows:#?}"))
+    }
+
+    /// **The chain is nine rows in the material's own order**, and the order
+    /// is read out of the recipes rather than out of a list here.
+    ///
+    /// Asserted as `(position, id)` pairs rather than as a count: a count
+    /// passes while the list holds the wrong things, and the *order* is the
+    /// whole information this screen carries. Two rows share rank 4 because
+    /// the material states no order between them.
+    #[test]
+    fn the_chain_is_the_materials_own_order_with_the_cd_first() {
+        let rows = rows_for("AmigaOS 3.9", None, &resolved(None, &[], &[])).unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.position, row.package_id.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, None),
+                (2, Some("boingbag-39-1".to_string())),
+                (3, Some("boingbag-39-2".to_string())),
+                (4, Some("locale-39".to_string())),
+                (4, Some("locale-39-turkish".to_string())),
+                (5, Some("locale-turkish".to_string())),
+                (6, Some("boingbag-39-2-contribution".to_string())),
+                (7, Some("euro-update".to_string())),
+                (8, Some("boingbags-39-3-4".to_string())),
+            ]
+        );
+        // Row 1 is the medium, synthesised from the slot and never from a
+        // package — it has no `package_id` and it is fed by the CD's slot.
+        assert_eq!(rows[0].slot_id.as_deref(), Some("medium:AmigaOS3.9"));
+        assert_eq!(rows[0].sentence_facts.runs_on_amiga, None);
+    }
+
+    /// **The CD row never takes the Run button, in the one state where it
+    /// used to** (round 3 whole-branch review, M3).
+    ///
+    /// The state is ordinary, not exotic: a 3.9 tree whose manifest records
+    /// no `AmigaOS3.9` in `built_from` — an imported tree, or one built
+    /// before ART recorded media — with the ISO sitting in a folder the user
+    /// named. `medium_state` answered `Ready`, `chainLines` marks the first
+    /// ready row runnable, and the single Run button landed on a disc it can
+    /// never run while the BoingBag below it was never offered.
+    ///
+    /// Asserted at both ends, because either alone would pass a defect: the
+    /// medium row is not `Ready` **and** the first ready row is a package.
+    #[test]
+    fn the_cd_row_is_never_ready_so_the_run_button_reaches_the_first_ready_package() {
+        let media = [super::super::scan::FoundMedia {
+            path: std::path::PathBuf::from("D:/a/AmigaOS39.iso"),
+            kind: super::super::scan::MediaKind::Disc,
+            volume_name: "AmigaOS3.9".to_string(),
+            layer: None,
+        }];
+        let packages = [archive("D:/a/BoingBag39-1.lha", "BoingBag3.9-1")];
+        // Built from nothing ART recorded, and carrying every component, so
+        // the BoingBag below is genuinely ready and the comparison is real.
+        let tree = manifest(&[], &["workbench-base", "locale-base"], &[]);
+        let rows = rows_for(
+            "AmigaOS 3.9",
+            Some(&tree),
+            &resolved(Some(&tree), &packages, &media),
+        )
+        .unwrap();
+
+        assert_eq!(rows[0].package_id, None, "the premise: row 1 is the medium");
+        assert!(
+            !matches!(rows[0].state, ChainState::Ready),
+            "the CD row may never be ready — the Run button would land on a disc: {:?}",
+            rows[0].state
+        );
+        assert!(
+            matches!(rows[0].state, ChainState::Missing { .. }),
+            "and it says what is actually true of the tree: {:?}",
+            rows[0].state
+        );
+
+        // The control, and the half that says the button has somewhere to
+        // go: the first row that *is* ready is a package, and it is the one
+        // whose archive is in the folder.
+        let first_ready = rows
+            .iter()
+            .find(|row| matches!(row.state, ChainState::Ready))
+            .expect("a ready row, or this proves nothing");
+        assert_eq!(first_ready.package_id.as_deref(), Some("boingbag-39-1"));
+    }
+
+    /// **A tree built without a component a package needs reads
+    /// `BlockedByComponent`, not `Ready`** (round 3 whole-branch review, M4).
+    ///
+    /// `locale-base` is `required: false` in `amigaos-3.9.json`, so a tree
+    /// without it is ordinary. Before this the three `locale-*` rows read
+    /// *ready*, the one Run button armed on the first of them — taking it
+    /// from a later row that really was ready — and
+    /// `resolve_packages_for_add` then refused with
+    /// `PackageComponentMissing`. The screen out-claiming the core.
+    ///
+    /// The control is the same tree with the component, because a check that
+    /// blocked every row would pass the first assertion and prove nothing.
+    #[test]
+    fn a_package_whose_component_the_tree_lacks_is_blocked_by_that_component() {
+        let packages = [archive("D:/a/Locale3_9.lha", "Locale3.9")];
+        let media = [super::super::scan::FoundMedia {
+            path: std::path::PathBuf::from("D:/a/AmigaOS39.iso"),
+            kind: super::super::scan::MediaKind::Disc,
+            volume_name: "AmigaOS3.9".to_string(),
+            layer: None,
+        }];
+
+        let without = manifest(&["AmigaOS3.9"], &["workbench-base"], &[]);
+        let rows = rows_for(
+            "AmigaOS 3.9",
+            Some(&without),
+            &resolved(Some(&without), &packages, &media),
+        )
+        .unwrap();
+        match &row(&rows, "locale-39").state {
+            ChainState::BlockedByComponent { components } => {
+                assert_eq!(components.len(), 1, "one component, named: {components:?}");
+                assert_eq!(components[0].id, "locale-base");
+                // The key, not a rendered name: the words are the
+                // catalogue's, and this is the key the components screen
+                // labels the same component by.
+                assert_eq!(
+                    components[0].label_key.as_deref(),
+                    Some("osinstall.components.name.os39.locale")
+                );
+            }
+            other => panic!("locale-39 must be blocked on its component, got {other:?}"),
+        }
+
+        // The control: add the component and the same row reads ready.
+        let with = manifest(&["AmigaOS3.9"], &["workbench-base", "locale-base"], &[]);
+        let rows = rows_for(
+            "AmigaOS 3.9",
+            Some(&with),
+            &resolved(Some(&with), &packages, &media),
+        )
+        .unwrap();
+        assert_eq!(
+            row(&rows, "locale-39").state,
+            ChainState::Ready,
+            "with the component, the same row is ready"
+        );
+    }
+
+    /// **A release with no chain is an empty list, not a lone CD row** (fix
+    /// round 1, m3).
+    ///
+    /// AmigaOS 3.2 ships no update package at all, and taking the first
+    /// medium slot regardless produced one row built from whichever floppy
+    /// happened to sort first — position 1, and a summary reading *"AmigaOS
+    /// 3.2 updates — 0 of 1 applied"*. The control is beside it, because a
+    /// `rows_for` that answered empty for everything would pass the first
+    /// assertion and prove nothing.
+    #[test]
+    fn a_release_with_no_chain_rows_has_no_chain_at_all() {
+        let slots = super::super::slots::slots_for("AmigaOS 3.2").unwrap();
+        assert!(
+            slots.iter().any(|slot| slot.kind == SlotKind::Medium),
+            "the premise: 3.2 has medium slots, so a first one exists to be taken by mistake"
+        );
+        let facts = super::super::slots::Facts {
+            media: &[],
+            packages: &[],
+            hashes: &[],
+            manifest: None,
+            rom: None,
+            program_versions: &[],
+            overrides: &[],
+            disc_roots: &[],
+        };
+        let states = super::super::slots::resolve(&slots, &facts);
+        let rows = rows_for("AmigaOS 3.2", None, &states).unwrap();
+        assert!(rows.is_empty(), "3.2 has no update package: {rows:#?}");
+        assert_eq!(summarize_chain("AmigaOS 3.2", &rows).total, 0);
+
+        // The control: the release that does have a chain still has one.
+        assert_eq!(
+            rows_for("AmigaOS 3.9", None, &resolved(None, &[], &[]))
+                .unwrap()
+                .len(),
+            9
+        );
+    }
+
+    /// **What a row waits for is named in the order it goes on** (fix round
+    /// 1, m2, and the design says so: *"blocked_by names rows, in position
+    /// order"*).
+    ///
+    /// The two halves arrive in two different orders — the packages in
+    /// `package::order`'s topological one, the media appended after them —
+    /// so BoingBag 3.9-2 blocked on both answered `["BoingBag 3.9-1",
+    /// "AmigaOS3.9"]`: rank 2 before rank 1. Telling somebody to do things
+    /// in an order that is not the order is the one thing this screen exists
+    /// to get right.
+    #[test]
+    fn a_blocked_row_names_what_it_waits_for_in_the_order_it_goes_on() {
+        let packages = [archive("D:/a/BoingBag39-2.lha", "BoingBag3.9-2")];
+        // No disc and no BoingBag 3.9-1: both halves of the block at once,
+        // which is the only arrangement that can show the order is wrong.
+        let rows = rows_for("AmigaOS 3.9", None, &resolved(None, &packages, &[])).unwrap();
+        assert_eq!(
+            row(&rows, "boingbag-39-2").state,
+            ChainState::BlockedBy {
+                names: vec!["AmigaOS3.9".to_string(), "BoingBag 3.9-1".to_string()]
+            },
+            "the CD is row 1 and BoingBag 3.9-1 is row 2"
+        );
+    }
+
+    /// **`installed` comes from the manifest and from nothing else.** Two
+    /// arms over one set of facts: the same folders, the same slots, and
+    /// only the manifest differing.
+    #[test]
+    fn installed_is_the_manifests_word_for_it_and_a_run_and_a_placement_both_count() {
+        let bare = rows_for("AmigaOS 3.9", None, &resolved(None, &[], &[])).unwrap();
+        assert!(
+            !matches!(
+                row(&bare, "boingbag-39-1").state,
+                ChainState::Installed { .. }
+            ),
+            "no manifest says nothing about what is installed"
+        );
+
+        let done = manifest(&["AmigaOS3.9"], &["locale-turkish"], &["boingbag-39-1"]);
+        let states = resolved(Some(&done), &[], &[]);
+        let rows = rows_for("AmigaOS 3.9", Some(&done), &states).unwrap();
+
+        // A run — `amiga_installed`.
+        assert_eq!(
+            row(&rows, "boingbag-39-1").state,
+            ChainState::Installed { when: None }
+        );
+        // A placement — a `files[]` record naming the component.
+        assert_eq!(
+            row(&rows, "locale-turkish").state,
+            ChainState::Installed { when: None }
+        );
+        // And the CD, from `built_from`.
+        assert_eq!(rows[0].state, ChainState::Installed { when: None });
+        assert_eq!(
+            summarize_chain("AmigaOS 3.9", &rows).installed,
+            3,
+            "three rows the manifest records, and no fourth"
+        );
+    }
+
+    /// **A row is ready when its own artefact is in hand and everything
+    /// before it is done** — and the control beside it: the same archive,
+    /// the same folders, a tree that has not had BoingBag 3.9-1 run on it,
+    /// and the row is blocked by name (ART-186, through the one
+    /// implementation `refuse_unless_installable` also uses).
+    #[test]
+    fn a_row_is_ready_only_when_what_goes_before_it_is_installed() {
+        let media = [super::super::scan::FoundMedia {
+            path: std::path::PathBuf::from("D:/a/AmigaOS39.iso"),
+            kind: super::super::scan::MediaKind::Disc,
+            volume_name: "AmigaOS3.9".to_string(),
+            layer: None,
+        }];
+        let packages = [archive("D:/a/BoingBag39-2.lha", "BoingBag3.9-2")];
+
+        let without = manifest(&["AmigaOS3.9"], &[], &[]);
+        let rows = rows_for(
+            "AmigaOS 3.9",
+            Some(&without),
+            &resolved(Some(&without), &packages, &media),
+        )
+        .unwrap();
+        assert_eq!(
+            row(&rows, "boingbag-39-2").state,
+            ChainState::BlockedBy {
+                names: vec!["BoingBag 3.9-1".to_string()]
+            },
+            "the row names the package, never the slot id"
+        );
+
+        let with = manifest(&["AmigaOS3.9"], &[], &["boingbag-39-1"]);
+        let rows = rows_for(
+            "AmigaOS 3.9",
+            Some(&with),
+            &resolved(Some(&with), &packages, &media),
+        )
+        .unwrap();
+        assert_eq!(row(&rows, "boingbag-39-2").state, ChainState::Ready);
+        assert_eq!(
+            row(&rows, "boingbag-39-2").sentence_facts.file.as_deref(),
+            Some("BoingBag39-2.lha"),
+            "the file travels with the row whatever its state"
+        );
+        assert_eq!(
+            row(&rows, "boingbag-39-2").sentence_facts.runs_on_amiga,
+            Some(true)
+        );
+    }
+
+    /// **The disc a package's installer verifies is met by having it, not by
+    /// installing it** (ART-193, design § 2: *"`required_medium` found"*).
+    /// Both arms, because the wrong reading is the plausible one.
+    #[test]
+    fn a_required_disc_blocks_the_row_until_it_is_in_hand() {
+        let packages = [archive("D:/a/BoingBag39-1.lha", "BoingBag3.9-1")];
+
+        // No disc anywhere: BoingBag 3.9-1's own Updater checks for it
+        // before it does anything, so the row waits and says for what.
+        let rows = rows_for("AmigaOS 3.9", None, &resolved(None, &packages, &[])).unwrap();
+        assert_eq!(
+            row(&rows, "boingbag-39-1").state,
+            ChainState::BlockedBy {
+                names: vec!["AmigaOS3.9".to_string()]
+            }
+        );
+
+        // The ISO in the folder, and nothing installed at all: ready. Not
+        // "install the CD first", which is not a thing anybody does.
+        let media = [super::super::scan::FoundMedia {
+            path: std::path::PathBuf::from("D:/a/AmigaOS39.iso"),
+            kind: super::super::scan::MediaKind::Disc,
+            volume_name: "AmigaOS3.9".to_string(),
+            layer: None,
+        }];
+        let rows = rows_for("AmigaOS 3.9", None, &resolved(None, &packages, &media)).unwrap();
+        assert_eq!(row(&rows, "boingbag-39-1").state, ChainState::Ready);
+    }
+
+    /// **Superseded and installed reads *not needed*, and the row names the
+    /// package that made it so.** The control is the same chain with
+    /// BoingBags 3&4 absent from the manifest, where Euro-Update is an
+    /// ordinary row.
+    #[test]
+    fn a_superseded_row_whose_superseder_is_installed_is_not_needed() {
+        let without = manifest(&[], &[], &[]);
+        let rows = rows_for(
+            "AmigaOS 3.9",
+            Some(&without),
+            &resolved(Some(&without), &[], &[]),
+        )
+        .unwrap();
+        assert!(
+            !matches!(
+                row(&rows, "euro-update").state,
+                ChainState::NotNeeded { .. }
+            ),
+            "nothing has superseded it yet: {:?}",
+            row(&rows, "euro-update").state
+        );
+
+        let with = manifest(&[], &["boingbags-39-3-4"], &[]);
+        let rows = rows_for("AmigaOS 3.9", Some(&with), &resolved(Some(&with), &[], &[])).unwrap();
+        assert_eq!(
+            row(&rows, "euro-update").state,
+            ChainState::NotNeeded {
+                superseded_by: "BoingBags 3&4 for AmigaOS 3.9".to_string()
+            },
+            "the name, not the id — the words belong in the catalogue"
+        );
+        assert_eq!(summarize_chain("AmigaOS 3.9", &rows).not_needed, 1);
+    }
+
+    /// **An artefact ART cannot find names the files to go and get**, and a
+    /// row two files could be is refused with both of them rather than
+    /// resolved by picking one.
+    #[test]
+    fn a_missing_row_names_the_file_and_an_ambiguous_one_names_the_candidates() {
+        let rows = rows_for("AmigaOS 3.9", None, &resolved(None, &[], &[])).unwrap();
+        assert_eq!(
+            row(&rows, "boingbag-39-1").state,
+            ChainState::Missing {
+                expected: vec!["BoingBag39-1.lha".to_string()]
+            }
+        );
+
+        let two = [
+            archive("D:/a/BoingBag39-1.lha", "BoingBag3.9-1"),
+            archive("D:/b/BoingBag39-1.lha", "BoingBag3.9-1"),
+        ];
+        let rows = rows_for("AmigaOS 3.9", None, &resolved(None, &two, &[])).unwrap();
+        assert_eq!(
+            row(&rows, "boingbag-39-1").state,
+            ChainState::Refused {
+                reason: RefusedBecause::Ambiguous {
+                    candidates: vec![
+                        "D:/a/BoingBag39-1.lha".to_string(),
+                        "D:/b/BoingBag39-1.lha".to_string(),
+                    ]
+                }
+            },
+            "whole paths: two copies under one name is the commonest shape"
+        );
+    }
+
+    /// **A package with no route at all is refused and says which**, and the
+    /// two refusals are different values rather than one shrug. Euro-Update
+    /// cannot be placed (`needs-fixfonts`) and has no Amiga-side installer;
+    /// BoingBag 3.9-1 cannot be placed either and *does*, so it is never
+    /// refused for the same reason.
+    #[test]
+    fn a_package_with_no_route_is_refused_by_the_block_that_is_true_of_it() {
+        let rows = rows_for("AmigaOS 3.9", None, &resolved(None, &[], &[])).unwrap();
+        assert_eq!(
+            row(&rows, "euro-update").state,
+            ChainState::Refused {
+                reason: RefusedBecause::NotPlaceable {
+                    block: super::super::HostPlacementBlock::NeedsFixfonts
+                }
+            }
+        );
+        assert_eq!(row(&rows, "euro-update").sentence_facts.runs_on_amiga, None);
+
+        assert!(
+            !matches!(
+                row(&rows, "boingbag-39-1").state,
+                ChainState::Refused { .. }
+            ),
+            "a package ART can run on the Amiga is not refused for being unplaceable"
+        );
+        // And the one host-placeable row of the chain says so.
+        assert_eq!(
+            row(&rows, "boingbag-39-2-contribution")
+                .sentence_facts
+                .runs_on_amiga,
+            Some(false)
+        );
+    }
+
+    /// **A declaration nobody has run outranks everything else about the
+    /// row.** BoingBags 3&4's archive is in the folder and BoingBag 3.9-2 is
+    /// installed, so every other check would have said *ready*; what the
+    /// user has to know is that ART has never driven the thing.
+    #[test]
+    fn a_row_nobody_has_run_says_so_however_ready_the_rest_of_it_looks() {
+        let done = manifest(&["AmigaOS3.9"], &[], &["boingbag-39-1", "boingbag-39-2"]);
+        let packages = [archive("D:/a/BoingBags3&4.lha", "BoingBag3.9-3&4")];
+        let rows = rows_for(
+            "AmigaOS 3.9",
+            Some(&done),
+            &resolved(Some(&done), &packages, &[]),
+        )
+        .unwrap();
+        assert_eq!(
+            row(&rows, "boingbags-39-3-4").state,
+            ChainState::NotYetRunnable {
+                reason: NotYetRunnable::InstallerNotMeasured
+            }
+        );
+        assert_eq!(
+            row(&rows, "boingbags-39-3-4")
+                .sentence_facts
+                .file
+                .as_deref(),
+            Some("BoingBags3&4.lha"),
+            "the archive is there, and the row still says what has not been measured"
+        );
+
+        // **But the manifest outranks it.** A tree that records the package
+        // has had it done, and saying "ART has never driven this one" over
+        // that is the screen out-claiming the core — the check ordering that
+        // running this test corrected.
+        let already = manifest(&["AmigaOS3.9"], &["boingbags-39-3-4"], &[]);
+        let rows = rows_for(
+            "AmigaOS 3.9",
+            Some(&already),
+            &resolved(Some(&already), &packages, &[]),
+        )
+        .unwrap();
+        assert_eq!(
+            row(&rows, "boingbags-39-3-4").state,
+            ChainState::Installed { when: None }
+        );
+    }
+
+    /// The summary counts what the rows say and nothing else — and a
+    /// *not needed* row is in neither the installed count nor the
+    /// outstanding one.
+    #[test]
+    fn the_summary_counts_the_rows_the_manifest_accounts_for() {
+        let done = manifest(&["AmigaOS3.9"], &["boingbags-39-3-4"], &["boingbag-39-1"]);
+        let rows = rows_for("AmigaOS 3.9", Some(&done), &resolved(Some(&done), &[], &[])).unwrap();
+        let summary = summarize_chain("AmigaOS 3.9", &rows);
+        assert_eq!(summary.release, "AmigaOS 3.9");
+        assert_eq!(summary.total, 9);
+        // The CD, BoingBag 3.9-1 and BoingBags 3&4 — three rows the manifest
+        // records; Euro-Update is not needed and is counted apart.
+        assert_eq!((summary.installed, summary.not_needed), (3, 1));
     }
 
     /// A manifest that is there but is not JSON is not silently treated as an

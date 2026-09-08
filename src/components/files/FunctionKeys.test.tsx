@@ -18,9 +18,14 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 
+import type { CursorMove } from "@/lib/cursorKeys";
+
 import {
+  useCommandLineKey,
+  useCursorKeys,
   useFunctionKeys,
   useInsertToggle,
+  useMarkKeys,
   useNavigationKeys,
   usePaneHistoryKeys,
   usePaneTab,
@@ -359,6 +364,157 @@ describe("usePaneHistoryKeys", () => {
     await user.click(input);
     await user.keyboard("{Alt>}{ArrowLeft}{/Alt}");
     expect(screen.getByTestId("log").textContent).toBe("");
+  });
+});
+
+// ART-275: the commander had no cursor keys at all — Up/Down/Home/End/
+// PageUp/PageDown moved nothing, which is what the owner met driving the
+// Windows 11 build mouse-free. `useCursorKeys` is the fix's keyboard half;
+// `cursorKeys.test.ts` covers the arithmetic it calls into.
+
+function CursorHarness({ active = true }: { active?: boolean }) {
+  const [log, setLog] = useState<string[]>([]);
+  useCursorKeys(
+    (move: CursorMove, shift: boolean) => setLog((l) => [...l, `${move}:${shift}`]),
+    active
+  );
+  return (
+    <div>
+      <div data-testid="log">{log.join(",")}</div>
+      <input aria-label="filter box" />
+    </div>
+  );
+}
+
+describe("useCursorKeys", () => {
+  it("reaches the handler with the right move for each of the six keys", async () => {
+    const user = userEvent.setup();
+    render(<CursorHarness />);
+
+    await user.keyboard("{ArrowUp}{ArrowDown}{Home}{End}{PageUp}{PageDown}");
+    expect(screen.getByTestId("log").textContent).toBe(
+      "up:false,down:false,home:false,end:false,pageUp:false,pageDown:false"
+    );
+  });
+
+  it("passes Shift through", async () => {
+    const user = userEvent.setup();
+    render(<CursorHarness />);
+
+    await user.keyboard("{Shift>}{ArrowDown}{/Shift}");
+    expect(screen.getByTestId("log").textContent).toBe("down:true");
+  });
+
+  it("Ctrl+PageDown does not reach it — that combination belongs to useNavigationKeys", async () => {
+    const user = userEvent.setup();
+    render(<CursorHarness />);
+
+    await user.keyboard("{Control>}{PageDown}{/Control}");
+    await user.keyboard("{Control>}{PageUp}{/Control}");
+    expect(screen.getByTestId("log").textContent).toBe("");
+  });
+
+  it("does not fire while a text field has focus", async () => {
+    const user = userEvent.setup();
+    render(<CursorHarness />);
+
+    const input = screen.getByRole("textbox", { name: "filter box" });
+    await user.click(input);
+    await user.keyboard("{ArrowUp}{ArrowDown}{Home}{End}{PageUp}{PageDown}");
+    expect(screen.getByTestId("log").textContent).toBe("");
+  });
+
+  it("does nothing while inactive (a dialog is on top)", async () => {
+    const user = userEvent.setup();
+    render(<CursorHarness active={false} />);
+
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByTestId("log").textContent).toBe("");
+  });
+});
+
+// ART-275's other half: Ctrl+Space, the owner's own `wincmd.ini` line
+// (`C+SPACE=cm_ExecuteDOS`), focuses the command line.
+
+function CommandLineHarness({ active = true }: { active?: boolean }) {
+  const [count, setCount] = useState(0);
+  useCommandLineKey(() => setCount((n) => n + 1), active);
+  return (
+    <div>
+      <div data-testid="count">{count}</div>
+      <input aria-label="filter box" />
+    </div>
+  );
+}
+
+describe("useCommandLineKey", () => {
+  it("fires on Ctrl+Space", async () => {
+    const user = userEvent.setup();
+    render(<CommandLineHarness />);
+
+    await user.keyboard("{Control>}{ }{/Control}");
+    expect(screen.getByTestId("count").textContent).toBe("1");
+  });
+
+  it("ignores plain Space and Ctrl+Space combined with another modifier", async () => {
+    const user = userEvent.setup();
+    render(<CommandLineHarness />);
+
+    await user.keyboard(" ");
+    expect(screen.getByTestId("count").textContent).toBe("0");
+
+    await user.keyboard("{Control>}{Alt>}{ }{/Alt}{/Control}");
+    expect(screen.getByTestId("count").textContent).toBe("0");
+  });
+
+  it("does not fire while typing in a text field", async () => {
+    const user = userEvent.setup();
+    render(<CommandLineHarness />);
+
+    const input = screen.getByRole("textbox", { name: "filter box" });
+    await user.click(input);
+    await user.keyboard("{Control>}{ }{/Control}");
+    expect(screen.getByTestId("count").textContent).toBe("0");
+  });
+
+  it("does nothing while inactive (a dialog is on top)", async () => {
+    const user = userEvent.setup();
+    render(<CommandLineHarness active={false} />);
+
+    await user.keyboard("{Control>}{ }{/Control}");
+    expect(screen.getByTestId("count").textContent).toBe("0");
+  });
+});
+
+// Ctrl+Space must never also reach `useMarkKeys`'s plain-Space handler — the
+// two hooks are wired side by side in `FileManager.tsx`, and a shared `window`
+// keydown listener that let both fire off one keystroke would both focus the
+// command line *and* mark the row under the cursor.
+
+function MarkSpaceHarness({ active = true }: { active?: boolean }) {
+  const [count, setCount] = useState(0);
+  useMarkKeys(
+    {
+      onSpace: () => setCount((n) => n + 1),
+      onMarkByMask: () => {},
+      onUnmarkByMask: () => {},
+      onInvert: () => {},
+    },
+    active
+  );
+  return <div data-testid="count">{count}</div>;
+}
+
+describe("useMarkKeys — Ctrl+Space does not mark", () => {
+  it("fires onSpace for plain Space but not for Ctrl+Space", async () => {
+    const user = userEvent.setup();
+    render(<MarkSpaceHarness />);
+
+    await user.keyboard("{Control>}{ }{/Control}");
+    expect(screen.getByTestId("count").textContent).toBe("0");
+
+    await user.keyboard(" ");
+    expect(screen.getByTestId("count").textContent).toBe("1");
   });
 });
 

@@ -1,0 +1,85 @@
+{
+  "$comment": "ART's OWN install-media hash table -- AmigaOS 3.9 update archives the adopted table (media_hashes.json, rootrootde/emu68hatcher, MIT) does not carry. NOT a merge into the adopted one: `mediahash.rs`'s own rule is that the adopted table stays exactly as adopted, so a reader can tell whose claim a row is. Corrected from the design's own first pass (docs/superpowers/specs/2026-09-08-os-builder-intake-design.md Section 2, which read '0 rows for the ISO, 0 for any package archive'): checked against the real file 2026-09-08, FOUR of that section's eleven candidate hashes are already adopted rows -- 3cb96e77d922a4f8eb696e525a240448 (AmigaOS 3.9 CD, one of two sequence-2 hashes under volume AmigaOS3_9), 71353d4aeb9af1f129545618d013a8c8 (AmigaOS3_9BB1), fd45d24bb408203883a4c9a56e968e28 (AmigaOS3_9BB2) and 4e48f80573554385a6fbc274d8ae328b (AmigaOS3_9BB34), all sourced 'Haage and Partners (3.9)'. `mediahash.rs`'s own invariant test (no_md5_is_shared_between_the_adopted_and_own_tables) is what caught it. Those four are left out of this file on purpose -- `row_for` already answers them, from the adopted table, and duplicating them here would be exactly the silent-first-wins this module's own design forbids. `artefact` for those four adopted rows is not carried anywhere yet: the design's own rule is that an adopted row's artefact id is derived from its volume+version by a future name mapping, never written into Hatcher's data or shadowed by a duplicate row here. The eight rows below are the ones the adopted table genuinely does not carry. One is also in HstWB Installer's amiga-os-entries.csv (MIT, https://github.com/henrikstengaard/hstwb-installer, file data/amiga-os-entries.csv) and is attributed to it; the rest are recorded from the owner's own material, measured 2026-09-08. `artefact` is the shipped package/recipe id where ART already has one (`boingbag-39-1`, `locale-turkish`), and a new id for the archives ART ships no recipe for yet. Fix round 1 of round 2's task 2 corrected `c7f97fc9...` from a coined id (`boingbag-39-2-turkish-locale`) to `locale-turkish`, the id of the package that actually reads that archive: an `artefact` names bytes so that a slot can find them, and one no slot is named by is a row nothing can reach -- the Turkish catalog pack's slot could never match by hash, carried no expected filename, and fell back to the `LocaleUpdate` top-level directory that all eight of the owner's language archives share. `volume` is the archive's own single top-level directory as `core::osinstall::scan::find_packages` reads it (for the CD, the ISO's own Joliet volume id) -- read from the real files with 7-Zip, read-only, 2026-09-08. `filenames` are names ART has actually seen this artefact ship under; a file can carry any name on disk, so this is a hint for a drop-folder guide, never a requirement.",
+  "rows": [
+    {
+      "md5": "e32a107e68edfc9b28a2fe075e32e5f6",
+      "kind": "disc",
+      "artefact": "amigaos-39-cd",
+      "name": "AmigaOS 3.9 CD-ROM",
+      "version": "3.9",
+      "volume": "AmigaOS3.9",
+      "source": "HstWB Installer amiga-os-entries.csv (MIT)",
+      "filenames": ["AmigaOS39.iso", "amigaos3.9.iso"]
+    },
+    {
+      "md5": "ef67ce2f786044dae1bce8fafb439d5e",
+      "kind": "archive",
+      "artefact": "boingbag-39-1",
+      "name": "BoingBag 3.9-1 (Updater 45.15)",
+      "version": "3.9",
+      "volume": "BoingBag3.9-1",
+      "source": "the owner's copy, 2026-09-08",
+      "filenames": ["BoingBag39-1.lha"]
+    },
+    {
+      "md5": "e00a91cd6800d6a34821a156c44b1c2f",
+      "kind": "archive",
+      "artefact": "boingbag-39-1-uae-fix",
+      "name": "BoingBag 3.9-1 UAE fix",
+      "version": "3.9",
+      "volume": "BoingBag3.9-1-UAE",
+      "source": "the owner's copy, 2026-09-08",
+      "filenames": ["BoingBag39-1-UAE.lha"]
+    },
+    {
+      "md5": "a7dcf701e9b9c77cb5ad51f679fa41e2",
+      "kind": "archive",
+      "artefact": "boingbag-39-2-contribution",
+      "name": "BoingBag 3.9-2 Contribution",
+      "version": "3.9",
+      "volume": "BoingBag3.9-2",
+      "source": "the owner's copy, 2026-09-08",
+      "filenames": ["BoingBag39-2-Contribution.lha"]
+    },
+    {
+      "md5": "c7f97fc909d3a135c48ecefb9cc948d2",
+      "kind": "archive",
+      "artefact": "locale-turkish",
+      "name": "BoingBag 3.9-2 Turkish locale update",
+      "version": "3.9",
+      "volume": "LocaleUpdate",
+      "source": "the owner's copy, 2026-09-08",
+      "filenames": ["BoingBag39-2-turkce.lha"]
+    },
+    {
+      "md5": "1c1a21e1f5c95dacd4dfa0c1fa6e244e",
+      "kind": "archive",
+      "artefact": "euro-update",
+      "name": "Euro-Update",
+      "version": "3.9",
+      "volume": "Euro-Update",
+      "source": "the owner's copy, 2026-09-08",
+      "filenames": ["Euro-Update.lha"]
+    },
+    {
+      "md5": "ed08b553fa3f150d2262ab657dc5484b",
+      "kind": "archive",
+      "artefact": "locale-39",
+      "name": "Locale 3.9",
+      "version": "3.9",
+      "volume": "Locale3.9",
+      "source": "the owner's copy, 2026-09-08",
+      "filenames": ["Locale3_9.lha"]
+    },
+    {
+      "md5": "8d5a778c19b0214fa3e7318f44e68c5c",
+      "kind": "archive",
+      "artefact": "genesis-prefs",
+      "name": "GenesisPrefs",
+      "version": "3.9",
+      "volume": "GenesisPrefs",
+      "source": "the owner's copy, 2026-09-08",
+      "filenames": ["GenesisPrefs.lha"]
+    }
+  ]
+}

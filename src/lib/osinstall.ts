@@ -192,8 +192,38 @@ export type RuleKind = "file" | "subtree" | "icon-tooltypes";
  * it (the owner's recorded decision), so the tick must be refused with a
  * sentence naming the Updater rather than accepted and answered later with
  * a raw English ZIP error.
+ *
+ * `"needs-fixfonts"` is Euro-Update: it replaces bitmap fonts and ships its
+ * own `.font` descriptors, and its own installer runs `FixFonts` afterwards
+ * to rebuild those indexes from what the drawer actually holds. ART cannot
+ * rebuild one, so placing the files alone would leave the index naming only
+ * the sizes this package happens to ship — a font that quietly stops being
+ * available, with nothing failing and nothing logged.
+ *
+ * `"needs-installer-script"` is BoingBags 3&4: plain files, and an Installer
+ * script that chooses among them by CPU, by machine, by the languages it
+ * asks for and by which assigns exist, then edits the startup-sequence. ART
+ * places a fixed set of paths and cannot answer those questions.
  */
-export type HostPlacementBlock = "encrypted-payload";
+export type HostPlacementBlock =
+  | "encrypted-payload"
+  | "needs-fixfonts"
+  | "needs-installer-script";
+
+/**
+ * Why a declared Amiga-side installer is not one ART will start. Mirrors
+ * `core::osinstall::package::NotYetRunnable`.
+ *
+ * A union of string literals rather than a `string`, for the reason
+ * {@link HostPlacementBlock} is one: every place that has to say something
+ * about it fails to compile rather than rendering a blank explanation when a
+ * second kind arrives.
+ *
+ * `"installer-not-measured"` is BoingBags 3&4: it installs through an
+ * Installer *script*, and nobody has measured whether that script finishes
+ * without a person at the window.
+ */
+export type NotYetRunnable = "installer-not-measured";
 
 export type RefusalReason =
   | { refusal: "media-missing"; component: string; volume_name: string }
@@ -249,7 +279,25 @@ export type RefusalReason =
   // wrote it, same as the seven above.
   | { refusal: "package-unknown"; package: string }
   | { refusal: "package-folder-missing"; packages: string[] }
+  // **Both fields are display *names*, not ids** (fix round 1, M1): the
+  // sentence renders them verbatim, and `locale-turkish` is ART's own
+  // bookkeeping.
   | { refusal: "package-requirement-missing"; package: string; requires: string }
+  /**
+   * The required package is one that **runs on the Amiga**, so *"tick that
+   * one too"* is advice about a checkbox `PackagePanel` disables.
+   *
+   * Correcting `locale-turkish`'s `requires` to what the material states
+   * made it need BoingBag 3.9-2 — `encrypted-payload` blocked, and
+   * untickable by design — so the owner's own Turkish catalogue pack became
+   * unaddable with an instruction they could not follow. This variant names
+   * the step that can actually do it.
+   */
+  | {
+      refusal: "package-requirement-needs-amiga-run";
+      package: string;
+      requirement: string;
+    }
   | { refusal: "package-component-missing"; package: string; component: string }
   | { refusal: "package-archive-missing"; package: string; media: string }
   | {
@@ -556,9 +604,22 @@ export async function osinstallScanMedia(mediaFolder: string): Promise<MediaScan
 // Identifying media by content hash — mirrors `core::osinstall::mediahash`
 // ---------------------------------------------------------------------------
 
+/** What kind of medium a row's bytes are. Mirrors
+ *  `core::osinstall::mediahash::MediaKindTag`. An adopted row states none of
+ *  this — Hatcher's data has no such field — and defaults to `"floppy"`,
+ *  which is what all 186 of them are; never render that default as a claim
+ *  the row actually made (see {@link MediaRow.tableOrigin}). */
+export type MediaKindTag = "floppy" | "disc" | "archive";
+
+/** Which of the two compiled-in tables a row came from. Mirrors
+ *  `core::osinstall::mediahash::Origin`. */
+export type MediaTableOrigin = "adopted" | "own";
+
 /**
- * One row of the 186-row install-media table ART compiles in, adopted from
- * Emu68 Hatcher (MIT). Mirrors `core::osinstall::mediahash::MediaRow`.
+ * One row of the install-media tables ART compiles in — 186 rows adopted
+ * from Emu68 Hatcher (MIT), plus ART's own table of AmigaOS 3.9 update
+ * archives the adopted one does not carry (design's §3.6, 2026-09-08).
+ * Mirrors `core::osinstall::mediahash::MediaRow`.
  *
  * Every field is **as the table states it** and none of them may be
  * re-derived here. Two traps the Rust side documents and this side inherits:
@@ -581,6 +642,11 @@ export interface MediaRow {
    * `DiskDoctor`. Joining them would have put all 35 of the owner's good
    * disks in conflict with the table. Never render this as the disk's name —
    * {@link MediaMatch.volumeName} is that.
+   *
+   * For an own-table row this is the archive's own single top-level
+   * directory (or the ISO's own volume id) instead of a Hatcher identifier —
+   * still never the disk's AmigaDOS volume name to compare against, since
+   * `core::osinstall::scan::find_packages` already reads that value itself.
    */
   volume: string;
   /** A human-readable label for the disk, as the table names it. */
@@ -589,6 +655,21 @@ export interface MediaRow {
   source: string;
   /** The disk's position in its set, when the source states one. */
   sequence: number | null;
+  /** What kind of medium this is. `"floppy"` for every adopted row (a
+   *  default, not a claim — see {@link MediaKindTag}). */
+  kind: MediaKindTag;
+  /** The shipped package/recipe id this row's bytes are the media of, when
+   *  ART has one — `"boingbag-39-1"`, `"amigaos-39-cd"`. `null` for every
+   *  adopted row: Hatcher's data names no ART id, and inventing one on its
+   *  behalf would be a claim this table does not get to make. */
+  artefact: string | null;
+  /** Names ART has actually seen this artefact ship under. A hint for a
+   *  drop-folder guide, never a requirement — a file can be renamed and
+   *  still hash to this row. Empty for every adopted row. */
+  filenames: string[];
+  /** Which of the two compiled-in files this row came from — the fact a
+   *  match's provenance sentence names (see {@link mediaIdentityLines}). */
+  tableOrigin: MediaTableOrigin;
 }
 
 /**
@@ -666,6 +747,10 @@ export interface MediaIdentification {
   hashed: number;
   /** How many were answered out of ART's scan cache without being read. */
   remembered: number;
+  /** Discs ART deliberately did not hash, because their own volume name is
+   *  not one any shipped recipe installs from (m7). Reported, never dropped:
+   *  a file in none of the lists reads as a file that is not in the folder. */
+  skipped: string[];
 }
 
 /** The event `osinstall_identify_media`'s own background job answers on. */
@@ -695,18 +780,19 @@ interface OsInstallIdentifyMediaResult extends MediaIdentification {
  * uses, and `remembered` says how many answers came from there.
  */
 export async function osinstallIdentifyMedia(folder: string): Promise<MediaIdentification> {
-  if (!folder) return { matches: [], unreadable: [], hashed: 0, remembered: 0 };
+  if (!folder) return { matches: [], unreadable: [], hashed: 0, remembered: 0, skipped: [] };
   // `awaitJobResult` subscribes before it calls `start` — see its own doc
   // comment: a pass answered entirely from the cache can finish before the
   // frontend has even learnt its job id.
   return awaitJobResult<OsInstallIdentifyMediaResult, MediaIdentification>(
     OSINSTALL_IDENTIFY_MEDIA_EVENT,
     () => invoke<number>("osinstall_identify_media", { folder }),
-    ({ matches, unreadable, hashed, remembered }) => ({
+    ({ matches, unreadable, hashed, remembered, skipped }) => ({
       matches,
       unreadable,
       hashed,
       remembered,
+      skipped,
     })
   );
 }
@@ -798,10 +884,19 @@ export type MediaIdentityState =
 
 /** One file, and the one sentence that is true about it. */
 export type MediaIdentityLine = {
-  /** Which of the four per-file endings this is. Kept on the object so a
-   *  screen can style them differently without re-deriving which is which
-   *  from the phrase key. */
-  kind: "confirmed" | "unconfirmed" | "not-in-table" | "unreadable";
+  /**
+   * Which of the **five** per-file endings this is. Kept on the object so a
+   * screen can style them differently without re-deriving which is which
+   * from the phrase key.
+   *
+   * `"skipped"` joined the four in round 3's whole-branch fix (m7): a disc
+   * whose own volume name is not one any shipped recipe installs from is
+   * never hashed at all. It is emphatically **not** `"not-in-table"` — that
+   * one means ART read the disc and the table did not know the hash, and this
+   * one means ART never asked, deliberately, because the file is not install
+   * media. Nor is it `"unreadable"`, which is a problem; this is not.
+   */
+  kind: "confirmed" | "unconfirmed" | "not-in-table" | "unreadable" | "skipped";
   /** The file's own name, which is what the user recognises it by. */
   file: string;
   /** Its full path, for a `key` and a tooltip. */
@@ -811,8 +906,11 @@ export type MediaIdentityLine = {
 
 /** The last path segment, on either separator. Media folders are chosen by
  *  the user and carry Windows paths, but a test fixture and a future CLI
- *  shell carry POSIX ones. */
-function fileName(path: string): string {
+ *  shell carry POSIX ones.
+ *
+ *  Exported since `slots.ts` needed the same answer: two copies of this would
+ *  be two ways of naming the same file on two rows of the same screen. */
+export function fileName(path: string): string {
   const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] || path;
 }
@@ -836,7 +934,7 @@ function fileName(path: string): string {
  */
 export function mediaIdentityLines(state: MediaIdentityState): MediaIdentityLine[] {
   if (state.kind === "not-asked" || state.kind === "identifying") return [];
-  const { matches, unreadable } = state.identification;
+  const { matches, unreadable, skipped } = state.identification;
 
   const matched: MediaIdentityLine[] = matches.map((found) => {
     const file = fileName(found.path);
@@ -852,13 +950,18 @@ export function mediaIdentityLines(state: MediaIdentityState): MediaIdentityLine
     // re-derived, and never resolved when they disagree (the Hotfix Pack's
     // `version` and `source` do).
     const row = { name: found.row.name, version: found.row.version, source: found.row.source };
+    // Which table answered gets its own sentence (design's §3.6) — the
+    // existing "confirmed"/"unconfirmed" phrases name Emu68 Hatcher's table
+    // by name and have no slot for a different one, so an own-table match
+    // takes its own key rather than a wrong attribution.
+    const own = found.row.tableOrigin === "own";
     if (found.confirmed) {
       return {
         kind: "confirmed",
         file,
         path: found.path,
         phrase: {
-          key: "osinstall.mediaId.confirmed",
+          key: own ? "osinstall.mediaId.confirmedOwn" : "osinstall.mediaId.confirmed",
           params: {
             file,
             ...row,
@@ -872,7 +975,10 @@ export function mediaIdentityLines(state: MediaIdentityState): MediaIdentityLine
       kind: "unconfirmed",
       file,
       path: found.path,
-      phrase: { key: "osinstall.mediaId.unconfirmed", params: { file, ...row } },
+      phrase: {
+        key: own ? "osinstall.mediaId.unconfirmedOwn" : "osinstall.mediaId.unconfirmed",
+        params: { file, ...row },
+      },
     };
   });
 
@@ -883,7 +989,18 @@ export function mediaIdentityLines(state: MediaIdentityState): MediaIdentityLine
     phrase: { key: "osinstall.mediaId.unreadable", params: { file: fileName(path) } },
   }));
 
-  return [...matched, ...unread].sort((a, b) => a.path.localeCompare(b.path));
+  // The fifth ending (m7). In the same list rather than a footnote, for the
+  // reason `unreadable` is: a file that appears nowhere reads as a file that
+  // is not in the folder — and somebody who put a game disc in their material
+  // folder should be told ART left it alone, not left to wonder.
+  const untouched: MediaIdentityLine[] = skipped.map((path) => ({
+    kind: "skipped",
+    file: fileName(path),
+    path,
+    phrase: { key: "osinstall.mediaId.skipped", params: { file: fileName(path) } },
+  }));
+
+  return [...matched, ...unread, ...untouched].sort((a, b) => a.path.localeCompare(b.path));
 }
 
 /**
@@ -1244,6 +1361,21 @@ export interface PackageSummary {
    *  `AmigaInstallPanel` offers exactly the packages this is true of, read
    *  from the recipe rather than from a list of ids written here. */
   amigaInstallable: boolean;
+  /**
+   * `null` for a package ART has actually run. Non-null is the recipe's own
+   * English sentence saying **what has not been measured yet** — the row is
+   * rendered *disabled with that sentence*, never hidden.
+   *
+   * Its own field rather than `amigaInstallable: false`, because the two are
+   * different sentences with different next steps: "ART ships no Amiga-side
+   * installer for this" is a fact about the recipe, and "nobody has run this
+   * one unattended yet" is a fact about what has been measured. §10 asks for
+   * the unready action to be registered, not hidden.
+   *
+   * A **value**, not prose (fix round 1, m6): it shipped as free English
+   * recipe text interpolated into a translated frame.
+   */
+  notYetRunnable: NotYetRunnable | null;
   /** Every entry name this package's own archive carries that `safe_join`
    *  refused — a `..`, an absolute path, a Windows prefix — exactly as the
    *  archive spelled it, and `[]` for the ordinary archive. Shown beside
@@ -1263,6 +1395,416 @@ export async function osinstallPackages(
   release: InstallRelease
 ): Promise<PackageSummary[]> {
   return invoke<PackageSummary[]>("osinstall_packages", { packageFolder, release });
+}
+
+// ---------------------------------------------------------------------------
+// Slots — what a release needs, resolved once (design §3.2)
+// ---------------------------------------------------------------------------
+//
+// Mirrors `core::osinstall::slots` exactly. The sentences these types are
+// allowed to produce live in `src/lib/slots.ts`, not here and not in a
+// component: a slot is data, and what is said about it is a `Phrase`.
+
+/** What kind of artefact a slot wants. Mirrors `slots::SlotKind`. */
+export type SlotKind = "medium" | "package" | "overlay" | "rom";
+
+/**
+ * How ART came to believe a file fills a slot. Mirrors `slots::MatchedBy`,
+ * **ranked** — see that module's doc comment. The order matters on screen as
+ * much as in Rust:
+ *
+ * - `hash` is a fact about the bytes;
+ * - `volume-name` / `top-level-directory` is what the medium says about
+ *   itself, which a rename cannot break;
+ * - `filename` is a **guess** and never reaches {@link SlotState.found} — a
+ *   file bearing the expected name arrives in {@link SlotState.candidates}
+ *   instead, so the row can say ART could not confirm it;
+ * - `chosen` is a file the user named by hand. Not an identification ART
+ *   made, and it must never be rendered as one.
+ */
+export type MatchedBy = "hash" | "volume-name" | "top-level-directory" | "filename" | "chosen";
+
+/** One artefact a release's build can use. Mirrors `slots::Slot`. */
+export interface Slot {
+  /** `medium:AmigaOS3.9`, `package:boingbag-39-1`,
+   *  `overlay:boingbag-39-1:BoingBag3.9-1-UAE`, `rom`. What
+   *  {@link Slot.requires} and {@link SlotState.blockedBy} name. */
+  id: string;
+  kind: SlotKind;
+  /** What the recipe calls it — a package's own name (ART-060), a medium's
+   *  volume name, an overlay's own drawer. Never translated. */
+  name: string;
+  /** The name the artefact gives for **itself**. A `rom` slot has none, so it
+   *  carries the Kickstart major the recipe states it needs (`"40"`), or `""`
+   *  when the recipe states no floor. */
+  identity: string;
+  /** The artefact id the media rows are looked up by, or `null` when neither
+   *  table names these bytes — which means the hash rank cannot fire, never
+   *  that the artefact is unknown or unwanted. */
+  artefact: string | null;
+  /** A medium a required component reads from, or a ROM the release states a
+   *  floor for. A package is a choice, so never required. */
+  required: boolean;
+  /** Names ART has seen this artefact ship under. A hint for the guide text
+   *  and for the *guess* rank — never a requirement. */
+  filenames: string[];
+  /** The media row's own `source`, verbatim. `null` when no row names it. */
+  provenance: string | null;
+  /** Chain order: media, then packages requires-first with each overlay right
+   *  after its package, then the ROM. Sort the readout by this. */
+  position: number;
+  requires: string[];
+  /** Reserved for round 3; empty today. */
+  supersededBy: string[];
+  /** Directories a disc filling this slot must carry at its root — design
+   *  § 3.6's structural check, as data on the artefact map. Empty for
+   *  everything ART records no expectation for. */
+  expectsDirectories: string[];
+}
+
+/**
+ * What is known about one file's **bytes**. Mirrors `slots::BytesRead`.
+ *
+ * Three answers, because two of them were one for a round (fix round 1's F1,
+ * then the re-review's F13):
+ *
+ * - `not-read` — nobody has hashed this file. `osinstallSlots` asks the scan
+ *   cache and hashes nothing, so this is the state of every file in a folder
+ *   `osinstallIdentifyMedia`'s job has not run over. Saying "its bytes are in
+ *   no table ART has" here reports a lookup nobody made.
+ * - `read-no-row` — hashed, and no row in either table claims those bytes.
+ *   The one answer that may say "in no table ART has".
+ * - `read-row` — hashed, and a row **does** claim them. At rank 1 that row is
+ *   the slot's own artefact; at ranks 2 and 3 it is by construction a
+ *   different one — a relabelled or mislabelled disk — and the row's own
+ *   `name` is what lets the readout say which artefact the bytes actually
+ *   are instead of claiming the table does not know them.
+ */
+export type BytesRead =
+  | { state: "not-read" }
+  | { state: "read-no-row" }
+  | { state: "read-row"; artefact: string | null; name: string };
+
+/** The file that fills a slot, and how ART knows. Mirrors `slots::Found`. */
+export interface SlotFound {
+  path: string;
+  matchedBy: MatchedBy;
+  /** The table row — **only** for `matchedBy === "hash"`, which is the rank a
+   *  row is the evidence for. A file matched by the name it gives for itself
+   *  may be in the table under some other artefact, and showing that row here
+   *  would present one artefact's provenance as another's. */
+  row: MediaRow | null;
+  confirmed: MediaConfirmation | null;
+  /** What the table lookup for these bytes came back with — see
+   *  {@link BytesRead}. */
+  bytesRead: BytesRead;
+}
+
+/** One file that might fill a slot. Mirrors `slots::Candidate`. */
+export interface SlotCandidate {
+  path: string;
+  /** See {@link BytesRead} — a guess nobody has hashed, one that was hashed
+   *  and matched nothing, and one whose bytes are some *other* catalogued
+   *  artefact are three different rows. */
+  bytesRead: BytesRead;
+}
+
+/**
+ * Whether the artefact is already part of the tree, **as the tree's own
+ * `distribution.json` states it**. Mirrors `slots::Installed`.
+ *
+ * A file being in a folder is never `"placed"` or `"ran"` — that is the whole
+ * reason this comes from the manifest and not from the scan.
+ */
+export type Installed =
+  | { state: "placed"; at: string | null }
+  | { state: "ran"; command: string }
+  | { state: "no" };
+
+/** One slot, resolved. Mirrors `slots::SlotState`. */
+export interface SlotState {
+  slot: Slot;
+  /** The one file ART will say fills this slot, or `null` whenever it could
+   *  not decide — nothing matched, several did, or the only evidence was a
+   *  file name. */
+  found: SlotFound | null;
+  /** Everything that might fill it, in sorted path order. Empty when `found`
+   *  is set. */
+  candidates: SlotCandidate[];
+  installed: Installed;
+  /** The path the user chose for this slot when **that file is not there** —
+   *  a remembered ROM on a drive nobody plugged in. Its own ending: not
+   *  *chosen* (a sentence about a file that is not there) and not *not found*
+   *  (which would say nothing about the choice already made). `found` is
+   *  `null` alongside it, so it is not counted. */
+  chosenMissing: string | null;
+  /** Every requirement that is not installed yet, by slot id. */
+  blockedBy: string[];
+  /** What ART measured that makes this slot unnecessary — the artefact's own
+   *  statement about itself, e.g. `"Updater 45.15"`. A measurement, not a
+   *  sentence: the words go in the catalogue. */
+  notNeeded: string | null;
+  /**
+   * The first directory {@link Slot.expectsDirectories} names that the disc
+   * filling this slot does **not** carry (design § 3.6).
+   *
+   * *Matched but incomplete* is a different sentence from *not found*: a
+   * disc ART recognises whose root is missing `Emergency-Boot` is a
+   * re-master or a partial copy, and telling somebody it is absent would
+   * send them looking for a file sitting right there. `null` when ART has
+   * nothing to check or everything expected is there.
+   */
+  incomplete: string | null;
+}
+
+/**
+ * How much of this set is here. Mirrors `slots::SetSummary`.
+ *
+ * **Required and optional are counted apart, and must be shown apart.** A set
+ * missing only optional files is ready to build, and one fraction cannot say
+ * that. A slot ART measured as not needed is in neither total.
+ */
+export interface SetSummary {
+  release: string;
+  requiredTotal: number;
+  requiredFound: number;
+  optionalTotal: number;
+  optionalFound: number;
+}
+
+/** What `osinstallSlots` answers. Mirrors `commands::osinstall::SlotReport`. */
+export interface SlotReport {
+  states: SlotState[];
+  summary: SetSummary;
+  /** Material folders ART could not read at all, as the user spelled them.
+   *  Empty is the normal answer, and it is a different sentence from "found
+   *  nothing": a remembered path on a drive nobody plugged in must not make
+   *  the disks in the folder beside it read as missing. */
+  unreadableFolders: string[];
+  /** Folders holding more archives than ART opens in one pass, as
+   *  `[folder, bound]` — design § 6's "bound the count and **name the
+   *  bound**". An artefact ART never reached must not read as one that is
+   *  not there, so the readout says so and quotes the number. */
+  crowdedFolders: [string, number][];
+}
+
+/**
+ * Resolve everything `release` can use against the material folders, the
+ * chosen tree and the chosen ROM — the one answer that replaces the four
+ * separate resolutions the OS Builder used to make.
+ *
+ * Read-only, and it hashes nothing: hash answers come out of the scan cache
+ * that `osinstallIdentifyMedia`'s own job fills, so a folder nobody has
+ * identified yet simply resolves by what its files call themselves. Call this
+ * again after that job finishes to pick the stronger rank up.
+ *
+ * An unreadable material folder is answered rather than refused (the readout
+ * always renders); a chosen `tree` that carries no `distribution.json` is a
+ * refusal, because the user just pointed at it.
+ */
+export async function osinstallSlots(
+  release: InstallRelease,
+  folders: string[],
+  tree?: string | null,
+  rom?: string | null,
+  /**
+   * The files the user picked by hand, as `[slot id, path]` — design § 3.4's
+   * *"a file the user picked by hand wins over the slot, and the readout says
+   * chosen by you for it"*.
+   *
+   * An override outranks every rank ART has: it is not an identification ART
+   * made and cannot be compared with one. Without them the readout said *"not
+   * in the folders you named"* about a file the run was going to use, while
+   * the Amiga-side panel said the opposite — two screens, one artefact.
+   *
+   * An overlay's entry may name `overlay:<packageId>` rather than a
+   * particular drawer; the screen holding these has one *"update archive"*
+   * field per package.
+   */
+  overrides?: SlotOverride[]
+): Promise<SlotReport> {
+  return invoke<SlotReport>("osinstall_slots", {
+    release,
+    folders,
+    tree: tree || null,
+    rom: rom || null,
+    overrides: overrides && overrides.length > 0 ? overrides : null,
+  });
+}
+
+/** One file the user picked by hand, as `osinstall_slots` takes it. */
+export type SlotOverride = [slot: string, path: string];
+
+// ---------------------------------------------------------------------------
+// The chain — one row per link of the material's own order
+// ---------------------------------------------------------------------------
+
+/**
+ * What one link of the AmigaOS 3.9 update chain is. Mirrors
+ * `chain::ChainState`.
+ *
+ * **Seven states, and they never collapse into "not done".** Installed,
+ * ready, waiting for something else, the file is not here, the material
+ * itself makes it redundant, ART will not do it, and nobody has measured it
+ * yet are seven different next steps. Folding any two of them would tell
+ * somebody to go and find a file they already have, or to wait for something
+ * that has already happened.
+ *
+ * `when` is always `null` today: `distribution.json` records no date against
+ * a component, a medium or a run. The screen renders nothing rather than a
+ * guess.
+ */
+export type ChainState =
+  | { state: "installed"; when: string | null }
+  | { state: "ready" }
+  | { state: "blocked-by"; names: string[] }
+  | { state: "blocked-by-component"; components: BlockedComponent[] }
+  | { state: "missing"; expected: string[] }
+  | { state: "not-needed"; supersededBy: string }
+  | { state: "refused"; reason: RefusedBecause }
+  | { state: "not-yet-runnable"; reason: NotYetRunnable };
+
+/**
+ * A component a package needs and the tree was not built with (ART-162).
+ * Mirrors `chain::BlockedComponent`.
+ *
+ * `labelKey` is an i18n key, not a name: the recipe is data in the Rust tree
+ * and the words are the catalogue's (ART-060). `null` for a component the
+ * components screen labels by its medium, and the screen then shows `id` —
+ * the same thing that screen shows, so the two cannot disagree.
+ */
+export interface BlockedComponent {
+  id: string;
+  labelKey: string | null;
+}
+
+/** Why a chain row is refused. A value, never a sentence — this file turns it
+ *  into one. Mirrors `chain::RefusedBecause`. */
+export type RefusedBecause =
+  | { because: "ambiguous"; candidates: string[] }
+  | { because: "not-placeable"; block: HostPlacementBlock };
+
+/** The facts a row's sentence needs beside its state. Mirrors
+ *  `chain::SentenceFacts`. */
+export interface SentenceFacts {
+  /** The file filling this row's slot, by name alone. `null` when nothing
+   *  fills it — including a row that is installed and whose archive has
+   *  since left the folder, which is ordinary. */
+  file: string | null;
+  /** `true` on the Amiga through the package's own installer, `false` placed
+   *  from Windows by ART, `null` for a row that is neither — the CD, and a
+   *  package ART can neither place nor run. Three states, because "ART
+   *  places it" and "ART can do neither" are not the same claim. */
+  runsOnAmiga: boolean | null;
+}
+
+/** One row of the chain screen. Mirrors `chain::ChainRow`. */
+export interface ChainRow {
+  /** The rank the material gives this link — the CD is 1, and two rows may
+   *  share a rank where the material states no order between them. Rows
+   *  arrive sorted by `(position, id)`. */
+  position: number;
+  /** The package's own id, or `null` for the CD row, which is a medium. */
+  packageId: string | null;
+  /** The slot feeding this row, when the release has one. */
+  slotId: string | null;
+  /** The package's own name, or the medium's (ART-060). */
+  name: string;
+  state: ChainState;
+  /** The facts the row's sentence needs beside its state. Named as the brief
+   *  named it (fix round 1, m5). */
+  sentenceFacts: SentenceFacts;
+}
+
+/** How much of the chain is done. Mirrors `chain::ChainSummary`.
+ *
+ *  A row the material makes redundant is counted apart — never as applied
+ *  (which would claim ART did something it did not) and never as outstanding
+ *  (which would send somebody after a file whose contents they have). */
+export interface ChainSummary {
+  release: string;
+  total: number;
+  installed: number;
+  notNeeded: number;
+}
+
+/** What `osinstallChain` answers. Mirrors `commands::osinstall::ChainReport`. */
+export interface ChainReport {
+  rows: ChainRow[];
+  summary: ChainSummary;
+  /** Material folders ART could not read at all — the same field
+   *  {@link SlotReport} carries, and empty is a different sentence from
+   *  "found nothing". */
+  unreadableFolders: string[];
+  /** Folders holding more archives than ART opens in one pass, as
+   *  `[folder, bound]`. */
+  crowdedFolders: [string, number][];
+}
+
+/**
+ * The whole chain for `release`, resolved against the same folders, tree and
+ * ROM the material readout is resolved against.
+ *
+ * The fact gathering is `osinstallSlots`' own, in Rust: two questions about
+ * one set of files, so the two screens cannot disagree about which archive is
+ * which. Read-only, and it hashes nothing.
+ *
+ * A chosen `tree` with no `distribution.json` is a refusal rather than an
+ * empty chain — every *installed* state here comes from that file alone.
+ */
+export async function osinstallChain(
+  release: InstallRelease,
+  folders: string[],
+  tree?: string | null,
+  rom?: string | null
+): Promise<ChainReport> {
+  return invoke<ChainReport>("osinstall_chain", {
+    release,
+    folders,
+    tree: tree || null,
+    rom: rom || null,
+  });
+}
+
+/**
+ * What writing the drop-folder guide did. Mirrors
+ * `commands::osinstall::GuideOutcome`.
+ *
+ * **Two endings, and they stay two.** *Written* and *there already* are
+ * different next steps — one is done, the other asks the user to delete a
+ * file — and a third, a real failure, arrives as a rejection rather than as
+ * an outcome. `already-there` is not an error: `SAFE_CREATE` means the file
+ * on disk was not touched, which is the guarantee; what to say about it is a
+ * sentence, and a sentence has to be translatable (ART-060).
+ */
+export type GuideOutcome =
+  | { state: "written"; path: string }
+  | { state: "alreadyThere"; path: string };
+
+/**
+ * Write *"what goes in this folder"* into one of the build's material folders
+ * (design § 3.7).
+ *
+ * **Only ever from a click.** ART does not write into a user's folder because
+ * they pointed at it; this exists so a person can ask for the list, in the
+ * folder where it is useful. The text is composed on the Rust side from the
+ * release's own slots, so it cannot drift from what ART actually accepts, and
+ * its **filename comes from the same data** — which is why this takes a
+ * language and not a name.
+ *
+ * `language` is the UI's own code (`i18n.language`, without its region);
+ * anything Rust has no guide for falls back to English rather than refusing.
+ */
+export async function osinstallWriteMaterialGuide(
+  folder: string,
+  release: InstallRelease,
+  language: string
+): Promise<GuideOutcome> {
+  return invoke<GuideOutcome>("osinstall_write_material_guide", {
+    folder,
+    release,
+    language,
+  });
 }
 
 /** The event `osinstall_collisions`'s own background job answers on. */
@@ -2048,6 +2590,11 @@ export function refusalPhrase(reason: RefusalReason): Phrase {
         key: "osinstall.refusal.packageFolderMissing",
         params: { packages: reason.packages.join(", ") },
       };
+    case "package-requirement-needs-amiga-run":
+      return {
+        key: "osinstall.refusal.packageRequirementNeedsAmigaRun",
+        params: { package: reason.package, requirement: reason.requirement },
+      };
     case "package-requirement-missing":
       return {
         key: "osinstall.refusal.packageRequirementMissing",
@@ -2100,6 +2647,10 @@ export function hostPlacementBlockSuffix(block: HostPlacementBlock): string {
   switch (block) {
     case "encrypted-payload":
       return "encryptedPayload";
+    case "needs-fixfonts":
+      return "needsFixfonts";
+    case "needs-installer-script":
+      return "needsInstallerScript";
   }
 }
 
@@ -2107,6 +2658,51 @@ export function hostPlacementBlockSuffix(block: HostPlacementBlock): string {
  *  no parameters; see [`hostPlacementBlockSuffix`]. */
 export function hostPlacementBlockKey(block: HostPlacementBlock): string {
   return `osinstall.packages.blocked.${hostPlacementBlockSuffix(block)}`;
+}
+
+/**
+ * The i18n key for a **chain row** refused because ART cannot place the
+ * package from the host — takes `{{name}}`.
+ *
+ * A third key per block, and it is the same lesson `notYetRunnableChainKey`
+ * carries one entry down (fix round 1, m6): the checklist's own sentence
+ * sits directly under the package's name and must not repeat it, while a
+ * chain row is one line among nine and has to say what it is about. The
+ * chain rendered the checklist's key until round 3's fix round 1, so
+ * Euro-Update's row read *"This package replaces the bitmap fonts…"* with
+ * nothing naming the package — and on every tree without BoingBags 3&4 that
+ * is the state Euro-Update is actually in, so it is the ordinary row rather
+ * than a corner of one.
+ */
+export function hostPlacementBlockChainKey(block: HostPlacementBlock): string {
+  return `osinstall.chain.refusedNotPlaceable.${hostPlacementBlockSuffix(block)}`;
+}
+
+/**
+ * The catalogue-key fragment naming one {@link NotYetRunnable} — the single
+ * `switch` both sentences about it are built from, exactly as
+ * {@link hostPlacementBlockSuffix} is for a block (fix round 1, m6).
+ *
+ * Two keys per reason, not one shared sentence: the chain row names the
+ * package (it is one line in a list of nine), while the Amiga-side panel's
+ * row sits directly under the package's own name and must not repeat it.
+ */
+export function notYetRunnableSuffix(reason: NotYetRunnable): string {
+  switch (reason) {
+    case "installer-not-measured":
+      return "installerNotMeasured";
+  }
+}
+
+/** The i18n key for the Amiga-side panel's own disabled row — no package
+ *  name, because it renders under one. */
+export function notYetRunnablePanelKey(reason: NotYetRunnable): string {
+  return `osinstall.amigaInstall.package.notYetRunnable.${notYetRunnableSuffix(reason)}`;
+}
+
+/** The i18n key for the chain row's sentence — takes `{{name}}`. */
+export function notYetRunnableChainKey(reason: NotYetRunnable): string {
+  return `osinstall.chain.notYetRunnable.${notYetRunnableSuffix(reason)}`;
 }
 
 /** Whether a plan's own refusals include the one that means "the paired

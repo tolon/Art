@@ -59,6 +59,8 @@ import { CopyPlanDialog } from "@/components/files/CopyPlanDialog";
 import { FileViewer } from "@/components/files/FileViewer";
 import {
   FunctionKeyBar,
+  useCommandLineKey,
+  useCursorKeys,
   useFunctionKeys,
   useInsertToggle,
   useMarkKeys,
@@ -107,6 +109,7 @@ import {
   type ColourRule,
 } from "@/lib/colourRules";
 import { extendSearch, shortenSearch } from "@/lib/quickSearch";
+import { cursorStep, type CursorMove } from "@/lib/cursorKeys";
 import { parseCommandLine } from "@/lib/commandLine";
 import {
   formatBytes,
@@ -166,6 +169,7 @@ import {
   insertToggle,
   invertSelection,
   markByMask,
+  markThrough,
   selectOnly,
   selectRange,
   selectedEntriesForBatch,
@@ -584,6 +588,9 @@ export function FileManager() {
   /** What has been typed into type-to-search, and the timer that ends it. */
   const [search, setSearch] = useState("");
   const searchTimer = useRef<number | null>(null);
+  /** The command line's own `<input>`, so Ctrl+Space (ART-275, the owner's
+   * `wincmd.ini` `C+SPACE=cm_ExecuteDOS`) can focus it. */
+  const commandLineRef = useRef<HTMLInputElement | null>(null);
   /** The two source combos, so Alt+F1 / Alt+F2 can open them. */
   const sourceCombos = {
     left: useRef<HTMLSelectElement>(null),
@@ -3826,9 +3833,81 @@ export function FileManager() {
     keysActive
   );
 
+  /**
+   * How many rows PageUp/PageDown moves by: however many currently fit in
+   * the focused pane's scroll container (`.tc-row-list`, found by the
+   * `data-side` the `Pane` section carries). Measured straight from the DOM
+   * at the moment of the keystroke — the same one-shot read `measurePane`
+   * above does for width — rather than tracked as state, since a row's
+   * height only matters exactly when a page-sized jump is being computed.
+   * Falls back to **20** (a reasonable pane's worth) when nothing has
+   * rendered yet: an empty pane, or a keystroke that lands before the first
+   * layout.
+   */
+  const pageRowsForFocused = useCallback(() => {
+    const pane = commanderRef.current?.querySelector<HTMLElement>(
+      `.tc-pane[data-side="${focused}"]`
+    );
+    const rowList = pane?.querySelector<HTMLElement>(".tc-row-list");
+    const row = rowList?.querySelector<HTMLElement>(".tc-row");
+    const rowHeight = row?.offsetHeight;
+    if (!rowList || !rowHeight) return 20;
+    return Math.max(1, Math.floor(rowList.clientHeight / rowHeight));
+  }, [focused]);
+
+  /**
+   * Scroll the row the cursor just landed on into view. The listing has no
+   * virtualisation (brief's own note), so a plain DOM query by the row's
+   * `data-name` is enough — no need for a per-row ref map. `scrollIntoView`
+   * does not exist under jsdom, hence the optional call rather than a bare
+   * one: this must not throw in a test render that never measures layout.
+   */
+  const scrollCursorIntoView = useCallback((side: Side, name: string) => {
+    const pane = commanderRef.current?.querySelector<HTMLElement>(
+      `.tc-pane[data-side="${side}"]`
+    );
+    const rows = pane?.querySelectorAll<HTMLElement>(".tc-row-list .tc-row");
+    if (!rows) return;
+    for (const row of rows) {
+      if (row.dataset.name === name) {
+        row.scrollIntoView?.({ block: "nearest" });
+        return;
+      }
+    }
+  }, []);
+
+  // Up/Down/Home/End/PageUp/PageDown (ART-275) — the commander had no cursor
+  // keys at all until this fix. Without Shift, a move is a search-style
+  // jump: only the cursor moves, exactly like type-to-search below, so a
+  // selection built with Insert survives walking around it with the arrows.
+  // With Shift it marks Total Commander's way — every row the cursor passes
+  // over, via `markThrough` (`@/lib/selection`) — except when there was no
+  // prior cursor to have passed anything *from* (a pane just opened), which
+  // is a plain move like the unshifted case.
+  useCursorKeys((move: CursorMove, shift: boolean) => {
+    const from = anchor[focused];
+    const to = cursorStep(paneNames(focused), from, move, pageRowsForFocused());
+    if (to === null) return;
+    if (shift && from !== null) {
+      applySelection(focused, markThrough(paneEntries(focused), selection[focused], from, to));
+    } else {
+      moveCursor(focused, to);
+    }
+    scrollCursorIntoView(focused, to);
+  }, keysActive);
+
+  // Ctrl+Space (ART-275) — the owner's own `wincmd.ini`
+  // (`[Shortcuts] C+SPACE=cm_ExecuteDOS`) focuses the command line.
+  useCommandLineKey(() => commandLineRef.current?.focus(), keysActive);
+
   // Letters move the cursor to the next matching name. The cursor only — a
   // search must never change what is marked, or typing a name would quietly
   // throw away a selection the user spent a minute building.
+  //
+  // No conflict with the cursor keys just above: `searchCharacter`
+  // (`@/lib/quickSearch`) accepts single printable characters only, and none
+  // of Up/Down/Home/End/PageUp/PageDown is one (`event.key.length !== 1`
+  // rejects them), so the two hooks never compete for the same keystroke.
   useTypeAhead(
     {
       onCharacter: (character) => {
@@ -4141,6 +4220,7 @@ export function FileManager() {
         >
           <span className="tc-command-prompt">{`${pane(focused).location}>`}</span>
           <input
+            ref={commandLineRef}
             type="text"
             className="tc-command-input"
             value={commandLine}
@@ -4475,6 +4555,11 @@ function Pane({
   return (
     <section
       className={`tc-pane${focused ? " tc-pane-focused" : ""}`}
+      // Which side this is, in the DOM — ART-275's cursor keys need to find
+      // *this* pane's row list from `FileManager.tsx` (to measure `pageRows`
+      // and to scroll the cursor row into view) without guessing at render
+      // order between the left and right `<Pane>`.
+      data-side={side}
       // Focus is shown by the path row across the pane's whole width (see
       // `.tc-pane-focused` in the stylesheet), not by a ring: a commander
       // where you cannot see which side the keyboard is talking to is worse
@@ -4733,6 +4818,10 @@ function Pane({
               <li
                 key={`${entry.name}-${entry.header_block ?? entry.path}`}
                 className={`tc-row${isCursor ? " tc-row-cursor" : ""}`}
+                // Lets ART-275's cursor keys find the row the cursor just
+                // landed on, to scroll it into view — the row list has no
+                // virtualisation, so a plain DOM query by name is enough.
+                data-name={entry.name}
                 draggable={!entry.is_dir}
                 onDragStart={(event) => {
                   event.dataTransfer.setData(

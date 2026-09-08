@@ -62,7 +62,7 @@ pub mod workvol;
 
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The file the Amiga writes and the host reads, in the root of ART's own
 /// work volume.
@@ -140,6 +140,110 @@ pub const MARK_OK: &str = "ok";
 /// no.
 pub const MARK_FAILED: &str = "failed";
 
+/// The file a **follow-up** writes, in the root of ART's work volume.
+///
+/// Separate from [`RESULT_FILE`] and not a fifth [`RunOutcome`]: a follow-up
+/// is something the *package* does after its own installer succeeded, and
+/// collapsing "the installer said no" into "the follow-up did not run" would
+/// be the four-endings-one-sentence defect this module already refuses
+/// elsewhere. The install's own ending stays exactly what it was.
+pub const FOLLOW_UP_FILE: &str = "art-followup.txt";
+
+/// The gate opened and the follow-up ran and returned without `WARN`.
+pub const MARK_FOLLOW_UP_RAN: &str = "ran";
+
+/// The gate was closed — the file the follow-up is conditional on is already
+/// at or above the version it names, so there was nothing to do. **Not a
+/// failure**, and it must not be reported as one.
+pub const MARK_FOLLOW_UP_NOT_NEEDED: &str = "not-needed";
+
+/// The gate opened, the follow-up ran, and it returned `WARN` or worse.
+pub const MARK_FOLLOW_UP_FAILED: &str = "failed";
+
+/// The gate could not be asked: the tree carries no `C/Version`, so the
+/// script cannot find out what version the file is at.
+///
+/// **Its own word rather than folded into [`MARK_FOLLOW_UP_NOT_NEEDED`].**
+/// "The tree is already up to date" and "ART could not find out" are different
+/// things to tell a person, and only the second is worth acting on. The
+/// command exists on all three states of the AmigaOS 3.9 tree measured on
+/// 2026-09-08 (`C/Version`, 4 500 bytes, clean and after both BoingBags) —
+/// but `C:Reboot` was present on the owner's 3.2 tree and absent on both his
+/// 3.9 trees (ART-272/273), which is why a disk command is checked for rather
+/// than assumed.
+pub const MARK_FOLLOW_UP_NOT_CHECKED: &str = "not-checked";
+
+/// What a package's version-gated follow-up did.
+///
+/// Four words, four meanings, and `None` (the file absent) is a fifth state
+/// the reader must keep separate: it means no follow-up was declared, or the
+/// script never got that far.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FollowUpOutcome {
+    /// It was needed and it worked.
+    Ran,
+    /// The gate was closed. Nothing to do, and nothing wrong.
+    NotNeeded,
+    /// It was needed, it ran, and it said no.
+    Failed,
+    /// ART could not ask the tree what version the gated file is at.
+    NotChecked,
+}
+
+/// A file-version gate: run the follow-up **unless** `path` already states at
+/// least `version`.
+///
+/// `path` is relative to the system volume, exactly as a recipe writes it
+/// (`Libs/xadmaster.library`), and the script prefixes the volume itself.
+/// `version` is the major version AmigaDOS's own `Version … FILE` compares
+/// against — an integer, because that is the only thing that command takes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct FileVersionGate {
+    /// The file to ask, relative to the system volume.
+    pub path: String,
+    /// The version it must already state for the follow-up to be skipped.
+    pub version: u32,
+}
+
+/// A second invocation of the package's own installer, on a second payload,
+/// conditional on a file's version.
+///
+/// **Data, and in the same boot.** HstWB Installer does exactly this for
+/// BoingBag 3.9-2's `XAD-Update` — `amiga/amiga-os-3.9/S/Amiga-OS-3.9/`
+/// `Install-Boing-Bag-2` lines 32-36, MIT-licensed and readable, the only
+/// distribution builder whose source can be read (ART-227):
+///
+/// ```text
+/// ; run xad updater, if xadmaster.library version is less than 10
+/// Version >>SYS:hstwb-installer.log "SYS:Libs/xadmaster.library" 10 FILE
+/// IF WARN
+///   SYS:T/BoingBags/BoingBag3.9-2/C/Updater SYS:T/BoingBags/BoingBag3.9-2/XAD-Update "SYS:"
+/// ENDIF
+/// ```
+///
+/// It is **not** a `finish::PostStep`: the payload is ZipCrypto and only the
+/// package's own `Updater` holds the key (ART-166), so no host file operation
+/// can place those files. And it is **not** a second emulator run: it is four
+/// more lines in the one boot script ART already writes.
+///
+/// Every field goes through
+/// [`crate::core::security::refuse_shell_metacharacters`] exactly like
+/// [`PlannedRun`]'s own, because it reaches the same generated script.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct FollowUp {
+    /// The program, relative to the package's own drawer — the same shape
+    /// [`PlannedRun::program`] has once the command layer has composed it.
+    pub program: String,
+    /// Its arguments, each a separate string. The target volume is appended
+    /// by the composer, exactly as it is for the first invocation.
+    pub args: Vec<String>,
+    /// Run it **unless** this is already satisfied.
+    pub unless_file_version_at_least: FileVersionGate,
+}
+
 /// What ART will run on the Amiga, and where.
 ///
 /// Every string in here is **shipped recipe data or a name ART chose itself**.
@@ -203,6 +307,15 @@ pub struct PlannedRun {
     /// Composed by the command layer, like [`program`](Self::program), and
     /// validated here with exactly the same guards.
     pub working_directory: Option<String>,
+    /// Version-gated second invocations, emitted **after** the first one's
+    /// `WARN` has already been turned into the result word.
+    ///
+    /// Empty for every package that declares none, which is all but one.
+    /// See [`FollowUp`] for what it is and why it is not a `PostStep`, and
+    /// [`workvol::startup_sequence`] for the ordering trap that makes the
+    /// placement load-bearing.
+    #[serde(default)]
+    pub follow_ups: Vec<FollowUp>,
 }
 
 /// What a run ended as. **Four endings, not two** — and they are four values

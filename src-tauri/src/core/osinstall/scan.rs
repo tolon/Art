@@ -422,7 +422,13 @@ pub fn media_for_layer<'a>(
 /// unreadable. Mutation confirms it: dropping the entry instead of keeping it
 /// leaves every test green. It stays because the alternative is silently
 /// losing a disk on a race nobody has seen, and that costs one line.
-fn dedupe_identical_disks(found: Vec<FoundMedia>) -> Vec<FoundMedia> {
+/// `pub` since `commands::osinstall::osinstall_slots` arrived (fix round 1,
+/// F2): that command scans each material folder **separately**, so that one
+/// unreadable folder cannot discard the disks found in the others the way
+/// [`find_media_across`]'s single `?` does, and it then needs this exact rule
+/// applied across the result. Exported rather than reimplemented — a second
+/// answer to "is this one disk or two" is how the two would drift.
+pub fn dedupe_identical_disks(found: Vec<FoundMedia>) -> Vec<FoundMedia> {
     let repeated: Vec<String> = found
         .iter()
         .map(|entry| entry.volume_name.clone())
@@ -488,13 +494,37 @@ fn file_sha256(path: &std::path::Path) -> Option<String> {
 /// Sorted by path, the same deterministic order `find_media` promises and
 /// for the same reason: a caller's report of what it found must not depend
 /// on a directory listing's own, filesystem-dependent order.
+/// How many files ART opens in one folder while asking which are packages —
+/// design § 6's bound, named so a sentence can quote it.
+///
+/// **A folder of 200 archives is not a material folder**, it is somebody's
+/// Aminet mirror, and [`find_packages`] opens every regular file in a folder
+/// to find out what it is. The design's own words: *"bound the count and name
+/// the bound."* 200 is the design's number.
+pub const MAX_MATERIAL_ARCHIVES: usize = 200;
+
 pub fn find_packages(folder: &Path) -> CoreResult<Vec<FoundPackage>> {
+    Ok(find_packages_bounded(folder, usize::MAX)?.0)
+}
+
+/// [`find_packages`], stopping after `max` files have been **opened**.
+///
+/// The second answer is whether the bound was reached, so a caller can say so
+/// rather than reporting a short list as the whole truth: an artefact ART
+/// never got to must not read as an artefact that is not there.
+///
+/// The count is of files *opened*, not of packages found — the cost this
+/// bounds is `ArchiveSource::open`, which is paid on every regular file in
+/// the folder whether or not it turns out to be an archive at all.
+pub fn find_packages_bounded(folder: &Path, max: usize) -> CoreResult<(Vec<FoundPackage>, bool)> {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(folder)?
         .map(|entry| entry.map(|e| e.path()))
         .collect::<std::io::Result<_>>()?;
     entries.sort();
 
     let mut found: Vec<FoundPackage> = Vec::new();
+    let mut opened = 0usize;
+    let mut hit_bound = false;
 
     for path in entries {
         // `symlink_metadata`, not `metadata` — a symlink is never followed,
@@ -505,6 +535,12 @@ pub fn find_packages(folder: &Path) -> CoreResult<Vec<FoundPackage>> {
         if !metadata.is_file() {
             continue;
         }
+
+        if opened >= max {
+            hit_bound = true;
+            break;
+        }
+        opened += 1;
 
         // Anything that is not an archive, or an archive `ArchiveSource`
         // refuses (no single top-level directory, or more than one), is
@@ -519,7 +555,7 @@ pub fn find_packages(folder: &Path) -> CoreResult<Vec<FoundPackage>> {
         });
     }
 
-    Ok(found)
+    Ok((found, hit_bound))
 }
 
 /// One archive [`find_packages`] opened, and the name it gave for itself.
@@ -656,7 +692,19 @@ pub fn media_for<'a>(found: &'a [FoundMedia], volume_name: &str) -> MediaMatch<'
 /// archive could pass the check. A directory has to hold at least one entry
 /// under it; a file has to be a file. `walk` answers entries **at or under**
 /// the path, so "under" is tested by path length, not by count.
-fn archive_carries(archive: &Path, inner: &str) -> bool {
+/// Whether `archive` carries `inner` below its own top-level directory —
+/// the check `Package::distinguished_by` exists for.
+///
+/// `pub` since round 3: `commands::amigainstall::classify_top_level` needs
+/// the same question answered about one archive it already has a path for.
+/// Two packages now legitimately share the top level `BoingBag3.9-2`
+/// (`BoingBag39-2.lha` and `BoingBag39-2-Contribution.lha`), and a
+/// classification that stopped at the top level would tell somebody holding
+/// the plain BoingBag 2 archive that ART cannot tell which of two packages
+/// it is — about a file whose own contents say so. One implementation, so
+/// the panel and `package_for` cannot come to different answers about one
+/// file.
+pub fn archive_carries(archive: &Path, inner: &str) -> bool {
     let Ok(mut source) = ArchiveSource::open(archive) else {
         return false;
     };

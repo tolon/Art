@@ -31,6 +31,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+import type { SlotOverride } from "@/lib/osinstall";
 import type { Phrase } from "@/lib/phrase";
 
 // ---------------------------------------------------------------------------
@@ -184,12 +185,27 @@ export interface AmigaInstallPreview {
   profileName: string;
 }
 
+/**
+ * What a package's version-gated follow-up did (ART-280).
+ *
+ * BoingBag 3.9-2 carries a second payload, `XAD-Update`, that its own
+ * `Updater` applies when `Libs/xadmaster.library` is older than 10. Four
+ * words because they mean four things: `not-needed` is not a failure, and
+ * `not-checked` — the tree has no `C/Version`, so ART could not ask — is not
+ * the same as either.
+ */
+export type FollowUpOutcome = "ran" | "not-needed" | "failed" | "not-checked";
+
 /** A finished run's own answer. `job_id` is snake_case to match every other
- *  job result in ART. */
+ *  job result in ART; `follow_up` matches its Rust field for the same reason. */
 export interface AmigaInstallResult {
   job_id: number;
   outcome: RunOutcome;
   settlement: SettlementReport;
+  /** `null` when the package declares no follow-up, which is all but one.
+   *  **Beside the ending, never inside it**: a follow-up that said no is not
+   *  the installer saying no. */
+  follow_up: FollowUpOutcome | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -226,6 +242,136 @@ export async function amigaInstallRun(
     request,
     winuaePath: winuaePath ?? null,
   });
+}
+
+/**
+ * What a chosen archive is, judged against a selected package — **before**
+ * it goes into a request (ART-277). The wrapper is plain LHA and this reads
+ * its listing alone; nothing is unpacked and the encrypted payload an update
+ * archive might carry is never opened.
+ *
+ * `kind` is one of six shapes: `"the-package"` (the selected package's own
+ * archive), `"the-update-archive"` (the selected package's own second
+ * archive), `` `another-package:${id}` `` (another release package's own
+ * archive, and one this screen's radio actually offers), ``
+ * `another-packages-update-archive:${id}` `` (that other package's *own*
+ * update archive, not its package archive), ``
+ * `other-artefact:${topLevelName}` `` (the archive names something real —
+ * either two or more release packages share that identity and ART will
+ * never pick one of them arbitrarily, or the one package that does claim it
+ * is not one this screen can run at all), or `"unknown"` (ART recognises
+ * none of the above — accepted without comment, since Rust still validates
+ * the real thing at `compose`).
+ */
+export interface ArchiveClassification {
+  kind:
+    | "the-package"
+    | "the-update-archive"
+    | "unknown"
+    | `another-package:${string}`
+    | `another-packages-update-archive:${string}`
+    | `shared-artefact:${string}`
+    | `other-artefact:${string}`;
+  /** What the archive's own listing carries at its top level — a drawer and,
+   *  usually, its sibling `.info` icon. Shown when ART cannot say more. */
+  topLevel: string[];
+  /** The **selected** package's own `media` — what the package field itself
+   *  expects. `null` when the selected id is not a package this release
+   *  ships. `PackageSummary` never carries a recipe's `media`, which is why
+   *  this travels with the answer rather than being looked up again. */
+  expectedMedia: string | null;
+  /** The selected package's own declared overlay drawers — what the
+   *  update-archive field expects. Empty for a package that declares none. */
+  expectedOverlays: string[];
+  /** Every release package that reads this exact identity, as ids — only
+   *  non-empty when `kind` is `` `shared-artefact:${media}` `` (ART-277
+   *  re-review, L5). Resolved to display names by the panel, the same way
+   *  it already does for `another-package`'s id. */
+  sharedBy: string[];
+}
+
+/** Ask Rust what an archive is, against the package currently selected and
+ *  the release currently being built — the same list the radio offers
+ *  (ART-277 review, Major 2: naming a package from a *different* release, or
+ *  one this screen does not even list, is an instruction the user cannot
+ *  act on here). Read-only and lenient: an archive ART cannot make sense of
+ *  answers `"unknown"` rather than rejecting the promise — this is asked on
+ *  every file pick, and a query must not turn "I could not tell" into an
+ *  error the user cannot get past. */
+export async function amigainstallClassifyArchive(
+  path: string,
+  packageId: string,
+  release: string
+): Promise<ArchiveClassification> {
+  return invoke<ArchiveClassification>("amigainstall_classify_archive", {
+    path,
+    packageId,
+    release,
+  });
+}
+
+/** [`ArchiveClassification.kind`], taken apart into something a `switch` can
+ *  read — every shape it can be, spelled out rather than parsed again at
+ *  every call site. */
+export type ParsedClassification =
+  | { kind: "the-package" }
+  | { kind: "the-update-archive" }
+  | { kind: "unknown" }
+  | { kind: "another-package"; id: string }
+  | { kind: "another-packages-update-archive"; id: string }
+  | { kind: "shared-artefact"; media: string }
+  | { kind: "other-artefact"; media: string };
+
+export function parseClassification(
+  classification: ArchiveClassification | null
+): ParsedClassification | null {
+  if (!classification) return null;
+  const { kind } = classification;
+  if (kind === "the-package" || kind === "the-update-archive" || kind === "unknown") {
+    return { kind };
+  }
+  if (kind.startsWith("another-packages-update-archive:")) {
+    return { kind: "another-packages-update-archive", id: kind.slice("another-packages-update-archive:".length) };
+  }
+  if (kind.startsWith("another-package:")) {
+    return { kind: "another-package", id: kind.slice("another-package:".length) };
+  }
+  if (kind.startsWith("shared-artefact:")) {
+    return { kind: "shared-artefact", media: kind.slice("shared-artefact:".length) };
+  }
+  if (kind.startsWith("other-artefact:")) {
+    return { kind: "other-artefact", media: kind.slice("other-artefact:".length) };
+  }
+  return { kind: "unknown" };
+}
+
+/**
+ * Where one package's own archive/overlay-archive choice is remembered
+ * (ART-277).
+ *
+ * **Scoped per package**, the way `rememberedComponentKey`
+ * (`@/lib/osinstall`) scopes a release's component picks: a component id
+ * means something only inside the recipe that declares it, and a chosen
+ * archive path means something only for the package it was picked for.
+ * Before this, `AmigaInstall.tsx` kept one global `"amigaInstall.archive"`
+ * key for every package, so switching the panel's radio from BoingBag 1 to
+ * BoingBag 2 carried BoingBag 1's own path straight into a BoingBag 2
+ * request — the owner's own defect: *"'…BoingBag39-2.lha' is not this
+ * package's update archive: it carries none of
+ * 'BoingBag3.9-1-UAE/BoingBag3.9-1'"*, produced by a stale `packageId`
+ * nothing had cleared.
+ *
+ * **Nothing is cleared** (CLAUDE.md: nothing changes unless the user changes
+ * it) — the carry is closed structurally instead: switching packages reads a
+ * *different* key, so BoingBag 1's own choice is still there, under its own
+ * name, the next time BoingBag 1 is selected again.
+ *
+ * `null` (no package chosen yet, or the panel used with an archive picked by
+ * hand before any package folder exists) keeps the base, unscoped key —
+ * there is no second package to collide with while none is selected at all.
+ */
+export function amigaInstallArchiveKey(base: string, packageId: string | null): string {
+  return packageId === null ? base : `${base}.${packageId}`;
 }
 
 /** The event a finished run's own answer arrives on. */
@@ -305,6 +451,29 @@ export function outcomeNextStepPhrase(outcome: RunOutcome): Phrase {
   }
 }
 
+/**
+ * What the package's follow-up did, in one sentence — one key per word, and
+ * **none of them says the install failed** (ART-280).
+ *
+ * It sits beside the ending rather than replacing it, because the two are
+ * different facts: the installer's own verdict is `outcomePhrase`, and this
+ * is what the package went on to do afterwards. `notNeeded` in particular
+ * must not read as a problem — it means the tree already carries that
+ * version, which is the ordinary case on a tree that has been updated before.
+ */
+export function followUpPhrase(followUp: FollowUpOutcome): Phrase {
+  switch (followUp) {
+    case "ran":
+      return { key: "osinstall.amigaInstall.followUp.ran" };
+    case "not-needed":
+      return { key: "osinstall.amigaInstall.followUp.notNeeded" };
+    case "failed":
+      return { key: "osinstall.amigaInstall.followUp.failed" };
+    case "not-checked":
+      return { key: "osinstall.amigaInstall.followUp.notChecked" };
+  }
+}
+
 /** How the report is coloured. Never the only signal — each ending already
  *  says which it is in words — but a success and a refusal must not look
  *  alike at a glance either. */
@@ -381,13 +550,87 @@ export function overlayAdvicePhrase(preview: AmigaInstallPreview): Phrase | null
  * Empty means every one of the three things ART cannot supply itself (the
  * user's own Kickstart, the package's own archives, an emulator) is there.
  */
-export function readinessBlockers(preview: AmigaInstallPreview): Phrase[] {
+/**
+ * Every archive the user picked by hand, as `osinstall_slots` takes them —
+ * design § 3.4 (round 2 whole-branch review, M5).
+ *
+ * **The readout could not see these, and said the opposite of the panel.** A
+ * user who chose BoingBag 3.9-1's archive on the Amiga-side step and stepped
+ * back one read *"BoingBag 3.9-1 is not in the folders you named"* about a
+ * file ART was holding a path for and would use in the run. The keys are the
+ * panel's own (`amigaInstall.archive.<packageId>` and `.overlayArchive.…`,
+ * ART-277); this reads them straight out of the remembered bag so the one
+ * screen that can see both — the step — can hand them over.
+ *
+ * An overlay is named as `overlay:<packageId>` rather than by drawer: the
+ * panel has one *"update archive"* field per package, not one per overlay,
+ * and the resolver matches an overlay slot by that prefix. See
+ * `slots::Override`.
+ *
+ * A path that is not there is **not** filtered out here: whether a chosen
+ * file has gone is a fact about the disk, the command checks it, and
+ * `chosen-missing` is its own ending precisely so the user is told rather
+ * than quietly dropped back to whatever ART found.
+ */
+export function slotOverrides(remembered: unknown): SlotOverride[] {
+  const bag =
+    typeof remembered === "object" && remembered !== null
+      ? (remembered as Record<string, unknown>)
+      : {};
+  const out: SlotOverride[] = [];
+  for (const [key, value] of Object.entries(bag)) {
+    if (typeof value !== "string" || value === "") continue;
+    if (key.startsWith("amigaInstall.archive.")) {
+      out.push([`package:${key.slice("amigaInstall.archive.".length)}`, value]);
+    } else if (key.startsWith("amigaInstall.overlayArchive.")) {
+      out.push([`overlay:${key.slice("amigaInstall.overlayArchive.".length)}`, value]);
+    }
+  }
+  // Sorted, so two equal bags give one string to `MaterialReadout`'s own
+  // primitive dependency and the readout does not re-ask on a key reorder.
+  return out.sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+export function readinessBlockers(
+  preview: AmigaInstallPreview,
+  /**
+   * The archive paths **ART resolved itself**, from the material folders
+   * (round 2, § 3.4) — not the ones the user picked by hand.
+   *
+   * Fix round 1's m5. `blocker.archiveMissing` says *"the archive chosen
+   * above… ART checked the file you chose"*, and since the fields fill
+   * themselves that is a sentence about a choice nobody made — printed
+   * directly under a read-only line still saying the file was *"identified by
+   * its bytes"*. Two sentences about one file, one wrong about who chose it
+   * and one out-claiming the disk.
+   *
+   * Empty (the default) keeps every existing caller on the original sentence,
+   * which is the right one when the user really did choose.
+   */
+  foundByArt: string[] = []
+): Phrase[] {
   const blockers: Phrase[] = [];
   if (!preview.packageArchivesPresent) {
-    blockers.push({
-      key: "osinstall.amigaInstall.blocker.archiveMissing",
-      params: { count: preview.packageArchives.length },
-    });
+    // **Which** archive is gone is not knowable here — `packageArchivesPresent`
+    // is one boolean over all of them — so the plural sentence deliberately
+    // says "one of" and lists them all. It is only in the singular case, where
+    // there is one archive and ART found it, that a path can be named as *the*
+    // missing one, and there the sentence does name it.
+    const artsOwn = preview.packageArchives.some((path) => foundByArt.includes(path));
+    blockers.push(
+      artsOwn
+        ? {
+            key: "osinstall.amigaInstall.blocker.archiveMissingFound",
+            params: {
+              count: preview.packageArchives.length,
+              path: preview.packageArchives.join(", "),
+            },
+          }
+        : {
+            key: "osinstall.amigaInstall.blocker.archiveMissing",
+            params: { count: preview.packageArchives.length },
+          }
+    );
   }
   if (!preview.kickstartPresent) {
     blockers.push({
@@ -399,4 +642,161 @@ export function readinessBlockers(preview: AmigaInstallPreview): Phrase[] {
     blockers.push({ key: "osinstall.amigaInstall.blocker.noEmulator" });
   }
   return blockers;
+}
+
+/**
+ * What an archive field's own classification means for Run — ART-277,
+ * folded into ART-277 review's Medium 2 fix.
+ *
+ * `field` says which slot this classification is for: `"package"` is the
+ * package's own archive field, `"overlay"` the second/update-archive field.
+ * A `Phrase` here is meant to be pushed into the **same** `readinessBlockers`
+ * list the preview's own blockers render in — directly above the confirm
+ * checkbox and the Run button — rather than shown a second time beside the
+ * field. ART-202's own lesson, from this exact screen: a reason Run is dead
+ * has to say so where the button is, and the first attempt at this said it
+ * only beside the field, a screen's height away.
+ *
+ * Five outcomes:
+ * - **Another release package's own archive**, or its own update archive
+ *   (Medium 1) — named by `otherName`, telling the user to select that
+ *   package instead, because this screen's radio actually offers it.
+ * - **Two or more release packages share this identity** — `shared-artefact`
+ *   (ART-277 re-review, L5, split out of `other-artefact`): named by
+ *   *both* display names via `sharedBy`, never resolved by picking one
+ *   (ART-276's own shape, reached from a different door), and making no
+ *   claim about which step handles it, since more than one package doing so
+ *   is not evidence either way.
+ * - **A single, real match this screen's radio does not offer at all** —
+ *   `other-artefact` (not Amiga-installable). The only safe claim is that
+ *   *this* step does not run it — true regardless of which one does — never
+ *   the first round's "the Packages step places it from Windows", which
+ *   assumed a specific other step `shared-artefact`'s own cause does not
+ *   establish (L5's own finding: one sentence asserting one cause for two).
+ * - **This package's own archive, in the wrong field** — `the-package` in
+ *   the *overlay* field (Major 1: the mirror of the update archive already
+ *   caught by the equivalent case at the other end, which Rust's own preview
+ *   refuses on its own) and `the-update-archive` in the *package* field.
+ *   **Named by the field's own label, never by direction** (ART-277
+ *   re-review): the first fix round's "the second field below"/"the first
+ *   field above" were written for a badge that used to sit directly beside
+ *   the specific field; moved into a `blockers` box below *both* fields, one
+ *   became backwards (the overlay field is above the box, not below it) and
+ *   the other was only right by coincidence. `fieldLabels` carries the exact
+ *   strings the two `Field`s themselves render — interpolated in, so the
+ *   sentence cannot say a label the screen does not — and is immune to a
+ *   future reordering of the two fields.
+ * - **Nothing** — an archive ART does not recognise, or one that is exactly
+ *   right, is accepted silently: Rust still validates the real thing at
+ *   `compose`, and inventing a warning for "unknown" would be a confident
+ *   guess about a file this function cannot actually place.
+ */
+export function archiveFieldBlockerPhrase(
+  classification: ArchiveClassification | null,
+  field: "package" | "overlay",
+  path: string,
+  selectedName: string,
+  otherName: (id: string) => string,
+  fieldLabels: { package: string; overlay: string }
+): Phrase | null {
+  const parsed = parseClassification(classification);
+  if (!parsed) return null;
+  switch (parsed.kind) {
+    case "another-package":
+      return {
+        key: "osinstall.amigaInstall.classify.anotherPackage",
+        params: { other: otherName(parsed.id), selected: selectedName },
+      };
+    case "another-packages-update-archive":
+      return {
+        key: "osinstall.amigaInstall.classify.anotherPackagesUpdateArchive",
+        params: { other: otherName(parsed.id), selected: selectedName },
+      };
+    case "shared-artefact": {
+      // ART-277 re-review, L5: two or more release packages read this
+      // exact identity — named, both, by display name; never picked one
+      // over the other (ART-276's own trap, one door over) and never a
+      // claim about which step handles it, since more than one might.
+      const names = (classification?.sharedBy ?? []).map(otherName);
+      return {
+        key: "osinstall.amigaInstall.classify.sharedArtefact",
+        params: { path, media: parsed.media, packages: names.join(", ") },
+      };
+    }
+    case "other-artefact": {
+      // ART-277 re-review, L5: a single, real match this screen's radio
+      // does not offer at all — the only claim safe to make is that *this*
+      // step does not run it (true regardless of which one does); the
+      // first round's "the Packages step places it from Windows" assumed a
+      // specific other step that this shape does not actually establish.
+      const expected =
+        field === "package"
+          ? (classification?.expectedMedia ?? null)
+          : (classification?.expectedOverlays.join(" or ") ?? null) || null;
+      return expected
+        ? {
+            key: "osinstall.amigaInstall.classify.otherArtefact",
+            params: { path, media: parsed.media, selected: selectedName, expected },
+          }
+        : {
+            key: "osinstall.amigaInstall.classify.otherArtefactGeneric",
+            params: { path, media: parsed.media },
+          };
+    }
+    case "the-package":
+      return field === "overlay"
+        ? {
+            key: "osinstall.amigaInstall.classify.wrongFieldPackage",
+            params: { packageLabel: fieldLabels.package, overlayLabel: fieldLabels.overlay },
+          }
+        : null;
+    case "the-update-archive":
+      return field === "package"
+        ? {
+            key: "osinstall.amigaInstall.classify.wrongFieldOverlay",
+            params: { packageLabel: fieldLabels.package, overlayLabel: fieldLabels.overlay },
+          }
+        : null;
+    default:
+      return null;
+  }
+}
+
+/** A `Phrase` plus a stable id for React's `key` prop. */
+export interface KeyedPhrase {
+  id: string;
+  phrase: Phrase;
+}
+
+/**
+ * `blockers`, keyed and deduplicated — the round 1 whole-branch review's M2.
+ *
+ * `readinessBlockers` was the only producer of the panel's `blockers` list
+ * when `blocker.key` was used as the React key directly, so every key was
+ * unique by construction. It is not the only producer any more: the package
+ * field and the overlay field each contribute their own
+ * `archiveFieldBlockerPhrase`, and nothing stops both fields holding the
+ * *same* wrong archive (BoingBag 2's own archive in both fields while
+ * BoingBag 1 is selected) — which produces the identical `Phrase` (same
+ * key, same params) from two different `entries`. Keying on `blocker.key`
+ * alone then gives React two identical keys in one list — a warning and a
+ * mis-reconciliation risk — and renders the same sentence twice, which is
+ * the exact *"aynı uyarı tek ekranda 2 tane"* mistake ART-202 already cost
+ * this screen once.
+ *
+ * `field` namespaces the id so two *different* phrases never collide by
+ * coincidence; identical phrases (same key, same serialized params) are
+ * dropped after the first, since two fields agreeing on one wrong archive
+ * genuinely have one thing to say, not two.
+ */
+export function dedupeBlockers(entries: { field: string; phrase: Phrase }[]): KeyedPhrase[] {
+  const seen = new Set<string>();
+  const out: KeyedPhrase[] = [];
+  for (const { field, phrase } of entries) {
+    const signature = `${phrase.key}:${JSON.stringify(phrase.params ?? {})}`;
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    out.push({ id: `${field}:${phrase.key}`, phrase });
+  }
+  return out;
 }

@@ -25,32 +25,109 @@ pass — filed and closed together rather than sitting in Open in between.
 ---
 
 ## Open
-**ART-275** 🟠 **The commander has no cursor keys: Up/Down, Home/End, PageUp/PageDown
-move nothing, and the ini's one custom shortcut (Ctrl+Space) is not wired** — *found
-2026-09-07 night by the owner, trying the Windows 11 build on the Files screen*
-`src/components/files/FunctionKeys.tsx` · `src/pages/FileManager.tsx`
 
-Not a regression of the Windows 11 round, which did not touch the Files screen: no
-version of ART has ever handled `ArrowUp`/`ArrowDown`/`Home`/`End`/`PageUp`/`PageDown`
-on a pane — `grep -rn ArrowDown src` finds only a test list. The keyboard brief
-(§3.2) decoded the owner's `wincmd.ini` into a key table, and the table omits the
-cursor keys because they are Total Commander's *defaults*, not `ini` entries; every
-key that *is* in the table exists (Enter, Backspace, Ctrl+PgUp/PgDn, Tab, Insert,
-Space, Ctrl+A, numpad + − *, type-to-search, F2–F9, Alt+F1/F2, Alt+Left/Right,
-Ctrl+T/W/Tab). The `[Colors]`, the 18 `ColorFilters`, the command line, the key
-bar and the layout are applied and match the file. The one `[Shortcuts]` line,
-`C+SPACE=cm_ExecuteDOS` (Ctrl+Space focuses the command line), is not applied:
-`isShortcutBlocked` refuses every Ctrl+ combination a hook did not ask for.
+**ART-281** 🔴 **The unit suite's scratch directories are never removed:
+`D:\tmp\art-tests` holds 263 484 directories and 764 GB** — *found 2026-09-08
+during round 3 task 3, on `art-osbuilder-intake`*
+`src-tauri/.cargo/config.toml` · every `ScratchDir`/`scratch()` fixture
 
-A mouse-free commander without cursor keys is driven by Insert and letters only,
-which is what the owner met.
+**This is [ART-184](#open) still running, three weeks on, at the place it was
+moved to rather than fixed.** That entry moved `TMP` off the system drive after
+a day of suite runs put 169 291 directories (~987 GB) in
+`C:\Users\…\AppData\Local\Temp` and filled a 2 TB disk; its own note says so
+plainly — *"pointing `TMP` at the project disk does not fix that."* The counts
+below are what "does not fix that" looks like now.
 
-**Fix:** one hook beside `useMarkKeys` — Up/Down one row, Home/End first/last,
-PageUp/PageDown one page of rows, Shift+movement marks the rows it passes over
-(Total Commander's own behaviour) — plus Ctrl+Space to the command line; each key
-tested, sharing the F-keys' gate and the text-field guard. Batched with whatever
-else the owner's test pass finds (the list is outside the repository,
-`D:\Projeler\Amiga\ART-test-bulgulari-2026-09-07.md`).
+Measured on 2026-09-08 (read-only; **nothing was deleted**):
+
+| | |
+|---|---|
+| directories under `D:\tmp\art-tests` | **263 484** |
+| bytes | **764 GB** |
+| oldest | 2026-08-20 — the day ART-184 was filed |
+| created today alone | **28 568** |
+| top prefixes | `art-osinstall-apply-planned` 13 202 · `art-osinstall-planned-with` 9 373 · `art-preload-native-pds` 8 995 |
+
+The shape is the one ART-184 named: a test scratch name is unique **per run**
+(process id plus a counter — `scratch-counter-sweep.py` exists to keep it
+unique *within* a process), so nothing ever collides with a previous run's
+directory and nothing sweeps them. `core::ScratchDir` removes itself on `Drop`
+and the ones that do are fine; what accumulates are the fixtures that build a
+path by hand and the ones whose `Drop` never runs.
+
+`core/osinstall`'s **production** code sweeps its own scratch after an hour.
+The test fixtures have no such sweep, and that asymmetry is the whole defect.
+
+**The cause, measured the same day** (`.superpowers/sdd/2026-09-08-intake/scratch-leak-investigation.md`, local-only; the numbers are re-runnable): `core::ScratchDir` — the `Drop`-removed scratch ART-184 was written for — is used by **6** of the ~69 files that create a test scratch; the other **63** carry a local `fn scratch(tag) -> PathBuf` that creates the directory and returns a bare path nothing ever removes (`osinstall::fixtures::scratch` is the biggest, its own doc calling the pattern "the repository's own convention"; `core/preload/*`, `core/artwork/*`, `core/archive/*`, `core/layout/*`, `core/volume/**`, `commands/*` likewise) — ~773 call sites. The controlled experiment: one test through `fixtures::scratch` left the directory count **+1** permanently (263 484 → 263 485); one through `ScratchDir` left it **unchanged** (263 485 → 263 485). So this is ART-184's defect copied into sixty-three files after its fix existed, not a `Drop` that fails. **Fix:** every `scratch()` helper returns a `ScratchDir` (a mechanical conversion, its own round — the tests that keep the path past the helper's scope must hold the guard), and a `Drop` whose `remove_dir_all` fails must say so on stderr rather than swallow it; `scratch-counter-sweep.py` gains a sibling that fails on any `fn scratch(` returning a bare `PathBuf`. Everything older than today under `D:\tmp\art-tests` is a test's own `art-*` scratch (0 other names; one `winuaetemplog.txt`) and can be deleted on the owner's word.
+
+**ART-279** 🟡 **The `TimedOut` next step tells the user to watch the emulator
+window, which is wrong advice for an installer that is hung rather than
+waiting** — *found 2026-09-08 by round 3 task 3's corrupt-payload experiment,
+on `art-osbuilder-intake`*
+`src/i18n/en.json` · `src/i18n/tr.json` ·
+`src/lib/amigainstall.ts::outcomeNextStepPhrase`
+
+`osinstall.amigaInstall.next.timedOut` reads *"Run it again and watch the
+emulator window this time. An Amiga installer asks questions, and this one was
+waiting for an answer nobody gave it."* That sentence names one cause for a
+state that has two, and the second was measured on 2026-09-08: a package whose
+payload is damaged does not ask anything — the `Updater` spins on the corrupt
+data (both runs stopped on the same payload entry, `Utilities/PlayCD`, its
+progress window unchanged for 28 minutes) and no amount of watching the window
+will produce an answer to give it.
+
+How it hurts someone: the user re-runs a 30-minute job, watches a window that
+never asks them anything, and ends up in the same place — with a sentence that
+told them the problem was their attention.
+[lessons.md § The failure that does not crash](lessons.md#the-failure-that-does-not-crash)
+calls this out directly: endings stay distinct, and a refusal must be
+actionable.
+
+The round deliberately did **not** change it, and that reasoning stands and
+should be read before anyone does: ART genuinely cannot tell "waiting on a
+requester" from "spinning on a corrupt payload" — both are *no word by the
+deadline* — and inventing a distinction ART cannot make is §89 from the other
+side. So this row is not "change the sentence": it is either (a) reword the
+next step to cover both causes honestly without pretending to know which, or
+(b) give ART a way to tell them apart first — [ART-278](#open)'s size ceiling
+is exactly such a signal, and if that lands, this ending can split on a
+measurement.
+
+**ART-278** 🔴 **A hung Amiga-side installer writes unbounded output into the
+staged copy, and nothing in ART bounds it or notices it** — *found 2026-09-08
+by round 3 task 3's corrupt-payload experiment, on `art-osbuilder-intake`*
+`src-tauri/src/core/amigainstall/run.rs` ·
+`src-tauri/src/core/amigainstall/stage.rs`
+
+An Amiga-side run works on a copy of the user's tree, staged as
+`<tree>.art-staged-<pid>-<n>` **beside the tree itself** — so on the disk the
+user keeps their Amiga material on. ART's only limit on that run is the wall
+clock: `run.rs` polls for the result word, and at `RunLimits::deadline` it
+terminates the emulator. Nothing looks at what the run is writing.
+
+Measured, twice, on the owner's own material: a `BoingBag39-2.lha` with **one
+byte** of its encrypted payload changed makes the `Updater` spin instead of
+warn, decompressing a corrupt deflate stream into its staging name without ever
+stopping. In 30 minutes each run wrote a single file — `Utilities/PlayCD.BB1`,
+**170 328 064 bytes** in run 3 and **173 408 256 bytes** in run 4, both
+beginning with a valid `HUNK_HEADER` and then running to zeros — and both were
+still growing when the deadline terminated the emulator. That is ~95 MB/minute
+into a directory beside the user's own tree, and ART reported `TimedOut`
+without a word about it.
+
+How it hurts someone: the default deadline is 30 minutes and a run may be given
+a longer one; a user with a small or nearly full disk gets it filled by a
+package that is merely damaged, and the ending they are shown says only that
+nobody answered. ART's data safety otherwise held perfectly here — the copy was
+kept, the tree was untouched, nothing was promoted — which is exactly why this
+is the one gap worth naming.
+
+Not fixed in that round because the round was a measurement and built nothing.
+The shape of a fix is a ceiling on what a staged copy may grow to (the copy's
+size is known before the run starts, so a multiple of it is a measurable
+bound), ending the run with an outcome that says *the installer was writing
+without stopping* rather than *nobody answered*. Report:
+`.superpowers/sdd/2026-09-08-intake/r3-task-3-report.md` § 2.1.
 
 **ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
 neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
@@ -431,6 +508,420 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-280** 🟡 ✅ **ART's BoingBag 3.9-2 run never applied `XAD-Update`, so
+`xadmaster.library` stayed at 9.1 where every other 3.9 builder leaves it at
+10+** — *found 2026-09-08 by round 3 task 3's Part A measurement, on
+`art-osbuilder-intake`*
+`src-tauri/src/core/osinstall/recipes/packages/boingbag-39-2.json` ·
+`src-tauri/src/core/amigainstall/workvol.rs` ·
+`src-tauri/src/core/amigainstall/mod.rs`
+
+Measured on a chain ART itself produced (clean 3.9 tree → BoingBag 1 → BoingBag
+2, every file hashed at each state): `Libs/xadmaster.library` reads
+`xadmaster 9.0 (25.11.2000)` clean, `9.1 (05.01.2001)` after BoingBag 1, and
+**`9.1` still** after BoingBag 2. The 110 100-byte build that BoingBag 3.9-2
+ships in its second payload, `BoingBag3.9-2/XAD-Update` (152 837 bytes, 39
+ZipCrypto entries: `Libs/xadmaster.library`, 26 `Libs/xad/*` clients and 10
+`C/` tools), was never applied, because ART invoked `C/Updater AmigaOS-Update`
+once and stopped.
+
+How it hurt someone: a tree ART reported as fully BoingBag'd was missing the
+XAD update every established 3.9 build applies, so archive handling on that
+system was a version behind what the user's own material contains — and nothing
+on the screen said so.
+
+**Not a `finish.rs` `PostStep`** — the payload is encrypted, ART writes no
+bypass (ART-166), and only the package's own `Updater` can place those files.
+**And not the "second emulator run behind a requester"** this round's own
+report first concluded: that requester (`#install-xad-update`) lives in
+BoingBag 2's own `Install` script, which ART does not run. HstWB Installer runs
+the same binary ART runs, unattended, **in the same boot**, four lines after
+the first invocation
+(`E:\amiga\ProjeART\research-2026-09-07\hstwb\…\S\Amiga-OS-3.9\Install-Boing-Bag-2`
+lines 32-36, MIT):
+
+    ; run xad updater, if xadmaster.library version is less than 10
+    Version >>SYS:hstwb-installer.log "SYS:Libs/xadmaster.library" 10 FILE
+    IF WARN
+      SYS:T/BoingBags/BoingBag3.9-2/C/Updater SYS:T/BoingBags/BoingBag3.9-2/XAD-Update "SYS:"
+    ENDIF
+
+*That elimination was corrected in place: the report said HstWB's source "is
+not on this machine", and it was — at the path the round's own brief gives,
+from the previous night's research. A confident wrong elimination costs more
+than none.*
+
+**Fixed 2026-09-08 (fix round 1).** `amiga_installer.follow_ups` is a typed,
+version-gated second invocation declared as **data** in `boingbag-39-2.json`
+(`program: "C/Updater"`, `args: ["XAD-Update"]`,
+`unless_file_version_at_least: { path: "Libs/xadmaster.library", version: 10 }`);
+`core::amigainstall::FollowUp` carries it, `compose` joins the program to the
+package volume and appends the target volume exactly as it does for the first
+invocation, and `workvol::startup_sequence` emits
+`If EXISTS <sys>:C/Version` / `Version >NIL: <sys>:<path> <n> FILE` / `If Warn`
+/ the second invocation / `EndIf`. It reports separately in
+`art-followup.txt` — `ran` / `not-needed` / `failed` / `not-checked` — read
+back by `install` and carried beside the ending on the wire as `follow_up`,
+never folded into `RunOutcome`: a follow-up that said no is not the installer
+saying no.
+
+**Two ordering traps, and the second was found by running it.**
+
+1. `Version … FILE` sets `WARN` as its *answer*, so a gate emitted above the
+   `If Warn` that reads the installer's return code would make the result word
+   the gate's — every successful run on a tree with an old `xadmaster`
+   reported as *the installer said no*. The block therefore sits **inside the
+   `Else` arm**, after the branch is decided.
+2. **The host terminates the emulator the instant the result word appears**
+   (`run::poll_until_ending` reads it first thing round the loop). The first
+   version emitted the block below the completed `If`/`Else`/`EndIf` and a
+   real run proved it never executed: `Succeeded` in **141.1 s** against the
+   follow-up-less control's **141.5 s**, no `art-followup.txt` at all, and a
+   tree **byte-identical** to the one with no follow-up declared. The `ok`
+   word is now written **last**, after the follow-up, which is what keeps the
+   emulator alive long enough to run it.
+
+`If EXISTS <sys>:C/Version` guards the gate itself, and its absence has its own
+word (`not-checked`) rather than being folded into `not-needed`: "the tree
+already has that version" and "ART could not find out" are different things to
+tell a person. `C/Version` is present (4 500 bytes) on all three states of the
+tree measured here — but `C:Reboot` was present on the owner's 3.2 tree and
+absent on both his 3.9 trees ([ART-272](#fixed)/[ART-273](#fixed)), which is
+why a disk command is checked for rather than assumed.
+
+**Proved by a real run, on the owner's own material.** BoingBag 3.9-2 with the
+follow-up, on a fresh copy of the same BoingBag-1 tree the control used:
+`Succeeded` / `Promoted`, `follow-up: Some(Ran)`, **156.6 s** (the control
+without a follow-up took 141.5 s, so the second invocation cost ~15 s). The
+artefact's own answer, which is the only one that counts here:
+
+| `Libs/xadmaster.library` | before | after |
+|---|---|---|
+| states | `xadmaster 9.1 (05.01.2001)` | **`xadmaster 10.0 (31.03.2001)`** |
+| bytes | 105 368 | **110 100** |
+
+Against the control tree the follow-up added **6 files** (`C/exe2arc`,
+`Libs/xad/EPF`, `LU`, `MS-TNEF`, `MakeSFX`, `oe4`), changed **12**
+(`xadmaster.library` itself, seven `C/xad*` tools and four `Libs/xad/*`
+clients) and **removed one** — 4 025 files → 4 030. Every remaining entry of
+the 39 was already present at those bytes.
+
+**The removal is a case-rename and is named here for the same reason the
+60 → 57 correction two entries away exists** (whole-branch review, L10):
+`C/Exe2Arc` becomes `C/exe2arc`, so the arithmetic is 4 025 + 6 − 1 = 4 030
+rather than a count that does not add up. It is the *only* only-in-the-control
+entry, so nothing was lost: `XAD-Update` ships the tool under the lowercase
+spelling BoingBag 1's own payload does not.
+
+*Tests:* `workvol::a_follow_up_is_emitted_whole_and_below_the_result_capture`
+(the whole script, entire), `…::the_gate_runs_after_the_branch_is_decided_and_before_the_word_is_written`
+(both orderings, each named), `…::the_failed_arm_carries_no_follow_up`,
+`…::a_package_with_no_follow_up_emits_nothing_extra`,
+`…::a_follow_ups_own_fields_go_through_the_metacharacter_gate`,
+`…::a_follow_up_may_not_reach_into_arts_own_volume`,
+`…::the_follow_up_word_reads_back_as_itself_and_nothing_else_does`;
+`package::boingbag_two_declares_the_xad_follow_up_and_nothing_else_declares_one_art_280`
+(the declaration, whole);
+`commands::amigainstall::the_follow_up_is_composed_onto_both_volumes_and_the_gate_is_left_alone`,
+`…::the_follow_ups_word_travels_beside_the_ending_and_not_inside_it`,
+`…::every_follow_up_word_has_its_own_sentence`;
+`src/lib/amigainstall.test.ts` (Rust-to-TypeScript parity for the new enum and
+field) and `AmigaInstallPanel.test.tsx` (its own line on screen, and none when
+no follow-up was declared). **Mutations: both orderings put back, both fell** —
+the gate above the branch, and the block below the result word.
+
+**ART-277** 🟠 **A stale package selection carried the wrong archive into a
+request, and the refusal quoted an internal overlay path instead of naming
+either package:
+`'…BoingBag39-2.lha' is not this package's update archive: it carries none of
+'BoingBag3.9-1-UAE/BoingBag3.9-1'; it holds BoingBag3.9-2,
+BoingBag3.9-2.info (ART-INPUT-INVALID)`** — *found 2026-09-07 night by the
+owner, running BoingBag 1 then attempting BoingBag 2 through
+`AmigaInstallPanel` — the same sitting `docs/FEATURES.md`'s "Amiga-side
+install panel" row records; fixed 2026-09-08*
+`src/components/osbuilder/AmigaInstallPanel.tsx` · `src/lib/amigainstall.ts` ·
+`src-tauri/src/core/amigainstall/packagevol.rs` ·
+`src-tauri/src/commands/amigainstall.rs`
+
+Two causes, both in the panel that had never been driven by a person until
+the night before (ART-118's own claim: "no run has ever been launched from
+this screen"). First, `AmigaInstallPanel.tsx` kept four **global, unscoped**
+`useRemembered` keys — `amigaInstall.package`, `amigaInstall.archive`,
+`amigaInstall.overlayArchive`, `amigaInstall.medium` — so switching the radio
+from BoingBag 3.9-1 to BoingBag 3.9-2 called `setPackageId` alone and left
+BoingBag 1's own archive paths sitting in the two archive fields, which then
+rode into the BoingBag 2 preview/run request. Second, `apply_overlay`'s
+refusal (`packagevol.rs`) named only the *expected* overlay path —
+`expected_overlays(layout)`, which can only ever describe the *selected*
+package's own declaration — and never said which package was actually
+selected, nor that the supplied archive was recognisably a whole other
+package's own (`BoingBag3.9-2`'s own top-level drawer), because
+`core/amigainstall` had no catalogue to check that against at all.
+
+**Fixed 2026-09-08.** The archive and overlay-archive keys are now scoped per
+package — `amigaInstall.<packageId>.archive` / `.overlayArchive`, via
+`amigaInstallArchiveKey` (`src/lib/amigainstall.ts`) — the same shape
+`rememberedComponentKey` already gives `OsInstall.tsx`'s per-release
+component picks; `amigaInstall.medium` stays global, since the AmigaOS 3.9
+CD image is one fact about the build and not about which package is
+selected. Nothing is cleared on a package switch (CLAUDE.md: nothing changes
+unless the user changes it) — a different key is simply read, so BoingBag
+1's own choice is exactly where it was left the next time BoingBag 1 is
+selected again. A new read-only command, `amigainstall_classify_archive`
+(`commands/amigainstall.rs`, over `packagevol::archive_top_level` /
+`archive_identity` / `archive_is`), classifies a chosen archive **at the
+moment it is picked** — `"the-package"`, `"the-update-archive"`,
+`` `another-package:<id>` ``, or `"unknown"` — and the panel shows a hint
+beside the field and disables Run while a field carries another catalogued
+package's own archive. `apply_overlay`'s refusal (`packagevol.rs`) now takes
+the selected package's own name and a small `KnownPackage { id, name, media }`
+catalogue (the lower-module's own record — `core/amigainstall` still never
+reads a recipe) from the command layer, and names the package a mismatched
+archive actually belongs to when its top level matches a catalogued
+`media`, or the selected package by name when it recognises nothing.
+
+Tests: `switching_the_selected_package_reads_that_packages_own_remembered_archive`
+and `a wrong-package archive disables Run and says which package it belongs to`
+(`AmigaInstallPanel.test.tsx`, new); `a_second_archive_matching_another_known_packages_media_names_that_package`
+and five `classify_top_level_*`/`the_command_*` tests (`packagevol.rs` /
+`commands/amigainstall.rs`, new); `a_second_archive_that_is_not_the_declared_overlay_is_refused`
+(existing, updated for the new sentence); every other `amigainstall::` test
+green (165 Rust, 33 in the panel's own suite). Mutated both guards to
+confirm they fail without the fix: the archive key unscoped again, and the
+catalogue lookup in `overlay_mismatch_sentence` disabled.
+
+**Fix round 1 (2026-09-08).** Review found the first pass added a *third*
+confident-and-wrong sentence, in two places: the catalogue scan in
+`overlay_mismatch_sentence` could match the *selected* package itself and
+then say *"Select BoingBag 3.9-1 to install it"* about the package already
+selected (reachable because `refuse_wrong_package_archive` only checked
+`archives.first()`, never a second archive), and `classify_top_level` scanned
+every shipped package regardless of release or `amiga_installer`, so an
+archive named `Locale3.9` could produce *"Select Locale 3.9 to install
+it"* — a package not on this screen's radio at all — and then hard-disable
+Run over an instruction the user cannot follow, and pick arbitrarily between
+`locale-39` and `locale-39-turkish` (both declare `"Locale3.9"` on purpose):
+ART-276's own trap, arriving through a different door one night later.
+
+Fixed: `overlay_mismatch_sentence` checks the archive against the selected
+package's own drawer *first*, directly, and gives that its own sentence
+(`'<path>' is <Package>'s own archive — it belongs in the package field;
+the second field is for its update archive (top-level '<drawer>')`) rather
+than matching itself in the catalogue; `refuse_wrong_package_archive` now
+checks every archive against its own slot. `amigainstall_classify_archive`
+takes `release` and scans only `package::packages_for(release)`; a match
+that is not `amiga_installable`, or a media two or more release packages
+share, answers a new `` `other-artefact:<name>` `` kind naming the archive
+by what it is rather than an id nobody can act on; a match against another
+package's own *declared overlay* (not just its `media`) answers
+`` `another-packages-update-archive:<id>` ``. The panel now folds a wrong
+field's classification into the same `blockers` list the preview's own
+readiness checks render in — directly above the confirm checkbox, which it
+now also disables — rather than a second box beside the field (ART-202's own
+lesson, from this exact screen, applied to the disabled state).
+
+One residue, left deliberately: an installation from before this round may
+still carry the old, unscoped `amigaInstall.archive` / `.overlayArchive`
+keys in `settings.json`. They are never read or written again once a
+package is selected (every read/write now goes through
+`amigaInstallArchiveKey`'s per-package name), so they cost nothing but the
+bytes they occupy — a one-time orphan, not a leak and not a wrong value.
+
+Tests (fix round 1): `the_packages_own_archive_in_the_second_field_gets_its_own_sentence_and_never_says_select_it`,
+`the_sentence_keeps_an_unreadable_listing_apart_from_an_empty_one`,
+`a_wrong_second_archive_is_refused_before_the_tree_is_copied`,
+`classify_top_level_names_another_packages_update_archive`,
+`classify_top_level_answers_other_artefact_when_two_packages_share_the_media`,
+`classify_top_level_answers_other_artefact_for_a_match_the_radio_does_not_offer`
+(Rust, new); `"a wrong-package archive disables Run and the confirm checkbox,
+and names which package it belongs to in the blockers list"` and `"names
+another package's own update archive, and a shared Packages-step archive,
+without ever saying 'select' a package this screen does not offer"`
+(`AmigaInstallPanel.test.tsx`, new). 171 Rust `amigainstall::` tests, 34 in
+the panel's own suite, 1248 total Vitest tests, all green. Mutated
+`refuse_wrong_package_archive` back to `archives.first()` alone and the
+`archiveFieldBlockerPhrase` `"another-package"` case back to `null`; both
+caught by the tests above.
+
+**Fix round 2 (5e40e5e, 2026-09-08).** A scoped re-review found the round-1 relocation
+of `wrongFieldOverlay`/`wrongFieldPackage` into the `blockers` box left both sentences
+saying "the second field **below**"/"the first field **above**" — true only at the old
+render position, beside the specific field; moved into a box below *both* fields, one
+direction read backwards and the other was right only by coincidence.
+`archiveFieldBlockerPhrase` now takes the two fields' own rendered labels
+(`t("osinstall.amigaInstall.archive.label")` / `.overlayArchive.label`) and both
+sentences interpolate `{{packageLabel}}`/`{{overlayLabel}}` instead of a direction —
+immune to the two fields ever reordering. A direct Rust test,
+`a_second_archive_matching_another_known_packages_overlay_drawer_names_it_as_that_packages_update_archive`,
+pins `overlay_mismatch_sentence`'s own text for "another package's own **update**
+archive" (previously checked only through the command layer's `kind` string). Tests:
+two new `AmigaInstallPanel.test.tsx` cases asserting the rendered box contains both
+labels and that the old "second field below"/"first field above" wording is gone; two
+`amigainstall.test.ts` cases extended to assert `phrase.params` carries both labels.
+172 Rust `amigainstall::` tests, 1250 total Vitest tests, all green.
+
+**Final fix — round 1 whole-branch review (2026-09-08).** Two new instances of this
+project's own signature defect, both in the panel and both invisible to the suite
+(M1/M2), plus nine lower-severity findings, all applied:
+
+- **M1.** The archive classification was never cleared before the next question was
+  asked — changing a field's archive (a second Browse, or switching to a package with
+  its own remembered one) left the *previous* file's verdict rendered against the *new*
+  file's path for the whole round trip. `setArchiveClassification(null)` /
+  `setOverlayClassification(null)` now run as the *first* statement of each effect,
+  before the new question is even asked. Test: a deferred `classifyMock` promise proves
+  the stale verdict is gone before the new one resolves; mutation (reverting the clear
+  to the old "only when the field is empty" branch) fails exactly that test.
+- **M2.** Two archive fields can now legitimately produce the identical `Phrase` (the
+  same wrong archive in both fields), which used to render as a duplicate React key and
+  the same sentence twice in one box — the *"aynı uyarı tek ekranda 2 tane"* mistake
+  ART-202 already cost this screen once. New `dedupeBlockers` (`src/lib/amigainstall.ts`)
+  namespaces each blocker's id by which field produced it and drops a later entry whose
+  key and params exactly match an earlier one. Test: the same wrong archive in both
+  fields renders one `<li>`, not two.
+- **L3/L4.** The core refusal's own catalogue (`Layout.catalogue`) was built from every
+  shipped package regardless of release, and a doc comment claimed it excluded the
+  selected package while the one production caller did not. `compose` now builds it from
+  `known_packages_for(&package)` — every package sharing a release with the one selected,
+  with the selected package's own id removed — and passes the identical list `install`
+  already had, rather than recomputing it. Test: `known_packages_from_excludes_a_package_from_a_different_release`
+  (a package built from a real one via struct-update, since the shipped catalogue has
+  only one release today).
+- **L5.** `other-artefact` had two causes — two or more release packages sharing an
+  identity, or a single non-installable match — and one sentence claiming "the Packages
+  step places it from Windows", true of only the second. Split into `shared-artefact:<media>`
+  (names *both* packages by display name, no claim about which step handles them) and
+  `other-artefact:<media>` (says only that *this* step does not run it). Both catalogues,
+  same commit. Tests: `classify_top_level_answers_shared_artefact_when_two_packages_share_the_media`
+  (asserts both package ids), the renamed `other-artefact` test, and two panel tests
+  (one per kind, the `other-artefact` one asserting the "Packages step"/"Windows" text
+  is gone).
+- **L6.** See ART-276's own addendum above — the same round applied it.
+- **L7.** `tr.json`'s new `otherArtefact`/`otherArtefactGeneric` text used
+  "Windows **tarafından**" (ablative-agentive, "by Windows") where the participle's
+  agent is already "Paketler adımı"; the locative "tarafında" was meant. The clause
+  moved to the new `sharedArtefact` key with the grammar corrected; `otherArtefact`
+  no longer makes the claim at all (L5).
+- **I9.** `classify_top_level`'s catalogue scan re-derived "is this archive's identity"
+  by hand (`drawer_names_equal` calls) instead of asking `archive_is` — the same
+  function already used for the *selected* package. Now calls `archive_is` for every
+  catalogue candidate too; one implementation of the identity rule, not two.
+- **I10.** `archive_listing` had no cap on entry count — `MAX_ENTRIES` (100,000) is
+  enforced in `extract_selection`, downstream of every other caller, but
+  `amigainstall_classify_archive` reaches a listing directly from a raw user-picked
+  path with nothing downstream to cap it. Split into `listing_from_entries` (testable
+  over a synthetic entry list) plus the bound; a listing over it refuses with "too many
+  entries", which the caller already turns into `"unknown"`. Test:
+  `a_listing_over_the_entry_cap_is_refused_rather_than_read` (100,001 synthetic entries,
+  no real archive built).
+- **I11.** The *package* field's own refusal (`wrong_archive_sentence`'s `Neither` arm)
+  named only what the archive was not, with no catalogue lookup, while the *second*
+  field's equivalent already named a recognised archive's real owner. Given the same
+  catalogue, it now does too: `… it holds BoingBag3.9-2, which is BoingBag 3.9-2's own
+  archive`. Test: `a_wrong_archive_in_the_package_field_names_its_real_owner_when_the_catalogue_knows_it`.
+
+Tests (final fix): 175 Rust `amigainstall::` tests, 75 `osinstall::apply::` tests, 1258
+total Vitest tests, all green (`cargo test --lib`: 3085). Mutation quoted above (M1).
+
+**ART-276** 🟠 **Two packages sharing one medium tripped the wrong clash check:
+`'Locale3.9' already names the medium component 'locale-39' was installed from in this
+tree`** — *found 2026-09-07 night by the owner, adding `locale-39-turkish` after
+`locale-39` on the Windows 11 build; fixed 2026-09-08*
+`src-tauri/src/core/osinstall/apply.rs`
+
+The owner added `locale-39` to a tree, then `locale-39-turkish` **from the same
+archive**, and got refused with the sentence above (`ART-INPUT-INVALID`).
+`add_package_staging_in`'s clash check scanned `manifest.files` for any file whose
+`media` matched the package being added and whose `component` differed — which fires on
+the very first file the first component placed, because `locale-39.json` and
+`locale-39-turkish.json` both declare `"media": "Locale3.9"` **on purpose**:
+`recipes/packages/locale-39-turkish.json`'s own doc comment says "two packages sharing
+one medium is ordinary: `media` says which archive, and the rules say which part of
+it." The check confused two components legitimately sharing one archive with the real
+ambiguity it meant to catch: one volume-name string meaning two *different* archives at
+different points in a tree's life.
+
+The manifest already held the fact that tells the two apart: `built_from: Vec<MediaRecord
+{ volume_name, sha256 }>` records one hash per medium name, and the archive's SHA-256 was
+already computed one line after the wrong check. The fix looks up `built_from` by
+`volume_name == package.media` instead of scanning `files`: no entry means no ambiguity
+yet; a matching hash means the same archive, a second component sharing it, allowed; a
+different hash means a genuine collision, refused by name and hash rather than by
+component id.
+
+**Fixed 2026-09-08.** `add_package_staging_in` moves `sha256_file(archive)` above the
+check and replaces the `manifest.files` scan with the `built_from` lookup above, naming
+both archives' SHA-256 prefixes in the refusal instead of a component id. Tests:
+`two_components_sharing_one_medium_are_both_accepted_when_the_archive_is_the_same` and
+`a_second_archive_under_the_same_medium_name_is_refused_and_names_both_hashes` (new);
+`adding_the_same_package_twice_replaces_its_own_files_rather_than_refusing` (existing,
+already asserts `built_from`'s single entry per archive).
+
+**Round 1 whole-branch review (L6, 2026-09-08).** Two SHA-256 prefixes are correct and
+specific, but the review found them not actionable on their own: a user is told which
+file is wrong and given twelve hex digits for the one that is right, with nothing to
+map either hash back to a file they recognise. `manifest.files` already knows which
+**component** was placed from the clashing record, so the refusal now names it too —
+`… 'Locale3.9' in this tree came from a different archive (sha256 abc123def456…, which
+placed locale-39) than '…' (sha256 …) — …`. Distinct and sorted, since two components
+can legitimately share one medium (the very fact this check exists to allow).
+`a_second_archive_under_the_same_medium_name_is_refused_and_names_both_hashes` (existing,
+updated) now also asserts `"which placed shared-a"`. 75 `osinstall::apply::` tests, all
+green.
+
+**ART-275** 🟠 **The commander had no cursor keys: Up/Down, Home/End, PageUp/PageDown
+moved nothing, and the ini's one custom shortcut (Ctrl+Space) was not wired** — *found
+2026-09-07 night by the owner, trying the Windows 11 build on the Files screen; fixed
+2026-09-08*
+`src/lib/cursorKeys.ts` · `src/components/files/FunctionKeys.tsx` · `src/lib/selection.ts` ·
+`src/pages/FileManager.tsx`
+
+Not a regression of the Windows 11 round, which did not touch the Files screen: no
+version of ART had ever handled `ArrowUp`/`ArrowDown`/`Home`/`End`/`PageUp`/`PageDown`
+on a pane — `grep -rn ArrowDown src` found only a test list. The keyboard brief
+(§3.2) decoded the owner's `wincmd.ini` into a key table, and the table omits the
+cursor keys because they are Total Commander's *defaults*, not `ini` entries; every
+key that *is* in the table existed (Enter, Backspace, Ctrl+PgUp/PgDn, Tab, Insert,
+Space, Ctrl+A, numpad + − *, type-to-search, F2–F9, Alt+F1/F2, Alt+Left/Right,
+Ctrl+T/W/Tab). The `[Colors]`, the 18 `ColorFilters`, the command line, the key
+bar and the layout were applied and matched the file. The one `[Shortcuts]` line,
+`C+SPACE=cm_ExecuteDOS` (Ctrl+Space focuses the command line), was not applied:
+`isShortcutBlocked` refused every Ctrl+ combination a hook did not ask for.
+
+A mouse-free commander without cursor keys was driven by Insert and letters only,
+which is what the owner met.
+
+**Fixed 2026-09-08.** `cursorStep` (`src/lib/cursorKeys.ts`, new) is the pure
+arithmetic: with no cursor, `down`/`home`/`pageDown` land on the first name and
+`up`/`end`/`pageUp` on the last; `up` at the first row and `down` at the last stay
+(no wrap); `pageUp`/`pageDown` move `pageRows` rows clamped to the ends; an empty
+list returns `null` — tested in `src/lib/cursorKeys.test.ts` (20 tests, new).
+`useCursorKeys` in `FunctionKeys.tsx` wires Up/Down/Home/End/PageUp/PageDown, gated
+like every other hook in the file by `isShortcutBlocked(event)` with
+`expectCtrl=false`, so Ctrl+PageUp/PageDown stay `useNavigationKeys`'s container
+steps and the two hooks can never both fire off one keystroke. `useCommandLineKey`
+wires Ctrl+Space (`isShortcutBlocked(event, true)`) to focus the command line's own
+`<input>`, which now carries a ref; a new test proves Ctrl+Space does not also reach
+`useMarkKeys`'s plain-Space handler. `FileManager.tsx` wires `onMove`: without Shift
+it calls `moveCursor` (the cursor only, exactly like type-to-search, so a selection
+built with Insert survives walking around it with the arrows); with Shift it marks
+the rows the cursor passed over through a new pure helper, `markThrough` in
+`selection.ts` — inclusive of the old cursor, exclusive of the new one, the same rule
+in both directions and at any step size — tested in `selection.test.ts`'s new
+`markThrough` suite. `pageRows` is measured from the focused pane's own
+`.tc-row-list` (found by a new `data-side` attribute on the pane, since the DOM has
+two) divided by a rendered row's `offsetHeight`, falling back to 20 when nothing has
+rendered; the cursor row is then scrolled into view (`scrollIntoView({block:
+"nearest"})`) by a new `data-name` attribute on each row.
+
+Tests: `src/lib/cursorKeys.test.ts` (20, new file), `src/lib/selection.test.ts`'s new
+`markThrough` suite (7 tests), and `FunctionKeys.test.tsx`'s new `useCursorKeys`,
+`useCommandLineKey` and `useMarkKeys — Ctrl+Space does not mark` suites (11 tests).
+**Mutation proof:** breaking `cursorStep`'s `down` clamp to wrap instead of stop at
+the last row is caught by exactly one test, `cursorStep — up/down, one row at a time
+> down at the last row stays — no wrap`; the mutation was backed up by absolute path
+before being introduced and restored the same way, never with `git checkout --`.
+
 **ART-261** 🟠 **`cargo test --lib` reports exit 0 with no `test result:`
 line whenever `commands::artwork` runs, and passes cleanly without it** —
 *found 2026-09-06 by round 4's Task 1, localised the same day by a two-armed
@@ -732,7 +1223,14 @@ paragraph with its control"` block (hint alone, `describedBy` alone, both
 together space-separated, neither) and `OsInstall.test.tsx`'s `"ART-241: the
 ROM field's Browse button is described by its own outcome paragraph"` block
 — mutated by dropping the `aria-describedby` attribute entirely, which all
-seven of those failed against, then restored.
+seven of those failed against, then restored. **This entry was untrue for two
+commits and nothing recorded it at the time** (written down 2026-09-08, round
+2 task 4): round 2's task 3 rebuilt the `kaynak` step's per-layer `Field`s as
+one folder list on `137e833`, and the association went with them — the new
+rows' Remove button and layer select named no paragraph at all — until
+`31ba77c` put it back on the row's own ids the same day. A Fixed entry is a
+claim about the tree, and it stays Fixed only while it is true; a rewrite that
+drops the wiring reopens it whether or not anybody notices.
 
 **ART-248** 🔵 **`appearance_apply` runs the whole wallpaper pipeline
 synchronously on the command thread, with no progress and no cancel** — *found
@@ -3445,6 +3943,149 @@ building an operation for an unmeasured step is how a vocabulary grows past
 what anyone can check. `NSDPatch.cfg` is left alone on purpose — it is
 user-editable configuration and a reference copy beside it is the right shape,
 which is the same conclusion HstWB reaches by touching neither.
+
+---
+
+**Appended 2026-09-08 (round 3, task 3) — three of those five measured, and
+none of them became a variant.** The paragraph above stands; this is the
+measurement it asked for, not a rewrite of it.
+
+A clean AmigaOS 3.9 tree **that carries locale** was needed and none of the
+three trees the round's brief named was one — checked against the tree rather
+than trusted: `dist-3.9` has no `Locale/` at all (2 499 files, 0 catalogs),
+`dist-3.9-bb`'s `version.library` reads **45.1**, so despite its name it was
+never BoingBag'd, and `bb-run2` is a folder of logs. The chain was therefore
+produced fresh from `E:\amiga\ProjeART\art226-tree` (3 947 files,
+`amigaInstalled: []`, `version.library 45.1`, **20 catalog languages, 597
+catalog files**): BoingBag 1 `Succeeded`/`Promoted` in **176.8 s** → 4 015
+files, then BoingBag 2 on a copy of that, `Succeeded`/`Promoted` in **141.5 s**
+→ 4 025 files. Every file of every state was hashed, so the rows below are
+whole-tree diffs.
+
+| HstWB step | what the tree says | verdict |
+|---|---|---|
+| `C/Installer` into `SYS:C`/`SYS:Utilities` | `Utilities/Installer` is `$VER: installer 44.10 (1.10.99)`, 154 804 B, sha256 `6e28d173…` — **byte-identical** to `BoingBag3.9-2/C/Installer`; unchanged by both runs | **measured, not needed** |
+| locale catalogs | **597 catalog files, 20 languages: 0 added, 0 removed, 0 changed** by BoingBag 1 and 2 together | **measured, not needed** |
+| second `Updater` run for `XAD-Update` | `xadmaster 9.0` clean → **`9.1` after BoingBag 1** (whose payload carries the 105 368-byte build) → **`9.1` still** after BoingBag 2. 9.1 < 10 | **needed — and not a `PostStep`** |
+
+The catalog row has a reason and not only a count, read out of the payloads'
+own entry names (ZipCrypto encrypts the bytes and leaves the names in clear,
+the same property ART-166 rests on): `BoingBag3.9-1/AmigaOS-Update` has 233
+entries and `BoingBag3.9-2/AmigaOS-Update` has 147, and **neither carries a
+single `Locale/` entry**. There is nothing for a merge step to merge.
+
+One divergence was found beside it and is deliberately left alone: BoingBag 2
+updates `Utilities/Amplifier/catalogs/deutsch/AMPlifier.catalog` (1 994 →
+2 174 bytes) and leaves `Locale/Catalogs/deutsch/AMPlifier.catalog` at 1 994 —
+the same shape as the ROM update, the newer file beside the older one. *What is
+not claimed:* which of the two paths `locale.library` opens first. That was not
+established from any source, and one file in one language out of 597 is not a
+basis for a step.
+
+**`XAD-Update` is needed and cannot live in `finish.rs`, which is the part
+worth writing down.** `BoingBag3.9-2/XAD-Update` is a **second ZipCrypto
+archive inside the same wrapper**: 152 837 bytes, **39 entries, every one
+encrypted**, carrying `Libs/xadmaster.library` at 110 100 bytes plus 26
+`Libs/xad/*` clients and 10 `C/` tools. Applying it means running
+`C/Updater XAD-Update "<target>"` **inside the emulator** — the package's own
+`Install` line 1632 — on content ART must not decrypt, and that line is gated
+on a requester the script puts to the *user* (`#install-xad-update`). So the
+round-3 design's *"`finish.rs` gains `run-again-with`"* is the one instruction
+this measurement contradicts: `finish.rs` is host file operations that need no
+emulator, ROM or licence, and this is none of those. The day ART offers it, it
+is a second declaration in the recipe and a second run, which is what
+`boingbag-39-2.json` already says.
+
+> **Appended 2026-09-08, fix round 2 (whole-branch review, m5): two sentences
+> in the paragraph above are wrong, and ART has since done the thing they said
+> it would not.** The paragraph stands as written — this is the correction
+> beside it, not a rewrite of it, for the same reason the `version.library`
+> over-claim two bullets down was corrected in place: a wrong elimination
+> costs more than none.
+>
+> - *"that line is gated on a requester the script puts to the user
+>   (`#install-xad-update`)"* — **it is not.** That requester lives in
+>   BoingBag 3.9-2's own `Install` script, and **ART does not run that
+>   script**; it runs `C/Updater` directly, which this same entry's Part B
+>   proves. Nobody is asked anything by the program ART launches.
+> - *"a second declaration in the recipe **and a second run**"* — the
+>   declaration was right and the second run was not. HstWB Installer does it
+>   **in the same boot**, four lines after the first invocation
+>   (`amiga/amiga-os-3.9/S/Amiga-OS-3.9/Install-Boing-Bag-2`, lines 32-36,
+>   MIT), and so does ART now: four more lines in the one script
+>   `workvol::startup_sequence` already writes, ~15 s on top of a 141 s run.
+>
+> The one sentence that survives intact is the load-bearing one — *it is not a
+> host file operation*, so it is not a `finish.rs` `PostStep`. Built and
+> proved as [ART-280](#fixed): `xadmaster.library` `9.1` →
+> **`10.0 (31.03.2001)`** on the owner's own material.
+
+**And the experiment ART-227 asked for: does `Updater` return a usable code?**
+Decided first: the measured quantity is the one word in `ARTWork:art-result.txt`,
+captured off ART's scratch **while the run was going** (the work volume is
+deleted on `Drop`), plus `Libs/version.library` before and after. One variable,
+each arm twice, the control measured.
+
+| arm | what changed | word | `RunOutcome` | `version.library` |
+|---|---|---|---|---|
+| control | nothing — the real `BoingBag39-2.lha` on a BoingBag-1 tree | `ok` | `Succeeded`/`Promoted`, 141.5 s | 45.2 → **45.3** |
+| corrupt payload ×2 | **one byte** of the encrypted `AmigaOS-Update` flipped, member CRC-16 and header checksum recomputed so the LHA still tests `Everything is Ok` | *none* — only `started` | **`TimedOut`** at 1 800.7 s / 1 800.7 s, `Kept` | 45.2 → **45.2** |
+| wrong target ×2 | the real archive on a tree that never had BoingBag 1 | **`ok`** | `Succeeded`/**`Promoted`**, 142.2 s / 140.7 s | 45.1 → **45.3** |
+
+- **`If Warn` is not proven; it is unexercised.** A corrupt payload does not
+  make the `Updater` warn — it makes it **hang**. Both runs stopped on the same
+  payload entry (`Utilities/PlayCD`, exactly where the flipped byte falls;
+  captures of the emulator's own progress window show it **unchanged for 28
+  minutes of the first run and across the whole of the second**) and wrote a
+  runaway `Utilities/PlayCD.BB1` of **170 328 064** and **173 408 256** bytes
+  into the copy before ART ended the emulator at the deadline. ART's data
+  safety held perfectly — the copy was kept, the tree was untouched — but the
+  ending a user is shown is *"nobody answered"*, and watching the window next
+  time will not help. Both halves are now filed: [ART-278](#open) for the
+  unbounded write, [ART-279](#open) for the next step.
+- **The `Updater` says `ok` on a wrong target.** ART does not run BoingBag 2's
+  `Install` script (which checks `version.library`); it runs `C/Updater`
+  directly, and the program itself checks nothing. Reaching that arm required
+  doctoring the copy's own manifest, because `chain::refuse_unless_installable`
+  refuses it first — **in 17.6 ms, with nothing copied and no emulator
+  started**. So that guard is not belt-and-braces over the package's own
+  judgement; it is what protects a user here. **Its bound, stated with it**: it
+  is a *bookkeeping* guard, reading a `distribution.json` only a successful ART
+  run writes — which is also why the wrong-target state is not one a user can
+  reach through ART at all.
+- **No fifth ending, and no `leaves_version` — because the measurement says it
+  would not work.** The design offered `NotApplied` for a run whose word is
+  `ok` while the version did not move. The version *did* move: the
+  wrong-target trees read `version 45.3 (7.12.2001)`, the same 352 bytes and
+  the same sha256 as the correctly chained tree, while being **missing 57
+  files**, carrying **51 at older bytes** and leaving `xadmaster` at 9.0. A
+  `leaves_version` check **on `version.library`** would have passed the broken
+  tree. Building it would have been a confident wrong sentence in code, which
+  is what this file exists for.
+
+  **Corrected in place (fix round 1), because a wrong elimination costs more
+  than none.** The first version of this bullet said *"no after-the-fact check
+  of the artefact could have separated them either"*, and the line above it
+  gives the counter-example: `Libs/xadmaster.library` reads **9.0** on the
+  skipped tree and **9.1** on the chained one. An artefact check is possible;
+  what was refuted is `version.library` as *the* artefact — a package's own
+  version string is not evidence that the package was applied to the right
+  thing, and a file the package *changes* can be. The honest sentence is that
+  narrow one.
+
+  **57, not 60** (fix round 1). Sixty *paths* differ, and three of them —
+  `C/Exe2Arc` ↔ `C/exe2arc`, `C/WBInfo` ↔ `C/wbinfo`, `Utilities/More` ↔
+  `Utilities/more` — exist in both trees under a different case, because
+  BoingBag 1 re-cases them rather than adding them. They are exactly the three
+  "only in the skipped tree" entries. The finding is unchanged; the number was
+  quoted in six places and is corrected in all of them.
+
+*Guards:* `package.rs::the_boingbags_declare_what_their_updater_leaves_undone_art_227`
+asserts both `post_install` lists **whole**, so a fourth step cannot be added
+without failing it; `chain.rs::boingbag_two_is_refused_on_a_tree_that_never_had_boingbag_one`
+and `…_is_allowed_once_boingbag_one_is_recorded` hold both arms of the refusal.
+Report and re-runnable command lines:
+`.superpowers/sdd/2026-09-08-intake/r3-task-3-report.md`.
 
 **ART-225** 🟠 ✅ **Thirteen font descriptors were placed as `X.FONT` and the
 running Amiga could see none of them — `diskfont.library` matches the `.font`

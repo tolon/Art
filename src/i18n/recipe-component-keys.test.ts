@@ -41,18 +41,32 @@ interface Component {
 /** Every shipped release recipe, read off disk rather than listed here — a
  *  recipe added to the folder is checked without anybody remembering to add
  *  it. Package recipes live in `recipes/packages/` and are a subdirectory, so
- *  `readdirSync` on the top level picks up releases only. */
+ *  `readdirSync` on the top level picks up releases only.
+ *
+ *  The folder also holds `guide.en.json` / `guide.tr.json` — the drop-folder
+ *  guide's own two languages (design § 3.7), which live beside the recipes
+ *  because that is what they are composed from. They are excluded **by
+ *  name**, not by the absence of the very field being guarded (round 2
+ *  whole-branch review, L10): filtering on `Array.isArray(components)` meant
+ *  a *release* recipe that lost its `components` array was silently dropped
+ *  from every check below instead of failing loudly, and the only backstop
+ *  fired when all of them went at once. A recipe with no components now
+ *  throws here, which is the behaviour that existed before the guide files
+ *  arrived. */
+const NOT_A_RECIPE = /^guide\./;
+
 function recipes(): { file: string; components: Component[] }[] {
   return readdirSync(RECIPES)
-    .filter((name) => name.endsWith(".json"))
-    .map((file) => ({
-      file,
-      components: (
-        JSON.parse(readFileSync(resolve(RECIPES, file), "utf8")) as {
-          components: Component[];
-        }
-      ).components,
-    }));
+    .filter((name) => name.endsWith(".json") && !NOT_A_RECIPE.test(name))
+    .map((file) => {
+      const parsed = JSON.parse(readFileSync(resolve(RECIPES, file), "utf8")) as {
+        components?: Component[];
+      };
+      if (!Array.isArray(parsed.components)) {
+        throw new Error(`${file} is in the recipes folder and declares no components`);
+      }
+      return { file, components: parsed.components };
+    });
 }
 
 /** Whether a dotted key resolves to a string in a catalogue. */
@@ -79,6 +93,13 @@ describe("an install recipe's component label keys", () => {
     // make every assertion below vacuously true.
     expect(recipes().length).toBeGreaterThan(0);
     expect(labelled().length).toBeGreaterThan(0);
+    // **Every release recipe in the folder is checked, and the count says
+    // so** (L10). A file quietly excluded is a file nothing below looks at,
+    // and the `> 0` guard above only fires if they all go at once.
+    const shipped = readdirSync(RECIPES).filter(
+      (name) => name.endsWith(".json") && !NOT_A_RECIPE.test(name)
+    );
+    expect(recipes().map((r) => r.file).sort()).toEqual(shipped.sort());
   });
 
   it("names only labels that exist in English", () => {

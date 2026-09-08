@@ -672,6 +672,35 @@ The guards read the text; the proof is the gated real boot
 [testing.md § Real material](testing.md#real-material-and-the-ignored-hooks)).
 Emu68 Hatcher's own scripts, which run on real hardware, follow the same rules.
 
+**A sixth rule, about the other script ART writes.**
+`core/amigainstall/workvol.rs` generates a one-shot `Startup-Sequence` that runs
+a package's own installer and then reports through `If Warn`. **That branch is
+unexercised, not proven** — measured 2026-09-08 with a controlled experiment on
+the owner's own BoingBags, one variable, each arm twice, the control measured:
+a payload with **one byte** changed does not make the `Updater` set WARN, it
+makes it **hang** (`TimedOut` at 1 800.7 s, twice, stopped on the payload entry
+the byte falls in), and the real archive applied to a **wrong target** returns
+**`ok`, twice**. So the word the Amiga writes says the program returned without
+WARN and nothing more. **And the artefact to ask afterwards is not the one the
+package updates**: `Libs/version.library` reads `45.3` byte-identically on a
+correctly chained tree and on one that skipped BoingBag 1 and is missing 57
+files — the package writes that string either way — while
+`Libs/xadmaster.library` separates them, 9.1 against 9.0. **What protects the
+user here is the refusal before the run**
+(`core/osinstall/chain.rs::refuse_unless_installable`, 17.6 ms, nothing copied),
+which is a *bookkeeping* guard: it reads a manifest only a successful ART run
+writes. Numbers and both arms: ART-227.
+
+**The same script now carries a second, version-gated invocation** — a
+package's `follow_ups`, HstWB's own shape for BoingBag 3.9-2's `XAD-Update`
+(ART-280) — and its placement is the seventh rule: **`Version … FILE` sets WARN
+as its answer**, so the gate is emitted strictly *below* the `If Warn` that
+turns the installer's own return code into the result word. Above it, every
+successful run on a tree with an old `xadmaster` would be reported as *the
+installer said no*. The follow-up reports separately, in `art-followup.txt`,
+with four words of its own — an install's ending is not changed by what the
+package did afterwards.
+
 ## Config files are user data
 
 **Never regenerate a user's config file from scratch.** `FF.CFG` (FlashFloppy),
@@ -716,6 +745,14 @@ back.
   the people using this are over fifty. It is a first-class setting, not an
   accessibility afterthought; new screens inherit it from the shell and must not
   fight it with fixed pixel heights.
+- **A found artefact pre-fills a field; a chosen one overrides it; a re-scan
+  never replaces a choice.** The OS Builder resolves the build's material once
+  (`core/osinstall/slots.rs`) and fills the Amiga-side panel's fields from the
+  answer — but a path the user picked by hand wins over it, is labelled as
+  theirs, and outlives every later pass. Taking the choice back is its own
+  control (*Use the one ART found*), and it `forget`s the remembered key rather
+  than storing a `null`: a stored "nothing" is itself a decision, and it would
+  switch the pre-fill off for good.
 
 ### The OS Builder is a wizard, and one value carries the build
 
@@ -748,6 +785,22 @@ them. Three media fields now persist outside the facade.
 When you are unsure which kind a value is, one question decides it: **can the
 value ART wrote and the value the next step operates on drift apart?** If yes it
 belongs in the facade, whatever it looks like.
+
+**The `amiga-kurulum` step is the update chain** (round 3 of the intake work):
+one row per link of the release's own order, from `core::osinstall::chain`
+through `osinstallChain` and `src/lib/chain.ts`, with a single Run button that
+runs the row the user selected or, when they selected none, the first *ready*
+row — and names it. Which of two routes a row takes is the **row's** answer,
+`SentenceFacts::runs_on_amiga`: an Amiga-side row goes through `compose →
+install`, a host-placed one through the `paketler` step's own
+`osinstall_collisions` → `osinstall_add_package`, shared as
+`components/osbuilder/HostPlacement.tsx` rather than copied.
+
+**A row's state comes from the manifest and the slots, never from a file being
+present.** `distribution.json` is what makes a row *installed*, and the resolved
+slot is what makes it *ready* or *missing*; a screen that inferred either from a
+file on disk would tell somebody a package was applied because its archive was
+still in the folder.
 
 ### Strings: two catalogues, and `src/lib` never renders one
 

@@ -9,6 +9,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A BoingBag 3.9-2 run now applies the XAD update too, in the same sitting.**
+  BoingBag 3.9-2 carries a second update inside itself — a newer
+  `xadmaster.library` and the two dozen little readers that go with it, for
+  `.lzx`, `.rar`, `.cab`, `.zoom` and the rest — and ART used to leave it
+  behind: the tree came out saying it was fully BoingBag'd while its archive
+  handling was a version older than the disc you had just installed from. ART
+  now checks what your tree's `xadmaster.library` says about itself and, if it
+  is older than 10, lets the package apply its own update straight after the
+  first one, in the same emulator session. Nothing extra to choose, and about
+  fifteen seconds longer.
+
+  The report afterwards says which of four things happened, and they are four
+  because they need four different reactions: **it ran** (your tree got the
+  update), **it was not needed** (your tree already had that version — not a
+  problem), **it ran and said no** (the install itself still worked; only that
+  extra part did not), or **ART could not check** (this tree has no
+  `C/Version`, so nothing was run rather than something being run blind). None
+  of them changes what the install itself reported.
+
+- **A folder of games is no longer read from end to end when you ask ART to
+  identify your install media.** ART asks each disc image for its own name
+  first — a few bytes near the front of the file — and only reads the whole of
+  one if that name is a disc some AmigaOS recipe actually installs from. The
+  rest are listed as *left alone*, by name, so you can see ART did not simply
+  miss them. On a material folder with a few CD32 images in it this is the
+  difference between a pass that reads a gigabyte and one that reads none of
+  it.
+
+- **The AmigaOS 3.9 updates are one ordered list now, and ART knows five more
+  of them.** The BoingBags, the Locale packs, the Contribution drawer, the
+  Euro-Update and the community BoingBags 3&4 are a chain: each one goes on
+  after the last, and each one's own installer checks that it did. ART now
+  carries that order as data and can say, for every link, exactly one of seven
+  things — it is already in this tree; it is ready and here is the file; it is
+  waiting for a named row; its file is not in the folders you named and here is
+  what to look for; you do not need it because something else already contains
+  it; ART will not do it and here is why; or nobody has run it yet. Those never
+  collapse into "not done", because the seven need seven different next steps.
+
+- **Three update packages ART did not know about.** *BoingBag 3.9-2's
+  Contribution* — the ClassAction, OpenURL and cddb-lib drawers — is placed
+  from Windows straight into your tree, beside where the CD's own Contribution
+  would go rather than on top of it. *Euro-Update* and *BoingBags 3&4* are
+  listed with their reason rather than hidden: Euro-Update's own installer
+  rebuilds the font index afterwards and ART cannot do that, so placing it
+  would quietly drop any font size the package does not itself ship; BoingBags
+  3&4 chooses what to copy from your processor, your machine and the languages
+  you pick, and its Install script has never been run unattended by ART. Both
+  say so on their own row instead of appearing to work.
+
+- **ART can write a "what goes here" note into your own material folders.**
+  Under the OS Builder's readout there is a button for each folder in the
+  list. Press it and ART writes a plain text file into that folder listing
+  everything the release you are building can use: whether each piece is
+  required or optional, the file names ART expects, where that piece came from
+  when ART has a note of it, what else stops working if you never find it, and
+  what has to be in place before it — so you have the list where the files are,
+  not only on screen. The Kickstart is listed too, saying plainly that it is
+  not a file for that folder and that you choose it in ART. It is written in
+  the language ART is showing, under a name in that language. ART downloads
+  none of this and the note contains no links. Nothing is written until you
+  press the button, and if a note is already in that folder ART leaves it
+  exactly as it is, byte for byte, and tells you to delete it if you want a
+  fresh one.
+- **The commander now has cursor keys.** Up/Down, Home/End and Page Up/Page
+  Down move the pane's cursor — no version of ART had ever handled them, so a
+  mouse-free session was driven by Insert and letters only. Holding Shift
+  while moving marks every row the cursor passes over, inclusive of where it
+  started and exclusive of where it lands, the same rule in either direction
+  and at any step size. Ctrl+Space focuses the command line, the one custom
+  shortcut the Total Commander `.ini` this build reads still needed wiring
+  (ART-275).
 - **A real Amiga can now finish its own first boot without a host in the
   loop.** The OS Builder gains a first-boot step: turn it on and the tree ART
   builds carries a small program that runs itself the first time the Amiga
@@ -96,6 +168,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The Amiga-side step is the whole update chain now, with one Run button.**
+  It used to be a list of the two packages ART could run on the Amiga, with
+  nothing to say where they sat in the order the material actually goes on.
+  It now shows every link of the AmigaOS 3.9 chain in that order — the CD, the
+  two BoingBags, the Locale packs, the Contribution drawer, Euro-Update and
+  BoingBags 3&4 — each with the one sentence that is true of it and whether it
+  runs on the Amiga or is placed from Windows. Pick a row to read its facts;
+  press Run to do the row you picked. Pick nothing and Run does the first row
+  that is ready, and says which one that is before you press it. A row that
+  cannot be run — because it is already in your tree, because another row has
+  to go first, because its file is not in the folders you named, because
+  something else already contains it, or because nobody has ever run it — is
+  still there to be read, and Run is switched off with that row's own reason
+  beside it. A row ART places from Windows is placed from this screen, through
+  the same preview and the same refusals as the packages step, and no emulator
+  window opens for it. When a row is done, the list re-reads your tree so that
+  row moves to "already in this tree" and the next one is offered — and the
+  report of what just happened stays on screen, naming the row it is about.
+  The first row, the CD, links back to the source step, which is where a disc
+  is chosen.
+
+- **The OS Builder asks for your files once, and then tells you what it
+  found.** Where the source step used to have an install-disks folder, a
+  separate list of extra folders and, for AmigaOS 3.2.2, one field per part of
+  the release — and the update-packages step asked for the archives all over
+  again — there is now a single list of folders. Add as many as you like,
+  say which part of the release a folder holds when the release has parts,
+  drop a disc on the window to add its folder, and remove one you no longer
+  want. Every folder you had already chosen in any of those places is carried
+  over, in order, with duplicates folded; nothing is lost and nothing is
+  changed behind you.
+
+  Underneath the list is a new readout: one line for every piece of material
+  the chosen release can use — the install disc, each update package, the
+  fix that only some copies need, the Kickstart — saying for each one
+  whether it is here and, when it is, **how ART knows**. Identified by its
+  bytes is a different sentence from "this file calls itself the right thing",
+  which is a different sentence again from "a file by that name is here and
+  nothing else says so", and none of them are the sentence for two files ART
+  will not choose between. A piece ART has measured as unnecessary — the
+  BoingBag 1 UAE fix, when your copy already carries the fixed installer —
+  says so instead of being reported as missing, and the summary line above the
+  list counts it as neither found nor missing while saying how many such
+  pieces there are. Required and optional are counted apart, so a set that is
+  only short of an optional file still reads as ready to build. A folder ART
+  could not open at all is named, and the material in the folders beside it
+  still counts.
+
+  If Amiga Forever is installed, ART offers its shared disk folder as one
+  line with an Add button while your list is still empty. It is never added
+  unless you press it.
+
+  The step that runs a package's own installer on the Amiga stops asking as
+  well. Its three Browse buttons — the package's archive, its second archive,
+  the CD image — are filled from the same answer: each one now shows the file
+  ART found and the reason it believes it, in the same words the readout uses,
+  and only asks you to go and find something when it genuinely could not. When
+  it does ask, it tells you what to look for by name and where that file comes
+  from, instead of describing the field. When two files could be the one it
+  wants, it lists both with what it knows about each and lets you say which;
+  it never picks. And when your copy of BoingBag 1 already carries the fixed
+  installer, the second archive field says so rather than asking for a file
+  nobody has to download.
+
+  A file you choose by hand still wins, is marked as yours, and stays yours —
+  scanning again never replaces it. *Use the one ART found* is the way back,
+  and it is the only way back. The readout on the source step knows about
+  those choices too, so the two screens no longer say opposite things about
+  the same file.
+
+  Three lines on that readout were wrong and are not any more. Your Kickstart
+  was reported as missing from your material folders and counted against the
+  build — ART never looks for one there, and never did; it is chosen in the
+  field on that step, and the readout now says so and names the version the
+  build needs. A piece already installed into your tree, whose archive you
+  have since moved away, was drawn in red as missing directly under a green
+  line saying nothing was. And a disc ART recognises that turns out to be
+  missing part of itself now says which part, instead of telling you to go and
+  find a disc that is sitting in the folder. A complete set says everything
+  required is here rather than counting a shortfall of nought, and a folder
+  with more archives in it than ART reads in one pass says how many it read.
+
+  The archives folder is now remembered per release, like everything else
+  about a build. Removing a folder while building one release used to
+  silently repoint another release's package steps at a different folder.
+
 - **ART now looks like a Windows 11 application, in both themes.** The
   colours are the Fluent tokens Windows itself draws with (Mica background,
   layer and card fills, the system accent blue), controls are 32 px with
@@ -113,6 +271,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two packages can now legitimately share one archive.** Adding a second
+  update package built from the same medium as one already in the tree used
+  to be refused outright — `'Locale3.9' already names the medium component
+  'locale-39' was installed from in this tree` — even where the recipe
+  declares the sharing on purpose. An archive that genuinely is a different
+  file under the same medium name is still refused, and now names which
+  component the tree's own copy actually came from (ART-276).
+- **The Amiga-side install panel remembers each package's own archive
+  choice, tells you the moment a picked file belongs to a different
+  package, and its refusals name that package.** Switching between BoingBag
+  3.9-1 and BoingBag 3.9-2 used to carry the first package's archive
+  straight into the second one's request, and a wrong-archive refusal named
+  an internal path instead of either package. The panel now remembers an
+  archive per package rather than one shared choice, classifies a chosen
+  file as soon as it is picked and shows what it found beside the confirm
+  box, and both the screen's own hint and Rust's own refusal name the
+  package an archive actually belongs to — never by guessing when more than
+  one package could be meant (ART-277).
 - **Applying a wallpaper, screen depth or icon arrangement no longer freezes
   the window, and can be stopped.** ART now reports progress while it works
   and a Stop button appears; stopping partway leaves whatever had already

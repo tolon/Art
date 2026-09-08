@@ -105,11 +105,14 @@ use crate::core::osinstall::scan::{
     MediaMatch, PackageMedium,
 };
 use crate::core::osinstall::scan_cache::ScanCache;
+use crate::core::osinstall::slots::{self, Facts, SetSummary, SlotState};
 use crate::core::osinstall::source::MediaSource;
+use crate::core::osinstall::source_archive::ArchiveSource;
 use crate::core::osinstall::verify::{verify_volume, VerifyReport};
 use crate::core::osinstall::{
     destination_key, host_destination, HostPlacementBlock, RefusalReason,
 };
+use crate::core::safety;
 use crate::error::{AppError, AppResult};
 
 use super::jobs::{spawn_job, spawn_job_in_lane, JobRegistry};
@@ -642,6 +645,20 @@ pub struct PackageSummary {
     /// 'locale-turkish'", met after the pick rather than before it — or
     /// carry a list of ids that a fourth recipe would silently not join.
     pub amiga_installable: bool,
+    /// `Some` when this package declares an Amiga-side installer that
+    /// **nobody has run** — the recipe's own typed
+    /// [`NotYetRunnable`](crate::core::osinstall::package::NotYetRunnable),
+    /// which the screen translates and renders on a row it shows
+    /// **disabled** (fix round 1, m6: it used to be free English prose
+    /// interpolated into a translated frame).
+    ///
+    /// Its own field rather than `amiga_installable: false`, because the two
+    /// are different sentences with different next steps: *"ART ships no
+    /// Amiga-side installer for this"* is a fact about the recipe, and
+    /// *"this one has not been run unattended yet"* is a fact about what has
+    /// been measured. Registering the row unready is what §10/§89 asks for —
+    /// never hiding it.
+    pub not_yet_runnable: Option<crate::core::osinstall::package::NotYetRunnable>,
     /// Every entry name this package's own archive carries that
     /// [`safe_join`](crate::core::security::safe_join) refused — a `..`, an
     /// absolute path, a Windows prefix — exactly as the archive spelled it,
@@ -705,6 +722,7 @@ pub fn osinstall_packages(
                 available: !matched.is_empty(),
                 host_placement_block: p.host_placement_block,
                 amiga_installable: p.amiga_installer.is_some(),
+                not_yet_runnable: p.amiga_installer.as_ref().and_then(|i| i.not_yet_runnable),
                 // Every claimant's, not only the first: an ambiguous name
                 // is still offered as available (the refusal comes later,
                 // by name), so saying nothing about the *other* claimant's
@@ -716,6 +734,614 @@ pub fn osinstall_packages(
             }
         })
         .collect())
+}
+
+// ---------------------------------------------------------------------------
+// osinstall_slots
+// ---------------------------------------------------------------------------
+
+/// What one release needs and what the user's folders turn out to hold.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotReport {
+    pub states: Vec<SlotState>,
+    pub summary: SetSummary,
+    /// Material folders ART could not read at all, as the user spelled them.
+    ///
+    /// **Reported rather than swallowed** (fix round 1, F2). A remembered
+    /// path on a drive nobody plugged in is the ordinary case here, and a
+    /// readout that simply showed every medium as *not found* would be saying
+    /// something false about disks sitting in the folder next to it. Empty is
+    /// the normal answer, and it is a different sentence from "found
+    /// nothing".
+    pub unreadable_folders: Vec<String>,
+    /// Folders holding more archives than ART opens in one pass, as
+    /// `(folder, bound)` — design § 6's *"bound the count and name the
+    /// bound"* (round 2 review, L7).
+    ///
+    /// A folder of 200 `.lha` files is an Aminet mirror, not a material
+    /// folder, and `find_packages` opens **every regular file** in a folder to
+    /// ask what it is. Nothing capped that, and this command now asks it from
+    /// two screens and re-asks on every change to the release, the folder
+    /// list, the tree, the ROM and the identify pass. So the scan stops, and
+    /// the readout says it stopped and at what number — a silent truncation
+    /// would make a missing artefact look absent when ART simply never
+    /// reached it.
+    pub crowded_folders: Vec<(String, usize)>,
+}
+
+/// Resolve every slot of `release` against `folders`, the chosen tree and the
+/// chosen ROM — the one answer that replaces the four separate resolutions the
+/// OS Builder used to make (design § 3.2).
+///
+/// **Read-only, and it hashes nothing.** `core::osinstall::slots` opens no
+/// file at all; this adapter gathers the facts and every one of them comes
+/// from a reader that already exists:
+///
+/// - [`find_media`] reads each disk's own volume name, as the `kaynak` step
+///   already does;
+/// - [`find_packages`] reads each archive's single top-level directory, as the
+///   `paketler` step already does;
+/// - [`mediahash::remembered_media_in`] answers **out of the scan cache
+///   only**. Hashing a 490 MB ISO belongs on the job `osinstall_identify_media`
+///   already runs (§54), never on the command thread, so a folder nobody has
+///   identified yet resolves at rank 2 — and `Found::bytes_read` is what lets
+///   the readout say that is why, rather than claiming a lookup nobody made.
+/// - the tree's own `distribution.json`, through
+///   [`chain::read_manifest`] — the one reader, so "installed" means the same
+///   thing here as everywhere else.
+///
+/// **Each folder is scanned on its own** (fix round 1, F2). `find_media_across`
+/// propagates the first folder's error, so one unreadable path used to discard
+/// the disks found in every *other* folder and the readout then said, of media
+/// sitting right there, that they were not in the folders the user named. The
+/// folders that failed come back on [`SlotReport::unreadable_folders`] instead,
+/// and `scan::dedupe_identical_disks` — the same rule `find_media_across`
+/// applies — folds the result.
+///
+/// A chosen *tree* that carries no manifest does propagate: the user just
+/// pointed at it, and `chain::read_manifest`'s refusal names what is wrong
+/// with it.
+///
+/// **`overrides` is the files the user picked by hand**, as `(slot id, path)`
+/// — design § 3.4's *"a file the user picked by hand wins over the slot, and
+/// the readout says* chosen by you *for it"* (round 2 review, M5). It is
+/// optional on the wire so a caller holding none sends nothing, and an
+/// overlay's entry may name `overlay:<package>` rather than a particular
+/// drawer (see [`slots::Override`]). Each path's existence is checked here,
+/// because `core::osinstall::slots` opens nothing.
+///
+/// **The ROM's existence is checked here**, because `core::osinstall::slots`
+/// opens nothing and the brief assigns the check to the caller (F5). A
+/// remembered path whose file has gone comes back as its own ending — not as
+/// *chosen*, which would be a sentence about a file that is not there, and not
+/// counted in `required_found`, which would turn the set line green on a build
+/// that cannot run.
+#[tauri::command]
+pub fn osinstall_slots(
+    release: String,
+    folders: Vec<PathBuf>,
+    tree: Option<PathBuf>,
+    rom: Option<PathBuf>,
+    overrides: Option<Vec<(String, PathBuf)>>,
+) -> AppResult<SlotReport> {
+    let slots = slots::slots_for(&release)?;
+    let gathered = gather_facts(&release, &folders, tree, rom, overrides)?;
+    let chosen = gathered.overrides();
+    let states = slots::resolve(&slots, &gathered.facts(&chosen));
+    let summary = slots::summarize(&release, &states);
+    Ok(SlotReport {
+        states,
+        summary,
+        unreadable_folders: gathered.unreadable_folders.clone(),
+        crowded_folders: gathered.crowded_folders.clone(),
+    })
+}
+
+/// Everything [`slots::resolve`] needs, read once and **owned** so that two
+/// commands can share one gathering.
+///
+/// `slots::Facts` borrows every field, which is what keeps
+/// `core::osinstall::slots` from opening anything; a borrowing struct cannot
+/// be returned from the function that read the folders, so the reading and
+/// the borrowing are two types. [`GatheredFacts::facts`] is the bridge.
+///
+/// **One gathering, two callers, on purpose.** `osinstall_slots` and
+/// `osinstall_chain` answer two questions about the same folders, the same
+/// tree and the same ROM; two copies of this loop would let the readout and
+/// the chain screen disagree about which archive is which — the
+/// two-screens-one-artefact defect round 2 spent a review closing.
+struct GatheredFacts {
+    media: Vec<FoundMedia>,
+    packages: Vec<FoundPackage>,
+    hashes: Vec<mediahash::MediaMatch>,
+    manifest: Option<crate::core::osinstall::apply::DistributionManifest>,
+    rom: Option<(PathBuf, bool)>,
+    program_versions: Vec<(String, String)>,
+    overrides: Vec<(String, PathBuf, bool)>,
+    disc_roots: Vec<(PathBuf, Vec<String>)>,
+    unreadable_folders: Vec<String>,
+    crowded_folders: Vec<(String, usize)>,
+}
+
+impl GatheredFacts {
+    /// The overrides, borrowed.
+    ///
+    /// Its own step rather than a line inside [`facts`](Self::facts): an
+    /// `Override` borrows its slot id and its path, so a `Vec` built inside
+    /// that method would be a reference into a temporary. The caller owns
+    /// the array and the borrow is theirs — the same split `slots.rs`'s own
+    /// test helper makes, and for the same reason.
+    fn overrides(&self) -> Vec<slots::Override<'_>> {
+        self.overrides
+            .iter()
+            .map(|(slot, path, on_disk)| slots::Override {
+                slot: slot.as_str(),
+                path: path.as_path(),
+                on_disk: *on_disk,
+            })
+            .collect()
+    }
+
+    fn facts<'a>(&'a self, overrides: &'a [slots::Override<'a>]) -> Facts<'a> {
+        Facts {
+            media: &self.media,
+            packages: &self.packages,
+            hashes: &self.hashes,
+            manifest: self.manifest.as_ref(),
+            rom: self.rom.as_ref().map(|(path, on_disk)| match on_disk {
+                true => slots::ChosenRom::OnDisk(path.as_path()),
+                false => slots::ChosenRom::Absent(path.as_path()),
+            }),
+            program_versions: &self.program_versions,
+            overrides,
+            disc_roots: &self.disc_roots,
+        }
+    }
+}
+
+/// Read the folders, the tree and the ROM once — see [`GatheredFacts`].
+fn gather_facts(
+    release: &str,
+    folders: &[PathBuf],
+    tree: Option<PathBuf>,
+    rom: Option<PathBuf>,
+    overrides: Option<Vec<(String, PathBuf)>>,
+) -> AppResult<GatheredFacts> {
+    // Per folder, and the same folder never twice: a user who adds their
+    // material folder a second time must not be told every disk and archive
+    // in it is ambiguous with itself (`find_media_across`'s own rule, which
+    // has no package-side counterpart to call).
+    let mut seen: Vec<PathBuf> = Vec::new();
+    let mut media: Vec<FoundMedia> = Vec::new();
+    let mut packages: Vec<FoundPackage> = Vec::new();
+    let mut hashes: Vec<mediahash::MediaMatch> = Vec::new();
+    let mut unreadable_folders: Vec<String> = Vec::new();
+    let mut crowded_folders: Vec<(String, usize)> = Vec::new();
+    let cache = ScanCache::in_dir(crate::scratch::root()?);
+    for folder in folders {
+        let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.clone());
+        if seen.contains(&canonical) {
+            continue;
+        }
+        seen.push(canonical);
+        match find_media(folder) {
+            Ok(found) => media.extend(found),
+            // Only this folder is lost, and it is named. `find_media` skips
+            // an unreadable *file* itself, so an error here is about the
+            // folder — the one thing the user can act on.
+            Err(_) => unreadable_folders.push(folder.display().to_string()),
+        }
+        // Bounded, and the bound is reported (L7). `find_packages` opens
+        // every regular file in a folder to ask what it is, and this command
+        // is now asked from two screens and re-asked on five different
+        // changes.
+        let (found, hit_bound) =
+            scan::find_packages_bounded(folder, scan::MAX_MATERIAL_ARCHIVES).unwrap_or_default();
+        if hit_bound {
+            crowded_folders.push((folder.display().to_string(), scan::MAX_MATERIAL_ARCHIVES));
+        }
+        packages.extend(found);
+        hashes.extend(mediahash::remembered_media_in(folder, &cache).unwrap_or_default());
+    }
+    let media = scan::dedupe_identical_disks(media);
+    let packages = narrow_by_distinguished_by(release, packages);
+
+    let manifest = match tree {
+        Some(tree) => Some(chain::read_manifest(&tree)?),
+        None => None,
+    };
+
+    let program_versions = installer_versions(release, &packages);
+
+    let rom = rom.map(|path| match path.is_file() {
+        true => (path, true),
+        false => (path, false),
+    });
+    // The existence check is the caller's, exactly as it is for the ROM (F5):
+    // `core::osinstall::slots` opens nothing, and "chose one, it has gone" is
+    // its own ending rather than a plain absence.
+    let overrides: Vec<(String, PathBuf, bool)> = overrides
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(slot, path)| {
+            let on_disk = path.is_file();
+            (slot, path, on_disk)
+        })
+        .collect();
+
+    // The volume names this release's own recipe names — the only discs
+    // `disc_roots_of` may open. Derived from the slots rather than written
+    // here, so a second release's disc needs no code.
+    let wanted: Vec<String> = slots::slots_for(release)?
+        .into_iter()
+        .filter(|slot| slot.kind == slots::SlotKind::Medium)
+        .map(|slot| slot.identity)
+        .collect();
+    let disc_roots = disc_roots_of(&media, &wanted);
+
+    Ok(GatheredFacts {
+        media,
+        packages,
+        hashes,
+        manifest,
+        rom,
+        program_versions,
+        overrides,
+        disc_roots,
+        unreadable_folders,
+        crowded_folders,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// osinstall_chain
+// ---------------------------------------------------------------------------
+
+/// The whole AmigaOS 3.9 update chain, in the material's own order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChainReport {
+    pub rows: Vec<chain::ChainRow>,
+    pub summary: chain::ChainSummary,
+    /// Material folders ART could not read at all, as the user spelled them
+    /// — the same field [`SlotReport`] carries and for the same reason (fix
+    /// round 1, F2). A drive nobody plugged in must not make every row read
+    /// *missing* with nothing said about why.
+    pub unreadable_folders: Vec<String>,
+    /// Folders holding more archives than ART opens in one pass, as
+    /// `(folder, bound)` — again [`SlotReport`]'s own field: an artefact ART
+    /// never reached must not read as one that is not there.
+    pub crowded_folders: Vec<(String, usize)>,
+}
+
+/// One row per link of `release`'s chain, resolved against the same folders,
+/// the same tree and the same ROM the material readout is resolved against.
+///
+/// **The fact gathering is `osinstall_slots`'s own** — `gather_facts`, one
+/// function with two callers. The chain screen and the readout are two
+/// questions about one set of files, and two gatherings would let them
+/// disagree about which archive is which.
+///
+/// Read-only and it hashes nothing, exactly as `osinstall_slots` is: hash
+/// answers come out of the scan cache `osinstall_identify_media`'s job
+/// fills, so a folder nobody has identified yet resolves by what its files
+/// call themselves.
+///
+/// A chosen `tree` that carries no `distribution.json` is a refusal rather
+/// than an empty chain — the user just pointed at it, and every *installed*
+/// state on this screen comes from that file alone.
+#[tauri::command]
+pub fn osinstall_chain(
+    release: String,
+    folders: Vec<PathBuf>,
+    tree: Option<PathBuf>,
+    rom: Option<PathBuf>,
+) -> AppResult<ChainReport> {
+    let slots = slots::slots_for(&release)?;
+    let gathered = gather_facts(&release, &folders, tree, rom, None)?;
+    let chosen = gathered.overrides();
+    let states = slots::resolve(&slots, &gathered.facts(&chosen));
+    let rows = chain::rows_for(&release, gathered.manifest.as_ref(), &states)?;
+    let summary = chain::summarize_chain(&release, &rows);
+    Ok(ChainReport {
+        rows,
+        summary,
+        unreadable_folders: gathered.unreadable_folders.clone(),
+        crowded_folders: gathered.crowded_folders.clone(),
+    })
+}
+
+/// The root directory names of every disc among `media` — design § 3.6's
+/// structural check, read here because `core::osinstall::slots` opens nothing.
+///
+/// **The root only, never a walk.** `IsoImage::list` over `root()` is one
+/// directory extent; `CdSource::open` walks the whole tree and refuses discs
+/// over its own caps, which is far more work than "does this disc carry
+/// `Emergency-Boot`" needs and would make a big disc answer nothing at all.
+///
+/// A disc that cannot be listed is simply **absent from the answer**, and
+/// `slots::missing_directory` treats an absent disc as "nobody looked" rather
+/// than as "the directory is not there" — the same rule `BytesRead` keeps one
+/// field over.
+fn disc_roots_of(media: &[FoundMedia], wanted: &[String]) -> Vec<(PathBuf, Vec<String>)> {
+    let mut out = Vec::new();
+    for found in media {
+        if found.kind != scan::MediaKind::Disc {
+            continue;
+        }
+        // **Only a disc this release's own recipe names is opened** (the
+        // owner's rule, 2026-09-08). `find_media` has already read every
+        // image's volume name off its primary descriptor, which is one
+        // sector; opening a disc is a second read of a directory extent, and
+        // the owner's material folders hold game and CD32 discs by the
+        // dozen. ART has no business reading the inside of any of them —
+        // this check answers a question about the AmigaOS 3.9 CD-ROM, and a
+        // disc that is not it cannot answer it.
+        if !wanted
+            .iter()
+            .any(|volume| crate::core::osinstall::amiga_names_equal(&found.volume_name, volume))
+        {
+            continue;
+        }
+        let Ok(image) = crate::core::iso::IsoImage::open(&found.path) else {
+            continue;
+        };
+        let (extent, length) = image.root();
+        let Ok(entries) = image.list(extent, length) else {
+            continue;
+        };
+        out.push((
+            found.path.clone(),
+            entries
+                .into_iter()
+                .filter(|entry| entry.is_dir)
+                .map(|entry| entry.name)
+                .collect(),
+        ));
+    }
+    out
+}
+
+/// Drop the archives a package's own `distinguished_by` rejects, before the
+/// slots are resolved against them (fix round 1, m4).
+///
+/// **`core::osinstall::slots` matches on `identity` alone** — a `Slot` carries
+/// the package's `media` and nothing else — while every other reader of the
+/// same folder (`osinstall_packages`, `plan()`, `resolve_package_archive`)
+/// goes through [`package_for`], which applies `distinguished_by` **whether or
+/// not `media` alone was ambiguous**. `package.rs` records why: eight of the
+/// owner's archives carry the top-level `LocaleUpdate`, and with only the
+/// German one present the Turkish package used to resolve to it with no
+/// ambiguity to warn anybody.
+///
+/// So the readout and the panel disagreed with the run about which file a slot
+/// is. For `boingbag-39-2` — the case that can actually reach the Amiga-side
+/// panel — a second archive claiming `BoingBag3.9-2` (its own Contribution
+/// archive does) made the field *ambiguous* where the run's resolver would
+/// have found exactly one, or filled it with a file `resolve_package_archive`
+/// refuses afterwards.
+///
+/// **Only the rejected ones go.** An archive no shipped package claims by
+/// identity is left in `Facts::packages` untouched, because rank 3's *guess*
+/// pool is built from every path the facts carry and an archive the recipes
+/// have never heard of is exactly what that rank exists to report on. What is
+/// removed is precisely: an archive whose top-level directory *is* some
+/// package's `media`, and which that package's own `distinguished_by` then
+/// turns down.
+///
+/// The cost is `archive_carries` re-opening each candidate archive — the same
+/// cost `osinstall_packages` already pays on the packages step, over the same
+/// files.
+fn narrow_by_distinguished_by(release: &str, found: Vec<FoundPackage>) -> Vec<FoundPackage> {
+    let Ok(packages) = package::packages_for(release) else {
+        // A release with no readable recipe list narrows nothing rather than
+        // losing everything: the slots will be empty anyway, and silently
+        // discarding the user's archives on the way is the worse failure.
+        return found;
+    };
+
+    // Every archive some package's `distinguished_by` accepts, by path. Built
+    // per package through the one function that answers "is this archive this
+    // package's", so this cannot come to a different conclusion than the run.
+    let mut accepted: Vec<PathBuf> = Vec::new();
+    for pkg in &packages {
+        let keep: Vec<&FoundPackage> =
+            match package_for(&found, &pkg.media, pkg.distinguished_by.as_deref()) {
+                MediaMatch::Missing => Vec::new(),
+                MediaMatch::Found(one) => vec![one],
+                MediaMatch::Ambiguous(many) => many,
+            };
+        for one in keep {
+            if !accepted.contains(&one.path) {
+                accepted.push(one.path.clone());
+            }
+        }
+    }
+
+    found
+        .into_iter()
+        .filter(|one| {
+            let claimed_by_identity = packages
+                .iter()
+                .any(|pkg| crate::core::osinstall::amiga_names_equal(&one.media, &pkg.media));
+            !claimed_by_identity || accepted.contains(&one.path)
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// osinstall_write_material_guide
+// ---------------------------------------------------------------------------
+
+/// What writing the guide did.
+///
+/// **Two endings, and they stay two** — the file is now there because ART
+/// wrote it, or the file was already there and ART did not touch it. A third,
+/// a real failure, is an error and reaches the screen as one.
+///
+/// **Why the refusal is an outcome and not an `Err`.** `SAFE_CREATE` is about
+/// never replacing what is already on disk, and that is exactly what happens
+/// here: the file is opened with `create_new`, so an existing guide keeps
+/// every byte it had. What is answered back is a different question — what
+/// the screen should say — and a `CoreError` sentence is English by
+/// construction (ART-060: `errorText`'s own opening paragraph is that a
+/// free-text English sentence cannot be translated, only rebuilt from parts).
+/// A typed answer lets the screen say *"already there; delete it to write a
+/// fresh one"* in the user's own language without parsing English, which is
+/// the whole reason `Phrase` exists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "state")]
+pub enum GuideOutcome {
+    /// Written, at this path.
+    Written { path: String },
+    /// A file of that name was already in the folder. **Not read, not
+    /// replaced, not appended to** — the path is answered so the screen can
+    /// name the file the user has to delete.
+    AlreadyThere { path: String },
+}
+
+/// Write *"what goes in this folder"* into one of the user's own material
+/// folders (design § 3.7).
+///
+/// **Only on a click, and only into the folder that click named.** ART does
+/// not write into a folder because somebody pointed at it; this command
+/// exists so a person can ask, and it writes exactly one file. The scratch
+/// root does not come into it — this is the user's own folder, not a staging
+/// site.
+///
+/// The text is [`slots::guide_text`]'s, composed from the release's own slots
+/// in position order, so it cannot drift from what ART actually accepts. The
+/// two languages are data beside the recipes (`recipes/guide.<lang>.json`);
+/// `language` is the UI's own code and anything unrecognised falls back to
+/// English rather than refusing.
+///
+/// `SAFE_CREATE`, through [`safety::atomic_create_new`] (fix round 1, L11).
+/// `core/safety` had no create-new primitive — `atomic_write` renames *over*
+/// the destination, which is the one thing that must not happen here — so it
+/// gained one: the name is reserved exclusively, the bytes go to a sibling
+/// temporary, and the rename swaps them in. A write that dies part way
+/// therefore cannot leave a half-guide that the next call refuses to replace
+/// while the screen says *"already there"* about ART's own debris.
+///
+/// **Logged** (§53). This creates a file in the user's own folder, which is a
+/// change to their data, so it goes through `write_result` like every other
+/// one — including the *already there* answer, which is a real outcome and not
+/// a non-event.
+#[tauri::command]
+pub fn osinstall_write_material_guide(
+    folder: PathBuf,
+    release: String,
+    language: String,
+    oplog: State<'_, JsonlOperationLog>,
+) -> AppResult<GuideOutcome> {
+    let result = write_material_guide(&folder, &release, &language);
+    write(&oplog, guide_record(&folder, &release, &language, &result));
+    result
+}
+
+/// What the operation log records about one guide write.
+///
+/// Its own function, the shape [`verify_record`] already uses in this module
+/// and for the same reason: a `State` cannot be built in a unit test, so the
+/// record has to be answerable without one or it is never checked at all.
+///
+/// **All three endings are logged, including *already there*.** That is not a
+/// non-event — the user asked ART to write into their folder and ART decided
+/// not to, which is exactly the kind of decision §53 exists to leave a trace
+/// of.
+fn guide_record(
+    folder: &Path,
+    release: &str,
+    language: &str,
+    result: &AppResult<GuideOutcome>,
+) -> OperationRecord {
+    let record = user_operation("Write a material guide into a folder")
+        .destination(folder.display().to_string())
+        .detail("Release", release)
+        .detail("Language", language);
+    match result {
+        Ok(GuideOutcome::Written { path }) => record.detail("Wrote", path.clone()),
+        Ok(GuideOutcome::AlreadyThere { path }) => {
+            record.detail("Left alone (already there)", path.clone())
+        }
+        Err(err) => record.failure(err.code(), err.to_string()),
+    }
+}
+
+/// [`osinstall_write_material_guide`] without the log, so the command body
+/// stays one expression and the record is written once whichever way it goes.
+fn write_material_guide(folder: &Path, release: &str, language: &str) -> AppResult<GuideOutcome> {
+    let slots = slots::slots_for(release)?;
+    let words = slots::guide_strings(language)?;
+    let text = slots::guide_text(&slots, release, language)?;
+
+    // `safe_join`, and not `folder.join(filename)`: the name comes from a
+    // shipped data file, but the one rule ART keeps about turning a name into
+    // a path has no exceptions for names ART wrote itself (`core/security`).
+    let path = crate::core::security::safe_join(folder, &words.filename)
+        .map_err(|err| CoreError::InvalidInput(err.to_string()))?;
+    let display = path.display().to_string();
+
+    match safety::atomic_create_new(&path, text.as_bytes())? {
+        safety::Created::Yes => Ok(GuideOutcome::Written { path: display }),
+        safety::Created::AlreadyThere => Ok(GuideOutcome::AlreadyThere { path: display }),
+    }
+}
+
+/// What each Amiga-installable package's **own** wrapper archive says its
+/// installer program is, as `(package id, "45.15")`.
+///
+/// This is the fact that decides whether BoingBag 1's UAE overlay is needed at
+/// all (ART-186), and it is asked of the artefact rather than of the user: the
+/// archive states its own `$VER:`, a date on a download page does not.
+///
+/// Only asked of a package that declares a `minimum_version` — nothing else
+/// has a question to answer — and only ever **read**: the member's bytes come
+/// out of [`ArchiveSource`] and are never written anywhere.
+/// [`packagevol::stated_version`](crate::core::amigainstall::packagevol::stated_version)
+/// is the same function `packagevol::unpack` uses on the extracted program, so
+/// the two cannot come to different conclusions about one file.
+///
+/// Every failure is silence, not a refusal: an archive that will not open, a
+/// member that is not there, a program stating no version. A package with no
+/// entry here has an overlay slot that stays *needed*, which is the safe
+/// answer — `packagevol::unpack` still refuses the run by name if the build
+/// really is too old.
+fn installer_versions(release: &str, found: &[FoundPackage]) -> Vec<(String, String)> {
+    let Ok(packages) = package::packages_for(release) else {
+        return Vec::new();
+    };
+    let mut versions = Vec::new();
+    for pkg in packages {
+        let Some(installer) = &pkg.amiga_installer else {
+            continue;
+        };
+        if installer.minimum_version.is_none() {
+            continue;
+        }
+        let MediaMatch::Found(archive) =
+            package_for(found, &pkg.media, pkg.distinguished_by.as_deref())
+        else {
+            continue;
+        };
+        let Ok(mut source) = ArchiveSource::open(&archive.path) else {
+            continue;
+        };
+        // The program's whole path inside the archive: the archive's own
+        // top-level drawer plus the path the recipe states *inside* the
+        // package. `AmigaInstaller::program` is never a whole path and never
+        // names a volume — `validate_installer` refuses one that does.
+        let member = format!("{}/{}", pkg.media, installer.program);
+        let Ok(bytes) = source.read(&member) else {
+            continue;
+        };
+        let Some(stated) = crate::core::amigainstall::packagevol::stated_version(&bytes) else {
+            continue;
+        };
+        versions.push((pkg.id, format!("{}.{}", stated.version, stated.revision)));
+    }
+    versions
 }
 
 // ---------------------------------------------------------------------------
@@ -942,6 +1568,38 @@ fn describe_host_placement_block(package: &str, block: HostPlacementBlock) -> St
              password-encrypted, and only the package's own Amiga-side Updater \
              holds the password (ART-166)"
         ),
+        HostPlacementBlock::NeedsFixfonts => format!(
+            "'{package}' cannot be placed from Windows: it replaces bitmap fonts, and \
+             its own installer runs FixFonts afterwards to rebuild the '.font' index \
+             files from what the drawer actually holds. ART cannot rebuild one, so \
+             placing the files alone would leave the index naming only the sizes this \
+             package ships"
+        ),
+        HostPlacementBlock::NeedsInstallerScript => format!(
+            "'{package}' cannot be placed from Windows: it installs through its own \
+             Installer script, which chooses files by CPU, by machine and by the \
+             languages it asks for, and edits the startup-sequence. ART places a fixed \
+             set of paths and cannot answer those questions for you"
+        ),
+    }
+}
+
+/// A plain-English sentence for a declared installer nobody has run — the
+/// `CoreError` half of what the screen renders as a translated one, exactly
+/// as [`describe_host_placement_block`] is for a block (fix round 1, m6).
+///
+/// One `match`, so a second [`NotYetRunnable`] kind cannot arrive with this
+/// sentence missing.
+pub(crate) fn describe_not_yet_runnable(
+    reason: crate::core::osinstall::package::NotYetRunnable,
+) -> &'static str {
+    use crate::core::osinstall::package::NotYetRunnable;
+    match reason {
+        NotYetRunnable::InstallerNotMeasured => {
+            "it installs through an Installer script, and nobody has measured whether that \
+             script finishes without a person at the window; ART will not start it until \
+             somebody has"
+        }
     }
 }
 
@@ -1628,7 +2286,12 @@ pub fn osinstall_collisions(
     registry: State<'_, Arc<JobRegistry>>,
 ) -> AppResult<u64> {
     let catalogue = package::packages()?;
-    let ordered = package::order(&packages)?;
+    // The same tolerance the add path applies, and for the same reason: a
+    // preview against a tree that already carries the prerequisite must not
+    // refuse the selection the add would accept, or the two screens
+    // disagree about one selection.
+    let applied: Vec<String> = chain::applied(&tree_root)?.into_iter().collect();
+    let ordered = package::order_with_installed(&packages, &applied)?;
     let title = format!(
         "Previewing {} package(s) against {}",
         ordered.len(),
@@ -1726,7 +2389,15 @@ fn resolve_packages_for_add(
         set.into_iter().collect()
     };
 
-    let mut refusals = detect_package_refusals(packages, &catalogue, &components_on);
+    // What this tree already carries — components *and* Amiga-side runs,
+    // through `chain`'s one reader. A `requires` naming a package the tree
+    // already has is met: `locale-turkish` and `boingbag-39-2-contribution`
+    // both go on after BoingBag 3.9-2, which is Amiga-side and can never be
+    // in a host selection, so without this the corrected `requires` would
+    // have made both permanently unaddable.
+    let applied: Vec<String> = chain::applied_in(&manifest).into_iter().collect();
+
+    let mut refusals = detect_package_refusals(packages, &catalogue, &components_on, &applied);
 
     let found = find_packages(package_folder)?;
     for id in packages {
@@ -1751,7 +2422,7 @@ fn resolve_packages_for_add(
     // the shipped data, not a user situation), and `detect_package_refusals`
     // above has already named the ordinary case — a `requires` that was not
     // itself chosen — by type.
-    let ordered = package::order(packages)?;
+    let ordered = package::order_with_installed(packages, &applied)?;
     let mut resolved = Vec::new();
     for id in &ordered {
         let package = catalogue
@@ -2347,6 +3018,23 @@ mod tests {
     /// uses, duplicated here rather than shared because that one is
     /// `#[cfg(test)]`-private to a different module.
     fn write_test_manifest(tree: &Path, files: Vec<crate::core::osinstall::apply::FileRecord>) {
+        write_test_manifest_with_runs(tree, files, Vec::new());
+    }
+
+    /// [`write_test_manifest`], plus the packages whose own installer ran on
+    /// the Amiga against this tree.
+    ///
+    /// Round 3: a host-placeable package may now `require` an Amiga-side one
+    /// — `locale-turkish` and `boingbag-39-2-contribution` both go on after
+    /// BoingBag 3.9-2 — and the only thing that can satisfy such a
+    /// requirement is this list. A test tree that records none is a tree that
+    /// has never had a BoingBag run on it, which is a real state and a
+    /// refusal, not a fixture to work around.
+    fn write_test_manifest_with_runs(
+        tree: &Path,
+        files: Vec<crate::core::osinstall::apply::FileRecord>,
+        amiga_installed: Vec<crate::core::osinstall::apply::AmigaInstallRecord>,
+    ) {
         let manifest = DistributionManifest {
             release: "AmigaOS 3.9".into(),
             built_from: vec![crate::core::osinstall::apply::MediaRecord {
@@ -2355,7 +3043,7 @@ mod tests {
             }],
             files,
             paired_rom: None,
-            amiga_installed: Vec::new(),
+            amiga_installed,
             layers: Vec::new(),
         };
         std::fs::write(
@@ -2363,6 +3051,16 @@ mod tests {
             serde_json::to_string_pretty(&manifest).unwrap(),
         )
         .unwrap();
+    }
+
+    /// The record a successful Amiga-side BoingBag 3.9-2 run leaves behind —
+    /// the only thing that can satisfy a `requires` naming it, since it can
+    /// never be chosen on the Packages step (ART-166).
+    fn boingbag_two_ran() -> crate::core::osinstall::apply::AmigaInstallRecord {
+        crate::core::osinstall::apply::AmigaInstallRecord {
+            package: "boingbag-39-2".into(),
+            command: "PKG:C/Updater AmigaOS-Update SYS:".into(),
+        }
     }
 
     fn locale_base_file_record(path: &str) -> crate::core::osinstall::apply::FileRecord {
@@ -2424,7 +3122,11 @@ mod tests {
         write_locale_turkish_archive(&folder, "turkish.lha", b"catalog bytes");
 
         let summaries = osinstall_packages(folder, "AmigaOS 3.9".to_string()).unwrap();
-        assert_eq!(summaries.len(), 5, "ART ships exactly five packages today");
+        assert_eq!(
+            summaries.len(),
+            8,
+            "the eight packages of the AmigaOS 3.9 chain"
+        );
 
         let turkish = summaries
             .iter()
@@ -2473,10 +3175,10 @@ mod tests {
         );
 
         // ...and the same folder, for the release these packages do belong
-        // to, still offers all four. A filter that answered "none" for
+        // to, still offers all eight. A filter that answered "none" for
         // everything would pass the assertion above.
         let for_39 = osinstall_packages(folder, "AmigaOS 3.9".to_string()).unwrap();
-        assert_eq!(for_39.len(), 5);
+        assert_eq!(for_39.len(), 8);
     }
 
     #[test]
@@ -2520,7 +3222,7 @@ mod tests {
         let missing = dir.join("does-not-exist");
 
         let summaries = osinstall_packages(missing, "AmigaOS 3.9".to_string()).unwrap();
-        assert_eq!(summaries.len(), 5);
+        assert_eq!(summaries.len(), 8);
         assert!(summaries.iter().all(|p| !p.available));
     }
 
@@ -2539,9 +3241,14 @@ mod tests {
             .join("t\u{FC}rk\u{E7}e");
         std::fs::create_dir_all(&drawer).unwrap();
         std::fs::write(drawer.join("x.catalog"), b"$VER: x.catalog 1.0 (1.1.20)").unwrap();
-        write_test_manifest(
+        // The run BoingBag 3.9-2 leaves behind is part of the fixture now:
+        // `locale-turkish` goes on after it, and a tree that has not had it
+        // run is one this selection is legitimately refused on (see
+        // `a_requirement_the_tree_already_carries_is_met_and_one_it_does_not_is_refused`).
+        write_test_manifest_with_runs(
             &tree,
             vec![locale_base_file_record(TURKISH_CATALOG_ON_TREE)],
+            vec![boingbag_two_ran()],
         );
 
         let packages_dir = dir.join("packages");
@@ -2558,7 +3265,9 @@ mod tests {
         // read-only work directly, the way `resolve_packages_for_add` and
         // `osinstall_verify`'s own `verify_at` already are.
         let catalogue = package::packages().unwrap();
-        let ordered = package::order(&["locale-turkish".to_string()]).unwrap();
+        let applied: Vec<String> = chain::applied(&tree).unwrap().into_iter().collect();
+        let ordered =
+            package::order_with_installed(&["locale-turkish".to_string()], &applied).unwrap();
         let reports = preview_collisions(
             &tree,
             &packages_dir,
@@ -3974,16 +4683,17 @@ mod tests {
     }
 
     /// The positive case beside it: once `locale-base` really is on the
-    /// tree, the same selection resolves to exactly one package, ready for
-    /// `add_package` to place.
+    /// tree **and BoingBag 3.9-2 has been run on it**, the same selection
+    /// resolves to exactly one package, ready for `add_package` to place.
     #[test]
     fn resolve_packages_for_add_resolves_locale_turkish_once_locale_base_is_on_the_tree() {
         let dir = scratch("add-component-present");
         let tree = dir.join("tree");
         std::fs::create_dir_all(&tree).unwrap();
-        write_test_manifest(
+        write_test_manifest_with_runs(
             &tree,
             vec![locale_base_file_record("Locale/Languages/turkish.language")],
+            vec![boingbag_two_ran()],
         );
 
         let packages_dir = dir.join("packages");
@@ -3997,6 +4707,82 @@ mod tests {
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].0.id, "locale-turkish");
         assert_eq!(resolved[0].1, packages_dir.join("turkish.lha"));
+    }
+
+    /// **A `requires` may be met by the tree instead of by the selection, and
+    /// the two arms are what make that a rule rather than a leak.**
+    ///
+    /// Round 3 corrected `locale-turkish`'s `requires` to what the material
+    /// states: it goes on after BoingBag 3.9-2. BoingBag 3.9-2 is Amiga-side
+    /// and can never appear in a host selection (ART-166), so checking the
+    /// selection alone would have made the owner's own Turkish catalogue pack
+    /// permanently unaddable — refused for a missing package if ticked alone,
+    /// refused as unplaceable if ticked together. Neither arm is asserted by
+    /// the other test, so both are here.
+    #[test]
+    fn a_requirement_the_tree_already_carries_is_met_and_one_it_does_not_is_refused() {
+        let dir = scratch("add-requires-from-tree");
+        let packages_dir = dir.join("packages");
+        std::fs::create_dir_all(&packages_dir).unwrap();
+        write_locale_turkish_archive(&packages_dir, "turkish.lha", b"catalog bytes");
+
+        // Arm 1 — `locale-base` is on the tree, BoingBag 3.9-2 has never run.
+        let without = dir.join("without-bb2");
+        std::fs::create_dir_all(&without).unwrap();
+        write_test_manifest(
+            &without,
+            vec![locale_base_file_record("Locale/Languages/turkish.language")],
+        );
+        let refusals =
+            resolve_packages_for_add(&without, &packages_dir, &["locale-turkish".to_string()])
+                .unwrap()
+                .unwrap_err();
+        // **The Amiga-side arm, and by name** (fix round 1, M1). BoingBag
+        // 3.9-2 is `encrypted-payload` blocked and the Packages step
+        // disables its checkbox, so the ordinary requirement refusal's
+        // advice — "tick that one too" — is about a tick that is not
+        // available. Asserted as the whole value, so a fallback to the old
+        // variant fails here rather than slipping through a looser
+        // `matches!`.
+        assert!(
+            refusals.contains(
+                &crate::core::osinstall::RefusalReason::PackageRequirementNeedsAmigaRun {
+                    package: "T\u{FC}rk\u{E7}e catalogs (BoingBag 3.9-2)".to_string(),
+                    requirement: "BoingBag 3.9-2".to_string(),
+                }
+            ),
+            "the refusal must name both packages and send the user to the Amiga-side step, \
+             got {refusals:?}"
+        );
+        assert!(
+            !refusals.iter().any(|r| matches!(
+                r,
+                crate::core::osinstall::RefusalReason::PackageRequirementMissing { .. }
+            )),
+            "the 'tick that one too' sentence must not fire for a package that cannot be \
+             ticked: {refusals:?}"
+        );
+
+        // Arm 2 — the same folder, the same selection, a tree that records
+        // the run. The only difference is the manifest.
+        let with = dir.join("with-bb2");
+        std::fs::create_dir_all(&with).unwrap();
+        write_test_manifest_with_runs(
+            &with,
+            vec![locale_base_file_record("Locale/Languages/turkish.language")],
+            vec![boingbag_two_ran()],
+        );
+        let resolved =
+            resolve_packages_for_add(&with, &packages_dir, &["locale-turkish".to_string()])
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            resolved
+                .iter()
+                .map(|(p, _)| p.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["locale-turkish"],
+        );
     }
 
     /// A missing archive is refused by name, not left for `add_package` to
@@ -4329,6 +5115,221 @@ mod tests {
             assert_eq!(value["kind"], "floppy");
         }
 
+        /// The slot readout's own wire shape (round 2, task 2). Pinned for
+        /// the reason every response type in this module is: `src/lib/
+        /// osinstall.ts` declares these key names by hand, and a missing
+        /// `rename_all` on one struct is what made `VerifyReport::notChecked`
+        /// read `undefined` on screen for a whole round.
+        #[test]
+        fn a_slot_report_serializes_with_the_keys_this_test_pins() {
+            let slots = crate::core::osinstall::slots::slots_for("AmigaOS 3.9").unwrap();
+            // A **filled** `found`, not an empty fixture (fix round 1, F9):
+            // with every slice empty, `found` was `null` on every state, so
+            // neither `Found`'s own camelCase keys nor `MatchedBy`'s
+            // kebab-case values were pinned at all — and `slots.ts` switches
+            // on `matchedBy` with no default, so a rename would have dropped
+            // through and rendered a *found* slot as not-found. Silently,
+            // which is the class of defect this whole test module exists for.
+            let rom = PathBuf::from("D:\\roms\\kick40068.A1200.rom");
+            let facts = Facts {
+                media: &[],
+                packages: &[],
+                hashes: &[],
+                manifest: None,
+                rom: Some(slots::ChosenRom::OnDisk(&rom)),
+                program_versions: &[],
+                overrides: &[],
+                disc_roots: &[],
+            };
+            let states = crate::core::osinstall::slots::resolve(&slots, &facts);
+            let report = SlotReport {
+                summary: crate::core::osinstall::slots::summarize("AmigaOS 3.9", &states),
+                states,
+                unreadable_folders: vec!["E:\\gone".to_string()],
+                crowded_folders: vec![("E:\\aminet".to_string(), 200)],
+            };
+            let value = serde_json::to_value(&report).unwrap();
+            expect_keys(
+                &value,
+                &["states", "summary", "unreadableFolders", "crowdedFolders"],
+            );
+            // The bound is a pair on the wire: the folder and the number,
+            // so the sentence can name the number rather than repeat it.
+            assert_eq!(value["crowdedFolders"][0][0], r"E:\aminet");
+            assert_eq!(value["crowdedFolders"][0][1], 200);
+            assert_eq!(value["unreadableFolders"][0], "E:\\gone");
+            expect_keys(
+                &value["summary"],
+                &[
+                    "release",
+                    "requiredTotal",
+                    "requiredFound",
+                    "optionalTotal",
+                    "optionalFound",
+                ],
+            );
+            expect_keys(
+                &value["states"][0],
+                &[
+                    "slot",
+                    "found",
+                    "candidates",
+                    "installed",
+                    "chosenMissing",
+                    "blockedBy",
+                    "notNeeded",
+                    "incomplete",
+                ],
+            );
+            expect_keys(
+                &value["states"][0]["slot"],
+                &[
+                    "id",
+                    "kind",
+                    "name",
+                    "identity",
+                    "artefact",
+                    "required",
+                    "filenames",
+                    "provenance",
+                    "position",
+                    "requires",
+                    "supersededBy",
+                    "expectsDirectories",
+                ],
+            );
+            assert_eq!(value["states"][0]["slot"]["kind"], "medium");
+            // The tagged shape the frontend switches on — `state`, not a bare
+            // string, so a future variant can carry its own fields.
+            assert_eq!(value["states"][0]["installed"]["state"], "no");
+
+            // The ROM is the last slot, and the only one this fixture fills.
+            let rom_state = value["states"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|state| state["slot"]["id"] == "rom")
+                .expect("AmigaOS 3.9 has a ROM slot");
+            expect_keys(
+                &rom_state["found"],
+                &["path", "matchedBy", "row", "confirmed", "bytesRead"],
+            );
+            assert_eq!(rom_state["found"]["matchedBy"], "chosen");
+            // `BytesRead` is a tagged enum on the wire (F13), not a boolean:
+            // `slots.ts` switches on `state`, so a rename here would drop
+            // straight through to a sentence about a lookup nobody made.
+            assert_eq!(rom_state["found"]["bytesRead"]["state"], "not-read");
+            assert_eq!(rom_state["slot"]["kind"], "rom");
+        }
+
+        /// F13's three answers, as the readout reads them off the wire.
+        ///
+        /// `slots.ts` switches on `bytesRead.state` with a case per variant;
+        /// a renamed tag or a dropped `name` would silently fall through to
+        /// the sentence that says the bytes are in no table, which is the
+        /// exact claim F13 exists to stop being made about a file the table
+        /// knows.
+        #[test]
+        fn the_three_answers_about_a_files_bytes_each_have_their_own_wire_shape() {
+            use crate::core::osinstall::slots::BytesRead;
+            let not_read = serde_json::to_value(BytesRead::NotRead).unwrap();
+            assert_eq!(not_read["state"], "not-read");
+            let no_row = serde_json::to_value(BytesRead::ReadNoRow).unwrap();
+            assert_eq!(no_row["state"], "read-no-row");
+            let row = serde_json::to_value(BytesRead::ReadRow {
+                artefact: Some("boingbag-39-1".to_string()),
+                name: "BoingBag 3.9-1".to_string(),
+            })
+            .unwrap();
+            expect_keys(&row, &["state", "artefact", "name"]);
+            assert_eq!(row["state"], "read-row");
+            assert_eq!(row["name"], "BoingBag 3.9-1");
+        }
+
+        /// A chosen ROM whose file is not on disk (fix round 1, F5) — its own
+        /// ending on the wire, and **not** counted as found.
+        #[test]
+        fn a_chosen_rom_that_is_not_there_is_its_own_state_and_is_not_counted_found() {
+            let slots = crate::core::osinstall::slots::slots_for("AmigaOS 3.9").unwrap();
+            let gone = PathBuf::from("D:\\roms\\this-drive-is-not-plugged-in.rom");
+            assert!(!gone.is_file(), "the fixture must really be absent");
+            let facts = Facts {
+                media: &[],
+                packages: &[],
+                hashes: &[],
+                manifest: None,
+                rom: Some(slots::ChosenRom::Absent(&gone)),
+                program_versions: &[],
+                overrides: &[],
+                disc_roots: &[],
+            };
+            let states = crate::core::osinstall::slots::resolve(&slots, &facts);
+            let rom = states
+                .iter()
+                .find(|state| state.slot.id == "rom")
+                .expect("AmigaOS 3.9 has a ROM slot");
+            assert!(rom.found.is_none(), "a file that is not there is not found");
+            assert_eq!(rom.chosen_missing.as_deref(), Some(gone.as_path()));
+            // The set line must not go green on a build that cannot run.
+            let summary = crate::core::osinstall::slots::summarize("AmigaOS 3.9", &states);
+            assert_eq!(summary.required_found, 0);
+            let value = serde_json::to_value(&states).unwrap();
+            assert_eq!(
+                value
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|s| s["slot"]["id"] == "rom")
+                    .unwrap()["chosenMissing"],
+                gone.display().to_string()
+            );
+        }
+
+        /// The command itself, over two real folders, one of which is not
+        /// there (fix round 1, F2): the good folder's disk still resolves and
+        /// the bad folder is named.
+        #[test]
+        fn one_unreadable_material_folder_does_not_empty_the_others() {
+            use crate::core::osinstall::fixtures;
+
+            let dir = fixtures::scratch("slots-unreadable-folder");
+            fixtures::media(
+                &dir,
+                "AmigaOS3.9",
+                "cd-lookalike.adf",
+                &[("C/Version", b"x" as &[u8], 0x00)],
+            );
+            let gone = dir.join("not-a-folder-at-all");
+            assert!(!gone.exists());
+
+            let report = osinstall_slots(
+                "AmigaOS 3.9".to_string(),
+                vec![gone.clone(), dir.clone()],
+                None,
+                None,
+                None,
+            )
+            .expect("an unreadable folder is answered, never refused");
+
+            assert_eq!(
+                report.unreadable_folders,
+                vec![gone.display().to_string()],
+                "the folder ART could not read is named"
+            );
+            // And the *other* folder's disk still fills its slot — the whole
+            // defect was that it did not.
+            let cd = report
+                .states
+                .iter()
+                .find(|state| state.slot.id == "medium:AmigaOS3.9")
+                .expect("the 3.9 recipe has a CD slot");
+            let found = cd
+                .found
+                .as_ref()
+                .expect("a disk in a readable folder survives an unreadable one beside it");
+            assert_eq!(found.path, dir.join("cd-lookalike.adf"));
+        }
+
         /// `ComponentSummary` is the checklist on screen, so a key renamed
         /// on one side only would empty a row rather than fail a build —
         /// `src/lib/osinstall.ts`'s `ComponentDef` declares exactly these
@@ -4565,14 +5566,35 @@ mod tests {
             expect_keys(&value["confirmed"], &["checked", "against"]);
             expect_keys(
                 &value["row"],
-                &["md5", "version", "volume", "name", "source", "sequence"],
+                &[
+                    "md5",
+                    "version",
+                    "volume",
+                    "name",
+                    "source",
+                    "sequence",
+                    // ART-round-2026-09-08 (intake): the two-table shape adds
+                    // three fields an adopted row simply defaults, plus which
+                    // of the two compiled-in files answered.
+                    "kind",
+                    "artefact",
+                    "filenames",
+                    "tableOrigin",
+                ],
             );
             assert_eq!(value["row"]["volume"], "Backdrops3_2");
             assert_eq!(value["volumeName"], "Backdrops3.2");
         }
 
         /// The wire shape `osinstallIdentifyMedia` reads: the job id beside
-        /// the identification's own four fields, flattened into one object.
+        /// the identification's own five fields, flattened into one object.
+        ///
+        /// `skipped` joined them in round 3's whole-branch fix (m7) and is
+        /// pinned here for the same reason the other four are: a field the
+        /// screen declares and the Rust does not send arrives as `undefined`,
+        /// so the list of discs ART deliberately did not read would silently
+        /// become an empty one — and a folder of games would look like a
+        /// folder ART had nothing to say about.
         #[test]
         fn identify_media_result_serializes_with_the_keys_the_frontend_declares() {
             let result = OsInstallIdentifyMediaResult {
@@ -4582,12 +5604,20 @@ mod tests {
                     unreadable: vec![PathBuf::from("E:\\amiga\\locked.adf")],
                     hashed: 2,
                     remembered: 1,
+                    skipped: vec![PathBuf::from("E:\\amiga\\Turrican.iso")],
                 },
             };
             let value = serde_json::to_value(&result).unwrap();
             expect_keys(
                 &value,
-                &["job_id", "matches", "unreadable", "hashed", "remembered"],
+                &[
+                    "job_id",
+                    "matches",
+                    "unreadable",
+                    "hashed",
+                    "remembered",
+                    "skipped",
+                ],
             );
         }
 
@@ -4935,6 +5965,7 @@ mod tests {
                     | RefusalReason::PackageUnknown { .. }
                     | RefusalReason::PackageFolderMissing { .. }
                     | RefusalReason::PackageRequirementMissing { .. }
+                    | RefusalReason::PackageRequirementNeedsAmigaRun { .. }
                     | RefusalReason::PackageComponentMissing { .. }
                     | RefusalReason::PackageArchiveMissing { .. }
                     | RefusalReason::PackageArchiveAmbiguous { .. }
@@ -5048,8 +6079,8 @@ mod tests {
                 ),
                 (
                     RefusalReason::PackageRequirementMissing {
-                        package: "boingbag-39-2".into(),
-                        requires: "boingbag-39-1".into(),
+                        package: "BoingBag 3.9-2".into(),
+                        requires: "BoingBag 3.9-1".into(),
                     },
                     "package-requirement-missing",
                     &["refusal", "package", "requires"],
@@ -5095,5 +6126,735 @@ mod tests {
                 expect_keys(&value, fields);
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // osinstall_write_material_guide (design § 3.7)
+    // -----------------------------------------------------------------------
+
+    /// The ordinary case: a folder with nothing in it gets the guide, and the
+    /// guide is the composed text rather than a stub.
+    #[test]
+    fn the_guide_is_written_into_the_folder_the_click_named() {
+        let dir = scratch("guide-write");
+        let outcome = write_material_guide(&dir, "AmigaOS 3.9", "en").unwrap();
+
+        let GuideOutcome::Written { path } = &outcome else {
+            panic!("expected a written guide, got {outcome:?}");
+        };
+        let written = PathBuf::from(path);
+        assert_eq!(
+            written.file_name().unwrap().to_string_lossy(),
+            "ART - what goes here.txt",
+            "the name comes from the guide's own data, not from the caller"
+        );
+        assert_eq!(written.parent().unwrap(), dir.as_path());
+
+        let text = std::fs::read_to_string(&written).unwrap();
+        let expected = slots::guide_text(
+            &slots::slots_for("AmigaOS 3.9").unwrap(),
+            "AmigaOS 3.9",
+            "en",
+        )
+        .unwrap();
+        assert_eq!(text, expected, "the file is the composed guide, verbatim");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `SAFE_CREATE`. The point is not that ART says something — it is that
+    /// the bytes already in the folder are still the bytes in the folder
+    /// afterwards. A guide somebody annotated, or a file of that name they
+    /// wrote themselves, is not ART's to replace.
+    #[test]
+    fn a_guide_already_in_the_folder_is_never_replaced() {
+        let dir = scratch("guide-exists");
+        let path = dir.join("ART - what goes here.txt");
+        std::fs::write(&path, b"the owner's own notes").unwrap();
+
+        let outcome = write_material_guide(&dir, "AmigaOS 3.9", "en").unwrap();
+
+        assert!(
+            matches!(outcome, GuideOutcome::AlreadyThere { .. }),
+            "expected the already-there ending, got {outcome:?}"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"the owner's own notes",
+            "SAFE_CREATE: not replaced, not appended to, not even opened for writing"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Turkish writes a Turkish file under a Turkish name — the filename is
+    /// part of the guide's own data, which is what lets the command take a
+    /// language and no filename at all.
+    #[test]
+    fn the_turkish_guide_has_its_own_name_and_its_own_words() {
+        let dir = scratch("guide-tr");
+        let outcome = write_material_guide(&dir, "AmigaOS 3.9", "tr").unwrap();
+        let GuideOutcome::Written { path } = &outcome else {
+            panic!("expected a written guide, got {outcome:?}");
+        };
+        assert!(
+            path.ends_with("ART - buraya ne konur.txt"),
+            "{path} is not the Turkish name"
+        );
+        let text = std::fs::read_to_string(path).unwrap();
+        assert!(text.contains("GEREKLİ"), "{text}");
+        assert!(!text.contains("REQUIRED"), "no English leaked in: {text}");
+        // And the two really are two files, not one name twice.
+        assert!(!dir.join("ART - what goes here.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **L7.** Design § 6: *"a folder of 200 `.lha` files (an Aminet mirror)
+    /// is not a material folder … bound the count and name the bound."*
+    /// `find_packages` opens **every regular file** in a folder to ask what
+    /// it is, and this command is now asked from two screens and re-asked on
+    /// five different changes.
+    ///
+    /// The bound is named on the wire rather than applied silently: an
+    /// artefact ART never reached must not read as an artefact that is not
+    /// there.
+    #[test]
+    fn a_folder_of_more_archives_than_art_opens_is_bounded_and_says_so() {
+        let dir = scratch("slots-crowded");
+        // Two past the bound, so the truncation is real rather than exact.
+        for n in 0..(scan::MAX_MATERIAL_ARCHIVES + 2) {
+            std::fs::write(dir.join(format!("f{n:04}.txt")), b"not an archive").unwrap();
+        }
+
+        let report = osinstall_slots(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.crowded_folders,
+            vec![(dir.display().to_string(), scan::MAX_MATERIAL_ARCHIVES)],
+            "the folder and the bound are both named"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other arm: an ordinary material folder is not reported as
+    /// crowded, so the sentence means something when it appears.
+    #[test]
+    fn an_ordinary_folder_is_never_reported_as_crowded() {
+        let dir = scratch("slots-not-crowded");
+        write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
+
+        let report = osinstall_slots(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(
+            report.crowded_folders.is_empty(),
+            "{:?}",
+            report.crowded_folders
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **The one host-placeable archive of the chain, placed** — round 3.
+    ///
+    /// Everything else about `boingbag-39-2-contribution` is a claim its
+    /// recipe makes; this is the claim being kept. A real archive shaped
+    /// like the owner's own (`BoingBag3.9-2/Contribution/{ClassAction,
+    /// OpenURL}/…` plus the readmes beside it), a tree that records the
+    /// BoingBag 3.9-2 run it goes on after, and the files where the recipe
+    /// says they land.
+    ///
+    /// Three things asserted, and the third is why the rule reads
+    /// `Contribution/BoingBag3.9-2` rather than `Contribution`: the payload
+    /// lands under the BoingBag's own name, the icons ride with it because a
+    /// `subtree` rule carries every entry below `from`, and the readmes
+    /// sitting *above* `from` are not placed — an icon for a drawer whose
+    /// destination name is different would name the wrong thing.
+    #[test]
+    fn the_contribution_archive_places_its_drawer_beside_the_discs_own() {
+        let dir = scratch("contribution-place");
+        let tree = dir.join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        write_test_manifest_with_runs(
+            &tree,
+            vec![locale_base_file_record("Locale/Languages/turkish.language")],
+            vec![boingbag_two_ran()],
+        );
+
+        let packages_dir = dir.join("packages");
+        std::fs::create_dir_all(&packages_dir).unwrap();
+        let entries: Vec<(&[u8], &[u8])> = vec![
+            (
+                b"BoingBag3.9-2\\Contribution\\ClassAction\\ClassAction",
+                b"the ClassAction program",
+            ),
+            (
+                b"BoingBag3.9-2\\Contribution\\ClassAction\\ClassAction.info",
+                b"its icon",
+            ),
+            (
+                b"BoingBag3.9-2\\Contribution\\OpenURL\\C\\OpenURL",
+                b"the OpenURL command",
+            ),
+            (b"BoingBag3.9-2\\Readme", b"read me first"),
+        ];
+        std::fs::write(
+            packages_dir.join("BoingBag39-2-Contribution.lha"),
+            crate::core::lha::tests::make_lha_with_raw_names(&entries),
+        )
+        .unwrap();
+
+        // Resolved through the real path the Packages step uses, so the
+        // `distinguished_by` and the corrected `requires` are exercised too.
+        let resolved = resolve_packages_for_add(
+            &tree,
+            &packages_dir,
+            &["boingbag-39-2-contribution".to_string()],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(resolved.len(), 1);
+
+        let (package, archive) = &resolved[0];
+        let outcome = crate::core::osinstall::apply::add_package_staging_in(
+            &tree,
+            package,
+            archive,
+            dir.as_path(),
+            &NoProgress,
+        )
+        .expect("the one host-placeable package of the chain must place");
+
+        let drawer = tree.join("Contribution").join("BoingBag3.9-2");
+        assert_eq!(
+            std::fs::read(drawer.join("ClassAction").join("ClassAction")).unwrap(),
+            b"the ClassAction program",
+            "the payload lands under the BoingBag's own name, beside where the disc's own \
+             Contribution would go"
+        );
+        assert!(
+            drawer
+                .join("ClassAction")
+                .join("ClassAction.info")
+                .is_file(),
+            "a subtree rule carries the icons with the files"
+        );
+        assert!(drawer.join("OpenURL").join("C").join("OpenURL").is_file());
+        assert!(
+            !drawer.join("Readme").exists() && !tree.join("Readme").exists(),
+            "the readmes sit above the rule's `from` and are deliberately not placed"
+        );
+        assert_eq!(
+            outcome.files, 3,
+            "three files below Contribution, and no fourth"
+        );
+
+        // And the tree's own account of itself names the component that put
+        // them there — the only thing that will ever say this row is done.
+        let manifest = chain::read_manifest(&tree).unwrap();
+        assert!(
+            manifest
+                .files
+                .iter()
+                .any(|file| file.component == "boingbag-39-2-contribution"),
+            "the manifest has to record it, or the chain row can never read installed"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -----------------------------------------------------------------
+    // osinstall_chain — round 3
+    // -----------------------------------------------------------------
+
+    /// **The chain command answers over the same folders the readout does**,
+    /// and the wire shape is pinned by name.
+    ///
+    /// The two screens share `gather_facts` precisely so that they cannot
+    /// disagree about one file, and this asserts the visible half of that:
+    /// the row for BoingBag 3.9-2 names the same archive `osinstall_slots`
+    /// resolves for the same folder, in the same call shape.
+    #[test]
+    fn the_chain_answers_over_the_same_folders_the_readout_does() {
+        let dir = scratch("chain-command");
+        write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
+
+        let report =
+            osinstall_chain("AmigaOS 3.9".to_string(), vec![dir.clone()], None, None).unwrap();
+
+        assert_eq!(report.summary.release, "AmigaOS 3.9");
+        assert_eq!(report.summary.total, 9, "the CD plus eight packages");
+        assert_eq!(report.summary.installed, 0, "no tree was chosen");
+        assert!(report.unreadable_folders.is_empty());
+
+        let bb2 = report
+            .rows
+            .iter()
+            .find(|row| row.package_id.as_deref() == Some("boingbag-39-2"))
+            .expect("BoingBag 3.9-2 is a chain row");
+        assert_eq!(bb2.sentence_facts.file.as_deref(), Some("BoingBag39-2.lha"));
+
+        // The readout, over the same folder, resolves the same file for the
+        // same slot. One gathering, two questions.
+        let slots = osinstall_slots(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let same = slots
+            .states
+            .iter()
+            .find(|state| state.slot.id == "package:boingbag-39-2")
+            .expect("the readout has the same slot")
+            .found
+            .as_ref()
+            .expect("and resolves it to a file");
+        assert_eq!(
+            same.path.file_name().unwrap().to_string_lossy(),
+            "BoingBag39-2.lha"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The wire keys `src/lib/chain.ts` reads, pinned by name — a rename in
+    /// Rust that the TypeScript did not follow would otherwise leave every
+    /// row rendering as its fallback, silently.
+    #[test]
+    fn a_chain_report_serializes_with_the_keys_this_test_pins() {
+        let dir = scratch("chain-wire");
+        write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
+        let report =
+            osinstall_chain("AmigaOS 3.9".to_string(), vec![dir.clone()], None, None).unwrap();
+        let json = serde_json::to_value(&report).unwrap();
+
+        for key in ["rows", "summary", "unreadableFolders", "crowdedFolders"] {
+            assert!(json.get(key).is_some(), "missing {key}: {json}");
+        }
+        for key in ["release", "total", "installed", "notNeeded"] {
+            assert!(json["summary"].get(key).is_some(), "missing summary.{key}");
+        }
+        let row = &json["rows"][0];
+        for key in [
+            "position",
+            "packageId",
+            "slotId",
+            "name",
+            "state",
+            "sentenceFacts",
+        ] {
+            assert!(row.get(key).is_some(), "missing row.{key}: {row}");
+        }
+        assert!(row["sentenceFacts"].get("runsOnAmiga").is_some());
+        // Every state carries its own `state` tag, kebab-cased, and the
+        // refusal carries a `because` tag inside it.
+        let states: Vec<String> = json["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["state"]["state"].as_str().unwrap().to_string())
+            .collect();
+        assert!(states.contains(&"missing".to_string()), "{states:?}");
+        assert!(states.contains(&"refused".to_string()), "{states:?}");
+        let refused = json["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["state"]["state"] == "refused")
+            .unwrap();
+        assert_eq!(refused["state"]["reason"]["because"], "not-placeable");
+        assert_eq!(refused["state"]["reason"]["block"], "needs-fixfonts");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A tree with no `distribution.json` is a refusal, not an empty chain:
+    /// every *installed* state on this screen comes from that file, and the
+    /// user has just pointed at the folder.
+    #[test]
+    fn the_chain_refuses_a_folder_that_is_not_a_tree() {
+        let dir = scratch("chain-not-a-tree");
+        let err = osinstall_chain("AmigaOS 3.9".to_string(), vec![], Some(dir.clone()), None)
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains(MANIFEST_FILE_NAME),
+            "the refusal must name what is missing: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **L6, end to end over a real ISO.** Design § 3.6's structural check:
+    /// a disc ART recognises whose root is missing one of the directories the
+    /// artefact map records is *matched but incomplete*, never *not found*.
+    ///
+    /// The disc here is synthetic and matched at rank 2 (its own volume
+    /// name), which is the rank a folder nobody has identified resolves at —
+    /// so this also proves the check is not gated on a hash.
+    #[test]
+    fn a_real_disc_missing_a_directory_is_matched_but_incomplete() {
+        use crate::core::iso::fixture::{dir as iso_dir, IsoBuilder};
+
+        let dir = scratch("slots-incomplete-disc");
+        // `Contribution` deliberately absent.
+        let bytes = IsoBuilder {
+            volume: "AmigaOS3.9".to_string(),
+            joliet_volume: "AmigaOS3.9".to_string(),
+            joliet: true,
+            children: vec![
+                iso_dir("OS-VERSION3.9", "OS-Version3.9", Vec::new()),
+                iso_dir("EMERGENCY-BOOT", "Emergency-Boot", Vec::new()),
+            ],
+            ..Default::default()
+        }
+        .build();
+        std::fs::write(dir.join("AmigaOS39.iso"), bytes).unwrap();
+
+        let report = osinstall_slots(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let medium = report
+            .states
+            .iter()
+            .find(|state| state.slot.id == "medium:AmigaOS3.9")
+            .expect("3.9 reads from its own CD");
+
+        assert!(
+            medium.found.is_some(),
+            "the disc is found — this is not a not-found row: {medium:?}"
+        );
+        assert_eq!(
+            medium.incomplete.as_deref(),
+            Some("Contribution"),
+            "the missing directory is named"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **ART opens only a disc this release's own recipe names** — the
+    /// owner's rule, 2026-09-08, and the reason is their own folders: they
+    /// hold game and CD32 discs by the dozen, and ART has no business
+    /// reading the inside of any of them.
+    ///
+    /// Both discs here are **valid, listable ISOs with directories at their
+    /// root**, so the game disc's absence from the answer is evidence that
+    /// it was skipped rather than that it failed to parse — an unreadable
+    /// fixture would have proved nothing. `find_media` still reads both
+    /// volume names, which is one sector each and is how ART knows which is
+    /// which.
+    #[test]
+    fn only_a_disc_the_recipe_names_is_opened_and_listed() {
+        use crate::core::iso::fixture::{dir as iso_dir, IsoBuilder};
+
+        let dir = scratch("slots-foreign-disc");
+        let disc = |volume: &str, child: &str| {
+            IsoBuilder {
+                volume: volume.to_string(),
+                joliet_volume: volume.to_string(),
+                joliet: true,
+                children: vec![iso_dir(&child.to_uppercase(), child, Vec::new())],
+                ..Default::default()
+            }
+            .build()
+        };
+        std::fs::write(
+            dir.join("AmigaOS39.iso"),
+            disc("AmigaOS3.9", "OS-Version3.9"),
+        )
+        .unwrap();
+        std::fs::write(dir.join("SomeGame.iso"), disc("SIMON2", "Data")).unwrap();
+
+        let media = vec![
+            FoundMedia {
+                path: dir.join("AmigaOS39.iso"),
+                volume_name: "AmigaOS3.9".to_string(),
+                kind: scan::MediaKind::Disc,
+                layer: None,
+            },
+            FoundMedia {
+                path: dir.join("SomeGame.iso"),
+                volume_name: "SIMON2".to_string(),
+                kind: scan::MediaKind::Disc,
+                layer: None,
+            },
+        ];
+
+        // The control first: both discs really are listable, so the check
+        // below is about the filter and not about a broken fixture.
+        let everything = disc_roots_of(&media, &["AmigaOS3.9".into(), "SIMON2".into()]);
+        assert_eq!(everything.len(), 2, "both fixtures list: {everything:?}");
+
+        let wanted = vec!["AmigaOS3.9".to_string()];
+        let opened = disc_roots_of(&media, &wanted);
+        assert_eq!(
+            opened
+                .iter()
+                .map(|(path, _)| path.file_name().unwrap().to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            vec!["AmigaOS39.iso".to_string()],
+            "the game disc must not be opened at all"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **M5, at the command layer.** The override arrives on the wire as
+    /// `(slot id, path)`, its existence is checked here, and the slot comes
+    /// back `Chosen`.
+    #[test]
+    fn an_override_on_the_wire_fills_the_slot_it_names() {
+        let dir = scratch("slots-override");
+        write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
+        let mine = dir.join("my-own-copy.lha");
+        std::fs::write(&mine, b"whatever the user says it is").unwrap();
+
+        let report = osinstall_slots(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            Some(vec![("package:boingbag-39-2".to_string(), mine.clone())]),
+        )
+        .unwrap();
+        let state = report
+            .states
+            .iter()
+            .find(|state| state.slot.id == "package:boingbag-39-2")
+            .unwrap();
+
+        let found = state.found.as_ref().expect("the override fills it");
+        assert_eq!(found.path, mine, "the archive in the folder did not win");
+        assert_eq!(found.matched_by, slots::MatchedBy::Chosen);
+
+        // A path that is not there is the *chosen missing* ending, not a
+        // silent fall-back to what ART found.
+        let gone = dir.join("not-here.lha");
+        let report = osinstall_slots(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            Some(vec![("package:boingbag-39-2".to_string(), gone.clone())]),
+        )
+        .unwrap();
+        let state = report
+            .states
+            .iter()
+            .find(|state| state.slot.id == "package:boingbag-39-2")
+            .unwrap();
+        assert!(state.found.is_none());
+        assert_eq!(state.chosen_missing.as_deref(), Some(gone.as_path()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Write both guides where a person can read them.**
+    ///
+    /// The fix round's own lesson: M1, M2 and M3 were three false sentences in
+    /// a file ART leaves on somebody's disk, and 3136 Rust tests read none of
+    /// it as prose. Assertions check the lines somebody thought to check; this
+    /// exists so the artefact itself can be opened and read, and re-run rather
+    /// than re-trusted. `#[ignore]`d and env-gated like every other hook here,
+    /// because it writes two real files into a folder the caller names.
+    ///
+    /// `set ART_GUIDE_OUT=<folder> && cargo test write_both_guides -- --ignored --nocapture`
+    #[test]
+    #[ignore = "writes two real guide files; set ART_GUIDE_OUT to a folder"]
+    fn write_both_guides_for_a_person_to_read() {
+        let Ok(out) = std::env::var("ART_GUIDE_OUT") else {
+            panic!("set ART_GUIDE_OUT to a folder to run this");
+        };
+        let folder = PathBuf::from(out);
+        std::fs::create_dir_all(&folder).unwrap();
+        for language in ["en", "tr"] {
+            match write_material_guide(&folder, "AmigaOS 3.9", language).unwrap() {
+                GuideOutcome::Written { path } => {
+                    println!(
+                        "\n===== {language} =====\n{}",
+                        std::fs::read_to_string(&path).unwrap()
+                    )
+                }
+                GuideOutcome::AlreadyThere { path } => {
+                    println!(
+                        "\n===== {language}: already there at {path}; delete it to rewrite ====="
+                    )
+                }
+            }
+        }
+    }
+
+    /// One archive under a package's own top-level directory, carrying `inner`
+    /// inside that directory — the shape `distinguished_by` is measured
+    /// against.
+    fn write_bb2_archive(folder: &Path, file_name: &str, inner: &str) {
+        let name = format!("BoingBag3.9-2\\{inner}");
+        std::fs::write(
+            folder.join(file_name),
+            crate::core::lha::tests::make_lha_with_raw_names(&[(name.as_bytes(), b"payload")]),
+        )
+        .unwrap();
+    }
+
+    /// **m4.** `core::osinstall::slots` matches an archive on `identity`
+    /// alone; every other reader of the same folder goes through
+    /// `scan::package_for`, which applies `distinguished_by` **whether or not
+    /// `media` alone was ambiguous**. So the readout and the Amiga-side panel
+    /// disagreed with the run about which file a slot is.
+    ///
+    /// The real shape, and the one that reaches the panel: BoingBag 3.9-2's
+    /// own archive and its Contribution archive both call themselves
+    /// `BoingBag3.9-2`, and only the first carries `AmigaOS-Update`.
+    #[test]
+    fn a_second_archive_sharing_a_packages_identity_is_narrowed_by_what_it_carries() {
+        let dir = scratch("slots-distinguished");
+        write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
+        write_bb2_archive(&dir, "BoingBag39-2-Contribution.lha", "Contribution/readme");
+
+        let report = osinstall_slots(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let state = report
+            .states
+            .iter()
+            .find(|state| state.slot.id == "package:boingbag-39-2")
+            .expect("3.9 has a BoingBag 3.9-2 slot");
+
+        let found = state
+            .found
+            .as_ref()
+            .unwrap_or_else(|| panic!("the slot did not resolve: {state:?}"));
+        assert!(
+            found.path.ends_with("BoingBag39-2.lha"),
+            "resolved to the wrong archive: {}",
+            found.path.display()
+        );
+        assert_eq!(
+            found.matched_by,
+            slots::MatchedBy::TopLevelDirectory,
+            "the archive says what it is; nothing here hashed anything"
+        );
+        assert!(
+            state.candidates.is_empty(),
+            "the Contribution archive is still a candidate: {:?}",
+            state.candidates
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other half of the narrowing rule, and what keeps it from being a
+    /// filter that quietly loses the user's files: an archive **no** shipped
+    /// package claims by identity is left exactly where it was, because
+    /// rank 3's *guess* pool is built from every path the facts carry and an
+    /// archive the recipes have never heard of is what that rank reports on.
+    #[test]
+    fn an_archive_no_package_claims_survives_the_narrowing() {
+        let dir = scratch("slots-unclaimed");
+        std::fs::write(
+            dir.join("SomethingElse.lha"),
+            crate::core::lha::tests::make_lha_with_raw_names(&[(
+                b"SomethingElse\\readme".as_slice(),
+                b"payload",
+            )]),
+        )
+        .unwrap();
+
+        let kept =
+            narrow_by_distinguished_by("AmigaOS 3.9", find_packages(&dir).unwrap_or_default());
+
+        assert_eq!(
+            kept.len(),
+            1,
+            "an unclaimed archive was thrown away: {kept:?}"
+        );
+        assert_eq!(kept[0].media, "SomethingElse");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **L11.** Writing into the user's own folder is a change to their data,
+    /// so it is logged (§53) — and *already there* is logged too. The user
+    /// asked ART to write and ART decided not to; a log with no trace of that
+    /// is a log that cannot answer why the file is a week old.
+    #[test]
+    fn every_guide_ending_leaves_its_own_line_in_the_operation_log() {
+        let folder = PathBuf::from("E:\\material");
+        let written = guide_record(
+            &folder,
+            "AmigaOS 3.9",
+            "en",
+            &Ok(GuideOutcome::Written {
+                path: "E:\\material\\ART - what goes here.txt".into(),
+            }),
+        );
+        assert_eq!(written.destination.as_deref(), Some("E:\\material"));
+        assert!(written
+            .details
+            .iter()
+            .any(|(k, v)| k == "Release" && v == "AmigaOS 3.9"));
+        assert!(written.details.iter().any(|(k, _)| k == "Wrote"));
+        assert!(matches!(written.outcome, OperationOutcome::Success { .. }));
+
+        let already = guide_record(
+            &folder,
+            "AmigaOS 3.9",
+            "tr",
+            &Ok(GuideOutcome::AlreadyThere {
+                path: "E:\\material\\ART - buraya ne konur.txt".into(),
+            }),
+        );
+        assert!(already
+            .details
+            .iter()
+            .any(|(k, _)| k == "Left alone (already there)"));
+        assert!(
+            !already.details.iter().any(|(k, _)| k == "Wrote"),
+            "a guide ART did not write must not be logged as written"
+        );
+
+        let failed = guide_record(
+            &folder,
+            "AmigaOS 3.9",
+            "en",
+            &Err(AppError::Core(CoreError::InvalidInput("no".into()))),
+        );
+        assert!(matches!(failed.outcome, OperationOutcome::Failure { .. }));
+    }
+
+    /// The outcome's own wire shape, pinned for the reason every response
+    /// type in this module is: `src/lib/osinstall.ts` writes these key names
+    /// by hand, and the screen switches on `state` with a case per variant.
+    #[test]
+    fn the_guide_outcome_serialises_with_the_keys_this_test_pins() {
+        let written = serde_json::to_value(GuideOutcome::Written {
+            path: "E:\\material\\ART - what goes here.txt".into(),
+        })
+        .unwrap();
+        assert_eq!(written["state"], "written");
+        assert_eq!(written["path"], "E:\\material\\ART - what goes here.txt");
+        let already = serde_json::to_value(GuideOutcome::AlreadyThere {
+            path: "E:\\material\\ART - what goes here.txt".into(),
+        })
+        .unwrap();
+        assert_eq!(already["state"], "alreadyThere");
     }
 }

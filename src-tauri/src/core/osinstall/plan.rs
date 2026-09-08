@@ -1366,9 +1366,11 @@ pub(crate) fn detect_package_refusals(
     chosen: &[String],
     all: &[Package],
     components_on: &[String],
+    installed: &[String],
 ) -> Vec<RefusalReason> {
     let mut refusals = Vec::new();
     let chosen_set: HashSet<&str> = chosen.iter().map(String::as_str).collect();
+    let installed_set: HashSet<&str> = installed.iter().map(String::as_str).collect();
 
     for id in chosen {
         let Some(package) = all.iter().find(|p| &p.id == id) else {
@@ -1389,13 +1391,45 @@ pub(crate) fn detect_package_refusals(
                 block,
             });
         }
+        // Satisfied by the selection **or by the tree**. A package already
+        // on the volume is not missing, and the two host-placeable packages
+        // that go on after BoingBag 3.9-2 could otherwise never be added at
+        // all: BoingBag 3.9-2 is Amiga-side and cannot be in a host
+        // selection (ART-166), so "requires it" and "cannot place it" were
+        // two refusals with no path between them. `installed` is the tree's
+        // own account of itself, empty when there is no tree yet — which is
+        // `plan()`'s own case and leaves this exactly as it was.
         for need in &package.requires {
-            if !chosen_set.contains(need.as_str()) {
-                refusals.push(RefusalReason::PackageRequirementMissing {
-                    package: id.clone(),
-                    requires: need.clone(),
-                });
+            if chosen_set.contains(need.as_str()) || installed_set.contains(need.as_str()) {
+                continue;
             }
+            // **Which refusal depends on what the required package is**
+            // (fix round 1, M1). A requirement that declares an
+            // `amiga_installer` is not something the user can tick here at
+            // all — the Packages step disables its row — so the ordinary
+            // sentence's advice, *"tick that one too"*, is about a checkbox
+            // that is not available. The Amiga-side arm names the step that
+            // can actually do it.
+            //
+            // Both carry the packages' own **names**: the sentence is
+            // rendered verbatim, and `locale-turkish`/`boingbag-39-2` is
+            // ART's bookkeeping read out at somebody.
+            let required = all.iter().find(|other| &other.id == need);
+            let requirement = required
+                .map(|other| other.name.clone())
+                .unwrap_or_else(|| need.clone());
+            refusals.push(match required {
+                Some(other) if other.amiga_installer.is_some() => {
+                    RefusalReason::PackageRequirementNeedsAmigaRun {
+                        package: package.name.clone(),
+                        requirement,
+                    }
+                }
+                _ => RefusalReason::PackageRequirementMissing {
+                    package: package.name.clone(),
+                    requires: requirement,
+                },
+            });
         }
         // Against the **resolved** set, never `InstallRequest::chosen` — a
         // component can be switched on by `required` or by its own
@@ -1683,10 +1717,14 @@ fn plan_over_with_cache(
     let mut chosen_packages: Vec<&Package> = Vec::new();
 
     if !request.packages.is_empty() {
+        // No tree exists yet — `plan()` describes one that is about to be
+        // built — so nothing is installed and every `requires` has to be met
+        // by the selection itself.
         refusals.extend(detect_package_refusals(
             &request.packages,
             catalogue,
             &components_on,
+            &[],
         ));
 
         match &request.package_folder {
@@ -5122,6 +5160,8 @@ mod plan_tests {
             amiga_installer: None,
             requires: requires.iter().map(|s| s.to_string()).collect(),
             requires_components: Vec::new(),
+            chain_position: None,
+            superseded_by: Vec::new(),
             host_placement_block: None,
             component,
         }

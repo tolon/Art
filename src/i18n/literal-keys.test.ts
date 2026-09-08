@@ -299,9 +299,15 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // one more, `t(hostPlacementBlockKey(pkg.hostPlacementBlock))` — the
     // sentence explaining why a package cannot be placed from the host at
     // all (ART-166). Key-only, from a `switch` over `HostPlacementBlock` in
-    // `@/lib/osinstall` that is exhaustive by its own return type, and its
-    // single value today is enumerated in `phrase-keys.test.ts`
-    // (`hostPlacementBlockKey: every HostPlacementBlock resolves`).
+    // `@/lib/osinstall` that is exhaustive by its own return type, and
+    // **all three** of its values — `encrypted-payload`, `needs-fixfonts`
+    // and `needs-installer-script` — are enumerated in `phrase-keys.test.ts`
+    // (`hostPlacementBlockKey: every HostPlacementBlock resolves`), which
+    // builds its list from a `Record` keyed by the union so a fourth kind is
+    // a compile error there. This comment said "its single value today" and
+    // stayed saying it while two more arrived (round 3 fix round 1, M2):
+    // the enumeration is the coverage this file cannot provide, so a claim
+    // about it going stale is a hole with a sentence over it.
     // 114 → 115 (ART-119 #2, debt-wave-c2): `OsInstall.tsx` gained one,
     // `t(reasonText.phrase.key, reasonText.phrase.params)`, and *lost four
     // literal ones* in the same edit — the four independent `&&` guards that
@@ -508,6 +514,98 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // that gained a real hint (`nav.files`/`nav.hardDisk`/`nav.osBuilder`/
     // `nav.whdload`) are catalogue phrases now, not the old literal codes
     // (ADF/LHA/HDF) or a hint resolved once outside the map.
-    expect(dynamicCalls).toBe(159);
+    // 159 -> 161 -> 159 (ART-277, fix round 1). The first round rendered
+    // `archiveFieldHint`'s answer in its own box beside each archive field —
+    // two dynamic call sites. The review's Medium 2 moved that sentence into
+    // the existing `blockers` list instead (rendered once, above the confirm
+    // checkbox, through the `t(blocker.key, blocker.params)` call site that
+    // was already here) — ART-202's own lesson, from this exact screen, that
+    // a reason Run is dead has to say so where the button is rather than in
+    // a second box beside the field. Net zero new call sites; the two the
+    // first round added are gone. `phrase-keys.test.ts` still resolves every
+    // shape `archiveFieldBlockerPhrase` can answer.
+    // 159 -> 165 (round 2 of the intake work, task 3: `MaterialReadout.tsx`,
+    // the per-slot readout on the `kaynak` step): six. Every one of them is a
+    // `Phrase` `src/lib/slots.ts` produced from what Rust measured, and every
+    // one is a list of endings that must never collapse: the row's own
+    // sentence (eight endings, `slotLines`), the `installed` badge (from the
+    // tree's manifest alone, never inferred), the `blocked` line (what a row
+    // waits for, by name), the set line (`setLine`, which says "N not needed"
+    // beside the counts so a shrinking denominator is not read as material
+    // vanishing), the unreadable-folder line (`unreadableFolderLines`), and
+    // the running line (`readoutRunningLine`, a count rather than a bar with
+    // no total). `slots.test.ts` enumerates every variant of all six.
+    // 165 -> 167 (round 2, task 4: `AmigaInstallPanel.tsx`'s `SlotField`):
+    // two, and both are the same `Phrase`-from-Rust pattern one screen over.
+    // A filled field carries the readout's *own* row sentence
+    // (`slotLines([state])[0].phrase`, or the chosen/not-needed phrase) so
+    // the panel and the `kaynak` step cannot say two different things about
+    // one file; an ambiguous field carries `candidateLines`' per-candidate
+    // sentence, which is the evidence beside each option rather than two
+    // paths and nothing else. Resolved by `phrase-keys.test.ts` through
+    // `slotLines`/`candidateLines`.
+    // 167 -> 168 (round 2 whole-branch review, L7): `MaterialReadout`'s
+    // crowded-folder line, the same `Phrase`-from-`src/lib` pattern as the
+    // unreadable-folder line beside it (`crowdedFolderLines`). Design § 6's
+    // "bound the count and **name the bound**" — the number is in the
+    // sentence, so it is one key with a parameter rather than a literal.
+    // 168 -> 169 (round 3 fix round 1, m6): `AmigaInstallPanel`'s
+    // not-yet-runnable row became `t(notYetRunnablePanelKey(reason))`. It was
+    // a literal key with an English `{{reason}}` interpolated into it — a
+    // Turkish frame around an English clause, and the reason is *recipe
+    // data*, not a `CoreError` sentence ART-060 lets stay English. Key-only,
+    // from a `switch` over `NotYetRunnable` in `@/lib/osinstall` that is
+    // exhaustive by its own return type, and every one of its values is
+    // enumerated in `phrase-keys.test.ts` (`notYetRunnable: every reason
+    // resolves on both screens`) from a `Record` keyed by the union, so a
+    // second reason is a compile error there rather than an untested key.
+    // 169 -> 173 (round 3, task 2: the chain screen). Four, and all four are
+    // one `Phrase` produced by `@/lib/chain` from what
+    // `core::osinstall::chain` decided — the rule this whole count exists to
+    // keep: the sentence is Rust's, the rendering is the screen's.
+    //   - the row's own state sentence, `t(line.phrase.key, …)`: seven
+    //     endings that must never collapse into "not done", each with its own
+    //     next step (go and get this file / do that row first / you already
+    //     have it / nobody has measured this);
+    //   - the row's `where` — *runs on the Amiga* / *placed from Windows* —
+    //     its own field rather than part of the state, because it is true of
+    //     the row whatever state the row is in;
+    //   - the set line (`chainSummaryLine`), which names the redundant rows
+    //     apart from the fraction so a shrinking denominator is not read as
+    //     material vanishing;
+    //   - the selected row's sentence repeated beside a disabled Run button,
+    //     so the reason the button is dead is the row's own words and never a
+    //     second wording composed in the component.
+    // `chain.test.ts` enumerates every variant of all four.
+    // 173 -> 176 (round 3 task 2, fix round 1). Three, and every one is the
+    // same rule as the four above: the sentence is decided elsewhere and the
+    // screen only renders it.
+    //   - F5's two folder lines — `unreadableFolderLines` and
+    //     `crowdedFolderLines` from `@/lib/slots`, the readout's own phrases
+    //     reused verbatim so the two screens cannot word one fact
+    //     differently. Without them every row below read "not in the folders
+    //     you named" about a folder ART could not open;
+    //   - F1's "nothing can run yet" line, which carries the **first
+    //     outstanding row's own sentence** through `sentenceFor` so it says
+    //     what is actually needed rather than only that something is. (The
+    //     two literal halves of that branch, `noneReady` and `allApplied`,
+    //     are literal keys and are not counted here.)
+    // The row's own sentence and the reason beside a dead Run button now go
+    // through `sentenceFor` too — F6, which substitutes one catalogue phrase
+    // for another when the material list is empty — but they were already
+    // dynamic call sites and the count does not move for them.
+    // 176 -> 177 (round 3 task 3, fix round 1: ART-280). One, and it is the
+    // same rule again: `followUpPhrase` in `@/lib/amigainstall` turns the
+    // word the Amiga wrote — `ran` / `not-needed` / `failed` / `not-checked`
+    // — into the key, and the panel only renders it. Four words that must
+    // never collapse: "not needed" is not a failure, and "ART could not
+    // check" is neither. `amigainstall.test.ts` enumerates all four.
+    // 177 -> 178 (round 3 whole-branch review, M4). One, and the same rule
+    // once more: a row blocked on a component names that component by the
+    // **key** the components step labels it with, and `sentenceFor` resolves
+    // it — `@/lib/chain` carries the key because that module never renders.
+    // A component with no `label_key` shows its id, which is what the
+    // components step shows for it too.
+    expect(dynamicCalls).toBe(178);
   });
 });

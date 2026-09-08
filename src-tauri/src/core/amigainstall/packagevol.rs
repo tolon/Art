@@ -172,13 +172,112 @@ pub enum ArchiveIs {
 /// **Not the authoritative check.** `unpack` still resolves the drawer on the
 /// real filesystem and asks `is_dir`, which is the same question the mount
 /// will put to the emulator. This one only decides which sentence to say.
-fn drawer_names_equal(a: &str, b: &str) -> bool {
+pub fn drawer_names_equal(a: &str, b: &str) -> bool {
     a.to_lowercase() == b.to_lowercase()
 }
 
 /// The drawer an overlay is copied *from* — its archive's own top level.
 fn overlay_drawer(overlay: &Overlay) -> &str {
     overlay.from.split('/').next().unwrap_or("")
+}
+
+/// One package ART's catalogue ships a recipe for, carrying only what a
+/// refusal or a classification needs to name it — never
+/// `core::osinstall::package::Package`.
+///
+/// **This module's own record, for the same reason [`Overlay`] is one and
+/// not `core::osinstall::package::InstallerOverlay`.** CLAUDE.md's
+/// inward-dependency rule: `core/amigainstall` must not read recipes, so
+/// `commands/amigainstall.rs` maps its catalogue into this before calling
+/// in — ART-277, where the wrong-archive refusal had to say *"this is
+/// BoingBag 3.9-2's own archive"* while BoingBag 3.9-1 was still selected,
+/// which needs every other shipped package's name and media, not only the
+/// one this run is composing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownPackage {
+    pub id: String,
+    pub name: String,
+    pub media: String,
+    /// Every overlay drawer this package's own recipe declares — the first
+    /// `/`-segment of each `amiga_installer.overlays[].from` — so an archive
+    /// that is recognisably *this* package's **update** archive can be named
+    /// as that, not folded into "unknown" (ART-277 review, Medium 1: the
+    /// brief asked for "`media`/overlay drawer names" and the first round
+    /// compared `media` only). `&[]`/empty for the package's own recipe
+    /// declaring no overlay — every one but BoingBag 3.9-1, today.
+    pub overlay_drawers: Vec<String>,
+}
+
+/// The archive's own top-level names, and its single identity drawer when it
+/// has exactly one — read from **one** listing, so a caller wanting both
+/// answers (`amigainstall_classify_archive` wants exactly this pair) opens
+/// the archive once rather than twice (review finding 7). The wrapper is
+/// plain LHA and this never extracts a byte, so the encrypted payload an
+/// update archive might carry is never opened.
+///
+/// The identity is the same question [`archive_is`] answers, asked of the
+/// raw listing rather than of one name already picked out: a root sibling
+/// (an `.info` icon) does not count on its own, the same rule
+/// `ArchiveSource::open` in `core::osinstall` uses for the same reason — it
+/// is not what the archive is *named after*. `None` for an archive with none
+/// or with more than one, which [`archive_is`] can only ever answer
+/// `Neither` about anyway.
+pub fn archive_listing(archive: &Path) -> CoreResult<(Vec<String>, Option<String>)> {
+    let mut backend = crate::core::archive::open(archive)?;
+    let entries = backend.entries()?;
+    listing_from_entries(archive, &entries)
+}
+
+/// [`archive_listing`]'s own logic, over an already-fetched entry list —
+/// split out so a test can hand it more entries than any real archive on
+/// disk needs building to prove the bound (ART-277 re-review, I10), and so
+/// the bound is checked exactly once regardless of caller.
+fn listing_from_entries(
+    archive: &Path,
+    entries: &[crate::core::archive::ArchiveEntry],
+) -> CoreResult<(Vec<String>, Option<String>)> {
+    // `entries()` alone has no cap of its own — `MAX_ENTRIES` is enforced in
+    // `extract_selection`, downstream of every *other* caller, but
+    // `amigainstall_classify_archive` reaches a listing directly, from a raw
+    // user-picked path, with no extraction behind it to cap it first.
+    // Bounded reads is a `core/security` rule; the caller
+    // (`amigainstall_classify_archive`) already turns any `Err` here into
+    // `"unknown"`, so this is the one place that needs to refuse rather than
+    // read.
+    if entries.len() > crate::core::archive::extract::MAX_ENTRIES {
+        return Err(CoreError::InvalidInput(format!(
+            "'{}' declares {} entries — too many entries for ART to list (at most {})",
+            archive.display(),
+            entries.len(),
+            crate::core::archive::extract::MAX_ENTRIES
+        )));
+    }
+    let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut identity: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for entry in entries {
+        let mut parts = entry.name.split(['/', '\\']).filter(|s| !s.is_empty());
+        let Some(first) = parts.next() else { continue };
+        names.insert(first.to_string());
+        if entry.is_dir || parts.next().is_some() {
+            identity.insert(first.to_string());
+        }
+    }
+    let identity = (identity.len() == 1).then(|| identity.into_iter().next().unwrap());
+    Ok((names.into_iter().collect(), identity))
+}
+
+/// The archive's own top-level names alone. A thin wrapper over
+/// [`archive_listing`], kept as its own pub function because it is unit
+/// tested on its own; production code that wants both answers calls
+/// [`archive_listing`] directly rather than through this and
+/// [`archive_identity`] both, which would open the archive twice.
+pub fn archive_top_level(archive: &Path) -> CoreResult<Vec<String>> {
+    Ok(archive_listing(archive)?.0)
+}
+
+/// The archive's single identity drawer alone — see [`archive_listing`].
+pub fn archive_identity(archive: &Path) -> CoreResult<Option<String>> {
+    Ok(archive_listing(archive)?.1)
 }
 
 /// See [`ArchiveIs`].
@@ -201,11 +300,20 @@ pub fn archive_is(media: &str, overlays: &[Overlay], top_level: &str) -> Archive
 /// the half it can say in the user's language. **Actionable**, which is
 /// CLAUDE.md's rule and the whole of ART-200: a mistake the user can undo by
 /// moving one file between two fields must not read like one they cannot fix.
+///
+/// `catalogue` is the same release-scoped, self-excluding record
+/// `overlay_mismatch_sentence` reads — used only by the `Neither` arm
+/// (ART-277 re-review, I11): the package field's own refusal used to say
+/// only what the archive was *not*, with no catalogue lookup at all, while
+/// the second field's equivalent refusal already named a recognised archive's
+/// real owner. `&[]` when the caller has none to offer; the sentence then
+/// falls back to the shape it always had.
 pub fn wrong_archive_sentence(
     archive: &std::path::Path,
     media: &str,
     role: &ArchiveIs,
     holds: &str,
+    catalogue: &[KnownPackage],
 ) -> String {
     match role {
         ArchiveIs::TheUpdateArchive => format!(
@@ -214,11 +322,39 @@ pub fn wrong_archive_sentence(
              carrying '{media}' in the package's own field.",
             archive.display()
         ),
-        _ => format!(
-            "'{}' carries no '{media}' drawer, so it is not the archive this \
-             package's installer lives in; it holds {holds}",
+        // ART-277 review, Major 1: the *other* direction of the same
+        // mistake — this exact archive, correct in the package's own field,
+        // supplied again as if it were the update archive. `refuse_wrong_
+        // package_archive` reaches this arm only for a slot after the
+        // first, so "the package field" always means a real, different
+        // field on this screen.
+        ArchiveIs::ThePackage => format!(
+            "'{}' is the package's own archive — it carries '{holds}'. It belongs in the \
+             package's own field; supply its update archive here instead.",
             archive.display()
         ),
+        ArchiveIs::Neither => {
+            let owner = catalogue.iter().find(|pkg| {
+                drawer_names_equal(&pkg.media, holds)
+                    || pkg
+                        .overlay_drawers
+                        .iter()
+                        .any(|drawer| drawer_names_equal(drawer, holds))
+            });
+            match owner {
+                Some(pkg) => format!(
+                    "'{}' carries no '{media}' drawer, so it is not the archive this \
+                     package's installer lives in; it holds {holds}, which is {}'s own archive",
+                    archive.display(),
+                    pkg.name
+                ),
+                None => format!(
+                    "'{}' carries no '{media}' drawer, so it is not the archive this \
+                     package's installer lives in; it holds {holds}",
+                    archive.display()
+                ),
+            }
+        }
     }
 }
 
@@ -242,16 +378,43 @@ pub struct Layout<'a> {
     /// The lowest `version.revision` the installer's own `$VER:` marker may
     /// state, or `None` when no build of it is known to be unfit.
     pub minimum_installer_version: Option<(u32, u32)>,
+    /// The selected package's own display name — `"BoingBag 3.9-1"` — used
+    /// only to make a wrong-overlay refusal name what is actually selected
+    /// (ART-277). `""` for a caller that has not supplied one, which every
+    /// call site before ART-277 is; a refusal falls back to the shape it has
+    /// always had rather than printing an empty name.
+    pub package_name: &'a str,
+    /// Every *other* package the command layer considers reachable from
+    /// here, as `(id, name, media, overlay_drawers)` only. **The lower
+    /// module's own record** — see [`KnownPackage`]. `&[]` when the caller
+    /// has none to offer; a wrong-overlay refusal then names only what the
+    /// archive held, exactly as it did before ART-277.
+    ///
+    /// **What "reachable" means is the caller's contract, not this module's
+    /// — stated exactly, not aspirationally (ART-277 re-review, L4).** The
+    /// one production caller, `commands::amigainstall::compose`, builds this
+    /// from every shipped package that shares a release with the one
+    /// selected, with the selected package's own id already removed. Nothing
+    /// here enforces either property — the drawer check in
+    /// [`overlay_mismatch_sentence`] finds the selected package unconditionally
+    /// regardless of whether it is in this list, and the catalogue scan
+    /// refuses to guess when more than one entry matches — so a caller that
+    /// does not keep this discipline gets a less specific sentence, never a
+    /// wrong one.
+    pub catalogue: &'a [KnownPackage],
 }
 
 impl<'a> Layout<'a> {
-    /// The ordinary case: one archive, no overlay, no version requirement.
+    /// The ordinary case: one archive, no overlay, no version requirement,
+    /// no catalogue to name a mismatch against.
     pub fn new(drawer: Option<&'a str>, installer: &'a str) -> Self {
         Self {
             drawer,
             installer,
             overlays: &[],
             minimum_installer_version: None,
+            package_name: "",
+            catalogue: &[],
         }
     }
 }
@@ -543,11 +706,15 @@ fn apply_overlay(
         }
     }
     let Some((overlay, source)) = matched else {
-        return Err(CoreError::InvalidInput(format!(
-            "'{}' is not this package's update archive: it carries none of {}; it holds {}",
-            medium.display(),
-            expected_overlays(layout),
-            what_it_holds(staging.path())
+        // `top_level_dir_names` stays an `Option` all the way into the
+        // sentence (ART-277 review, Medium 3): an unreadable staging
+        // directory and an empty one are different endings, and collapsing
+        // them here with `unwrap_or_default` is exactly the "endings stay
+        // distinct" mistake CLAUDE.md names.
+        return Err(CoreError::InvalidInput(overlay_mismatch_sentence(
+            medium,
+            layout,
+            top_level_dir_names(staging.path()),
         )));
     };
 
@@ -569,6 +736,176 @@ fn expected_overlays(layout: &Layout<'_>) -> String {
         .map(|o| format!("'{}'", o.from))
         .collect::<Vec<String>>()
         .join(" or ")
+}
+
+/// The drawers a package's own declared overlays are recognised by — just
+/// the first path segment of each, `'BoingBag3.9-1-UAE'` rather than the
+/// full `'BoingBag3.9-1-UAE/BoingBag3.9-1'` [`expected_overlays`] prints —
+/// used only by the "this is your own archive, in the wrong field" sentence,
+/// which names the archive the way a user would go and look for it, not the
+/// path inside it.
+fn overlay_drawers_display(layout: &Layout<'_>) -> String {
+    layout
+        .overlays
+        .iter()
+        .map(|o| format!("'{}'", overlay_drawer(o)))
+        .collect::<Vec<String>>()
+        .join(" or ")
+}
+
+/// What to say when a second archive is not this package's declared overlay
+/// — ART-277's second cause.
+///
+/// The owner ran BoingBag 1, then supplied `BoingBag39-2.lha` as the *second*
+/// archive while BoingBag 1 was still selected (a stale package selection
+/// the panel now closes structurally — see `AmigaInstallPanel.tsx`'s
+/// per-package remembered keys), and read `'…BoingBag39-2.lha' is not this
+/// package's update archive: it carries none of
+/// 'BoingBag3.9-1-UAE/BoingBag3.9-1'; it holds BoingBag3.9-2,
+/// BoingBag3.9-2.info` — true, and useless: it never says *which* package is
+/// selected, and never says the archive is actually a whole other package's
+/// own, which `layout.catalogue` (ART-277's own reason to exist) can tell it
+/// when it is.
+///
+/// **ART-277 review, Major 1.** The first round's catalogue scan could match
+/// the *selected* package itself and then tell the user to "select" the
+/// package that is already selected — reachable by putting the package's own
+/// archive in the second field, which is exactly the mistake this sentence
+/// exists to name. Checked first, directly against `layout.drawer` (the same
+/// identity [`archive_is`] uses for `ArchiveIs::ThePackage`) rather than
+/// through the catalogue, so it is true even when no catalogue was supplied
+/// at all.
+///
+/// **`layout.catalogue` is the command layer's own release-scoped list, with
+/// the selected package already removed from it** (`commands::amigainstall::
+/// compose`, ART-277 review's L3/L4: the first round's doc comment here
+/// claimed this discipline while the one production caller — `known_packages()`
+/// — did neither. `compose` now builds the catalogue from every package that
+/// shares a release with the one selected, `package.id`-filtered, so a
+/// package from a release this build cannot reach is never named and the
+/// drawer check above is defence in depth rather than the only thing making
+/// this true). This function still does not *rely* on either property: the
+/// drawer check above is unconditional, and the scan below never resolves an
+/// ambiguous match by picking one, whatever the caller passed in.
+///
+/// **Medium 1** (matches another package's *update* archive, not only its
+/// own), **Medium 3** (an unreadable listing and an empty one stay
+/// different sentences) and **L3** (never pick one of several equally
+/// matching catalogue entries — `classify_top_level`'s own "collect every
+/// match, refuse to guess" rule, not `Iterator::find_map`'s first-match-wins)
+/// are all here too.
+///
+/// The base shape (neither the selected package's own drawer nor a single,
+/// unambiguous catalogue match) is the old sentence, preserved exactly when
+/// `layout.package_name` is empty and `layout.catalogue` is `&[]` — every
+/// call site before ART-277 gets the identical sentence it always did.
+fn overlay_mismatch_sentence(
+    medium: &Path,
+    layout: &Layout<'_>,
+    names: Option<Vec<String>>,
+) -> String {
+    let expected = expected_overlays(layout);
+    let selected = layout.package_name;
+    let own = if selected.is_empty() {
+        "this package's".to_string()
+    } else {
+        format!("{selected}'s")
+    };
+
+    // This package's own archive, in the wrong field — checked before the
+    // catalogue and regardless of it (see the function doc comment).
+    if let (Some(drawer), Some(names)) = (layout.drawer, &names) {
+        if names.iter().any(|name| drawer_names_equal(name, drawer)) {
+            return format!(
+                "'{}' is {own} own archive — it belongs in the package field; the second field \
+                 is for its update archive (top-level {}).",
+                medium.display(),
+                overlay_drawers_display(layout)
+            );
+        }
+    }
+
+    // Every *other* catalogued package this archive could be — its own
+    // drawer, or (Medium 1) one of its own declared overlays' drawer.
+    // Collected, not `find_map`'s first-match-wins (L3): two catalogue
+    // entries matching the same identity is `classify_top_level`'s own
+    // `other-artefact` shape one layer down, and this function must not
+    // resolve that ambiguity by naming whichever one happened to come
+    // first — the exact trap ART-276 was filed for.
+    let other = names.as_ref().and_then(|names| {
+        let mut matches = layout.catalogue.iter().filter_map(|pkg| {
+            if names
+                .iter()
+                .any(|name| drawer_names_equal(name, &pkg.media))
+            {
+                Some((pkg, false))
+            } else if pkg
+                .overlay_drawers
+                .iter()
+                .any(|drawer| names.iter().any(|name| drawer_names_equal(name, drawer)))
+            {
+                Some((pkg, true))
+            } else {
+                None
+            }
+        });
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            None
+        } else {
+            Some(first)
+        }
+    });
+
+    // Medium 3: an unreadable listing and an empty one are different
+    // endings; `top_level_dir_names` already tells them apart and this must
+    // not collapse the distinction back together with `unwrap_or_default`.
+    let holds = match &names {
+        Some(names) => format_holds(names.clone()),
+        None => "nothing that could be read".to_string(),
+    };
+
+    match (other, selected.is_empty()) {
+        (Some((pkg, is_update)), false) => {
+            let owns = if is_update {
+                "own update archive"
+            } else {
+                "own archive"
+            };
+            format!(
+                "'{}' is {}'s {owns}, not the second archive {selected} needs — {selected}'s \
+                 second archive is {expected}. Select {} to install it, or give {selected}'s own \
+                 second archive here.",
+                medium.display(),
+                pkg.name,
+                pkg.name
+            )
+        }
+        (Some((pkg, is_update)), true) => {
+            let owns = if is_update {
+                "own update archive"
+            } else {
+                "own archive"
+            };
+            format!(
+                "'{}' is {}'s {owns}, not this package's own second archive — its second \
+                 archive is {expected}. Select {} to install it, or give the right archive here.",
+                medium.display(),
+                pkg.name,
+                pkg.name
+            )
+        }
+        (None, false) => format!(
+            "'{}' is not an archive ART knows: it holds {holds}; {selected}'s second archive is \
+             {expected}",
+            medium.display()
+        ),
+        (None, true) => format!(
+            "'{}' is not this package's update archive: it carries none of {expected}; it holds \
+             {holds}",
+            medium.display()
+        ),
+    }
 }
 
 /// Copy every file under `from` into `to`, replacing what is already there.
@@ -636,6 +973,26 @@ fn copy_over(from: &Path, to: &Path, sink: &dyn ProgressSink) -> CoreResult<(usi
     Ok((files, bytes))
 }
 
+/// What a program says about **itself**, read from a bounded window of its
+/// own bytes.
+///
+/// The one place that decides how much of a program is read and what counts
+/// as a statement of version, so the two callers that ask the same question
+/// of the same file cannot drift apart: [`unpack`], which has the program on
+/// disk after an archive was extracted, and
+/// `commands::osinstall::osinstall_slots`, which has the same program's
+/// bytes straight out of the wrapper archive and never writes them anywhere.
+/// A second `amigaver::read` with a second bound is how one of them would
+/// start answering `None` where the other answers `Updater 45.15`.
+///
+/// **Never a size, never a date** — see
+/// [`crate::core::osinstall::package::AmigaInstaller::minimum_version`] for
+/// why the `$VER:` marker is the only acceptable evidence here.
+pub fn stated_version(bytes: &[u8]) -> Option<AmigaVersion> {
+    let bound = VERSION_SEARCH_BOUND as usize;
+    amigaver::read(&bytes[..bytes.len().min(bound)])
+}
+
 /// What the installer says about itself, read from a bounded window.
 fn read_installer_version(program: &Path) -> CoreResult<Option<AmigaVersion>> {
     use std::io::Read as _;
@@ -643,7 +1000,7 @@ fn read_installer_version(program: &Path) -> CoreResult<Option<AmigaVersion>> {
     let file = std::fs::File::open(program)?;
     let mut window = Vec::new();
     file.take(VERSION_SEARCH_BOUND).read_to_end(&mut window)?;
-    Ok(amigaver::read(&window))
+    Ok(stated_version(&window))
 }
 
 /// A package-relative path, resolved under `root` through the same gate an
@@ -665,13 +1022,30 @@ fn resolve(root: &Path, relative: &str) -> CoreResult<PathBuf> {
 /// The first few names directly inside `dir`, for a refusal that tells the
 /// user which archive they actually pointed at.
 fn what_it_holds(dir: &Path) -> String {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return "nothing that could be read".to_string();
-    };
-    let mut names: Vec<String> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
+    match top_level_dir_names(dir) {
+        Some(names) => format_holds(names),
+        None => "nothing that could be read".to_string(),
+    }
+}
+
+/// The names directly inside `dir` — `what_it_holds`'s own listing, split
+/// out so a caller that also needs to *match* one of them (ART-277's
+/// wrong-package refusal) does not read the directory twice. `None` only
+/// when `dir` itself could not be read; an empty, readable directory is
+/// `Some(vec![])`, which `format_holds` already renders as `"nothing"`.
+fn top_level_dir_names(dir: &Path) -> Option<Vec<String>> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    Some(
+        entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect(),
+    )
+}
+
+/// The first few of `names`, sorted, for a refusal that says what an archive
+/// actually held without printing a hostile archive's entire index.
+fn format_holds(mut names: Vec<String>) -> String {
     if names.is_empty() {
         return "nothing".to_string();
     }
@@ -748,6 +1122,68 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------
+    // ART-277: classifying an archive from its listing alone, before
+    // anything is unpacked.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn archive_top_level_lists_the_drawer_and_its_sibling_icon() {
+        let dir = scratch("top-level");
+        let archive = write_boingbag(dir.path(), "BoingBag3.9-2");
+        let names = archive_top_level(&archive).unwrap();
+        assert_eq!(
+            names,
+            vec![
+                "BoingBag3.9-2".to_string(),
+                "BoingBag3.9-2.info".to_string()
+            ],
+            "got {names:?}"
+        );
+    }
+
+    #[test]
+    fn archive_identity_is_the_drawer_not_the_sibling_icon() {
+        let dir = scratch("identity");
+        let archive = write_boingbag(dir.path(), "BoingBag3.9-2");
+        assert_eq!(
+            archive_identity(&archive).unwrap().as_deref(),
+            Some("BoingBag3.9-2")
+        );
+    }
+
+    #[test]
+    fn archive_identity_is_none_for_an_archive_with_no_single_top_level_directory() {
+        let dir = scratch("no-identity");
+        let archive = dir.join("loose.lha");
+        std::fs::write(
+            &archive,
+            make_lha_with(&[("Readme", b"a file with nothing nested under it")]),
+        )
+        .unwrap();
+        assert_eq!(archive_identity(&archive).unwrap(), None);
+    }
+
+    /// **ART-277 re-review, I10.** `entries()` has no cap of its own — only
+    /// `extract_selection` enforces `MAX_ENTRIES`, and `archive_listing`
+    /// reaches a listing with no extraction downstream of it to cap first.
+    /// Built as a synthetic entry list rather than a real 100,001-entry
+    /// archive on disk (`listing_from_entries` is exactly the split that
+    /// makes this cheap to prove).
+    #[test]
+    fn a_listing_over_the_entry_cap_is_refused_rather_than_read() {
+        let entries: Vec<crate::core::archive::ArchiveEntry> = (0
+            ..=crate::core::archive::extract::MAX_ENTRIES)
+            .map(|i| crate::core::archive::ArchiveEntry {
+                name: format!("Pkg/f{i}.txt"),
+                is_dir: false,
+                declared_bytes: 1,
+            })
+            .collect();
+        let err = listing_from_entries(Path::new("E:\\dl\\huge.lha"), &entries).unwrap_err();
+        assert!(err.to_string().contains("too many entries"), "got {err}");
+    }
+
     #[test]
     fn the_update_archive_refusal_names_the_field_to_move_it_to() {
         // CLAUDE.md: a refusal must be actionable. This one is fixable by
@@ -757,6 +1193,7 @@ mod tests {
             "BoingBag3.9-1",
             &ArchiveIs::TheUpdateArchive,
             "BoingBag3.9-1-UAE, BoingBag3.9-1-UAE.info",
+            &[],
         );
         assert!(
             said.contains("update archive"),
@@ -781,9 +1218,41 @@ mod tests {
             "BoingBag3.9-1",
             &ArchiveIs::Neither,
             "Euro-Update, Euro-Update.info",
+            &[],
         );
         assert!(said.contains("carries no 'BoingBag3.9-1' drawer"), "{said}");
         assert!(said.contains("Euro-Update.info"), "{said}");
+    }
+
+    /// **ART-277 re-review, I11.** The package field's own refusal used to
+    /// say only what the archive was *not*, with no catalogue lookup at all
+    /// — the asymmetry the review named against `apply_overlay`'s equivalent
+    /// sentence for the second field, which already named a recognised
+    /// archive's real owner. Given a catalogue, this one now does too.
+    #[test]
+    fn a_wrong_archive_in_the_package_field_names_its_real_owner_when_the_catalogue_knows_it() {
+        let catalogue = [KnownPackage {
+            id: "boingbag-39-2".to_string(),
+            name: "BoingBag 3.9-2".to_string(),
+            media: "BoingBag3.9-2".to_string(),
+            overlay_drawers: vec![],
+        }];
+        // `holds` here is the single identity `MediaSource::volume_name`
+        // states — the shape `refuse_wrong_package_archive` actually passes
+        // in production, not the comma-joined display list the *other* two
+        // tests in this group use to pin `Neither`'s generic wording.
+        let said = wrong_archive_sentence(
+            std::path::Path::new("E:\\dl\\BoingBag39-2.lha"),
+            "BoingBag3.9-1",
+            &ArchiveIs::Neither,
+            "BoingBag3.9-2",
+            &catalogue,
+        );
+        assert!(said.contains("carries no 'BoingBag3.9-1' drawer"), "{said}");
+        assert!(
+            said.contains("which is BoingBag 3.9-2's own archive"),
+            "must name the real owner: {said}"
+        );
     }
 
     use crate::core::jobs::{CancelToken, NoProgress, ProgressSink};
@@ -1349,6 +1818,8 @@ mod tests {
             installer: "C/Updater",
             overlays,
             minimum_installer_version: Some((45, 15)),
+            package_name: "BoingBag 3.9-1",
+            catalogue: &[],
         }
     }
 
@@ -1613,10 +2084,227 @@ mod tests {
             text.contains("Euro-Update.info"),
             "and list what the archive really held: {text}"
         );
+        // ART-277: an archive ART cannot place anywhere still names the
+        // *selected* package, so a reader is never left to guess which
+        // package's second archive was expected.
+        assert!(
+            text.contains("BoingBag 3.9-1"),
+            "must name the selected package: {text}"
+        );
+        assert!(text.contains("is not an archive ART knows"), "got {text}");
         assert_eq!(
             std::fs::read(into.join("BoingBag3.9-1/C/Updater")).unwrap(),
             updater(45, 13, "stock"),
             "and nothing of it may have been copied over the package"
+        );
+    }
+
+    /// ART-277's own defect: the owner ran BoingBag 1, then supplied
+    /// `BoingBag39-2.lha` as the *second* archive while BoingBag 1 was still
+    /// selected. The old sentence — `'…' is not this package's update
+    /// archive: it carries none of '…'; it holds BoingBag3.9-2,
+    /// BoingBag3.9-2.info` — never said the one thing that ends the
+    /// confusion: the archive is BoingBag 3.9-2's own, in the wrong request
+    /// entirely. With the catalogue supplied, the refusal now says so.
+    #[test]
+    fn a_second_archive_matching_another_known_packages_media_names_that_package() {
+        let dir = scratch("wrong-package-selected");
+        let stock = stock_wrapper(dir.path());
+        let other = dir.join("BoingBag39-2.lha");
+        std::fs::write(
+            &other,
+            make_lha_with(&[
+                ("BoingBag3.9-2.info", b"icon"),
+                ("BoingBag3.9-2/C/Updater", b"boingbag 2's own updater"),
+            ]),
+        )
+        .unwrap();
+        let into = dir.join("pkg");
+        let overlays = uae_overlay();
+        let catalogue = [
+            KnownPackage {
+                id: "boingbag-39-1".to_string(),
+                name: "BoingBag 3.9-1".to_string(),
+                media: "BoingBag3.9-1".to_string(),
+                overlay_drawers: vec![],
+            },
+            KnownPackage {
+                id: "boingbag-39-2".to_string(),
+                name: "BoingBag 3.9-2".to_string(),
+                media: "BoingBag3.9-2".to_string(),
+                overlay_drawers: vec![],
+            },
+        ];
+        let layout = Layout {
+            drawer: Some("BoingBag3.9-1"),
+            installer: "C/Updater",
+            overlays: &overlays,
+            minimum_installer_version: Some((45, 15)),
+            package_name: "BoingBag 3.9-1",
+            catalogue: &catalogue,
+        };
+
+        let err = unpack(
+            &[stock, other],
+            &into,
+            &layout,
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap_err();
+
+        let text = err.to_string();
+        assert!(
+            text.contains("BoingBag 3.9-2's own archive"),
+            "must name whose archive it really is: {text}"
+        );
+        assert!(
+            text.contains("BoingBag 3.9-1"),
+            "must name the package that is actually selected: {text}"
+        );
+        assert!(
+            text.contains("Select BoingBag 3.9-2"),
+            "must say what to do about it: {text}"
+        );
+    }
+
+    /// **ART-277 re-review, Medium 1's own gap: the "another package's own
+    /// *update* archive" sentence, asserted directly at this layer.** The
+    /// first fix round pinned this shape only through the command layer's
+    /// `kind` string (`classify_top_level_names_another_packages_update_archive`);
+    /// nothing asserted the *core* sentence text `overlay_mismatch_sentence`
+    /// actually produces when a catalogue match is via `overlay_drawers`
+    /// rather than `media`.
+    #[test]
+    fn a_second_archive_matching_another_known_packages_overlay_drawer_names_it_as_that_packages_update_archive(
+    ) {
+        let dir = scratch("wrong-update-archive-selected");
+        let stock = stock_wrapper(dir.path());
+        // Shaped like *some other* package's own update archive — its top
+        // level is that other package's declared overlay drawer, not
+        // BoingBag 3.9-1's own (`BoingBag3.9-1-UAE`) and not any package's
+        // own `media` either, so the only way this matches anything is
+        // through `KnownPackage::overlay_drawers`.
+        let other = dir.join("OtherPkg-UAE.lha");
+        std::fs::write(
+            &other,
+            make_lha_with(&[
+                ("OtherPkg-UAE.info", b"icon"),
+                (
+                    "OtherPkg-UAE/C/Updater",
+                    b"some other package's own update archive",
+                ),
+            ]),
+        )
+        .unwrap();
+        let into = dir.join("pkg");
+        let overlays = uae_overlay();
+        let catalogue = [KnownPackage {
+            id: "other-pkg".to_string(),
+            name: "Other Package".to_string(),
+            media: "OtherPkg".to_string(),
+            overlay_drawers: vec!["OtherPkg-UAE".to_string()],
+        }];
+        let layout = Layout {
+            drawer: Some("BoingBag3.9-1"),
+            installer: "C/Updater",
+            overlays: &overlays,
+            minimum_installer_version: Some((45, 15)),
+            package_name: "BoingBag 3.9-1",
+            catalogue: &catalogue,
+        };
+
+        let err = unpack(
+            &[stock, other.clone()],
+            &into,
+            &layout,
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap_err();
+
+        let text = err.to_string();
+        assert!(
+            text.contains(&format!(
+                "'{}' is Other Package's own update archive, not the second archive BoingBag \
+                 3.9-1 needs — BoingBag 3.9-1's second archive is \
+                 'BoingBag3.9-1-UAE/BoingBag3.9-1'. Select Other Package to install it, or give \
+                 BoingBag 3.9-1's own second archive here.",
+                other.display()
+            )),
+            "got {text}"
+        );
+    }
+
+    /// **ART-277 review, Major 1 — the finding itself, reproduced and
+    /// fixed.** BoingBag 3.9-1's own archive, supplied a *second* time while
+    /// BoingBag 3.9-1 is selected, used to match itself in the catalogue and
+    /// produce *"Select BoingBag 3.9-1 to install it"* — an instruction to
+    /// select the package that is already selected. It now gets its own
+    /// sentence, checked before the catalogue is even consulted, and never
+    /// tells the user to select anything.
+    #[test]
+    fn the_packages_own_archive_in_the_second_field_gets_its_own_sentence_and_never_says_select_it()
+    {
+        let dir = scratch("own-archive-wrong-field");
+        let stock = stock_wrapper(dir.path());
+        let into = dir.join("pkg");
+        let overlays = uae_overlay();
+
+        let err = unpack(
+            &[stock.clone(), stock],
+            &into,
+            &with_overlay(&overlays),
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap_err();
+
+        let text = err.to_string();
+        assert!(
+            text.contains("is BoingBag 3.9-1's own archive"),
+            "must name whose archive it is: {text}"
+        );
+        assert!(
+            text.contains("it belongs in the package field"),
+            "must say where it belongs: {text}"
+        );
+        assert!(
+            text.contains("the second field is for its update archive"),
+            "must say what the second field is for: {text}"
+        );
+        assert!(
+            text.contains("'BoingBag3.9-1-UAE'"),
+            "must name the update archive's own drawer: {text}"
+        );
+        assert!(
+            !text.contains("Select"),
+            "must never tell the user to select the package that is already selected: {text}"
+        );
+    }
+
+    /// **ART-277 review, Medium 3.** An unreadable listing and an empty one
+    /// are different endings and must stay different — `top_level_dir_names`
+    /// already tells them apart (`what_it_holds`'s own two sentences); this
+    /// pins that the sentence built on top of it does not collapse them back
+    /// together with an `unwrap_or_default`.
+    #[test]
+    fn the_sentence_keeps_an_unreadable_listing_apart_from_an_empty_one() {
+        let overlays = uae_overlay();
+        let layout = with_overlay(&overlays);
+        let medium = Path::new("E:\\dl\\Mystery.lha");
+
+        let unreadable = overlay_mismatch_sentence(medium, &layout, None);
+        assert!(
+            unreadable.contains("nothing that could be read"),
+            "got {unreadable}"
+        );
+
+        let empty = overlay_mismatch_sentence(medium, &layout, Some(Vec::new()));
+        assert!(empty.contains("it holds nothing"), "got {empty}");
+        assert!(
+            !empty.contains("could be read"),
+            "an empty, readable listing must not say the same thing as an unreadable one: {empty}"
         );
     }
 
@@ -1735,6 +2423,8 @@ mod tests {
                     installer: "C/Updater",
                     overlays: &overlays,
                     minimum_installer_version: None,
+                    package_name: "",
+                    catalogue: &[],
                 },
                 &std::env::temp_dir(),
                 &NoProgress,
@@ -1752,6 +2442,8 @@ mod tests {
                     installer: "C/Updater",
                     overlays: &overlays,
                     minimum_installer_version: None,
+                    package_name: "",
+                    catalogue: &[],
                 },
                 &std::env::temp_dir(),
                 &NoProgress,
