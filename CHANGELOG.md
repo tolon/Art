@@ -104,6 +104,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The OS Builder asks for your files once, and then tells you what it
+  found.** Where the source step used to have an install-disks folder, a
+  separate list of extra folders and, for AmigaOS 3.2.2, one field per part of
+  the release — and the update-packages step asked for the archives all over
+  again — there is now a single list of folders. Add as many as you like,
+  say which part of the release a folder holds when the release has parts,
+  drop a disc on the window to add its folder, and remove one you no longer
+  want. Every folder you had already chosen in any of those places is carried
+  over, in order, with duplicates folded; nothing is lost and nothing is
+  changed behind you.
+
+  Underneath the list is a new readout: one line for every piece of material
+  the chosen release can use — the install disc, each update package, the
+  fix that only some copies need, the Kickstart — saying for each one
+  whether it is here and, when it is, **how ART knows**. Identified by its
+  bytes is a different sentence from "this file calls itself the right thing",
+  which is a different sentence again from "a file by that name is here and
+  nothing else says so", and none of them are the sentence for two files ART
+  will not choose between. A piece ART has measured as unnecessary — the
+  BoingBag 1 UAE fix, when your copy already carries the fixed installer —
+  says so instead of being reported as missing, and the summary line above the
+  list counts it as neither found nor missing while saying how many such
+  pieces there are. Required and optional are counted apart, so a set that is
+  only short of an optional file still reads as ready to build. A folder ART
+  could not open at all is named, and the material in the folders beside it
+  still counts.
+
+  If Amiga Forever is installed, ART offers its shared disk folder as one
+  line with an Add button while your list is still empty. It is never added
+  unless you press it.
+
 - **ART now looks like a Windows 11 application, in both themes.** The
   colours are the Fluent tokens Windows itself draws with (Mica background,
   layer and card fills, the system accent blue), controls are 32 px with
