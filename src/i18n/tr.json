@@ -2237,6 +2237,8 @@
       "heading": "Bu dosyalar, içeriklerine göre ne",
       "confirmed": "{{file}} — Emu68 Hatcher'ın kurulum ortamı tablosunun “{{name}}” dediği satırla eşleşiyor ({{version}}, {{source}}). O satır burada gerçek bir disketle karşılaştırıldı: {{against}}, {{checked}}.",
       "unconfirmed": "{{file}} — Emu68 Hatcher'ın kurulum ortamı tablosunun “{{name}}” dediği satırla eşleşiyor ({{version}}, {{source}}). O satırı burada hiç kimse gerçek bir disketle karşılaştırmadı — tablonun 186 satırından 151'i denenmemiş durumda, yani bu iddia yalnızca tablonun.",
+      "confirmedOwn": "{{file}} — ART'ın kendi kurulum ortamı tablosunun “{{name}}” dediği satırla eşleşiyor ({{version}}, {{source}}). O satır burada gerçek bir disketle karşılaştırıldı: {{against}}, {{checked}}.",
+      "unconfirmedOwn": "{{file}} — ART'ın kendi kurulum ortamı tablosunun “{{name}}” dediği satırla eşleşiyor ({{version}}, {{source}}). O satır kaydedildiğinden beri burada hiç kimse gerçek bir disketle karşılaştırmadı — bu, yalnızca tablonun kendi iddiası, ikinci bir kaynakça henüz doğrulanmadı.",
       "notInTable": "{{file}} — Emu68 Hatcher'ın kurulum ortamı tablosunda yok. Bu, tablo hakkında bir bilgidir, disket hakkında değil: yeniden imaj almak da, tek bir baytını değiştirmek de, başka bir sürümüne sahip olmak da özeti değiştirir. Disketin kendi adı olduğu gibi geçerlidir.",
       "unreadable": "{{file}} — ART bu dosyanın baytlarını okuyamadı, dolayısıyla özeti hiç alınmadı. Bu “tabloda yok” demek değildir: tabloya hiç sorulmadı.",
       "notHashedYet": "İçeriğine göre henüz hiçbir şey tanımlanmadı.",

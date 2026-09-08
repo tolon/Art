@@ -56,6 +56,7 @@ import type {
   InstallRelease,
   InstallRequest,
   MediaIdentification,
+  MediaRow,
   MediaScanResult,
   OsInstallResult,
   PlanItem,
@@ -2945,7 +2946,7 @@ describe("identifying install media by content hash (design §4.3)", () => {
       ...over,
     };
   }
-  const ROW = {
+  const ROW: MediaRow = {
     md5: "5edf0b7a10409ef992ea351565ef8b6c",
     version: "3.2",
     // Hatcher's own identifier, which is *not* what the disk calls itself.
@@ -2953,6 +2954,10 @@ describe("identifying install media by content hash (design §4.3)", () => {
     name: "Workbench 3.2",
     source: "Hyperion (3.2 base)",
     sequence: 1,
+    kind: "floppy",
+    artefact: null,
+    filenames: [],
+    tableOrigin: "adopted",
   };
 
   function answersWith(identification: MediaIdentification) {

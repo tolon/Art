@@ -4565,7 +4565,21 @@ mod tests {
             expect_keys(&value["confirmed"], &["checked", "against"]);
             expect_keys(
                 &value["row"],
-                &["md5", "version", "volume", "name", "source", "sequence"],
+                &[
+                    "md5",
+                    "version",
+                    "volume",
+                    "name",
+                    "source",
+                    "sequence",
+                    // ART-round-2026-09-08 (intake): the two-table shape adds
+                    // three fields an adopted row simply defaults, plus which
+                    // of the two compiled-in files answered.
+                    "kind",
+                    "artefact",
+                    "filenames",
+                    "tableOrigin",
+                ],
             );
             assert_eq!(value["row"]["volume"], "Backdrops3_2");
             assert_eq!(value["volumeName"], "Backdrops3.2");

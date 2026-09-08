@@ -26,6 +26,21 @@
 //! 2026-09-06-media-identification-by-hash-design.md`) is what governs how a
 //! caller may phrase a match; this module just hands back the row's fields.
 //!
+//! ## A second table, ART's own
+//!
+//! `media_hashes_own.json` (§2/§3.6 of `docs/superpowers/specs/
+//! 2026-09-08-os-builder-intake-design.md`) carries what Hatcher's table
+//! carries none of: the AmigaOS 3.9 CD-ROM and its update archives. It is a
+//! **separate file**, not a merge into `media_hashes.json` — the same rule
+//! that keeps `media_hashes_confirmed.json` apart from the table it confirms,
+//! applied one level up: the adopted table stays exactly as adopted, and
+//! [`MediaRow::table_origin`] is how a caller tells which file answered.
+//! [`rows`] serves both files, adopted rows first; [`row_for`] looks in both.
+//! Unlike Hatcher's rows, an own-table row can carry a [`MediaRow::kind`], an
+//! [`MediaRow::artefact`] slot id and a list of [`MediaRow::filenames`] —
+//! fields an adopted row simply defaults, because Hatcher's data never
+//! declared them and this module does not invent claims on its behalf.
+//!
 //! ## Two halves
 //!
 //! Everything down to [`confirmation_for`] is that pure lookup and depends on
@@ -50,7 +65,7 @@
 //! `&'static [MediaRow]` and `Option<&'static MediaRow>` — with no error arm,
 //! on the reasoning that the table ships inside the binary, never changes at
 //! runtime, and is already guarded by this module's own invariant tests
-//! (`the_shipped_table_has_exactly_186_rows` and the rest below), so a parse
+//! (`the_shipped_adopted_table_has_exactly_186_rows` and the rest below), so a parse
 //! failure could only be a defect caught long before a release reached a
 //! user. On that reasoning, a broken table simply **panicked** the first
 //! time either function ran.
@@ -95,7 +110,39 @@ use super::scan_cache::ScanCache;
 /// `name`/`version`/`source` and attributes the claim to Hatcher's table, so
 /// every field has to arrive intact rather than being summarised into a
 /// string on this side.
+/// What kind of medium a row's bytes are. Adopted rows never state one —
+/// Hatcher's data has no such field — so they default to `Floppy`, which is
+/// what every one of the 186 shipped rows actually is; an own-table row
+/// always states its real kind explicitly (`kind` is a required key in
+/// `media_hashes_own.json`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaKindTag {
+    #[default]
+    Floppy,
+    Disc,
+    Archive,
+}
+
+/// Which of the two compiled-in files answered — the fact
+/// [`MediaRow::table_origin`] carries, so a caller can attribute a match's
+/// provenance sentence correctly. Never read from either file: `media_hashes
+/// .json` and `media_hashes_own.json` do not state this about their own
+/// rows, so it is stamped on after parsing (see [`parse_own_table`]),
+/// `#[serde(skip_deserializing)]` on the field itself, and `Adopted` as the
+/// type's `Default` is what makes plain [`parse_table`] — used directly by
+/// this module's own error-path tests with hand-written JSON that has no
+/// opinion on provenance — produce the right tag without having to say so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Origin {
+    #[default]
+    Adopted,
+    Own,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MediaRow {
     /// 32 lowercase hex characters. Table lookup only — never ART's
     /// integrity hash (that stays SHA-256; see `core/hashing.rs`).
@@ -128,6 +175,35 @@ pub struct MediaRow {
     pub source: String,
     /// The disk's position within its set, when the source states one.
     pub sequence: Option<u32>,
+    /// What kind of medium this is. `#[serde(default)]`: Hatcher's rows
+    /// never state one and default to [`MediaKindTag::Floppy`], which is
+    /// what all 186 of them are; every own-table row states its own.
+    #[serde(default)]
+    pub kind: MediaKindTag,
+    /// The shipped package/recipe id this row's bytes are the media of, when
+    /// ART has one — `boingbag-39-1`, `amigaos-39-cd`. `None` for every
+    /// adopted row: Hatcher's data names no ART id, and inventing one on its
+    /// behalf would be a claim this module does not get to make. `#[serde
+    /// (default)]` is belt-and-braces here — `Option<T>` already deserializes
+    /// a missing key as `None` — kept for the same reason [`filenames`]
+    /// states it explicitly: a reader of this struct should not have to know
+    /// which optional fields need the attribute and which do not.
+    ///
+    /// [`filenames`]: MediaRow::filenames
+    #[serde(default)]
+    pub artefact: Option<String>,
+    /// Names ART has actually seen this artefact ship under —
+    /// `["AmigaOS39.iso", "amigaos3.9.iso"]` for the 3.9 CD. A hint for a
+    /// drop-folder guide, never a requirement: a file can be renamed and
+    /// still hash to this row. Empty for every adopted row.
+    #[serde(default)]
+    pub filenames: Vec<String>,
+    /// Which of the two compiled-in files this row came from. Stamped on
+    /// after parsing, never read from either file — see [`Origin`]'s own doc
+    /// comment for why the field is `#[serde(skip_deserializing)]` rather
+    /// than an ordinary key.
+    #[serde(skip_deserializing, default)]
+    pub table_origin: Origin,
 }
 
 /// The shape of the shipped JSON file. `$comment` and `adopted_from` are
@@ -141,6 +217,19 @@ struct MediaTable {
 /// The registry as it ships, compiled into the binary.
 const MEDIA_HASHES_JSON: &str = include_str!("media_hashes.json");
 
+/// The shape of ART's own table. `rows`, not `media` — a different key on
+/// purpose, so a reader who opens the file cannot mistake it for a copy of
+/// the adopted one. `$comment` is provenance for a human reader and is not
+/// modelled, same as [`MediaTable`].
+#[derive(Debug, Deserialize)]
+struct OwnMediaTable {
+    rows: Vec<MediaRow>,
+}
+
+/// ART's own table, compiled into the binary — see this module's doc comment
+/// on the second half of "A second table, ART's own".
+const MEDIA_HASHES_OWN_JSON: &str = include_str!("media_hashes_own.json");
+
 /// Parses a media table from its JSON text. Split out of [`cached`] so the
 /// failure path — otherwise unreachable through the public API, since the
 /// compiled-in JSON always parses — has something to call directly with
@@ -148,6 +237,31 @@ const MEDIA_HASHES_JSON: &str = include_str!("media_hashes.json");
 fn parse_table(json: &str) -> Result<Vec<MediaRow>, String> {
     let parsed: MediaTable = serde_json::from_str(json).map_err(|e| e.to_string())?;
     Ok(parsed.media)
+}
+
+/// Parses ART's own table from its JSON text, and stamps every row
+/// [`Origin::Own`] — the one fact neither file states about itself. Split out
+/// of [`cached`] for the same reason [`parse_table`] is.
+fn parse_own_table(json: &str) -> Result<Vec<MediaRow>, String> {
+    let parsed: OwnMediaTable = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let mut rows = parsed.rows;
+    for row in &mut rows {
+        row.table_origin = Origin::Own;
+    }
+    Ok(rows)
+}
+
+/// Both tables, concatenated adopted-first. The `&str` argument is ignored —
+/// this combines the **two** compiled-in constants directly rather than
+/// parsing whatever text it is handed — so it can still be passed through
+/// [`cached`], which every other parse in this module already goes through
+/// and which is what makes a broken file panic nobody instead of the whole
+/// application (see this module's own doc comment on why `rows`/`row_for`
+/// return a `Result` at all).
+fn parse_combined(_ignored: &str) -> Result<Vec<MediaRow>, String> {
+    let mut combined = parse_table(MEDIA_HASHES_JSON)?;
+    combined.extend(parse_own_table(MEDIA_HASHES_OWN_JSON)?);
+    Ok(combined)
 }
 
 /// Parses `json` into `cache` on first use and hands back a reference into
@@ -178,7 +292,10 @@ fn cached<'a, T>(
     }
 }
 
-/// Parsed once, on first use.
+/// The adopted table alone, parsed once on first use. Kept as its own
+/// function — rather than filtering [`rows`] — so this module's own tests
+/// can pin the adopted table's invariants (186 rows and counting) without
+/// them drifting the moment ART's own table grows a row.
 fn table() -> CoreResult<&'static [MediaRow]> {
     static TABLE: OnceLock<Result<Vec<MediaRow>, String>> = OnceLock::new();
     Ok(cached(
@@ -190,25 +307,50 @@ fn table() -> CoreResult<&'static [MediaRow]> {
     .as_slice())
 }
 
-/// Every row in the shipped table, in file order. Many rows can share a
-/// `volume` — see this module's doc comment on the many-to-one mapping.
-pub fn rows() -> CoreResult<&'static [MediaRow]> {
-    table()
+/// ART's own table alone, parsed once on first use — the [`table`] counterpart
+/// for `media_hashes_own.json`.
+fn own_table() -> CoreResult<&'static [MediaRow]> {
+    static OWN_TABLE: OnceLock<Result<Vec<MediaRow>, String>> = OnceLock::new();
+    Ok(cached(
+        &OWN_TABLE,
+        MEDIA_HASHES_OWN_JSON,
+        "ART's own install-media hash table",
+        parse_own_table,
+    )?
+    .as_slice())
 }
 
-/// The row whose `md5` matches `md5`, if any.
+/// Both tables, adopted rows first, parsed once on first use. Its own cache
+/// rather than a fresh `Vec` built from [`table`] and [`own_table`] on every
+/// call, because [`rows`] promises a `&'static [MediaRow]` — a slice into
+/// memory that outlives the call — and a freshly allocated `Vec` cannot back
+/// one without leaking.
+fn combined_table() -> CoreResult<&'static [MediaRow]> {
+    static COMBINED: OnceLock<Result<Vec<MediaRow>, String>> = OnceLock::new();
+    Ok(cached(&COMBINED, "", "install-media hash table", parse_combined)?.as_slice())
+}
+
+/// Every row in both shipped tables, adopted rows first, each in its own
+/// file order. Many rows can share a `volume` — see this module's doc
+/// comment on the many-to-one mapping. Check [`MediaRow::table_origin`] to
+/// tell which file a given row came from.
+pub fn rows() -> CoreResult<&'static [MediaRow]> {
+    combined_table()
+}
+
+/// The row whose `md5` matches `md5`, if any — in either table.
 ///
 /// Case-insensitive on the **input** — a user's own hashing tool may emit
-/// uppercase hex — but exact on the **stored** value, which the shipped table
-/// already carries as lowercase (asserted by this module's own invariant
-/// tests). A hash matching no row returns `Ok(None)`; per §4.3 of the design,
-/// that says nothing about the disk's identity and must never be read as a
-/// negative claim. `Err` means the table itself could not be read, which is
-/// a different situation entirely and must never be collapsed into "no
-/// match".
+/// uppercase hex — but exact on the **stored** value, which both shipped
+/// tables already carry as lowercase (asserted by this module's own
+/// invariant tests). A hash matching no row returns `Ok(None)`; per §4.3 of
+/// the design, that says nothing about the disk's identity and must never be
+/// read as a negative claim. `Err` means a table itself could not be read,
+/// which is a different situation entirely and must never be collapsed into
+/// "no match".
 pub fn row_for(md5: &str) -> CoreResult<Option<&'static MediaRow>> {
     let needle = md5.to_ascii_lowercase();
-    Ok(table()?.iter().find(|row| row.md5 == needle))
+    Ok(rows()?.iter().find(|row| row.md5 == needle))
 }
 
 // ---------------------------------------------------------------------------
@@ -424,10 +566,14 @@ pub struct Identification {
 
 /// The file extensions a media folder is searched for, lowercase.
 ///
-/// The same three `scripts/media-table-check.py` looks at, deliberately: the
+/// The same six `scripts/media-table-check.py` looks at, deliberately: the
 /// script and this function must ask the same question of a folder, or the
-/// outside check stops checking the thing that ships.
-const MEDIA_EXTENSIONS: [&str; 3] = ["adf", "iso", "lha"];
+/// outside check stops checking the thing that ships. `lzh`, `zip` and `7z`
+/// joined `adf`/`iso`/`lha` so a re-packed archive — anything
+/// `core::osinstall::scan::find_packages` can actually open — is at least
+/// reported rather than silently invisible to identification (design's
+/// §3.6, 2026-09-08).
+const MEDIA_EXTENSIONS: [&str; 6] = ["adf", "iso", "lha", "lzh", "zip", "7z"];
 
 /// Every file in `folder` this module will try to identify, in sorted path
 /// order.
@@ -579,31 +725,193 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    /// Unwraps [`rows`]'s `CoreResult` — the shipped table always parses, so
+    /// Unwraps [`rows`]'s `CoreResult` — the shipped tables always parse, so
     /// every test above the error-path tests below treats a failure here as
-    /// a hard test bug rather than something to assert about.
+    /// a hard test bug rather than something to assert about. Both tables,
+    /// adopted first — see [`adopted_shipped_rows`] and [`own_shipped_rows`]
+    /// for the two halves on their own.
     fn shipped_rows() -> &'static [MediaRow] {
-        rows().expect("the shipped table must parse")
+        rows().expect("the shipped tables must parse")
+    }
+
+    /// The adopted table alone, unwrapped the same way [`shipped_rows`] is.
+    /// Kept separate so the adopted table's own pinned invariants (186 rows,
+    /// the Hotfix Pack disagreement) never drift just because ART's own
+    /// table gained a row — the adopted table stays exactly as adopted.
+    fn adopted_shipped_rows() -> &'static [MediaRow] {
+        table().expect("the adopted table must parse")
+    }
+
+    /// ART's own table alone, unwrapped the same way.
+    fn own_shipped_rows() -> &'static [MediaRow] {
+        own_table().expect("ART's own table must parse")
     }
 
     #[test]
-    fn the_shipped_table_has_exactly_186_rows() {
+    fn the_shipped_adopted_table_has_exactly_186_rows() {
         assert_eq!(
-            shipped_rows().len(),
+            adopted_shipped_rows().len(),
             186,
-            "expected 186 rows in the shipped table"
+            "expected 186 rows in the adopted table"
         );
     }
 
     #[test]
-    fn every_md5_in_the_table_is_distinct() {
-        let hashes: HashSet<&str> = shipped_rows().iter().map(|row| row.md5.as_str()).collect();
+    fn every_md5_in_the_adopted_table_is_distinct() {
+        let hashes: HashSet<&str> = adopted_shipped_rows()
+            .iter()
+            .map(|row| row.md5.as_str())
+            .collect();
         assert_eq!(
             hashes.len(),
             186,
             "expected 186 distinct md5 values, found {}",
             hashes.len()
         );
+    }
+
+    // -- ART's own table (§3.6 of `docs/superpowers/specs/
+    // 2026-09-08-os-builder-intake-design.md`): the AmigaOS 3.9 CD and its
+    // update archives, none of which the adopted table carries.
+
+    #[test]
+    fn the_shipped_own_table_has_exactly_8_rows() {
+        // Not the design's §2 table's eleven rows plus HstWB's other CD
+        // hash: checked against the real adopted table 2026-09-08, four of
+        // those twelve candidate hashes turned out to already be adopted
+        // rows (Hatcher's own "Haage and Partners (3.9)" AmigaOS 3.9 CD, BB1,
+        // BB2 and BB3&4 entries) — caught by
+        // `no_md5_is_shared_between_the_adopted_and_own_tables` below, and
+        // left out of `media_hashes_own.json` on purpose rather than shipped
+        // as a duplicate. Eight hashes are genuinely not in the adopted
+        // table.
+        assert_eq!(
+            own_shipped_rows().len(),
+            8,
+            "expected 8 rows in ART's own table"
+        );
+    }
+
+    #[test]
+    fn every_md5_in_the_own_table_is_distinct() {
+        let hashes: HashSet<&str> = own_shipped_rows()
+            .iter()
+            .map(|row| row.md5.as_str())
+            .collect();
+        assert_eq!(
+            hashes.len(),
+            own_shipped_rows().len(),
+            "expected every md5 in ART's own table to be distinct"
+        );
+    }
+
+    /// The invariant the brief calls out by name: an md5 present in both
+    /// tables must fail at this level, as a shipped-data defect — never
+    /// resolved silently by whichever table [`row_for`] happens to search
+    /// first.
+    #[test]
+    fn no_md5_is_shared_between_the_adopted_and_own_tables() {
+        let adopted: HashSet<&str> = adopted_shipped_rows()
+            .iter()
+            .map(|row| row.md5.as_str())
+            .collect();
+        let shared: Vec<&str> = own_shipped_rows()
+            .iter()
+            .map(|row| row.md5.as_str())
+            .filter(|md5| adopted.contains(md5))
+            .collect();
+        assert!(
+            shared.is_empty(),
+            "md5(s) claimed by both tables: {shared:?}"
+        );
+    }
+
+    /// [`rows`] serves both files, adopted rows first — not interleaved, not
+    /// own-first — so a caller that only wants "the adopted 186" can still
+    /// take a fixed-size prefix if it ever needs to (nothing shipped does
+    /// today; this pins the ordering the doc comment promises).
+    #[test]
+    fn rows_serves_both_tables_adopted_first() {
+        let combined = shipped_rows();
+        assert_eq!(combined.len(), 186 + 8);
+        assert!(
+            combined[..186]
+                .iter()
+                .all(|row| row.table_origin == Origin::Adopted),
+            "the first 186 rows must all be adopted"
+        );
+        assert!(
+            combined[186..]
+                .iter()
+                .all(|row| row.table_origin == Origin::Own),
+            "everything after the adopted 186 must be ART's own"
+        );
+    }
+
+    /// Every adopted row defaults the three fields Hatcher's data never
+    /// states, rather than any of them being left to whatever `derive
+    /// (Default)` on the enum happens to pick without this being asserted.
+    #[test]
+    fn adopted_rows_default_kind_artefact_and_filenames() {
+        for row in adopted_shipped_rows() {
+            assert_eq!(
+                row.kind,
+                MediaKindTag::Floppy,
+                "{}: adopted rows default to floppy",
+                row.md5
+            );
+            assert!(
+                row.artefact.is_none(),
+                "{}: an adopted row must carry no ART id",
+                row.md5
+            );
+            assert!(
+                row.filenames.is_empty(),
+                "{}: an adopted row must carry no filenames",
+                row.md5
+            );
+            assert_eq!(row.table_origin, Origin::Adopted);
+        }
+    }
+
+    /// A real own-table row, pinned end to end: HstWB's other accepted hash
+    /// for the AmigaOS 3.9 CD-ROM (design's §2; the owner's own copy hashes
+    /// to `3cb96e77…`, which turned out to already be an *adopted* row — see
+    /// [`the_shipped_own_table_has_exactly_8_rows`]) resolves through the
+    /// same [`row_for`] a caller would use, and carries every slot field the
+    /// design specifies.
+    #[test]
+    fn the_amigaos_39_cd_own_row_carries_its_slot_fields() {
+        let row = row_for("e32a107e68edfc9b28a2fe075e32e5f6")
+            .expect("the tables must parse")
+            .expect("HstWB's other AmigaOS 3.9 CD-ROM hash is in ART's own table");
+        assert_eq!(row.kind, MediaKindTag::Disc);
+        assert_eq!(row.artefact.as_deref(), Some("amigaos-39-cd"));
+        assert_eq!(row.volume, "AmigaOS3.9");
+        assert_eq!(row.table_origin, Origin::Own);
+        assert!(row.filenames.iter().any(|f| f == "AmigaOS39.iso"));
+    }
+
+    /// **The duplicate the invariant test above exists to catch, proven
+    /// negative.** The owner's own `AmigaOS39.iso` hashes to `3cb96e77…`,
+    /// which is an *adopted* row (Hatcher's own "AmigaOS 3.9", sourced
+    /// "Haage and Partners (3.9)") — not one of ART's own, and not tagged
+    /// `disc`/`amigaos-39-cd` at all, because adopted rows carry none of
+    /// those fields. A caller must not assume every AmigaOS 3.9 hash answers
+    /// through ART's own table just because most of them do.
+    #[test]
+    fn the_owners_cd_hash_resolves_through_the_adopted_table_not_arts_own() {
+        let row = row_for("3cb96e77d922a4f8eb696e525a240448")
+            .expect("the tables must parse")
+            .expect("this hash is a real Hatcher row");
+        assert_eq!(row.table_origin, Origin::Adopted);
+        assert_eq!(row.source, "Haage and Partners (3.9)");
+        assert_eq!(
+            row.kind,
+            MediaKindTag::Floppy,
+            "adopted rows default their kind"
+        );
+        assert!(row.artefact.is_none(), "adopted rows carry no ART id");
     }
 
     #[test]
@@ -687,7 +995,11 @@ mod tests {
         // choose between.
         let confirmed = confirmations().expect("the shipped record must parse");
         assert_eq!(confirmed.len(), 35, "expected 35 confirmed rows");
-        let unconfirmed = shipped_rows()
+        // Scoped to the *adopted* table on purpose — the 35/151 split is a
+        // measurement of `media_hashes.json` specifically (the same file
+        // `src/i18n/media-table-counts.test.ts` reads), and ART's own table
+        // gaining a row must not silently move this number.
+        let unconfirmed = adopted_shipped_rows()
             .iter()
             .filter(|row| {
                 confirmation_for(&row.md5)
@@ -914,7 +1226,7 @@ mod tests {
     /// whether the row is right), and **conflicting** (a real defect: the
     /// same file's hash resolves to more than one row, which can only
     /// happen if the shipped table itself carries a duplicate `md5` —
-    /// something `every_md5_in_the_table_is_distinct` above already
+    /// something `every_md5_in_the_adopted_table_is_distinct` above already
     /// asserts never happens, checked again here independently, against
     /// [`rows`] rather than trusted from that other test). `unverified` is
     /// printed and never asserted on.
@@ -1303,12 +1615,21 @@ mod tests {
         assert_eq!(reports[3].0, 3);
     }
 
-    /// Only the three extensions the outside check looks at, and never a
+    /// Only the six extensions the outside check looks at, and never a
     /// directory that happens to be named like one.
     #[test]
     fn only_media_extensions_are_candidates_and_a_directory_is_not_one() {
         let dir = ScratchDir::new("art-mediahash", "candidates");
-        for name in ["a.adf", "b.ISO", "c.lha", "notes.txt", "d.hdf"] {
+        for name in [
+            "a.adf",
+            "b.ISO",
+            "c.lha",
+            "e.lzh",
+            "f.ZIP",
+            "g.7z",
+            "notes.txt",
+            "d.hdf",
+        ] {
             std::fs::write(dir.join(name), b"x").unwrap();
         }
         std::fs::create_dir_all(dir.join("trap.adf")).unwrap();
@@ -1318,7 +1639,10 @@ mod tests {
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, vec!["a.adf", "b.ISO", "c.lha"]);
+        assert_eq!(
+            names,
+            vec!["a.adf", "b.ISO", "c.lha", "e.lzh", "f.ZIP", "g.7z"]
+        );
     }
 
     /// A folder that is not there is an error, not an empty answer — the

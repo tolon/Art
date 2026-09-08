@@ -1491,6 +1491,10 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       name: "Workbench 3.2",
       source: "Hyperion (3.2 base)",
       sequence: 1,
+      kind: "floppy" as const,
+      artefact: null,
+      filenames: [] as string[],
+      tableOrigin: "adopted" as const,
     };
     const base = { path: "a.adf", volumeName: "Workbench3.2", md5: "0".repeat(32) };
     const identification: MediaIdentification = {

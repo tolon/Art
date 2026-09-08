@@ -556,9 +556,22 @@ export async function osinstallScanMedia(mediaFolder: string): Promise<MediaScan
 // Identifying media by content hash — mirrors `core::osinstall::mediahash`
 // ---------------------------------------------------------------------------
 
+/** What kind of medium a row's bytes are. Mirrors
+ *  `core::osinstall::mediahash::MediaKindTag`. An adopted row states none of
+ *  this — Hatcher's data has no such field — and defaults to `"floppy"`,
+ *  which is what all 186 of them are; never render that default as a claim
+ *  the row actually made (see {@link MediaRow.tableOrigin}). */
+export type MediaKindTag = "floppy" | "disc" | "archive";
+
+/** Which of the two compiled-in tables a row came from. Mirrors
+ *  `core::osinstall::mediahash::Origin`. */
+export type MediaTableOrigin = "adopted" | "own";
+
 /**
- * One row of the 186-row install-media table ART compiles in, adopted from
- * Emu68 Hatcher (MIT). Mirrors `core::osinstall::mediahash::MediaRow`.
+ * One row of the install-media tables ART compiles in — 186 rows adopted
+ * from Emu68 Hatcher (MIT), plus ART's own table of AmigaOS 3.9 update
+ * archives the adopted one does not carry (design's §3.6, 2026-09-08).
+ * Mirrors `core::osinstall::mediahash::MediaRow`.
  *
  * Every field is **as the table states it** and none of them may be
  * re-derived here. Two traps the Rust side documents and this side inherits:
@@ -581,6 +594,11 @@ export interface MediaRow {
    * `DiskDoctor`. Joining them would have put all 35 of the owner's good
    * disks in conflict with the table. Never render this as the disk's name —
    * {@link MediaMatch.volumeName} is that.
+   *
+   * For an own-table row this is the archive's own single top-level
+   * directory (or the ISO's own volume id) instead of a Hatcher identifier —
+   * still never the disk's AmigaDOS volume name to compare against, since
+   * `core::osinstall::scan::find_packages` already reads that value itself.
    */
   volume: string;
   /** A human-readable label for the disk, as the table names it. */
@@ -589,6 +607,21 @@ export interface MediaRow {
   source: string;
   /** The disk's position in its set, when the source states one. */
   sequence: number | null;
+  /** What kind of medium this is. `"floppy"` for every adopted row (a
+   *  default, not a claim — see {@link MediaKindTag}). */
+  kind: MediaKindTag;
+  /** The shipped package/recipe id this row's bytes are the media of, when
+   *  ART has one — `"boingbag-39-1"`, `"amigaos-39-cd"`. `null` for every
+   *  adopted row: Hatcher's data names no ART id, and inventing one on its
+   *  behalf would be a claim this table does not get to make. */
+  artefact: string | null;
+  /** Names ART has actually seen this artefact ship under. A hint for a
+   *  drop-folder guide, never a requirement — a file can be renamed and
+   *  still hash to this row. Empty for every adopted row. */
+  filenames: string[];
+  /** Which of the two compiled-in files this row came from — the fact a
+   *  match's provenance sentence names (see {@link mediaIdentityLines}). */
+  tableOrigin: MediaTableOrigin;
 }
 
 /**
@@ -852,13 +885,18 @@ export function mediaIdentityLines(state: MediaIdentityState): MediaIdentityLine
     // re-derived, and never resolved when they disagree (the Hotfix Pack's
     // `version` and `source` do).
     const row = { name: found.row.name, version: found.row.version, source: found.row.source };
+    // Which table answered gets its own sentence (design's §3.6) — the
+    // existing "confirmed"/"unconfirmed" phrases name Emu68 Hatcher's table
+    // by name and have no slot for a different one, so an own-table match
+    // takes its own key rather than a wrong attribution.
+    const own = found.row.tableOrigin === "own";
     if (found.confirmed) {
       return {
         kind: "confirmed",
         file,
         path: found.path,
         phrase: {
-          key: "osinstall.mediaId.confirmed",
+          key: own ? "osinstall.mediaId.confirmedOwn" : "osinstall.mediaId.confirmed",
           params: {
             file,
             ...row,
@@ -872,7 +910,10 @@ export function mediaIdentityLines(state: MediaIdentityState): MediaIdentityLine
       kind: "unconfirmed",
       file,
       path: found.path,
-      phrase: { key: "osinstall.mediaId.unconfirmed", params: { file, ...row } },
+      phrase: {
+        key: own ? "osinstall.mediaId.unconfirmedOwn" : "osinstall.mediaId.unconfirmed",
+        params: { file, ...row },
+      },
     };
   });
 

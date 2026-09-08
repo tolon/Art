@@ -1548,6 +1548,26 @@ describe("what a content-hash result is allowed to say", () => {
     name: "Workbench 3.2",
     source: "Hyperion (3.2 base)",
     sequence: 1,
+    // An adopted row: Hatcher's data states none of these three, so they
+    // default the same way `mediahash.rs`'s own adopted rows do.
+    kind: "floppy",
+    artefact: null,
+    filenames: [],
+    tableOrigin: "adopted",
+  };
+  /** An own-table row — the AmigaOS 3.9 CD-ROM, design's §3.6 — used to
+   *  prove `mediaIdentityLines` names the right table. */
+  const OWN_ROW: MediaRow = {
+    md5: "e32a107e68edfc9b28a2fe075e32e5f6",
+    version: "3.9",
+    volume: "AmigaOS3.9",
+    name: "AmigaOS 3.9 CD-ROM",
+    source: "HstWB Installer amiga-os-entries.csv (MIT)",
+    sequence: null,
+    kind: "disc",
+    artefact: "amigaos-39-cd",
+    filenames: ["AmigaOS39.iso", "amigaos3.9.iso"],
+    tableOrigin: "own",
   };
   const CHECK: MediaConfirmation = {
     checked: "2026-09-06",
@@ -1618,6 +1638,40 @@ describe("what a content-hash result is allowed to say", () => {
       checked: "2026-09-06",
       against: CHECK.against,
     });
+  });
+
+  /**
+   * **Which table answered gets its own sentence** (design's §3.6). The
+   * existing "confirmed"/"unconfirmed" keys name Emu68 Hatcher's table by
+   * name and have no slot for a different one, so a match against ART's own
+   * table must take a different key — never the adopted one, which would
+   * misattribute the claim, and never a silently-shared key that could not
+   * tell the two apart. Both confirmation states are asserted, the same way
+   * the adopted pair is above: a mapper that always picked the "own" key
+   * would pass an own-only test just as easily as one that never did.
+   */
+  it("names ART's own table when a match came from it, confirmed and unconfirmed both", () => {
+    const [unconfirmed] = mediaIdentityLines(
+      identified({ matches: [match({ row: OWN_ROW, md5: OWN_ROW.md5 })] })
+    );
+    expect(unconfirmed.phrase.key).toBe("osinstall.mediaId.unconfirmedOwn");
+    expect(unconfirmed.phrase.params).toMatchObject({
+      name: "AmigaOS 3.9 CD-ROM",
+      version: "3.9",
+      source: "HstWB Installer amiga-os-entries.csv (MIT)",
+    });
+
+    const [confirmed] = mediaIdentityLines(
+      identified({ matches: [match({ row: OWN_ROW, md5: OWN_ROW.md5, confirmed: CHECK })] })
+    );
+    expect(confirmed.phrase.key).toBe("osinstall.mediaId.confirmedOwn");
+
+    // And the adopted row still takes the adopted keys — the two tables'
+    // sentences must not have merged into one another.
+    const [adopted] = mediaIdentityLines(
+      identified({ matches: [match({ row: ROW, md5: ROW.md5 })] })
+    );
+    expect(adopted.phrase.key).toBe("osinstall.mediaId.unconfirmed");
   });
 
   /**
