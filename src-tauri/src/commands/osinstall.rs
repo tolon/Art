@@ -829,7 +829,88 @@ pub fn osinstall_slots(
     overrides: Option<Vec<(String, PathBuf)>>,
 ) -> AppResult<SlotReport> {
     let slots = slots::slots_for(&release)?;
+    let gathered = gather_facts(&release, &folders, tree, rom, overrides)?;
+    let chosen = gathered.overrides();
+    let states = slots::resolve(&slots, &gathered.facts(&chosen));
+    let summary = slots::summarize(&release, &states);
+    Ok(SlotReport {
+        states,
+        summary,
+        unreadable_folders: gathered.unreadable_folders.clone(),
+        crowded_folders: gathered.crowded_folders.clone(),
+    })
+}
 
+/// Everything [`slots::resolve`] needs, read once and **owned** so that two
+/// commands can share one gathering.
+///
+/// `slots::Facts` borrows every field, which is what keeps
+/// `core::osinstall::slots` from opening anything; a borrowing struct cannot
+/// be returned from the function that read the folders, so the reading and
+/// the borrowing are two types. [`GatheredFacts::facts`] is the bridge.
+///
+/// **One gathering, two callers, on purpose.** `osinstall_slots` and
+/// `osinstall_chain` answer two questions about the same folders, the same
+/// tree and the same ROM; two copies of this loop would let the readout and
+/// the chain screen disagree about which archive is which — the
+/// two-screens-one-artefact defect round 2 spent a review closing.
+struct GatheredFacts {
+    media: Vec<FoundMedia>,
+    packages: Vec<FoundPackage>,
+    hashes: Vec<mediahash::MediaMatch>,
+    manifest: Option<crate::core::osinstall::apply::DistributionManifest>,
+    rom: Option<(PathBuf, bool)>,
+    program_versions: Vec<(String, String)>,
+    overrides: Vec<(String, PathBuf, bool)>,
+    disc_roots: Vec<(PathBuf, Vec<String>)>,
+    unreadable_folders: Vec<String>,
+    crowded_folders: Vec<(String, usize)>,
+}
+
+impl GatheredFacts {
+    /// The overrides, borrowed.
+    ///
+    /// Its own step rather than a line inside [`facts`](Self::facts): an
+    /// `Override` borrows its slot id and its path, so a `Vec` built inside
+    /// that method would be a reference into a temporary. The caller owns
+    /// the array and the borrow is theirs — the same split `slots.rs`'s own
+    /// test helper makes, and for the same reason.
+    fn overrides(&self) -> Vec<slots::Override<'_>> {
+        self.overrides
+            .iter()
+            .map(|(slot, path, on_disk)| slots::Override {
+                slot: slot.as_str(),
+                path: path.as_path(),
+                on_disk: *on_disk,
+            })
+            .collect()
+    }
+
+    fn facts<'a>(&'a self, overrides: &'a [slots::Override<'a>]) -> Facts<'a> {
+        Facts {
+            media: &self.media,
+            packages: &self.packages,
+            hashes: &self.hashes,
+            manifest: self.manifest.as_ref(),
+            rom: self.rom.as_ref().map(|(path, on_disk)| match on_disk {
+                true => slots::ChosenRom::OnDisk(path.as_path()),
+                false => slots::ChosenRom::Absent(path.as_path()),
+            }),
+            program_versions: &self.program_versions,
+            overrides,
+            disc_roots: &self.disc_roots,
+        }
+    }
+}
+
+/// Read the folders, the tree and the ROM once — see [`GatheredFacts`].
+fn gather_facts(
+    release: &str,
+    folders: &[PathBuf],
+    tree: Option<PathBuf>,
+    rom: Option<PathBuf>,
+    overrides: Option<Vec<(String, PathBuf)>>,
+) -> AppResult<GatheredFacts> {
     // Per folder, and the same folder never twice: a user who adds their
     // material folder a second time must not be told every disk and archive
     // in it is ambiguous with itself (`find_media_across`'s own rule, which
@@ -841,7 +922,7 @@ pub fn osinstall_slots(
     let mut unreadable_folders: Vec<String> = Vec::new();
     let mut crowded_folders: Vec<(String, usize)> = Vec::new();
     let cache = ScanCache::in_dir(crate::scratch::root()?);
-    for folder in &folders {
+    for folder in folders {
         let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.clone());
         if seen.contains(&canonical) {
             continue;
@@ -867,14 +948,14 @@ pub fn osinstall_slots(
         hashes.extend(mediahash::remembered_media_in(folder, &cache).unwrap_or_default());
     }
     let media = scan::dedupe_identical_disks(media);
-    let packages = narrow_by_distinguished_by(&release, packages);
+    let packages = narrow_by_distinguished_by(release, packages);
 
     let manifest = match tree {
         Some(tree) => Some(chain::read_manifest(&tree)?),
         None => None,
     };
 
-    let program_versions = installer_versions(&release, &packages);
+    let program_versions = installer_versions(release, &packages);
 
     let rom = rom.map(|path| match path.is_file() {
         true => (path, true),
@@ -891,37 +972,78 @@ pub fn osinstall_slots(
             (slot, path, on_disk)
         })
         .collect();
-    let overrides: Vec<slots::Override<'_>> = overrides
-        .iter()
-        .map(|(slot, path, on_disk)| slots::Override {
-            slot: slot.as_str(),
-            path: path.as_path(),
-            on_disk: *on_disk,
-        })
-        .collect();
 
     let disc_roots = disc_roots_of(&media);
 
-    let facts = Facts {
-        media: &media,
-        packages: &packages,
-        hashes: &hashes,
-        manifest: manifest.as_ref(),
-        rom: rom.as_ref().map(|(path, on_disk)| match on_disk {
-            true => slots::ChosenRom::OnDisk(path.as_path()),
-            false => slots::ChosenRom::Absent(path.as_path()),
-        }),
-        program_versions: &program_versions,
-        overrides: &overrides,
-        disc_roots: &disc_roots,
-    };
-    let states = slots::resolve(&slots, &facts);
-    let summary = slots::summarize(&release, &states);
-    Ok(SlotReport {
-        states,
-        summary,
+    Ok(GatheredFacts {
+        media,
+        packages,
+        hashes,
+        manifest,
+        rom,
+        program_versions,
+        overrides,
+        disc_roots,
         unreadable_folders,
         crowded_folders,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// osinstall_chain
+// ---------------------------------------------------------------------------
+
+/// The whole AmigaOS 3.9 update chain, in the material's own order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChainReport {
+    pub rows: Vec<chain::ChainRow>,
+    pub summary: chain::ChainSummary,
+    /// Material folders ART could not read at all, as the user spelled them
+    /// — the same field [`SlotReport`] carries and for the same reason (fix
+    /// round 1, F2). A drive nobody plugged in must not make every row read
+    /// *missing* with nothing said about why.
+    pub unreadable_folders: Vec<String>,
+    /// Folders holding more archives than ART opens in one pass, as
+    /// `(folder, bound)` — again [`SlotReport`]'s own field: an artefact ART
+    /// never reached must not read as one that is not there.
+    pub crowded_folders: Vec<(String, usize)>,
+}
+
+/// One row per link of `release`'s chain, resolved against the same folders,
+/// the same tree and the same ROM the material readout is resolved against.
+///
+/// **The fact gathering is `osinstall_slots`'s own** — `gather_facts`, one
+/// function with two callers. The chain screen and the readout are two
+/// questions about one set of files, and two gatherings would let them
+/// disagree about which archive is which.
+///
+/// Read-only and it hashes nothing, exactly as `osinstall_slots` is: hash
+/// answers come out of the scan cache `osinstall_identify_media`'s job
+/// fills, so a folder nobody has identified yet resolves by what its files
+/// call themselves.
+///
+/// A chosen `tree` that carries no `distribution.json` is a refusal rather
+/// than an empty chain — the user just pointed at it, and every *installed*
+/// state on this screen comes from that file alone.
+#[tauri::command]
+pub fn osinstall_chain(
+    release: String,
+    folders: Vec<PathBuf>,
+    tree: Option<PathBuf>,
+    rom: Option<PathBuf>,
+) -> AppResult<ChainReport> {
+    let slots = slots::slots_for(&release)?;
+    let gathered = gather_facts(&release, &folders, tree, rom, None)?;
+    let chosen = gathered.overrides();
+    let states = slots::resolve(&slots, &gathered.facts(&chosen));
+    let rows = chain::rows_for(&release, gathered.manifest.as_ref(), &states)?;
+    let summary = chain::summarize_chain(&release, &rows);
+    Ok(ChainReport {
+        rows,
+        summary,
+        unreadable_folders: gathered.unreadable_folders.clone(),
+        crowded_folders: gathered.crowded_folders.clone(),
     })
 }
 
@@ -6070,6 +6192,122 @@ mod tests {
             report.crowded_folders.is_empty(),
             "{:?}",
             report.crowded_folders
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -----------------------------------------------------------------
+    // osinstall_chain — round 3
+    // -----------------------------------------------------------------
+
+    /// **The chain command answers over the same folders the readout does**,
+    /// and the wire shape is pinned by name.
+    ///
+    /// The two screens share `gather_facts` precisely so that they cannot
+    /// disagree about one file, and this asserts the visible half of that:
+    /// the row for BoingBag 3.9-2 names the same archive `osinstall_slots`
+    /// resolves for the same folder, in the same call shape.
+    #[test]
+    fn the_chain_answers_over_the_same_folders_the_readout_does() {
+        let dir = scratch("chain-command");
+        write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
+
+        let report =
+            osinstall_chain("AmigaOS 3.9".to_string(), vec![dir.clone()], None, None).unwrap();
+
+        assert_eq!(report.summary.release, "AmigaOS 3.9");
+        assert_eq!(report.summary.total, 9, "the CD plus eight packages");
+        assert_eq!(report.summary.installed, 0, "no tree was chosen");
+        assert!(report.unreadable_folders.is_empty());
+
+        let bb2 = report
+            .rows
+            .iter()
+            .find(|row| row.package_id.as_deref() == Some("boingbag-39-2"))
+            .expect("BoingBag 3.9-2 is a chain row");
+        assert_eq!(bb2.facts.file.as_deref(), Some("BoingBag39-2.lha"));
+
+        // The readout, over the same folder, resolves the same file for the
+        // same slot. One gathering, two questions.
+        let slots = osinstall_slots(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let same = slots
+            .states
+            .iter()
+            .find(|state| state.slot.id == "package:boingbag-39-2")
+            .expect("the readout has the same slot")
+            .found
+            .as_ref()
+            .expect("and resolves it to a file");
+        assert_eq!(
+            same.path.file_name().unwrap().to_string_lossy(),
+            "BoingBag39-2.lha"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The wire keys `src/lib/chain.ts` reads, pinned by name — a rename in
+    /// Rust that the TypeScript did not follow would otherwise leave every
+    /// row rendering as its fallback, silently.
+    #[test]
+    fn a_chain_report_serializes_with_the_keys_this_test_pins() {
+        let dir = scratch("chain-wire");
+        write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
+        let report =
+            osinstall_chain("AmigaOS 3.9".to_string(), vec![dir.clone()], None, None).unwrap();
+        let json = serde_json::to_value(&report).unwrap();
+
+        for key in ["rows", "summary", "unreadableFolders", "crowdedFolders"] {
+            assert!(json.get(key).is_some(), "missing {key}: {json}");
+        }
+        for key in ["release", "total", "installed", "notNeeded"] {
+            assert!(json["summary"].get(key).is_some(), "missing summary.{key}");
+        }
+        let row = &json["rows"][0];
+        for key in ["position", "packageId", "slotId", "name", "state", "facts"] {
+            assert!(row.get(key).is_some(), "missing row.{key}: {row}");
+        }
+        assert!(row["facts"].get("runsOnAmiga").is_some());
+        // Every state carries its own `state` tag, kebab-cased, and the
+        // refusal carries a `because` tag inside it.
+        let states: Vec<String> = json["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["state"]["state"].as_str().unwrap().to_string())
+            .collect();
+        assert!(states.contains(&"missing".to_string()), "{states:?}");
+        assert!(states.contains(&"refused".to_string()), "{states:?}");
+        let refused = json["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["state"]["state"] == "refused")
+            .unwrap();
+        assert_eq!(refused["state"]["reason"]["because"], "not-placeable");
+        assert_eq!(refused["state"]["reason"]["block"], "needs-fixfonts");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A tree with no `distribution.json` is a refusal, not an empty chain:
+    /// every *installed* state on this screen comes from that file, and the
+    /// user has just pointed at the folder.
+    #[test]
+    fn the_chain_refuses_a_folder_that_is_not_a_tree() {
+        let dir = scratch("chain-not-a-tree");
+        let err = osinstall_chain("AmigaOS 3.9".to_string(), vec![], Some(dir.clone()), None)
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains(MANIFEST_FILE_NAME),
+            "the refusal must name what is missing: {err}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

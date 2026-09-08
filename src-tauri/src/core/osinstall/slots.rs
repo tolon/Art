@@ -910,11 +910,12 @@ impl Override<'_> {
 pub fn resolve(slots: &[Slot], facts: &Facts<'_>) -> Vec<SlotState> {
     let mut states: Vec<SlotState> = slots.iter().map(|slot| resolve_one(slot, facts)).collect();
 
-    let known: Vec<(String, bool, bool)> = states
+    let known: Vec<(String, SlotKind, bool, bool)> = states
         .iter()
         .map(|state| {
             (
                 state.slot.id.clone(),
+                state.slot.kind,
                 state.installed != Installed::No,
                 state.found.is_some(),
             )
@@ -931,8 +932,8 @@ pub fn resolve(slots: &[Slot], facts: &Facts<'_>) -> Vec<SlotState> {
                 // treated as not installed rather than ignored: silently
                 // dropping it would turn a data mistake into a run that
                 // looks ready.
-                !known.iter().any(|(id, installed, found)| {
-                    id == *need && requirement_met(kind, *installed, *found)
+                !known.iter().any(|(id, required, installed, found)| {
+                    id == *need && requirement_met(kind, *required, *installed, *found)
                 })
             })
             .cloned()
@@ -956,8 +957,24 @@ pub fn resolve(slots: &[Slot], facts: &Facts<'_>) -> Vec<SlotState> {
 /// `installed` still satisfies an overlay: a package already on the tree is
 /// not one the overlay is waiting for either, and answering *blocked* there
 /// would be a row waiting for something that has already happened.
-fn requirement_met(requiring: SlotKind, installed: bool, found: bool) -> bool {
-    installed || (requiring == SlotKind::Overlay && found)
+///
+/// **A required *medium* is met by having it, not by installing it** (round
+/// 3). A `required_medium` becomes a `requires` entry naming the medium slot
+/// — BoingBag 3.9-1's own `Updater` checks for the AmigaOS 3.9 CD-ROM before
+/// it does anything (ART-193) — and what that check wants is the disc in a
+/// drive, which is exactly `found`. Reading it as *installed* said "needs
+/// AmigaOS3.9 first" about a build whose ISO was sitting in the folder the
+/// user had just named, and told them to install a disc they were not
+/// installing. The design says it in as many words: ready is *"every
+/// `requires` installed and `required_medium` **found**"*.
+fn requirement_met(requiring: SlotKind, required: SlotKind, installed: bool, found: bool) -> bool {
+    if installed {
+        return true;
+    }
+    match required {
+        SlotKind::Medium => found,
+        _ => requiring == SlotKind::Overlay && found,
+    }
 }
 
 fn resolve_one(slot: &Slot, facts: &Facts<'_>) -> SlotState {

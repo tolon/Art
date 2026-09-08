@@ -1574,6 +1574,120 @@ export async function osinstallSlots(
 /** One file the user picked by hand, as `osinstall_slots` takes it. */
 export type SlotOverride = [slot: string, path: string];
 
+// ---------------------------------------------------------------------------
+// The chain — one row per link of the material's own order
+// ---------------------------------------------------------------------------
+
+/**
+ * What one link of the AmigaOS 3.9 update chain is. Mirrors
+ * `chain::ChainState`.
+ *
+ * **Seven states, and they never collapse into "not done".** Installed,
+ * ready, waiting for something else, the file is not here, the material
+ * itself makes it redundant, ART will not do it, and nobody has measured it
+ * yet are seven different next steps. Folding any two of them would tell
+ * somebody to go and find a file they already have, or to wait for something
+ * that has already happened.
+ *
+ * `when` is always `null` today: `distribution.json` records no date against
+ * a component, a medium or a run. The screen renders nothing rather than a
+ * guess.
+ */
+export type ChainState =
+  | { state: "installed"; when: string | null }
+  | { state: "ready" }
+  | { state: "blocked-by"; names: string[] }
+  | { state: "missing"; expected: string[] }
+  | { state: "not-needed"; supersededBy: string }
+  | { state: "refused"; reason: RefusedBecause }
+  | { state: "not-yet-runnable"; reason: string };
+
+/** Why a chain row is refused. A value, never a sentence — this file turns it
+ *  into one. Mirrors `chain::RefusedBecause`. */
+export type RefusedBecause =
+  | { because: "ambiguous"; candidates: string[] }
+  | { because: "not-placeable"; block: HostPlacementBlock };
+
+/** The facts a row's sentence needs beside its state. Mirrors
+ *  `chain::SentenceFacts`. */
+export interface SentenceFacts {
+  /** The file filling this row's slot, by name alone. `null` when nothing
+   *  fills it — including a row that is installed and whose archive has
+   *  since left the folder, which is ordinary. */
+  file: string | null;
+  /** `true` on the Amiga through the package's own installer, `false` placed
+   *  from Windows by ART, `null` for a row that is neither — the CD, and a
+   *  package ART can neither place nor run. Three states, because "ART
+   *  places it" and "ART can do neither" are not the same claim. */
+  runsOnAmiga: boolean | null;
+}
+
+/** One row of the chain screen. Mirrors `chain::ChainRow`. */
+export interface ChainRow {
+  /** The rank the material gives this link — the CD is 1, and two rows may
+   *  share a rank where the material states no order between them. Rows
+   *  arrive sorted by `(position, id)`. */
+  position: number;
+  /** The package's own id, or `null` for the CD row, which is a medium. */
+  packageId: string | null;
+  /** The slot feeding this row, when the release has one. */
+  slotId: string | null;
+  /** The package's own name, or the medium's (ART-060). */
+  name: string;
+  state: ChainState;
+  facts: SentenceFacts;
+}
+
+/** How much of the chain is done. Mirrors `chain::ChainSummary`.
+ *
+ *  A row the material makes redundant is counted apart — never as applied
+ *  (which would claim ART did something it did not) and never as outstanding
+ *  (which would send somebody after a file whose contents they have). */
+export interface ChainSummary {
+  release: string;
+  total: number;
+  installed: number;
+  notNeeded: number;
+}
+
+/** What `osinstallChain` answers. Mirrors `commands::osinstall::ChainReport`. */
+export interface ChainReport {
+  rows: ChainRow[];
+  summary: ChainSummary;
+  /** Material folders ART could not read at all — the same field
+   *  {@link SlotReport} carries, and empty is a different sentence from
+   *  "found nothing". */
+  unreadableFolders: string[];
+  /** Folders holding more archives than ART opens in one pass, as
+   *  `[folder, bound]`. */
+  crowdedFolders: [string, number][];
+}
+
+/**
+ * The whole chain for `release`, resolved against the same folders, tree and
+ * ROM the material readout is resolved against.
+ *
+ * The fact gathering is `osinstallSlots`' own, in Rust: two questions about
+ * one set of files, so the two screens cannot disagree about which archive is
+ * which. Read-only, and it hashes nothing.
+ *
+ * A chosen `tree` with no `distribution.json` is a refusal rather than an
+ * empty chain — every *installed* state here comes from that file alone.
+ */
+export async function osinstallChain(
+  release: InstallRelease,
+  folders: string[],
+  tree?: string | null,
+  rom?: string | null
+): Promise<ChainReport> {
+  return invoke<ChainReport>("osinstall_chain", {
+    release,
+    folders,
+    tree: tree || null,
+    rom: rom || null,
+  });
+}
+
 /**
  * What writing the drop-folder guide did. Mirrors
  * `commands::osinstall::GuideOutcome`.
