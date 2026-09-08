@@ -889,7 +889,12 @@ describe("a media folder belongs to the release it holds (ART-207)", () => {
   // owner's one A1200 ROM is the right answer for both.
   it("shows each release's own media folder, never the other's", async () => {
     await renderFull();
-    expect(screen.getByText("E:\\media")).toBeTruthy();
+    // `getAllByText`: the folder is on screen more than once since the one
+    // material list arrived (design § 3.1) — the list's own row, and the
+    // packages panel below, which is a *view onto the same list* rather than
+    // a second remembered folder. What this test is about is that the
+    // **other release's** folder is nowhere, and that is asserted below.
+    expect(screen.getAllByText("E:\\media").length).toBeGreaterThan(0);
 
     const picker = screen.getByRole("combobox", {
       name: i18n.t("osinstall.release.label"),
@@ -897,8 +902,8 @@ describe("a media folder belongs to the release it holds (ART-207)", () => {
     await userEvent.selectOptions(picker, "AmigaOS 3.9");
     await waitFor(() => expect(componentsMock).toHaveBeenCalledWith("AmigaOS 3.9"));
 
-    expect(await screen.findByText("E:\\media39")).toBeTruthy();
-    expect(screen.queryByText("E:\\media")).toBeNull();
+    expect((await screen.findAllByText("E:\\media39")).length).toBeGreaterThan(0);
+    expect(screen.queryAllByText("E:\\media")).toHaveLength(0);
   });
 
   it("plans a release into its own destination, not the other release's", async () => {
@@ -949,13 +954,16 @@ describe("a media folder belongs to the release it holds (ART-207)", () => {
     await userEvent.click(
       within(await screen.findByTestId("osinstall-media-field")).getByRole("button")
     );
-    expect(await screen.findByText("E:\\os39")).toBeTruthy();
+    // `findAllByText`: since the one material list (design § 3.1) a folder is
+    // shown by the list row and by the packages panel below, which reads the
+    // same list rather than keeping a folder of its own.
+    expect((await screen.findAllByText("E:\\os39")).length).toBeGreaterThan(0);
 
     await userEvent.selectOptions(picker, "AmigaOS 3.2");
-    expect(await screen.findByText("E:\\media")).toBeTruthy();
+    expect((await screen.findAllByText("E:\\media")).length).toBeGreaterThan(0);
 
     await userEvent.selectOptions(picker, "AmigaOS 3.9");
-    expect(await screen.findByText("E:\\os39")).toBeTruthy();
+    expect((await screen.findAllByText("E:\\os39")).length).toBeGreaterThan(0);
   });
 });
 
@@ -1983,7 +1991,14 @@ describe("the release the user picks is the release the whole screen is on (ART-
     const releasesAsked = () => packagesMock.mock.calls.map((call) => call[1]);
     expect(releasesAsked().length).toBeGreaterThan(0);
     for (const asked of releasesAsked()) expect(asked).toBe("AmigaOS 3.2");
-    expect(packagesMock).toHaveBeenCalledWith("E:\\archives", "AmigaOS 3.2");
+    // **The folder is the build's one material list now** (design § 3.1).
+    // `session.packages.folder` is a view onto that list's first untagged
+    // entry rather than a second remembered folder, so the panel is handed
+    // `E:\media` — where the `kaynak` step's list starts — and not the
+    // separate `buildSession.packages` folder it used to keep. What this
+    // test is about is unchanged: the release, and that it is *every*
+    // caller's.
+    expect(packagesMock).toHaveBeenCalledWith("E:\\media", "AmigaOS 3.2");
 
     packagesMock.mockClear();
     const picker = screen.getByRole("combobox", {

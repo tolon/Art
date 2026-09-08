@@ -27,38 +27,61 @@ import {
   DEFAULT_PACKAGES,
   FIRSTBOOT_SPEC,
   LEGACY_KEYS,
+  MATERIAL_SPEC,
   MEDIA_SPEC,
   PACKAGE_SPEC,
   ROM_SPEC,
   SESSION_KEYS,
   TREE_SPEC,
+  firstUntaggedFolder,
   isBuildKind,
   seedCardImage,
   seedRom,
   seedTreeRoot,
   seededComponents,
+  seededMaterial,
+  withFolder,
   type BuildKind,
   type BuildSession,
   type CardChoice,
   type ComponentChoice,
   type FirstBootChoice,
+  type MaterialChoice,
+  type MaterialFolder,
   type MediaChoice,
   type PackageChoice,
   type TreeChoice,
 } from "@/lib/buildSession";
 import { isInstallRelease, type InstallRelease } from "@/lib/osinstall";
-import { isFlag, isTextList, isTextOrNothing, recall } from "@/lib/remembered";
+import { isFlag, isTextList, isTextOrNothing, recall, recallInto } from "@/lib/remembered";
 import { useRemembered, useRememberedShape } from "@/lib/useRemembered";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 export interface BuildSessionApi {
   session: BuildSession;
   setKind: (next: BuildKind) => void;
+  /** Replace the whole material folder list — what the `kaynak` step's own
+   *  list control does on add, remove and re-tag. */
+  setMaterial: (folders: MaterialFolder[]) => void;
+  /** Append one folder, unless some spelling of it is already in the list.
+   *  What a drop and the *Add folder* button reach for, and what
+   *  `setMedia`/`setPackages` write through to. */
+  addMaterialFolder: (path: string, layer?: string | null) => void;
+  /**
+   * @deprecated `media.folder` is a view onto `material.folders` now.
+   * Setting it **adds** the folder to the list rather than replacing a
+   * stored value; the other fields (`reuseScan`) still write through
+   * normally. Passing `folder: null` changes nothing — a null is "nothing
+   * chosen", not an instruction to drop somebody's first folder — so use
+   * `setMaterial` to remove one.
+   */
   setMedia: (change: Partial<MediaChoice>) => void;
   setRom: (path: string | null) => void;
   setRelease: (next: InstallRelease) => void;
   setTree: (change: Partial<TreeChoice>) => void;
   setComponents: (change: Partial<ComponentChoice>) => void;
+  /** `chosen` is this panel's own; `folder` is the same deprecated view
+   *  {@link BuildSessionApi.setMedia} carries, and adds to the list. */
   setPackages: (change: Partial<PackageChoice>) => void;
   /** The card this build writes and then prepares — one value for both steps
    *  (ART-197's remaining duplicate). */
@@ -84,10 +107,33 @@ export function useBuildSession(): BuildSessionApi {
     recall(bag, LEGACY_KEYS.release, isInstallRelease, "AmigaOS 3.2")
   );
 
-  const [media, setMedia] = useRememberedShape<MediaChoice>(SESSION_KEYS.media, MEDIA_SPEC, {
-    folder: recall(bag, LEGACY_KEYS.mediaFolder, isTextOrNothing, DEFAULT_MEDIA.folder),
-    reuseScan: recall(bag, LEGACY_KEYS.reuseScan, isFlag, DEFAULT_MEDIA.reuseScan),
-  });
+  /**
+   * **The one folder list** (design § 3.1), per release like the components.
+   *
+   * The migration is `seededMaterial`, and it is the whole of it: an absent
+   * `buildSession.material.<release>` falls back to the four legacy keys in
+   * the order the fields were drawn in. `useRememberedShape` uses a fallback
+   * only while nothing is stored, so a list the user has touched this run is
+   * never reseeded — ART-089's mechanism, unchanged.
+   */
+  const [material, setMaterialShape] = useRememberedShape<MaterialChoice>(
+    SESSION_KEYS.material(release),
+    MATERIAL_SPEC,
+    seededMaterial(bag, release)
+  );
+
+  // `reuseScan` only. `folder` is derived below from `material.folders`, so
+  // the stored `buildSession.media.folder` is neither read nor written any
+  // more — two places holding one folder is the defect this list replaces,
+  // and leaving the old field live would keep the second one.
+  const [mediaShape, setMediaShape] = useRememberedShape<MediaChoice>(
+    SESSION_KEYS.media,
+    MEDIA_SPEC,
+    {
+      folder: recall(bag, LEGACY_KEYS.mediaFolder, isTextOrNothing, DEFAULT_MEDIA.folder),
+      reuseScan: recall(bag, LEGACY_KEYS.reuseScan, isFlag, DEFAULT_MEDIA.reuseScan),
+    }
+  );
 
   const [rom, setRomShape] = useRememberedShape<{ path: string | null }>(SESSION_KEYS.rom, ROM_SPEC, {
     // Through `seedRom`, which walks all three of the keys the three panels
@@ -112,7 +158,9 @@ export function useBuildSession(): BuildSessionApi {
     seededComponents(bag, release)
   );
 
-  const [packages, setPackages] = useRememberedShape<PackageChoice>(
+  // `chosen` only, for `mediaShape`'s reason: `folder` is the same derived
+  // view onto `material.folders`.
+  const [packagesShape, setPackagesShape] = useRememberedShape<PackageChoice>(
     SESSION_KEYS.packages,
     PACKAGE_SPEC,
     {
@@ -136,6 +184,52 @@ export function useBuildSession(): BuildSessionApi {
     DEFAULT_FIRSTBOOT
   );
 
+  const setMaterial = useCallback(
+    (folders: MaterialFolder[]) => setMaterialShape({ folders }),
+    [setMaterialShape]
+  );
+
+  // Reads the store rather than the rendered `material`, exactly as
+  // `useRememberedShape`'s own setter does: two controls appending in one
+  // tick — a drop landing while a Browse dialog resolves — must not overwrite
+  // each other with a stale copy of the list.
+  const addMaterialFolder = useCallback(
+    (path: string, layer: string | null = null) => {
+      if (!path) return;
+      const latest = useSettingsStore.getState().settings.remembered;
+      const held = recallInto<MaterialChoice>(
+        latest,
+        SESSION_KEYS.material(release),
+        MATERIAL_SPEC,
+        seededMaterial(latest, release)
+      );
+      setMaterialShape({ folders: withFolder(held.folders, { path, layer }) });
+    },
+    [release, setMaterialShape]
+  );
+
+  /** The folder both deprecated views answer with — the first entry ART
+   *  scans for everything. */
+  const derivedFolder = firstUntaggedFolder(material);
+
+  const setMedia = useCallback(
+    (change: Partial<MediaChoice>) => {
+      const { folder, ...rest } = change;
+      if (folder) addMaterialFolder(folder);
+      if (Object.keys(rest).length > 0) setMediaShape(rest);
+    },
+    [addMaterialFolder, setMediaShape]
+  );
+
+  const setPackages = useCallback(
+    (change: Partial<PackageChoice>) => {
+      const { folder, ...rest } = change;
+      if (folder) addMaterialFolder(folder);
+      if (Object.keys(rest).length > 0) setPackagesShape(rest);
+    },
+    [addMaterialFolder, setPackagesShape]
+  );
+
   const setRom = useCallback((path: string | null) => setRomShape({ path }), [setRomShape]);
   const setCard = useCallback(
     (image: string | null) => setCardShape({ image }),
@@ -156,14 +250,28 @@ export function useBuildSession(): BuildSessionApi {
     [setTreeShape, tree.root, setFirstBoot]
   );
 
+  // The two deprecated views are rebuilt here rather than stored, and the
+  // memo keys on the derived string, so a render that changes neither the
+  // folder nor `reuseScan` hands back the same object identity (ART-178).
+  const media = useMemo<MediaChoice>(
+    () => ({ folder: derivedFolder, reuseScan: mediaShape.reuseScan }),
+    [derivedFolder, mediaShape.reuseScan]
+  );
+  const packages = useMemo<PackageChoice>(
+    () => ({ folder: derivedFolder, chosen: packagesShape.chosen }),
+    [derivedFolder, packagesShape.chosen]
+  );
+
   const session = useMemo<BuildSession>(
-    () => ({ kind, media, rom, release, tree, components, packages, card, firstboot }),
-    [kind, media, rom, release, tree, components, packages, card, firstboot]
+    () => ({ kind, material, media, rom, release, tree, components, packages, card, firstboot }),
+    [kind, material, media, rom, release, tree, components, packages, card, firstboot]
   );
 
   return {
     session,
     setKind,
+    setMaterial,
+    addMaterialFolder,
     setMedia,
     setRom,
     setRelease,
