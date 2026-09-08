@@ -2446,6 +2446,49 @@ describe("the chain", () => {
     expect(screen.queryByTestId("amiga-chain-next")).toBeNull();
   });
 
+  it("keeps a selection made after a run that did not succeed", async () => {
+    // **Fix round 2, N1.** `pendingAdvance` was armed at the *start* of a
+    // run and cleared only when it actually fired — so a run that refused,
+    // failed, timed out or was cancelled left it armed with no row having
+    // become installed, and the next time the user selected an
+    // already-installed row **to read it**, F4's effect fired on that row
+    // and silently dropped the selection. "Nothing changes unless the user
+    // changes it", broken by the code written to respect it: the second
+    // click asked to read one row, not to move on from anything.
+    withArchiveFor("boingbag-39-2", "D:/pkg/BoingBag39-2.lha");
+    renderChain();
+    await screen.findAllByTestId("amiga-chain-row");
+    await screen.findByTestId("amiga-install-preview");
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(i18n.t("osinstall.amigaInstall.confirm")));
+    await user.click(runButton());
+    await waitFor(() => expect(runMock).toHaveBeenCalled());
+
+    // The run ends badly. Nothing was promoted, so no row becomes
+    // installed and the chain comes back exactly as it was.
+    await act(async () => {
+      deliver!({
+        job_id: 7,
+        outcome: { kind: "failed" },
+        settlement: { kind: "kept", copy: "D:/amiga/os39.art-run", original: "D:/amiga/os39" },
+      });
+      await Promise.resolve();
+    });
+    expect(await screen.findByTestId("amiga-install-report")).toBeTruthy();
+
+    // Now the user selects an unrelated row that is already installed, to
+    // read its facts. It must stay selected.
+    await user.click(radioFor("BoingBag 3.9-1"));
+    await waitFor(() => expect(radioFor("BoingBag 3.9-1").checked).toBe(true));
+    expect(radioFor("BoingBag 3.9-1").checked).toBe(true);
+    // …and the button is about that row, not about one ART moved to on its
+    // own: "Next: X" is what a cleared selection would have rendered.
+    expect(screen.queryByTestId("amiga-chain-next")).toBeNull();
+    expect(screen.getByTestId("amiga-chain-cannot-run").textContent).toBe(
+      i18n.t("osinstall.chain.installed", { name: "BoingBag 3.9-1" })
+    );
+  });
+
   it("says ART has nowhere to look when no material folder has been named", async () => {
     // **F6.** "…is not in the folders you named" is strictly true of an
     // empty set and useless — a fact about a set the user has not

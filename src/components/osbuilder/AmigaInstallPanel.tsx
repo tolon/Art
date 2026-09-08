@@ -677,10 +677,21 @@ export function AmigaInstallPanel({
   const [confirmed, setConfirmed] = useState(false);
 
   const job = useRef<number | null>(null);
-  /** Set when a run starts and read once the chain has re-answered: the
-   *  selection is only moved on by a run **this screen made**. A ref rather
-   *  than state — nothing renders from it, and a re-render on setting it
-   *  would re-run the effect that reads it. */
+  /**
+   * Set when a run starts and read once the chain has re-answered: the
+   * selection is only moved on by a run **this screen made**. A ref rather
+   * than state — nothing renders from it, and a re-render on setting it
+   * would re-run the effect that reads it.
+   *
+   * **Armed at the start of a run and disarmed by every ending that is not
+   * a success** (fix round 2, N1): the four Amiga-side endings, a job that
+   * failed or was cancelled mid-flight, a refusal raised before any job
+   * started, and the host route's failure and refusal. Only a run that
+   * succeeded can make its own row `installed`, so only a success may leave
+   * this armed. Left armed after anything else it survives until the user
+   * next selects an installed row **to read it**, and then clears that
+   * selection — nothing changing because the user changed it.
+   */
   const pendingAdvance = useRef(false);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<JobProgress | null>(null);
@@ -1006,8 +1017,19 @@ export function AmigaInstallPanel({
     setChainAsked((asked) => asked + 1);
   }, [placement.outcome]);
   useEffect(() => {
-    if (placement.applyError) setPlacedError(placement.applyError);
+    if (!placement.applyError) return;
+    setPlacedError(placement.applyError);
+    // N1, the host route's half: a failed or cancelled placement wrote
+    // nothing, so nothing may advance.
+    pendingAdvance.current = false;
   }, [placement.applyError]);
+  useEffect(() => {
+    // …and a refusal, which is resolved before a byte moves and so never
+    // reaches a job at all (Task 7's F2).
+    if (placement.refusals && placement.refusals.length > 0) {
+      pendingAdvance.current = false;
+    }
+  }, [placement.refusals]);
 
   /**
    * **…and the selection moves on with it** (fix round 1, F4).
@@ -1264,8 +1286,13 @@ export function AmigaInstallPanel({
         setLastReported(update.message.trim() === "" ? null : update.message);
         if (update.state.state === "failed") {
           setJobError(`${update.state.message} (${update.state.error_code})`);
+          // N1: a run that died mid-flight emits no result of its own, so
+          // this is the only place its ending is seen. Nothing was
+          // promoted; nothing may advance.
+          pendingAdvance.current = false;
         } else if (update.state.state === "cancelled") {
           setWasCancelled(true);
+          pendingAdvance.current = false;
         }
         // A clean finish says nothing here: the run's own answer — which of
         // the four endings, and what happened to the copy — arrives on
@@ -1283,6 +1310,14 @@ export function AmigaInstallPanel({
         if (answer.job_id !== job.current) return;
         setResult(answer);
         setConfirmed(false);
+        // **Three of the four endings disarm the advance** (fix round 2,
+        // N1). Only a run that succeeded can make its row `installed`, and
+        // only then may `pendingAdvance` be left armed for the effect that
+        // reads it. Left armed after a refusal, a timeout or a closed
+        // window, it fires on whatever installed row the user next selects
+        // **to read** and drops that selection — a setting changing without
+        // the user changing it, from the code written to respect the rule.
+        if (answer.outcome.kind !== "succeeded") pendingAdvance.current = false;
       })
     );
   }, []);
@@ -1355,6 +1390,8 @@ export function AmigaInstallPanel({
       setRefusal(errorText(t, e));
       setBusy(false);
       job.current = null;
+      // N1: no job ran, so no row can have become installed.
+      pendingAdvance.current = false;
     }
   }
 
