@@ -716,6 +716,14 @@ back.
   the people using this are over fifty. It is a first-class setting, not an
   accessibility afterthought; new screens inherit it from the shell and must not
   fight it with fixed pixel heights.
+- **A found artefact pre-fills a field; a chosen one overrides it; a re-scan
+  never replaces a choice.** The OS Builder resolves the build's material once
+  (`core/osinstall/slots.rs`) and fills the Amiga-side panel's fields from the
+  answer — but a path the user picked by hand wins over it, is labelled as
+  theirs, and outlives every later pass. Taking the choice back is its own
+  control (*Use the one ART found*), and it `forget`s the remembered key rather
+  than storing a `null`: a stored "nothing" is itself a decision, and it would
+  switch the pre-fill off for good.
 
 ### The OS Builder is a wizard, and one value carries the build
 

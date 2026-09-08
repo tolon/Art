@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ART can write a "what goes here" note into your own material folders.**
+  Under the OS Builder's readout there is a button for each folder in the
+  list. Press it and ART writes a plain text file into that folder listing
+  everything the release you are building can use: whether each piece is
+  required or optional, the file names ART expects, where that piece came
+  from, what has to be in place before it, and what happens if you never find
+  it — so you have the list where the files are, not only on screen. It is
+  written in the language ART is showing, under a name in that language. ART
+  downloads none of this and the note contains no links; it says where each
+  piece comes from so you can go and get it yourself. Nothing is written until
+  you press the button, and if a note is already in that folder ART leaves it
+  exactly as it is and tells you to delete it if you want a fresh one.
 - **The commander now has cursor keys.** Up/Down, Home/End and Page Up/Page
   Down move the pane's cursor — no version of ART had ever handled them, so a
   mouse-free session was driven by Insert and letters only. Holding Shift
@@ -134,6 +146,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   If Amiga Forever is installed, ART offers its shared disk folder as one
   line with an Add button while your list is still empty. It is never added
   unless you press it.
+
+  The step that runs a package's own installer on the Amiga stops asking as
+  well. Its three Browse buttons — the package's archive, its second archive,
+  the CD image — are filled from the same answer: each one now shows the file
+  ART found and the reason it believes it, in the same words the readout uses,
+  and only asks you to go and find something when it genuinely could not. When
+  it does ask, it tells you what to look for by name and where that file comes
+  from, instead of describing the field. When two files could be the one it
+  wants, it lists both with what it knows about each and lets you say which;
+  it never picks. And when your copy of BoingBag 1 already carries the fixed
+  installer, the second archive field says so rather than asking for a file
+  nobody has to download.
+
+  A file you choose by hand still wins, is marked as yours, and stays yours —
+  scanning again never replaces it. *Use the one ART found* is the way back,
+  and it is the only way back.
 
 - **ART now looks like a Windows 11 application, in both themes.** The
   colours are the Fluent tokens Windows itself draws with (Mica background,

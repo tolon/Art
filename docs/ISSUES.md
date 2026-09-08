@@ -998,7 +998,14 @@ paragraph with its control"` block (hint alone, `describedBy` alone, both
 together space-separated, neither) and `OsInstall.test.tsx`'s `"ART-241: the
 ROM field's Browse button is described by its own outcome paragraph"` block
 — mutated by dropping the `aria-describedby` attribute entirely, which all
-seven of those failed against, then restored.
+seven of those failed against, then restored. **This entry was untrue for two
+commits and nothing recorded it at the time** (written down 2026-09-08, round
+2 task 4): round 2's task 3 rebuilt the `kaynak` step's per-layer `Field`s as
+one folder list on `137e833`, and the association went with them — the new
+rows' Remove button and layer select named no paragraph at all — until
+`31ba77c` put it back on the row's own ids the same day. A Fixed entry is a
+claim about the tree, and it stays Fixed only while it is true; a rewrite that
+drops the wiring reopens it whether or not anybody notices.
 
 **ART-248** 🔵 **`appearance_apply` runs the whole wallpaper pipeline
 synchronously on the command thread, with no progress and no cancel** — *found
