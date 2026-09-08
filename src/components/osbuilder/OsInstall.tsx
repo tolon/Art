@@ -130,7 +130,7 @@ import {
 import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
 import { isFlag, isText, isTextList, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
-import { foldersForPlan } from "@/lib/buildSession";
+import { foldersForPlan, type MaterialFolder } from "@/lib/buildSession";
 import { hostAmigaForeverFolders } from "@/lib/api";
 import { useBuildSession } from "@/lib/useBuildSession";
 import {
@@ -471,66 +471,73 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [materialKey]);
 
-  /** The volume names one layer's own folder actually holds — `[]` when
-   *  nothing was scanned, nothing was found, or the folder could not be
-   *  read, which are three ways to nothing the wrong-layer hint below
-   *  deliberately collapses (it is not that hint's question). */
-  function layerFoundVolumeNames(layerId: string): string[] {
-    const folder = folderForLayer(layerId);
-    const scan = folder ? folderScans[folder] : null;
+  /** The volume names one **folder** actually holds — `[]` when nothing was
+   *  scanned, nothing was found, or the folder could not be read, which are
+   *  three ways to nothing the wrong-layer hint below deliberately collapses
+   *  (it is not that hint's question). */
+  function folderVolumeNames(folder: string): string[] {
+    const scan = folderScans[folder];
     return scan?.outcome === "found" ? scan.media.map((m) => m.volumeName) : [];
   }
 
   /**
-   * Which layer each layer's own scan actually looks like — `osinstall_layer_for_media`'s
-   * own answer, asked only once a scan has found something (an empty pile
-   * decides nothing, the same gate `layer_holding` itself applies). A layer
-   * whose own scan agrees with itself, or that found nothing to compare,
-   * holds no entry.
+   * Which layer each **folder** actually looks like —
+   * `osinstall_layer_for_media`'s own answer, asked only once a scan has
+   * found something (an empty pile decides nothing, the same gate
+   * `layer_holding` itself applies).
+   *
+   * **Keyed by the folder's own path, not by layer id** (fix round 1, F5).
+   * Two rows may carry the same tag — `foldersForPlan`'s `unusedForPlan`
+   * exists precisely because that state is reachable — and keying by layer
+   * meant the second row rendered a sentence computed from the *first* row's
+   * scan, under the same DOM id. A hint is a claim about the folder in front
+   * of it, so it is measured from that folder.
    */
-  const [layerIdentified, setLayerIdentified] = useState<Record<string, string | null>>({});
+  const [folderIdentified, setFolderIdentified] = useState<Record<string, string | null>>({});
   useEffect(() => {
-    if (layers.length === 0) {
+    const tagged = materialFolders.filter((entry) => entry.layer !== null);
+    if (layers.length === 0 || tagged.length === 0) {
       // Same guard as `folderScans` (ART-260): keep the previous object when
       // it is already empty, so a no-op reset does not manufacture a fresh
       // identity for nothing.
-      setLayerIdentified(resetIfEmpty);
+      setFolderIdentified(resetIfEmpty);
       return;
     }
     let cancelled = false;
     Promise.all(
-      layers.map(async (layer) => {
-        const found = layerFoundVolumeNames(layer.id);
-        if (found.length === 0) return [layer.id, null] as const;
+      tagged.map(async (entry) => {
+        const found = folderVolumeNames(entry.path);
+        if (found.length === 0) return [entry.path, null] as const;
         try {
-          return [layer.id, await layerForMedia(release, found)] as const;
+          return [entry.path, await layerForMedia(release, found)] as const;
         } catch {
-          return [layer.id, null] as const;
+          return [entry.path, null] as const;
         }
       })
     ).then((entries) => {
-      if (!cancelled) setLayerIdentified(Object.fromEntries(entries));
+      if (!cancelled) setFolderIdentified(Object.fromEntries(entries));
     });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layers, folderScans, layerFoldersKey, release]);
+  }, [layers, folderScans, materialKey, release]);
 
   /**
-   * The sentence for one layer's own field, when its folder's media
-   * identifies as a **different** layer of this same release — `null`
-   * otherwise, which covers "nothing scanned yet", "scan agrees with this
-   * field" and "scan found nothing distinguishing" alike, none of which are
-   * this field's problem to report.
+   * The sentence for one **row**, when the media in that row's own folder
+   * identifies as a different layer of this same release — `null` otherwise,
+   * which covers "nothing scanned yet", "the scan agrees with the tag" and
+   * "the scan found nothing distinguishing" alike, none of which are this
+   * row's problem to report.
    */
-  function wrongLayerHint(layer: InstallLayer): string | null {
-    const actualId = layerIdentified[layer.id];
-    if (!actualId || actualId === layer.id) return null;
+  function wrongLayerHintFor(entry: MaterialFolder): string | null {
+    if (!entry.layer) return null;
+    const actualId = folderIdentified[entry.path];
+    if (!actualId || actualId === entry.layer) return null;
     const actual = layerById(actualId);
     return t("osinstall.layer.wrongLayer", {
       actual: actual ? layerLabel(actual) : actualId,
-      found: layerFoundVolumeNames(layer.id).join(", "),
+      found: folderVolumeNames(entry.path).join(", "),
     });
   }
 
@@ -754,17 +761,23 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    * choice about every future build from one click.
    */
   const [amigaForeverAdf, setAmigaForeverAdf] = useState<string | null>(null);
+  const [amigaForeverRom, setAmigaForeverRom] = useState<string | null>(null);
   const [amigaForeverDismissed, setAmigaForeverDismissed] = useState(false);
+  const [amigaForeverRomDismissed, setAmigaForeverRomDismissed] = useState(false);
   useEffect(() => {
     let cancelled = false;
     hostAmigaForeverFolders()
       .then((found) => {
-        if (!cancelled) setAmigaForeverAdf(found.adf);
+        if (cancelled) return;
+        setAmigaForeverAdf(found.adf);
+        setAmigaForeverRom(found.rom);
       })
       // A host that cannot answer is a host with nothing to suggest. There is
       // no sentence to write about a suggestion that could not be made.
       .catch(() => {
-        if (!cancelled) setAmigaForeverAdf(null);
+        if (cancelled) return;
+        setAmigaForeverAdf(null);
+        setAmigaForeverRom(null);
       });
     return () => {
       cancelled = true;
@@ -772,6 +785,22 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   }, []);
   const amigaForeverOffer =
     materialFolders.length === 0 && !amigaForeverDismissed ? amigaForeverAdf : null;
+  /**
+   * **The ROM half of the same offer** (fix round 1, F6). `Shared\rom` is the
+   * one folder that answers the Kickstart field on this very step, and the
+   * command was already returning it while nothing consumed it %s a value on
+   * the wire that nothing reads is a later reader's wrong assumption.
+   *
+   * Its own dismissal, because it is its own suggestion: somebody who has a
+   * ROM and no disks should not have to refuse a sentence about disks to get
+   * rid of a sentence about ROMs. Offered only while no Kickstart is chosen,
+   * for `amigaForeverOffer`'s reason.
+   *
+   * It names the **folder**, not a file: ART does not pick somebody's
+   * Kickstart for them, and a folder of ROMs is what the picker opens on.
+   */
+  const amigaForeverRomOffer =
+    !romPath && !amigaForeverRomDismissed ? amigaForeverRom : null;
 
   const [rom, setRom] = useState<RomInfo | null>(null);
   const [romError, setRomError] = useState(false);
@@ -1028,6 +1057,23 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     () => mediaIdentityFolderLines(mediaIdentity),
     [mediaIdentity]
   );
+  /**
+   * **What tells the material readout that the scan cache has moved** (fix
+   * round 1, F2).
+   *
+   * `osinstall_slots` hashes nothing: it reads the cache the pass above
+   * fills. Nothing in the readout's own dependency list changed when that
+   * pass finished, so a first visit with a cold cache told the user "nobody
+   * has read its bytes yet -- identify this folder by content" directly above
+   * a section reporting that it had just hashed them. Two halves of one
+   * screen disagreeing about the same files.
+   *
+   * A primitive, and one that moves exactly once per completed pass: the
+   * "Scan again" nonce plus one while the pass is settled. It deliberately
+   * does **not** move when a pass *starts* -- re-asking mid-pass would read
+   * the same cold cache and put the same wrong sentence back.
+   */
+  const identifiedPass = identifyNonce + (mediaIdentity.kind === "identified" ? 1 : 0);
 
   // Re-identify whatever ROM was remembered, for the same reason.
   useEffect(() => {
@@ -1569,12 +1615,23 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   }
 
   async function chooseRom() {
+    return chooseRomIn(undefined);
+  }
+
+  /** The Kickstart picker, optionally opened on a folder ART already knows
+   *  about (fix round 1, F6: Amiga Forever's `Shared\rom`). The **user**
+   *  still picks the file; ART only says where to look. */
+  async function chooseRomIn(defaultPath?: string) {
     const picked = await open({
       multiple: false,
       title: t("osinstall.rom.chooseTitle"),
+      defaultPath,
       filters: [{ name: "Kickstart ROM", extensions: ["rom", "bin"] }],
     });
-    if (typeof picked === "string") setRomPath(picked);
+    if (typeof picked === "string") {
+      setRomPath(picked);
+      setAmigaForeverRomDismissed(true);
+    }
   }
 
   async function chooseDestination() {
@@ -1681,11 +1738,26 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
               {t("osinstall.media.none")}
             </p>
           )}
-          {materialFolders.map((entry) => {
+          {materialFolders.map((entry, index) => {
             const scan = folderScans[entry.path];
-            const layer = entry.layer ? layerById(entry.layer) : undefined;
-            const hint = layer ? wrongLayerHint(layer) : null;
-            const hintId = `layer-wrong-hint-${entry.layer ?? ""}`;
+            const hint = wrongLayerHintFor(entry);
+            // **The row's index, not its layer tag** (fix round 1, F5). Two
+            // rows may carry one tag — `unusedForPlan` exists because that
+            // state is reachable — and keying the id by the tag gave two
+            // DOM elements one `id`, which is an accessibility fault in its
+            // own right as well as a `data-testid` that matched either.
+            const hintId = `layer-wrong-hint-${index}`;
+            const unreadableId = `material-folder-unreadable-${index}`;
+            // ART-241: the controls on this row are described by whichever
+            // of the row's own paragraphs actually renders, so a screen
+            // reader user hears the warning with the control rather than
+            // having to hunt forward in the page for it. The fix originally
+            // landed on the `Field`s these rows replaced, and putting it back
+            // is not optional: the entry stays Fixed only while it is true.
+            const describedBy =
+              [scan?.outcome === "folder-unreadable" ? unreadableId : null, hint ? hintId : null]
+                .filter(Boolean)
+                .join(" ") || undefined;
             return (
               <div key={entry.path} data-testid="material-folder" style={{ margin: "0 0 6px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -1704,6 +1776,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
                       // identical accessible name, which is ART-240's own
                       // defect one control along.
                       aria-label={t("osinstall.material.layerAriaLabel", { folder: entry.path })}
+                      aria-describedby={describedBy}
                       onChange={(e) => tagFolder(entry.path, e.target.value)}
                     >
                       <option value="">{t("osinstall.material.layerAny")}</option>
@@ -1723,14 +1796,16 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
                     // user tabbing through heard the same word once per row
                     // with nothing to tell them apart.
                     aria-label={t("osinstall.media.removeFolderAriaLabel", { folder: entry.path })}
+                    aria-describedby={describedBy}
                   >
                     {t("osinstall.media.removeFolder")}
                   </button>
                 </div>
                 {scan?.outcome === "folder-unreadable" && (
                   <p
+                    id={unreadableId}
                     className="badge badge-err"
-                    data-testid="material-folder-unreadable"
+                    data-testid={unreadableId}
                     style={{ fontSize: 11, margin: "2px 0 0", display: "inline-block" }}
                   >
                     {t("osinstall.media.unreadable")}
@@ -1850,6 +1925,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           folders={materialFolders.map((entry) => entry.path)}
           treeRoot={packagesTreeRoot}
           rom={romPath}
+          identifiedPass={identifiedPass}
         />
 
         {/*
@@ -1971,6 +2047,38 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
             romError ? "osinstall-rom-unreadable" : rom ? "osinstall-rom-identified" : undefined
           }
         />
+        {/*
+          **Amiga Forever's ROM folder, offered** (fix round 1, F6; design
+          § 3.5). `Shared\rom` is the one folder that answers this very
+          field, and the command already knew where it was. Its own dismissal
+          rather than the disks offer's: somebody who has a Kickstart and no
+          disks should not have to refuse a sentence about disks to be rid of
+          a sentence about ROMs. The Add button opens the picker on that
+          folder — ART does not choose somebody's Kickstart for them.
+        */}
+        {amigaForeverRomOffer && (
+          <p
+            className="faint"
+            data-testid="amiga-forever-rom-offer"
+            style={{ fontSize: 11, margin: "0 0 12px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
+          >
+            <span>{t("osinstall.material.amigaForeverRom", { path: amigaForeverRomOffer })}</span>
+            <button
+              className="btn"
+              style={{ fontSize: 11 }}
+              onClick={() => void chooseRomIn(amigaForeverRomOffer)}
+            >
+              {t("osinstall.material.amigaForeverAdd")}
+            </button>
+            <button
+              className="btn"
+              style={{ fontSize: 11 }}
+              onClick={() => setAmigaForeverRomDismissed(true)}
+            >
+              {t("osinstall.material.amigaForeverDismiss")}
+            </button>
+          </p>
+        )}
         {romError && (
           <p
             id="osinstall-rom-unreadable"

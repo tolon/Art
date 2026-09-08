@@ -2237,6 +2237,7 @@
       "unusedForPlan_one": "This release reads one folder per part, so ART will not install from {{count}} folder in this list: {{folders}}. Say which part it holds, or take it out.",
       "unusedForPlan_other": "This release reads one folder per part, so ART will not install from {{count}} folders in this list: {{folders}}. Say which part each holds, or take them out.",
       "amigaForever": "Amiga Forever's disks are at {{path}}.",
+      "amigaForeverRom": "Amiga Forever's Kickstart ROMs are in {{path}}.",
       "amigaForeverAdd": "Add it",
       "amigaForeverDismiss": "Not now",
       "readoutHeading": "What this release needs, and what your folders hold",

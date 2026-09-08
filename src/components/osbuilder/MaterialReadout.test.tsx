@@ -117,6 +117,7 @@ function renderReadout() {
       folders={["E:\\amiga\\os39"]}
       treeRoot={null}
       rom={null}
+      identifiedPass={0}
     />
   );
 }
@@ -242,14 +243,17 @@ describe("every ending gets its own sentence, in both languages", () => {
     expect(otherRow).toContain("BoingBag 3.9-2");
   });
 
-  it("lists every candidate of an ambiguous row rather than picking one", async () => {
+  it("lists every candidate of an ambiguous row by its full path, never by name", async () => {
+    // Fix round 1, F3: the ambiguity this row exists for is one artefact in
+    // two folders, and its commonest shape is two copies under the *same*
+    // name -- which file names rendered as one string twice.
     slotsMock.mockResolvedValue(
       report({
         states: [
           state({
             candidates: [
-              { path: "D:\\a\\first.lha", bytesRead: NO_ROW },
-              { path: "D:\\b\\second.lha", bytesRead: NO_ROW },
+              { path: "D:\\disks\\BoingBag39-1.lha", bytesRead: NO_ROW },
+              { path: "E:\\archives\\BoingBag39-1.lha", bytesRead: NO_ROW },
             ],
           }),
         ],
@@ -258,8 +262,8 @@ describe("every ending gets its own sentence, in both languages", () => {
     renderReadout();
 
     const row = await screen.findByTestId("material-row-ambiguous");
-    expect(row.textContent).toContain("first.lha");
-    expect(row.textContent).toContain("second.lha");
+    expect(row.textContent).toContain("D:\\disks\\BoingBag39-1.lha");
+    expect(row.textContent).toContain("E:\\archives\\BoingBag39-1.lha");
   });
 
   it("shows the installed badge from the manifest, and never 'not installed'", async () => {
@@ -375,6 +379,7 @@ describe("while the pass is running, and when it fails", () => {
         folders={["E:\\one", "E:\\two", "E:\\three"]}
         treeRoot={null}
         rom={null}
+        identifiedPass={0}
       />
     );
 
@@ -400,7 +405,13 @@ describe("while the pass is running, and when it fails", () => {
 
   it("renders nothing at all before any folder is chosen", () => {
     const { container } = render(
-      <MaterialReadout release="AmigaOS 3.9" folders={[]} treeRoot={null} rom={null} />
+      <MaterialReadout
+        release="AmigaOS 3.9"
+        folders={[]}
+        treeRoot={null}
+        rom={null}
+        identifiedPass={0}
+      />
     );
     expect(container.textContent).toBe("");
     expect(slotsMock).not.toHaveBeenCalled();
@@ -452,10 +463,22 @@ describe("a superseded answer is dropped, never rendered", () => {
     );
 
     const { rerender } = render(
-      <MaterialReadout release="AmigaOS 3.9" folders={["E:\\one"]} treeRoot={null} rom={null} />
+      <MaterialReadout
+        release="AmigaOS 3.9"
+        folders={["E:\\one"]}
+        treeRoot={null}
+        rom={null}
+        identifiedPass={0}
+      />
     );
     rerender(
-      <MaterialReadout release="AmigaOS 3.9" folders={["E:\\two"]} treeRoot={null} rom={null} />
+      <MaterialReadout
+        release="AmigaOS 3.9"
+        folders={["E:\\two"]}
+        treeRoot={null}
+        rom={null}
+        identifiedPass={0}
+      />
     );
     await screen.findByTestId("material-row-found-by-hash");
 
@@ -468,5 +491,84 @@ describe("a superseded answer is dropped, never rendered", () => {
     expect(screen.getByTestId("material-row-found-by-hash").textContent).toContain(
       "the second answer"
     );
+  });
+});
+
+describe("the identification pass changes what the readout may say", () => {
+  /// **Fix round 1, F2.** `osinstall_slots` hashes nothing: it reads the scan
+  /// cache the identify job fills. Nothing in the readout's dependency list
+  /// changed when that job finished, so a first visit with a cold cache said
+  /// "nobody has read its bytes yet -- identify this folder by content"
+  /// directly above a section reporting that it had just hashed them.
+  it("re-asks once the pass has landed, and the row's sentence changes with it", async () => {
+    const cold = report({
+      states: [state({ found: foundBy("volume-name", "D:\\a\\one.iso", NOT_READ) })],
+    });
+    const warm = report({
+      states: [state({ found: foundBy("volume-name", "D:\\a\\one.iso", NO_ROW) })],
+    });
+    slotsMock.mockResolvedValueOnce(cold).mockResolvedValue(warm);
+
+    const props = {
+      release: "AmigaOS 3.9" as const,
+      folders: ["E:\\amiga\\os39"],
+      treeRoot: null,
+      rom: null,
+    };
+    const { rerender } = render(<MaterialReadout {...props} identifiedPass={0} />);
+
+    // Before the pass: the honest "ART did not look" sentence.
+    await screen.findByTestId("material-row-found-by-name");
+    expect(screen.getByTestId("material-row-found-by-name").textContent).toContain(
+      i18n.t("osinstall.slots.foundByNameUnread", {
+        file: "one.iso",
+        name: "BoingBag 3.9-1",
+        identity: "BoingBag3.9-1",
+      })
+    );
+
+    // The pass completes.
+    rerender(<MaterialReadout {...props} identifiedPass={1} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("material-row-found-by-name").textContent).toContain(
+        i18n.t("osinstall.slots.foundByName", {
+          file: "one.iso",
+          name: "BoingBag 3.9-1",
+          identity: "BoingBag3.9-1",
+        })
+      )
+    );
+    expect(slotsMock).toHaveBeenCalledTimes(2);
+  });
+
+  /// **Fix round 1, F9.** A set line and a row list left standing under a
+  /// "Reading 3 folders..." heading are counts of a folder set the reader has
+  /// already changed -- numbers that look current and are not.
+  it("takes the previous answer down while a new pass runs", async () => {
+    slotsMock.mockResolvedValueOnce(
+      report({ states: [state({ found: foundBy("hash", "D:\\a\\one.lha") })] })
+    );
+    let settle: (value: SlotReport) => void = () => {};
+    slotsMock.mockReturnValue(
+      new Promise<SlotReport>((resolve) => {
+        settle = resolve;
+      })
+    );
+
+    const props = { release: "AmigaOS 3.9" as const, treeRoot: null, rom: null };
+    const { rerender } = render(
+      <MaterialReadout {...props} folders={["E:\\one"]} identifiedPass={0} />
+    );
+    await screen.findByTestId("material-set-line");
+
+    rerender(<MaterialReadout {...props} folders={["E:\\one", "E:\\two"]} identifiedPass={0} />);
+
+    await screen.findByTestId("material-readout-running");
+    expect(screen.queryByTestId("material-set-line")).toBeNull();
+    expect(screen.queryByTestId("material-row-found-by-hash")).toBeNull();
+
+    settle(report({ states: [state()] }));
+    await screen.findByTestId("material-set-line");
   });
 });

@@ -474,11 +474,13 @@ export function PackagePanel({
       )}
       <Field
         label={t("osinstall.packages.packageFolder.label")}
+        ariaLabel={t("osinstall.packages.packageFolder.label")}
         value={packageFolder}
         empty={t("osinstall.packages.packageFolder.none")}
         onChoose={() => void choosePackageFolder()}
         choose={t("common.browse")}
         hint={t("osinstall.packages.packageFolder.hint")}
+        testId="package-folder-field"
       />
 
       {catalogueError && (

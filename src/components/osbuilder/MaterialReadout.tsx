@@ -100,9 +100,35 @@ export interface MaterialReadoutProps {
   treeRoot: string | null;
   /** The chosen Kickstart, which fills the ROM slot. */
   rom: string | null;
+  /**
+   * A value that changes whenever the **identification pass** has filled the
+   * scan cache with something new.
+   *
+   * **Why the readout needs it** (fix round 1, F2). `osinstall_slots` hashes
+   * nothing: it asks `mediahash::remembered_media_in`, and that cache is
+   * filled by `osinstall_identify_media`, which the step runs in its own
+   * effect over the same folders. Nothing in this component's dependency list
+   * changed when that job finished, so on a first visit with a cold cache
+   * every rank-2 and rank-3 row said *"nobody has read its bytes yet —
+   * identify this folder by content"* and went on saying it directly above a
+   * section reporting that it had just hashed them. Two halves of one screen
+   * disagreeing about the same files, which is ART-256's shape and CLAUDE.md's
+   * "confident, wrong, and invisible".
+   *
+   * The caller decides what makes it move (see `OsInstall.tsx`); this only
+   * has to re-ask when it does. Re-asking is safe: a superseded answer is
+   * already dropped by the cancellation below.
+   */
+  identifiedPass: number;
 }
 
-export function MaterialReadout({ release, folders, treeRoot, rom }: MaterialReadoutProps) {
+export function MaterialReadout({
+  release,
+  folders,
+  treeRoot,
+  rom,
+  identifiedPass,
+}: MaterialReadoutProps) {
   const { t } = useTranslation();
   const [report, setReport] = useState<SlotReport | null>(null);
   const [running, setRunning] = useState(false);
@@ -128,6 +154,12 @@ export function MaterialReadout({ release, folders, treeRoot, rom }: MaterialRea
     let cancelled = false;
     setRunning(true);
     setFailed(null);
+    // **The previous list's answer goes with it** (fix round 1, F9). A set
+    // line and a row list left standing under a "Reading 3 folders…" line
+    // are counts of a folder set the user has already changed — numbers that
+    // look current and are not. Nothing is a truer readout than stale
+    // something.
+    setReport(null);
     osinstallSlots(release, list, treeRoot, rom)
       .then((answer) => {
         if (cancelled) return;
@@ -152,7 +184,7 @@ export function MaterialReadout({ release, folders, treeRoot, rom }: MaterialRea
     // re-rendered in the new language by `errorText`'s own key when it is one
     // ART recognises.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [release, foldersKey, treeRoot, rom]);
+  }, [release, foldersKey, treeRoot, rom, identifiedPass]);
 
   if (folders.length === 0) return null;
 

@@ -2237,6 +2237,7 @@
       "unusedForPlan_one": "Bu sürüm her parça için ayrı bir klasör okur; bu yüzden ART listedeki {{count}} klasörden kurulum yapmayacak: {{folders}}. Hangi parçayı tuttuğunu belirtin ya da listeden çıkarın.",
       "unusedForPlan_other": "Bu sürüm her parça için ayrı bir klasör okur; bu yüzden ART listedeki {{count}} klasörden kurulum yapmayacak: {{folders}}. Her birinin hangi parçayı tuttuğunu belirtin ya da listeden çıkarın.",
       "amigaForever": "Amiga Forever'ın disketleri {{path}} konumunda.",
+      "amigaForeverRom": "Amiga Forever'ın Kickstart ROM'ları {{path}} klasöründe.",
       "amigaForeverAdd": "Ekle",
       "amigaForeverDismiss": "Şimdi değil",
       "readoutHeading": "Bu sürüm neye ihtiyaç duyuyor, klasörlerinizde ne var",
