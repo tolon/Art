@@ -141,6 +141,12 @@ pub struct AdoptedArtefact {
     /// A hint, never a requirement.
     #[serde(default)]
     pub filenames: Vec<String>,
+    /// Directories this artefact's disc carries at its root, for design
+    /// § 3.6's structural check. **ART's own claim**, like `filenames`:
+    /// Hatcher's rows say nothing about a disc's contents. Empty means ART
+    /// has no expectation and never reports such a disc as incomplete.
+    #[serde(default)]
+    pub directories: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -259,6 +265,13 @@ pub struct Slot {
     /// unnecessary). Always empty today, and stated rather than omitted so
     /// the wire shape does not change under the screen when it fills.
     pub superseded_by: Vec<String>,
+    /// Directories a disc filling this slot must carry at its root — design
+    /// § 3.6's structural check, and **data on the artefact map, never a list
+    /// in code**: which six directories an AmigaOS 3.9 CD has is a fact about
+    /// that disc, and a second release's disc would need its own.
+    ///
+    /// Empty for everything but a medium ART records expectations for.
+    pub expects_directories: Vec<String>,
 }
 
 /// Every slot `release`'s build can use, in chain order.
@@ -294,6 +307,9 @@ fn slots_over(recipe: &Recipe, packages: &[Package]) -> CoreResult<Vec<Slot>> {
             .iter()
             .any(|c| c.required && amiga_names_equal(&c.media, media));
         let artefact = artefact_for_identity(rows, media);
+        // Read before the move into the literal below; `artefact` is consumed
+        // there and this is the one slot kind that has directories at all.
+        let artefact_ref = artefact.clone();
         slots.push(Slot {
             id: format!("medium:{media}"),
             kind: SlotKind::Medium,
@@ -306,6 +322,7 @@ fn slots_over(recipe: &Recipe, packages: &[Package]) -> CoreResult<Vec<Slot>> {
             position: take(&mut position),
             requires: Vec::new(),
             superseded_by: Vec::new(),
+            expects_directories: directories_for(artefact_ref.as_deref()),
         });
     }
 
@@ -348,6 +365,7 @@ fn slots_over(recipe: &Recipe, packages: &[Package]) -> CoreResult<Vec<Slot>> {
             position: take(&mut position),
             requires,
             superseded_by: Vec::new(),
+            expects_directories: Vec::new(),
         });
 
         // --- and its overlays, immediately after it ------------------------
@@ -373,6 +391,7 @@ fn slots_over(recipe: &Recipe, packages: &[Package]) -> CoreResult<Vec<Slot>> {
                 position: take(&mut position),
                 requires: Vec::new(),
                 superseded_by: Vec::new(),
+                expects_directories: Vec::new(),
             });
         }
     }
@@ -409,6 +428,7 @@ fn slots_over(recipe: &Recipe, packages: &[Package]) -> CoreResult<Vec<Slot>> {
             position: take(&mut position),
             requires: Vec::new(),
             superseded_by: Vec::new(),
+            expects_directories: Vec::new(),
         });
     }
 
@@ -554,6 +574,24 @@ fn provenance_for(rows: &[MediaRow], artefact: Option<&str>) -> Option<String> {
     rows_for_artefact(rows, artefact)
         .find(|row| row.table_origin == mediahash::Origin::Adopted)
         .map(|row| row.source.clone())
+}
+
+/// The directories a disc of `artefact` carries at its root, from the
+/// artefact map — design § 3.6's structural check, as **data**.
+///
+/// On the map beside `filenames` rather than in code, for the same reason
+/// that field is there: which directories an AmigaOS 3.9 CD has is a fact
+/// about that disc, ART's own claim rather than Hatcher's, and a second
+/// release's disc needs its own list, not an `if` here.
+fn directories_for(artefact: Option<&str>) -> Vec<String> {
+    let Some(artefact) = artefact else {
+        return Vec::new();
+    };
+    adopted_artefacts()
+        .ok()
+        .and_then(|mapped| mapped.iter().find(|entry| entry.artefact == artefact))
+        .map(|entry| entry.directories.clone())
+        .unwrap_or_default()
 }
 
 fn rows_for_artefact<'a>(
@@ -727,6 +765,22 @@ pub struct SlotState {
     /// **A measurement, not a sentence.** The words around it belong in the
     /// catalogue; core states what it read.
     pub not_needed: Option<String>,
+    /// The first directory [`Slot::expects_directories`] names that the disc
+    /// filling this slot does **not** carry — design § 3.6's structural check
+    /// beside the hash.
+    ///
+    /// *Matched but incomplete* is a different sentence from *not found*, and
+    /// that is the whole of it: a disc whose bytes ART recognises but whose
+    /// root is missing `Emergency-Boot` is a disc somebody re-mastered or a
+    /// partial copy, and telling them it is absent would send them looking
+    /// for a file that is sitting right there.
+    ///
+    /// `None` means either that ART has nothing to check (no expectations, or
+    /// nobody listed the disc's root) or that everything expected is there.
+    /// Those two are deliberately one value here because the row says nothing
+    /// in both cases; the fact that separates them is
+    /// [`Facts::disc_roots`]'s own membership.
+    pub incomplete: Option<String>,
 }
 
 /// A Kickstart the user named by hand, and what the caller found when it
@@ -768,6 +822,60 @@ pub struct Facts<'a> {
     /// from the archive itself (`packagevol::stated_version`), because a
     /// version is a fact about a file and this module opens none.
     pub program_versions: &'a [(String, String)],
+    /// **Files the user picked by hand, per slot** (design § 3.4).
+    ///
+    /// The generalisation of [`Facts::rom`], which was the first of these and
+    /// had to be a field of its own because it arrives from a different
+    /// screen. An override **outranks every rank**: it is not an
+    /// identification ART made, so it cannot be compared with one — the user
+    /// said *this file*, and ART's job is to use it and say who chose it.
+    ///
+    /// The round-2 review found the readout and the Amiga-side panel saying
+    /// opposite things about one artefact because only the panel knew about
+    /// these: the readout printed *"BoingBag 3.9-1 is not in the folders you
+    /// named"* about a file ART was holding a path for and would use in the
+    /// run.
+    pub overrides: &'a [Override<'a>],
+    /// The root directory names of each disc the caller could read, as
+    /// `(path, names)` — the fact behind [`SlotState::incomplete`].
+    ///
+    /// The caller's, because this module opens nothing. A disc missing from
+    /// this list is a disc nobody listed, which is **not** the same as a disc
+    /// whose root is empty: the first says nothing and leaves `incomplete`
+    /// `None`, the second is a real answer.
+    pub disc_roots: &'a [(PathBuf, Vec<String>)],
+}
+
+/// One file the user chose by hand for a named slot.
+///
+/// `on_disk` is the caller's check, exactly as [`ChosenRom`]'s two variants
+/// are and for the same reason (fix round 1, F5): this module opens nothing,
+/// and "chose one, it has gone" is its own ending rather than a plain
+/// absence.
+///
+/// **`slot` may name an overlay's package rather than a particular drawer.**
+/// An overlay slot's id is `overlay:<package>:<drawer>`, and the screen that
+/// holds these overrides has one *"the package's update archive"* field per
+/// package, not one per drawer — so `overlay:boingbag-39-1` matches every
+/// overlay of that package. An exact id always matches only itself. Today
+/// every shipped package declares at most one overlay, so the two readings
+/// coincide; the prefix rule is what keeps a second overlay from silently
+/// dropping the user's choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Override<'a> {
+    pub slot: &'a str,
+    pub path: &'a Path,
+    pub on_disk: bool,
+}
+
+impl Override<'_> {
+    /// Whether this override is about `slot`.
+    fn names(&self, slot: &Slot) -> bool {
+        if slot.id == self.slot {
+            return true;
+        }
+        slot.kind == SlotKind::Overlay && slot.id.starts_with(&format!("{}:", self.slot))
+    }
 }
 
 /// Resolve every slot against `facts`.
@@ -803,7 +911,10 @@ pub fn resolve(slots: &[Slot], facts: &Facts<'_>) -> Vec<SlotState> {
 fn resolve_one(slot: &Slot, facts: &Facts<'_>) -> SlotState {
     let installed = installed_state(slot, facts.manifest);
     let not_needed = not_needed_for(slot, facts);
-    let state = |found, candidates: Vec<PathBuf>, chosen_missing| SlotState {
+    let state = |found: Option<Found>, candidates: Vec<PathBuf>, chosen_missing| SlotState {
+        incomplete: found
+            .as_ref()
+            .and_then(|one| missing_directory(slot, &one.path, facts)),
         slot: slot.clone(),
         found,
         candidates: candidates
@@ -818,6 +929,31 @@ fn resolve_one(slot: &Slot, facts: &Facts<'_>) -> SlotState {
         blocked_by: Vec::new(),
         not_needed: not_needed.clone(),
     };
+
+    // --- rank 0: the user said so ------------------------------------------
+    //
+    // **Above every rank, because it is not one.** The others are ART
+    // deciding what a file is; this is the user telling it. A hash find that
+    // outranked a hand-picked path would be ART overruling a decision, which
+    // is the one thing `remembered.ts`'s rule forbids — and the readout would
+    // then say something different from the panel about the file the run is
+    // actually going to use.
+    if let Some(chosen) = facts.overrides.iter().find(|one| one.names(slot)) {
+        return match chosen.on_disk {
+            true => state(
+                Some(Found {
+                    path: chosen.path.to_path_buf(),
+                    matched_by: MatchedBy::Chosen,
+                    row: None,
+                    confirmed: None,
+                    bytes_read: bytes_read(chosen.path, facts),
+                }),
+                Vec::new(),
+                None,
+            ),
+            false => state(None, Vec::new(), Some(chosen.path.to_path_buf())),
+        };
+    }
 
     if slot.kind == SlotKind::Rom {
         // Never `Filename`: the user handed ART this path, which is a
@@ -944,6 +1080,30 @@ fn resolve_one(slot: &Slot, facts: &Facts<'_>) -> SlotState {
         collapse_identical(sorted(by_name), facts.hashes),
         None,
     )
+}
+
+/// The first directory `slot` expects that the disc at `path` does not carry
+/// — design § 3.6's structural check beside the hash.
+///
+/// **Silent unless ART has both halves.** A slot with no expectations, or a
+/// disc nobody listed the root of, answers `None` — because *"ART did not
+/// look"* is not *"ART looked and it is not there"*, which is the same rule
+/// `BytesRead` exists for one field over. Names are compared the way
+/// AmigaDOS compares them (case-insensitively over Latin-1), since that is
+/// what the disc's own directory is.
+fn missing_directory(slot: &Slot, path: &Path, facts: &Facts<'_>) -> Option<String> {
+    if slot.expects_directories.is_empty() {
+        return None;
+    }
+    let names = facts
+        .disc_roots
+        .iter()
+        .find(|(disc, _)| disc == path)
+        .map(|(_, names)| names)?;
+    slot.expects_directories
+        .iter()
+        .find(|wanted| !names.iter().any(|name| amiga_names_equal(name, wanted)))
+        .cloned()
 }
 
 fn sorted(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
@@ -1301,12 +1461,48 @@ pub fn guide_text(slots: &[Slot], release: &str, language: &str) -> CoreResult<S
     let mut ordered: Vec<&Slot> = slots.iter().collect();
     ordered.sort_by_key(|slot| slot.position);
 
-    for slot in ordered {
-        let tag = match slot.required {
+    // **One entry per artefact** (round 2 review, L11). `locale-39` and
+    // `locale-39-turkish` genuinely share one archive — both declare
+    // `"media": "Locale3.9"` and the second's recipe says so — so the guide
+    // listed `Locale3_9.lha` twice under two OPTIONAL headings and a person
+    // filling a folder went looking for two files. Grouped by artefact id,
+    // the group's names are joined into one heading and everything else is
+    // the union: one file, both names, one place to read it.
+    //
+    // A slot with no artefact (`None`) is never grouped with another — `None`
+    // means the tables name no artefact for it, which is a gap in ART's
+    // knowledge and not a statement that two slots are the same thing.
+    let mut written: Vec<&str> = Vec::new();
+    for slot in &ordered {
+        if let Some(artefact) = &slot.artefact {
+            if written.contains(&artefact.as_str()) {
+                continue;
+            }
+            written.push(artefact.as_str());
+        }
+        let group: Vec<&&Slot> = match &slot.artefact {
+            Some(artefact) => ordered
+                .iter()
+                .filter(|other| other.artefact.as_deref() == Some(artefact.as_str()))
+                .collect(),
+            None => vec![slot],
+        };
+
+        // Any one of them required makes the entry required: the reader has
+        // to obtain the file either way.
+        let required = group.iter().any(|one| one.required);
+        let tag = match required {
             true => &words.required,
             false => &words.optional,
         };
-        out.push_str(&format!("{tag}  {}\n", guide_name(slot)));
+        out.push_str(&format!(
+            "{tag}  {}\n",
+            group
+                .iter()
+                .map(|one| guide_name(one))
+                .collect::<Vec<_>>()
+                .join(" / ")
+        ));
 
         // **The ROM is not a file for this folder** (M1). Its own line
         // replaces the expected/provenance pair, because both of those
@@ -1321,36 +1517,53 @@ pub fn guide_text(slots: &[Slot], release: &str, language: &str) -> CoreResult<S
                 }
             ));
         } else {
+            // The group's union, deduplicated: two slots reading one archive
+            // expect one set of file names, and printing them twice was the
+            // defect this grouping exists for.
+            let mut filenames: Vec<String> = Vec::new();
+            for one in &group {
+                for name in &one.filenames {
+                    if !filenames.iter().any(|seen| seen.eq_ignore_ascii_case(name)) {
+                        filenames.push(name.clone());
+                    }
+                }
+            }
             out.push_str(&format!(
                 "  {}\n",
-                match slot.filenames.is_empty() {
+                match filenames.is_empty() {
                     true => words.filenames_unknown.clone(),
-                    false => fill(&words.expected, "filenames", &slot.filenames.join(", ")),
+                    false => fill(&words.expected, "filenames", &filenames.join(", ")),
                 }
             ));
             out.push_str(&format!(
                 "  {}\n",
-                match &slot.provenance {
+                match group.iter().find_map(|one| one.provenance.as_ref()) {
                     Some(source) => fill(&words.provenance, "provenance", source),
                     None => words.provenance_unknown.clone(),
                 }
             ));
         }
 
+        // Everything the group needs first, and everything that needs the
+        // group — the union, and never a slot of the group itself: a package
+        // does not go on after the archive it *is*.
+        let mut requires: Vec<String> = Vec::new();
+        for one in &group {
+            for id in &one.requires {
+                if group.iter().any(|other| &other.id == id) {
+                    continue;
+                }
+                let name = name_of(id);
+                if !requires.contains(&name) {
+                    requires.push(name);
+                }
+            }
+        }
         out.push_str(&format!(
             "  {}\n",
-            match slot.requires.is_empty() {
+            match requires.is_empty() {
                 true => words.needs_nothing.clone(),
-                false => fill(
-                    &words.needs_first,
-                    "needs",
-                    &slot
-                        .requires
-                        .iter()
-                        .map(|id| name_of(id))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                ),
+                false => fill(&words.needs_first, "needs", &requires.join(", ")),
             }
         ));
 
@@ -1358,14 +1571,25 @@ pub fn guide_text(slots: &[Slot], release: &str, language: &str) -> CoreResult<S
         // (M2): every package slot is optional by construction, so BoingBag
         // 3.9-1 was told "nothing else fails" four lines above this same
         // file's own statement that BoingBag 3.9-2 goes on after it.
-        let dependents: Vec<String> = slots
-            .iter()
-            .filter(|other| other.requires.iter().any(|id| id == &slot.id))
-            .map(guide_name)
-            .collect();
+        let mut dependents: Vec<String> = Vec::new();
+        for other in slots {
+            if group.iter().any(|one| one.id == other.id) {
+                continue;
+            }
+            if other
+                .requires
+                .iter()
+                .any(|id| group.iter().any(|one| &one.id == id))
+            {
+                let name = guide_name(other);
+                if !dependents.contains(&name) {
+                    dependents.push(name);
+                }
+            }
+        }
         out.push_str(&format!(
             "  {}\n\n",
-            match (slot.required, dependents.is_empty()) {
+            match (required, dependents.is_empty()) {
                 // A required slot's own sentence outranks it: "the build
                 // cannot be made at all" already covers everything that would
                 // have gone on after it.
@@ -1500,12 +1724,14 @@ mod tests {
                 "{language}: the release is not named"
             );
             for slot in &slots {
-                let tag = match slot.required {
-                    true => &words.required,
-                    false => &words.optional,
-                };
-                let line = format!("{tag}  {}", slot.name);
-                assert!(text.contains(&line), "{language}: no entry for {}", slot.id);
+                // Every slot's own name appears — but not necessarily as a
+                // heading of its own: slots sharing an artefact share one
+                // entry (L11) and their names are joined into its heading.
+                assert!(
+                    text.contains(&guide_name(slot)),
+                    "{language}: no entry names {}",
+                    slot.id
+                );
             }
             // Both tags are really used by 3.9's own slot list — a guide that
             // said REQUIRED about everything would satisfy the loop above.
@@ -1637,6 +1863,7 @@ mod tests {
             position: 0,
             requires: Vec::new(),
             superseded_by: Vec::new(),
+            expects_directories: Vec::new(),
         };
         let words = guide_strings("en").unwrap();
         let text = guide_text(&[rom], "AmigaOS 3.9", "en").unwrap();
@@ -1728,6 +1955,204 @@ mod tests {
         );
     }
 
+    /// **L11.** `locale-39` and `locale-39-turkish` genuinely share one
+    /// archive — both declare `"media": "Locale3.9"` — so the guide listed
+    /// `Locale3_9.lha` under two OPTIONAL headings and a person filling a
+    /// folder went looking for two files.
+    #[test]
+    fn two_slots_reading_one_archive_get_one_guide_entry_naming_both() {
+        let slots = slots_for("AmigaOS 3.9").unwrap();
+        let text = guide_text(&slots, "AmigaOS 3.9", "en").unwrap();
+
+        assert_eq!(
+            text.matches("Locale3_9.lha").count(),
+            1,
+            "one archive, one expected-names line:\n{text}"
+        );
+        // And neither package lost its name: one entry, both headings.
+        let entry = guide_entry(&text, "Türkçe catalogs and fonts (Locale 3.9)");
+        assert!(
+            entry.contains("AmigaOS 3.9 Locale update"),
+            "the other package sharing the archive is not named:\n{entry}"
+        );
+
+        // The other arm: a package with an artefact of its own still gets its
+        // own entry, so this is a grouping and not a collapse.
+        assert_eq!(text.matches("BoingBag39-1.lha").count(), 1, "{text}");
+        // `\r\n`: the guide is CRLF (fix round 1, L8), so a heading asserted
+        // with a bare newline would never match.
+        assert!(text.contains("OPTIONAL  BoingBag 3.9-1\r\n"), "{text}");
+    }
+
+    // -----------------------------------------------------------------------
+    // Overrides — the files the user picked by hand (round 2 review, M5)
+    // -----------------------------------------------------------------------
+
+    /// **M5.** An override is not a rank: it is the user telling ART what a
+    /// file is. A hash find that beat it would be ART overruling a decision,
+    /// and the readout would then say something different from the panel
+    /// about the file the run is actually going to use.
+    #[test]
+    fn a_file_the_user_chose_wins_over_a_hash_find() {
+        let slots = slots_for("AmigaOS 3.9").unwrap();
+        let mine = PathBuf::from("D:\\pkg\\my-own-copy.lha");
+        let mut gathered = Gathered::empty();
+        // A real rank-1 find for the same slot, so the override is beating
+        // the strongest evidence ART has rather than an empty answer.
+        gathered
+            .hashes
+            .push(hashed("E:\\material\\BoingBag39-1.lha", BB1_45_15_MD5));
+
+        let without = resolve(&slots, &gathered.facts(None));
+        let found = state_of(&without, "package:boingbag-39-1")
+            .found
+            .as_ref()
+            .expect("the hash fills it");
+        assert_eq!(found.matched_by, MatchedBy::Hash);
+        assert_eq!(found.path, PathBuf::from("E:\\material\\BoingBag39-1.lha"));
+
+        let chosen = [Override {
+            slot: "package:boingbag-39-1",
+            path: mine.as_path(),
+            on_disk: true,
+        }];
+        let with = resolve(&slots, &gathered.facts_with(None, &chosen));
+        let found = state_of(&with, "package:boingbag-39-1")
+            .found
+            .as_ref()
+            .expect("the override fills it");
+        assert_eq!(found.matched_by, MatchedBy::Chosen, "the user chose it");
+        assert_eq!(found.path, mine);
+        assert!(
+            found.row.is_none(),
+            "a chosen file carries no table row: ART identified nothing"
+        );
+    }
+
+    /// A chosen file that has gone is its own ending here too — the same
+    /// rule `ChosenRom::Absent` already keeps (F5), generalised.
+    #[test]
+    fn a_chosen_file_that_is_not_there_is_chosen_missing_and_not_found() {
+        let slots = slots_for("AmigaOS 3.9").unwrap();
+        let gone = PathBuf::from("E:\\unplugged\\BoingBag39-1.lha");
+        let chosen = [Override {
+            slot: "package:boingbag-39-1",
+            path: gone.as_path(),
+            on_disk: false,
+        }];
+        let gathered = Gathered::empty();
+        let states = resolve(&slots, &gathered.facts_with(None, &chosen));
+        let state = state_of(&states, "package:boingbag-39-1");
+
+        assert!(state.found.is_none());
+        assert_eq!(state.chosen_missing.as_deref(), Some(gone.as_path()));
+        assert!(state.candidates.is_empty());
+    }
+
+    /// An overlay override may name the package rather than the drawer — the
+    /// screen that holds these has one *"update archive"* field per package,
+    /// not one per overlay.
+    #[test]
+    fn an_overlay_override_may_name_the_package_it_belongs_to() {
+        let slots = slots_for("AmigaOS 3.9").unwrap();
+        let overlay_id = slots
+            .iter()
+            .find(|slot| slot.kind == SlotKind::Overlay)
+            .expect("3.9 declares one")
+            .id
+            .clone();
+        assert!(overlay_id.starts_with("overlay:boingbag-39-1:"));
+
+        let mine = PathBuf::from("D:\\pkg\\the-uae-fix.lha");
+        let chosen = [Override {
+            slot: "overlay:boingbag-39-1",
+            path: mine.as_path(),
+            on_disk: true,
+        }];
+        let gathered = Gathered::empty();
+        let states = resolve(&slots, &gathered.facts_with(None, &chosen));
+        assert_eq!(
+            state_of(&states, &overlay_id)
+                .found
+                .as_ref()
+                .map(|f| f.path.clone()),
+            Some(mine)
+        );
+        // And it does not reach across to the package's own slot: a prefix
+        // that matched anything starting with the package id would put the
+        // update archive into the package field.
+        assert!(state_of(&states, "package:boingbag-39-1").found.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // The structural check beside the hash (design § 3.6, review L6)
+    // -----------------------------------------------------------------------
+
+    /// **L6.** A disc whose bytes ART recognises but whose root is missing
+    /// one of the directories the artefact map records is a re-master or a
+    /// partial copy — *matched but incomplete*, which is a different next
+    /// step from *not found*.
+    #[test]
+    fn a_disc_missing_a_directory_the_artefact_expects_is_incomplete_not_absent() {
+        let slots = slots_for("AmigaOS 3.9").unwrap();
+        let medium = state_of_slot(&slots, "medium:AmigaOS3.9");
+        assert!(
+            !medium.expects_directories.is_empty(),
+            "the artefact map records directories for the 3.9 CD"
+        );
+
+        let disc = PathBuf::from("E:\\material\\AmigaOS39.iso");
+        let mut gathered = Gathered::empty();
+        gathered
+            .hashes
+            .push(hashed("E:\\material\\AmigaOS39.iso", CD_ADOPTED_MD5));
+
+        // Every expected directory but one.
+        let mut roots: Vec<String> = medium.expects_directories.clone();
+        let missing = roots.pop().expect("at least one");
+        gathered.disc_roots.push((disc, roots));
+
+        let states = resolve(&slots, &gathered.facts(None));
+        let state = state_of(&states, "medium:AmigaOS3.9");
+        assert!(
+            state.found.is_some(),
+            "the disc is still found — this is not a not-found row"
+        );
+        assert_eq!(state.incomplete.as_deref(), Some(missing.as_str()));
+    }
+
+    /// Both other arms, because *"ART did not look"* is not *"ART looked and
+    /// it is all there"*: a complete disc and a disc nobody listed both
+    /// answer `None`, and only the first of those is a claim.
+    #[test]
+    fn a_complete_disc_and_an_unlisted_one_both_report_nothing_missing() {
+        let slots = slots_for("AmigaOS 3.9").unwrap();
+        let expected = state_of_slot(&slots, "medium:AmigaOS3.9")
+            .expects_directories
+            .clone();
+        let disc = PathBuf::from("E:\\material\\AmigaOS39.iso");
+
+        let mut complete = Gathered::empty();
+        complete
+            .hashes
+            .push(hashed("E:\\material\\AmigaOS39.iso", CD_ADOPTED_MD5));
+        complete.disc_roots.push((disc, expected));
+        assert_eq!(
+            state_of(&resolve(&slots, &complete.facts(None)), "medium:AmigaOS3.9").incomplete,
+            None
+        );
+
+        let mut unlisted = Gathered::empty();
+        unlisted
+            .hashes
+            .push(hashed("E:\\material\\AmigaOS39.iso", CD_ADOPTED_MD5));
+        assert_eq!(
+            state_of(&resolve(&slots, &unlisted.facts(None)), "medium:AmigaOS3.9").incomplete,
+            None,
+            "a disc nobody listed the root of says nothing, never 'incomplete'"
+        );
+    }
+
     /// A slot ART has no recorded file name for says that, instead of
     /// printing "Expected ." at somebody — the sentence a reader cannot act
     /// on, which is the same choice `slotLines` makes on screen.
@@ -1745,6 +2170,7 @@ mod tests {
             position: 0,
             requires: Vec::new(),
             superseded_by: Vec::new(),
+            expects_directories: Vec::new(),
         };
         let words = guide_strings("en").unwrap();
         let text = guide_text(&[bare], "AmigaOS 3.9", "en").unwrap();
@@ -1935,6 +2361,7 @@ mod tests {
         rom: Option<PathBuf>,
         rom_on_disk: bool,
         program_versions: Vec<(String, String)>,
+        disc_roots: Vec<(PathBuf, Vec<String>)>,
     }
 
     impl Gathered {
@@ -1946,10 +2373,25 @@ mod tests {
                 rom: None,
                 rom_on_disk: true,
                 program_versions: Vec::new(),
+                disc_roots: Vec::new(),
             }
         }
 
         fn facts<'a>(&'a self, manifest: Option<&'a DistributionManifest>) -> Facts<'a> {
+            self.facts_with(manifest, &[])
+        }
+
+        /// The same, plus the files the user picked by hand.
+        ///
+        /// A separate method rather than a field, because an `Override`
+        /// borrows its slot id and path: owning them on `Gathered` and
+        /// handing out a `Vec` built inside `facts()` would be a reference
+        /// into a temporary. The caller owns the array; the borrow is theirs.
+        fn facts_with<'a>(
+            &'a self,
+            manifest: Option<&'a DistributionManifest>,
+            overrides: &'a [Override<'a>],
+        ) -> Facts<'a> {
             Facts {
                 media: &self.media,
                 packages: &self.packages,
@@ -1960,6 +2402,8 @@ mod tests {
                     false => ChosenRom::Absent(path),
                 }),
                 program_versions: &self.program_versions,
+                overrides,
+                disc_roots: &self.disc_roots,
             }
         }
     }

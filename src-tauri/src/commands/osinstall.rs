@@ -740,6 +740,19 @@ pub struct SlotReport {
     /// the normal answer, and it is a different sentence from "found
     /// nothing".
     pub unreadable_folders: Vec<String>,
+    /// Folders holding more archives than ART opens in one pass, as
+    /// `(folder, bound)` — design § 6's *"bound the count and name the
+    /// bound"* (round 2 review, L7).
+    ///
+    /// A folder of 200 `.lha` files is an Aminet mirror, not a material
+    /// folder, and `find_packages` opens **every regular file** in a folder to
+    /// ask what it is. Nothing capped that, and this command now asks it from
+    /// two screens and re-asks on every change to the release, the folder
+    /// list, the tree, the ROM and the identify pass. So the scan stops, and
+    /// the readout says it stopped and at what number — a silent truncation
+    /// would make a missing artefact look absent when ART simply never
+    /// reached it.
+    pub crowded_folders: Vec<(String, usize)>,
 }
 
 /// Resolve every slot of `release` against `folders`, the chosen tree and the
@@ -775,6 +788,14 @@ pub struct SlotReport {
 /// pointed at it, and `chain::read_manifest`'s refusal names what is wrong
 /// with it.
 ///
+/// **`overrides` is the files the user picked by hand**, as `(slot id, path)`
+/// — design § 3.4's *"a file the user picked by hand wins over the slot, and
+/// the readout says* chosen by you *for it"* (round 2 review, M5). It is
+/// optional on the wire so a caller holding none sends nothing, and an
+/// overlay's entry may name `overlay:<package>` rather than a particular
+/// drawer (see [`slots::Override`]). Each path's existence is checked here,
+/// because `core::osinstall::slots` opens nothing.
+///
 /// **The ROM's existence is checked here**, because `core::osinstall::slots`
 /// opens nothing and the brief assigns the check to the caller (F5). A
 /// remembered path whose file has gone comes back as its own ending — not as
@@ -787,6 +808,7 @@ pub fn osinstall_slots(
     folders: Vec<PathBuf>,
     tree: Option<PathBuf>,
     rom: Option<PathBuf>,
+    overrides: Option<Vec<(String, PathBuf)>>,
 ) -> AppResult<SlotReport> {
     let slots = slots::slots_for(&release)?;
 
@@ -799,6 +821,7 @@ pub fn osinstall_slots(
     let mut packages: Vec<FoundPackage> = Vec::new();
     let mut hashes: Vec<mediahash::MediaMatch> = Vec::new();
     let mut unreadable_folders: Vec<String> = Vec::new();
+    let mut crowded_folders: Vec<(String, usize)> = Vec::new();
     let cache = ScanCache::in_dir(crate::scratch::root()?);
     for folder in &folders {
         let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.clone());
@@ -813,7 +836,16 @@ pub fn osinstall_slots(
             // folder — the one thing the user can act on.
             Err(_) => unreadable_folders.push(folder.display().to_string()),
         }
-        packages.extend(find_packages(folder).unwrap_or_default());
+        // Bounded, and the bound is reported (L7). `find_packages` opens
+        // every regular file in a folder to ask what it is, and this command
+        // is now asked from two screens and re-asked on five different
+        // changes.
+        let (found, hit_bound) =
+            scan::find_packages_bounded(folder, scan::MAX_MATERIAL_ARCHIVES).unwrap_or_default();
+        if hit_bound {
+            crowded_folders.push((folder.display().to_string(), scan::MAX_MATERIAL_ARCHIVES));
+        }
+        packages.extend(found);
         hashes.extend(mediahash::remembered_media_in(folder, &cache).unwrap_or_default());
     }
     let media = scan::dedupe_identical_disks(media);
@@ -830,6 +862,28 @@ pub fn osinstall_slots(
         true => (path, true),
         false => (path, false),
     });
+    // The existence check is the caller's, exactly as it is for the ROM (F5):
+    // `core::osinstall::slots` opens nothing, and "chose one, it has gone" is
+    // its own ending rather than a plain absence.
+    let overrides: Vec<(String, PathBuf, bool)> = overrides
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(slot, path)| {
+            let on_disk = path.is_file();
+            (slot, path, on_disk)
+        })
+        .collect();
+    let overrides: Vec<slots::Override<'_>> = overrides
+        .iter()
+        .map(|(slot, path, on_disk)| slots::Override {
+            slot: slot.as_str(),
+            path: path.as_path(),
+            on_disk: *on_disk,
+        })
+        .collect();
+
+    let disc_roots = disc_roots_of(&media);
+
     let facts = Facts {
         media: &media,
         packages: &packages,
@@ -840,6 +894,8 @@ pub fn osinstall_slots(
             false => slots::ChosenRom::Absent(path.as_path()),
         }),
         program_versions: &program_versions,
+        overrides: &overrides,
+        disc_roots: &disc_roots,
     };
     let states = slots::resolve(&slots, &facts);
     let summary = slots::summarize(&release, &states);
@@ -847,7 +903,45 @@ pub fn osinstall_slots(
         states,
         summary,
         unreadable_folders,
+        crowded_folders,
     })
+}
+
+/// The root directory names of every disc among `media` — design § 3.6's
+/// structural check, read here because `core::osinstall::slots` opens nothing.
+///
+/// **The root only, never a walk.** `IsoImage::list` over `root()` is one
+/// directory extent; `CdSource::open` walks the whole tree and refuses discs
+/// over its own caps, which is far more work than "does this disc carry
+/// `Emergency-Boot`" needs and would make a big disc answer nothing at all.
+///
+/// A disc that cannot be listed is simply **absent from the answer**, and
+/// `slots::missing_directory` treats an absent disc as "nobody looked" rather
+/// than as "the directory is not there" — the same rule `BytesRead` keeps one
+/// field over.
+fn disc_roots_of(media: &[FoundMedia]) -> Vec<(PathBuf, Vec<String>)> {
+    let mut out = Vec::new();
+    for found in media {
+        if found.kind != scan::MediaKind::Disc {
+            continue;
+        }
+        let Ok(image) = crate::core::iso::IsoImage::open(&found.path) else {
+            continue;
+        };
+        let (extent, length) = image.root();
+        let Ok(entries) = image.list(extent, length) else {
+            continue;
+        };
+        out.push((
+            found.path.clone(),
+            entries
+                .into_iter()
+                .filter(|entry| entry.is_dir)
+                .map(|entry| entry.name)
+                .collect(),
+        ));
+    }
+    out
 }
 
 /// Drop the archives a package's own `distinguished_by` rejects, before the
@@ -4725,15 +4819,25 @@ mod tests {
                 manifest: None,
                 rom: Some(slots::ChosenRom::OnDisk(&rom)),
                 program_versions: &[],
+                overrides: &[],
+                disc_roots: &[],
             };
             let states = crate::core::osinstall::slots::resolve(&slots, &facts);
             let report = SlotReport {
                 summary: crate::core::osinstall::slots::summarize("AmigaOS 3.9", &states),
                 states,
                 unreadable_folders: vec!["E:\\gone".to_string()],
+                crowded_folders: vec![("E:\\aminet".to_string(), 200)],
             };
             let value = serde_json::to_value(&report).unwrap();
-            expect_keys(&value, &["states", "summary", "unreadableFolders"]);
+            expect_keys(
+                &value,
+                &["states", "summary", "unreadableFolders", "crowdedFolders"],
+            );
+            // The bound is a pair on the wire: the folder and the number,
+            // so the sentence can name the number rather than repeat it.
+            assert_eq!(value["crowdedFolders"][0][0], r"E:\aminet");
+            assert_eq!(value["crowdedFolders"][0][1], 200);
             assert_eq!(value["unreadableFolders"][0], "E:\\gone");
             expect_keys(
                 &value["summary"],
@@ -4755,6 +4859,7 @@ mod tests {
                     "chosenMissing",
                     "blockedBy",
                     "notNeeded",
+                    "incomplete",
                 ],
             );
             expect_keys(
@@ -4771,6 +4876,7 @@ mod tests {
                     "position",
                     "requires",
                     "supersededBy",
+                    "expectsDirectories",
                 ],
             );
             assert_eq!(value["states"][0]["slot"]["kind"], "medium");
@@ -4835,6 +4941,8 @@ mod tests {
                 manifest: None,
                 rom: Some(slots::ChosenRom::Absent(&gone)),
                 program_versions: &[],
+                overrides: &[],
+                disc_roots: &[],
             };
             let states = crate::core::osinstall::slots::resolve(&slots, &facts);
             let rom = states
@@ -4878,6 +4986,7 @@ mod tests {
             let report = osinstall_slots(
                 "AmigaOS 3.9".to_string(),
                 vec![gone.clone(), dir.clone()],
+                None,
                 None,
                 None,
             )
@@ -5763,6 +5872,165 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **L7.** Design § 6: *"a folder of 200 `.lha` files (an Aminet mirror)
+    /// is not a material folder … bound the count and name the bound."*
+    /// `find_packages` opens **every regular file** in a folder to ask what
+    /// it is, and this command is now asked from two screens and re-asked on
+    /// five different changes.
+    ///
+    /// The bound is named on the wire rather than applied silently: an
+    /// artefact ART never reached must not read as an artefact that is not
+    /// there.
+    #[test]
+    fn a_folder_of_more_archives_than_art_opens_is_bounded_and_says_so() {
+        let dir = scratch("slots-crowded");
+        // Two past the bound, so the truncation is real rather than exact.
+        for n in 0..(scan::MAX_MATERIAL_ARCHIVES + 2) {
+            std::fs::write(dir.join(format!("f{n:04}.txt")), b"not an archive").unwrap();
+        }
+
+        let report = osinstall_slots(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.crowded_folders,
+            vec![(dir.display().to_string(), scan::MAX_MATERIAL_ARCHIVES)],
+            "the folder and the bound are both named"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other arm: an ordinary material folder is not reported as
+    /// crowded, so the sentence means something when it appears.
+    #[test]
+    fn an_ordinary_folder_is_never_reported_as_crowded() {
+        let dir = scratch("slots-not-crowded");
+        write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
+
+        let report = osinstall_slots(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(
+            report.crowded_folders.is_empty(),
+            "{:?}",
+            report.crowded_folders
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **L6, end to end over a real ISO.** Design § 3.6's structural check:
+    /// a disc ART recognises whose root is missing one of the directories the
+    /// artefact map records is *matched but incomplete*, never *not found*.
+    ///
+    /// The disc here is synthetic and matched at rank 2 (its own volume
+    /// name), which is the rank a folder nobody has identified resolves at —
+    /// so this also proves the check is not gated on a hash.
+    #[test]
+    fn a_real_disc_missing_a_directory_is_matched_but_incomplete() {
+        use crate::core::iso::fixture::{dir as iso_dir, IsoBuilder};
+
+        let dir = scratch("slots-incomplete-disc");
+        // `Contribution` deliberately absent.
+        let bytes = IsoBuilder {
+            volume: "AmigaOS3.9".to_string(),
+            joliet_volume: "AmigaOS3.9".to_string(),
+            joliet: true,
+            children: vec![
+                iso_dir("OS-VERSION3.9", "OS-Version3.9", Vec::new()),
+                iso_dir("EMERGENCY-BOOT", "Emergency-Boot", Vec::new()),
+            ],
+            ..Default::default()
+        }
+        .build();
+        std::fs::write(dir.join("AmigaOS39.iso"), bytes).unwrap();
+
+        let report = osinstall_slots(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let medium = report
+            .states
+            .iter()
+            .find(|state| state.slot.id == "medium:AmigaOS3.9")
+            .expect("3.9 reads from its own CD");
+
+        assert!(
+            medium.found.is_some(),
+            "the disc is found — this is not a not-found row: {medium:?}"
+        );
+        assert_eq!(
+            medium.incomplete.as_deref(),
+            Some("Contribution"),
+            "the missing directory is named"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **M5, at the command layer.** The override arrives on the wire as
+    /// `(slot id, path)`, its existence is checked here, and the slot comes
+    /// back `Chosen`.
+    #[test]
+    fn an_override_on_the_wire_fills_the_slot_it_names() {
+        let dir = scratch("slots-override");
+        write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
+        let mine = dir.join("my-own-copy.lha");
+        std::fs::write(&mine, b"whatever the user says it is").unwrap();
+
+        let report = osinstall_slots(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            Some(vec![("package:boingbag-39-2".to_string(), mine.clone())]),
+        )
+        .unwrap();
+        let state = report
+            .states
+            .iter()
+            .find(|state| state.slot.id == "package:boingbag-39-2")
+            .unwrap();
+
+        let found = state.found.as_ref().expect("the override fills it");
+        assert_eq!(found.path, mine, "the archive in the folder did not win");
+        assert_eq!(found.matched_by, slots::MatchedBy::Chosen);
+
+        // A path that is not there is the *chosen missing* ending, not a
+        // silent fall-back to what ART found.
+        let gone = dir.join("not-here.lha");
+        let report = osinstall_slots(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            Some(vec![("package:boingbag-39-2".to_string(), gone.clone())]),
+        )
+        .unwrap();
+        let state = report
+            .states
+            .iter()
+            .find(|state| state.slot.id == "package:boingbag-39-2")
+            .unwrap();
+        assert!(state.found.is_none());
+        assert_eq!(state.chosen_missing.as_deref(), Some(gone.as_path()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// **Write both guides where a person can read them.**
     ///
     /// The fix round's own lesson: M1, M2 and M3 were three false sentences in
@@ -5825,8 +6093,14 @@ mod tests {
         write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
         write_bb2_archive(&dir, "BoingBag39-2-Contribution.lha", "Contribution/readme");
 
-        let report =
-            osinstall_slots("AmigaOS 3.9".to_string(), vec![dir.clone()], None, None).unwrap();
+        let report = osinstall_slots(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         let state = report
             .states
             .iter()

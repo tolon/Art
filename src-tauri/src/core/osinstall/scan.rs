@@ -494,13 +494,37 @@ fn file_sha256(path: &std::path::Path) -> Option<String> {
 /// Sorted by path, the same deterministic order `find_media` promises and
 /// for the same reason: a caller's report of what it found must not depend
 /// on a directory listing's own, filesystem-dependent order.
+/// How many files ART opens in one folder while asking which are packages —
+/// design § 6's bound, named so a sentence can quote it.
+///
+/// **A folder of 200 archives is not a material folder**, it is somebody's
+/// Aminet mirror, and [`find_packages`] opens every regular file in a folder
+/// to find out what it is. The design's own words: *"bound the count and name
+/// the bound."* 200 is the design's number.
+pub const MAX_MATERIAL_ARCHIVES: usize = 200;
+
 pub fn find_packages(folder: &Path) -> CoreResult<Vec<FoundPackage>> {
+    Ok(find_packages_bounded(folder, usize::MAX)?.0)
+}
+
+/// [`find_packages`], stopping after `max` files have been **opened**.
+///
+/// The second answer is whether the bound was reached, so a caller can say so
+/// rather than reporting a short list as the whole truth: an artefact ART
+/// never got to must not read as an artefact that is not there.
+///
+/// The count is of files *opened*, not of packages found — the cost this
+/// bounds is `ArchiveSource::open`, which is paid on every regular file in
+/// the folder whether or not it turns out to be an archive at all.
+pub fn find_packages_bounded(folder: &Path, max: usize) -> CoreResult<(Vec<FoundPackage>, bool)> {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(folder)?
         .map(|entry| entry.map(|e| e.path()))
         .collect::<std::io::Result<_>>()?;
     entries.sort();
 
     let mut found: Vec<FoundPackage> = Vec::new();
+    let mut opened = 0usize;
+    let mut hit_bound = false;
 
     for path in entries {
         // `symlink_metadata`, not `metadata` — a symlink is never followed,
@@ -511,6 +535,12 @@ pub fn find_packages(folder: &Path) -> CoreResult<Vec<FoundPackage>> {
         if !metadata.is_file() {
             continue;
         }
+
+        if opened >= max {
+            hit_bound = true;
+            break;
+        }
+        opened += 1;
 
         // Anything that is not an archive, or an archive `ArchiveSource`
         // refuses (no single top-level directory, or more than one), is
@@ -525,7 +555,7 @@ pub fn find_packages(folder: &Path) -> CoreResult<Vec<FoundPackage>> {
         });
     }
 
-    Ok(found)
+    Ok((found, hit_bound))
 }
 
 /// One archive [`find_packages`] opened, and the name it gave for itself.

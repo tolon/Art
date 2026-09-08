@@ -3,7 +3,7 @@
   "heading": "What goes in this folder",
   "release": "This list is what ART needs to build {release}.",
   "intro": "ART wrote this file because somebody asked it to. It is a list, not an instruction: put whatever you have of it in this folder and ART will work out which file is which by reading the files themselves, not by their names. Names are only what ART expects to see, and a file you renamed is still recognised.",
-  "noDownloads": "ART does not download any of this and never will. Where each item came from is written under it; you go and get it, and ART reads what you already have.",
+  "noDownloads": "ART does not download any of this and never will. Where ART knows an item's source it is written under it; you go and get it, and ART reads what you already have.",
   "required": "REQUIRED",
   "optional": "OPTIONAL",
   "expected": "Expected file names: {filenames}",

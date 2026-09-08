@@ -5,7 +5,9 @@
       "version": "3.9",
       "volume": "AmigaOS3_9",
       "artefact": "amigaos-39-cd",
-      "filenames": ["AmigaOS39.iso", "amigaos3.9.iso"]
+      "filenames": ["AmigaOS39.iso", "amigaos3.9.iso"],
+      "_why_directories": "Design 3.6's structural check beside the hash, built 2026-09-08 (round 2 whole-branch review, L6). Three directories the AmigaOS 3.9 CD carries at its root; a disc whose bytes ART recognises but whose root is missing one of them is a re-master or a partial copy, and the readout says 'matched but incomplete: <dir> missing' rather than 'not found' -- two different next steps, and telling somebody a disc is absent when it is sitting in the folder is this project's named defect. ART's own claim, like `filenames` above and for the same reason: the adopted table says nothing about any disc's contents. The list is deliberately short -- these three are the ones the design names and the ones every reader of the 3.9 CD in ART actually reads from; a longer list would turn an unusual-but-usable mastering into a warning.",
+      "directories": ["OS-Version3.9", "Emergency-Boot", "Contribution"]
     },
     {
       "version": "3.9",

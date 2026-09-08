@@ -3,7 +3,7 @@
   "heading": "Bu klasöre ne konur",
   "release": "Bu liste, ART'ın {release} kurmak için ihtiyaç duyduklarıdır.",
   "intro": "ART bu dosyayı biri istediği için yazdı. Bu bir liste, bir talimat değil: elinizde bunlardan ne varsa bu klasöre koyun; ART hangi dosyanın hangisi olduğunu adlarına değil, dosyaların kendisine bakarak bulur. Adlar yalnızca ART'ın görmeyi beklediği adlardır; yeniden adlandırdığınız bir dosya da tanınır.",
-  "noDownloads": "ART bunların hiçbirini indirmez, hiç indirmeyecek. Her birinin nereden geldiği altında yazılıdır; siz gidip alırsınız, ART da elinizdekini okur.",
+  "noDownloads": "ART bunların hiçbirini indirmez, hiç indirmeyecek. Bir öğenin kaynağını ART biliyorsa altında yazılıdır; siz gidip alırsınız, ART da elinizdekini okur.",
   "required": "GEREKLİ",
   "optional": "İSTEĞE BAĞLI",
   "expected": "Beklenen dosya adları: {filenames}",
