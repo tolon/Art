@@ -387,13 +387,28 @@ fn unmet_prerequisites(package: &Package, have: &BTreeSet<String>) -> CoreResult
 /// `Promoted` in 142.2 s and 140.7 s, producing two byte-identical trees.
 ///
 /// Those trees are the "boots and is quietly wrong" case, and the numbers are
-/// worth carrying: against a correctly chained tree they are **missing 60
-/// files**, carry **51 at older bytes**, and leave `Libs/xadmaster.library` at
-/// `9.0` where the chained tree has `9.1` — while `Libs/version.library` reads
-/// `version 45.3 (7.12.2001)` on **both**, the same 352 bytes and the same
-/// sha256. So no after-the-fact check of the artefact could have separated
-/// them either. The refusal here is not belt-and-braces over the package's own
-/// judgement; it is the whole of the protection.
+/// worth carrying: against a correctly chained tree they are **missing 57
+/// files** (60 paths differ, three of which — `C/Exe2Arc`, `C/WBInfo`,
+/// `Utilities/More` — exist in both under a different case, because BoingBag 1
+/// re-cases them rather than adding them), carry **51 at older bytes**, and
+/// leave `Libs/xadmaster.library` at `9.0` where the chained tree has `9.1`.
+///
+/// **What that refutes, stated narrowly.** `Libs/version.library` reads
+/// `version 45.3 (7.12.2001)` on **both** — the same 352 bytes and the same
+/// sha256 — so *the version string the package updates* is not evidence that
+/// the right thing happened. It does **not** follow that no artefact could
+/// separate them: `xadmaster.library` is an artefact and it does, 9.0 against
+/// 9.1. What the round refused to build was a `leaves_version` check **on
+/// `version.library`**, which would have passed the broken tree.
+///
+/// So an after-the-fact artefact check is *possible*; it is simply not what is
+/// protecting anyone here. This refusal is — and the bound on that claim
+/// belongs beside it: it is a **bookkeeping** guard, not an artefact guard.
+/// [`missing_prerequisites`] reads `distribution.json`, which only a
+/// successful ART run writes, so the wrong-target state is unreachable through
+/// ART at all. That is why it is a refusal before anything is copied rather
+/// than a warning after, and why the package's own judgement — measured to be
+/// `ok` — is not something to lean on.
 pub fn refuse_unless_installable(package: &Package, tree: &Path) -> CoreResult<()> {
     let missing = missing_prerequisites(package, tree)?;
     let Some(first) = missing.first() else {

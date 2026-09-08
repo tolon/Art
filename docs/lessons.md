@@ -147,12 +147,22 @@ first). Each arm twice, the control measured:
   not proven by this; it is *unexercised*.
 - **wrong target** — `ok`, twice, promoted. And `version.library` moved to
   **exactly the right value**: `45.3`, the same 352 bytes and the same sha256
-  as the correctly chained tree, on a tree missing 60 files.
+  as the correctly chained tree, on a tree missing 57 files.
 
 So the check the round set out to build would have passed the one broken tree
 the round produced. **It was not built**, and the not-building is the result.
 An experiment that only ever confirms the fix you had in mind is not measuring
 anything; decide what would be measured first, and let it say no.
+
+**And then say what it refuted, no wider than that.** The first write-up of
+this concluded *"no after-the-fact check of the artefact could have separated
+them"* — which the round's own table disproves two lines earlier:
+`xadmaster.library` reads 9.0 on the skipped tree and 9.1 on the chained one.
+What was refuted is `version.library` **as the artefact to ask**: a package's
+own version string is not evidence that the package went on the right thing,
+because the package writes it either way. A file the package *changes* can be.
+Over-stating a refutation is the same defect as over-stating a finding, and it
+is harder to notice because it wears the clothes of caution.
 
 ---
 

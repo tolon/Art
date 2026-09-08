@@ -681,12 +681,25 @@ a payload with **one byte** changed does not make the `Updater` set WARN, it
 makes it **hang** (`TimedOut` at 1 800.7 s, twice, stopped on the payload entry
 the byte falls in), and the real archive applied to a **wrong target** returns
 **`ok`, twice**. So the word the Amiga writes says the program returned without
-WARN and nothing more, and asking the artefact afterwards does not close the
-gap either: `Libs/version.library` reads `45.3` byte-identically on a correctly
-chained tree and on one that skipped BoingBag 1 and is missing 60 files. **What
-protects the user is the refusal before the run**
+WARN and nothing more. **And the artefact to ask afterwards is not the one the
+package updates**: `Libs/version.library` reads `45.3` byte-identically on a
+correctly chained tree and on one that skipped BoingBag 1 and is missing 57
+files — the package writes that string either way — while
+`Libs/xadmaster.library` separates them, 9.1 against 9.0. **What protects the
+user here is the refusal before the run**
 (`core/osinstall/chain.rs::refuse_unless_installable`, 17.6 ms, nothing copied),
-not the installer's own judgement. Numbers and both arms: ART-227.
+which is a *bookkeeping* guard: it reads a manifest only a successful ART run
+writes. Numbers and both arms: ART-227.
+
+**The same script now carries a second, version-gated invocation** — a
+package's `follow_ups`, HstWB's own shape for BoingBag 3.9-2's `XAD-Update`
+(ART-280) — and its placement is the seventh rule: **`Version … FILE` sets WARN
+as its answer**, so the gate is emitted strictly *below* the `If Warn` that
+turns the installer's own return code into the result word. Above it, every
+successful run on a tree with an old `xadmaster` would be reported as *the
+installer said no*. The follow-up reports separately, in `art-followup.txt`,
+with four words of its own — an install's ending is not changed by what the
+package did afterwards.
 
 ## Config files are user data
 
