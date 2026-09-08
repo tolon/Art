@@ -273,6 +273,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Ticking a Turkish locale update on a tree that hasn't had BoingBag 3.9-2
+  run on it no longer shows a raw internal error the moment you tick the
+  box.** It now says plainly that BoingBag 3.9-2 needs to be installed first,
+  that it's run from the Amiga-side step, and that it can't be ticked from
+  this list — never ART's own package ids read out at you (ART-282).
 - **Two packages can now legitimately share one archive.** Adding a second
   update package built from the same medium as one already in the tree used
   to be refused outright — `'Locale3.9' already names the medium component

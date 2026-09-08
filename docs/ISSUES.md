@@ -508,6 +508,72 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-282** 🟡 ✅ **Ticking `locale-turkish` on the Packages step, on a tree
+BoingBag 3.9-2 had not been run on, read the engine's own bookkeeping out at
+the owner** — *found 2026-09-08 by the owner on the 0.9.1 candidate build*
+`src-tauri/src/commands/osinstall.rs` · `src-tauri/src/core/osinstall/package.rs`
+
+The screen showed:
+
+    invalid input: 'locale-turkish' requires 'boingbag-39-2', which was not chosen  (ART-INPUT-INVALID)
+
+Two things wrong in one sentence: ids nobody watching the Packages step can
+recognise, and advice that is simply false — `boingbag-39-2` is Amiga-side
+(ART-166) and can never be ticked from that list, so "which was not chosen"
+told the owner to do something the screen does not let him do.
+
+**Why:** round 3 had already added the typed, actionable refusal for exactly
+this case — `RefusalReason::PackageRequirementNeedsAmigaRun` — but only on the
+*add* path (`resolve_packages_for_add`, which calls
+`plan::detect_package_refusals` before ever ordering the selection). The
+*preview* path the Packages step actually calls the instant a checkbox is
+ticked — `osinstall_collisions`, §3's PREVIEW, which runs on every selection
+change and long before "Add" is pressed — went straight to
+`package::order_with_installed` with no refusal check in front of it at all.
+`order_over_with_installed`'s own ordering check fired first and reached the
+screen as a raw `CoreError::InvalidInput`, built from bare ids, with no idea
+that the requirement it named could never be chosen from this screen.
+
+**Fixed 2026-09-08.** `osinstall_collisions` now runs the same
+`detect_package_refusals` check the add path already ran, through a new
+`ordered_packages_for_collisions` helper that is refused as **data**
+(`Ok(Err(refusals))`), never as an error — `order_with_installed` is called
+only once the selection is already known-good, so it cannot be the thing the
+screen hears from. The refusal reaches the screen through
+`describe_package_refusal`, now extended to cover
+`PackageRequirementNeedsAmigaRun`/`PackageRequirementMissing` by the
+catalogue's own names, mirroring `packageRequirementNeedsAmigaRun`/
+`packageRequirementMissing` in `src/i18n/en.json` rather than repeating raw
+Rust debug text.
+
+**Belt and suspenders:** `order_over_with_installed`'s own sentence — the one
+that still runs if some future caller ever skips the refusal check — no
+longer reads out ids either. It now names the requirement through the
+catalogue (falling back to the id only when the catalogue has nothing for it)
+and appends "— install it first on the Amiga-side step" when the requirement
+is `amiga_installer`-declared, in place of "which was not chosen" — advice
+that is wrong for a requirement that was never choosable to begin with.
+
+*Tests:* `commands::osinstall::ordered_packages_for_collisions_refuses_locale_turkish_without_boingbag_by_name`
+(the owner's exact tree — `locale-base` present, BoingBag 3.9-2 never run —
+answers `PackageRequirementNeedsAmigaRun` by name, and the outer `AppResult`
+comes back `Ok`, proving `order` never ran),
+`…::describe_package_refusal_names_the_amiga_side_step_and_never_an_id` (the
+preview path's own string for both requirement variants, names only);
+`package::order_over_with_installeds_own_error_names_the_amiga_side_step`
+(the belt-and-suspenders sentence itself, Amiga-side arm),
+`…::order_over_with_installeds_own_error_keeps_the_ordinary_advice_for_a_host_package`
+(the plain arm beside it — an ordinary host requirement keeps "which was not
+chosen", because that one really could be ticked),
+`…::a_requirement_that_was_not_chosen_is_refused_by_name` (updated: BoingBag
+3.9-2 requiring BoingBag 3.9-1, both real shipped packages, now asserts the
+name and the Amiga-side advice, and that the bare id `boingbag-39-1` never
+leaks). Mutation: putting `order_with_installed` back ahead of the refusal
+check in `ordered_packages_for_collisions` failed
+`ordered_packages_for_collisions_refuses_locale_turkish_without_boingbag_by_name`
+with the raw `CoreError::InvalidInput` surfacing through the outer
+`AppResult`, exactly as the owner saw it.
+
 **ART-280** 🟡 ✅ **ART's BoingBag 3.9-2 run never applied `XAD-Update`, so
 `xadmaster.library` stayed at 9.1 where every other 3.9 builder leaves it at
 10+** — *found 2026-09-08 by round 3 task 3's Part A measurement, on
