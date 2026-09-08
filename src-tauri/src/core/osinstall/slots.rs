@@ -53,6 +53,36 @@
 //!    *chosen by you* rather than claiming an identification nobody made. The
 //!    ROM arrives this way today, and Task 4's per-artefact override will.
 //!
+//! ## Rank 1 falling silent has more than one cause, and the screen says which
+//!
+//! **The most common reason no row answers is that nobody has read the bytes**
+//! (fix round 1, F1). `osinstall_slots` asks the scan cache and hashes
+//! nothing — a 490 MB ISO belongs on the job that already exists, not on a
+//! command thread — so until `osinstall_identify_media` has run over a folder,
+//! every file in it lands at rank 2 with nothing known about its bytes at all.
+//! *"Its bytes are in no table ART has"* would then be a statement about a
+//! lookup nobody made, which is exactly what
+//! [`mediahash::remembered_media_in`]'s own doc comment forbids its callers to
+//! say. So [`Found::bytes_read`] and [`Candidate::bytes_read`] carry the
+//! difference to the screen, and the readout has two sentences where it used
+//! to have one.
+//!
+//! ## What rank 3 can see, and what it cannot (F8, parked by ruling)
+//!
+//! [`Facts`] carries what three *readers* accepted — disks `find_media`
+//! opened, archives `find_packages` opened, files somebody hashed — and not a
+//! raw directory listing. So the guess rank only ever fires for a file at
+//! least one reader took, which in practice means **a readable archive or disk
+//! whose bytes the table does not know**. A file that no reader would accept
+//! at all (a truncated download, an archive of a shape `ArchiveSource`
+//! refuses) is not a candidate here and the slot reads as not found.
+//!
+//! That is narrower than the design's § 3.2 wording, and it is parked rather
+//! than fixed: closing it means the caller passing the plain per-folder
+//! listing as a fourth fact, which is a fact about a folder rather than about
+//! an artefact and belongs with the readout that would show it. Recorded here
+//! so the gap is a known one rather than a surprise.
+//!
 //! Two candidates at one rank are never resolved by list order:
 //! [`super::scan::MediaMatch::Ambiguous`]'s own rule applies here unchanged —
 //! both go into `candidates`, in sorted path order, and the user picks. Only
@@ -102,6 +132,12 @@ pub struct AdoptedArtefact {
     pub volume: String,
     /// ART's artefact id — the same string a slot is named by.
     pub artefact: String,
+    /// Names ART has seen this artefact ship under. **ART's own claim, not
+    /// the adopted table's** — Hatcher's rows carry no such field, so this is
+    /// the only place an adopted-only artefact can get one (fix round 1, F4).
+    /// A hint, never a requirement.
+    #[serde(default)]
+    pub filenames: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -292,7 +328,7 @@ fn slots_over(recipe: &Recipe, packages: &[Package]) -> CoreResult<Vec<Slot>> {
                 requires.push(medium_slot_id(&slots, &medium.volume));
             }
         }
-        let artefact = Some(pkg.id.clone());
+        let artefact = artefact_for_package(rows, pkg);
         slots.push(Slot {
             id: format!("package:{}", pkg.id),
             kind: SlotKind::Package,
@@ -388,18 +424,31 @@ fn medium_slot_id(slots: &[Slot], volume: &str) -> String {
         .unwrap_or_else(|| format!("medium:{volume}"))
 }
 
-/// Which artefact the rows say `identity` is — used for a medium and for an
-/// overlay, whose identities are names a row's `volume` really does state.
+/// Which artefact the rows say `identity` is — a medium's or an overlay's
+/// name for itself, and a package's `media` when no row carries the package's
+/// own id.
+///
+/// **Only ART's own rows are asked, and that is a rule rather than an
+/// optimisation** (fix round 1, F12). `identity` here is an AmigaDOS name — a
+/// volume label off a root block, an archive's single top-level directory —
+/// and [`MediaRow::volume`] is **not** one for an adopted row: it is Hatcher's
+/// own identifier for the disk, and that field's own doc comment carries the
+/// measurement (0 of the owner's 12 AmigaOS 3.2 disks matched it). Comparing
+/// across the two namespaces is harmless only for as long as no adopted row
+/// happens to spell an identity the way AmigaDOS does; it is a false positive
+/// waiting for the map to grow, so the comparison is not made at all.
+/// [`MediaRow::table_origin`] is what separates them.
 ///
 /// **Only when the answer is unambiguous.** Two artefacts claiming one
 /// identity (two archives sharing a top-level directory, which the owner's
 /// own folder has eight of) answers `None`: naming one of them would be the
-/// arbitrary winner this module refuses everywhere else. A package slot never
-/// asks this — its artefact is its own id, which `package.rs` already
-/// guarantees is unique.
+/// arbitrary winner this module refuses everywhere else.
 fn artefact_for_identity(rows: &[MediaRow], identity: &str) -> Option<String> {
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for row in rows {
+        if row.table_origin != mediahash::Origin::Own {
+            continue;
+        }
         if !amiga_names_equal(&row.volume, identity) {
             continue;
         }
@@ -413,16 +462,56 @@ fn artefact_for_identity(rows: &[MediaRow], identity: &str) -> Option<String> {
     }
 }
 
-/// Every filename the rows for `artefact` record, in table order, deduplicated.
+/// The artefact a package slot's rows are looked up by.
+///
+/// Its own id when a row names it — the ordinary case, and the one that keeps
+/// two packages reading two different archives apart. Otherwise the artefact
+/// of whatever row names the archive the package reads, because
+/// **`MediaRow::artefact` names bytes and several packages may read one
+/// archive** (fix round 1, F3). `locale-39` and `locale-39-turkish` both
+/// declare `"media": "Locale3.9"` and there is one row for that file: without
+/// this fallback the second slot had an artefact no row named, so rank 1
+/// could never fire for it and its not-found row could not say which file to
+/// obtain.
+///
+/// `None` when neither answers, which is honest: ART has no rows for these
+/// bytes at all.
+fn artefact_for_package(rows: &[MediaRow], package: &Package) -> Option<String> {
+    if rows_for_artefact(rows, &package.id).next().is_some() {
+        return Some(package.id.clone());
+    }
+    artefact_for_identity(rows, &package.media)
+}
+
+/// Every filename ART has recorded for `artefact`, deduplicated — the rows'
+/// own first, then the adopted map's.
+///
+/// The map is consulted as well as the rows because the adopted table carries
+/// `filenames` on none of its 186 rows and never will (fix round 1, F4): an
+/// artefact whose only row is adopted — AmigaOS 3.9's BoingBag 2 — would
+/// otherwise have a not-found sentence with its actionable half missing,
+/// naming no file for the user to go and get. Putting ART's own claim in the
+/// map rather than in a duplicate row is the same rule the artefact id itself
+/// follows.
 fn filenames_for(rows: &[MediaRow], artefact: Option<&str>) -> Vec<String> {
     let Some(artefact) = artefact else {
         return Vec::new();
     };
     let mut names: Vec<String> = Vec::new();
+    let push = |name: &String, names: &mut Vec<String>| {
+        if !names.iter().any(|seen| seen.eq_ignore_ascii_case(name)) {
+            names.push(name.clone());
+        }
+    };
     for row in rows_for_artefact(rows, artefact) {
         for name in &row.filenames {
-            if !names.iter().any(|seen| seen.eq_ignore_ascii_case(name)) {
-                names.push(name.clone());
+            push(name, &mut names);
+        }
+    }
+    if let Ok(mapped) = adopted_artefacts() {
+        for entry in mapped.iter().filter(|entry| entry.artefact == artefact) {
+            for name in &entry.filenames {
+                push(name, &mut names);
             }
         }
     }
@@ -494,6 +583,32 @@ pub struct Found {
     /// would present one artefact's provenance as another's.
     pub row: Option<MediaRowRef>,
     pub confirmed: Option<ConfirmationRef>,
+    /// Whether anybody has hashed this file yet — that is, whether
+    /// [`Facts::hashes`] carries an answer for it.
+    ///
+    /// **The readout needs this to keep two sentences apart** (fix round 1,
+    /// F1). Rank 1 not firing has more than one cause, and the most common of
+    /// them is that nothing has read the bytes: `osinstall_slots` asks the
+    /// scan cache and hashes nothing, so until `osinstall_identify_media`'s
+    /// job has run over a folder, every file in it lands at rank 2 with
+    /// nothing at all known about its bytes. *"Its bytes are in no table ART
+    /// has"* is then a statement about a lookup nobody made — the exact
+    /// sentence [`mediahash::remembered_media_in`]'s own doc comment forbids
+    /// its callers from producing.
+    pub bytes_read: bool,
+}
+
+/// One file that might fill a slot, and whether its bytes have been read.
+///
+/// A struct rather than a bare path for [`Found::bytes_read`]'s reason: a
+/// filename guess that nobody has hashed and one that was hashed and matched
+/// no row are two different situations, and the row that offers the user a
+/// next step has to know which it is looking at.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Candidate {
+    pub path: PathBuf,
+    pub bytes_read: bool,
 }
 
 /// Whether this slot's artefact is already part of the tree, **as the tree's
@@ -527,8 +642,18 @@ pub struct SlotState {
     /// claimants of an ambiguous identity, or the filename guesses. Empty
     /// when `found` is `Some` — a decided slot has nothing left to choose
     /// between.
-    pub candidates: Vec<PathBuf>,
+    pub candidates: Vec<Candidate>,
     pub installed: Installed,
+    /// The path the user chose for this slot when **that file is not there**
+    /// (fix round 1, F5).
+    ///
+    /// Its own field rather than a `candidate` or a `Found`, because it is
+    /// its own ending: a remembered ROM path on a drive that is not plugged
+    /// in must not read as *chosen* (a sentence about a file that is not
+    /// there) and must not read as *not found* either (which says nothing
+    /// about the choice the user already made and would have them make it
+    /// again). `found` stays `None`, so [`summarize`] does not count it.
+    pub chosen_missing: Option<PathBuf>,
     /// Every [`Slot::requires`] entry that is not installed yet, in the order
     /// the slot states them. Empty is "nothing is in the way".
     pub blocked_by: Vec<String>,
@@ -540,6 +665,18 @@ pub struct SlotState {
     /// **A measurement, not a sentence.** The words around it belong in the
     /// catalogue; core states what it read.
     pub not_needed: Option<String>,
+}
+
+/// A Kickstart the user named by hand, and what the caller found when it
+/// looked for the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChosenRom<'a> {
+    /// The caller looked and the file is there.
+    OnDisk(&'a Path),
+    /// The caller looked and it is not — a remembered path on a drive nobody
+    /// plugged in, which is exactly what the design's Amiga Forever
+    /// suggestion will start producing.
+    Absent(&'a Path),
 }
 
 /// Everything the caller learned about the user's folders, gathered once.
@@ -556,8 +693,14 @@ pub struct Facts<'a> {
     /// The chosen distribution tree's own account of itself, when one is
     /// chosen. The **only** source of [`Installed`].
     pub manifest: Option<&'a DistributionManifest>,
-    /// The Kickstart the user chose by hand.
-    pub rom: Option<&'a Path>,
+    /// The Kickstart the user chose by hand, **and whether the caller found
+    /// it on disk**.
+    ///
+    /// The existence check is the caller's — this module opens nothing — and
+    /// it is expressed as a state rather than as two fields so that "chose
+    /// one, it is there", "chose one, it has gone" and "chose none" cannot be
+    /// muddled by a caller setting both (fix round 1, F5).
+    pub rom: Option<ChosenRom<'a>>,
     /// What each Amiga-installable package's own wrapper archive says its
     /// installer program is, as `(package id, "45.15")` — read by the caller
     /// from the archive itself (`packagevol::stated_version`), because a
@@ -598,11 +741,18 @@ pub fn resolve(slots: &[Slot], facts: &Facts<'_>) -> Vec<SlotState> {
 fn resolve_one(slot: &Slot, facts: &Facts<'_>) -> SlotState {
     let installed = installed_state(slot, facts.manifest);
     let not_needed = not_needed_for(slot, facts);
-    let state = |found, candidates| SlotState {
+    let state = |found, candidates: Vec<PathBuf>, chosen_missing| SlotState {
         slot: slot.clone(),
         found,
-        candidates,
+        candidates: candidates
+            .into_iter()
+            .map(|path| Candidate {
+                bytes_read: bytes_read(&path, facts),
+                path,
+            })
+            .collect(),
         installed: installed.clone(),
+        chosen_missing,
         blocked_by: Vec::new(),
         not_needed: not_needed.clone(),
     };
@@ -611,45 +761,67 @@ fn resolve_one(slot: &Slot, facts: &Facts<'_>) -> SlotState {
         // Never `Filename`: the user handed ART this path, which is a
         // different thing from ART recognising a name, and collapsing the two
         // would let a hand-picked ROM read as a guess.
-        let found = facts.rom.map(|path| Found {
-            path: path.to_path_buf(),
-            matched_by: MatchedBy::Chosen,
-            row: None,
-            confirmed: None,
-        });
-        return state(found, Vec::new());
+        return match facts.rom {
+            Some(ChosenRom::OnDisk(path)) => state(
+                Some(Found {
+                    path: path.to_path_buf(),
+                    matched_by: MatchedBy::Chosen,
+                    row: None,
+                    confirmed: None,
+                    bytes_read: bytes_read(path, facts),
+                }),
+                Vec::new(),
+                None,
+            ),
+            // Its own ending, not a `Found` and not a plain absence — see
+            // `SlotState::chosen_missing`.
+            Some(ChosenRom::Absent(path)) => state(None, Vec::new(), Some(path.to_path_buf())),
+            None => state(None, Vec::new(), None),
+        };
     }
 
     // --- rank 1: the bytes -------------------------------------------------
-    let mut by_hash: Vec<&mediahash::MediaMatch> = Vec::new();
+    let mut by_hash: Vec<PathBuf> = Vec::new();
     if let Some(artefact) = &slot.artefact {
         for entry in facts.hashes {
             let Some(row) = &entry.row else { continue };
             if artefact_of(row).as_deref() == Some(artefact.as_str()) {
-                by_hash.push(entry);
+                by_hash.push(entry.path.clone());
             }
         }
     }
-    by_hash.sort_by(|a, b| a.path.cmp(&b.path));
-    by_hash.dedup_by(|a, b| a.md5 == b.md5);
+    // `collapse_identical`, not a `dedup_by` over a path-sorted list (fix
+    // round 1, F6): `Vec::dedup_by` removes only *adjacent* equals, so two
+    // byte-identical copies separated by a third file of the same artefact —
+    // a second accepted mastering, and the 3.9 CD has five rows mapping to
+    // one artefact — survived as two candidates and the slot read as
+    // ambiguous with itself. One collapse rule for all three ranks, so there
+    // is one answer to "is this one file or two".
+    let by_hash = collapse_identical(sorted(by_hash), facts.hashes);
     if by_hash.len() == 1 {
-        let entry = by_hash[0];
+        let entry = facts
+            .hashes
+            .iter()
+            .find(|entry| entry.path == by_hash[0])
+            .expect("every rank-1 path came out of facts.hashes");
         return state(
             Some(Found {
                 path: entry.path.clone(),
                 matched_by: MatchedBy::Hash,
                 row: entry.row.clone(),
                 confirmed: entry.confirmed.clone(),
+                bytes_read: true,
             }),
             Vec::new(),
+            None,
         );
     }
     if by_hash.len() > 1 {
-        return state(None, by_hash.iter().map(|e| e.path.clone()).collect());
+        return state(None, by_hash, None);
     }
 
     // --- rank 2: what the artefact says it is ------------------------------
-    let (mut by_identity, matched_by) = match slot.kind {
+    let (by_identity, matched_by) = match slot.kind {
         SlotKind::Medium => (
             facts
                 .media
@@ -670,9 +842,7 @@ fn resolve_one(slot: &Slot, facts: &Facts<'_>) -> SlotState {
         ),
         SlotKind::Rom => (Vec::new(), MatchedBy::Chosen),
     };
-    by_identity.sort();
-    by_identity.dedup();
-    let by_identity = collapse_identical(by_identity, facts.hashes);
+    let by_identity = collapse_identical(sorted(by_identity), facts.hashes);
     if by_identity.len() == 1 {
         return state(
             Some(Found {
@@ -680,16 +850,18 @@ fn resolve_one(slot: &Slot, facts: &Facts<'_>) -> SlotState {
                 matched_by,
                 row: None,
                 confirmed: None,
+                bytes_read: bytes_read(&by_identity[0], facts),
             }),
             Vec::new(),
+            None,
         );
     }
     if by_identity.len() > 1 {
-        return state(None, by_identity);
+        return state(None, by_identity, None);
     }
 
     // --- rank 3: the name somebody gave the file — a guess, never a find ---
-    let mut by_name: Vec<PathBuf> = every_path(facts)
+    let by_name: Vec<PathBuf> = every_path(facts)
         .into_iter()
         .filter(|path| {
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
@@ -700,9 +872,23 @@ fn resolve_one(slot: &Slot, facts: &Facts<'_>) -> SlotState {
                 .any(|wanted| wanted.eq_ignore_ascii_case(name))
         })
         .collect();
-    by_name.sort();
-    by_name.dedup();
-    state(None, collapse_identical(by_name, facts.hashes))
+    state(
+        None,
+        collapse_identical(sorted(by_name), facts.hashes),
+        None,
+    )
+}
+
+fn sorted(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// Whether anybody has hashed this file — the fact
+/// [`Found::bytes_read`] carries.
+fn bytes_read(path: &Path, facts: &Facts<'_>) -> bool {
+    facts.hashes.iter().any(|entry| entry.path == path)
 }
 
 /// Every path the caller looked at, however it was looked at.
@@ -723,6 +909,11 @@ fn every_path(facts: &Facts<'_>) -> Vec<PathBuf> {
 /// the caller already has a hash for can collapse — this module reads
 /// nothing, so an unhashed pair stays two candidates, which is the honest
 /// answer for two files nobody has compared.
+///
+/// **The one collapse rule, for all three ranks** (fix round 1, F6). It is
+/// order-independent, unlike `Vec::dedup_by`, which is what rank 1 used to
+/// use over a path-sorted list and which therefore only ever collapsed
+/// duplicates that happened to land next to each other.
 fn collapse_identical(paths: Vec<PathBuf>, hashes: &[mediahash::MediaMatch]) -> Vec<PathBuf> {
     let md5_of = |path: &Path| {
         hashes
@@ -878,6 +1069,7 @@ mod tests {
     use super::*;
     use crate::core::osinstall::apply::{AmigaInstallRecord, FileRecord, MediaRecord};
     use crate::core::osinstall::scan::MediaKind;
+    use crate::core::osinstall::{Component, PathRule, RuleKind};
 
     // -----------------------------------------------------------------
     // Deriving the list
@@ -1047,6 +1239,7 @@ mod tests {
         packages: Vec<FoundPackage>,
         hashes: Vec<mediahash::MediaMatch>,
         rom: Option<PathBuf>,
+        rom_on_disk: bool,
         program_versions: Vec<(String, String)>,
     }
 
@@ -1057,6 +1250,7 @@ mod tests {
                 packages: Vec::new(),
                 hashes: Vec::new(),
                 rom: None,
+                rom_on_disk: true,
                 program_versions: Vec::new(),
             }
         }
@@ -1067,7 +1261,10 @@ mod tests {
                 packages: &self.packages,
                 hashes: &self.hashes,
                 manifest,
-                rom: self.rom.as_deref(),
+                rom: self.rom.as_deref().map(|path| match self.rom_on_disk {
+                    true => ChosenRom::OnDisk(path),
+                    false => ChosenRom::Absent(path),
+                }),
                 program_versions: &self.program_versions,
             }
         }
@@ -1078,6 +1275,21 @@ mod tests {
             .iter()
             .find(|state| state.slot.id == id)
             .unwrap_or_else(|| panic!("no slot {id}"))
+    }
+
+    fn state_of_slot<'a>(slots: &'a [Slot], id: &str) -> &'a Slot {
+        slots
+            .iter()
+            .find(|slot| slot.id == id)
+            .unwrap_or_else(|| panic!("no slot {id}"))
+    }
+
+    fn candidate_paths(state: &SlotState) -> Vec<PathBuf> {
+        state
+            .candidates
+            .iter()
+            .map(|candidate| candidate.path.clone())
+            .collect()
     }
 
     #[test]
@@ -1160,9 +1372,12 @@ mod tests {
             overlay.found
         );
         assert_eq!(
-            overlay.candidates,
+            candidate_paths(overlay),
             vec![PathBuf::from("D:/a/BoingBag39-1-UAE.lha")]
         );
+        // Nobody hashed it, and the readout has to be able to say so rather
+        // than claiming the table does not know these bytes (F1).
+        assert!(!overlay.candidates[0].bytes_read);
     }
 
     #[test]
@@ -1182,7 +1397,7 @@ mod tests {
         let bb1 = state_of(&states, "package:boingbag-39-1");
         assert!(bb1.found.is_none(), "ART does not pick between two");
         assert_eq!(
-            bb1.candidates,
+            candidate_paths(bb1),
             vec![
                 PathBuf::from("D:/a/first.lha"),
                 PathBuf::from("D:/b/second.lha")
@@ -1392,5 +1607,287 @@ mod tests {
         let states = resolve(&slots, &gathered.facts(Some(&done)));
         let summary = summarize("AmigaOS 3.9", &states);
         assert_eq!(summary.required_found, 1);
+    }
+
+    // -----------------------------------------------------------------
+    // Fix round 1
+    // -----------------------------------------------------------------
+
+    /// F1 — the two causes of rank 1 falling silent, kept apart.
+    #[test]
+    fn a_rank_two_match_says_whether_anybody_has_read_the_bytes() {
+        let slots = slots_for("AmigaOS 3.9").unwrap();
+
+        // Nobody has hashed anything: the readout must be able to say ART did
+        // not look, not that the table does not know these bytes.
+        let mut unread = Gathered::empty();
+        unread
+            .packages
+            .push(archive("D:/a/renamed.lha", "BoingBag3.9-1"));
+        let states = resolve(&slots, &unread.facts(None));
+        let found = state_of(&states, "package:boingbag-39-1")
+            .found
+            .as_ref()
+            .unwrap();
+        assert_eq!(found.matched_by, MatchedBy::TopLevelDirectory);
+        assert!(!found.bytes_read, "the scan cache had no answer for it");
+
+        // Hashed, and the hash matched no row this slot's artefact names —
+        // the genuinely stronger statement.
+        let mut hashed_unmatched = Gathered::empty();
+        hashed_unmatched
+            .packages
+            .push(archive("D:/a/renamed.lha", "BoingBag3.9-1"));
+        hashed_unmatched
+            .hashes
+            .push(hashed("D:/a/renamed.lha", &"1".repeat(32)));
+        let states = resolve(&slots, &hashed_unmatched.facts(None));
+        let found = state_of(&states, "package:boingbag-39-1")
+            .found
+            .as_ref()
+            .unwrap();
+        assert_eq!(found.matched_by, MatchedBy::TopLevelDirectory);
+        assert!(found.bytes_read, "somebody hashed it and no row claimed it");
+
+        // Rank 1 is only ever reached through a hash, so it always has them.
+        let mut by_bytes = Gathered::empty();
+        by_bytes.hashes.push(hashed("D:/a/bb1.lha", BB1_45_15_MD5));
+        let states = resolve(&slots, &by_bytes.facts(None));
+        assert!(
+            state_of(&states, "package:boingbag-39-1")
+                .found
+                .as_ref()
+                .unwrap()
+                .bytes_read
+        );
+    }
+
+    /// F3 — a package slot whose own id no row names falls back to the
+    /// artefact of the archive it reads, so two packages over one archive
+    /// both resolve.
+    #[test]
+    fn two_packages_reading_one_archive_share_its_artefact() {
+        let slots = slots_for("AmigaOS 3.9").unwrap();
+        // `locale-39` has its own row; `locale-39-turkish` declares the same
+        // `Locale3.9` archive and has none.
+        assert_eq!(
+            state_of_slot(&slots, "package:locale-39")
+                .artefact
+                .as_deref(),
+            Some("locale-39")
+        );
+        assert_eq!(
+            state_of_slot(&slots, "package:locale-39-turkish")
+                .artefact
+                .as_deref(),
+            Some("locale-39"),
+            "a row names bytes, and two packages may read one archive"
+        );
+        // And the Turkish catalog pack now has a row of its own, so it does
+        // not fall back at all.
+        assert_eq!(
+            state_of_slot(&slots, "package:locale-turkish")
+                .artefact
+                .as_deref(),
+            Some("locale-turkish")
+        );
+    }
+
+    /// F3/F4 — every shipped 3.9 package slot can tell the user what file to
+    /// obtain. An artefact no row names produces a not-found row with its
+    /// actionable half missing, which is what this pins against a fourth
+    /// instance.
+    #[test]
+    fn every_shipped_package_slot_for_3_9_names_at_least_one_expected_filename() {
+        let empty: Vec<String> = slots_for("AmigaOS 3.9")
+            .unwrap()
+            .into_iter()
+            .filter(|slot| slot.kind == SlotKind::Package && slot.filenames.is_empty())
+            .map(|slot| slot.id)
+            .collect();
+        assert!(
+            empty.is_empty(),
+            "package slots that cannot say what file to get: {empty:?}"
+        );
+    }
+
+    /// F4 — the adopted map's own `filenames` reach a slot whose only row is
+    /// an adopted one.
+    #[test]
+    fn an_adopted_only_artefact_still_names_the_file_to_obtain() {
+        let slots = slots_for("AmigaOS 3.9").unwrap();
+        let bb2 = state_of_slot(&slots, "package:boingbag-39-2");
+        assert_eq!(bb2.artefact.as_deref(), Some("boingbag-39-2"));
+        assert!(
+            bb2.filenames.iter().any(|n| n == "BoingBag39-2.lha"),
+            "its only row is the adopted fd45d24b…, which carries no filenames: {:?}",
+            bb2.filenames
+        );
+        // The name is ART's own claim; the provenance is still the table's,
+        // stated as the table states it.
+        assert_eq!(bb2.provenance.as_deref(), Some("Haage and Partners (3.9)"));
+    }
+
+    /// F6 — two different masterings of one artefact present at once. Rank 1
+    /// is ambiguous, and it is not resolved by list order.
+    #[test]
+    fn two_masterings_of_one_artefact_leave_rank_one_ambiguous() {
+        let slots = slots_for("AmigaOS 3.9").unwrap();
+        let mut gathered = Gathered::empty();
+        gathered.hashes.push(hashed("D:/b/second.iso", CD_OWN_MD5));
+        gathered
+            .hashes
+            .push(hashed("D:/a/first.iso", CD_ADOPTED_MD5));
+        let states = resolve(&slots, &gathered.facts(None));
+        let cd = state_of(&states, "medium:AmigaOS3.9");
+        assert!(cd.found.is_none(), "two masterings, no arbitrary winner");
+        assert_eq!(
+            candidate_paths(cd),
+            vec![
+                PathBuf::from("D:/a/first.iso"),
+                PathBuf::from("D:/b/second.iso")
+            ]
+        );
+        assert!(cd.candidates.iter().all(|c| c.bytes_read));
+    }
+
+    /// F6 — `collapse_identical` is the one rule, and rank 2 goes through it:
+    /// the same archive kept in two folders is one candidate even though
+    /// neither copy's hash matches any row.
+    #[test]
+    fn one_archive_kept_twice_is_one_candidate_at_rank_two_as_well() {
+        let slots = slots_for("AmigaOS 3.9").unwrap();
+        let mut gathered = Gathered::empty();
+        let md5 = "2".repeat(32);
+        gathered
+            .packages
+            .push(archive("D:/a/BoingBag39-1.lha", "BoingBag3.9-1"));
+        gathered
+            .packages
+            .push(archive("D:/b/backup.lha", "BoingBag3.9-1"));
+        gathered.hashes.push(hashed("D:/a/BoingBag39-1.lha", &md5));
+        gathered.hashes.push(hashed("D:/b/backup.lha", &md5));
+
+        let states = resolve(&slots, &gathered.facts(None));
+        let bb1 = state_of(&states, "package:boingbag-39-1");
+        let found = bb1
+            .found
+            .as_ref()
+            .expect("one archive kept twice is one archive");
+        assert_eq!(found.matched_by, MatchedBy::TopLevelDirectory);
+        assert_eq!(found.path, PathBuf::from("D:/a/BoingBag39-1.lha"));
+    }
+
+    /// F12 — an adopted row's `volume` is Hatcher's identifier, not an
+    /// AmigaDOS name, and this module never compares one against the other.
+    #[test]
+    fn an_adopted_rows_volume_never_answers_an_identity_question() {
+        let rows = mediahash::rows().unwrap();
+        // `AmigaOS3_9BB1` is an adopted identifier that maps to a real
+        // artefact — so if adopted rows were consulted, asking for it would
+        // answer `boingbag-39-1`. It must answer nothing.
+        assert_eq!(artefact_for_identity(rows, "AmigaOS3_9BB1"), None);
+        // While ART's own rows, whose `volume` really is what the archive
+        // calls itself, still answer.
+        assert_eq!(
+            artefact_for_identity(rows, "BoingBag3.9-1"),
+            Some("boingbag-39-1".to_string())
+        );
+    }
+
+    // --- F11: synthetic recipes, which no test used to state ---------------
+
+    fn component(id: &str, media: &str, required: bool, condition: Option<Condition>) -> Component {
+        Component {
+            id: id.to_string(),
+            media: media.to_string(),
+            rules: vec![PathRule {
+                from: "C".to_string(),
+                to: "C".to_string(),
+                kind: RuleKind::Subtree,
+            }],
+            required,
+            condition,
+            overrides: Vec::new(),
+            user_startup: Vec::new(),
+            activate: Vec::new(),
+            exclusive_group: None,
+            label_key: None,
+            available: true,
+            layer: None,
+            removes: Vec::new(),
+        }
+    }
+
+    fn recipe_of(components: Vec<Component>) -> Recipe {
+        Recipe {
+            release: "Test OS".to_string(),
+            base: None,
+            layers: Vec::new(),
+            components,
+        }
+    }
+
+    /// A release off **several** disks — the shape every shipped release but
+    /// 3.9 has, and one no test stated until this round. `slots_over`'s own
+    /// doc comment promised it.
+    #[test]
+    fn a_release_off_several_disks_gets_one_medium_slot_each_in_recipe_order() {
+        let slots = slots_over(
+            &recipe_of(vec![
+                component("base", "Workbench3.2", true, None),
+                component("extras", "Extras3.2", false, None),
+                // A second component off a disk already named adds no second
+                // slot — a slot is an artefact, not a component.
+                component("fonts", "workbench3.2", false, None),
+            ]),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            slots.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["medium:Workbench3.2", "medium:Extras3.2"],
+            "no ROM condition anywhere, so no ROM slot either"
+        );
+        assert!(slots[0].required, "a required component reads Workbench3.2");
+        assert!(!slots[1].required, "nothing required reads Extras3.2");
+        assert_eq!(slots[1].position, 1);
+    }
+
+    /// A release that asks about the ROM without stating a floor — AmigaOS
+    /// 3.2's shape. The slot exists (something has to be paired) and is not
+    /// required, and its identity is empty because the recipe states no
+    /// number.
+    #[test]
+    fn a_rom_condition_with_no_floor_gives_an_optional_rom_slot_with_no_number() {
+        let slots = slots_over(
+            &recipe_of(vec![
+                component("base", "Workbench3.2", true, None),
+                component(
+                    "modules-a1200",
+                    "Modules3.2",
+                    false,
+                    Some(Condition::RomOlderThan { major: 47 }),
+                ),
+            ]),
+            &[],
+        )
+        .unwrap();
+        let rom = slots.last().unwrap();
+        assert_eq!(rom.id, "rom");
+        assert!(
+            !rom.required,
+            "rom-older-than switches a fallback on; it states no floor"
+        );
+        assert_eq!(rom.identity, "", "the recipe states no number to show");
+    }
+
+    /// And a recipe that asks nothing about the ROM has no ROM slot at all —
+    /// the arm the shipped 3.9 recipe cannot exercise.
+    #[test]
+    fn a_recipe_that_never_asks_about_the_rom_has_no_rom_slot() {
+        let slots =
+            slots_over(&recipe_of(vec![component("base", "Only", true, None)]), &[]).unwrap();
+        assert!(slots.iter().all(|slot| slot.kind != SlotKind::Rom));
     }
 }

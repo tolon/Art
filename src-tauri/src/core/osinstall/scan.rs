@@ -422,7 +422,13 @@ pub fn media_for_layer<'a>(
 /// unreadable. Mutation confirms it: dropping the entry instead of keeping it
 /// leaves every test green. It stays because the alternative is silently
 /// losing a disk on a race nobody has seen, and that costs one line.
-fn dedupe_identical_disks(found: Vec<FoundMedia>) -> Vec<FoundMedia> {
+/// `pub` since `commands::osinstall::osinstall_slots` arrived (fix round 1,
+/// F2): that command scans each material folder **separately**, so that one
+/// unreadable folder cannot discard the disks found in the others the way
+/// [`find_media_across`]'s single `?` does, and it then needs this exact rule
+/// applied across the result. Exported rather than reimplemented — a second
+/// answer to "is this one disk or two" is how the two would drift.
+pub fn dedupe_identical_disks(found: Vec<FoundMedia>) -> Vec<FoundMedia> {
     let repeated: Vec<String> = found
         .iter()
         .map(|entry| entry.volume_name.clone())

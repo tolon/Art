@@ -645,7 +645,16 @@ fn volume_name_for(path: &Path, cache: &ScanCache) -> Option<String> {
 }
 
 /// What the scan cache **already knows** about the candidates in `folder` —
-/// hashing nothing, reading no bytes of any candidate.
+/// hashing nothing.
+///
+/// **It may still open a file, and the first version of this sentence claimed
+/// otherwise** (fix round 1, F10). No candidate is *hashed*: that is the whole
+/// point, and it is what keeps a 490 MB ISO off a command thread. But a file
+/// whose md5 the cache holds and whose *listing* it does not goes through
+/// [`volume_name_for`], which falls back to `scan::identify` and opens it — a
+/// bounded probe of a root block or a volume descriptor, not a read of the
+/// file. Said plainly here because this module's rules are enforced by its
+/// doc comments, and one that overclaims is a rule nobody can rely on.
 ///
 /// [`identify_media_in`]'s companion, and deliberately not a mode of it. That
 /// function is the pass that *does* the work and takes a
