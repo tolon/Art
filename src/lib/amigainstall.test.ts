@@ -288,6 +288,46 @@ describe("what a previewed run still lacks", () => {
     const [blocker] = readinessBlockers(preview({ kickstartPresent: false }));
     expect(blocker.params).toEqual({ path: "D:/roms/kick31.rom" });
   });
+
+  /// **Fix round 1, m5.** The fields fill themselves from the slots now, so
+  /// "the archive chosen above… ART checked the file you chose" is a sentence
+  /// about a choice nobody made — printed under a read-only line still saying
+  /// the file was identified by its bytes.
+  it("keeps an archive ART found apart from one the user chose, when it has gone", () => {
+    const gone = preview({
+      packageArchivesPresent: false,
+      packageArchives: ["E:/material/BoingBag39-1.lha"],
+    });
+
+    const [artsOwn] = readinessBlockers(gone, ["E:/material/BoingBag39-1.lha"]);
+    expect(artsOwn.key).toBe("osinstall.amigaInstall.blocker.archiveMissingFound");
+    expect(artsOwn.params).toEqual({ count: 1, path: "E:/material/BoingBag39-1.lha" });
+
+    // The other arm, and the reason this is a branch rather than a rename:
+    // when the user really did pick the file, the original sentence is the
+    // right one and it is unchanged.
+    const [theirs] = readinessBlockers(gone);
+    expect(theirs.key).toBe("osinstall.amigaInstall.blocker.archiveMissing");
+    expect(theirs.params).toEqual({ count: 1 });
+  });
+
+  /// Which of two archives is gone is not knowable from `packageArchivesPresent`
+  /// — one boolean over all of them — so the plural sentence says "one of" and
+  /// lists them, and nothing here names a single file as *the* missing one.
+  it("does not claim which of several archives is the missing one", () => {
+    const [blocker] = readinessBlockers(
+      preview({
+        packageArchivesPresent: false,
+        packageArchives: ["E:/material/one.lha", "D:/pkg/two.lha"],
+      }),
+      ["E:/material/one.lha"]
+    );
+    expect(blocker.key).toBe("osinstall.amigaInstall.blocker.archiveMissingFound");
+    expect(blocker.params).toEqual({
+      count: 2,
+      path: "E:/material/one.lha, D:/pkg/two.lha",
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

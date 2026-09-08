@@ -232,6 +232,17 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     for (const blocker of readinessBlockers(preview)) {
       expect(resolvesAtRuntime(blocker.key)).toBe(true);
     }
+    // Fix round 1's m5: the same list again for an archive **ART** resolved,
+    // which picks a different key for the missing-archive case. Pluralised,
+    // so both arms have to resolve.
+    for (const archives of [["a.lha"], ["a.lha", "b.lha"]]) {
+      for (const blocker of readinessBlockers(
+        { ...preview, packageArchives: archives, packageArchivesPresent: false },
+        archives
+      )) {
+        expect(resolvesAtRuntime(blocker.key)).toBe(true);
+      }
+    }
     for (const archives of [["a.lha"], ["a.lha", "b.lha"]]) {
       const advice = overlayAdvicePhrase({ ...preview, packageArchives: archives });
       expect(advice).not.toBeNull();

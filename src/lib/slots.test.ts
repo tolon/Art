@@ -444,6 +444,26 @@ describe("setLine", () => {
   });
 });
 
+describe("what a chosen file's sentence may claim", () => {
+  /// **Fix round 1, L7.** *"ART did not identify it"* is printed after the
+  /// user picks a row out of the ambiguous list — about which
+  /// `candidateLines` has just told them, on that very row, what ART knows
+  /// about the bytes. An under-claim rather than an over-claim, but it is a
+  /// sentence the screen has evidence against. What is true is that ART has
+  /// not *checked* the file the user named.
+  it("says ART has not checked the file, never that it learned nothing about it", () => {
+    const [line] = slotLines([
+      state({ found: foundBy("chosen", "D:\\pkg\\my-own-copy.lha") }),
+    ]);
+    expect(line.kind).toBe("chosen");
+    for (const catalogue of [en, tr]) {
+      const text = leafText(catalogue, line.phrase.key);
+      expect(text).not.toMatch(/did not identify|tanımadı/);
+    }
+    expect(leafText(en, line.phrase.key)).toContain("has not checked");
+  });
+});
+
 describe("candidateLines", () => {
   /// The ambiguous row says *that* ART will not choose and lists the paths.
   /// A screen that offers the choice needs the evidence beside each option,

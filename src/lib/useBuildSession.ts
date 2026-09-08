@@ -215,14 +215,26 @@ export function useBuildSession(): BuildSessionApi {
   const setMaterial = useCallback(
     (folders: MaterialFolder[]) => {
       setMaterialShape({ folders });
-      const stored = packagesShape.folder;
+      // **Read from the store, not from the render closure** (fix round 1,
+      // L10) — the rule `addMaterialFolder` below already keeps and for the
+      // same reason: two controls writing in one tick (a drop landing while a
+      // Browse dialog resolves) must not decide against a stale copy. Rebuilt
+      // through `recallInto` with the section's own spec and fallback, so this
+      // reads exactly what `packagesShape.folder` would have been — a stored
+      // `null` stays `null` here rather than falling back to a legacy key and
+      // resurrecting a folder the user has already had removed.
+      const latest = useSettingsStore.getState().settings.remembered;
+      const stored = recallInto<PackageChoice>(latest, SESSION_KEYS.packages, PACKAGE_SPEC, {
+        folder: seedPackagesFolder(latest),
+        chosen: DEFAULT_PACKAGES.chosen,
+      }).folder;
       if (!stored) return;
       const wanted = canonicalFolder(stored);
       if (!folders.some((entry) => canonicalFolder(entry.path) === wanted)) {
         setPackagesShape({ folder: null });
       }
     },
-    [setMaterialShape, packagesShape.folder, setPackagesShape]
+    [setMaterialShape, setPackagesShape]
   );
 
   // Reads the store rather than the rendered `material`, exactly as

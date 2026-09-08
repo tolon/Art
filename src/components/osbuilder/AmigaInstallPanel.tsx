@@ -625,13 +625,19 @@ export function AmigaInstallPanel({
    * ." is a sentence nobody can act on, and this project's own rule is that a
    * refusal must name something.
    */
-  function expectation(state: SlotState): { filenames: string; provenance: string } {
+  /// **`null` answers too, and that is fix round 1's m6.** No slot means no
+  /// answer arrived — no material folders, or `osinstall_slots` refused,
+  /// which it does for a chosen tree carrying no `distribution.json`, so this
+  /// is not only the exotic case. The hint used to vanish entirely then,
+  /// taking the field's whole explanation with it. The two "ART has no note"
+  /// phrases exist for exactly this, and saying them costs one line.
+  function expectation(state: SlotState | null): { filenames: string; provenance: string } {
     return {
       filenames:
-        state.slot.filenames.length > 0
+        state && state.slot.filenames.length > 0
           ? state.slot.filenames.join(", ")
           : t("osinstall.slots.filenamesUnknown"),
-      provenance: state.slot.provenance ?? t("osinstall.slots.provenanceUnknown"),
+      provenance: state?.slot.provenance ?? t("osinstall.slots.provenanceUnknown"),
     };
   }
 
@@ -693,7 +699,30 @@ export function AmigaInstallPanel({
    *  assumed: `null` means nobody has asked yet (ART-212). */
   const nothingRunnableHere = catalogue !== null && !catalogue.some((p) => p.amigaInstallable);
 
-  const packageBelongsHere = packageFolder
+  /**
+   * The one folder the **catalogue** is read from, and the folder the file
+   * dialogs open on.
+   *
+   * `packages.folder` is the user's own archives folder when they have one,
+   * and the material list's first *untagged* entry otherwise — so a build
+   * whose folders are **all** layer-tagged (AmigaOS 3.2.2, every folder said
+   * to hold a part of the release) leaves it `null`, and this panel then
+   * printed *"choose the update packages folder above"* and offered no
+   * package radio at all, while its own slots had just found everything in
+   * those same folders. The catalogue was gated on one folder and the fields
+   * were not (fix round 1, L9).
+   *
+   * Falling back to the list's first entry is safe here and nowhere else:
+   * which packages a release offers is a function of the *recipes*, not of
+   * the folder (`osinstall_packages` answers the same list whichever folder
+   * it is given — only `available` depends on it, and this panel never reads
+   * `available`, filtering on `amigaInstallable` alone). So the fallback
+   * changes which folder the picker opens on and nothing else about what is
+   * offered.
+   */
+  const catalogueFolder = packageFolder ?? materialFolders[0] ?? null;
+
+  const packageBelongsHere = catalogueFolder
     ? // A folder is set, so an answer is coming: **wait for it.** Previewing
       // on the strength of a remembered id and retracting a moment later
       // would put a wrong sentence on screen — briefly, but this project's
@@ -727,13 +756,13 @@ export function AmigaInstallPanel({
   // `[]`) until something arrives, so "not loaded yet" and "loaded and empty"
   // stay different states — the distinction `OsInstall.tsx` already draws.
   useEffect(() => {
-    if (!packageFolder) {
+    if (!catalogueFolder) {
       setCatalogue(null);
       setCatalogueError(false);
       return;
     }
     let cancelled = false;
-    osinstallPackages(packageFolder, release)
+    osinstallPackages(catalogueFolder, release)
       .then((list) => {
         if (!cancelled) {
           setCatalogue(list);
@@ -749,7 +778,7 @@ export function AmigaInstallPanel({
     return () => {
       cancelled = true;
     };
-  }, [packageFolder, release]);
+  }, [catalogueFolder, release]);
 
   // ART-277: ask what an archive *is* at the moment it is picked (or
   // restored from a remembered choice), rather than finding out only once
@@ -928,7 +957,7 @@ export function AmigaInstallPanel({
     const picked = await open({
       multiple: false,
       title,
-      defaultPath: packageFolder ?? undefined,
+      defaultPath: catalogueFolder ?? undefined,
       filters: [{ name: "Package archive", extensions: ["lha", "lzh", "zip", "7z"] }],
     });
     if (typeof picked === "string") set(picked);
@@ -1049,8 +1078,22 @@ export function AmigaInstallPanel({
   // to render as a duplicate React key and the same sentence twice —
   // ART-202's own "aynı uyarı tek ekranda 2 tane" mistake, reached through
   // a producer this screen did not have when that rule was written.
+  //
+  // **m5.** The archives ART resolved itself are named, so a file that has
+  // gone since the scan is not reported as *"the archive you chose"* — the
+  // user chose nothing, and the read-only line directly above still says the
+  // file was identified by its bytes.
+  const artsOwnArchives = [
+    archive === null ? archiveFound : null,
+    overlayArchive === null ? overlayFound : null,
+  ].filter((path): path is string => path !== null);
   const blockers = dedupeBlockers([
-    ...(preview ? readinessBlockers(preview).map((phrase) => ({ field: "preview", phrase })) : []),
+    ...(preview
+      ? readinessBlockers(preview, artsOwnArchives).map((phrase) => ({
+          field: "preview",
+          phrase,
+        }))
+      : []),
     ...(missingArchiveBlocker ? [{ field: "slot", phrase: missingArchiveBlocker }] : []),
     ...(archiveBlocker ? [{ field: "package", phrase: archiveBlocker }] : []),
     ...(overlayBlocker ? [{ field: "overlay", phrase: overlayBlocker }] : []),
@@ -1103,7 +1146,7 @@ export function AmigaInstallPanel({
           {t("osinstall.amigaInstall.package.unavailableHint")}
         </p>
       )}
-      {!packageFolder && !catalogueError && (
+      {!catalogueFolder && !catalogueError && (
         <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
           {t("osinstall.amigaInstall.package.needsFolder")}
         </p>
@@ -1160,7 +1203,7 @@ export function AmigaInstallPanel({
           testId="amiga-slot-archive"
           label={t("osinstall.amigaInstall.archive.label")}
           empty={t("osinstall.amigaInstall.archive.none")}
-          hint={packageSlot ? t("osinstall.amigaInstall.archive.hint", expectation(packageSlot)) : undefined}
+          hint={t("osinstall.amigaInstall.archive.hint", expectation(packageSlot))}
           state={packageSlot}
           override={archive}
           found={archiveFound}
@@ -1175,11 +1218,7 @@ export function AmigaInstallPanel({
           testId="amiga-slot-overlay"
           label={t("osinstall.amigaInstall.overlayArchive.label")}
           empty={t("osinstall.amigaInstall.overlayArchive.none")}
-          hint={
-            overlaySlot
-              ? t("osinstall.amigaInstall.overlayArchive.hint", expectation(overlaySlot))
-              : undefined
-          }
+          hint={t("osinstall.amigaInstall.overlayArchive.hint", expectation(overlaySlot))}
           state={overlaySlot}
           override={overlayArchive}
           found={overlayFound}
@@ -1207,7 +1246,7 @@ export function AmigaInstallPanel({
           testId="amiga-slot-medium"
           label={t("osinstall.amigaInstall.medium.label")}
           empty={t("osinstall.amigaInstall.medium.none")}
-          hint={mediumSlot ? t("osinstall.amigaInstall.medium.hint", expectation(mediumSlot)) : undefined}
+          hint={t("osinstall.amigaInstall.medium.hint", expectation(mediumSlot))}
           state={mediumSlot}
           override={medium}
           found={mediumFound}

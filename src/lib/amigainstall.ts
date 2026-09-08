@@ -511,13 +511,46 @@ export function overlayAdvicePhrase(preview: AmigaInstallPreview): Phrase | null
  * Empty means every one of the three things ART cannot supply itself (the
  * user's own Kickstart, the package's own archives, an emulator) is there.
  */
-export function readinessBlockers(preview: AmigaInstallPreview): Phrase[] {
+export function readinessBlockers(
+  preview: AmigaInstallPreview,
+  /**
+   * The archive paths **ART resolved itself**, from the material folders
+   * (round 2, § 3.4) — not the ones the user picked by hand.
+   *
+   * Fix round 1's m5. `blocker.archiveMissing` says *"the archive chosen
+   * above… ART checked the file you chose"*, and since the fields fill
+   * themselves that is a sentence about a choice nobody made — printed
+   * directly under a read-only line still saying the file was *"identified by
+   * its bytes"*. Two sentences about one file, one wrong about who chose it
+   * and one out-claiming the disk.
+   *
+   * Empty (the default) keeps every existing caller on the original sentence,
+   * which is the right one when the user really did choose.
+   */
+  foundByArt: string[] = []
+): Phrase[] {
   const blockers: Phrase[] = [];
   if (!preview.packageArchivesPresent) {
-    blockers.push({
-      key: "osinstall.amigaInstall.blocker.archiveMissing",
-      params: { count: preview.packageArchives.length },
-    });
+    // **Which** archive is gone is not knowable here — `packageArchivesPresent`
+    // is one boolean over all of them — so the plural sentence deliberately
+    // says "one of" and lists them all. It is only in the singular case, where
+    // there is one archive and ART found it, that a path can be named as *the*
+    // missing one, and there the sentence does name it.
+    const artsOwn = preview.packageArchives.some((path) => foundByArt.includes(path));
+    blockers.push(
+      artsOwn
+        ? {
+            key: "osinstall.amigaInstall.blocker.archiveMissingFound",
+            params: {
+              count: preview.packageArchives.length,
+              path: preview.packageArchives.join(", "),
+            },
+          }
+        : {
+            key: "osinstall.amigaInstall.blocker.archiveMissing",
+            params: { count: preview.packageArchives.length },
+          }
+    );
   }
   if (!preview.kickstartPresent) {
     blockers.push({

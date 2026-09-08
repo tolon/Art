@@ -2265,7 +2265,7 @@
       "reading_other": "{{count}} klasör okunuyor — her dosyanın hangi parça olduğu çıkarılıyor…",
       "foundByHash": "{{file}} — baytlarından tanındı: ART’ın tablosunun {{name}} için kaydettiği baytlar bunlar.",
       "foundByName": "{{file}} — bu dosya kendine {{identity}} diyor, {{name}} de zaten bu. Baytları özetlendi ve ART’ın hiçbir tablosunda yok; yani bu bir doğrulama değil, dosyanın kendi beyanı.",
-      "chosen": "{{file}} — {{name}} için sizin seçtiğiniz dosya. ART onu tanımadı.",
+      "chosen": "{{file}} — {{name}} için sizin seçtiğiniz dosya. ART onun o olduğunu doğrulamadı.",
       "guessedByFilename": "{{file}} adı {{name}} gibi duruyor; ART’ın söyleyebileceği bundan ibaret: baytları özetlendi ve ART’ın bildiği hiçbir şeyle eşleşmiyor, içindeki ad da {{name}} değil. Bu satıra güvenmeden önce dosyayı açın ya da değiştirin.",
       "ambiguous": "Buradaki {{count}} dosya {{name}} olabilir ve ART aralarında seçim yapmaz: {{candidates}}. Hangisini kastettiğinizi siz seçin.",
       "notFound": "{{name}} adını verdiğiniz klasörlerde yok. Beklenen: {{filenames}}.",
@@ -2590,6 +2590,8 @@
         "heading": "Henüz çalıştırmaya hazır değil",
         "archiveMissing_one": "Yukarıda seçilen arşiv artık orada değil. ART seçtiğiniz {{count}} dosyaya baktı.",
         "archiveMissing_other": "Yukarıda seçilen arşivlerden biri artık orada değil. ART seçtiğiniz {{count}} dosyanın hepsine baktı.",
+        "archiveMissingFound_one": "ART'ın bulduğu arşiv artık orada değil: {{path}}. Yeniden tarayın ya da dosyayı kendiniz seçin.",
+        "archiveMissingFound_other": "Bu çalıştırmanın kullanacağı {{count}} arşivden biri artık orada değil: {{path}}. Yeniden tarayın ya da dosyayı kendiniz seçin.",
         "kickstartMissing": "O Kickstart orada değil: {{path}}",
         "noEmulator": "Emülatör bulunamadı. WinUAE'nin yolunu Ayarlar'da belirtin — ART zaten sizde olan bir emülatörü başlatır, emülatör kurmaz.",
         "slotMissing": "{{name}}, bu yapının malzemesini tutan klasörlerde yok ve o olmadan burada hiçbir şey çalışamaz. Beklenen: {{filenames}} — içinde bulunduğu klasörü ekleyin ya da dosyayı kendiniz seçin."

@@ -321,6 +321,11 @@ export function MaterialReadout({
         somebody pointed at it; that is `remembered.ts`'s rule about the
         user's own settings, applied to the user's own disk.
       */}
+      {/* **The intro belongs to the buttons** (fix round 1, L8): it is a
+          sentence about pressing them, so it is inside the same guard rather
+          than beside it. The early return above already covers today's only
+          empty case; this makes it true of the block itself. */}
+      {folders.length > 0 && (
       <div data-testid="material-guide" style={{ margin: "8px 0 0" }}>
         <p className="faint" style={{ fontSize: 10, margin: "0 0 4px" }}>
           {t("osinstall.material.guide.intro")}
@@ -365,6 +370,7 @@ export function MaterialReadout({
           );
         })}
       </div>
+      )}
     </div>
   );
 }

@@ -1519,6 +1519,99 @@ describe("the fields are filled from the slots (design § 3.4)", () => {
     ).toBeTruthy();
   });
 
+  /// **Fix round 1, m5.** A slot found by hash whose file the user then
+  /// deletes: the read-only line above still says *"identified by its
+  /// bytes"* (nothing re-scanned), and the blocker under it used to say *"ART
+  /// checked the file you chose"* about a file the user never chose.
+  it("says ART's own archive has gone, not that a file the user chose has", async () => {
+    withPackageChosen();
+    slotsMock.mockResolvedValue(
+      slotReport([slotState({ found: foundByHash("E:/material/BoingBag39-1.lha") })])
+    );
+    previewMock.mockResolvedValue(
+      preview({
+        packageArchives: ["E:/material/BoingBag39-1.lha"],
+        packageArchivesPresent: false,
+      })
+    );
+    renderPanel();
+
+    const blockers = await screen.findByTestId("amiga-install-blockers");
+    expect(blockers.textContent).toContain(
+      i18n.t("osinstall.amigaInstall.blocker.archiveMissingFound", {
+        count: 1,
+        path: "E:/material/BoingBag39-1.lha",
+      })
+    );
+    // And the sentence about a choice nobody made is gone.
+    expect(blockers.textContent).not.toContain(
+      i18n.t("osinstall.amigaInstall.blocker.archiveMissing", { count: 1 })
+    );
+  });
+
+  it("keeps 'the file you chose' for a file the user really did choose", async () => {
+    // The other arm. A blanket rename would satisfy the test above and lie
+    // here instead.
+    withPackageChosen({ "amigaInstall.archive.boingbag-39-1": "D:/pkg/my-own-copy.lha" });
+    slotsMock.mockResolvedValue(
+      slotReport([slotState({ found: foundByHash("E:/material/BoingBag39-1.lha") })])
+    );
+    previewMock.mockResolvedValue(
+      preview({ packageArchives: ["D:/pkg/my-own-copy.lha"], packageArchivesPresent: false })
+    );
+    renderPanel();
+
+    const blockers = await screen.findByTestId("amiga-install-blockers");
+    expect(blockers.textContent).toContain(
+      i18n.t("osinstall.amigaInstall.blocker.archiveMissing", { count: 1 })
+    );
+  });
+
+  /// **Fix round 1, m6.** `osinstall_slots` refuses a chosen tree that
+  /// carries no `distribution.json`, so a panel with no slot answer is not
+  /// only the exotic case — and the fields used to lose their hint entirely,
+  /// taking the explanation with it. "ART has no note" is what is true.
+  it("still says what it expects when no slot answer arrived at all", async () => {
+    withPackageChosen();
+    slotsMock.mockRejectedValue(new Error("that tree carries no distribution.json"));
+    renderPanel();
+
+    const hint = i18n.t("osinstall.amigaInstall.archive.hint", {
+      filenames: i18n.t("osinstall.slots.filenamesUnknown"),
+      provenance: i18n.t("osinstall.slots.provenanceUnknown"),
+    });
+    expect(await screen.findByText(hint)).toBeTruthy();
+    // The browse row is still there — a panel usable with a hand-picked
+    // archive is the state ART-212 ruled must keep working.
+    expect(browseFor(i18n.t("osinstall.amigaInstall.archive.label"))).toBeTruthy();
+  });
+
+  /// **Fix round 1, L9.** With every material folder layer-tagged (AmigaOS
+  /// 3.2.2, each folder said to hold a part of the release) `packages.folder`
+  /// derives to `null`, and the panel printed "choose the update packages
+  /// folder above" and offered no radio — while its own slots had just found
+  /// everything in those same folders.
+  it("reads the catalogue from the material list when no archives folder is set", async () => {
+    withPackageChosen();
+    render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.9"
+        treeRoot="D:/amiga/os39"
+        packageFolder={null}
+        materialFolders={["E:/tagged-base", "E:/tagged-update"]}
+      />
+    );
+
+    await waitFor(() =>
+      expect(packagesMock).toHaveBeenCalledWith("E:/tagged-base", "AmigaOS 3.9")
+    );
+    // And the radio is really offered, which is the half the user sees.
+    expect(await screen.findAllByTestId("amiga-package-row")).toHaveLength(2);
+    expect(
+      screen.queryByText(i18n.t("osinstall.amigaInstall.package.needsFolder"))
+    ).toBeNull();
+  });
+
   it("lists every candidate of an ambiguous slot, and picking one becomes the choice", async () => {
     // ART does not choose between two of somebody's files (design § 4). The
     // paths are the whole of the information — the commonest shape here is

@@ -2265,7 +2265,7 @@
       "reading_other": "Reading {{count}} folders — working out which artefact each file is…",
       "foundByHash": "{{file}} — identified by its bytes: they are the ones ART’s table records for {{name}}.",
       "foundByName": "{{file}} — this file calls itself {{identity}}, which is what {{name}} is. Its bytes were hashed and are in no table ART has, so that is the file’s own word rather than a check.",
-      "chosen": "{{file}} — the file you chose for {{name}}. ART did not identify it.",
+      "chosen": "{{file}} — the file you chose for {{name}}. ART has not checked that it is one.",
       "guessedByFilename": "{{file}} is named like {{name}}, and that is all ART can say: its bytes were hashed and match nothing ART knows, and the name inside it is not {{name}} either. Open it or replace it before relying on this row.",
       "ambiguous": "{{count}} files here could be {{name}}, and ART will not choose between them: {{candidates}}. Pick the one you mean.",
       "notFound": "{{name}} is not in the folders you named. Expected {{filenames}}.",
@@ -2590,6 +2590,8 @@
         "heading": "Not ready to run yet",
         "archiveMissing_one": "The archive chosen above is not there any more. ART checked the {{count}} file you chose.",
         "archiveMissing_other": "One of the archives chosen above is not there any more. ART checked all {{count}} files you chose.",
+        "archiveMissingFound_one": "The archive ART found is not there any more: {{path}}. Scan again, or choose the file yourself.",
+        "archiveMissingFound_other": "One of the {{count}} archives this run would use is not there any more: {{path}}. Scan again, or choose the file yourself.",
         "kickstartMissing": "That Kickstart is not there: {{path}}",
         "noEmulator": "No emulator was found. Set WinUAE's path in Settings — ART starts an emulator you already have, it does not install one.",
         "slotMissing": "{{name}} is not in the folders holding this build's material, and nothing here can run without it. Expected {{filenames}} — add the folder it is in, or choose the file yourself."
