@@ -716,13 +716,33 @@ pub fn rows_for(
             state: package_state(package, state, &have, slots, &packages, &components)?,
             sentence_facts: SentenceFacts {
                 file: state.and_then(file_name_of),
+                // **The block decides, and the installer only breaks the
+                // tie** (2026-09-08, the owner's BoingBag reversal).
+                //
+                // The precedence used to be the other way round — a package
+                // that declared an `amiga_installer` ran on the Amiga,
+                // whatever else was true — and that was right while the only
+                // packages declaring one were also the ones ART could not
+                // place. Both BoingBags now carry a `payload_password` and
+                // **no** `host_placement_block`, and they still carry their
+                // `amiga_installer`: the emulator route is not withdrawn,
+                // and it is no longer the route this row takes. Under the
+                // old reading the chain would have gone on offering a ~140 s
+                // emulator run, needing a ROM and a licence, for work the
+                // host does in seconds — the screen out-claiming what ART
+                // has to do.
+                //
+                // So: no block means ART places it (`Some(false)`, the
+                // `useHostPlacement` route); a block with an installer means
+                // the Amiga (`Some(true)`); a block with no installer means
+                // neither (`None`, Euro-Update).
                 runs_on_amiga: match (
-                    package.amiga_installer.is_some(),
                     package.host_placement_block.is_some(),
+                    package.amiga_installer.is_some(),
                 ) {
-                    (true, _) => Some(true),
-                    (false, false) => Some(false),
-                    (false, true) => None,
+                    (false, _) => Some(false),
+                    (true, true) => Some(true),
+                    (true, false) => None,
                 },
             },
         });
@@ -1911,7 +1931,74 @@ mod tests {
         );
         assert_eq!(
             row(&rows, "boingbag-39-2").sentence_facts.runs_on_amiga,
-            Some(true)
+            Some(false),
+            "since 2026-09-08 this row is placed from Windows — see the precedence test below"
+        );
+    }
+
+    /// **Which of the two routes a row takes, and what decides it**
+    /// (2026-09-08, ART-166's reversal).
+    ///
+    /// `runs_on_amiga` is what `AmigaInstallPanel` switches on: `Some(true)`
+    /// composes an emulator run, `Some(false)` goes through
+    /// `useHostPlacement`, `None` is neither. The precedence used to be
+    /// "an `amiga_installer` wins", and under that reading both BoingBags —
+    /// which still declare one — would have gone on offering a ~140 s
+    /// emulator run needing a ROM and a licence for work the host now does
+    /// in seconds.
+    ///
+    /// All three arms, from the shipped recipes rather than from fixtures,
+    /// because each is a different package's real shape and the table is
+    /// only a guard if the middle one is genuinely occupied.
+    #[test]
+    fn the_block_decides_which_route_a_row_takes_and_the_installer_only_breaks_the_tie() {
+        let media = [super::super::scan::FoundMedia {
+            path: std::path::PathBuf::from("D:/a/AmigaOS39.iso"),
+            kind: super::super::scan::MediaKind::Disc,
+            volume_name: "AmigaOS3.9".to_string(),
+            layer: None,
+        }];
+        let manifest = manifest(&["AmigaOS3.9"], &[], &[]);
+        let rows = rows_for(
+            "AmigaOS 3.9",
+            Some(&manifest),
+            &resolved(Some(&manifest), &[], &media),
+        )
+        .unwrap();
+
+        for id in ["boingbag-39-1", "boingbag-39-2"] {
+            let package = super::super::package::by_id(id).unwrap();
+            assert_eq!(package.host_placement_block, None, "the premise for {id}");
+            assert!(
+                package.amiga_installer.is_some(),
+                "{id} still declares its Amiga-side installer; the route is not chosen by \
+                 withdrawing it"
+            );
+            assert_eq!(
+                row(&rows, id).sentence_facts.runs_on_amiga,
+                Some(false),
+                "{id} is placed from Windows"
+            );
+        }
+
+        // A block *and* an installer: the emulator, as before.
+        assert_eq!(
+            row(&rows, "boingbags-39-3-4").sentence_facts.runs_on_amiga,
+            Some(true),
+            "needs-installer-script, and it declares an installer"
+        );
+        // A block and no installer: neither route, which is not the same as
+        // either of the other two and must not be reported as one.
+        assert_eq!(
+            row(&rows, "euro-update").sentence_facts.runs_on_amiga,
+            None,
+            "needs-fixfonts, and nothing to run on the Amiga either"
+        );
+        // And the ordinary host package, so `Some(false)` above is not
+        // simply what every row answers.
+        assert_eq!(
+            row(&rows, "locale-turkish").sentence_facts.runs_on_amiga,
+            Some(false)
         );
     }
 

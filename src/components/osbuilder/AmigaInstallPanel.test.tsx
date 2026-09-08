@@ -2195,6 +2195,8 @@ describe("the chain", () => {
           removed: [],
           icons: [],
           iconMergeFailures: 0,
+          extraMembers: [],
+          postPlace: [],
         },
       });
       await Promise.resolve();

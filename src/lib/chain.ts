@@ -266,8 +266,29 @@ export function chainLines(rows: ChainRow[]): ChainLine[] {
   });
 }
 
-/** *runs on the Amiga* / *placed from Windows*, or nothing for a row that is
- *  neither. See {@link ChainLine.where}. */
+/**
+ * *runs on the Amiga* / *placed from Windows*, or nothing for a row that is
+ * neither. See {@link ChainLine.where}.
+ *
+ * **The precedence, decided in Rust and only rendered here** — `runsOnAmiga`
+ * comes from `core::osinstall::chain`, where the three-way `match` and the
+ * reasoning live. It is repeated in one sentence because this is the file a
+ * reader reaches for when the row says the wrong thing:
+ *
+ *   - **no `hostPlacementBlock`** → `false`, ART places the files from
+ *     Windows, and `AmigaInstallPanel`'s Run goes through
+ *     `useHostPlacement`. Both BoingBags are here since 2026-09-08, and they
+ *     still declare an `amigaInstaller` — the emulator route is not
+ *     withdrawn, it is simply not what this row's one Run button does.
+ *   - **a block and an `amigaInstaller`** → `true`, an emulator run through
+ *     `compose` (BoingBags 3&4).
+ *   - **a block and no installer** → `null`, neither route (Euro-Update).
+ *
+ * The block decides; the installer only breaks the tie. Reading the
+ * installer first — which is what this used to do — would have gone on
+ * offering a ~140 s emulator run, needing a ROM and a licence, for work the
+ * host now does in seconds.
+ */
 function wherePhrase(row: ChainRow): Phrase | null {
   const where = row.sentenceFacts.runsOnAmiga;
   if (where === null) return null;

@@ -108,12 +108,34 @@ pub trait ArchiveBackend {
 /// modules matching the same magic separately is two things to keep in step,
 /// and the one that drifts is the one nobody is looking at.
 pub fn open(path: &Path) -> CoreResult<Box<dyn ArchiveBackend>> {
+    open_with_password(path, None)
+}
+
+/// [`open`], with a key for an archive whose entries are encrypted.
+///
+/// **ZIP only, and refused rather than ignored for the other two.** The one
+/// shape that needs this is an update package's own ZipCrypto payload (see
+/// `zip::ZipBackend`'s module doc comment). A password silently dropped for an
+/// LHA or a 7z would be ART accepting a recipe it cannot honour and then
+/// failing later for a reason nobody could connect to it — the "confident,
+/// wrong" shape. Neither format is one any shipped recipe names a password
+/// for, so this refusal is unreachable today and is what keeps it so.
+pub fn open_with_password(
+    path: &Path,
+    password: Option<&str>,
+) -> CoreResult<Box<dyn ArchiveBackend>> {
     let detection = crate::core::detect::detect(path)?;
 
-    match detection.format_hint.as_str() {
-        "lha" => Ok(Box::new(lha::LhaBackend::open(path)?)),
-        "zip" => Ok(Box::new(zip::ZipBackend::open(path)?)),
-        "7z" => Ok(Box::new(sevenz::SevenZBackend::open(path)?)),
+    match (detection.format_hint.as_str(), password) {
+        ("lha", None) => Ok(Box::new(lha::LhaBackend::open(path)?)),
+        ("zip", _) => Ok(Box::new(zip::ZipBackend::open_with_password(
+            path, password,
+        )?)),
+        ("7z", None) => Ok(Box::new(sevenz::SevenZBackend::open(path)?)),
+        (format @ ("lha" | "7z"), Some(_)) => Err(CoreError::UnsupportedFormat(format!(
+            "'{}' is a {format} archive and ART can only use a payload password with a ZIP",
+            path.display()
+        ))),
         _ => Err(CoreError::UnsupportedFormat(format!(
             "'{}' is not an archive ART can open",
             path.display()

@@ -1690,6 +1690,7 @@ fn extract_package_items(
     let medium = PackageMedium {
         path: archive.path.clone(),
         member: package.member.clone(),
+        payload_password: package.payload_password.clone(),
     };
     let mut source = open_package(&medium)?;
 
@@ -4554,6 +4555,7 @@ mod tests {
             open_package(&PackageMedium {
                 path: archive.path.clone(),
                 member: package.member.clone(),
+                payload_password: package.payload_password.clone(),
             })
             .is_err(),
             "the corrupted archive must not itself still open as a real one, \
@@ -4811,30 +4813,36 @@ mod tests {
             resolve_packages_for_add(&without, &packages_dir, &["locale-turkish".to_string()])
                 .unwrap()
                 .unwrap_err();
-        // **The Amiga-side arm, and by name** (fix round 1, M1). BoingBag
-        // 3.9-2 is `encrypted-payload` blocked and the Packages step
-        // disables its checkbox, so the ordinary requirement refusal's
-        // advice — "tick that one too" — is about a tick that is not
-        // available. Asserted as the whole value, so a fallback to the old
-        // variant fails here rather than slipping through a looser
-        // `matches!`.
+        // **The ordinary arm, and by name — and it used to be the
+        // Amiga-side one** (2026-09-08, ART-166's reversal). While BoingBag
+        // 3.9-2 was `encrypted-payload` blocked, the Packages step disabled
+        // its checkbox and "tick that one too" was about a tick that did not
+        // exist; the Amiga-side sentence was the true one. It is now
+        // host-placeable, its checkbox is on this very list, and *"tick
+        // BoingBag 3.9-2 too"* is what somebody can actually do — which is
+        // what the brief predicted this refusal would become.
+        //
+        // Asserted as the whole value, and with the other variant asserted
+        // **absent**, because this is exactly the pair that must not both be
+        // live: two sentences about one state is how a screen tells somebody
+        // to go to a step they do not need.
         assert!(
             refusals.contains(
-                &crate::core::osinstall::RefusalReason::PackageRequirementNeedsAmigaRun {
+                &crate::core::osinstall::RefusalReason::PackageRequirementMissing {
                     package: "T\u{FC}rk\u{E7}e catalogs (BoingBag 3.9-2)".to_string(),
-                    requirement: "BoingBag 3.9-2".to_string(),
+                    requires: "BoingBag 3.9-2".to_string(),
                 }
             ),
-            "the refusal must name both packages and send the user to the Amiga-side step, \
-             got {refusals:?}"
+            "the refusal must name both packages and send the user to the checkbox that is \
+             right there, got {refusals:?}"
         );
         assert!(
             !refusals.iter().any(|r| matches!(
                 r,
-                crate::core::osinstall::RefusalReason::PackageRequirementMissing { .. }
+                crate::core::osinstall::RefusalReason::PackageRequirementNeedsAmigaRun { .. }
             )),
-            "the 'tick that one too' sentence must not fire for a package that cannot be \
-             ticked: {refusals:?}"
+            "the Amiga-side sentence must not fire for a package that can be ticked: \
+             {refusals:?}"
         );
 
         // Arm 2 — the same folder, the same selection, a tree that records
@@ -4927,16 +4935,21 @@ mod tests {
                 // `order` never reached.
                 .expect("a package selection refusal is data, not an AppError; order must not run");
 
-        let refusals = outcome.expect_err("boingbag-39-2 was never run on this tree");
+        let refusals = outcome.expect_err("boingbag-39-2 is not on this tree");
+        // The sentence became the *ordinary* one on 2026-09-08, when
+        // BoingBag 3.9-2 stopped being blocked from the host (ART-166) —
+        // "tick BoingBag 3.9-2 too" is now true, and it is the whole point
+        // of the reversal that it is. What ART-282 is about is unchanged and
+        // still asserted below: names, never ids, and never the raw
+        // `order_over_with_installed` sentence reaching the screen.
         assert!(
             refusals.contains(
-                &crate::core::osinstall::RefusalReason::PackageRequirementNeedsAmigaRun {
+                &crate::core::osinstall::RefusalReason::PackageRequirementMissing {
                     package: "T\u{FC}rk\u{E7}e catalogs (BoingBag 3.9-2)".to_string(),
-                    requirement: "BoingBag 3.9-2".to_string(),
+                    requires: "BoingBag 3.9-2".to_string(),
                 }
             ),
-            "the refusal must name both packages and send the user to the Amiga-side step, \
-             got {refusals:?}"
+            "the refusal must name both packages, got {refusals:?}"
         );
         // Bare ids ('locale-turkish', 'boingbag-39-2') are exactly what the
         // owner saw and exactly what this refusal must never repeat.
@@ -5682,6 +5695,13 @@ mod tests {
                     // tally).
                     "icons",
                     "iconMergeFailures",
+                    // 2026-09-08, the host BoingBag route: one verdict per
+                    // declared extra payload unit (including the ones that
+                    // did not run — "not needed" and "never considered" are
+                    // different things), and what the package's own
+                    // `post_place` steps did to the tree afterwards.
+                    "extraMembers",
+                    "postPlace",
                 ],
             );
         }

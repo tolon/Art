@@ -169,7 +169,13 @@ pub enum PostStep {
 }
 
 /// What one step actually did, so the report can say rather than imply.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Serialize` since 2026-09-08: the host-placement route reports these on
+/// [`crate::core::osinstall::apply::ApplyOutcome::post_place`], where the
+/// Amiga-side route only ever logged them. Tagged like every other outcome
+/// enum on that wire, so a screen switches on `step` rather than on a shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "step", rename_all = "kebab-case")]
 pub enum AppliedStep {
     /// `path`'s bits went from the first spelling to the second.
     Protected {

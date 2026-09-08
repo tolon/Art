@@ -1,4 +1,26 @@
 {
+  "_why_overrides": [
+    "**Corrected 2026-09-08, and the correction is the point of this note.** The list below used",
+    "to be `[\"workbench-base\"]` alone, on a measurement recorded as: \"every one of BoingBag",
+    "3.9-1's 210 files sits at a path the base AmigaOS 3.9 recipe's `workbench-base` component",
+    "already writes - 100%, not merely 'some'\". That was a claim about the *media*, and the",
+    "list has to be a claim about the **tree**: `distribution.json` records which component",
+    "actually placed each file, and AmigaOS 3.9's own recipe splits the Workbench across",
+    "`workbench-base` (the 3.5 half) and `workbench-39` (the 3.9 half). The first real host",
+    "placement, against the owner's own tree, refused with:",
+    "",
+    "    'boingbag-39-1' would write over 122 file(s) it never declared it may replace:",
+    "    C/WBInfo, C/StringSnip, C/SetPatch, C/SetVNC, C/LoadMonDrvs, and 117 more",
+    "",
+    "Counted against that tree's own manifest (2026-09-08): of this payload's 210 files, **122**",
+    "are recorded to `workbench-39`, **24** to `workbench-base`, and 64 are not in the tree at",
+    "all (new files, which overwrite nothing). So both are named, and the old note's 100% was",
+    "right about the disc and wrong about the tree - which is exactly the difference `overrides`",
+    "is written in terms of.",
+    "",
+    "The original note is kept below, because the reason `overrides` may not simply be left",
+    "empty is still the reason it may not be:"
+  ],
   "_why_overrides_workbench_base": [
     "Fix round 1 (Task 4 review). The first version of this file shipped",
     "`overrides: []`, reasoned from the wrong scope: every rule below is",
@@ -55,10 +77,41 @@
     "claiming more than is true cuts this way too."
   ],
   "member": "AmigaOS-Update",
-  "_why_host_placement_block": [
-    "ART-166, measured in Task 8's real run and confirmed three independent ways (ART's own reader, 7-Zip 26.02, the raw general-purpose flag word 0x0003 with bit 0 set): the `AmigaOS-Update` member named above is a ZIP whose every entry is ZipCrypto-encrypted — 233 of 233 entries in 3.9-1's payload, 147 of 147 in 3.9-2's. The password belongs to the BoingBag's own `Updater`, which the wrapper LHA carries beside the payload and which has to run *on* an Amiga; every established distribution builder (HstWB Installer, AmiKit, AmigaSYS, ClassicWB) installs a BoingBag by running that Updater inside an emulator rather than by decrypting anything, and the owner's recorded decision is that ART will write no bypass.  So the rules below are right and unreachable, and spec §10/§89 says ART must not offer what it cannot do. Declaring the block here — data, not code — is what makes the screen refuse the tick with a translated sentence naming the Updater, instead of accepting it and meeting the reader's own raw English `Password required to decrypt file` after the user already confirmed. **That prediction was wrong, and is corrected here rather than left standing (2026-08-25).** It read: \"The day the Amiga-side install round lands, this one key is deleted and nothing else changes.\" That round landed on 2026-08-21 and both BoingBags installed on the owner's own material through ART's own compose-then-install path - and this key STAYS. The block is about placing the payload's files from the host, which is as impossible as it ever was: the Amiga's own Updater writes them, inside the emulator, after the package's own code decrypts its own payload. Deleting this key would put a live tick back on a screen that still cannot do what the tick promises."
+  "_why_payload_password": [
+    "ART-166, and the whole of its history, because a wrong elimination left standing costs",
+    "more than none.",
+    "",
+    "**What was measured (2026-08-25, three independent ways: ART's own reader, 7-Zip 26.02,",
+    "the raw general-purpose flag word 0x0003 with bit 0 set).** The `AmigaOS-Update` member",
+    "named above is a ZIP whose every entry is ZipCrypto-encrypted - 233 of 233 entries in",
+    "3.9-1's payload, 147 of 147 in 3.9-2's. That measurement was and remains correct.",
+    "",
+    "**What was concluded from it, twice, and was wrong.** This file used to carry",
+    "`host_placement_block: \"encrypted-payload\"`, on the reasoning that the key belongs to the",
+    "package's own `Updater` and that every established distribution builder runs that Updater",
+    "inside an emulator. The second half was never checked against the builders that had since",
+    "appeared. **Emu68 Hatcher** and **Emu68-Imager** - both MIT, both building AmigaOS 3.9 for",
+    "the same hardware ART targets - do exactly what this file said nobody does: they open the",
+    "payload with the key they publish in their own source and copy the files onto the tree",
+    "(`src/main/python/emu68hatcher/builder/staging/boingbag.py`, read whole on 2026-09-08).",
+    "",
+    "**The owner's decision, 2026-09-08, in their own words:** \"inatla BoingBag'i Windows",
+    "uzerinden yerlestirmedin; diger proje yapiyor bu isi, bu yuzden is kilitlendi\" /",
+    "\"avukatlik yapma, muhendisiz biz\". It reverses the 2026-08-19 ruling. ART places BoingBag",
+    "1 and 2 from the host, the way those two projects do.",
+    "",
+    "**The key below is Emu68 Hatcher's**, `93ABDF11`, attributed in",
+    "THIRD_PARTY_LICENSES.md with the file it comes from. Verified against the owner's own",
+    "`BoingBag39-1 (1).lha` on 2026-09-08 with Python's `zipfile`: 233 of 233 entries read",
+    "clean, and `C/WBRun` and `Libs/xadmaster.library` both begin `000003F3`, the AmigaOS hunk",
+    "header - so the bytes are real programs and not noise that happened to decrypt.",
+    "",
+    "**`amiga_installer` below STAYS.** The emulator route is not withdrawn: it is still what a",
+    "user who wants the package's own installer to do the work gets, and the chain row's Run",
+    "chooses the host route only because no `host_placement_block` is set (`chain.rs`'s",
+    "`runs_on_amiga`, whose precedence is documented there)."
   ],
-  "host_placement_block": "encrypted-payload",
+  "payload_password": "93ABDF11",
   "_why_amiga_installer": [
     "Measured, not assumed (2026-08-20, 7-Zip 26.02 against the owner's own",
     "BoingBag39-1.lha). Two readings:",
@@ -255,11 +308,87 @@
       "name": "the original AmigaOS 3.9 CD-ROM"
     }
   },
+  "_why_post_place": [
+    "The host-side counterpart of `amiga_installer.post_install` above, and the same ten files",
+    "for the same reason (ART-227): `Resident` refuses a command without the `p` bit, AmigaOS",
+    "3.9's own boot makes commands resident, and a tree missing these boots and then fails a",
+    "line at a time.",
+    "",
+    "**Measured against the Updater's own tree, not copied from the list above.** The round-3",
+    "measurement hashed every file of a clean AmigaOS 3.9 tree and of the tree ART's own",
+    "BoingBag 1 emulator run produced (`E:\\amiga\\ProjeART\\r3-measure\\logs`, 2026-09-08). Of",
+    "the 4 015 files in the second, the `.uaem` sidecars that differ are exactly these ten",
+    "files' - `C/SetEnv.uaem` and `C/WBRun.uaem` created, `C/LoadMonDrvs.uaem`,",
+    "`C/LoadResource.uaem` and `C/wbinfo.uaem` changed from `----rwed` to `--p-rwed`,",
+    "`S/Startup-Sequence-BB3.9-1.uaem` and `S/Stream-Amplifier.rexx.uaem` created as `-s--rwed`",
+    "- and `C/MakeDir`, `C/MakeLink` and `S/Start-Amplifier.rexx` already carried the bit off",
+    "the CD, so setting it there is a no-op rather than a change. A host placement that copied",
+    "the payload and stopped would leave seven files differing from the Updater's tree, and",
+    "nothing would say so: exactly the failure that does not crash.",
+    "",
+    "The same ten are what HstWB Installer sets, in the same two groups (`+prwed` on the",
+    "commands, `+srwed` on the scripts), which is where the list was found. Every one is placed",
+    "by this package's own payload, so `protect`'s refusal of an absent file cannot fire on a",
+    "placement that succeeded."
+  ],
+  "post_place": [
+    {
+      "step": "protect",
+      "path": "C/LoadMonDrvs",
+      "add": "p"
+    },
+    {
+      "step": "protect",
+      "path": "C/LoadResource",
+      "add": "p"
+    },
+    {
+      "step": "protect",
+      "path": "C/MakeDir",
+      "add": "p"
+    },
+    {
+      "step": "protect",
+      "path": "C/MakeLink",
+      "add": "p"
+    },
+    {
+      "step": "protect",
+      "path": "C/SetEnv",
+      "add": "p"
+    },
+    {
+      "step": "protect",
+      "path": "C/WBInfo",
+      "add": "p"
+    },
+    {
+      "step": "protect",
+      "path": "C/WBRun",
+      "add": "p"
+    },
+    {
+      "step": "protect",
+      "path": "S/Start-Amplifier.rexx",
+      "add": "s"
+    },
+    {
+      "step": "protect",
+      "path": "S/Startup-Sequence-BB3.9-1",
+      "add": "s"
+    },
+    {
+      "step": "protect",
+      "path": "S/Stream-Amplifier.rexx",
+      "add": "s"
+    }
+  ],
   "_why_chain_position": "2 of the material's own order (design section 1 of 2026-09-08-os-builder-chain-design.md): the CD is 1, and BoingBag 3.9-1 is the first thing that goes on it. Its own Install script reads version.library off the target and refuses anything but 45, which is the arrow the chain draws between rows 1 and 2.",
   "chain_position": 2,
   "requires": [],
   "overrides": [
-    "workbench-base"
+    "workbench-base",
+    "workbench-39"
   ],
   "rules": [
     {

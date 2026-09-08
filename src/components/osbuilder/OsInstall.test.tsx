@@ -2397,6 +2397,8 @@ describe("a release switch does not leave the other release's answers on screen 
       removed: [],
       icons: [],
       iconMergeFailures: 0,
+    extraMembers: [],
+    postPlace: [],
     },
     stated_release: { verdict: "unstated" },
   };
@@ -2472,6 +2474,8 @@ describe("the tree it builds is the tree the next steps get (ART-197)", () => {
       removed: [],
       icons: [],
       iconMergeFailures: 0,
+    extraMembers: [],
+    postPlace: [],
     },
     stated_release: { verdict: "unstated" },
   };
@@ -2569,6 +2573,8 @@ describe("Task 9: the tree's own release marker gets its own line", () => {
     removed: [],
     icons: [],
     iconMergeFailures: 0,
+    extraMembers: [],
+    postPlace: [],
   };
 
   it("reports a confirmed marker by its own text", async () => {

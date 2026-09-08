@@ -265,6 +265,35 @@ pub struct Package {
     /// The member holding the payload, for a package whose files sit inside
     /// a second archive. `None` for loose files at direct paths.
     pub member: Option<String>,
+    /// The key that opens [`member`](Self::member), for a package whose
+    /// publisher shipped its payload encrypted. `None` for every package
+    /// whose payload is in clear.
+    ///
+    /// **The owner's decision, 2026-09-08 (ART-166).** Their words:
+    /// *"inatla BoingBag'ı Windows üzerinden yerleştirmedin; diğer proje
+    /// yapıyor bu işi, bu yüzden iş kilitlendi"* / *"avukatlık yapma,
+    /// mühendisiz biz"*. It reverses the 2026-08-19 ruling that ART would
+    /// write no bypass. What ART does now is what **Emu68 Hatcher** and
+    /// **Emu68-Imager** — both MIT, both distribution builders for the same
+    /// hardware — already do: open the package's own payload with the key
+    /// those projects publish
+    /// (`src/main/python/emu68hatcher/builder/staging/boingbag.py`) and copy
+    /// the files onto the tree. Two BoingBags that took ~140 s each inside an
+    /// emulator, needed a ROM and a licence, and could not run at all on a
+    /// machine without one, now take seconds on the host.
+    ///
+    /// **Recipe data, never code.** A third such package is a JSON file. The
+    /// value travels to the reader on [`super::scan::PackageMedium`] and
+    /// reaches `core::archive::zip`, which uses it and nothing else: ART
+    /// derives no key, tries no second key, and refuses once
+    /// ([`CoreError::PayloadPasswordRefused`](crate::core::error::CoreError))
+    /// when the one it carries does not fit.
+    ///
+    /// Only meaningful with a [`member`](Self::member) — the wrapper LHA is
+    /// never the encrypted half — and `validate_payload_password` refuses the
+    /// combination rather than letting a key be carried where nothing can use
+    /// it.
+    pub payload_password: Option<String>,
     /// The second half of this package's identity: a path that must exist
     /// **inside** the archive, below its top-level directory, for that
     /// archive to be this package's — `locale/catalogs/türkçe` for the
@@ -341,6 +370,104 @@ pub struct Package {
     /// were in between ART-166 and this round. Folding them into one enum
     /// would have made that state unrepresentable and so unreportable.
     pub amiga_installer: Option<AmigaInstaller>,
+    /// What the tree needs done **after this package's files are placed from
+    /// the host** — the host-side counterpart of
+    /// [`AmigaInstaller::post_install`], and the same
+    /// [`PostStep`](crate::core::amigainstall::finish::PostStep) vocabulary.
+    ///
+    /// **Two lists rather than one shared one, because the two routes leave
+    /// different work behind** (2026-09-08). The Amiga-side list is what the
+    /// package's own `Updater` does *not* do after it runs; this list is what
+    /// ART's own placement does not do after *it* runs. They overlap heavily
+    /// today — BoingBag 3.9-1's ten protection bits are wanted either way —
+    /// and they are not the same list: Emu68 Hatcher renames BoingBag 3.9-2's
+    /// `Devs/NSDPatch.cfg.BB39-2` into place and the `Updater` does not, so a
+    /// single list would have to be wrong on one route.
+    ///
+    /// Runs against the tree root after the last file is written and after
+    /// any [`extra_members`](Self::extra_members), in declaration order.
+    pub post_place: Vec<crate::core::amigainstall::finish::PostStep>,
+    /// Further payload archives inside the same wrapper, each with its own
+    /// rules and its own condition — see [`ExtraMember`].
+    ///
+    /// Empty for every package but BoingBag 3.9-2, whose wrapper carries
+    /// `XAD-Update` beside `AmigaOS-Update`.
+    pub extra_members: Vec<ExtraMember>,
+}
+
+impl Package {
+    /// True when this package **cannot be ticked on the host Packages step**
+    /// and there *is* an Amiga-side route that can install it — the one case
+    /// where *"do that one on the Amiga-side step first"* is both necessary
+    /// advice and possible advice.
+    ///
+    /// **Keyed on the block, not on the installer** (ART-282 review,
+    /// 2026-09-08). What decides whether a row can be ticked is
+    /// [`host_placement_block`](Self::host_placement_block) — `PackagePanel`
+    /// disables a row exactly when `hostPlacementBlock !== null` — and
+    /// [`amiga_installer`](Self::amiga_installer) is a different question
+    /// with a different answer. Both BoingBags declare an installer *and* are
+    /// host-placeable since the owner's 2026-09-08 reversal, so a predicate
+    /// reading the installer alone would go on telling somebody that BoingBag
+    /// 3.9-2 "cannot be ticked on this list" while the checkbox sat there,
+    /// enabled, in front of them: advice that is wrong in the one way this
+    /// project pays most for.
+    ///
+    /// Both halves, not just the first: a package that is blocked and has no
+    /// installer (`euro-update`, `needs-fixfonts`) cannot be done on the
+    /// Amiga either, and sending somebody to a step that will refuse it is
+    /// the same defect from the other end. Nothing shipped names such a
+    /// package as a `requires`, and this is what keeps the sentence honest if
+    /// something ever does.
+    pub fn only_installable_on_the_amiga(&self) -> bool {
+        self.host_placement_block.is_some() && self.amiga_installer.is_some()
+    }
+}
+
+/// A second payload archive inside a package's wrapper, applied after the
+/// main [`member`](Package::member) when its own condition says so.
+///
+/// **A placement unit, not a second package.** BoingBag 3.9-2's wrapper holds
+/// `AmigaOS-Update` (the update itself) *and* `XAD-Update` (the xadmaster
+/// client set), and the package's own `Updater` applies the second one only
+/// when the tree's `Libs/xadmaster.library` is older than 10 — HstWB
+/// Installer's `Install-Boing-Bag-2` does the same, lines 32-36 (MIT):
+///
+/// ```text
+/// ; run xad updater, if xadmaster.library version is less than 10
+/// Version >>SYS:hstwb-installer.log "SYS:Libs/xadmaster.library" 10 FILE
+/// IF WARN
+///   SYS:T/BoingBags/BoingBag3.9-2/C/Updater …/XAD-Update "SYS:"
+/// ENDIF
+/// ```
+///
+/// So it is one package's files, recorded under one component id, and not a
+/// package of its own: a second recipe would have to be `requires`d, ordered,
+/// ticked and reported separately for something the user never chose apart
+/// from the package it is inside.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ExtraMember {
+    /// The member's name inside the wrapper, relative to its top-level
+    /// directory — `XAD-Update`, never `BoingBag3.9-2/XAD-Update`.
+    pub member: String,
+    /// What to place out of it, in the same shape every other placement takes.
+    pub rules: Vec<PathRule>,
+    /// Skip this unit when the tree's own file at `path` already states
+    /// `version` or newer. `None` means always apply it.
+    ///
+    /// **Read on the host, from the tree, before anything is placed.** The
+    /// timing is deliberate and it is only safe because it was measured: the
+    /// gate's file must not be one the *main* member would place, or the
+    /// answer would be about a file that is one step out of date. BoingBag
+    /// 3.9-2's `AmigaOS-Update` carries 121 files and **no
+    /// `Libs/xadmaster.library`** among them (the owner's own
+    /// `BoingBag39-2.lha`, every entry decrypted and listed, 2026-09-08), so
+    /// for the one shipped unit the two orders give the same answer. Reading
+    /// it first is what lets every overwrite this unit would make be checked
+    /// against the manifest *before a byte is written*, which is the rule the
+    /// whole module is built on.
+    #[serde(default)]
+    pub unless_file_version_at_least: Option<crate::core::amigainstall::FileVersionGate>,
 }
 
 /// What to run on the Amiga to install this package, when ART cannot place
@@ -624,6 +751,8 @@ struct RawPackage {
     #[serde(default)]
     member: Option<String>,
     #[serde(default)]
+    payload_password: Option<String>,
+    #[serde(default)]
     distinguished_by: Option<String>,
     #[serde(default)]
     requires: Vec<String>,
@@ -637,6 +766,10 @@ struct RawPackage {
     host_placement_block: Option<HostPlacementBlock>,
     #[serde(default)]
     amiga_installer: Option<AmigaInstaller>,
+    #[serde(default)]
+    post_place: Vec<crate::core::amigainstall::finish::PostStep>,
+    #[serde(default)]
+    extra_members: Vec<ExtraMember>,
     #[serde(default)]
     overrides: Vec<String>,
     rules: Vec<PathRule>,
@@ -706,6 +839,7 @@ impl RawPackage {
             releases: self.releases,
             media: self.media,
             member: self.member,
+            payload_password: self.payload_password,
             distinguished_by: self.distinguished_by,
             requires: self.requires,
             requires_components: self.requires_components,
@@ -714,6 +848,8 @@ impl RawPackage {
             host_placement_block: self.host_placement_block,
             component,
             amiga_installer: self.amiga_installer,
+            post_place: self.post_place,
+            extra_members: self.extra_members,
         }
     }
 }
@@ -974,7 +1110,152 @@ fn parse(json: &str) -> CoreResult<Package> {
     validate_component("package", &package.component)?;
     validate_installer(&package)?;
     validate_releases(&package)?;
+    validate_host_placement(&package)?;
     Ok(package)
+}
+
+/// The three things a host placement declares beyond its rules —
+/// `payload_password`, `post_place` and `extra_members` — checked at the
+/// boundary where the JSON is read, exactly as `validate_installer` checks the
+/// Amiga-side half.
+///
+/// Every path here becomes a real path inside a real tree, so each goes
+/// through the same [`validate_path`] gate a rule's does. A recipe is shipped
+/// data and is still parsed (see [`validate_installer`]'s own doc comment):
+/// the file can be hand-edited, and a `..` in an `extra_members` rule would
+/// reach outside the tree exactly as it would anywhere else.
+fn validate_host_placement(package: &Package) -> CoreResult<()> {
+    // A key with nothing to unlock. `open_package_staging_in` drops it in
+    // that case rather than applying it to the wrapper, and a recipe that
+    // carries one is either a typo or a misunderstanding about which of the
+    // two archives is locked — either way, something the author has to be
+    // told rather than have quietly ignored.
+    if package.payload_password.is_some() && package.member.is_none() {
+        return Err(CoreError::Malformed {
+            format: "package".into(),
+            detail: format!(
+                "'{}': a payload_password is declared and no member is — the key opens the \
+                 nested payload, and the wrapper archive is never the encrypted half",
+                package.id
+            ),
+        });
+    }
+    if package
+        .payload_password
+        .as_deref()
+        .is_some_and(|p| p.trim().is_empty())
+    {
+        return Err(CoreError::Malformed {
+            format: "package".into(),
+            detail: format!(
+                "'{}': the payload_password is empty — declare the key or declare none",
+                package.id
+            ),
+        });
+    }
+
+    for step in &package.post_place {
+        for (field, value) in post_step_paths(step) {
+            validate_path("package", &package.id, field, value, false)?;
+        }
+    }
+
+    for extra in &package.extra_members {
+        if extra.member.trim().is_empty() {
+            return Err(CoreError::Malformed {
+                format: "package".into(),
+                detail: format!("'{}': an extra_members entry names no member", package.id),
+            });
+        }
+        validate_path(
+            "package",
+            &package.id,
+            "extra_members[].member",
+            &extra.member,
+            false,
+        )?;
+        // Not a placement plan at all if it is empty, and a unit that places
+        // nothing would still be reported as *applied* — the claim-what-you-
+        // did-not-do shape.
+        if extra.rules.is_empty() {
+            return Err(CoreError::Malformed {
+                format: "package".into(),
+                detail: format!(
+                    "'{}': the extra member '{}' declares no rules, so applying it would place \
+                     nothing while reporting that it ran",
+                    package.id, extra.member
+                ),
+            });
+        }
+        // The same two gates a component's own rules go through
+        // (`recipe::validate_component`), reusing the one path validator
+        // rather than a second copy of what a rule may say. The id in the
+        // refusal names the unit, not just the package, so an author with two
+        // extra members can tell which one they mistyped.
+        let unit = format!("{}:{}", package.id, extra.member);
+        for rule in &extra.rules {
+            validate_path(
+                "package",
+                &unit,
+                "extra_members[].rules.from",
+                &rule.from,
+                true,
+            )?;
+            validate_path(
+                "package",
+                &unit,
+                "extra_members[].rules.to",
+                &rule.to,
+                false,
+            )?;
+        }
+        if let Some(gate) = &extra.unless_file_version_at_least {
+            validate_path(
+                "package",
+                &package.id,
+                "extra_members[].unless_file_version_at_least.path",
+                &gate.path,
+                false,
+            )?;
+            // Zero can never close: every file that states anything states at
+            // least 0, so the unit could never be skipped — a gate that
+            // reads as a condition and is not one.
+            if gate.version == 0 {
+                return Err(CoreError::Malformed {
+                    format: "package".into(),
+                    detail: format!(
+                        "'{}': the extra member '{}' has a version gate of 0, which can never \
+                         close; declare the version the file has to already state, or declare \
+                         no gate",
+                        package.id, extra.member
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Every recipe-supplied path inside one [`PostStep`], with the field name a
+/// refusal should quote.
+///
+/// A `match` rather than a method on `PostStep`, so a new variant is a compile
+/// error **here** — where the question is "does this one carry a path that has
+/// to be validated?" — rather than a variant that quietly validates nothing.
+fn post_step_paths(
+    step: &crate::core::amigainstall::finish::PostStep,
+) -> Vec<(&'static str, &String)> {
+    use crate::core::amigainstall::finish::PostStep;
+    match step {
+        PostStep::Protect { path, .. } => vec![("post_place[].path", path)],
+        PostStep::ReplaceKeepingBackup {
+            target,
+            replacement,
+        } => vec![
+            ("post_place[].target", target),
+            ("post_place[].replacement", replacement),
+        ],
+    }
 }
 
 /// ART-209 — a package belongs to at least one release ART ships a recipe
@@ -1210,12 +1491,18 @@ pub(super) fn order_over_with_installed(
             // requirement can never be ticked from this list at all,
             // rather than "which was not chosen" — advice that is simply
             // wrong for a requirement nobody could have chosen here.
+            //
+            // **Through `only_installable_on_the_amiga`, the one predicate**
+            // (ART-282 review): reading `amiga_installer` here and the block
+            // on the screen is two answers to "can this be ticked?", and
+            // since 2026-09-08 they disagree — both BoingBags declare an
+            // installer and are tickable.
             let required = index.get(need.as_str());
             let requirement = required
                 .map(|other| other.name.clone())
                 .unwrap_or_else(|| need.clone());
             let advice = match required {
-                Some(other) if other.amiga_installer.is_some() => {
+                Some(other) if other.only_installable_on_the_amiga() => {
                     " — install it first on the Amiga-side step"
                 }
                 _ => "",
@@ -1507,11 +1794,17 @@ mod tests {
         }
     }
 
-    /// **The three packages ART cannot place from Windows each say a
-    /// different thing about why**, and the two that it can say nothing.
+    /// **The two packages ART cannot place from Windows each say a
+    /// different thing about why**, and the rest say nothing.
     /// A block that spread would silently turn the feature off and still
     /// look safe; a block that collapsed into one variant would send half
     /// its readers to the wrong fix.
+    ///
+    /// **Both BoingBags left this list on 2026-09-08** — see
+    /// `Package::payload_password` and ART-166. They are asserted `None`
+    /// here, not merely absent, because "no longer blocked" is the change
+    /// and a test that only lists the blocked ones would pass just as well
+    /// if a block came back.
     #[test]
     fn each_blocked_package_names_the_reason_that_is_true_of_it() {
         use super::super::HostPlacementBlock;
@@ -1527,14 +1820,18 @@ mod tests {
             Some(HostPlacementBlock::NeedsInstallerScript),
             "its Install script chooses files by CPU, machine and language"
         );
-        assert_eq!(
-            block("boingbag-39-1"),
-            Some(HostPlacementBlock::EncryptedPayload)
-        );
+        for id in ["boingbag-39-1", "boingbag-39-2"] {
+            assert_eq!(
+                block(id),
+                None,
+                "{id} is placed from Windows with the key its recipe carries (ART-166, \
+                 the owner's 2026-09-08 reversal)"
+            );
+        }
         assert_eq!(
             block("boingbag-39-2-contribution"),
             None,
-            "plain files, no program, no script — the one host-placeable archive of the chain"
+            "plain files, no program, no script"
         );
         assert_eq!(block("locale-turkish"), None);
     }
@@ -1674,25 +1971,154 @@ mod tests {
         assert!(two.requires.contains(&"boingbag-39-1".to_string()));
     }
 
-    /// **ART-166, as shipped data rather than as prose.** Both BoingBag
-    /// recipes name a payload ART cannot read on the host, so neither may
-    /// be offered as placeable; the Turkish catalog pack has no such block
-    /// and must not acquire one by accident. Asserted in both directions
-    /// because a block that spreads to every package would silently turn
-    /// the whole feature off and still look "safe".
+    /// **ART-166 as shipped data, after the owner's 2026-09-08 reversal.**
+    /// Both BoingBag recipes carry the key that opens their own payload and
+    /// **no** `host_placement_block`, so both are offered on the Packages
+    /// step; the Turkish catalog pack needs no key and must not acquire one
+    /// by accident.
+    ///
+    /// Asserted in every direction that matters, because each half fails
+    /// silently in a different way: a block coming back would turn the
+    /// feature off while still looking "safe", a key that spread to a
+    /// package whose payload is in clear would be handed to a reader that
+    /// has nothing to unlock, and a key that quietly went missing would
+    /// leave a tickable row whose payload cannot be opened at all.
     #[test]
-    fn both_boingbags_declare_the_encrypted_payload_block_and_the_catalog_pack_does_not() {
-        use super::super::HostPlacementBlock;
+    fn both_boingbags_carry_their_payload_key_and_no_block_and_the_catalog_pack_carries_neither() {
         for id in ["boingbag-39-1", "boingbag-39-2"] {
+            let package = super::by_id(id).unwrap();
             assert_eq!(
-                super::by_id(id).unwrap().host_placement_block,
-                Some(HostPlacementBlock::EncryptedPayload),
-                "{id} names an encrypted payload and cannot be placed from the host"
+                package.host_placement_block, None,
+                "{id} is placed from the host now (ART-166)"
+            );
+            assert!(
+                package.payload_password.is_some(),
+                "{id} must carry the key its own payload needs"
+            );
+            assert!(
+                package.member.is_some(),
+                "{id}'s key opens a nested member, and a key without one is refused at parse"
             );
         }
+        // The two keys are Emu68 Hatcher's own, and they are **different** —
+        // one value used for both would open one payload and refuse the
+        // other, which is the mistake copying rather than reading produces.
         assert_eq!(
-            super::by_id("locale-turkish").unwrap().host_placement_block,
-            None,
+            super::by_id("boingbag-39-1")
+                .unwrap()
+                .payload_password
+                .as_deref(),
+            Some("93ABDF11")
+        );
+        assert_eq!(
+            super::by_id("boingbag-39-2")
+                .unwrap()
+                .payload_password
+                .as_deref(),
+            Some("3FB6986B-B0AD6339-4FF3254B")
+        );
+
+        let pack = super::by_id("locale-turkish").unwrap();
+        assert_eq!(pack.host_placement_block, None);
+        assert_eq!(pack.payload_password, None, "its payload is in clear");
+    }
+
+    /// **A key with nothing to unlock is a refusal, not a shrug.** The
+    /// wrapper archive is never the encrypted half, so a recipe declaring a
+    /// `payload_password` and no `member` has misunderstood which of the two
+    /// archives the key belongs to — and `open_package_staging_in` would
+    /// silently drop it, leaving a package that reads as configured and is
+    /// not.
+    #[test]
+    fn a_payload_password_without_a_member_is_refused() {
+        let err = parse(
+            r#"{ "id": "x", "name": "X", "releases": ["AmigaOS 3.9"], "media": "X",
+                 "payload_password": "secret",
+                 "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ] }"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("payload_password"), "{err}");
+        assert!(err.contains("no member"), "{err}");
+
+        // And the control: the same recipe with a member parses, so the
+        // refusal is about the missing member and not about the key.
+        assert!(parse(
+            r#"{ "id": "x", "name": "X", "releases": ["AmigaOS 3.9"], "media": "X",
+                 "member": "Payload", "payload_password": "secret",
+                 "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ] }"#,
+        )
+        .is_ok());
+    }
+
+    /// The extra-payload unit, as shipped data: one member, its own gate,
+    /// and rules that cover the archive the recipe's `_why` measured.
+    #[test]
+    fn boingbag_two_declares_the_xad_unit_with_the_gate_hstwb_states() {
+        let two = super::by_id("boingbag-39-2").unwrap();
+        assert_eq!(two.extra_members.len(), 1);
+        let xad = &two.extra_members[0];
+        assert_eq!(xad.member, "XAD-Update");
+        let gate = xad.unless_file_version_at_least.as_ref().expect(
+            "the unit is conditional; applying it unconditionally would downgrade a \
+                     tree that already carries a newer xadmaster",
+        );
+        assert_eq!(gate.path, "Libs/xadmaster.library");
+        assert_eq!(gate.version, 10, "HstWB's own number, not one ART chose");
+        let mut froms: Vec<&str> = xad.rules.iter().map(|r| r.from.as_str()).collect();
+        froms.sort_unstable();
+        assert_eq!(
+            froms,
+            vec!["C", "Libs"],
+            "the measured top level of XAD-Update, whole"
+        );
+
+        // Nobody else has one, and that is the point of it being data.
+        for id in ["boingbag-39-1", "locale-turkish", "boingbags-39-3-4"] {
+            assert!(
+                super::by_id(id).unwrap().extra_members.is_empty(),
+                "{id} declares no second payload"
+            );
+        }
+    }
+
+    /// **The host route's own after-work, and it is not the Amiga route's.**
+    /// BoingBag 1 owes the same ten protection bits either way; BoingBag 2
+    /// owes one rotation either way and a second one only on the host, where
+    /// ART follows Emu68 Hatcher rather than the package's own `Updater`.
+    /// Asserted as the difference, because a shared list would be wrong on
+    /// one of the two routes and nothing else would say so.
+    #[test]
+    fn each_boingbags_host_side_steps_are_the_ones_its_own_route_owes() {
+        use crate::core::amigainstall::finish::PostStep;
+
+        let one = super::by_id("boingbag-39-1").unwrap();
+        assert_eq!(one.post_place.len(), 10);
+        assert_eq!(
+            one.post_place,
+            one.amiga_installer.as_ref().unwrap().post_install,
+            "BoingBag 1 owes the same bits whoever placed the files"
+        );
+
+        let two = super::by_id("boingbag-39-2").unwrap();
+        let targets: Vec<&str> = two
+            .post_place
+            .iter()
+            .map(|step| match step {
+                PostStep::ReplaceKeepingBackup { target, .. } => target.as_str(),
+                PostStep::Protect { path, .. } => path.as_str(),
+            })
+            .collect();
+        assert_eq!(
+            targets,
+            vec!["Devs/AmigaOS ROM Update", "Devs/NSDPatch.cfg"],
+            "the ROM update rotation both routes owe, and the NSDPatch rename only this one does"
+        );
+        assert_eq!(
+            two.amiga_installer.as_ref().unwrap().post_install.len(),
+            1,
+            "the Amiga route still leaves NSDPatch.cfg alone — the Updater does, and that \
+             list describes what the Updater leaves behind"
         );
     }
 
@@ -2458,16 +2884,26 @@ mod tests {
     /// Choosing a package without what it requires is refused, saying what
     /// is missing — not silently added, because adding a whole package the
     /// user did not ask for is a bigger surprise than a refusal. By the
-    /// catalogue's own **name**, never the bare id (ART-282: BoingBag 3.9-1
-    /// is also `amiga_installer`-declared, so the refusal names the
-    /// Amiga-side step too).
+    /// catalogue's own **name**, never the bare id (ART-282).
+    ///
+    /// **The advice changed on 2026-09-08 and this test changed with it.**
+    /// It used to assert "Amiga-side step", because BoingBag 3.9-1 declared
+    /// an `amiga_installer` and was blocked from the host. It still declares
+    /// the installer and is no longer blocked, so the box the user is being
+    /// sent to is right there on this list — and the ordinary sentence is
+    /// the true one. The negative arm is the point: the old advice must be
+    /// **gone**, not merely joined by the new one.
     #[test]
     fn a_requirement_that_was_not_chosen_is_refused_by_name() {
         let err = super::order(&["boingbag-39-2".into()])
             .unwrap_err()
             .to_string();
         assert!(err.contains("BoingBag 3.9-1"), "got {err}");
-        assert!(err.contains("Amiga-side step"), "got {err}");
+        assert!(err.contains("which was not chosen"), "got {err}");
+        assert!(
+            !err.contains("Amiga-side step"),
+            "BoingBag 3.9-1 can be ticked on this very list now: got {err}"
+        );
         assert!(
             !err.contains("boingbag-39-1"),
             "the id must not leak: got {err}"
@@ -2484,8 +2920,11 @@ mod tests {
             name: id.to_string(),
             media: "SyntheticMedia".to_string(),
             member: None,
+            payload_password: None,
             distinguished_by: None,
             amiga_installer: None,
+            post_place: Vec::new(),
+            extra_members: Vec::new(),
             requires: requires.iter().map(|s| s.to_string()).collect(),
             requires_components: Vec::new(),
             chain_position: None,
@@ -2563,6 +3002,13 @@ mod tests {
         let x = synthetic("x", &["y"]);
         let mut y = synthetic("y", &[]);
         y.name = "Y Display Name".to_string();
+        // **Both halves, because both are what makes the advice true**
+        // (ART-282 review, 2026-09-08). What stops a row being ticked is the
+        // block; the installer is what makes the Amiga-side step able to do
+        // anything about it. A requirement with only the installer — which
+        // is what both BoingBags are now — is tickable right here, and the
+        // arm below must not fire for it (see the next test).
+        y.host_placement_block = Some(super::super::HostPlacementBlock::EncryptedPayload);
         y.amiga_installer = Some(AmigaInstaller {
             program: "C/Updater".to_string(),
             args: Vec::new(),
@@ -2597,6 +3043,48 @@ mod tests {
         assert!(err.contains("Y Display Name"), "got {err}");
         assert!(err.contains("which was not chosen"), "got {err}");
         assert!(!err.contains("Amiga-side step"), "got {err}");
+    }
+
+    /// **The shape both BoingBags are in since 2026-09-08: an
+    /// `amiga_installer` and no block.** ART-282's review found this
+    /// predicate keyed on the installer in two places, and with the reversal
+    /// that reading became wrong in the worst direction — telling somebody a
+    /// package "cannot be ticked on this list" while its checkbox sat in
+    /// front of them, enabled.
+    ///
+    /// The third arm is here rather than only the two above because it is
+    /// the one a reader would think is covered by them and is not: without
+    /// the block the row is ordinary, whatever else it declares.
+    #[test]
+    fn a_host_placeable_requirement_that_also_has_an_installer_gets_the_ordinary_advice() {
+        let x = synthetic("x", &["y"]);
+        let mut y = synthetic("y", &[]);
+        y.name = "BoingBag 3.9-2".to_string();
+        y.amiga_installer = Some(AmigaInstaller {
+            program: "C/Updater".to_string(),
+            args: Vec::new(),
+            minimum_version: None,
+            overlays: Vec::new(),
+            required_medium: None,
+            follow_ups: Vec::new(),
+            post_install: Vec::new(),
+            not_yet_runnable: None,
+        });
+        assert_eq!(y.host_placement_block, None, "the premise of this test");
+        assert!(
+            !y.only_installable_on_the_amiga(),
+            "an installer alone does not make a package Amiga-only"
+        );
+
+        let err = super::order_over(&["x".to_string()], &[x, y])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("BoingBag 3.9-2"), "got {err}");
+        assert!(err.contains("which was not chosen"), "got {err}");
+        assert!(
+            !err.contains("Amiga-side step"),
+            "it can be ticked on this list: got {err}"
+        );
     }
 
     /// Two shipped JSON files naming the same id is the failure mode that

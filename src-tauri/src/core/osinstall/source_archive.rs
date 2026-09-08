@@ -362,8 +362,8 @@ impl ArchiveSource {
     /// what an already-volume-relative archive (a BoingBag payload's own
     /// ZIP) needs: `open`'s rule would see thirteen top-level directories and
     /// refuse it.
-    fn open_flat(path: &Path) -> CoreResult<Self> {
-        let mut backend = crate::core::archive::open(path)?;
+    fn open_flat(path: &Path, password: Option<&str>) -> CoreResult<Self> {
+        let mut backend = crate::core::archive::open_with_password(path, password)?;
         let raw_entries = backend.entries()?;
         let (parsed, refused_names) = Self::parsed_entries(&raw_entries);
         let entries: Vec<(String, Option<usize>, ArchiveEntry)> = parsed
@@ -399,7 +399,19 @@ impl ArchiveSource {
     /// inner archive's paths are already volume-relative, and the resulting
     /// `volume_name` is set to the **wrapper's** top-level directory, not
     /// anything read from inside the payload.
-    pub fn open_nested(outer: &Path, member: &str, scratch_root: &Path) -> CoreResult<Self> {
+    ///
+    /// `password` is the key for the **inner** archive, from the package's own
+    /// recipe (`package::Package::payload_password`); the wrapper is never
+    /// encrypted and never gets it. `None` is the ordinary case. A key that
+    /// does not fit is [`CoreError::PayloadPasswordRefused`] naming `outer` —
+    /// the file the user can go and look at, not the scratch copy — raised
+    /// here, before any caller has read an entry or written a byte.
+    pub fn open_nested(
+        outer: &Path,
+        member: &str,
+        scratch_root: &Path,
+        password: Option<&str>,
+    ) -> CoreResult<Self> {
         let mut wrapper = Self::open(outer)?;
         let normalized_member = Self::normalized(member);
         let (index, is_dir) = {
@@ -433,7 +445,20 @@ impl ArchiveSource {
         // not to be an archive at all never leaves a leftover behind.
         let tmp = Self::write_nested_temp_file(scratch_root, member, &bytes)?;
         let opened = (|| -> CoreResult<Self> {
-            let mut inner = Self::open_flat(&tmp)?;
+            // The **inner** archive is the one a package's publisher locked;
+            // the wrapper LHA above never is. So the key goes here and
+            // nowhere else, and `open_flat` verifies it before this function
+            // returns — a wrong key is a refusal with the *wrapper's* own
+            // path in it (`CoreError::PayloadPasswordRefused` is built from
+            // the file the backend was handed, which is the scratch copy, so
+            // the sentence is rebuilt below against the file the user can
+            // actually go and look at).
+            let mut inner = Self::open_flat(&tmp, password).map_err(|err| match err {
+                CoreError::PayloadPasswordRefused { .. } => CoreError::PayloadPasswordRefused {
+                    archive: outer.display().to_string(),
+                },
+                other => other,
+            })?;
             inner.volume_name = wrapper.volume_name().to_string();
             inner.path = outer.to_path_buf();
             // The wrapper is discarded here, so anything `safe_join` refused
@@ -785,7 +810,8 @@ mod tests {
         );
 
         let mut src =
-            ArchiveSource::open_nested(&outer, "AmigaOS-Update", &std::env::temp_dir()).unwrap();
+            ArchiveSource::open_nested(&outer, "AmigaOS-Update", &std::env::temp_dir(), None)
+                .unwrap();
         // The volume name is the *wrapper's* top-level directory ("BB"),
         // never anything read from inside the payload — swapping outer and
         // inner identity here would still open, still read, and still be
@@ -822,7 +848,7 @@ mod tests {
         let handle_a = std::thread::spawn(move || {
             barrier_a.wait();
             let mut src =
-                ArchiveSource::open_nested(&outer_a, "AmigaOS-Update", &std::env::temp_dir())
+                ArchiveSource::open_nested(&outer_a, "AmigaOS-Update", &std::env::temp_dir(), None)
                     .unwrap();
             src.read("C/Version").unwrap()
         });
@@ -831,7 +857,7 @@ mod tests {
         let handle_b = std::thread::spawn(move || {
             barrier_b.wait();
             let mut src =
-                ArchiveSource::open_nested(&outer_b, "AmigaOS-Update", &std::env::temp_dir())
+                ArchiveSource::open_nested(&outer_b, "AmigaOS-Update", &std::env::temp_dir(), None)
                     .unwrap();
             src.read("C/Version").unwrap()
         });
@@ -853,7 +879,8 @@ mod tests {
             &[("BB/AmigaOS-Update", b"not an archive, just bytes")],
         );
         assert!(
-            ArchiveSource::open_nested(&outer, "AmigaOS-Update", &std::env::temp_dir()).is_err()
+            ArchiveSource::open_nested(&outer, "AmigaOS-Update", &std::env::temp_dir(), None)
+                .is_err()
         );
     }
 
@@ -862,7 +889,7 @@ mod tests {
     fn a_missing_member_is_refused_by_name() {
         let dir = scratch("archive-nested-missing");
         let outer = package_zip(&dir, "x.zip", &[("BB/Something", b"x")]);
-        let err = ArchiveSource::open_nested(&outer, "AmigaOS-Update", &std::env::temp_dir())
+        let err = ArchiveSource::open_nested(&outer, "AmigaOS-Update", &std::env::temp_dir(), None)
             .unwrap_err()
             .to_string();
         assert!(err.contains("AmigaOS-Update"), "got {err}");
@@ -909,7 +936,8 @@ mod tests {
 
         let before = count_leftover_temp_files();
 
-        let mut ok = ArchiveSource::open_nested(&good, MEMBER, &std::env::temp_dir()).unwrap();
+        let mut ok =
+            ArchiveSource::open_nested(&good, MEMBER, &std::env::temp_dir(), None).unwrap();
         assert_eq!(ok.read("C/Version").unwrap(), b"cmd bytes");
         assert_eq!(
             count_leftover_temp_files(),
@@ -917,12 +945,87 @@ mod tests {
             "a successful open_nested left its extraction behind"
         );
 
-        assert!(ArchiveSource::open_nested(&bad, MEMBER, &std::env::temp_dir()).is_err());
+        assert!(ArchiveSource::open_nested(&bad, MEMBER, &std::env::temp_dir(), None).is_err());
         assert_eq!(
             count_leftover_temp_files(),
             before,
             "a failed open_nested left its extraction behind"
         );
+    }
+
+    // ---- the locked payload (ART-166, 2026-09-08) ------------------------
+
+    /// The real BoingBag shape: an LHA wrapper whose payload ZIP is
+    /// **encrypted**, opened with the key the recipe carries.
+    ///
+    /// The wrapper is *not* encrypted and the payload is — which is the
+    /// arrangement the owner's own archives have, and the reason the key is
+    /// handed only to the inner open.
+    #[test]
+    fn a_locked_nested_payload_opens_with_the_recipes_own_key() {
+        let dir = scratch("archive-nested-locked");
+        let inner = crate::core::archive::zip::tests::make_zipcrypto_zip_with(
+            &[
+                ("Libs/version.library", b"lib bytes"),
+                ("C/WBRun", b"amiga program"),
+            ],
+            b"93ABDF11",
+        );
+        let outer = package_lha(
+            &dir,
+            "BoingBagLike.lha",
+            &[
+                ("BB/AmigaOS-Update", &inner),
+                ("BB/C/Updater", b"an amiga program ART does not run"),
+            ],
+        );
+
+        let mut src = ArchiveSource::open_nested(
+            &outer,
+            "AmigaOS-Update",
+            &std::env::temp_dir(),
+            Some("93ABDF11"),
+        )
+        .unwrap();
+        assert_eq!(src.volume_name(), "BB");
+        assert_eq!(src.read("Libs/version.library").unwrap(), b"lib bytes");
+        assert_eq!(src.read("C/WBRun").unwrap(), b"amiga program");
+
+        // The premise, asserted rather than assumed: without the key the
+        // very same archive cannot be read, so the test above is proving the
+        // key did the work.
+        let mut locked =
+            ArchiveSource::open_nested(&outer, "AmigaOS-Update", &std::env::temp_dir(), None)
+                .unwrap();
+        assert!(locked.read("C/WBRun").is_err());
+    }
+
+    /// **A wrong key is refused at open, naming the file the user can go and
+    /// look at** — the wrapper on their disk, never the scratch copy ART
+    /// extracted the payload into, whose path means nothing to anybody.
+    #[test]
+    fn a_wrong_key_is_refused_naming_the_archive_the_user_has() {
+        let dir = scratch("archive-nested-wrongkey");
+        let inner = crate::core::archive::zip::tests::make_zipcrypto_zip_with(
+            &[("C/WBRun", b"amiga program")],
+            b"93ABDF11",
+        );
+        let outer = package_lha(&dir, "BoingBag39-1.lha", &[("BB/AmigaOS-Update", &inner)]);
+
+        let err = ArchiveSource::open_nested(
+            &outer,
+            "AmigaOS-Update",
+            &std::env::temp_dir(),
+            Some("NOTTHEKEY"),
+        )
+        .expect_err("the key does not fit this build of the archive");
+        assert_eq!(err.code(), "ART-PAYLOAD-PASSWORD");
+        let text = err.to_string();
+        assert!(
+            text.contains("BoingBag39-1.lha"),
+            "the wrapper the user holds, not the scratch copy: {text}"
+        );
+        assert!(!text.contains("art-tmp"), "{text}");
     }
 
     // ---- implicit directories (fix round 1) ------------------------------
@@ -1069,7 +1172,7 @@ mod tests {
         let dir = scratch("archive-implicit-nested");
         let p = package_zip(&dir, "implicit-nested.zip", &[("BB/C/Assign", b"assign")]);
 
-        let err = ArchiveSource::open_nested(&p, "C", &std::env::temp_dir())
+        let err = ArchiveSource::open_nested(&p, "C", &std::env::temp_dir(), None)
             .unwrap_err()
             .to_string();
         assert!(err.contains("drawer"), "got {err}");
@@ -1177,7 +1280,8 @@ mod tests {
             ],
         );
 
-        let Ok(src) = ArchiveSource::open_nested(&outer, "Payload", &std::env::temp_dir()) else {
+        let Ok(src) = ArchiveSource::open_nested(&outer, "Payload", &std::env::temp_dir(), None)
+        else {
             return;
         };
         assert_eq!(src.refused_names(), &["BB/../../outside".to_string()]);

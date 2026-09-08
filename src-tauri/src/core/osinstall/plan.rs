@@ -1404,12 +1404,19 @@ pub(crate) fn detect_package_refusals(
                 continue;
             }
             // **Which refusal depends on what the required package is**
-            // (fix round 1, M1). A requirement that declares an
-            // `amiga_installer` is not something the user can tick here at
-            // all — the Packages step disables its row — so the ordinary
-            // sentence's advice, *"tick that one too"*, is about a checkbox
-            // that is not available. The Amiga-side arm names the step that
-            // can actually do it.
+            // (fix round 1, M1). A requirement the Packages step **blocks**
+            // is not something the user can tick here at all — the row is
+            // disabled — so the ordinary sentence's advice, *"tick that one
+            // too"*, is about a checkbox that is not available. The
+            // Amiga-side arm names the step that can actually do it.
+            //
+            // The question is asked through `only_installable_on_the_amiga`,
+            // which reads the **block** and not the installer alone (ART-282
+            // review, 2026-09-08). Both BoingBags declare an
+            // `amiga_installer` *and* are host-placeable since the owner's
+            // reversal that day, so the older reading would send somebody to
+            // the Amiga-side step for a package whose checkbox is right
+            // there.
             //
             // Both carry the packages' own **names**: the sentence is
             // rendered verbatim, and `locale-turkish`/`boingbag-39-2` is
@@ -1419,7 +1426,7 @@ pub(crate) fn detect_package_refusals(
                 .map(|other| other.name.clone())
                 .unwrap_or_else(|| need.clone());
             refusals.push(match required {
-                Some(other) if other.amiga_installer.is_some() => {
+                Some(other) if other.only_installable_on_the_amiga() => {
                     RefusalReason::PackageRequirementNeedsAmigaRun {
                         package: package.name.clone(),
                         requirement,
@@ -1779,6 +1786,7 @@ fn plan_over_with_cache(
                     let medium = PackageMedium {
                         path: archive.path.clone(),
                         member: package.member.clone(),
+                        payload_password: package.payload_password.clone(),
                     };
                     let mut source = open_package_staging_in(&medium, scratch_root)?;
                     items.extend(expand_rules(
@@ -5156,8 +5164,11 @@ mod plan_tests {
             name: id.to_string(),
             media: media.to_string(),
             member: None,
+            payload_password: None,
             distinguished_by: None,
             amiga_installer: None,
+            post_place: Vec::new(),
+            extra_members: Vec::new(),
             requires: requires.iter().map(|s| s.to_string()).collect(),
             requires_components: Vec::new(),
             chain_position: None,

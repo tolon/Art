@@ -36,10 +36,19 @@
   ],
   "distinguished_by": "AmigaOS-Update",
   "member": "AmigaOS-Update",
-  "_why_host_placement_block": [
-    "ART-166, measured in Task 8's real run and confirmed three independent ways (ART's own reader, 7-Zip 26.02, the raw general-purpose flag word 0x0003 with bit 0 set): the `AmigaOS-Update` member named above is a ZIP whose every entry is ZipCrypto-encrypted — 233 of 233 entries in 3.9-1's payload, 147 of 147 in 3.9-2's. The password belongs to the BoingBag's own `Updater`, which the wrapper LHA carries beside the payload and which has to run *on* an Amiga; every established distribution builder (HstWB Installer, AmiKit, AmigaSYS, ClassicWB) installs a BoingBag by running that Updater inside an emulator rather than by decrypting anything, and the owner's recorded decision is that ART will write no bypass.  So the rules below are right and unreachable, and spec §10/§89 says ART must not offer what it cannot do. Declaring the block here — data, not code — is what makes the screen refuse the tick with a translated sentence naming the Updater, instead of accepting it and meeting the reader's own raw English `Password required to decrypt file` after the user already confirmed. **That prediction was wrong, and is corrected here rather than left standing (2026-08-25).** It read: \"The day the Amiga-side install round lands, this one key is deleted and nothing else changes.\" That round landed on 2026-08-21 and both BoingBags installed on the owner's own material through ART's own compose-then-install path - and this key STAYS. The block is about placing the payload's files from the host, which is as impossible as it ever was: the Amiga's own Updater writes them, inside the emulator, after the package's own code decrypts its own payload. Deleting this key would put a live tick back on a screen that still cannot do what the tick promises."
+  "_why_payload_password": [
+    "ART-166. The whole history is in `boingbag-39-1.json`'s `_why_payload_password`, which",
+    "quotes the owner's 2026-09-08 reversal and the two MIT projects it follows; it is not",
+    "restated here.",
+    "",
+    "**This key is not 3.9-1's, and it was read separately** - Emu68 Hatcher's",
+    "`boingbag.py` gives BoingBag 2 `3FB6986B-B0AD6339-4FF3254B`, three groups where 3.9-1 has",
+    "one. Verified against the owner's own `BoingBag39-2.lha` on 2026-09-08 with Python's",
+    "`zipfile`: `AmigaOS-Update` 147 of 147 entries read clean and `XAD-Update` 39 of 39 with",
+    "**the same key** - one password for both members of this wrapper, which is a fact about",
+    "the archive and is why `extra_members` below carries no key of its own."
   ],
-  "host_placement_block": "encrypted-payload",
+  "payload_password": "3FB6986B-B0AD6339-4FF3254B",
   "_why_amiga_installer": [
     "Measured separately from 3.9-1's rather than copied, the same rule this",
     "file's own top comment follows (2026-08-20, 7-Zip 26.02 against the",
@@ -193,13 +202,123 @@
       "name": "the original AmigaOS 3.9 CD-ROM"
     }
   },
+  "_why_extra_members": [
+    "ART-280, from the host. `amiga_installer.follow_ups` above is the same fact for the",
+    "emulator route - a second `C/Updater` invocation - and this is the host route's: the same",
+    "second payload, the same gate, placed by ART instead of by the package's own program.",
+    "Both are declared because both routes exist and neither is the other's fallback.",
+    "",
+    "**What it carries, measured** (the owner's own `BoingBag39-2.lha`, member `XAD-Update`,",
+    "every entry decrypted with the key above and listed, 2026-09-08): 39 entries, 152 837",
+    "bytes, top level exactly `C` and `Libs` - 9 `C/` tools, 26 `Libs/xad/*` clients and",
+    "`Libs/xadmaster.library` at 110 100 bytes. So two subtree rules cover it whole, and no",
+    "rule here names a path the archive does not have.",
+    "",
+    "**The gate is HstWB Installer's, read from its own source** (MIT,",
+    "`amiga/amiga-os-3.9/S/Amiga-OS-3.9/Install-Boing-Bag-2`, lines 32-36): `Version",
+    "\"SYS:Libs/xadmaster.library\" 10 FILE` / `IF WARN` / run the updater on `XAD-Update`. The",
+    "number is 10 because that is what those lines say, not because anything here chose it.",
+    "",
+    "**Why the gate can be read before the main member is placed.** `AmigaOS-Update` carries",
+    "121 files and **no `Libs/xadmaster.library`** among them - which is also why the round-3",
+    "measurement found the library still at 9.1 after a real BoingBag 2 run - so the tree's",
+    "answer is the same before and after. Reading it first is what lets every file this unit",
+    "would overwrite be checked against `distribution.json` before a byte is written.",
+    "",
+    "**How the version is read on the host, and the reading that had to be corrected.** This",
+    "file carries **no `$VER:` marker at all** - searched byte by byte on 2026-09-08 across the",
+    "owner's 9.0 (105 332 bytes, off the CD), 9.1 (105 368, BoingBag 1) and 10.0 (110 100,",
+    "`XAD-Update`) copies, zero hits in each. What each carries at offset ~384 is its `struct",
+    "Resident`: `xadmaster.library\\0` followed by `xadmaster 9.0 (25.11.2000)`. So",
+    "`core::amigaver::read_id_string` reads that, anchored on the file's own name, and a",
+    "`$VER:`-only reader would have answered *nothing* for the one file this gate is about."
+  ],
+  "extra_members": [
+    {
+      "member": "XAD-Update",
+      "unless_file_version_at_least": {
+        "path": "Libs/xadmaster.library",
+        "version": 10
+      },
+      "rules": [
+        {
+          "from": "C",
+          "to": "C",
+          "kind": "subtree"
+        },
+        {
+          "from": "Libs",
+          "to": "Libs",
+          "kind": "subtree"
+        }
+      ]
+    }
+  ],
+  "_why_post_place": [
+    "The host-side counterpart of `amiga_installer.post_install` above, and it is deliberately",
+    "**not the same list** - the two routes leave different work behind, so one shared list",
+    "would have to be wrong on one of them.",
+    "",
+    "1. `Devs/AmigaOS ROM Update` - identical to the Amiga-side step, and needed for the same",
+    "   reason (ART-227): the payload writes its 321 768-byte ROM update as",
+    "   `Devs/AmigaOS ROM Update.BB39-2`, beside the CD's own 127 956-byte file, under a name",
+    "   `SetPatch` does not load. Whoever puts the payload down - the Updater or ART - leaves",
+    "   the same two files, so the same rotation is owed.",
+    "",
+    "2. `Devs/NSDPatch.cfg` - **only on this route**, and this reverses what the",
+    "   `_why_post_install` note above still records for the other one. That note's reasoning",
+    "   (the file is user-editable configuration; HstWB touches neither) is kept there because",
+    "   it is still what the Amiga-side route does. Emu68 Hatcher, which is the project ART's",
+    "   host placement follows, renames it into place -",
+    "   `(\"Devs/NSDPatch.cfg.BB39-2\", \"Devs\", \"NSDPatch.cfg\")` in its `boingbag.py` - and the",
+    "   owner's 2026-09-08 decision is to do what that project does. The user's own file is not",
+    "   lost: `replace-keeping-backup` moves it to `Devs/NSDPatch.cfg.old` first, and refuses",
+    "   rather than overwriting once four generations exist.",
+    "",
+    "   Recorded as a **known divergence from the Updater's own tree**: the real Updater leaves",
+    "   `NSDPatch.cfg` alone, so a host placement checked against the run-8 snapshot differs on",
+    "   exactly these two paths (`Devs/NSDPatch.cfg` changed, `Devs/NSDPatch.cfg.old` added),",
+    "   for this reason and no other.",
+    "",
+    "**`rename-into-place` was asked for and `replace-keeping-backup` is what shipped.** The",
+    "brief's own words were \"keeping a backup the same way\", which is this step exactly; a",
+    "second variant differing only in whether the source file is left behind would be one more",
+    "thing for a reader to tell apart, and leaving `Devs/NSDPatch.cfg.BB39-2` in place is also",
+    "what the Updater's own tree does."
+  ],
+  "post_place": [
+    {
+      "step": "replace-keeping-backup",
+      "target": "Devs/AmigaOS ROM Update",
+      "replacement": "Devs/AmigaOS ROM Update.BB39-2"
+    },
+    {
+      "step": "replace-keeping-backup",
+      "target": "Devs/NSDPatch.cfg",
+      "replacement": "Devs/NSDPatch.cfg.BB39-2"
+    }
+  ],
   "_why_chain_position": "3 of the material's own order. BoingBag 3.9-2's own Install script reads version.library off the target and requires revision >= 2, which is BoingBag 3.9-1 applied - the arrow between rows 2 and 3, enforced by the package rather than advised by prose.",
   "chain_position": 3,
   "requires": [
     "boingbag-39-1"
   ],
+  "_why_overrides": [
+    "`workbench-39` added 2026-09-08 for the reason `boingbag-39-1.json`'s own `_why_overrides`",
+    "records at length: `overrides` is a claim about which **component the tree's manifest says",
+    "placed a file**, and AmigaOS 3.9's recipe splits the Workbench between `workbench-base` and",
+    "`workbench-39`. Counted against the owner's own tree: of this payload's 121 files, 84 are",
+    "recorded to `workbench-39`, 17 to `workbench-base` and 20 are new. The `XAD-Update` unit",
+    "below lands on 29 more `workbench-39` files and 7 new ones, and is covered by the same",
+    "list - its items are this package's, under this package's component id.",
+    "",
+    "`boingbag-39-1` is here because BoingBag 1 rewrites many of the same paths first, and once",
+    "it has, the manifest records **it** as the owner - so without this line the second BoingBag",
+    "would be refused on exactly the trees the chain is designed to produce."
+  ],
   "overrides": [
     "workbench-base",
+    "workbench-39",
     "boingbag-39-1"
   ],
   "rules": [

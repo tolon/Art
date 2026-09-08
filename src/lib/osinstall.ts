@@ -505,7 +505,46 @@ export interface ApplyOutcome {
    *  "did anything fail" computes it from both rather than trusting one
    *  number that could quietly disagree with them. */
   iconMergeFailures: number;
+  /** One verdict per extra payload unit the package declares — **including
+   *  the ones that did not run**. "Not needed, the tree is already newer"
+   *  and "never considered" are two different things to tell somebody, and
+   *  an absent row says the second while meaning the first. Empty for every
+   *  package that declares none, which is all but BoingBag 3.9-2. */
+  extraMembers: ExtraMemberVerdict[];
+  /** What the package's own host-side after-steps did to the tree once the
+   *  last file was written, in order. Reported rather than implied:
+   *  `Devs/AmigaOS ROM Update` being rotated is the difference between a
+   *  tree whose ROM update loads and one whose does not. */
+  postPlace: AppliedStep[];
 }
+
+/** Whether an extra payload unit ran, and what the tree said when it was
+ *  asked. Four states, and `"not-checked"` must never read as `"applied"` —
+ *  that would be ART claiming a version reading it never made. */
+export type ExtraMemberState =
+  | { state: "unconditional" }
+  | { state: "applied"; path: string; stated: string; at_least: number }
+  | { state: "not-needed"; path: string; stated: string; at_least: number }
+  | { state: "not-checked"; path: string };
+
+export interface ExtraMemberVerdict {
+  /** The member's own name inside the wrapper — `XAD-Update`. */
+  member: string;
+  state: ExtraMemberState;
+  /** How many files this unit placed; `0` for one that did not run. */
+  files: number;
+}
+
+/** What one host-side after-step actually did — `core::amigainstall::finish`'s
+ *  `AppliedStep`, tagged by `step` exactly as the recipe spells it. */
+export type AppliedStep =
+  | { step: "protect"; path: string; was: string; now: string }
+  | {
+      step: "replace-keeping-backup";
+      target: string;
+      replacement: string;
+      backup: string | null;
+    };
 
 export const OSINSTALL_EVENT = "osinstall-result";
 

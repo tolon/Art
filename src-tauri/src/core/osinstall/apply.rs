@@ -428,6 +428,70 @@ pub struct ApplyOutcome {
     /// failure kind does not have to remember to feed a shared counter to
     /// stay honest.
     pub icon_merge_failures: u64,
+    /// One verdict per [`super::package::ExtraMember`] the package declares —
+    /// **including the ones that did not run**, because *"not needed"* and
+    /// *"never considered"* are two different things to tell somebody and an
+    /// absent row says the second while meaning the first.
+    ///
+    /// Empty for every package that declares none, which is all but BoingBag
+    /// 3.9-2.
+    pub extra_members: Vec<ExtraMemberVerdict>,
+    /// What the package's own [`super::package::Package::post_place`] steps
+    /// did to the tree after the last file was written, in order.
+    ///
+    /// Reported rather than implied: `Devs/AmigaOS ROM Update` being rotated
+    /// is the difference between a tree whose ROM update loads and one whose
+    /// does not, and *"the package was added"* says nothing about it either
+    /// way.
+    pub post_place: Vec<crate::core::amigainstall::finish::AppliedStep>,
+}
+
+/// Whether an extra payload unit ran, and what the tree said when it was
+/// asked.
+///
+/// **Four states, and none of them collapses into another.** *Applied
+/// because the tree's file was older*, *skipped because it was not*,
+/// *applied because there was no gate to ask* and *applied because the file
+/// could not be asked* are four different sentences with four different
+/// next steps — and the fourth in particular must never read as the first,
+/// which would be ART claiming a version reading it never made
+/// (CLAUDE.md: "ask the artefact", and "never claim what you did not do").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum ExtraMemberState {
+    /// No gate declared: this unit is part of the package unconditionally.
+    Unconditional,
+    /// The tree's own file states `stated`, which is below `at_least`, so
+    /// the unit was applied.
+    Applied {
+        path: String,
+        stated: String,
+        at_least: u32,
+    },
+    /// The tree's own file already states `stated`, which is `at_least` or
+    /// newer. Nothing to do, and nothing wrong.
+    NotNeeded {
+        path: String,
+        stated: String,
+        at_least: u32,
+    },
+    /// The gate's file is not in the tree, or states no version ART can
+    /// read. The unit **was** applied — which is what AmigaDOS's own
+    /// `Version … FILE` leads to (it sets `WARN`, and the installer's `If
+    /// Warn` then runs) — and the report says the version was never read
+    /// rather than inventing one.
+    NotChecked { path: String },
+}
+
+/// One [`super::package::ExtraMember`], resolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtraMemberVerdict {
+    /// The member's own name inside the wrapper — `XAD-Update`.
+    pub member: String,
+    pub state: ExtraMemberState,
+    /// How many files this unit placed; `0` for one that did not run.
+    pub files: u64,
 }
 
 /// What happened when [`apply`] tried to remove one destination — see
@@ -1744,6 +1808,7 @@ pub fn add_package_staging_in(
     let medium = super::scan::PackageMedium {
         path: archive.to_path_buf(),
         member: package.member.clone(),
+        payload_password: package.payload_password.clone(),
     };
     let mut source = super::scan::open_package_staging_in(&medium, scratch_root)?;
     if source.volume_name() != package.media {
@@ -1809,7 +1874,7 @@ pub fn add_package_staging_in(
     }
 
     let mut refusals = Vec::new();
-    let items = super::plan::expand_rules(&package.component, source.as_mut(), &mut refusals)?;
+    let mut items = super::plan::expand_rules(&package.component, source.as_mut(), &mut refusals)?;
     if !refusals.is_empty() {
         // Refused before a byte is written, never partway through: every
         // rule this package declares has to resolve on the archive it was
@@ -1821,6 +1886,64 @@ pub fn add_package_staging_in(
             archive.display(),
             refusal_summary(&refusals)
         )));
+    }
+
+    let mut sources: BTreeMap<String, Box<dyn MediaSource>> = BTreeMap::new();
+    sources.insert(package.media.clone(), source);
+
+    // **The extra payload units, resolved now and placed with everything
+    // else.** Each is a second archive inside the same wrapper with its own
+    // gate — see `package::ExtraMember`, and that type's own doc comment for
+    // why the gate is read against the tree *before* the main member lands.
+    // Their items join `items` here so the two checks below see the whole of
+    // what this package would write: refused before a byte, not partway.
+    let mut extra_members: Vec<ExtraMemberVerdict> = Vec::new();
+    for extra in &package.extra_members {
+        let verdict = gate_verdict(tree_root, extra)?;
+        if !verdict.applied {
+            extra_members.push(ExtraMemberVerdict {
+                member: extra.member.clone(),
+                state: verdict.state,
+                files: 0,
+            });
+            continue;
+        }
+        let media = extra_member_media(&package.media, &extra.member);
+        let mut extra_source = super::source_archive::ArchiveSource::open_nested(
+            archive,
+            &extra.member,
+            scratch_root,
+            package.payload_password.as_deref(),
+        )?;
+        // The unit's own component, sharing the package's id — its files
+        // belong to this package in the manifest, exactly as the main
+        // member's do (the brief's own rule) — and its `overrides`, because
+        // `XAD-Update` lands on files the base and BoingBag 3.9-1 placed and
+        // the package has already declared it may.
+        let unit = super::Component {
+            id: package.component.id.clone(),
+            media: media.clone(),
+            rules: extra.rules.clone(),
+            overrides: package.component.overrides.clone(),
+            ..blank_component()
+        };
+        let expanded = super::plan::expand_rules(&unit, &mut extra_source, &mut refusals)?;
+        if !refusals.is_empty() {
+            return Err(CoreError::InvalidInput(format!(
+                "'{}' cannot apply '{}' out of '{}': {}",
+                package.id,
+                extra.member,
+                archive.display(),
+                refusal_summary(&refusals)
+            )));
+        }
+        extra_members.push(ExtraMemberVerdict {
+            member: extra.member.clone(),
+            state: verdict.state,
+            files: expanded.iter().filter(|item| !item.is_dir).count() as u64,
+        });
+        items.extend(expanded);
+        sources.insert(media, Box::new(extra_source));
     }
 
     // The same host-escaping check `apply` runs, for the same reason: a
@@ -1855,9 +1978,6 @@ pub fn add_package_staging_in(
         )));
     }
 
-    let mut sources: BTreeMap<String, Box<dyn MediaSource>> = BTreeMap::new();
-    sources.insert(package.media.clone(), source);
-
     let mut writer = TreeWriter::new(tree_root, std::mem::take(&mut manifest.files));
     // **The manifest is updated whatever happened.** `apply` can leave no
     // manifest at all when it stops early, because a half-built tree that
@@ -1868,8 +1988,23 @@ pub fn add_package_staging_in(
     // (or any other failure) still writes what actually landed, and only
     // then reports itself.
     let placed = writer.place(&items, &mut sources, sink);
-    let TreeWriter { outcome, files, .. } = writer;
+    let TreeWriter {
+        mut outcome, files, ..
+    } = writer;
     manifest.files = files;
+    outcome.extra_members = extra_members;
+
+    // **After the files, and only if they all arrived.** A `post_place` step
+    // is about the tree the placement produced — `Devs/AmigaOS ROM Update`
+    // cannot be rotated onto a `.BB39-2` that a cancelled run never wrote —
+    // and `finish::protect` refuses a file that is not there rather than
+    // skipping it, so running these over a half-placed tree would turn one
+    // failure into a second, less informative one.
+    let stepped = match &placed {
+        Ok(()) => crate::core::amigainstall::finish::apply(tree_root, &package.post_place)
+            .map(|done| outcome.post_place = done),
+        Err(_) => Ok(()),
+    };
 
     // Re-added in place when this archive is already recorded (adding the
     // same package twice), appended otherwise — so `built_from`'s order is
@@ -1894,12 +2029,146 @@ pub fn add_package_staging_in(
 
     // The placer's own failure explains the run, so it is reported first; a
     // manifest that could not be written is the next-worst thing to know and
-    // is never swallowed.
+    // is never swallowed. A `post_place` step that failed sits between them:
+    // the files are on disk and recorded, and the tree is short of one
+    // rotation or one protection bit, which is a thing to say rather than to
+    // let the caller infer from a green result.
     placed?;
+    stepped?;
     recorded?;
 
     Ok(outcome)
 }
+
+/// The media key an extra member's items travel under.
+///
+/// Its own name (`BoingBag3.9-2/XAD-Update`), never the package's, because
+/// `TreeWriter::place` looks a `PlanItem`'s bytes up by `item.media` and two
+/// archives under one key would mean the second silently replacing the first
+/// in the map — every `XAD-Update` item then reading out of `AmigaOS-Update`,
+/// finding nothing at its path, and failing with a sentence about the wrong
+/// file.
+fn extra_member_media(package_media: &str, member: &str) -> String {
+    format!("{package_media}/{member}")
+}
+
+/// A [`super::Component`] with nothing switched on — the fields an extra
+/// member's synthetic component has no opinion about.
+///
+/// Spelled once here rather than at the call site so that a new `Component`
+/// field is a compile error in one place, and so the call site reads as the
+/// three things that unit actually declares.
+fn blank_component() -> super::Component {
+    super::Component {
+        id: String::new(),
+        media: String::new(),
+        rules: Vec::new(),
+        required: false,
+        condition: None,
+        overrides: Vec::new(),
+        user_startup: Vec::new(),
+        activate: Vec::new(),
+        exclusive_group: None,
+        label_key: None,
+        layer: None,
+        available: true,
+        removes: Vec::new(),
+    }
+}
+
+/// What [`gate_verdict`] answers: whether the unit applies, and the verdict
+/// that will be reported either way.
+struct GateVerdict {
+    applied: bool,
+    state: ExtraMemberState,
+}
+
+/// Ask the tree whether an extra member's gate is open.
+///
+/// **Three answers, and the third is not a failure.** A gate whose file the
+/// tree does not carry, or carries and states no version for, is
+/// [`ExtraMemberState::NotChecked`] — and the unit **is** applied, which is
+/// what AmigaDOS's own `Version … FILE` does (it sets `WARN`, and HstWB's
+/// `IF WARN` then runs the updater). Reporting that as though the version had
+/// been read and found old would be claiming a reading nobody made.
+fn gate_verdict(tree_root: &Path, extra: &super::package::ExtraMember) -> CoreResult<GateVerdict> {
+    let Some(gate) = &extra.unless_file_version_at_least else {
+        return Ok(GateVerdict {
+            applied: true,
+            state: ExtraMemberState::Unconditional,
+        });
+    };
+    let target = super::host_destination(tree_root, &gate.path)?;
+    let Some(stated) = read_stated_version(&target)? else {
+        return Ok(GateVerdict {
+            applied: true,
+            state: ExtraMemberState::NotChecked {
+                path: gate.path.clone(),
+            },
+        });
+    };
+    let label = format!("{}.{}", stated.version, stated.revision);
+    if stated.version >= gate.version {
+        return Ok(GateVerdict {
+            applied: false,
+            state: ExtraMemberState::NotNeeded {
+                path: gate.path.clone(),
+                stated: label,
+                at_least: gate.version,
+            },
+        });
+    }
+    Ok(GateVerdict {
+        applied: true,
+        state: ExtraMemberState::Applied {
+            path: gate.path.clone(),
+            stated: label,
+            at_least: gate.version,
+        },
+    })
+}
+
+/// What the file at `path` states about its own version, read from a bounded
+/// window of its own bytes.
+///
+/// **Two markers, in the order AmigaDOS's own `Version` effectively tries
+/// them.** A program states itself with `$VER:`; a library states itself in
+/// its resident tag's id string, anchored on its own name — and
+/// `Libs/xadmaster.library`, the one file a shipped gate asks about, carries
+/// **no `$VER:` at all** (measured byte by byte on the owner's 9.0, 9.1 and
+/// 10.0 copies, 2026-09-08). See
+/// [`crate::core::amigaver::read_id_string`] for that measurement.
+///
+/// The window is [`VERSION_SEARCH_BOUND`], the same 1 MiB
+/// `core::osinstall::collide` and `core::amigainstall::packagevol` already
+/// read for the same question — one bound, not a third.
+fn read_stated_version(path: &Path) -> CoreResult<Option<crate::core::amigaver::AmigaVersion>> {
+    use std::io::Read as _;
+
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(CoreError::Io(err)),
+    };
+    let mut window = Vec::new();
+    file.take(VERSION_SEARCH_BOUND).read_to_end(&mut window)?;
+    if let Some(version) = crate::core::amigaver::read(&window) {
+        return Ok(Some(version));
+    }
+    // The library's own name, without its suffix: `xadmaster` out of
+    // `xadmaster.library`, which is what its resident tag's id string spells.
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string();
+    Ok(crate::core::amigaver::read_id_string(&window, &stem))
+}
+
+/// How much of a file [`read_stated_version`] reads looking for a version.
+/// The same bound `core::osinstall::collide` and
+/// `core::amigainstall::packagevol` already use.
+const VERSION_SEARCH_BOUND: u64 = 1024 * 1024;
 
 /// Every destination in `items` that already holds a file `package` never
 /// declared it may replace — Add's half of `plan::detect_collisions`.
@@ -6064,8 +6333,11 @@ mod tests {
             name: id.to_string(),
             media: "SharedMedium".to_string(),
             member: None,
+            payload_password: None,
             distinguished_by: None,
             amiga_installer: None,
+            post_place: Vec::new(),
+            extra_members: Vec::new(),
             requires: Vec::new(),
             requires_components: Vec::new(),
             chain_position: None,
@@ -6834,6 +7106,7 @@ mod tests {
         let medium = crate::core::osinstall::scan::PackageMedium {
             path: archive.to_path_buf(),
             member: package.member.clone(),
+            payload_password: package.payload_password.clone(),
         };
         let mut source = crate::core::osinstall::scan::open_package(&medium)?;
         let mut refusals = Vec::new();
@@ -8087,6 +8360,447 @@ mod tests {
         let ids: Vec<&str> = manifest.layers.iter().map(|l| l.id.as_str()).collect();
         assert_eq!(ids, vec!["base", "update-3.2.2"]);
         assert!(manifest.layers.iter().all(|l| l.folder.is_absolute()));
+    }
+
+    // ---- the host BoingBag route (ART-166, 2026-09-08) --------------------
+    //
+    // Three things `add_package` gained that day: a key for a locked nested
+    // payload, a second payload unit behind a version gate read off the
+    // tree, and the package's own after-steps run on the host. Each is
+    // tested against a synthetic archive of the same *shape* as the owner's
+    // real one — a wrapper holding two ZipCrypto members — because the real
+    // shape is what the recipes are written against.
+
+    /// The `xadmaster.library` shape: a library that carries **no `$VER:`
+    /// marker** and states its version in its resident tag's id string.
+    fn library_stating(version: &str) -> Vec<u8> {
+        let mut bytes: Vec<u8> = vec![0x00, 0x00, 0x03, 0xF3, 0x90, 0x16];
+        bytes.extend_from_slice(b"xadmaster.library\x00");
+        bytes.extend_from_slice(format!("xadmaster {version} (1.1.2001) AmigaOS").as_bytes());
+        bytes.push(0);
+        bytes
+    }
+
+    /// A wrapper LHA holding two ZipCrypto payloads under one key — the
+    /// shape `BoingBag39-2.lha` has (`AmigaOS-Update` beside `XAD-Update`).
+    fn locked_wrapper(folder: &Path, file_name: &str, key: &str) -> PathBuf {
+        let main = crate::core::archive::zip::tests::make_zipcrypto_zip_with(
+            &[("C/OnlyPack", b"main payload")],
+            key.as_bytes(),
+        );
+        let extra = crate::core::archive::zip::tests::make_zipcrypto_zip_with(
+            &[("Libs/xadmaster.library", &library_stating("10.0"))],
+            key.as_bytes(),
+        );
+        let path = folder.join(file_name);
+        std::fs::write(
+            &path,
+            crate::core::lha::tests::make_lha_with(&[
+                ("TestPack/AmigaOS-Update", &main),
+                ("TestPack/XAD-Update", &extra),
+                ("TestPack/C/Updater", b"an amiga program ART does not run"),
+            ]),
+        )
+        .unwrap();
+        path
+    }
+
+    /// The package the tests below add: locked payload, one extra unit
+    /// behind the gate, and one host-side after-step.
+    fn locked_package(key: &str, gate: Option<u32>) -> crate::core::osinstall::package::Package {
+        use crate::core::amigainstall::finish::PostStep;
+        use crate::core::osinstall::package::ExtraMember;
+
+        let mut package = fixtures::package_test_package();
+        package.media = "TestPack".to_string();
+        package.component.media = "TestPack".to_string();
+        package.component.rules = vec![super::super::PathRule {
+            from: "C/OnlyPack".to_string(),
+            to: "C/OnlyPack".to_string(),
+            kind: super::super::RuleKind::File,
+        }];
+        package.member = Some("AmigaOS-Update".to_string());
+        package.payload_password = Some(key.to_string());
+        package.post_place = vec![PostStep::Protect {
+            path: "C/OnlyPack".to_string(),
+            add: "p".to_string(),
+        }];
+        package.extra_members = vec![ExtraMember {
+            member: "XAD-Update".to_string(),
+            rules: vec![super::super::PathRule {
+                from: "Libs".to_string(),
+                to: "Libs".to_string(),
+                kind: super::super::RuleKind::Subtree,
+            }],
+            unless_file_version_at_least: gate.map(|version| {
+                crate::core::amigainstall::FileVersionGate {
+                    path: "Libs/xadmaster.library".to_string(),
+                    version,
+                }
+            }),
+        }];
+        package.component.overrides = vec!["base-c".to_string()];
+        package
+    }
+
+    /// A tree carrying one recorded file — `Libs/xadmaster.library` at the
+    /// version asked for — and nothing else.
+    fn tree_with_library(root: &Path, version: &str) {
+        let bytes = library_stating(version);
+        std::fs::create_dir_all(root.join("Libs")).unwrap();
+        std::fs::write(root.join("Libs/xadmaster.library"), &bytes).unwrap();
+        write_manifest(
+            root,
+            &DistributionManifest {
+                release: "AmigaOS 3.9".to_string(),
+                built_from: Vec::new(),
+                files: vec![FileRecord {
+                    path: "Libs/xadmaster.library".to_string(),
+                    host_path: None,
+                    component: "base-c".to_string(),
+                    media: "TestBase".to_string(),
+                    sha256: sha256_bytes(&bytes),
+                    bytes: bytes.len() as u64,
+                    protection: None,
+                    overwrote: None,
+                }],
+                paired_rom: None,
+                amiga_installed: Vec::new(),
+                layers: Vec::new(),
+            },
+        )
+        .unwrap();
+    }
+
+    /// **The whole route, on a tree whose library is older than the gate.**
+    /// The locked main payload opens with the recipe's key, the extra unit
+    /// runs because the tree says 9.1, its file lands under the package's
+    /// own component, and the after-step sets the bit — one test, because
+    /// the point is that all four happen in one `add_package` and in that
+    /// order.
+    #[test]
+    fn a_locked_payload_its_gated_second_unit_and_the_after_steps_all_land() {
+        let (dir, _media, packages) = package_dirs("host-boingbag");
+        let archive = locked_wrapper(&packages, "Locked.lha", "93ABDF11");
+        let root = dir.join("tree");
+        std::fs::create_dir_all(&root).unwrap();
+        tree_with_library(&root, "9.1");
+
+        let outcome = add_package(
+            &root,
+            &locked_package("93ABDF11", Some(10)),
+            &archive,
+            &NoProgress,
+        )
+        .unwrap();
+
+        // 1 — the locked main payload.
+        assert_eq!(
+            std::fs::read(root.join("C/OnlyPack")).unwrap(),
+            b"main payload"
+        );
+        // 2 — the gated unit ran, and says why in terms of the reading it
+        // actually made rather than "it ran".
+        assert_eq!(outcome.extra_members.len(), 1);
+        assert_eq!(outcome.extra_members[0].member, "XAD-Update");
+        assert_eq!(
+            outcome.extra_members[0].state,
+            ExtraMemberState::Applied {
+                path: "Libs/xadmaster.library".to_string(),
+                stated: "9.1".to_string(),
+                at_least: 10,
+            }
+        );
+        assert_eq!(outcome.extra_members[0].files, 1);
+        assert_eq!(
+            crate::core::amigaver::read_id_string(
+                &std::fs::read(root.join("Libs/xadmaster.library")).unwrap(),
+                "xadmaster"
+            )
+            .unwrap()
+            .version,
+            10,
+            "the unit's own library must be the one in the tree now"
+        );
+        // 3 — its file is the package's, in the manifest, not a component
+        // of its own.
+        let manifest: DistributionManifest =
+            serde_json::from_str(&std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap())
+                .unwrap();
+        let record = manifest
+            .files
+            .iter()
+            .find(|f| f.path == "Libs/xadmaster.library")
+            .expect("the unit's file is recorded");
+        assert_eq!(record.component, "test-package");
+        // 4 — the after-step, reported rather than implied.
+        assert_eq!(
+            outcome.post_place,
+            vec![crate::core::amigainstall::finish::AppliedStep::Protected {
+                path: "C/OnlyPack".to_string(),
+                was: "----rwed".to_string(),
+                now: "--p-rwed".to_string(),
+            }]
+        );
+    }
+
+    /// **The gate closed, and the unit reported as not needed rather than
+    /// left out of the report.** A tree already at 10.0 must not have its
+    /// library rewritten, and the row must still be there saying so: an
+    /// absent row reads as "never considered", which is a different thing.
+    #[test]
+    fn the_gated_unit_is_skipped_when_the_tree_already_states_the_version() {
+        let (dir, _media, packages) = package_dirs("host-boingbag-gate");
+        let archive = locked_wrapper(&packages, "Locked.lha", "93ABDF11");
+        let root = dir.join("tree");
+        std::fs::create_dir_all(&root).unwrap();
+        tree_with_library(&root, "10.0");
+        let before = std::fs::read(root.join("Libs/xadmaster.library")).unwrap();
+
+        let outcome = add_package(
+            &root,
+            &locked_package("93ABDF11", Some(10)),
+            &archive,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(
+            outcome.extra_members,
+            vec![ExtraMemberVerdict {
+                member: "XAD-Update".to_string(),
+                state: ExtraMemberState::NotNeeded {
+                    path: "Libs/xadmaster.library".to_string(),
+                    stated: "10.0".to_string(),
+                    at_least: 10,
+                },
+                files: 0,
+            }]
+        );
+        assert_eq!(
+            std::fs::read(root.join("Libs/xadmaster.library")).unwrap(),
+            before,
+            "a closed gate must not write the unit's file anyway"
+        );
+        // And the main payload still landed — the gate is about one unit,
+        // not about the package.
+        assert_eq!(
+            std::fs::read(root.join("C/OnlyPack")).unwrap(),
+            b"main payload"
+        );
+    }
+
+    /// A gate whose file the tree does not carry is **not checked**, and the
+    /// unit runs — which is what AmigaDOS's own `Version … FILE` leads to.
+    /// Reported as `not-checked`, never as `applied`: ART made no reading,
+    /// and saying it did would be claiming what it did not do.
+    #[test]
+    fn a_gate_whose_file_is_absent_is_reported_as_unchecked_and_the_unit_runs() {
+        let (dir, _media, packages) = package_dirs("host-boingbag-nogate");
+        let archive = locked_wrapper(&packages, "Locked.lha", "93ABDF11");
+        let root = dir.join("tree");
+        std::fs::create_dir_all(&root).unwrap();
+        write_manifest(
+            &root,
+            &DistributionManifest {
+                release: "AmigaOS 3.9".to_string(),
+                built_from: Vec::new(),
+                files: Vec::new(),
+                paired_rom: None,
+                amiga_installed: Vec::new(),
+                layers: Vec::new(),
+            },
+        )
+        .unwrap();
+
+        let outcome = add_package(
+            &root,
+            &locked_package("93ABDF11", Some(10)),
+            &archive,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(
+            outcome.extra_members[0].state,
+            ExtraMemberState::NotChecked {
+                path: "Libs/xadmaster.library".to_string(),
+            }
+        );
+        assert!(root.join("Libs/xadmaster.library").is_file());
+    }
+
+    /// **A wrong key refuses before a byte is written.** The tree must be
+    /// exactly as it was: this is the case where the user's copy of the
+    /// package is a different build, and a half-applied tree would be far
+    /// worse than a refusal.
+    #[test]
+    fn a_wrong_key_refuses_add_package_and_writes_nothing() {
+        let (dir, _media, packages) = package_dirs("host-boingbag-badkey");
+        let archive = locked_wrapper(&packages, "Locked.lha", "93ABDF11");
+        let root = dir.join("tree");
+        std::fs::create_dir_all(&root).unwrap();
+        tree_with_library(&root, "9.1");
+
+        let err = add_package(
+            &root,
+            &locked_package("NOTTHEKEY", Some(10)),
+            &archive,
+            &NoProgress,
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "ART-PAYLOAD-PASSWORD");
+        assert!(
+            !root.join("C/OnlyPack").exists(),
+            "nothing may be placed on the way to refusing"
+        );
+    }
+
+    /// **The oracle: a host placement of BoingBag 1 and 2 must hash, file
+    /// for file, to the tree the packages' own `Updater` produced.**
+    ///
+    /// This is the check the whole host route rests on. The Updater is the
+    /// only thing that knows what a BoingBag is supposed to do to a tree, and
+    /// the round-3 measurement captured what it did: every file of a clean
+    /// AmigaOS 3.9 tree, of that tree after a real BoingBag 3.9-1 emulator
+    /// run, and of *that* after BoingBag 3.9-2 with the `XAD-Update`
+    /// follow-up — sizes and sha256, in `E:\amiga\ProjeART\r3-measure\logs`.
+    /// A host placement that agrees with those snapshots is doing what the
+    /// Amiga did; one that does not is either wrong or doing something
+    /// nobody asked for, and this says which paths.
+    ///
+    /// **It copies and never touches the original.** `ART_BB_HOST_CLEAN` is
+    /// read-only: the tree is copied to `ART_BB_HOST_WORK` first, and the
+    /// two archives are opened read-only where they sit.
+    ///
+    /// ```text
+    /// ART_BB_HOST_CLEAN="E:\amiga\ProjeART\art226-tree" ^
+    /// ART_BB_HOST_WORK="E:\amiga\ProjeART\bb-host\tree" ^
+    /// ART_BB_HOST_BB1="E:\amiga\Amigatolon\os39\BoingBag39-1 (1).lha" ^
+    /// ART_BB_HOST_BB2="E:\amiga\Amigatolon\os39\BoingBag39-2.lha" ^
+    /// ART_BB_HOST_ORACLE="E:\amiga\ProjeART\r3-measure\logs\run8-followup-xad-fixed.after.json" ^
+    /// cargo test the_host_placement_hashes_to_the_updaters_own_tree -- --nocapture --ignored
+    /// ```
+    ///
+    /// The comparison is `snap.py`'s own: sha256 of every file under the
+    /// root, keyed by `/`-separated relative path. Paths are compared
+    /// **case-insensitively**, because the host filesystem is and the
+    /// Updater's own tree records whichever case the last writer used
+    /// (`C/exe2arc` and `C/Exe2Arc` are one file on both sides); a
+    /// difference in case alone is reported as such rather than as one file
+    /// added and another missing.
+    #[test]
+    #[ignore = "copies the owner's real 3.9 tree and reads their own BoingBags; run explicitly, see the doc comment"]
+    fn the_host_placement_hashes_to_the_updaters_own_tree() {
+        let (Ok(clean), Ok(work), Ok(bb1), Ok(bb2), Ok(oracle)) = (
+            std::env::var("ART_BB_HOST_CLEAN"),
+            std::env::var("ART_BB_HOST_WORK"),
+            std::env::var("ART_BB_HOST_BB1"),
+            std::env::var("ART_BB_HOST_BB2"),
+            std::env::var("ART_BB_HOST_ORACLE"),
+        ) else {
+            return;
+        };
+        let clean = PathBuf::from(clean);
+        let work = PathBuf::from(work);
+        assert_ne!(clean, work, "the original is never written to");
+
+        // A fresh copy every run, so the result is about this code and not
+        // about what a previous run left behind.
+        if work.exists() {
+            std::fs::remove_dir_all(&work).unwrap();
+        }
+        copy_tree(&clean, &work);
+
+        for (id, archive) in [("boingbag-39-1", &bb1), ("boingbag-39-2", &bb2)] {
+            let package = crate::core::osinstall::package::by_id(id).unwrap();
+            let outcome = add_package(&work, &package, Path::new(archive), &NoProgress)
+                .unwrap_or_else(|e| {
+                    panic!("{id} could not be placed from '{archive}': {e}");
+                });
+            println!(
+                "{id}: {} files, {} bytes, extra {:?}, after-steps {:?}",
+                outcome.files, outcome.bytes, outcome.extra_members, outcome.post_place
+            );
+        }
+
+        let expected: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&oracle).unwrap()).unwrap();
+        let expected = expected["files"].as_object().expect("snap.py's shape");
+
+        let mut want: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        for (path, row) in expected {
+            want.insert(
+                path.to_lowercase(),
+                row[1].as_str().unwrap_or_default().to_string(),
+            );
+        }
+        let mut got: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+        hash_tree(&work, &work, &mut got);
+
+        let added: Vec<&String> = got.keys().filter(|k| !want.contains_key(*k)).collect();
+        let missing: Vec<&String> = want.keys().filter(|k| !got.contains_key(*k)).collect();
+        let differing: Vec<&String> = got
+            .keys()
+            .filter(|k| want.get(*k).is_some_and(|w| w != &got[*k]))
+            .collect();
+
+        println!(
+            "oracle: {} files expected, {} produced — added {}, missing {}, differing {}",
+            want.len(),
+            got.len(),
+            added.len(),
+            missing.len(),
+            differing.len()
+        );
+        for (label, list) in [
+            ("added", &added),
+            ("missing", &missing),
+            ("differing", &differing),
+        ] {
+            for path in list.iter().take(80) {
+                println!("  {label}: {path}");
+            }
+        }
+    }
+
+    /// A whole-tree copy, for the oracle above. `std::fs::copy` per file,
+    /// which carries the `.uaem` sidecars along with everything else because
+    /// they are ordinary files in the tree.
+    #[cfg(test)]
+    fn copy_tree(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let target = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_tree(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), &target).unwrap();
+            }
+        }
+    }
+
+    /// `snap.py`'s own hashing, in Rust: sha256 of every file under `root`,
+    /// keyed by its `/`-separated relative path, folded to lower case.
+    #[cfg(test)]
+    fn hash_tree(root: &Path, at: &Path, out: &mut std::collections::BTreeMap<String, String>) {
+        for entry in std::fs::read_dir(at).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if entry.file_type().unwrap().is_dir() {
+                hash_tree(root, &path, out);
+                continue;
+            }
+            let relative = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/")
+                .to_lowercase();
+            out.insert(relative, sha256_bytes(&std::fs::read(&path).unwrap()));
+        }
     }
 
     /// **Mutation table row 2.** A `distribution.json` ART wrote before this
