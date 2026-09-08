@@ -844,8 +844,11 @@ export type MediaIdentityLine = {
 
 /** The last path segment, on either separator. Media folders are chosen by
  *  the user and carry Windows paths, but a test fixture and a future CLI
- *  shell carry POSIX ones. */
-function fileName(path: string): string {
+ *  shell carry POSIX ones.
+ *
+ *  Exported since `slots.ts` needed the same answer: two copies of this would
+ *  be two ways of naming the same file on two rows of the same screen. */
+export function fileName(path: string): string {
   const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] || path;
 }

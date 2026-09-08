@@ -2233,6 +2233,19 @@
       "addTitle": "Choose another folder holding this release's disks",
       "addHint": "AmigaOS 3.2.2.1 is your 3.2 disks plus the Update and Hotfix folders — add each one."
     },
+    "slots": {
+      "foundByHash": "{{file}} — identified by its bytes: they are the ones ART’s table records for {{name}}.",
+      "foundByName": "{{file}} — this file calls itself {{identity}}, which is what {{name}} is. Its bytes are in no row ART has, so that is the file’s own word rather than a check.",
+      "chosen": "{{file}} — the file you chose for {{name}}. ART did not identify it.",
+      "guessedByFilename": "{{file}} is named like {{name}}, and that is all ART can say: neither its bytes nor the name inside it confirm it. Open it or replace it before relying on this row.",
+      "ambiguous": "{{count}} files here could be {{name}}, and ART will not choose between them: {{candidates}}. Pick the one you mean.",
+      "notFound": "{{name}} is not in the folders you named. Expected {{filenames}}.",
+      "notFoundUnnamed": "{{name}} is not in the folders you named.",
+      "notNeeded": "{{name}} is not needed — this copy already carries {{carries}}.",
+      "installedPlaced": "already in this tree",
+      "installedRan": "already installed on the Amiga: {{command}}",
+      "blocked": "needs {{needs}} first"
+    },
     "mediaId": {
       "heading": "What these files are, by content",
       "confirmed": "{{file}} — matches the row Emu68 Hatcher's install-media table calls “{{name}}” ({{version}}, {{source}}). That row has been checked against a real disk here: {{against}}, {{checked}}.",
