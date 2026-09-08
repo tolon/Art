@@ -39,6 +39,17 @@
     "more than the artefact's own installer does is ART inventing a step nobody",
     "measured."
   ],
+  "_why_sources_and_eliminations": [
+    "**Where the rules come from, and what was eliminated.** HstWB Installer",
+    "(henrikstengaard, MIT) covers the 3.9 base and both official BoingBags and",
+    "**not this package** — none of its ten AmigaDOS scripts under",
+    "`amiga/amiga-os-3.9/S/Amiga-OS-3.9/` mentions Euro-Update (grepped",
+    "2026-09-08). So the rules are the archive's own `Euro-Install`, quoted",
+    "above, and they agree with the research pass recorded independently in",
+    "`.superpowers/sdd/2026-09-07-osbuilder-research/material.md` section 8:",
+    "Euro-Update runs the bundled `C/FixFonts`, *\"rebuilds `.font` files after",
+    "copying updated bitmap fonts\"*, over plain files that are not an archive."
+  ],
   "id": "euro-update",
   "name": "Euro-Update for AmigaOS 2.1+",
   "releases": [

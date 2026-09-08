@@ -28,6 +28,21 @@
     "There is **no `Updater` and no `C/Installer`** in this archive: the only",
     "bundled helper is `Files2/C/FixFonts`, which the script runs itself."
   ],
+  "_why_sources_and_eliminations": [
+    "**Where the rules come from, and what was eliminated.** HstWB Installer",
+    "(henrikstengaard, MIT) has an `Install-Boing-Bags` script, and it installs",
+    "BoingBag 1 and BoingBag 2 only — grepping all ten of its AmigaDOS scripts",
+    "for `3&4` and `3.9-3` finds nothing (2026-09-08). No established project",
+    "read in the research pass automates this community release, so the rules",
+    "are the archive's own `Install`, read in full and quoted above.",
+    "",
+    "It agrees with the research pass recorded independently in",
+    "`.superpowers/sdd/2026-09-07-osbuilder-research/material.md` section 8:",
+    "BB3&4's `Install` runs the bundled `Files2/C/FixFonts` over plain files,",
+    "*\"its largest payload members verified not to be archives\"* — so nothing",
+    "here is encrypted, and the block below is about decisions rather than",
+    "about bytes ART cannot read."
+  ],
   "id": "boingbags-39-3-4",
   "name": "BoingBags 3&4 for AmigaOS 3.9",
   "releases": [

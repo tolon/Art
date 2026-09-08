@@ -2287,6 +2287,21 @@
       "installedRan": "already installed on the Amiga: {{command}}",
       "blocked": "needs {{needs}} first"
     },
+    "chain": {
+      "installed": "{{name}} — already in this tree.",
+      "ready": "{{name}} — ready: {{file}}.",
+      "readyUnnamed": "{{name}} — ready.",
+      "blocked": "{{name}} — {{needs}} has to go on first.",
+      "missing": "{{name}} is not in the folders you named. Expected {{filenames}}.",
+      "missingUnnamed": "{{name}} is not in the folders you named.",
+      "notNeeded": "{{name}} is not needed — {{supersededBy}} already contains it.",
+      "refusedAmbiguous": "{{count}} files here could be {{name}}, and ART will not choose between them: {{candidates}}. Pick the one you mean.",
+      "notYetRunnable": "{{name}} — ART has never run this one: {{reason}}. It is listed rather than hidden, so you can see the recipe exists.",
+      "onAmiga": "runs on the Amiga",
+      "onWindows": "placed from Windows",
+      "setLine": "{{release}} updates — {{installed}} of {{total}} applied",
+      "setLineNotNeeded": "{{release}} updates — {{installed}} of {{total}} applied — {{notNeeded}} not needed"
+    },
     "mediaId": {
       "heading": "What these files are, by content",
       "confirmed": "{{file}} — matches the row Emu68 Hatcher's install-media table calls “{{name}}” ({{version}}, {{source}}). That row has been checked against a real disk here: {{against}}, {{checked}}.",

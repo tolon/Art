@@ -973,7 +973,15 @@ fn gather_facts(
         })
         .collect();
 
-    let disc_roots = disc_roots_of(&media);
+    // The volume names this release's own recipe names — the only discs
+    // `disc_roots_of` may open. Derived from the slots rather than written
+    // here, so a second release's disc needs no code.
+    let wanted: Vec<String> = slots::slots_for(release)?
+        .into_iter()
+        .filter(|slot| slot.kind == slots::SlotKind::Medium)
+        .map(|slot| slot.identity)
+        .collect();
+    let disc_roots = disc_roots_of(&media, &wanted);
 
     Ok(GatheredFacts {
         media,
@@ -1059,10 +1067,24 @@ pub fn osinstall_chain(
 /// `slots::missing_directory` treats an absent disc as "nobody looked" rather
 /// than as "the directory is not there" — the same rule `BytesRead` keeps one
 /// field over.
-fn disc_roots_of(media: &[FoundMedia]) -> Vec<(PathBuf, Vec<String>)> {
+fn disc_roots_of(media: &[FoundMedia], wanted: &[String]) -> Vec<(PathBuf, Vec<String>)> {
     let mut out = Vec::new();
     for found in media {
         if found.kind != scan::MediaKind::Disc {
+            continue;
+        }
+        // **Only a disc this release's own recipe names is opened** (the
+        // owner's rule, 2026-09-08). `find_media` has already read every
+        // image's volume name off its primary descriptor, which is one
+        // sector; opening a disc is a second read of a directory extent, and
+        // the owner's material folders hold game and CD32 discs by the
+        // dozen. ART has no business reading the inside of any of them —
+        // this check answers a question about the AmigaOS 3.9 CD-ROM, and a
+        // disc that is not it cannot answer it.
+        if !wanted
+            .iter()
+            .any(|volume| crate::core::osinstall::amiga_names_equal(&found.volume_name, volume))
+        {
             continue;
         }
         let Ok(image) = crate::core::iso::IsoImage::open(&found.path) else {
@@ -6196,6 +6218,114 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **The one host-placeable archive of the chain, placed** — round 3.
+    ///
+    /// Everything else about `boingbag-39-2-contribution` is a claim its
+    /// recipe makes; this is the claim being kept. A real archive shaped
+    /// like the owner's own (`BoingBag3.9-2/Contribution/{ClassAction,
+    /// OpenURL}/…` plus the readmes beside it), a tree that records the
+    /// BoingBag 3.9-2 run it goes on after, and the files where the recipe
+    /// says they land.
+    ///
+    /// Three things asserted, and the third is why the rule reads
+    /// `Contribution/BoingBag3.9-2` rather than `Contribution`: the payload
+    /// lands under the BoingBag's own name, the icons ride with it because a
+    /// `subtree` rule carries every entry below `from`, and the readmes
+    /// sitting *above* `from` are not placed — an icon for a drawer whose
+    /// destination name is different would name the wrong thing.
+    #[test]
+    fn the_contribution_archive_places_its_drawer_beside_the_discs_own() {
+        let dir = scratch("contribution-place");
+        let tree = dir.join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        write_test_manifest_with_runs(
+            &tree,
+            vec![locale_base_file_record("Locale/Languages/turkish.language")],
+            vec![boingbag_two_ran()],
+        );
+
+        let packages_dir = dir.join("packages");
+        std::fs::create_dir_all(&packages_dir).unwrap();
+        let entries: Vec<(&[u8], &[u8])> = vec![
+            (
+                b"BoingBag3.9-2\\Contribution\\ClassAction\\ClassAction",
+                b"the ClassAction program",
+            ),
+            (
+                b"BoingBag3.9-2\\Contribution\\ClassAction\\ClassAction.info",
+                b"its icon",
+            ),
+            (
+                b"BoingBag3.9-2\\Contribution\\OpenURL\\C\\OpenURL",
+                b"the OpenURL command",
+            ),
+            (b"BoingBag3.9-2\\Readme", b"read me first"),
+        ];
+        std::fs::write(
+            packages_dir.join("BoingBag39-2-Contribution.lha"),
+            crate::core::lha::tests::make_lha_with_raw_names(&entries),
+        )
+        .unwrap();
+
+        // Resolved through the real path the Packages step uses, so the
+        // `distinguished_by` and the corrected `requires` are exercised too.
+        let resolved = resolve_packages_for_add(
+            &tree,
+            &packages_dir,
+            &["boingbag-39-2-contribution".to_string()],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(resolved.len(), 1);
+
+        let (package, archive) = &resolved[0];
+        let outcome = crate::core::osinstall::apply::add_package_staging_in(
+            &tree,
+            package,
+            archive,
+            dir.as_path(),
+            &NoProgress,
+        )
+        .expect("the one host-placeable package of the chain must place");
+
+        let drawer = tree.join("Contribution").join("BoingBag3.9-2");
+        assert_eq!(
+            std::fs::read(drawer.join("ClassAction").join("ClassAction")).unwrap(),
+            b"the ClassAction program",
+            "the payload lands under the BoingBag's own name, beside where the disc's own \
+             Contribution would go"
+        );
+        assert!(
+            drawer
+                .join("ClassAction")
+                .join("ClassAction.info")
+                .is_file(),
+            "a subtree rule carries the icons with the files"
+        );
+        assert!(drawer.join("OpenURL").join("C").join("OpenURL").is_file());
+        assert!(
+            !drawer.join("Readme").exists() && !tree.join("Readme").exists(),
+            "the readmes sit above the rule's `from` and are deliberately not placed"
+        );
+        assert_eq!(
+            outcome.files, 3,
+            "three files below Contribution, and no fourth"
+        );
+
+        // And the tree's own account of itself names the component that put
+        // them there — the only thing that will ever say this row is done.
+        let manifest = chain::read_manifest(&tree).unwrap();
+        assert!(
+            manifest
+                .files
+                .iter()
+                .any(|file| file.component == "boingbag-39-2-contribution"),
+            "the manifest has to record it, or the chain row can never read installed"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // -----------------------------------------------------------------
     // osinstall_chain — round 3
     // -----------------------------------------------------------------
@@ -6361,6 +6491,73 @@ mod tests {
             Some("Contribution"),
             "the missing directory is named"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **ART opens only a disc this release's own recipe names** — the
+    /// owner's rule, 2026-09-08, and the reason is their own folders: they
+    /// hold game and CD32 discs by the dozen, and ART has no business
+    /// reading the inside of any of them.
+    ///
+    /// Both discs here are **valid, listable ISOs with directories at their
+    /// root**, so the game disc's absence from the answer is evidence that
+    /// it was skipped rather than that it failed to parse — an unreadable
+    /// fixture would have proved nothing. `find_media` still reads both
+    /// volume names, which is one sector each and is how ART knows which is
+    /// which.
+    #[test]
+    fn only_a_disc_the_recipe_names_is_opened_and_listed() {
+        use crate::core::iso::fixture::{dir as iso_dir, IsoBuilder};
+
+        let dir = scratch("slots-foreign-disc");
+        let disc = |volume: &str, child: &str| {
+            IsoBuilder {
+                volume: volume.to_string(),
+                joliet_volume: volume.to_string(),
+                joliet: true,
+                children: vec![iso_dir(&child.to_uppercase(), child, Vec::new())],
+                ..Default::default()
+            }
+            .build()
+        };
+        std::fs::write(
+            dir.join("AmigaOS39.iso"),
+            disc("AmigaOS3.9", "OS-Version3.9"),
+        )
+        .unwrap();
+        std::fs::write(dir.join("SomeGame.iso"), disc("SIMON2", "Data")).unwrap();
+
+        let media = vec![
+            FoundMedia {
+                path: dir.join("AmigaOS39.iso"),
+                volume_name: "AmigaOS3.9".to_string(),
+                kind: scan::MediaKind::Disc,
+                layer: None,
+            },
+            FoundMedia {
+                path: dir.join("SomeGame.iso"),
+                volume_name: "SIMON2".to_string(),
+                kind: scan::MediaKind::Disc,
+                layer: None,
+            },
+        ];
+
+        // The control first: both discs really are listable, so the check
+        // below is about the filter and not about a broken fixture.
+        let everything = disc_roots_of(&media, &["AmigaOS3.9".into(), "SIMON2".into()]);
+        assert_eq!(everything.len(), 2, "both fixtures list: {everything:?}");
+
+        let wanted = vec!["AmigaOS3.9".to_string()];
+        let opened = disc_roots_of(&media, &wanted);
+        assert_eq!(
+            opened
+                .iter()
+                .map(|(path, _)| path.file_name().unwrap().to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            vec!["AmigaOS39.iso".to_string()],
+            "the game disc must not be opened at all"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

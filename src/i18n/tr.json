@@ -2287,6 +2287,21 @@
       "installedRan": "Amiga’da zaten kuruldu: {{command}}",
       "blocked": "önce {{needs}} gerekiyor"
     },
+    "chain": {
+      "installed": "{{name}} — bu ağaçta zaten var.",
+      "ready": "{{name}} — hazır: {{file}}.",
+      "readyUnnamed": "{{name}} — hazır.",
+      "blocked": "{{name}} — önce {{needs}} girmeli.",
+      "missing": "{{name}} adını verdiğin klasörlerde yok. Beklenen: {{filenames}}.",
+      "missingUnnamed": "{{name}} adını verdiğin klasörlerde yok.",
+      "notNeeded": "{{name}} gerekmiyor — {{supersededBy}} bunu zaten içeriyor.",
+      "refusedAmbiguous": "Buradaki {{count}} dosya {{name}} olabilir ve ART aralarında seçim yapmaz: {{candidates}}. Hangisini kastettiğini sen seç.",
+      "notYetRunnable": "{{name}} — ART bunu hiç çalıştırmadı: {{reason}}. Gizlemek yerine listeleniyor, böylece tarifin var olduğunu görebilirsin.",
+      "onAmiga": "Amiga'da çalışır",
+      "onWindows": "Windows'tan yerleştirilir",
+      "setLine": "{{release}} güncellemeleri — {{total}} satırın {{installed}} tanesi uygulandı",
+      "setLineNotNeeded": "{{release}} güncellemeleri — {{total}} satırın {{installed}} tanesi uygulandı — {{notNeeded}} tanesi gerekmiyor"
+    },
     "mediaId": {
       "heading": "Bu dosyalar, içeriklerine göre ne",
       "confirmed": "{{file}} — Emu68 Hatcher'ın kurulum ortamı tablosunun “{{name}}” dediği satırla eşleşiyor ({{version}}, {{source}}). O satır burada gerçek bir disketle karşılaştırıldı: {{against}}, {{checked}}.",

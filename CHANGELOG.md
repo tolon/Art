@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The AmigaOS 3.9 updates are one ordered list now, and ART knows five more
+  of them.** The BoingBags, the Locale packs, the Contribution drawer, the
+  Euro-Update and the community BoingBags 3&4 are a chain: each one goes on
+  after the last, and each one's own installer checks that it did. ART now
+  carries that order as data and can say, for every link, exactly one of seven
+  things — it is already in this tree; it is ready and here is the file; it is
+  waiting for a named row; its file is not in the folders you named and here is
+  what to look for; you do not need it because something else already contains
+  it; ART will not do it and here is why; or nobody has run it yet. Those never
+  collapse into "not done", because the seven need seven different next steps.
+
+- **Three update packages ART did not know about.** *BoingBag 3.9-2's
+  Contribution* — the ClassAction, OpenURL and cddb-lib drawers — is placed
+  from Windows straight into your tree, beside where the CD's own Contribution
+  would go rather than on top of it. *Euro-Update* and *BoingBags 3&4* are
+  listed with their reason rather than hidden: Euro-Update's own installer
+  rebuilds the font index afterwards and ART cannot do that, so placing it
+  would quietly drop any font size the package does not itself ship; BoingBags
+  3&4 chooses what to copy from your processor, your machine and the languages
+  you pick, and its Install script has never been run unattended by ART. Both
+  say so on their own row instead of appearing to work.
+
 - **ART can write a "what goes here" note into your own material folders.**
   Under the OS Builder's readout there is a button for each folder in the
   list. Press it and ART writes a plain text file into that folder listing

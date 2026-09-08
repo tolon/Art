@@ -29,6 +29,23 @@
     "for a person to double-click later if they want them wired in. Nothing in",
     "this archive installs itself, which is exactly why ART may place it."
   ],
+  "_why_sources_and_eliminations": [
+    "**Where the rules come from, and what was eliminated.** HstWB Installer",
+    "(henrikstengaard, MIT) is the reference wherever it covers a step, and it",
+    "does not cover this one: its AmigaDOS scripts under",
+    "`amiga/amiga-os-3.9/S/Amiga-OS-3.9/` are `Install-Amiga-OS-3.9`,",
+    "`Install-Boing-Bag-1`, `Install-Boing-Bag-2` and `Install-Boing-Bags`, and",
+    "grepping all ten for `contribution` finds nothing (2026-09-08). So the rule",
+    "below comes from the archive itself, which carries **no Install script at",
+    "all** — the one package in the chain that has none.",
+    "",
+    "The listing above is this round's own `7z l`, and it agrees with the",
+    "research pass recorded independently in",
+    "`.superpowers/sdd/2026-09-07-osbuilder-research/material.md` sections 4 and",
+    "8: *\"Only `BoingBag39-2-Contribution.lha` is genuinely host-placeable as",
+    "plain files with no Amiga-side program of any kind — it carries no Installer",
+    "script, just an icon and a directory tree.\"*"
+  ],
   "id": "boingbag-39-2-contribution",
   "name": "BoingBag 3.9-2 Contribution",
   "releases": [
