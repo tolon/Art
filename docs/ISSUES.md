@@ -26,6 +26,115 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-281** 🔴 **The unit suite's scratch directories are never removed:
+`D:\tmp\art-tests` holds 263 484 directories and 764 GB** — *found 2026-09-08
+during round 3 task 3, on `art-osbuilder-intake`*
+`src-tauri/.cargo/config.toml` · every `ScratchDir`/`scratch()` fixture
+
+**This is [ART-184](#open) still running, three weeks on, at the place it was
+moved to rather than fixed.** That entry moved `TMP` off the system drive after
+a day of suite runs put 169 291 directories (~987 GB) in
+`C:\Users\…\AppData\Local\Temp` and filled a 2 TB disk; its own note says so
+plainly — *"pointing `TMP` at the project disk does not fix that."* The counts
+below are what "does not fix that" looks like now.
+
+Measured on 2026-09-08 (read-only; **nothing was deleted**):
+
+| | |
+|---|---|
+| directories under `D:\tmp\art-tests` | **263 484** |
+| bytes | **764 GB** |
+| oldest | 2026-08-20 — the day ART-184 was filed |
+| created today alone | **28 568** |
+| top prefixes | `art-osinstall-apply-planned` 13 202 · `art-osinstall-planned-with` 9 373 · `art-preload-native-pds` 8 995 |
+
+The shape is the one ART-184 named: a test scratch name is unique **per run**
+(process id plus a counter — `scratch-counter-sweep.py` exists to keep it
+unique *within* a process), so nothing ever collides with a previous run's
+directory and nothing sweeps them. `core::ScratchDir` removes itself on `Drop`
+and the ones that do are fine; what accumulates are the fixtures that build a
+path by hand and the ones whose `Drop` never runs.
+
+`core/osinstall`'s **production** code sweeps its own scratch after an hour.
+The test fixtures have no such sweep, and that asymmetry is the whole defect.
+
+*The cause is under investigation as this is written* — a read-only pass was
+running when this entry was filed, and its findings belong here when they
+land. What is already certain is the shape of a fix: the fixtures that leak
+must go through a type that removes itself, and the suite needs a sweep of its
+own scratch root the way production has one. **Nothing here may delete outside
+that root**, and the 764 GB already on disk is the owner's to remove, not
+ART's.
+
+**ART-279** 🟡 **The `TimedOut` next step tells the user to watch the emulator
+window, which is wrong advice for an installer that is hung rather than
+waiting** — *found 2026-09-08 by round 3 task 3's corrupt-payload experiment,
+on `art-osbuilder-intake`*
+`src/i18n/en.json` · `src/i18n/tr.json` ·
+`src/lib/amigainstall.ts::outcomeNextStepPhrase`
+
+`osinstall.amigaInstall.next.timedOut` reads *"Run it again and watch the
+emulator window this time. An Amiga installer asks questions, and this one was
+waiting for an answer nobody gave it."* That sentence names one cause for a
+state that has two, and the second was measured on 2026-09-08: a package whose
+payload is damaged does not ask anything — the `Updater` spins on the corrupt
+data (both runs stopped on the same payload entry, `Utilities/PlayCD`, its
+progress window unchanged for 28 minutes) and no amount of watching the window
+will produce an answer to give it.
+
+How it hurts someone: the user re-runs a 30-minute job, watches a window that
+never asks them anything, and ends up in the same place — with a sentence that
+told them the problem was their attention.
+[lessons.md § The failure that does not crash](lessons.md#the-failure-that-does-not-crash)
+calls this out directly: endings stay distinct, and a refusal must be
+actionable.
+
+The round deliberately did **not** change it, and that reasoning stands and
+should be read before anyone does: ART genuinely cannot tell "waiting on a
+requester" from "spinning on a corrupt payload" — both are *no word by the
+deadline* — and inventing a distinction ART cannot make is §89 from the other
+side. So this row is not "change the sentence": it is either (a) reword the
+next step to cover both causes honestly without pretending to know which, or
+(b) give ART a way to tell them apart first — [ART-278](#open)'s size ceiling
+is exactly such a signal, and if that lands, this ending can split on a
+measurement.
+
+**ART-278** 🔴 **A hung Amiga-side installer writes unbounded output into the
+staged copy, and nothing in ART bounds it or notices it** — *found 2026-09-08
+by round 3 task 3's corrupt-payload experiment, on `art-osbuilder-intake`*
+`src-tauri/src/core/amigainstall/run.rs` ·
+`src-tauri/src/core/amigainstall/stage.rs`
+
+An Amiga-side run works on a copy of the user's tree, staged as
+`<tree>.art-staged-<pid>-<n>` **beside the tree itself** — so on the disk the
+user keeps their Amiga material on. ART's only limit on that run is the wall
+clock: `run.rs` polls for the result word, and at `RunLimits::deadline` it
+terminates the emulator. Nothing looks at what the run is writing.
+
+Measured, twice, on the owner's own material: a `BoingBag39-2.lha` with **one
+byte** of its encrypted payload changed makes the `Updater` spin instead of
+warn, decompressing a corrupt deflate stream into its staging name without ever
+stopping. In 30 minutes each run wrote a single file — `Utilities/PlayCD.BB1`,
+**170 328 064 bytes** in run 3 and **173 408 256 bytes** in run 4, both
+beginning with a valid `HUNK_HEADER` and then running to zeros — and both were
+still growing when the deadline terminated the emulator. That is ~95 MB/minute
+into a directory beside the user's own tree, and ART reported `TimedOut`
+without a word about it.
+
+How it hurts someone: the default deadline is 30 minutes and a run may be given
+a longer one; a user with a small or nearly full disk gets it filled by a
+package that is merely damaged, and the ending they are shown says only that
+nobody answered. ART's data safety otherwise held perfectly here — the copy was
+kept, the tree was untouched, nothing was promoted — which is exactly why this
+is the one gap worth naming.
+
+Not fixed in that round because the round was a measurement and built nothing.
+The shape of a fix is a ceiling on what a staged copy may grow to (the copy's
+size is known before the run starts, so a multiple of it is a measurable
+bound), ending the run with an outcome that says *the installer was writing
+without stopping* rather than *nobody answered*. Report:
+`.superpowers/sdd/2026-09-08-intake/r3-task-3-report.md` § 2.1.
+
 **ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
 neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
 8's real run, on `content-layer`*
@@ -405,6 +514,121 @@ re-audits them without reason:
 ---
 
 ## Fixed
+**ART-280** 🟡 ✅ **ART's BoingBag 3.9-2 run never applied `XAD-Update`, so
+`xadmaster.library` stayed at 9.1 where every other 3.9 builder leaves it at
+10+** — *found 2026-09-08 by round 3 task 3's Part A measurement, on
+`art-osbuilder-intake`*
+`src-tauri/src/core/osinstall/recipes/packages/boingbag-39-2.json` ·
+`src-tauri/src/core/amigainstall/workvol.rs` ·
+`src-tauri/src/core/amigainstall/mod.rs`
+
+Measured on a chain ART itself produced (clean 3.9 tree → BoingBag 1 → BoingBag
+2, every file hashed at each state): `Libs/xadmaster.library` reads
+`xadmaster 9.0 (25.11.2000)` clean, `9.1 (05.01.2001)` after BoingBag 1, and
+**`9.1` still** after BoingBag 2. The 110 100-byte build that BoingBag 3.9-2
+ships in its second payload, `BoingBag3.9-2/XAD-Update` (152 837 bytes, 39
+ZipCrypto entries: `Libs/xadmaster.library`, 26 `Libs/xad/*` clients and 10
+`C/` tools), was never applied, because ART invoked `C/Updater AmigaOS-Update`
+once and stopped.
+
+How it hurt someone: a tree ART reported as fully BoingBag'd was missing the
+XAD update every established 3.9 build applies, so archive handling on that
+system was a version behind what the user's own material contains — and nothing
+on the screen said so.
+
+**Not a `finish.rs` `PostStep`** — the payload is encrypted, ART writes no
+bypass (ART-166), and only the package's own `Updater` can place those files.
+**And not the "second emulator run behind a requester"** this round's own
+report first concluded: that requester (`#install-xad-update`) lives in
+BoingBag 2's own `Install` script, which ART does not run. HstWB Installer runs
+the same binary ART runs, unattended, **in the same boot**, four lines after
+the first invocation
+(`E:\amiga\ProjeART\research-2026-09-07\hstwb\…\S\Amiga-OS-3.9\Install-Boing-Bag-2`
+lines 32-36, MIT):
+
+    ; run xad updater, if xadmaster.library version is less than 10
+    Version >>SYS:hstwb-installer.log "SYS:Libs/xadmaster.library" 10 FILE
+    IF WARN
+      SYS:T/BoingBags/BoingBag3.9-2/C/Updater SYS:T/BoingBags/BoingBag3.9-2/XAD-Update "SYS:"
+    ENDIF
+
+*That elimination was corrected in place: the report said HstWB's source "is
+not on this machine", and it was — at the path the round's own brief gives,
+from the previous night's research. A confident wrong elimination costs more
+than none.*
+
+**Fixed 2026-09-08 (fix round 1).** `amiga_installer.follow_ups` is a typed,
+version-gated second invocation declared as **data** in `boingbag-39-2.json`
+(`program: "C/Updater"`, `args: ["XAD-Update"]`,
+`unless_file_version_at_least: { path: "Libs/xadmaster.library", version: 10 }`);
+`core::amigainstall::FollowUp` carries it, `compose` joins the program to the
+package volume and appends the target volume exactly as it does for the first
+invocation, and `workvol::startup_sequence` emits
+`If EXISTS <sys>:C/Version` / `Version >NIL: <sys>:<path> <n> FILE` / `If Warn`
+/ the second invocation / `EndIf`. It reports separately in
+`art-followup.txt` — `ran` / `not-needed` / `failed` / `not-checked` — read
+back by `install` and carried beside the ending on the wire as `follow_up`,
+never folded into `RunOutcome`: a follow-up that said no is not the installer
+saying no.
+
+**Two ordering traps, and the second was found by running it.**
+
+1. `Version … FILE` sets `WARN` as its *answer*, so a gate emitted above the
+   `If Warn` that reads the installer's return code would make the result word
+   the gate's — every successful run on a tree with an old `xadmaster`
+   reported as *the installer said no*. The block therefore sits **inside the
+   `Else` arm**, after the branch is decided.
+2. **The host terminates the emulator the instant the result word appears**
+   (`run::poll_until_ending` reads it first thing round the loop). The first
+   version emitted the block below the completed `If`/`Else`/`EndIf` and a
+   real run proved it never executed: `Succeeded` in **141.1 s** against the
+   follow-up-less control's **141.5 s**, no `art-followup.txt` at all, and a
+   tree **byte-identical** to the one with no follow-up declared. The `ok`
+   word is now written **last**, after the follow-up, which is what keeps the
+   emulator alive long enough to run it.
+
+`If EXISTS <sys>:C/Version` guards the gate itself, and its absence has its own
+word (`not-checked`) rather than being folded into `not-needed`: "the tree
+already has that version" and "ART could not find out" are different things to
+tell a person. `C/Version` is present (4 500 bytes) on all three states of the
+tree measured here — but `C:Reboot` was present on the owner's 3.2 tree and
+absent on both his 3.9 trees ([ART-272](#fixed)/[ART-273](#fixed)), which is
+why a disk command is checked for rather than assumed.
+
+**Proved by a real run, on the owner's own material.** BoingBag 3.9-2 with the
+follow-up, on a fresh copy of the same BoingBag-1 tree the control used:
+`Succeeded` / `Promoted`, `follow-up: Some(Ran)`, **156.6 s** (the control
+without a follow-up took 141.5 s, so the second invocation cost ~15 s). The
+artefact's own answer, which is the only one that counts here:
+
+| `Libs/xadmaster.library` | before | after |
+|---|---|---|
+| states | `xadmaster 9.1 (05.01.2001)` | **`xadmaster 10.0 (31.03.2001)`** |
+| bytes | 105 368 | **110 100** |
+
+Against the control tree the follow-up added **6 files** (`C/exe2arc`,
+`Libs/xad/EPF`, `LU`, `MS-TNEF`, `MakeSFX`, `oe4`) and changed **12**
+(`xadmaster.library` itself, seven `C/xad*` tools and four `Libs/xad/*`
+clients) — 4 025 files → 4 030. Every remaining entry of the 39 was already
+present at those bytes.
+
+*Tests:* `workvol::a_follow_up_is_emitted_whole_and_below_the_result_capture`
+(the whole script, entire), `…::the_gate_runs_after_the_branch_is_decided_and_before_the_word_is_written`
+(both orderings, each named), `…::the_failed_arm_carries_no_follow_up`,
+`…::a_package_with_no_follow_up_emits_nothing_extra`,
+`…::a_follow_ups_own_fields_go_through_the_metacharacter_gate`,
+`…::a_follow_up_may_not_reach_into_arts_own_volume`,
+`…::the_follow_up_word_reads_back_as_itself_and_nothing_else_does`;
+`package::boingbag_two_declares_the_xad_follow_up_and_nothing_else_declares_one_art_280`
+(the declaration, whole);
+`commands::amigainstall::the_follow_up_is_composed_onto_both_volumes_and_the_gate_is_left_alone`,
+`…::the_follow_ups_word_travels_beside_the_ending_and_not_inside_it`,
+`…::every_follow_up_word_has_its_own_sentence`;
+`src/lib/amigainstall.test.ts` (Rust-to-TypeScript parity for the new enum and
+field) and `AmigaInstallPanel.test.tsx` (its own line on screen, and none when
+no follow-up was declared). **Mutations: both orderings put back, both fell** —
+the gate above the branch, and the block below the result word.
+
 **ART-277** 🟠 **A stale package selection carried the wrong archive into a
 request, and the refusal quoted an internal overlay path instead of naming
 either package:
@@ -3786,29 +4010,50 @@ each arm twice, the control measured.
 - **`If Warn` is not proven; it is unexercised.** A corrupt payload does not
   make the `Updater` warn — it makes it **hang**. Both runs stopped on the same
   payload entry (`Utilities/PlayCD`, exactly where the flipped byte falls;
-  screenshots of the emulator's own progress window, pixel-identical across
-  five minutes) and wrote a runaway `Utilities/PlayCD.BB1` of **170 328 064**
-  and **173 408 256** bytes into the copy before ART ended the emulator at the
-  deadline. ART's data safety held perfectly — the copy was kept, the tree was
-  untouched — but the ending a user is shown is *"nobody answered"*, and
-  watching the window next time will not help.
+  captures of the emulator's own progress window show it **unchanged for 28
+  minutes of the first run and across the whole of the second**) and wrote a
+  runaway `Utilities/PlayCD.BB1` of **170 328 064** and **173 408 256** bytes
+  into the copy before ART ended the emulator at the deadline. ART's data
+  safety held perfectly — the copy was kept, the tree was untouched — but the
+  ending a user is shown is *"nobody answered"*, and watching the window next
+  time will not help. Both halves are now filed: [ART-278](#open) for the
+  unbounded write, [ART-279](#open) for the next step.
 - **The `Updater` says `ok` on a wrong target.** ART does not run BoingBag 2's
   `Install` script (which checks `version.library`); it runs `C/Updater`
   directly, and the program itself checks nothing. Reaching that arm required
   doctoring the copy's own manifest, because `chain::refuse_unless_installable`
   refuses it first — **in 17.6 ms, with nothing copied and no emulator
   started**. So that guard is not belt-and-braces over the package's own
-  judgement; it is the whole of the protection. Not a state a user can reach
-  through ART.
+  judgement; it is what protects a user here. **Its bound, stated with it**: it
+  is a *bookkeeping* guard, reading a `distribution.json` only a successful ART
+  run writes — which is also why the wrong-target state is not one a user can
+  reach through ART at all.
 - **No fifth ending, and no `leaves_version` — because the measurement says it
   would not work.** The design offered `NotApplied` for a run whose word is
   `ok` while the version did not move. The version *did* move: the
   wrong-target trees read `version 45.3 (7.12.2001)`, the same 352 bytes and
-  the same sha256 as the correctly chained tree, while being **missing 60
+  the same sha256 as the correctly chained tree, while being **missing 57
   files**, carrying **51 at older bytes** and leaving `xadmaster` at 9.0. A
-  `leaves_version` check would have passed the broken tree. Building it would
-  have been a confident wrong sentence in code, which is what this file exists
-  for.
+  `leaves_version` check **on `version.library`** would have passed the broken
+  tree. Building it would have been a confident wrong sentence in code, which
+  is what this file exists for.
+
+  **Corrected in place (fix round 1), because a wrong elimination costs more
+  than none.** The first version of this bullet said *"no after-the-fact check
+  of the artefact could have separated them either"*, and the line above it
+  gives the counter-example: `Libs/xadmaster.library` reads **9.0** on the
+  skipped tree and **9.1** on the chained one. An artefact check is possible;
+  what was refuted is `version.library` as *the* artefact — a package's own
+  version string is not evidence that the package was applied to the right
+  thing, and a file the package *changes* can be. The honest sentence is that
+  narrow one.
+
+  **57, not 60** (fix round 1). Sixty *paths* differ, and three of them —
+  `C/Exe2Arc` ↔ `C/exe2arc`, `C/WBInfo` ↔ `C/wbinfo`, `Utilities/More` ↔
+  `Utilities/more` — exist in both trees under a different case, because
+  BoingBag 1 re-cases them rather than adding them. They are exactly the three
+  "only in the skipped tree" entries. The finding is unchanged; the number was
+  quoted in six places and is corrected in all of them.
 
 *Guards:* `package.rs::the_boingbags_declare_what_their_updater_leaves_undone_art_227`
 asserts both `post_install` lists **whole**, so a fourth step cannot be added
