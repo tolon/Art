@@ -2309,7 +2309,17 @@
       "cdLink": "Choose the disc on the source step",
       "next": "Next: {{name}}",
       "reportRow": "This report is about {{name}}.",
-      "updatesLink": "{{release}} updates"
+      "updatesLink": "{{release}} updates",
+      "noneReady": "Nothing here can run yet.",
+      "allApplied": "Every link of this chain is accounted for — there is nothing left to run.",
+      "noFolders": "ART has nowhere to look for these files: add the folders your archives are in on the source step.",
+      "missingNoFolders": "{{name}} — no material folders chosen yet.",
+      "runRow": "Run this row",
+      "refusedNotPlaceable": {
+        "encryptedPayload": "{{name}} cannot be placed from Windows: the files inside it are locked and only the package's own Amiga program has the key. Run it on the Amiga instead.",
+        "needsFixfonts": "{{name}} cannot be placed from Windows: it replaces bitmap fonts and its own installer rebuilds the .font index afterwards, which ART cannot do — placing it would quietly drop any font size this package does not itself ship. Run the package's own installer on the Amiga, or install BoingBags 3&4, which already contains this update.",
+        "needsInstallerScript": "{{name}} cannot be placed from Windows: its own Installer script chooses what to copy from your processor, your machine and the languages you pick, and ART cannot answer those questions for you."
+      }
     },
     "mediaId": {
       "heading": "What these files are, by content",

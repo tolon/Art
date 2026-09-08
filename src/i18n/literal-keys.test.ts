@@ -577,6 +577,23 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     //     so the reason the button is dead is the row's own words and never a
     //     second wording composed in the component.
     // `chain.test.ts` enumerates every variant of all four.
-    expect(dynamicCalls).toBe(173);
+    // 173 -> 176 (round 3 task 2, fix round 1). Three, and every one is the
+    // same rule as the four above: the sentence is decided elsewhere and the
+    // screen only renders it.
+    //   - F5's two folder lines — `unreadableFolderLines` and
+    //     `crowdedFolderLines` from `@/lib/slots`, the readout's own phrases
+    //     reused verbatim so the two screens cannot word one fact
+    //     differently. Without them every row below read "not in the folders
+    //     you named" about a folder ART could not open;
+    //   - F1's "nothing can run yet" line, which carries the **first
+    //     outstanding row's own sentence** through `sentenceFor` so it says
+    //     what is actually needed rather than only that something is. (The
+    //     two literal halves of that branch, `noneReady` and `allApplied`,
+    //     are literal keys and are not counted here.)
+    // The row's own sentence and the reason beside a dead Run button now go
+    // through `sentenceFor` too — F6, which substitutes one catalogue phrase
+    // for another when the material list is empty — but they were already
+    // dynamic call sites and the count does not move for them.
+    expect(dynamicCalls).toBe(176);
   });
 });

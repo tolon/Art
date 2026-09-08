@@ -24,13 +24,15 @@
 // confident sentence that sends somebody after a file they already have, or
 // tells them to wait for something that has already happened.
 //
-// **The block sentence is not written twice.** A refused-because-unplaceable
-// row reuses `hostPlacementBlockKey` — the same catalogue entry the Packages
-// checklist shows under the same package. Two wordings for one fact is how
-// the two screens would come to disagree about it.
+// **The block is decided once and said twice.** A refused-because-unplaceable
+// row goes through `hostPlacementBlockChainKey` — the same `switch` over the
+// same `HostPlacementBlock` the Packages checklist uses, one key family
+// further on. Two *decisions* about one fact is how two screens come to
+// disagree; two *sentences* is what a row in a list of nine needs and a row
+// sitting under its own package's name must not have (fix round 1, F3).
 
 import {
-  hostPlacementBlockKey,
+  hostPlacementBlockChainKey,
   notYetRunnableChainKey,
   type ChainReport,
   type ChainRow,
@@ -178,9 +180,22 @@ export function chainLines(rows: ChainRow[]): ChainLine[] {
                     candidates: row.state.reason.candidates.join(", "),
                   },
                 }
-              : // The Packages checklist's own sentence for the same block,
-                // not a second wording of it.
-                { key: hostPlacementBlockKey(row.state.reason.block) },
+              : // **The block's own sentence, in this row's own words**
+                // (round 3 task 2, fix round 1, F3). It used to be the
+                // Packages checklist's key — one wording for one fact,
+                // which was the right instinct and the wrong key: that
+                // sentence renders *under the package's own name* on the
+                // checklist and so names no package. In a list of nine
+                // rows it left the one row the owner's tree will actually
+                // show — Euro-Update, refused for `needs-fixfonts` on
+                // every tree without BoingBags 3&4 — beginning "This
+                // package replaces the bitmap fonts…" with eight
+                // candidates above and below it. One block, two keys, the
+                // same `switch`: `notYetRunnableChainKey`'s shape exactly.
+                {
+                  key: hostPlacementBlockChainKey(row.state.reason.block),
+                  params: { name },
+                },
         };
 
       case "not-yet-runnable":

@@ -366,54 +366,71 @@ export function PackagePanel({
             // nested in a button is neither reachable by keyboard as itself
             // nor valid, and picking the tree and going to its updates are
             // two different acts.
+            //
+            // **Only for this build's own release** (fix round 1, F2). The
+            // chain screen is mounted with the *session's* release and the
+            // *session's* tree, so a link under a 3.9 build while the
+            // session is building 3.2 said "AmigaOS 3.9 updates" and
+            // arrived at a screen asking about 3.2 — the link promising one
+            // thing and the destination being another. And because going
+            // there is only meaningful about *this* build, the link
+            // **selects it** on the way (`onTreeRootChange`), so the chain
+            // resolves against the tree whose row was clicked rather than
+            // against whatever the session happened to hold.
             const updates =
-              isInstallRelease(found.summary.release) && releasesWithChain[found.summary.release]
+              found.summary.release === release &&
+              isInstallRelease(found.summary.release) &&
+              releasesWithChain[found.summary.release]
                 ? found.summary.release
                 : null;
             return (
               <div key={found.path}>
-              <button
-                type="button"
-                className={chosenTree ? "btn btn-primary" : "btn"}
-                onClick={() => {
-                  onTreeRootChange?.(found.path);
-                }}
-                aria-pressed={chosenTree}
-                style={{
-                  display: "block",
-                  width: "100%",
-                  textAlign: "left",
-                  marginBottom: 4,
-                  fontSize: 12,
-                }}
-              >
-                <strong>{found.name}</strong>{" "}
-                <span className="faint">
-                  {/* Release, size and what it carries — the three answers
-                      that used to need a build to find out. `components` is
-                      the one that decides whether a package can go on. */}
-                  {t("osinstall.packages.treePicker.row", {
-                    release: found.summary.release ?? "—",
-                    files: found.summary.files,
-                    components: found.summary.components.length,
-                  })}
-                </span>
-                {found.summary.amigaInstalled.length > 0 && (
+                <button
+                  type="button"
+                  className={chosenTree ? "btn btn-primary" : "btn"}
+                  onClick={() => {
+                    onTreeRootChange?.(found.path);
+                  }}
+                  aria-pressed={chosenTree}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    marginBottom: 4,
+                    fontSize: 12,
+                  }}
+                >
+                  <strong>{found.name}</strong>{" "}
                   <span className="faint">
-                    {" "}
-                    {t("osinstall.packages.treePicker.alreadyInstalled", {
-                      packages: found.summary.amigaInstalled.join(", "),
+                    {/* Release, size and what it carries — the three answers
+                        that used to need a build to find out. `components` is
+                        the one that decides whether a package can go on. */}
+                    {t("osinstall.packages.treePicker.row", {
+                      release: found.summary.release ?? "—",
+                      files: found.summary.files,
+                      components: found.summary.components.length,
                     })}
                   </span>
+                  {found.summary.amigaInstalled.length > 0 && (
+                    <span className="faint">
+                      {" "}
+                      {t("osinstall.packages.treePicker.alreadyInstalled", {
+                        packages: found.summary.amigaInstalled.join(", "),
+                      })}
+                    </span>
+                  )}
+                </button>
+                {updates && (
+                  <p style={{ fontSize: 11, margin: "0 0 6px" }}>
+                    <Link
+                      data-testid="tree-picker-updates"
+                      to="/os-builder/amiga-kurulum"
+                      onClick={() => onTreeRootChange?.(found.path)}
+                    >
+                      {t("osinstall.chain.updatesLink", { release: updates })}
+                    </Link>
+                  </p>
                 )}
-              </button>
-              {updates && (
-                <p style={{ fontSize: 11, margin: "0 0 6px" }}>
-                  <Link data-testid="tree-picker-updates" to="/os-builder/amiga-kurulum">
-                    {t("osinstall.chain.updatesLink", { release: updates })}
-                  </Link>
-                </p>
-              )}
               </div>
             );
           })}

@@ -616,10 +616,18 @@ describe("the link to a build's updates", () => {
     },
   });
 
-  function renderRouted() {
+  function renderRouted(
+    release: "AmigaOS 3.9" | "AmigaOS 3.2" = "AmigaOS 3.9",
+    onTreeRootChange?: (path: string | null) => void
+  ) {
     return render(
       <MemoryRouter>
-        <PackagePanel release="AmigaOS 3.9" treeRoot={null} chosen={[]} />
+        <PackagePanel
+          release={release}
+          treeRoot={null}
+          onTreeRootChange={onTreeRootChange}
+          chosen={[]}
+        />
       </MemoryRouter>
     );
   }
@@ -653,6 +661,59 @@ describe("the link to a build's updates", () => {
       })
     ).toBeNull();
     expect(screen.getAllByTestId("tree-picker-updates")).toHaveLength(1);
+  });
+
+  it("selects the build it sits under, so the chain is about that tree", async () => {
+    // **Fix round 1, F2.** The link neither selected the build nor carried
+    // it: `StepAmigaKurulum` mounts the chain with the *session's* tree, so
+    // clicking "AmigaOS 3.9 updates" under a build that is not the chosen
+    // one landed on a chain resolved against whatever the session held. The
+    // screen names its own tree, so nothing false was said — but the link's
+    // placement is the claim, and the reader had to read a path to catch it.
+    const onChange = vi.fn();
+    dialogOpenMock.mockResolvedValue("E:/builds");
+    treesInMock.mockResolvedValue([
+      BUILD_OF("dist-3.9-a", "AmigaOS 3.9"),
+      BUILD_OF("dist-3.9-b", "AmigaOS 3.9"),
+    ]);
+    chainMock.mockImplementation(async (release: string) => chainFor(release, 9));
+
+    renderRouted("AmigaOS 3.9", onChange);
+    await userEvent.click(screen.getAllByRole("button", { name: /browse/i })[0]);
+    await screen.findByTestId("tree-picker");
+    onChange.mockClear();
+
+    await userEvent.click(screen.getAllByTestId("tree-picker-updates")[1]);
+    // The **path** of the row the link sat under, not the first build and
+    // not whatever the session held.
+    expect(onChange).toHaveBeenCalledWith("E:/builds/dist-3.9-b");
+  });
+
+  it("offers nothing for a build of another release than the one being built", async () => {
+    // The second half of F2, and the worse one. `releasesWithChain` was
+    // keyed by the *found* tree's release and never compared with the
+    // panel's own, so with a 3.2 build in progress and a 3.9 build in the
+    // browsed folder the link said "AmigaOS 3.9 updates" and arrived at a
+    // screen asking `osinstallChain("AmigaOS 3.2", …)`. The link promised
+    // one release and the destination was about another.
+    dialogOpenMock.mockResolvedValue("E:/builds");
+    treesInMock.mockResolvedValue([BUILD_OF("dist-3.9", "AmigaOS 3.9")]);
+    chainMock.mockImplementation(async (release: string) =>
+      chainFor(release, release === "AmigaOS 3.9" ? 9 : 0)
+    );
+
+    renderRouted("AmigaOS 3.2");
+    await userEvent.click(screen.getAllByRole("button", { name: /browse/i })[0]);
+    await screen.findByTestId("tree-picker");
+    // The build's own row is still listed and still selectable — only the
+    // link is withheld, because only the link would have lied.
+    expect(screen.getByRole("button", { name: /dist-3\.9/ })).toBeTruthy();
+    expect(screen.queryAllByTestId("tree-picker-updates")).toHaveLength(0);
+    expect(
+      screen.queryByRole("link", {
+        name: i18n.t("osinstall.chain.updatesLink", { release: "AmigaOS 3.9" }),
+      })
+    ).toBeNull();
   });
 
   it("offers nothing when the chain cannot be asked", async () => {

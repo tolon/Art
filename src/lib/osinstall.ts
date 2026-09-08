@@ -2621,6 +2621,24 @@ export function hostPlacementBlockKey(block: HostPlacementBlock): string {
 }
 
 /**
+ * The i18n key for a **chain row** refused because ART cannot place the
+ * package from the host — takes `{{name}}`.
+ *
+ * A third key per block, and it is the same lesson `notYetRunnableChainKey`
+ * carries one entry down (fix round 1, m6): the checklist's own sentence
+ * sits directly under the package's name and must not repeat it, while a
+ * chain row is one line among nine and has to say what it is about. The
+ * chain rendered the checklist's key until round 3's fix round 1, so
+ * Euro-Update's row read *"This package replaces the bitmap fonts…"* with
+ * nothing naming the package — and on every tree without BoingBags 3&4 that
+ * is the state Euro-Update is actually in, so it is the ordinary row rather
+ * than a corner of one.
+ */
+export function hostPlacementBlockChainKey(block: HostPlacementBlock): string {
+  return `osinstall.chain.refusedNotPlaceable.${hostPlacementBlockSuffix(block)}`;
+}
+
+/**
  * The catalogue-key fragment naming one {@link NotYetRunnable} — the single
  * `switch` both sentences about it are built from, exactly as
  * {@link hostPlacementBlockSuffix} is for a block (fix round 1, m6).

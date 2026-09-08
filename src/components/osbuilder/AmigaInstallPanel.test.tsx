@@ -1946,10 +1946,19 @@ describe("the chain", () => {
     return row.querySelector("input") as HTMLInputElement;
   }
 
+  /** The one Run button, whichever of its three labels it is wearing — the
+   *  Amiga-side one, the packages one, or (fix round 1, F8) the neutral one
+   *  a row that opens no emulator and places no file gets. */
   const runButton = () =>
     screen.getByRole("button", {
       name: new RegExp(
-        `${i18n.t("osinstall.amigaInstall.run")}|${i18n.t("osinstall.packages.apply.run")}`
+        [
+          i18n.t("osinstall.amigaInstall.run"),
+          i18n.t("osinstall.packages.apply.run"),
+          i18n.t("osinstall.chain.runRow"),
+        ]
+          .map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+          .join("|")
       ),
     });
 
@@ -2270,6 +2279,240 @@ describe("the chain", () => {
     expect(screen.getByTestId("amiga-chain-tree").textContent).toBe(
       i18n.t("osinstall.chain.treeNone")
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // Fix round 1 — the sentences the first pass left the button and two rows
+  // without.
+  // -------------------------------------------------------------------------
+
+  it("says why nothing can run, and what the first row still needs", async () => {
+    // **F1.** No row is ready and the user has selected none, which is the
+    // state of a fresh tree with only the CD in it. Both of the branches
+    // beside the button are false there, and what was left was a dead
+    // button with nothing next to it — ART-202's own defect, on this exact
+    // screen. The mutation this case is written against is putting that
+    // silence back.
+    const rows = THE_CHAIN().map((row) =>
+      row.state.state === "ready"
+        ? { ...row, state: { state: "missing" as const, expected: [`${row.name}.lha`] } }
+        : row
+    );
+    renderChain(rows, 2);
+    await screen.findAllByTestId("amiga-chain-row");
+
+    const said = screen.getByTestId("amiga-chain-none-ready").textContent ?? "";
+    expect(said).toContain(i18n.t("osinstall.chain.noneReady"));
+    // …and it carries the first outstanding row's own words, so it says what
+    // is actually needed rather than only that something is.
+    expect(said).toContain(
+      i18n.t("osinstall.chain.missing", {
+        name: "BoingBag 3.9-2",
+        filenames: "BoingBag 3.9-2.lha",
+      })
+    );
+    // The other ending is not on screen: "nothing can run yet" and
+    // "everything is done" are two sentences and two next steps.
+    expect(said).not.toContain(i18n.t("osinstall.chain.allApplied"));
+    expect(runButton().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("says the chain is finished when every row is accounted for", async () => {
+    // **F1, the other cause.** Installed *or* not needed — a chain whose one
+    // remaining row is `not needed` is finished, and `installed === total`
+    // would call that "nothing can run yet" about a tree that has
+    // everything.
+    const rows = THE_CHAIN().map((row) =>
+      row.state.state === "not-needed" ? row : { ...row, state: { state: "installed" as const, when: null } }
+    );
+    renderChain(rows, rows.length - 1);
+    await screen.findAllByTestId("amiga-chain-row");
+
+    const said = screen.getByTestId("amiga-chain-none-ready").textContent ?? "";
+    expect(said).toBe(i18n.t("osinstall.chain.allApplied"));
+    expect(said).not.toContain(i18n.t("osinstall.chain.noneReady"));
+    expect(runButton().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("names the package on a row ART will not place from Windows", async () => {
+    // **F3.** Euro-Update is `refused` for `needs-fixfonts` on every tree
+    // that does not already carry BoingBags 3&4 — and ART cannot put those
+    // there, so this is the ordinary state of that row rather than a corner
+    // of one. It used to render the Packages checklist's own sentence, which
+    // begins "This package…" because on that screen it sits under the
+    // package's name. In a list of eight rows it named nothing.
+    const rows = THE_CHAIN().map((row) =>
+      row.packageId === "euro-update"
+        ? {
+            ...row,
+            state: {
+              state: "refused" as const,
+              reason: { because: "not-placeable" as const, block: "needs-fixfonts" as const },
+            },
+          }
+        : row
+    );
+    renderChain(rows);
+    const list = await screen.findAllByTestId("amiga-chain-row");
+    expect(list[6].textContent).toContain(
+      i18n.t("osinstall.chain.refusedNotPlaceable.needsFixfonts", { name: "Euro-Update" })
+    );
+    // The checklist's own nameless wording is not what is on screen.
+    expect(list[6].textContent).not.toContain(
+      i18n.t("osinstall.packages.blocked.needsFixfonts")
+    );
+
+    // …and selecting it puts that same named sentence beside the dead button.
+    await userEvent.setup().click(radioAt(6));
+    expect(runButton().hasAttribute("disabled")).toBe(true);
+    expect(screen.getByTestId("amiga-chain-cannot-run").textContent).toBe(
+      i18n.t("osinstall.chain.refusedNotPlaceable.needsFixfonts", { name: "Euro-Update" })
+    );
+  });
+
+  it("offers the next ready row after running a row the user picked", async () => {
+    // **F4.** `selectRow` writes the selection, so after a run of an
+    // *explicitly* selected row the selection stayed on the row that had
+    // just become installed and no next row was named. Only a run this
+    // screen made may move it — a selection the user makes has to survive
+    // every other refresh, which the case below asserts.
+    withArchiveFor("boingbag-39-2", "D:/pkg/BoingBag39-2.lha");
+    renderChain();
+    await screen.findAllByTestId("amiga-chain-row");
+    const user = userEvent.setup();
+    await user.click(radioFor("BoingBag 3.9-2"));
+
+    const after = THE_CHAIN();
+    after[2] = { ...after[2], state: { state: "installed", when: null } };
+    chainMock.mockResolvedValue(chainReport(after, 3));
+
+    await screen.findByTestId("amiga-install-preview");
+    await user.click(screen.getByLabelText(i18n.t("osinstall.amigaInstall.confirm")));
+    await user.click(runButton());
+    await waitFor(() => expect(runMock).toHaveBeenCalled());
+    await act(async () => {
+      deliver!({
+        job_id: 7,
+        outcome: { kind: "succeeded" },
+        settlement: { kind: "promoted", tree: "D:/amiga/os39", leftBehind: null },
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("amiga-chain-next").textContent).toBe(
+        i18n.t("osinstall.chain.next", { name: "AmigaOS 3.9 Locale update" })
+      )
+    );
+    // The report of the run that just finished survives the move and still
+    // names its own row.
+    expect(screen.getByTestId("amiga-install-report-row").textContent).toBe(
+      i18n.t("osinstall.chain.reportRow", { name: "BoingBag 3.9-2" })
+    );
+  });
+
+  it("keeps a selection the user made when the chain re-answers on its own", async () => {
+    // The other arm of F4, and the one that keeps it honest: a refresh that
+    // is not the result of a run this screen made must not move a selection
+    // the user made. Without it, "clear the selection when the row becomes
+    // installed" would drop a selection every time the material re-resolved.
+    chainMock.mockResolvedValue(chainReport(THE_CHAIN(), 2));
+    const view = render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.9"
+        treeRoot="D:/amiga/os39"
+        packageFolder="D:/pkg"
+        materialFolders={["E:/material"]}
+      />
+    );
+    await screen.findAllByTestId("amiga-chain-row");
+    await userEvent.setup().click(radioFor("BoingBag 3.9-1"));
+    expect(radioFor("BoingBag 3.9-1").checked).toBe(true);
+    const asked = chainMock.mock.calls.length;
+
+    // A **real** re-ask, driven the way the screen's own effect drives one —
+    // the material list changed — with the row in the same installed state
+    // it was already in. Nothing here was a run this screen made.
+    view.rerender(
+      <AmigaInstallPanel
+        release="AmigaOS 3.9"
+        treeRoot="D:/amiga/os39"
+        packageFolder="D:/pkg"
+        materialFolders={["E:/material", "F:/more"]}
+      />
+    );
+    await waitFor(() => expect(chainMock.mock.calls.length).toBeGreaterThan(asked));
+    expect(radioFor("BoingBag 3.9-1").checked).toBe(true);
+    expect(screen.queryByTestId("amiga-chain-next")).toBeNull();
+  });
+
+  it("says ART has nowhere to look when no material folder has been named", async () => {
+    // **F6.** "…is not in the folders you named" is strictly true of an
+    // empty set and useless — a fact about a set the user has not
+    // populated, read seven times over by somebody who reached this step
+    // before the source step.
+    chainMock.mockResolvedValue(chainReport(THE_CHAIN(), 2));
+    render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.9"
+        treeRoot="D:/amiga/os39"
+        packageFolder="D:/pkg"
+        materialFolders={[]}
+      />
+    );
+    const rows = await screen.findAllByTestId("amiga-chain-row");
+
+    // Once, above the rows, with the next step and where to take it.
+    const banner = screen.getByTestId("amiga-chain-no-folders");
+    expect(banner.textContent).toContain(i18n.t("osinstall.chain.noFolders"));
+    expect(banner.querySelector("a")?.getAttribute("href")).toBe("/os-builder/kaynak");
+
+    // And the missing row says the short form of it rather than the sentence
+    // about folders nobody named.
+    expect(rows[5].textContent).toContain(
+      i18n.t("osinstall.chain.missingNoFolders", { name: "BoingBag 3.9-2 Contribution" })
+    );
+    expect(rows[5].textContent).not.toContain("folders you named");
+  });
+
+  it("names a folder it could not read, and one it stopped counting in", async () => {
+    // **F5.** Both fields have been on the wire since task 1 and nothing on
+    // this screen rendered them — so a remembered folder on a drive nobody
+    // plugged in left every row below saying "not in the folders you named"
+    // about a folder ART could not open.
+    chainMock.mockResolvedValue({
+      ...chainReport(THE_CHAIN(), 2),
+      unreadableFolders: ["Z:/gone"],
+      crowdedFolders: [["E:/material", 200]] as [string, number][],
+    });
+    render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.9"
+        treeRoot="D:/amiga/os39"
+        packageFolder="D:/pkg"
+        materialFolders={["E:/material", "Z:/gone"]}
+      />
+    );
+    await screen.findAllByTestId("amiga-chain-row");
+
+    // The readout's own sentences, so the two screens cannot word it
+    // differently.
+    expect(screen.getByTestId("amiga-chain-unreadable-folder").textContent).toBe(
+      i18n.t("osinstall.slots.unreadableFolder", { folder: "Z:/gone" })
+    );
+    expect(screen.getByTestId("amiga-chain-crowded-folder").textContent).toBe(
+      i18n.t("osinstall.slots.crowdedFolder", { folder: "E:/material", bound: 200 })
+    );
+  });
+
+  it("says nothing about folders when every one of them was read", async () => {
+    // The control: an ordinary answer renders neither line. "0 folders could
+    // not be read" is a sentence about nothing.
+    renderChain();
+    await screen.findAllByTestId("amiga-chain-row");
+    expect(screen.queryByTestId("amiga-chain-unreadable-folder")).toBeNull();
+    expect(screen.queryByTestId("amiga-chain-crowded-folder")).toBeNull();
+    expect(screen.queryByTestId("amiga-chain-no-folders")).toBeNull();
   });
 
   it("falls back to the package list when ART knows no chain for this release", async () => {

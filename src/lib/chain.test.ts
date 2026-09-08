@@ -140,15 +140,44 @@ describe("chainLines", () => {
     }
   });
 
-  it("says a refused-because-unplaceable row with the Packages checklist's own words", () => {
+  it("says a refused-because-unplaceable row in words that name the row", () => {
+    // **Round 3 task 2, fix round 1, F3.** This used to assert the
+    // *checklist's* key, `osinstall.packages.blocked.needsFixfonts` — one
+    // wording for one fact, which was the right instinct and the wrong key.
+    // That sentence renders directly under the package's own name on the
+    // checklist, so it names no package; in a list of nine rows it left
+    // Euro-Update — the state every tree without BoingBags 3&4 is in —
+    // beginning "This package replaces the bitmap fonts…" with eight
+    // candidates above and below it. The decision is still made once (the
+    // same `switch` over `HostPlacementBlock`); only the sentence differs.
     const [line] = chainLines([
       row({
+        name: "Euro-Update",
         state: { state: "refused", reason: { because: "not-placeable", block: "needs-fixfonts" } },
       }),
     ]);
-    // Not a second wording of one fact: the key is the checklist's.
-    expect(line.phrase.key).toBe("osinstall.packages.blocked.needsFixfonts");
-    expect(leafText(en, line.phrase.key)).toMatch(/FixFonts/);
+    expect(line.phrase.key).toBe("osinstall.chain.refusedNotPlaceable.needsFixfonts");
+    expect(line.phrase.params).toEqual({ name: "Euro-Update" });
+    // The row names itself, and it still says what the block actually is.
+    const said = leafText(en, line.phrase.key);
+    expect(said).toMatch(/\{\{name\}\}/);
+    expect(said).toMatch(/FixFonts|\.font/);
+  });
+
+  it("gives every block its own chain sentence, in both catalogues", () => {
+    // The three blocks the recipes ship. A fourth is a compile error in
+    // `hostPlacementBlockSuffix`, and this is what stops it arriving with
+    // one of its three sentences missing.
+    for (const block of ["encrypted-payload", "needs-fixfonts", "needs-installer-script"] as const) {
+      const [line] = chainLines([
+        row({ state: { state: "refused", reason: { because: "not-placeable", block } } }),
+      ]);
+      expect(isLeafKey(en, line.phrase.key), `${line.phrase.key} in en`).toBe(true);
+      expect(isLeafKey(tr, line.phrase.key), `${line.phrase.key} in tr`).toBe(true);
+      // Every one of them names the row: that is the whole of F3.
+      expect(leafText(en, line.phrase.key), line.phrase.key).toMatch(/\{\{name\}\}/);
+      expect(leafText(tr, line.phrase.key), line.phrase.key).toMatch(/\{\{name\}\}/);
+    }
   });
 
   // **One Run button, on the first ready row.** A button on every ready row

@@ -2293,12 +2293,12 @@
       "ready": "{{name}} — hazır: {{file}}.",
       "readyUnnamed": "{{name}} — hazır.",
       "blocked": "{{name}} — önce {{needs}} girmeli.",
-      "missing": "{{name}} adını verdiğin klasörlerde yok. Beklenen: {{filenames}}.",
-      "missingUnnamed": "{{name}} adını verdiğin klasörlerde yok.",
+      "missing": "{{name}} adını verdiğiniz klasörlerde yok. Beklenen: {{filenames}}.",
+      "missingUnnamed": "{{name}} adını verdiğiniz klasörlerde yok.",
       "notNeeded": "{{name}} gerekmiyor — {{supersededBy}} bunu zaten içeriyor.",
-      "refusedAmbiguous": "Buradaki {{count}} dosya {{name}} olabilir ve ART aralarında seçim yapmaz: {{candidates}}. Hangisini kastettiğini sen seç.",
+      "refusedAmbiguous": "Buradaki {{count}} dosya {{name}} olabilir ve ART aralarında seçim yapmaz: {{candidates}}. Hangisini kastettiğinizi siz seçin.",
       "notYetRunnable": {
-        "installerNotMeasured": "{{name}} — ART bunu hiç çalıştırmadı: bir Installer betiği ile kuruluyor ve o betiğin pencerede biri olmadan bitip bitmediğini kimse ölçmedi. Gizlemek yerine listeleniyor, böylece tarifin var olduğunu görebilirsin."
+        "installerNotMeasured": "{{name}} — ART bunu hiç çalıştırmadı: bir Installer betiği ile kuruluyor ve o betiğin pencerede biri olmadan bitip bitmediğini kimse ölçmedi. Gizlemek yerine listeleniyor, böylece tarifin var olduğunu görebilirsiniz."
       },
       "onAmiga": "Amiga'da çalışır",
       "onWindows": "Windows'tan yerleştirilir",
@@ -2309,7 +2309,17 @@
       "cdLink": "Diski kaynak adımında seçin",
       "next": "Sıradaki: {{name}}",
       "reportRow": "Bu rapor {{name}} hakkında.",
-      "updatesLink": "{{release}} güncellemeleri"
+      "updatesLink": "{{release}} güncellemeleri",
+      "noneReady": "Burada henüz çalıştırılabilecek bir şey yok.",
+      "allApplied": "Bu zincirin her halkası hesaba katıldı — çalıştırılacak bir şey kalmadı.",
+      "noFolders": "ART bu dosyaları arayacak bir yer bilmiyor: arşivlerinizin bulunduğu klasörleri kaynak adımında ekleyin.",
+      "missingNoFolders": "{{name}} — henüz hiçbir malzeme klasörü seçilmedi.",
+      "runRow": "Bu satırı çalıştır",
+      "refusedNotPlaceable": {
+        "encryptedPayload": "{{name}} Windows'tan yerleştirilemez: içindeki dosyalar kilitli ve anahtar yalnızca paketin kendi Amiga programında. Bunun yerine Amiga'da çalıştırın.",
+        "needsFixfonts": "{{name}} Windows'tan yerleştirilemez: bitmap yazı tiplerini değiştiriyor ve kendi kurucusu ardından .font dizinini yeniden kuruyor; ART bunu yapamaz, dolayısıyla yerleştirmek bu paketin kendisinin getirmediği yazı tipi boylarını sessizce düşürürdü. Paketin kendi kurucusunu Amiga'da çalıştırın ya da bu güncellemeyi zaten içeren BoingBags 3&4'ü kurun.",
+        "needsInstallerScript": "{{name}} Windows'tan yerleştirilemez: kendi Installer betiği neyin kopyalanacağını işlemcinize, makinenize ve seçtiğiniz dillere göre belirliyor ve ART bu soruları sizin yerinize yanıtlayamaz."
+      }
     },
     "mediaId": {
       "heading": "Bu dosyalar, içeriklerine göre ne",

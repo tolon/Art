@@ -141,7 +141,13 @@ import {
   type SlotState,
 } from "@/lib/osinstall";
 import { chainLines, chainSummaryLine, type ChainLine } from "@/lib/chain";
-import { candidateLines, displayName, slotLines } from "@/lib/slots";
+import {
+  candidateLines,
+  crowdedFolderLines,
+  displayName,
+  slotLines,
+  unreadableFolderLines,
+} from "@/lib/slots";
 import {
   HostPlacementPreview,
   HostPlacementReport,
@@ -566,6 +572,40 @@ export function AmigaInstallPanel({
   /** The row the Run button is about. */
   const target = selected ?? firstReady;
   /**
+   * The rows still owed — neither already in the tree nor made redundant by
+   * something that is.
+   *
+   * **Not `installed === total`** (fix round 1, F1). A chain whose only
+   * outstanding row is `not needed` is finished, and counting it as owed
+   * would answer "nothing here can run yet" about a tree that has
+   * everything. `summarize_chain` counts the two apart for the same reason.
+   */
+  const outstanding = entries.filter(
+    (entry) => entry.line.kind !== "installed" && entry.line.kind !== "not-needed"
+  );
+  /** Whether this build has been given anywhere to look at all. */
+  const noFolders = materialFolders.length === 0;
+  /**
+   * The sentence one row renders.
+   *
+   * `chainLines`' own in every case but one: **a `missing` row when the user
+   * has named no folders at all** (fix round 1, F6). *"…is not in the folders
+   * you named"* is strictly true of an empty set and useless — it is a fact
+   * about a set the user has not populated, and somebody arriving here before
+   * the source step reads it eight times over. Whether the list is empty is
+   * this screen's own prop and something `core::osinstall::chain` cannot know,
+   * so the substitution is here; the sentence itself is still a catalogue
+   * entry and still names the row.
+   *
+   * One function, used by the rows, by the reason beside a dead Run button
+   * and by F1's "nothing can run yet" line, so the three cannot disagree.
+   */
+  function sentenceFor(line: ChainLine): Phrase {
+    return noFolders && line.kind === "missing"
+      ? { key: "osinstall.chain.missingNoFolders", params: { name: line.name } }
+      : line.phrase;
+  }
+  /**
    * The package every field, every classification and the whole Amiga-side
    * request is about.
    *
@@ -637,6 +677,11 @@ export function AmigaInstallPanel({
   const [confirmed, setConfirmed] = useState(false);
 
   const job = useRef<number | null>(null);
+  /** Set when a run starts and read once the chain has re-answered: the
+   *  selection is only moved on by a run **this screen made**. A ref rather
+   *  than state — nothing renders from it, and a re-render on setting it
+   *  would re-run the effect that reads it. */
+  const pendingAdvance = useRef(false);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<JobProgress | null>(null);
   const [jobError, setJobError] = useState<string | null>(null);
@@ -964,6 +1009,34 @@ export function AmigaInstallPanel({
     if (placement.applyError) setPlacedError(placement.applyError);
   }, [placement.applyError]);
 
+  /**
+   * **…and the selection moves on with it** (fix round 1, F4).
+   *
+   * `selectRow` writes `packageId`, so after a run of a row the user had
+   * *explicitly* selected the selection stayed on that row — which is now
+   * `installed` — and the button read "already in this tree" with no next
+   * row named. The brief's *"the next ready row is offered"* held only on
+   * the path where nothing was selected.
+   *
+   * Cleared rather than moved: dropping the selection lets `target` fall
+   * back to `firstReady`, which is the one answer to "which row is next"
+   * and already names itself beside the button. Setting a new `packageId`
+   * here would be ART making a choice the user did not.
+   *
+   * **Only after a run this screen made**, which is what `pendingAdvance`
+   * is for — a selection the user made must survive every other refresh of
+   * the chain, and this effect runs on all of them.
+   */
+  useEffect(() => {
+    if (!pendingAdvance.current) return;
+    if (!selected || selected.line.kind !== "installed") return;
+    pendingAdvance.current = false;
+    // Not `clearReport()`: the report of the run that just finished is
+    // exactly what has to survive this, and it names its own row.
+    setMediumSelected(false);
+    setPackageId(null);
+  }, [selected, setPackageId]);
+
   const packageBelongsHere = catalogueFolder
     ? // A folder is set, so an answer is coming: **wait for it.** Previewing
       // on the strength of a remembered id and retracting a moment later
@@ -1270,6 +1343,8 @@ export function AmigaInstallPanel({
     setBusy(true);
     clearReport();
     setRanName(target?.line.name ?? null);
+    // F4: this run, and only this run, may move an explicit selection on.
+    pendingAdvance.current = true;
     setProgress(null);
     try {
       job.current = await amigaInstallRun(request, winuaePath);
@@ -1288,6 +1363,7 @@ export function AmigaInstallPanel({
   async function runPlacement() {
     clearReport();
     setRanName(target?.line.name ?? null);
+    pendingAdvance.current = true;
     await placement.run();
   }
 
@@ -1396,6 +1472,17 @@ export function AmigaInstallPanel({
 
   const chainSummary = chain ? chainSummaryLine(chain) : null;
   /**
+   * The folders ART could not read, and the folders it stopped counting in
+   * — the two fields the chain report has carried since task 1 and nothing
+   * on this screen rendered (fix round 1, F5).
+   *
+   * `MaterialReadout`'s own phrases, from `@/lib/slots`: the same fact said
+   * the same way on both screens, and a user who lives on this step no
+   * longer has to visit the other one to learn that a folder was skipped.
+   */
+  const unreadableFolders = unreadableFolderLines(chain?.unreadableFolders ?? []);
+  const crowdedFolders = crowdedFolderLines(chain?.crowdedFolders ?? []);
+  /**
    * Whether the Amiga-side form belongs on screen at all.
    *
    * Two gates, and they are different questions. ART-212's: this release
@@ -1430,6 +1517,25 @@ export function AmigaInstallPanel({
    * row runnable. Mutating this line alone therefore survives the suite:
    * disclosed in the round's report rather than pretended away.
    */
+  /**
+   * What the button says.
+   *
+   * **The label is the row's, not the screen's** (fix round 1, F8). A row
+   * that is neither route — the CD, and a package ART can neither place nor
+   * run — used to fall through to *"Run the installer on the Amiga"*, which
+   * is a sentence about an emulator that will not open. The button is
+   * disabled in that state, so nothing followed from it; it was still a
+   * word that is not true of the row.
+   */
+  const runLabel = hostSideRow
+    ? running
+      ? "osinstall.packages.apply.running"
+      : "osinstall.packages.apply.run"
+    : hasChain && targetRunsOnAmiga === null
+      ? "osinstall.chain.runRow"
+      : running
+        ? "osinstall.amigaInstall.running"
+        : "osinstall.amigaInstall.run";
   const canRun = hostSideRow
     ? targetReady && !placement.busy && placement.confirmed && placement.collisions !== null
     : targetReady && !busy && confirmed && preview !== null && blockers.length === 0;
@@ -1496,6 +1602,41 @@ export function AmigaInstallPanel({
               ? t("osinstall.chain.tree", { root: treeRoot })
               : t("osinstall.chain.treeNone")}
           </p>
+          {/* **Where ART was told to look, when it was told nowhere**
+              (fix round 1, F6). Once, above the rows, carrying the next
+              step; each row says the short form of it for itself. */}
+          {noFolders && (
+            <p className="badge badge-warn" data-testid="amiga-chain-no-folders" style={{ display: "block", padding: "6px 12px", fontSize: 12, margin: "0 0 8px" }}>
+              {t("osinstall.chain.noFolders")}{" "}
+              <Link to="/os-builder/kaynak">{t("osBuilder.step.kaynak")}</Link>
+            </p>
+          )}
+          {/* **What was not looked at** (fix round 1, F5). A remembered
+              folder on a drive nobody plugged in is the ordinary case, and
+              without this line every row below reads *"not in the folders
+              you named"* about a folder ART could not open — the
+              confident-wrong sentence, arrived at honestly. The readout's
+              own phrases, so the two screens cannot word it differently. */}
+          {unreadableFolders.map(({ folder, phrase }) => (
+            <p
+              key={folder}
+              className="badge badge-err"
+              data-testid="amiga-chain-unreadable-folder"
+              style={{ display: "block", padding: "6px 12px", fontSize: 11, margin: "0 0 6px", wordBreak: "break-all" }}
+            >
+              {t(phrase.key, phrase.params)}
+            </p>
+          ))}
+          {crowdedFolders.map(({ folder, phrase }) => (
+            <p
+              key={folder}
+              className="faint"
+              data-testid="amiga-chain-crowded-folder"
+              style={{ fontSize: 11, margin: "0 0 6px", wordBreak: "break-all" }}
+            >
+              {t(phrase.key, phrase.params)}
+            </p>
+          ))}
           {entries.map(({ row, line }) => {
             const chosenRow = selected?.line === line;
             return (
@@ -1523,7 +1664,7 @@ export function AmigaInstallPanel({
                   <span className="faint" style={{ marginRight: 6 }}>
                     {line.position}
                   </span>
-                  {t(line.phrase.key, line.phrase.params)}
+                  {t(sentenceFor(line).key, sentenceFor(line).params)}
                   {line.where && (
                     <span className="faint" style={{ marginLeft: 6 }}>
                       {t(line.where.key, line.where.params)}
@@ -1547,9 +1688,9 @@ export function AmigaInstallPanel({
       )}
 
       {!hasChain && (
-      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
-        {t("osinstall.amigaInstall.package.label")}
-      </div>
+        <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+          {t("osinstall.amigaInstall.package.label")}
+        </div>
       )}
       {!hasChain && catalogueError && (
         <p className="badge badge-err" style={{ fontSize: 11, display: "inline-block" }}>
@@ -1577,48 +1718,48 @@ export function AmigaInstallPanel({
       */}
       {!hasChain &&
         runnable.map((pkg) => (
-        <label
-          key={pkg.id}
-          data-testid="amiga-package-row"
-          style={{
-            display: "flex",
-            gap: 8,
-            alignItems: "baseline",
-            fontSize: 12,
-            padding: "3px 0",
-            opacity: pkg.notYetRunnable ? 0.6 : 1,
-          }}
-        >
-          <input
-            type="radio"
-            name="amiga-install-package"
-            checked={packageId === pkg.id}
-            disabled={pkg.notYetRunnable !== null}
-            onChange={() => {
-              clearReport();
-              setPackageId(pkg.id);
+          <label
+            key={pkg.id}
+            data-testid="amiga-package-row"
+            style={{
+              display: "flex",
+              gap: 8,
+              alignItems: "baseline",
+              fontSize: 12,
+              padding: "3px 0",
+              opacity: pkg.notYetRunnable ? 0.6 : 1,
             }}
-          />
-          <span>
-            {pkg.name}
-            {pkg.requires.length > 0 && (
-              <span className="faint" style={{ fontSize: 11, marginLeft: 6 }}>
-                {t("osinstall.packages.requiresPackages", {
-                  list: pkg.requires.map(nameOf).join(", "),
-                })}
-              </span>
-            )}
-            {pkg.notYetRunnable && (
-              <div
-                className="faint"
-                data-testid="amiga-package-not-yet-runnable"
-                style={{ fontSize: 11, marginTop: 2 }}
-              >
-                {t(notYetRunnablePanelKey(pkg.notYetRunnable))}
-              </div>
-            )}
-          </span>
-        </label>
+          >
+            <input
+              type="radio"
+              name="amiga-install-package"
+              checked={packageId === pkg.id}
+              disabled={pkg.notYetRunnable !== null}
+              onChange={() => {
+                clearReport();
+                setPackageId(pkg.id);
+              }}
+            />
+            <span>
+              {pkg.name}
+              {pkg.requires.length > 0 && (
+                <span className="faint" style={{ fontSize: 11, marginLeft: 6 }}>
+                  {t("osinstall.packages.requiresPackages", {
+                    list: pkg.requires.map(nameOf).join(", "),
+                  })}
+                </span>
+              )}
+              {pkg.notYetRunnable && (
+                <div
+                  className="faint"
+                  data-testid="amiga-package-not-yet-runnable"
+                  style={{ fontSize: 11, marginTop: 2 }}
+                >
+                  {t(notYetRunnablePanelKey(pkg.notYetRunnable))}
+                </div>
+              )}
+            </span>
+          </label>
         ))}
 
       {/*
@@ -1982,15 +2123,7 @@ export function AmigaInstallPanel({
           onClick={() => void (hostSideRow ? runPlacement() : runInstall())}
           disabled={!canRun}
         >
-          {t(
-            hostSideRow
-              ? running
-                ? "osinstall.packages.apply.running"
-                : "osinstall.packages.apply.run"
-              : running
-                ? "osinstall.amigaInstall.running"
-                : "osinstall.amigaInstall.run"
-          )}
+          {t(runLabel)}
         </button>
         {/* **Which row this button is about.** Named when the user has
             selected none — pressing Run then runs the first ready row, and a
@@ -2006,7 +2139,29 @@ export function AmigaInstallPanel({
             here. */}
         {hasChain && selected && !targetReady && (
           <span className="faint" data-testid="amiga-chain-cannot-run" style={{ fontSize: 11 }}>
-            {t(selected.line.phrase.key, selected.line.phrase.params)}
+            {t(sentenceFor(selected.line).key, sentenceFor(selected.line).params)}
+          </span>
+        )}
+        {/* **And when there is no row at all** (fix round 1, F1). No row is
+            ready and the user has selected none: both branches above are
+            false, and what was left was a dead button with nothing beside
+            it — ART-202's own defect, learned on this exact screen, on a
+            state that is not exotic at all (a fresh tree with only the CD,
+            and a finished chain, are both this).
+
+            **Two causes, two sentences, two next steps.** "Everything is
+            accounted for" and "nothing here can run yet" are not one
+            sentence about a button that does nothing, and the second one
+            carries the first outstanding row's own words so it says what
+            is actually needed rather than that something is. */}
+        {hasChain && !target && (
+          <span className="faint" data-testid="amiga-chain-none-ready" style={{ fontSize: 11 }}>
+            {outstanding.length === 0
+              ? t("osinstall.chain.allApplied")
+              : `${t("osinstall.chain.noneReady")} ${t(
+                  sentenceFor(outstanding[0].line).key,
+                  sentenceFor(outstanding[0].line).params
+                )}`}
           </span>
         )}
         {running && (
