@@ -36,6 +36,7 @@ import {
   firstUntaggedFolder,
   isBuildKind,
   seedCardImage,
+  seedPackagesFolder,
   seedRom,
   seedTreeRoot,
   seededComponents,
@@ -53,7 +54,7 @@ import {
   type TreeChoice,
 } from "@/lib/buildSession";
 import { isInstallRelease, type InstallRelease } from "@/lib/osinstall";
-import { isFlag, isTextList, isTextOrNothing, recall, recallInto } from "@/lib/remembered";
+import { isFlag, isTextList, recall, recallInto } from "@/lib/remembered";
 import { useRemembered, useRememberedShape } from "@/lib/useRemembered";
 import { useSettingsStore } from "@/stores/settingsStore";
 
@@ -122,17 +123,17 @@ export function useBuildSession(): BuildSessionApi {
     seededMaterial(bag, release)
   );
 
-  // `reuseScan` only. `folder` is derived below from `material.folders`, so
-  // the stored `buildSession.media.folder` is neither read nor written any
-  // more — two places holding one folder is the defect this list replaces,
-  // and leaving the old field live would keep the second one.
-  const [mediaShape, setMediaShape] = useRememberedShape<MediaChoice>(
+  // **`reuseScan` only, in the shape as well as in the read** (fix round 1,
+  // F7). `media.folder` is derived below from `material.folders`, so the
+  // stored `buildSession.media.folder` is neither read nor written any more
+  // — two places holding one folder is the defect the list replaces, and
+  // `useRememberedShape`'s setter persists `{ ...current, ...change }`, so
+  // leaving `folder` in `MEDIA_SPEC` meant every `reuseScan` toggle wrote a
+  // folder nobody reads, seeded from the unsuffixed legacy key.
+  const [mediaShape, setMediaShape] = useRememberedShape<{ reuseScan: boolean }>(
     SESSION_KEYS.media,
     MEDIA_SPEC,
-    {
-      folder: recall(bag, LEGACY_KEYS.mediaFolder, isTextOrNothing, DEFAULT_MEDIA.folder),
-      reuseScan: recall(bag, LEGACY_KEYS.reuseScan, isFlag, DEFAULT_MEDIA.reuseScan),
-    }
+    { reuseScan: recall(bag, LEGACY_KEYS.reuseScan, isFlag, DEFAULT_MEDIA.reuseScan) }
   );
 
   const [rom, setRomShape] = useRememberedShape<{ path: string | null }>(SESSION_KEYS.rom, ROM_SPEC, {
@@ -158,13 +159,15 @@ export function useBuildSession(): BuildSessionApi {
     seededComponents(bag, release)
   );
 
-  // `chosen` only, for `mediaShape`'s reason: `folder` is the same derived
-  // view onto `material.folders`.
+  // **`folder` is still stored here** (fix round 1, F1) — see
+  // `PackageChoice.folder` for why. It is in `material.folders` too, but a
+  // user whose archives live apart from their disks must keep *their* folder
+  // for the two package panels while those panels each take one.
   const [packagesShape, setPackagesShape] = useRememberedShape<PackageChoice>(
     SESSION_KEYS.packages,
     PACKAGE_SPEC,
     {
-      folder: recall(bag, LEGACY_KEYS.packagesFolder, isTextOrNothing, DEFAULT_PACKAGES.folder),
+      folder: seedPackagesFolder(bag),
       chosen: recall(bag, LEGACY_KEYS.packagesChosen, isTextList, DEFAULT_PACKAGES.chosen),
     }
   );
@@ -221,11 +224,14 @@ export function useBuildSession(): BuildSessionApi {
     [addMaterialFolder, setMediaShape]
   );
 
+  // **Both**, and that is F1's fix: the panel's own field has to follow the
+  // pick (the stored value) *and* the folder has to reach the readout and the
+  // planner (the list). Writing only the list made Browse a no-op for anyone
+  // whose archives were not already the list's head.
   const setPackages = useCallback(
     (change: Partial<PackageChoice>) => {
-      const { folder, ...rest } = change;
-      if (folder) addMaterialFolder(folder);
-      if (Object.keys(rest).length > 0) setPackagesShape(rest);
+      if (change.folder) addMaterialFolder(change.folder);
+      setPackagesShape(change);
     },
     [addMaterialFolder, setPackagesShape]
   );
@@ -257,9 +263,13 @@ export function useBuildSession(): BuildSessionApi {
     () => ({ folder: derivedFolder, reuseScan: mediaShape.reuseScan }),
     [derivedFolder, mediaShape.reuseScan]
   );
+  // The stored archives folder **when there is one**, the list's first
+  // untagged folder otherwise (fix round 1, F1). A user who never kept a
+  // separate archives folder gets the one list's answer for free; a user who
+  // did keeps theirs.
   const packages = useMemo<PackageChoice>(
-    () => ({ folder: derivedFolder, chosen: packagesShape.chosen }),
-    [derivedFolder, packagesShape.chosen]
+    () => ({ folder: packagesShape.folder ?? derivedFolder, chosen: packagesShape.chosen }),
+    [derivedFolder, packagesShape.folder, packagesShape.chosen]
   );
 
   const session = useMemo<BuildSession>(

@@ -72,7 +72,15 @@ export interface SlotLine {
   required: boolean;
   /** The file's own name, when one file is involved. `null` otherwise. */
   file: string | null;
-  /** Every candidate's file name, for an ambiguous row. */
+  /**
+   * Every candidate's **full path**, for an ambiguous row.
+   *
+   * Paths and not file names (fix round 1, F3). The ambiguity this row exists
+   * for is one artefact in two folders, and its commonest shape is two copies
+   * under the *same* name: rendering names gave the user
+   * "BoingBag39-1.lha, BoingBag39-1.lha" and nothing to pick between. The
+   * folder is the whole of the information here.
+   */
   candidates: string[];
   phrase: Phrase;
   /** The installed badge, from the manifest alone. `null` when the manifest
@@ -176,7 +184,7 @@ export function slotLines(states: SlotState[]): SlotLine[] {
         id: state.slot.id,
         name,
         required: state.slot.required,
-        candidates: state.candidates.map((candidate) => fileName(candidate.path)),
+        candidates: state.candidates.map((candidate) => candidate.path),
         installed: installedPhrase(state.installed),
         blocked:
           state.blockedBy.length > 0

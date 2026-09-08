@@ -239,9 +239,30 @@ describe("slotLines", () => {
     ]);
     expect(line.kind).toBe("ambiguous");
     expect(line.file).toBeNull();
-    expect(line.candidates).toEqual(["first.lha", "second.lha"]);
+    expect(line.candidates).toEqual(["D:\\a\\first.lha", "D:\\b\\second.lha"]);
     expect(line.phrase.params?.count).toBe(2);
-    expect(line.phrase.params?.candidates).toBe("first.lha, second.lha");
+    expect(line.phrase.params?.candidates).toBe("D:\\a\\first.lha, D:\\b\\second.lha");
+  });
+
+  /// **The ambiguity this row actually exists for** (fix round 1, F3). One
+  /// artefact in two folders is what produces it, and its commonest shape is
+  /// two copies under the *same* name -- for which file names rendered
+  /// "BoingBag39-1.lha, BoingBag39-1.lha" and gave the user nothing to pick
+  /// between. The folder is the whole of the information.
+  it("keeps two copies of one name apart, which file names could not", () => {
+    const [line] = slotLines([
+      state({
+        candidates: [
+          read("D:\\disks\\BoingBag39-1.lha"),
+          read("E:\\archives\\BoingBag39-1.lha"),
+        ],
+      }),
+    ]);
+    expect(line.kind).toBe("ambiguous");
+    expect(new Set(line.candidates).size).toBe(2);
+    expect(line.phrase.params?.candidates).toBe(
+      "D:\\disks\\BoingBag39-1.lha, E:\\archives\\BoingBag39-1.lha"
+    );
   });
 
   it("keeps 'ART did not look' apart from 'ART looked and found nothing'", () => {

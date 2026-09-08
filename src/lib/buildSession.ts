@@ -111,10 +111,24 @@ export interface ComponentChoice {
 
 export interface PackageChoice {
   /**
-   * @deprecated The same derived value as {@link MediaChoice.folder}, and for
-   * the same reason: an update archive and an install disk are material for
-   * one build, and asking for them in two places was the defect. Read
-   * `session.material.folders`.
+   * The folder the two package panels read archives out of.
+   *
+   * **Still stored, and that is a decision rather than an oversight** (fix
+   * round 1, F1). It is *also* in {@link MaterialChoice.folders} — adding a
+   * folder here adds it there — but it keeps its own value while
+   * `PackagePanel` and `AmigaInstallPanel` still take one folder each. Making
+   * it a pure view onto the list's first untagged entry broke two things at
+   * once for a user whose archives live apart from their disks: on upgrade
+   * the panels were handed the *disks* folder and their own already-chosen
+   * packages sat above a catalogue that could not see them, and afterwards
+   * the panel's own Browse button became a no-op, because it appended to the
+   * list while the field went on showing the list's head. "Nothing changes
+   * unless the user changes it", running backwards: they changed it and
+   * nothing changed.
+   *
+   * `null` here means *nothing stored*, and only then does the session derive
+   * {@link firstUntaggedFolder} — which is what makes a user who never had a
+   * separate archives folder get the one list's answer for free.
    */
   folder: string | null;
   chosen: string[];
@@ -243,8 +257,17 @@ export const TREE_SPEC: { [K in keyof TreeChoice]: Guard<TreeChoice[K]> } = {
   builtHere: isFlag,
 };
 
-export const MEDIA_SPEC: { [K in keyof MediaChoice]: Guard<MediaChoice[K]> } = {
-  folder: isTextOrNothing,
+/**
+ * **`reuseScan` alone** (fix round 1, F7).
+ *
+ * `MediaChoice.folder` is derived from {@link MaterialChoice.folders} and is
+ * neither read nor written any more. Leaving it in the spec kept
+ * `useRememberedShape`'s setter persisting it on every unrelated change — a
+ * value seeded from the *unsuffixed* legacy key, written for ever, read by
+ * nobody. The type keeps the field because callers still read
+ * `session.media.folder`; the store does not.
+ */
+export const MEDIA_SPEC: { reuseScan: Guard<boolean> } = {
   reuseScan: isFlag,
 };
 
@@ -525,19 +548,32 @@ export function seededMaterial(store: unknown, release: InstallRelease): Materia
 
   // The packages step's own folder, last: it is one question further along
   // the wizard, and a user who filled both meant the install folder first.
-  //
-  // Both spellings of it, session key first. `buildSession.packages.folder`
-  // is what a user who has run any recent ART actually has; the legacy
-  // `osinstall.packages.folder` is what an older settings file holds and is
-  // what the session's own fallback reads. Taking only one of the two would
-  // lose the folder for exactly one of those two populations.
-  const held = bagOf(bag[SESSION_KEYS.packages]);
-  const packages = isText(held.folder)
-    ? held.folder
-    : textAt(bag, LEGACY_KEYS.packagesFolder);
+  // It stays a stored value of its own as well — see `PackageChoice.folder`.
+  const packages = seedPackagesFolder(bag);
   if (packages) folders = withFolder(folders, { path: packages, layer: null });
 
   return { folders };
+}
+
+/**
+ * The archives folder this session starts with, from whichever key the user's
+ * own history put one in.
+ *
+ * Both spellings, session key first. `buildSession.packages.folder` is what a
+ * user who has run any recent ART actually has; the legacy
+ * `osinstall.packages.folder` is what an older settings file holds. Taking
+ * only one of the two would lose the folder for exactly one of those two
+ * populations, and losing it is F1's own defect.
+ *
+ * Stated once and used twice — here for `seededMaterial`'s last entry, and
+ * as `useBuildSession`'s fallback for the stored value itself — so the two
+ * cannot answer differently.
+ */
+export function seedPackagesFolder(store: unknown): string | null {
+  const bag = bagOf(store);
+  const held = bagOf(bag[SESSION_KEYS.packages]);
+  if (isText(held.folder)) return held.folder;
+  return textAt(bag, LEGACY_KEYS.packagesFolder);
 }
 
 /** The first folder ART scans for everything — what `media.folder` and
