@@ -338,6 +338,7 @@ mod tests {
             "BoingBag3.9-1",
             &crate::core::amigainstall::packagevol::ArchiveIs::Neither,
             "BoingBag3.9-1-UAE, BoingBag3.9-1-UAE.info",
+            &[],
         );
         assert!(
             said.contains("' carries no '"),

@@ -225,9 +225,36 @@ pub struct KnownPackage {
 pub fn archive_listing(archive: &Path) -> CoreResult<(Vec<String>, Option<String>)> {
     let mut backend = crate::core::archive::open(archive)?;
     let entries = backend.entries()?;
+    listing_from_entries(archive, &entries)
+}
+
+/// [`archive_listing`]'s own logic, over an already-fetched entry list —
+/// split out so a test can hand it more entries than any real archive on
+/// disk needs building to prove the bound (ART-277 re-review, I10), and so
+/// the bound is checked exactly once regardless of caller.
+fn listing_from_entries(
+    archive: &Path,
+    entries: &[crate::core::archive::ArchiveEntry],
+) -> CoreResult<(Vec<String>, Option<String>)> {
+    // `entries()` alone has no cap of its own — `MAX_ENTRIES` is enforced in
+    // `extract_selection`, downstream of every *other* caller, but
+    // `amigainstall_classify_archive` reaches a listing directly, from a raw
+    // user-picked path, with no extraction behind it to cap it first.
+    // Bounded reads is a `core/security` rule; the caller
+    // (`amigainstall_classify_archive`) already turns any `Err` here into
+    // `"unknown"`, so this is the one place that needs to refuse rather than
+    // read.
+    if entries.len() > crate::core::archive::extract::MAX_ENTRIES {
+        return Err(CoreError::InvalidInput(format!(
+            "'{}' declares {} entries — too many entries for ART to list (at most {})",
+            archive.display(),
+            entries.len(),
+            crate::core::archive::extract::MAX_ENTRIES
+        )));
+    }
     let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut identity: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for entry in &entries {
+    for entry in entries {
         let mut parts = entry.name.split(['/', '\\']).filter(|s| !s.is_empty());
         let Some(first) = parts.next() else { continue };
         names.insert(first.to_string());
@@ -273,11 +300,20 @@ pub fn archive_is(media: &str, overlays: &[Overlay], top_level: &str) -> Archive
 /// the half it can say in the user's language. **Actionable**, which is
 /// CLAUDE.md's rule and the whole of ART-200: a mistake the user can undo by
 /// moving one file between two fields must not read like one they cannot fix.
+///
+/// `catalogue` is the same release-scoped, self-excluding record
+/// `overlay_mismatch_sentence` reads — used only by the `Neither` arm
+/// (ART-277 re-review, I11): the package field's own refusal used to say
+/// only what the archive was *not*, with no catalogue lookup at all, while
+/// the second field's equivalent refusal already named a recognised archive's
+/// real owner. `&[]` when the caller has none to offer; the sentence then
+/// falls back to the shape it always had.
 pub fn wrong_archive_sentence(
     archive: &std::path::Path,
     media: &str,
     role: &ArchiveIs,
     holds: &str,
+    catalogue: &[KnownPackage],
 ) -> String {
     match role {
         ArchiveIs::TheUpdateArchive => format!(
@@ -297,11 +333,28 @@ pub fn wrong_archive_sentence(
              package's own field; supply its update archive here instead.",
             archive.display()
         ),
-        ArchiveIs::Neither => format!(
-            "'{}' carries no '{media}' drawer, so it is not the archive this \
-             package's installer lives in; it holds {holds}",
-            archive.display()
-        ),
+        ArchiveIs::Neither => {
+            let owner = catalogue.iter().find(|pkg| {
+                drawer_names_equal(&pkg.media, holds)
+                    || pkg
+                        .overlay_drawers
+                        .iter()
+                        .any(|drawer| drawer_names_equal(drawer, holds))
+            });
+            match owner {
+                Some(pkg) => format!(
+                    "'{}' carries no '{media}' drawer, so it is not the archive this \
+                     package's installer lives in; it holds {holds}, which is {}'s own archive",
+                    archive.display(),
+                    pkg.name
+                ),
+                None => format!(
+                    "'{}' carries no '{media}' drawer, so it is not the archive this \
+                     package's installer lives in; it holds {holds}",
+                    archive.display()
+                ),
+            }
+        }
     }
 }
 
@@ -331,11 +384,23 @@ pub struct Layout<'a> {
     /// call site before ART-277 is; a refusal falls back to the shape it has
     /// always had rather than printing an empty name.
     pub package_name: &'a str,
-    /// Every other package ART's catalogue ships a recipe for, as `(id,
-    /// name, media)` only. **The lower module's own record** — see
-    /// [`KnownPackage`]. `&[]` when the caller has none to offer; a
-    /// wrong-overlay refusal then names only what the archive held, exactly
-    /// as it did before ART-277.
+    /// Every *other* package the command layer considers reachable from
+    /// here, as `(id, name, media, overlay_drawers)` only. **The lower
+    /// module's own record** — see [`KnownPackage`]. `&[]` when the caller
+    /// has none to offer; a wrong-overlay refusal then names only what the
+    /// archive held, exactly as it did before ART-277.
+    ///
+    /// **What "reachable" means is the caller's contract, not this module's
+    /// — stated exactly, not aspirationally (ART-277 re-review, L4).** The
+    /// one production caller, `commands::amigainstall::compose`, builds this
+    /// from every shipped package that shares a release with the one
+    /// selected, with the selected package's own id already removed. Nothing
+    /// here enforces either property — the drawer check in
+    /// [`overlay_mismatch_sentence`] finds the selected package unconditionally
+    /// regardless of whether it is in this list, and the catalogue scan
+    /// refuses to guess when more than one entry matches — so a caller that
+    /// does not keep this discipline gets a less specific sentence, never a
+    /// wrong one.
     pub catalogue: &'a [KnownPackage],
 }
 
@@ -709,21 +774,31 @@ fn overlay_drawers_display(layout: &Layout<'_>) -> String {
 /// exists to name. Checked first, directly against `layout.drawer` (the same
 /// identity [`archive_is`] uses for `ArchiveIs::ThePackage`) rather than
 /// through the catalogue, so it is true even when no catalogue was supplied
-/// at all. `layout.catalogue` is expected to already exclude the selected
-/// package (the command layer's job — a lower module should not have to
-/// re-derive "which one is me" from a list it was handed); this function
-/// does not rely on that alone, since a caller could pass its own entry by
-/// mistake and the drawer check catches it regardless.
+/// at all.
+///
+/// **`layout.catalogue` is the command layer's own release-scoped list, with
+/// the selected package already removed from it** (`commands::amigainstall::
+/// compose`, ART-277 review's L3/L4: the first round's doc comment here
+/// claimed this discipline while the one production caller — `known_packages()`
+/// — did neither. `compose` now builds the catalogue from every package that
+/// shares a release with the one selected, `package.id`-filtered, so a
+/// package from a release this build cannot reach is never named and the
+/// drawer check above is defence in depth rather than the only thing making
+/// this true). This function still does not *rely* on either property: the
+/// drawer check above is unconditional, and the scan below never resolves an
+/// ambiguous match by picking one, whatever the caller passed in.
 ///
 /// **Medium 1** (matches another package's *update* archive, not only its
-/// own) and **Medium 3** (an unreadable listing and an empty one stay
-/// different sentences) are both here too — see `KnownPackage::overlay_drawers`
-/// and the `names: Option<…>` parameter respectively.
+/// own), **Medium 3** (an unreadable listing and an empty one stay
+/// different sentences) and **L3** (never pick one of several equally
+/// matching catalogue entries — `classify_top_level`'s own "collect every
+/// match, refuse to guess" rule, not `Iterator::find_map`'s first-match-wins)
+/// are all here too.
 ///
-/// The base shape (neither the selected package's own drawer nor a catalogue
-/// match) is the old sentence, preserved exactly when `layout.package_name`
-/// is empty and `layout.catalogue` is `&[]` — every call site before
-/// ART-277 gets the identical sentence it always did.
+/// The base shape (neither the selected package's own drawer nor a single,
+/// unambiguous catalogue match) is the old sentence, preserved exactly when
+/// `layout.package_name` is empty and `layout.catalogue` is `&[]` — every
+/// call site before ART-277 gets the identical sentence it always did.
 fn overlay_mismatch_sentence(
     medium: &Path,
     layout: &Layout<'_>,
@@ -752,8 +827,13 @@ fn overlay_mismatch_sentence(
 
     // Every *other* catalogued package this archive could be — its own
     // drawer, or (Medium 1) one of its own declared overlays' drawer.
+    // Collected, not `find_map`'s first-match-wins (L3): two catalogue
+    // entries matching the same identity is `classify_top_level`'s own
+    // `other-artefact` shape one layer down, and this function must not
+    // resolve that ambiguity by naming whichever one happened to come
+    // first — the exact trap ART-276 was filed for.
     let other = names.as_ref().and_then(|names| {
-        layout.catalogue.iter().find_map(|pkg| {
+        let mut matches = layout.catalogue.iter().filter_map(|pkg| {
             if names
                 .iter()
                 .any(|name| drawer_names_equal(name, &pkg.media))
@@ -768,7 +848,13 @@ fn overlay_mismatch_sentence(
             } else {
                 None
             }
-        })
+        });
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            None
+        } else {
+            Some(first)
+        }
     });
 
     // Medium 3: an unreadable listing and an empty one are different
@@ -1058,6 +1144,26 @@ mod tests {
         assert_eq!(archive_identity(&archive).unwrap(), None);
     }
 
+    /// **ART-277 re-review, I10.** `entries()` has no cap of its own — only
+    /// `extract_selection` enforces `MAX_ENTRIES`, and `archive_listing`
+    /// reaches a listing with no extraction downstream of it to cap first.
+    /// Built as a synthetic entry list rather than a real 100,001-entry
+    /// archive on disk (`listing_from_entries` is exactly the split that
+    /// makes this cheap to prove).
+    #[test]
+    fn a_listing_over_the_entry_cap_is_refused_rather_than_read() {
+        let entries: Vec<crate::core::archive::ArchiveEntry> = (0
+            ..=crate::core::archive::extract::MAX_ENTRIES)
+            .map(|i| crate::core::archive::ArchiveEntry {
+                name: format!("Pkg/f{i}.txt"),
+                is_dir: false,
+                declared_bytes: 1,
+            })
+            .collect();
+        let err = listing_from_entries(Path::new("E:\\dl\\huge.lha"), &entries).unwrap_err();
+        assert!(err.to_string().contains("too many entries"), "got {err}");
+    }
+
     #[test]
     fn the_update_archive_refusal_names_the_field_to_move_it_to() {
         // CLAUDE.md: a refusal must be actionable. This one is fixable by
@@ -1067,6 +1173,7 @@ mod tests {
             "BoingBag3.9-1",
             &ArchiveIs::TheUpdateArchive,
             "BoingBag3.9-1-UAE, BoingBag3.9-1-UAE.info",
+            &[],
         );
         assert!(
             said.contains("update archive"),
@@ -1091,9 +1198,41 @@ mod tests {
             "BoingBag3.9-1",
             &ArchiveIs::Neither,
             "Euro-Update, Euro-Update.info",
+            &[],
         );
         assert!(said.contains("carries no 'BoingBag3.9-1' drawer"), "{said}");
         assert!(said.contains("Euro-Update.info"), "{said}");
+    }
+
+    /// **ART-277 re-review, I11.** The package field's own refusal used to
+    /// say only what the archive was *not*, with no catalogue lookup at all
+    /// — the asymmetry the review named against `apply_overlay`'s equivalent
+    /// sentence for the second field, which already named a recognised
+    /// archive's real owner. Given a catalogue, this one now does too.
+    #[test]
+    fn a_wrong_archive_in_the_package_field_names_its_real_owner_when_the_catalogue_knows_it() {
+        let catalogue = [KnownPackage {
+            id: "boingbag-39-2".to_string(),
+            name: "BoingBag 3.9-2".to_string(),
+            media: "BoingBag3.9-2".to_string(),
+            overlay_drawers: vec![],
+        }];
+        // `holds` here is the single identity `MediaSource::volume_name`
+        // states — the shape `refuse_wrong_package_archive` actually passes
+        // in production, not the comma-joined display list the *other* two
+        // tests in this group use to pin `Neither`'s generic wording.
+        let said = wrong_archive_sentence(
+            std::path::Path::new("E:\\dl\\BoingBag39-2.lha"),
+            "BoingBag3.9-1",
+            &ArchiveIs::Neither,
+            "BoingBag3.9-2",
+            &catalogue,
+        );
+        assert!(said.contains("carries no 'BoingBag3.9-1' drawer"), "{said}");
+        assert!(
+            said.contains("which is BoingBag 3.9-2's own archive"),
+            "must name the real owner: {said}"
+        );
     }
 
     use crate::core::jobs::{CancelToken, NoProgress, ProgressSink};

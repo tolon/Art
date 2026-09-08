@@ -1776,9 +1776,30 @@ pub fn add_package_staging_in(
         .find(|record| record.volume_name == package.media)
     {
         if clash.sha256 != sha256 {
+            // ART-277 re-review, L6: a hash the user cannot map back to a
+            // file is not actionable on its own — `manifest.files` already
+            // knows which **component** was placed from the clashing
+            // record, and naming it is the missing half. Distinct and
+            // sorted: two components can legitimately share one medium
+            // (the very fact this whole check exists to allow, ART-276),
+            // and every one of them came from the archive being named here.
+            let mut placed_by: Vec<&str> = manifest
+                .files
+                .iter()
+                .filter(|file| file.media == package.media)
+                .map(|file| file.component.as_str())
+                .collect();
+            placed_by.sort_unstable();
+            placed_by.dedup();
+            let placed_by_clause = if placed_by.is_empty() {
+                String::new()
+            } else {
+                format!(", which placed {}", placed_by.join(", "))
+            };
             return Err(CoreError::InvalidInput(format!(
-                "'{}' in this tree came from a different archive (sha256 {}…) than '{}' (sha256 {}…) \
-                 — ART will not add a package under a medium name that already means another file",
+                "'{}' in this tree came from a different archive (sha256 {}…{placed_by_clause}) \
+                 than '{}' (sha256 {}…) — ART will not add a package under a medium name that \
+                 already means another file",
                 package.media,
                 &clash.sha256[..12.min(clash.sha256.len())],
                 archive.display(),
@@ -6167,6 +6188,13 @@ mod tests {
         assert!(msg.contains("SharedMedium"), "{msg}");
         assert!(msg.contains(&first_sha[..12]), "{msg}");
         assert!(msg.contains(&second_sha[..12]), "{msg}");
+        // ART-277 re-review, L6: a hash the user cannot map back to a file
+        // is not, on its own, actionable — name the component that archive
+        // placed, which `manifest.files` already knows.
+        assert!(
+            msg.contains("which placed shared-a"),
+            "must name the component the clashing archive placed: {msg}"
+        );
 
         // Refused before anything is written for this second archive.
         assert!(!root.join("B").join("File2").is_file());
