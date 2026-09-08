@@ -33,11 +33,19 @@ they could happen.
   mediaIdentityLines`). `scan::find_media` reads a disk's volume name from its root block;
   `scan::find_packages` reads an archive's single top-level directory. **None of it is
   replaced.** This round joins them.
-- **The table has no AmigaOS 3.9 rows.** `media_hashes.json`: 186 rows, 0 for the ISO, 0 for
-  any package archive. `candidates_in` already hashes `adf`, `iso` and `lha`
-  (`MEDIA_EXTENSIONS`, `mediahash.rs:430`), so the owner's ISO and archives are hashed today
-  and every one of them reads *not in the table* — a claim about the table, as the module's
-  own doc says, and one this round makes true less often.
+- **The adopted table already carries seven AmigaOS 3.9 rows — corrected 2026-09-08, in
+  place.** This paragraph first said the table had none; a `grep` for `BoingBag` and `iso`
+  found nothing because Hatcher names them `AmigaOS3_9`, `AmigaOS3_9BB1`, `AmigaOS3_9BB2`,
+  `AmigaOS3_9BB34` under source `Haage and Partners (3.9)`: four ISO masterings (including the
+  owner's `3cb96e77…`), BoingBag 1 (the pre-fix `71353d4a…`), BoingBag 2 and BoingBags 3&4.
+  Round 2's first task found it by a test — `no_md5_is_shared_between_the_adopted_and_own
+  _tables` — when the eleven rows below were first all written into ART's own table. So ART's
+  own table ships **eight** rows (the 45.15 BoingBag 1, the UAE fix, Contribution, the Turkish
+  update, Euro-Update, Locale 3.9, GenesisPrefs, and HstWB's other ISO hash `e32a107e…`), not
+  twelve; the four the adopted table already had stay there. `candidates_in` already hashes
+  `adf`, `iso` and `lha` (`MEDIA_EXTENSIONS`, `mediahash.rs:430`). The lesson is the one the
+  research already recorded once tonight: a search that finds nothing is a claim about the
+  search.
 - **HstWB's table (MIT) and the owner's files agree where they overlap**, measured 2026-09-08:
 
   | Artefact | Owner's file | MD5 | In HstWB's CSV |
@@ -54,7 +62,7 @@ they could happen.
   | Locale 3.9 | `Locale3_9.lha` | `ed08b553fa3f150d2262ab657dc5484b` | no |
   | GenesisPrefs | `GenesisPrefs.lha` | `8d5a778c19b0214fa3e7318f44e68c5c` | no |
 
-  Two sources agree on three rows; the other eight are the owner's own files and are recorded
+  Three sources agree on the four rows Hatcher also carries; the rest are the owner's own files and are recorded
   as such (`source: "the owner's copy, 2026-09-08"`), unconfirmed by a second source — the
   honest label `mediahash.rs` already has for 151 of its 186 rows.
 - **A medium may have several accepted hashes.** HstWB accepts two for the 3.9 ISO; ten of its
