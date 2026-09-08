@@ -50,6 +50,52 @@
 //! result**, and building an operation for a step nobody has measured is how a
 //! vocabulary grows past what anyone can check. They are recorded in ART-227;
 //! each becomes a variant here on the day a measurement asks for one.
+//!
+//! ### Three of them were measured on 2026-09-08, and none became a variant
+//!
+//! Round 3, task 3, on the owner's own material: a clean AmigaOS 3.9 tree
+//! carrying locale (`E:\amiga\ProjeART\art226-tree`, 3 947 files, 20 catalog
+//! languages) was copied, BoingBag 3.9-1 run against the copy (`Succeeded`,
+//! 176.8 s), then BoingBag 3.9-2 against a copy of *that* (`Succeeded`,
+//! 141.5 s). Every file of every state was hashed, so what follows is a
+//! whole-tree diff and not a spot check.
+//!
+//! - **`C/Installer` — measured, not needed.** The tree's `Utilities/Installer`
+//!   states `$VER: installer 44.10 (1.10.99)`, 154 804 bytes, sha256
+//!   `6e28d173…` — **byte-identical** to `BoingBag3.9-2/C/Installer` in the
+//!   owner's own archive. It is not older; it is the same file, and neither
+//!   BoingBag touched it. (HstWB also *places* it in `SYS:C`, and this tree has
+//!   it only in `Utilities`. That is a reachability question about AmigaOS,
+//!   not a version question, and nothing here has measured it — so no step.)
+//! - **Locale catalogs — measured, not needed.** 597 catalog files in 20
+//!   languages: **0 added, 0 removed, 0 changed** by BoingBag 1 and 2 together.
+//!   The reason is in the payloads themselves, whose entry *names* are in clear
+//!   even though the bytes are ZipCrypto: `AmigaOS-Update` has 233 entries in
+//!   3.9-1 and 147 in 3.9-2, and **neither carries a single `Locale/` entry**.
+//!   There is nothing for a merge step to merge. One divergence was found next
+//!   door and is left alone deliberately: BoingBag 2 updates
+//!   `Utilities/Amplifier/catalogs/deutsch/AMPlifier.catalog` (1 994 → 2 174
+//!   bytes) and leaves `Locale/Catalogs/deutsch/AMPlifier.catalog` at 1 994.
+//!   Which of the two `locale.library` opens first was **not** established from
+//!   any source, so there is no basis for a step — one file, one language, one
+//!   program, out of 597.
+//! - **`XAD-Update` — needed, and it cannot live in this module.**
+//!   `Libs/xadmaster.library` reads `xadmaster 9.0 (25.11.2000)` on the clean
+//!   tree, `9.1 (05.01.2001)` after BoingBag 1 (whose payload carries the
+//!   105 368-byte build) and **`9.1` still** after BoingBag 2. 9.1 < 10, so the
+//!   `XAD-Update` payload was never applied — HstWB's gate
+//!   (`Version SYS:Libs/xadmaster.library 10 FILE`) would fire. But
+//!   `BoingBag3.9-2/XAD-Update` is a **second ZipCrypto archive** inside the
+//!   same wrapper: 152 837 bytes, 39 entries, every one encrypted, carrying
+//!   `Libs/xadmaster.library` at 110 100 bytes plus 26 `Libs/xad/*` clients and
+//!   10 `C/` tools. Applying it is a second `Updater` run **inside the
+//!   emulator** (`C/Updater XAD-Update "<target>"`, the package's own `Install`
+//!   line 1632), on content ART must not decrypt (ART-166, the owner's
+//!   ruling) — and that line is gated on a requester the script puts to the
+//!   *user* (`#install-xad-update`). None of that is a host file operation, so
+//!   the round-3 design's *"`finish.rs` gains `run-again-with`"* is the one
+//!   instruction the measurement contradicts. When ART offers it, it is a
+//!   second declaration in the recipe and a second run, not a variant here.
 
 use std::path::{Path, PathBuf};
 

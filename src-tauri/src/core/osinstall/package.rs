@@ -2661,6 +2661,25 @@ mod tests {
     /// `Updater` leaves a 321 768-byte ROM update under a name `SetPatch`
     /// does not load, and without this step a tree reports itself updated
     /// while running the ROM update it had before.
+    ///
+    /// **The lists are asserted whole rather than "contains", and that is what
+    /// makes them the guard for the three steps HstWB has and ART does not.**
+    /// All three were measured on 2026-09-08 (round 3, task 3) on the owner's
+    /// own material, and none of them may be added here without a measurement
+    /// of its own — this test is what would fail:
+    ///
+    /// - `C/Installer`: the tree's `Utilities/Installer` is **byte-identical**
+    ///   to BoingBag 3.9-2's own (154 804 bytes, sha256 `6e28d173…`,
+    ///   `$VER: installer 44.10 (1.10.99)`). Not older. *Measured, not needed.*
+    /// - Locale catalogs: **597 catalog files in 20 languages, 0 added, 0
+    ///   removed, 0 changed** by both BoingBags; neither payload carries a
+    ///   single `Locale/` entry. *Measured, not needed.*
+    /// - `XAD-Update`: needed — `Libs/xadmaster.library` is still
+    ///   `xadmaster 9.1 (05.01.2001)` after both, and 9.1 < 10 — but it is a
+    ///   second `Updater` run inside the emulator on a second ZipCrypto
+    ///   archive, gated on a requester the package puts to the user. It is not
+    ///   a `PostStep` and must not become one; see
+    ///   `core::amigainstall::finish`'s module documentation.
     #[test]
     fn the_boingbags_declare_what_their_updater_leaves_undone_art_227() {
         use crate::core::amigainstall::finish::PostStep;
