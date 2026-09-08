@@ -10,9 +10,20 @@
 // confident sentence covering several different situations. A slot ART
 // identified by its bytes, one that merely calls itself the right thing, one
 // that only has the right *file name*, two files ART will not choose between,
-// one that is simply absent, one the user chose by hand and one ART has
-// measured as unnecessary are seven different states with seven different
-// next steps. They never collapse into "not found" or into "found".
+// one that is simply absent, one the user chose by hand, one whose chosen file
+// has gone, and one ART has measured as unnecessary are eight different
+// states with eight different next steps. They never collapse into "not
+// found" or into "found".
+//
+// **And "ART did not look" is not "ART looked and found nothing"** (fix round
+// 1, F1). `osinstallSlots` hashes nothing — it reads the scan cache the
+// identify job fills — so a folder nobody has identified yet produces rank-2
+// and rank-3 rows with *nothing at all known about the bytes*. Every such row
+// picks between two sentences on `bytesRead`: one reports a lookup that
+// happened and matched nothing, the other says the lookup has not happened and
+// what to do about it. The first version of this file had one sentence for
+// both, and it was the one that asserted a fact about a table nobody had
+// asked.
 //
 // The `installed` badge is separate from all of them on purpose: it comes
 // from the tree's own `distribution.json` and says nothing about whether the
@@ -23,15 +34,19 @@ import { fileName, type Installed, type SlotState } from "@/lib/osinstall";
 import type { Phrase } from "@/lib/phrase";
 
 /**
- * Which of the seven endings this row is.
+ * Which of the eight endings this row is.
  *
  * Kept on the object rather than derived from the phrase key, so a screen can
  * style a guess differently from a find without re-deciding which is which.
+ * `found-by-name` and `guessed-by-filename` each carry two possible sentences
+ * — see the file header — because the *ending* is the same and only the
+ * reason ART cannot say more differs.
  */
 export type SlotLineKind =
   | "found-by-hash"
   | "found-by-name"
   | "chosen"
+  | "chosen-missing"
   | "guessed-by-filename"
   | "ambiguous"
   | "not-found"
@@ -64,7 +79,9 @@ export interface SlotLine {
  *
  * A ROM is the one slot whose `name` is generic — the recipe states a
  * Kickstart *floor*, not a Kickstart — so the major it asks for is joined on.
- * That is two data values placed side by side, not a translated sentence.
+ * That is two data values placed side by side, not a translated sentence. A
+ * release that states no floor (`rom-older-than` only) leaves `identity`
+ * empty and the row simply says "Kickstart".
  */
 function displayName(state: SlotState): string {
   const { slot } = state;
@@ -96,6 +113,12 @@ function installedPhrase(installed: Installed): Phrase | null {
  * be throwing that away.
  */
 export function slotLines(states: SlotState[]): SlotLine[] {
+  // A slot id is ART's own bookkeeping. "needs package:boingbag-39-1,
+  // medium:AmigaOS3.9 first" is the most-rendered sentence in the readout
+  // before a tree is chosen, and it was rendering ids at the user (fix round
+  // 1, F7). Every state is in hand, so the name is one lookup away.
+  const names = new Map(states.map((state) => [state.slot.id, displayName(state)]));
+
   return [...states]
     .sort((a, b) => a.slot.position - b.slot.position)
     .map((state): SlotLine => {
@@ -104,13 +127,15 @@ export function slotLines(states: SlotState[]): SlotLine[] {
         id: state.slot.id,
         name,
         required: state.slot.required,
-        candidates: state.candidates.map(fileName),
+        candidates: state.candidates.map((candidate) => fileName(candidate.path)),
         installed: installedPhrase(state.installed),
         blocked:
           state.blockedBy.length > 0
             ? {
                 key: "osinstall.slots.blocked",
-                params: { needs: state.blockedBy.join(", ") },
+                params: {
+                  needs: state.blockedBy.map((id) => names.get(id) ?? id).join(", "),
+                },
               }
             : null,
       };
@@ -127,6 +152,21 @@ export function slotLines(states: SlotState[]): SlotLine[] {
           phrase: {
             key: "osinstall.slots.notNeeded",
             params: { name, carries: state.notNeeded },
+          },
+        };
+      }
+
+      // A file the user named that is not on disk. Not *chosen*, which would
+      // describe a file that is not there, and not *not found*, which would
+      // say nothing about the choice they already made.
+      if (state.chosenMissing) {
+        return {
+          ...line,
+          kind: "chosen-missing" as const,
+          file: fileName(state.chosenMissing),
+          phrase: {
+            key: "osinstall.slots.chosenMissing",
+            params: { name, path: state.chosenMissing },
           },
         };
       }
@@ -148,7 +188,9 @@ export function slotLines(states: SlotState[]): SlotLine[] {
               kind: "found-by-name" as const,
               file,
               phrase: {
-                key: "osinstall.slots.foundByName",
+                key: state.found.bytesRead
+                  ? "osinstall.slots.foundByName"
+                  : "osinstall.slots.foundByNameUnread",
                 params: { file, name, identity: state.slot.identity },
               },
             };
@@ -169,7 +211,9 @@ export function slotLines(states: SlotState[]): SlotLine[] {
               kind: "guessed-by-filename" as const,
               file,
               phrase: {
-                key: "osinstall.slots.guessedByFilename",
+                key: state.found.bytesRead
+                  ? "osinstall.slots.guessedByFilename"
+                  : "osinstall.slots.guessedByFilenameUnread",
                 params: { file, name },
               },
             };
@@ -193,12 +237,18 @@ export function slotLines(states: SlotState[]): SlotLine[] {
       }
 
       if (state.candidates.length === 1) {
-        const file = fileName(state.candidates[0]);
+        const [candidate] = state.candidates;
+        const file = fileName(candidate.path);
         return {
           ...line,
           kind: "guessed-by-filename" as const,
           file,
-          phrase: { key: "osinstall.slots.guessedByFilename", params: { file, name } },
+          phrase: {
+            key: candidate.bytesRead
+              ? "osinstall.slots.guessedByFilename"
+              : "osinstall.slots.guessedByFilenameUnread",
+            params: { file, name },
+          },
         };
       }
 

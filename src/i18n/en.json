@@ -2234,10 +2234,13 @@
       "addHint": "AmigaOS 3.2.2.1 is your 3.2 disks plus the Update and Hotfix folders — add each one."
     },
     "slots": {
+      "foundByNameUnread": "{{file}} — this file calls itself {{identity}}, which is what {{name}} is. Nobody has read its bytes yet, so ART has not checked them against its tables — identify this folder by content to confirm it.",
+      "guessedByFilenameUnread": "{{file}} is named like {{name}}, and nothing else says so: the name inside it is not {{name}}, and nobody has read its bytes yet. Identify this folder by content, or open the file, before relying on this row.",
+      "chosenMissing": "The file you chose for {{name}} is not there: {{path}}. Choose it again, or plug in the drive it was on.",
       "foundByHash": "{{file}} — identified by its bytes: they are the ones ART’s table records for {{name}}.",
-      "foundByName": "{{file}} — this file calls itself {{identity}}, which is what {{name}} is. Its bytes are in no row ART has, so that is the file’s own word rather than a check.",
+      "foundByName": "{{file}} — this file calls itself {{identity}}, which is what {{name}} is. Its bytes were hashed and are in no table ART has, so that is the file’s own word rather than a check.",
       "chosen": "{{file}} — the file you chose for {{name}}. ART did not identify it.",
-      "guessedByFilename": "{{file}} is named like {{name}}, and that is all ART can say: neither its bytes nor the name inside it confirm it. Open it or replace it before relying on this row.",
+      "guessedByFilename": "{{file}} is named like {{name}}, and that is all ART can say: its bytes were hashed and match nothing ART knows, and the name inside it is not {{name}} either. Open it or replace it before relying on this row.",
       "ambiguous": "{{count}} files here could be {{name}}, and ART will not choose between them: {{candidates}}. Pick the one you mean.",
       "notFound": "{{name}} is not in the folders you named. Expected {{filenames}}.",
       "notFoundUnnamed": "{{name}} is not in the folders you named.",
