@@ -1622,10 +1622,31 @@ fn describe_package_refusal(reason: &RefusalReason) -> String {
             "more than one archive carries '{media}', the media '{package}' needs: {}",
             paths.join(", ")
         ),
-        // `resolve_package_archive` only ever produces the two variants
-        // above; kept total rather than narrowing the return type so a
-        // future caller passing some other `RefusalReason` in still gets a
-        // sentence instead of a panic.
+        // ART-282: `osinstall_collisions` now runs `detect_package_refusals`
+        // before it ever orders a selection (see
+        // `ordered_packages_for_collisions`), so these two — previously only
+        // reachable from the add path, which sends the typed `RefusalReason`
+        // itself across the wire instead of a string — can now arrive here.
+        // Mirrors `packageRequirementMissing`/`packageRequirementNeedsAmigaRun`
+        // in `src/i18n/en.json`, in English regardless of the chosen
+        // language (ART-060): both carry the packages' own names, never ids.
+        RefusalReason::PackageRequirementMissing { package, requires } => format!(
+            "'{package}' needs '{requires}' applied first — tick that one too, or untick \
+             '{package}' on its own"
+        ),
+        RefusalReason::PackageRequirementNeedsAmigaRun {
+            package,
+            requirement,
+        } => format!(
+            "'{package}' needs '{requirement}' installed first, and '{requirement}' is run \
+             on the Amiga from the Amiga-side step — it cannot be ticked on this list. Do \
+             that one there first, then add '{package}' here"
+        ),
+        // `resolve_package_archive` only ever produces the two archive
+        // variants above, and only they (plus the two matched explicitly)
+        // reach this function today; kept total rather than narrowing the
+        // return type so a future caller passing some other `RefusalReason`
+        // in still gets a sentence instead of a panic.
         other => format!("{other:?}"),
     }
 }
@@ -2267,6 +2288,45 @@ pub struct OsInstallCollisionsResult {
     pub reports: Vec<CollisionReport>,
 }
 
+/// [`osinstall_collisions`]'s own selection check, pulled out so it can be
+/// unit-tested without a live `AppHandle`/`State` — the same shape
+/// [`resolve_packages_for_add`] already is, and reusing that function's own
+/// [`detect_package_refusals`] call rather than a second copy of the
+/// requirement rule (ART-282).
+///
+/// `Ok(Ok(ordered))` is the happy path — `chosen`, reordered, ready for
+/// [`preview_collisions`]. `Ok(Err(refusals))` is every typed reason the
+/// selection cannot proceed, collected all at once the way `plan()` and
+/// `resolve_packages_for_add` both do — never just the first. The outer
+/// `AppResult` is reserved for what is not a user selection problem: an
+/// unreadable `distribution.json`.
+fn ordered_packages_for_collisions(
+    tree_root: &Path,
+    packages: &[String],
+    catalogue: &[Package],
+) -> AppResult<Result<Vec<String>, Vec<RefusalReason>>> {
+    let manifest = read_manifest(tree_root)?;
+    let components_on: Vec<String> = {
+        let mut set: BTreeSet<String> = BTreeSet::new();
+        for file in &manifest.files {
+            set.insert(file.component.clone());
+        }
+        set.into_iter().collect()
+    };
+    // The same tolerance the add path applies, and for the same reason: a
+    // preview against a tree that already carries the prerequisite must not
+    // refuse the selection the add would accept, or the two screens
+    // disagree about one selection.
+    let applied: Vec<String> = chain::applied_in(&manifest).into_iter().collect();
+
+    let refusals = detect_package_refusals(packages, catalogue, &components_on, &applied);
+    if !refusals.is_empty() {
+        return Ok(Err(refusals));
+    }
+
+    Ok(Ok(package::order_with_installed(packages, &applied)?))
+}
+
 /// What landing the chosen packages on `tree_root` would actually do to the
 /// files already there (spec §3's PREVIEW). Returns a job id (§54) — see
 /// [`preview_collisions`]'s own doc comment for why this now runs as a job
@@ -2286,12 +2346,26 @@ pub fn osinstall_collisions(
     registry: State<'_, Arc<JobRegistry>>,
 ) -> AppResult<u64> {
     let catalogue = package::packages()?;
-    // The same tolerance the add path applies, and for the same reason: a
-    // preview against a tree that already carries the prerequisite must not
-    // refuse the selection the add would accept, or the two screens
-    // disagree about one selection.
-    let applied: Vec<String> = chain::applied(&tree_root)?.into_iter().collect();
-    let ordered = package::order_with_installed(&packages, &applied)?;
+    // ART-282: a preview used to go straight to `order_with_installed`,
+    // which refuses an unsatisfied `requires` with its own raw, id-only
+    // sentence — reached from this screen the moment the user ticked
+    // `locale-turkish` on a tree BoingBag 3.9-2 had not been run on, before
+    // any "Add" was even pressed. `detect_package_refusals` is the same
+    // typed check `resolve_packages_for_add` already runs before ordering
+    // (below), so it runs here first too, and a refusal is reported through
+    // it — by name, and with the Amiga-side advice when the requirement
+    // cannot be ticked from this list at all — never through `order`.
+    let ordered = match ordered_packages_for_collisions(&tree_root, &packages, &catalogue)? {
+        Ok(ordered) => ordered,
+        Err(refusals) => {
+            let message = refusals
+                .iter()
+                .map(describe_package_refusal)
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(CoreError::InvalidInput(message).into());
+        }
+    };
     let title = format!(
         "Previewing {} package(s) against {}",
         ordered.len(),
@@ -4813,6 +4887,91 @@ mod tests {
             )),
             "{refusals:?}"
         );
+    }
+
+    // ---- ART-282 ----------------------------------------------------------
+    //
+    // The owner ticked `locale-turkish` on the Packages step, on a tree
+    // BoingBag 3.9-2 had never been run on, and saw
+    // `order_over_with_installed`'s own raw sentence —
+    // `'locale-turkish' requires 'boingbag-39-2', which was not chosen
+    // (ART-INPUT-INVALID)` — read out at them the moment the checkbox was
+    // ticked, before "Add" was ever pressed. That preview goes through
+    // `osinstall_collisions`, which used to call `order_with_installed`
+    // directly with no refusal check in front of it at all — unlike the add
+    // path (`resolve_packages_for_add`, tested above), which already ran
+    // `detect_package_refusals` first. `ordered_packages_for_collisions` is
+    // the same check, reused rather than copied, now sitting in front of
+    // `osinstall_collisions`'s own call to `order_with_installed`.
+
+    /// The exact tree the owner had: `locale-base` present, BoingBag 3.9-2
+    /// never run. The preview must answer the typed, named refusal — never
+    /// the raw `order_over_with_installed` sentence, and never bare ids.
+    #[test]
+    fn ordered_packages_for_collisions_refuses_locale_turkish_without_boingbag_by_name() {
+        let dir = scratch("collisions-requires-amiga-run");
+        let tree = dir.join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        write_test_manifest(
+            &tree,
+            vec![locale_base_file_record("Locale/Languages/turkish.language")],
+        );
+
+        let catalogue = package::packages().unwrap();
+        let outcome =
+            ordered_packages_for_collisions(&tree, &["locale-turkish".to_string()], &catalogue)
+                // The outer `AppResult` failing here would itself be the bug this
+                // guards against: `order_over_with_installed`'s raw
+                // `CoreError::InvalidInput` used to surface exactly this way. It
+                // must come back `Ok` — refused as data, not as an error — with
+                // `order` never reached.
+                .expect("a package selection refusal is data, not an AppError; order must not run");
+
+        let refusals = outcome.expect_err("boingbag-39-2 was never run on this tree");
+        assert!(
+            refusals.contains(
+                &crate::core::osinstall::RefusalReason::PackageRequirementNeedsAmigaRun {
+                    package: "T\u{FC}rk\u{E7}e catalogs (BoingBag 3.9-2)".to_string(),
+                    requirement: "BoingBag 3.9-2".to_string(),
+                }
+            ),
+            "the refusal must name both packages and send the user to the Amiga-side step, \
+             got {refusals:?}"
+        );
+        // Bare ids ('locale-turkish', 'boingbag-39-2') are exactly what the
+        // owner saw and exactly what this refusal must never repeat.
+        for refusal in &refusals {
+            let text = format!("{refusal:?}");
+            assert!(!text.contains("boingbag-39-2"), "got {text}");
+        }
+    }
+
+    /// [`describe_package_refusal`]'s own text for the two requirement
+    /// variants — what the screen actually reads once
+    /// `ordered_packages_for_collisions` has refused a selection, since
+    /// `osinstall_collisions` can only answer with a string, not the typed
+    /// `RefusalReason` the add path sends across the wire. Names, the
+    /// Amiga-side step named for the arm that needs it, and never an id.
+    #[test]
+    fn describe_package_refusal_names_the_amiga_side_step_and_never_an_id() {
+        let needs_amiga_run = RefusalReason::PackageRequirementNeedsAmigaRun {
+            package: "T\u{FC}rk\u{E7}e catalogs (BoingBag 3.9-2)".to_string(),
+            requirement: "BoingBag 3.9-2".to_string(),
+        };
+        let text = describe_package_refusal(&needs_amiga_run);
+        assert!(text.contains("Amiga-side step"), "got {text}");
+        assert!(text.contains("T\u{FC}rk\u{E7}e catalogs"), "got {text}");
+        assert!(text.contains("BoingBag 3.9-2"), "got {text}");
+        assert!(!text.contains("boingbag-39-2"), "got {text}");
+        assert!(!text.contains("locale-turkish"), "got {text}");
+
+        let missing = RefusalReason::PackageRequirementMissing {
+            package: "Some Package".to_string(),
+            requires: "Some Requirement".to_string(),
+        };
+        let text = describe_package_refusal(&missing);
+        assert!(text.contains("Some Package"), "got {text}");
+        assert!(text.contains("Some Requirement"), "got {text}");
     }
 
     /// The carried-forward review point: a media folder that does not exist

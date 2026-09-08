@@ -1194,11 +1194,36 @@ pub(super) fn order_over_with_installed(
             .get(id.as_str())
             .ok_or_else(|| CoreError::InvalidInput(format!("ART ships no package '{id}'")))?;
         for need in &package.requires {
-            if !chosen_set.contains(need.as_str()) && !installed_set.contains(need.as_str()) {
-                return Err(CoreError::InvalidInput(format!(
-                    "'{id}' requires '{need}', which was not chosen"
-                )));
+            if chosen_set.contains(need.as_str()) || installed_set.contains(need.as_str()) {
+                continue;
             }
+            // ART-282: this fires only when a caller reaches `order` (or
+            // `order_with_installed`) without having run
+            // `plan::detect_package_refusals` first — the screen itself
+            // never should, now that both `osinstall_collisions` and
+            // `resolve_packages_for_add` check refusals before ordering.
+            // But this is the one place that check is *not* guaranteed —
+            // it stays a real `CoreError`, not a panic — so it names the
+            // requirement the same way the typed refusal does: by the
+            // catalogue's own name when the id resolves, the raw id only
+            // when it does not, and the Amiga-side advice when the
+            // requirement can never be ticked from this list at all,
+            // rather than "which was not chosen" — advice that is simply
+            // wrong for a requirement nobody could have chosen here.
+            let required = index.get(need.as_str());
+            let requirement = required
+                .map(|other| other.name.clone())
+                .unwrap_or_else(|| need.clone());
+            let advice = match required {
+                Some(other) if other.amiga_installer.is_some() => {
+                    " — install it first on the Amiga-side step"
+                }
+                _ => "",
+            };
+            return Err(CoreError::InvalidInput(format!(
+                "'{}' requires '{requirement}', which was not chosen{advice}",
+                package.name
+            )));
         }
     }
 
@@ -2432,13 +2457,21 @@ mod tests {
 
     /// Choosing a package without what it requires is refused, saying what
     /// is missing — not silently added, because adding a whole package the
-    /// user did not ask for is a bigger surprise than a refusal.
+    /// user did not ask for is a bigger surprise than a refusal. By the
+    /// catalogue's own **name**, never the bare id (ART-282: BoingBag 3.9-1
+    /// is also `amiga_installer`-declared, so the refusal names the
+    /// Amiga-side step too).
     #[test]
     fn a_requirement_that_was_not_chosen_is_refused_by_name() {
         let err = super::order(&["boingbag-39-2".into()])
             .unwrap_err()
             .to_string();
-        assert!(err.contains("boingbag-39-1"), "got {err}");
+        assert!(err.contains("BoingBag 3.9-1"), "got {err}");
+        assert!(err.contains("Amiga-side step"), "got {err}");
+        assert!(
+            !err.contains("boingbag-39-1"),
+            "the id must not leak: got {err}"
+        );
     }
 
     /// A minimal, valid `Package` for the synthetic tests below — real
@@ -2513,6 +2546,57 @@ mod tests {
             .to_string();
         assert!(err.contains("more than once"), "got {err}");
         assert!(!err.contains("cycle"), "got {err}");
+    }
+
+    /// ART-282: the screen must never reach this — both command paths now
+    /// run `plan::detect_package_refusals` before ordering — but
+    /// `order_over_with_installed`'s own sentence still has to be one a
+    /// person could act on if some future caller ever *does* skip that
+    /// check, and it must never read out ART's own ids the way it used to:
+    /// `'locale-turkish' requires 'boingbag-39-2', which was not chosen`
+    /// named neither package by anything a person watching the Packages
+    /// step could recognise, and told them the missing package "was not
+    /// chosen" — advice that is simply wrong for one that cannot be, because
+    /// it runs on the Amiga.
+    #[test]
+    fn order_over_with_installeds_own_error_names_the_amiga_side_step() {
+        let x = synthetic("x", &["y"]);
+        let mut y = synthetic("y", &[]);
+        y.name = "Y Display Name".to_string();
+        y.amiga_installer = Some(AmigaInstaller {
+            program: "C/Updater".to_string(),
+            args: Vec::new(),
+            minimum_version: None,
+            overlays: Vec::new(),
+            required_medium: None,
+            follow_ups: Vec::new(),
+            post_install: Vec::new(),
+            not_yet_runnable: None,
+        });
+
+        let err = super::order_over(&["x".to_string()], &[x, y])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Y Display Name"), "got {err}");
+        assert!(err.contains("Amiga-side step"), "got {err}");
+        assert!(!err.contains("'y'"), "the id must not leak: got {err}");
+    }
+
+    /// The plain arm beside it: a requirement that is an ordinary,
+    /// host-placeable package (no `amiga_installer`) keeps the old advice —
+    /// "which was not chosen" is correct there, because it really could be.
+    #[test]
+    fn order_over_with_installeds_own_error_keeps_the_ordinary_advice_for_a_host_package() {
+        let x = synthetic("x", &["y"]);
+        let mut y = synthetic("y", &[]);
+        y.name = "Y Display Name".to_string();
+
+        let err = super::order_over(&["x".to_string()], &[x, y])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Y Display Name"), "got {err}");
+        assert!(err.contains("which was not chosen"), "got {err}");
+        assert!(!err.contains("Amiga-side step"), "got {err}");
     }
 
     /// Two shipped JSON files naming the same id is the failure mode that
