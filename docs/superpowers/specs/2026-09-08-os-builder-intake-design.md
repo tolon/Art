@@ -132,6 +132,17 @@ SlotState {
 }
 ```
 
+**Corrected in place, 2026-09-08 (round 2's whole-branch review, I14 and M5).**
+`installed` shipped as `Installed::{ Placed { at }, Ran { command }, No }` — no
+date and no hash, because `distribution.json` records neither per component;
+what it records is where a file was placed and the command line an Amiga-side
+installer ran. The § 3.3 sketch's *"installed 2026-09-07"* row is therefore not
+what renders. `SlotState` also gained three fields the sketch has none of:
+`chosen_missing` (a file the user named that is not there — its own ending),
+`not_needed` (an artefact ART measured as unnecessary) and `incomplete`
+(§ 3.6's structural check). `Facts` gained `overrides`, which is what makes the
+*chosen by you* sentence below true on the readout as well as on the panel.
+
 `matched_by` is ranked the way HstWB ranks it and for the same reason: a hash is a fact about
 the bytes, a volume name or top-level directory is what the medium says about itself, a
 filename is a guess. **A filename match is shown as a guess** (yellow), never as a find, and it
@@ -147,6 +158,13 @@ shows and the user resolves by picking, never an arbitrary winner.
 One component, `MaterialReadout.tsx`, rendered on the `kaynak` step and on the Amiga-side
 panel (round 3 makes it the chain screen's spine). One row per slot, in chain order:
 
+**Corrected in place, 2026-09-08 (I13).** The Amiga-side panel does *not* render
+this component: it renders its own `SlotField` per artefact, because what it
+needs is a field the user can act on rather than a row they can read — and it
+reuses `slotLines([state])[0].phrase` for the sentence, so the two screens
+cannot say different things about one file. Round 3's chain screen is where
+this component reaches that panel.
+
 ```
 ✔  AmigaOS 3.9 CD          AmigaOS39.iso        by hash · Amiga, Inc. and H&P · installed 2026-09-07
 ✔  BoingBag 3.9-1          BoingBag39-1 (1).lha by hash · Updater 45.15, no fix needed · installed
@@ -160,6 +178,15 @@ and above it the set line HstWB shows: **`AmigaOS 3.9 · 5 of 6 found · 1 optio
 green when every required slot is found, red naming how many required are missing. Required
 and optional are counted separately, so a set missing only optional files is green.
 
+**Corrected in place, 2026-09-08 (L8).** A complete set says *"everything
+required is here"* rather than *"0 required missing"* — the count is named only
+when there is one, which is the rule this design already states for the
+not-needed clause. There are eleven row endings rather than the four listed
+below: the eight of round 2's task 2 plus *matched but incomplete* (§ 3.6),
+*already in this tree, archive gone*, and *no Kickstart chosen yet* — the last
+two because a ROM is never resolved from a folder and a slot the set line
+counts found must not draw as a problem.
+
 Every row's sentence is a `Phrase` from `src/lib` (two catalogues), and the four endings stay
 distinct per row: found-by-hash, found-by-its-own-name, guessed-by-filename, not found; plus
 `installed` as a state from the manifest, never inferred from a file being present.
@@ -172,6 +199,15 @@ The panel's three browse buttons go. The package's archive, its overlay and the 
 `BoingBag39-1-UAE.lha`; only needed because your BoingBag 1 carries `Updater` 45.13"*). The
 per-package remembered keys from round 1 stay as the override: a file the user picked by hand
 wins over the slot, and the readout says *chosen by you* for it.
+
+**Built, 2026-09-08 (M5).** `osinstall_slots` takes an `overrides` list of
+`(slot id, path)` and resolves an override above every rank — an override is
+not an identification ART made and cannot be compared with one. The `kaynak`
+step reads the panel's own remembered keys and passes them, so both screens say
+the same thing about one file. The panel keeps computing its own effective
+value locally as well, because it is the one screen that needs *both* facts:
+what ART found **and** what the user chose, so it can offer *Use the one ART
+found*.
 
 ### 3.5 Amiga Forever, offered
 
@@ -199,6 +235,16 @@ Never added silently: `remembered.ts`'s rule.
 - **Structural check beside the hash** for the CD (HstWB's six directories): a slot for a
   disc that matched by hash *and* lacks `OS-Version3.9`, `Emergency-Boot`, `Contribution` … is
   reported as *matched but incomplete* — a different sentence from *not found*.
+
+  **Built, 2026-09-08 (round 2's whole-branch review, L6), with two
+  corrections.** Three directories rather than six, on
+  `media_artefacts_adopted.json` beside `filenames` — data, ART's own claim,
+  and a longer list would turn an unusual-but-usable mastering into a warning.
+  And it is not gated on the hash: a disc matched by the volume name it states
+  is checked the same way, since the check is about the disc's contents and not
+  about how ART recognised it. The command reads the root through
+  `IsoImage::list` (one directory extent, never a walk); a disc nobody could
+  list says nothing rather than reading as incomplete.
 
 ### 3.7 The drop-folder text, on request
 
@@ -251,5 +297,12 @@ at it. The SD lane (round 3 or later) puts the same text onto the FAT32 partitio
   mirror) is not a material folder, and the readout should say *"this folder holds 200
   archives; ART looked at them all"* rather than hang silently. Bound the count and name the
   bound.
+
+  **Built, 2026-09-08 (L7).** `scan::MAX_MATERIAL_ARCHIVES = 200`, applied by
+  `find_packages_bounded`, and the folders that hit it come back on
+  `SlotReport::crowded_folders` with the number so the sentence can quote it.
+  What it says is *"ART looked at the first 200"*, not *"looked at them all"* —
+  the wording in the bullet above would be the confident-wrong version of the
+  same line.
 - The recipes' `filenames` data is a convention, not a fact about the user's disk; it is only
   ever used for the *guess* rank and for the guide text.

@@ -163,7 +163,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   A file you choose by hand still wins, is marked as yours, and stays yours —
   scanning again never replaces it. *Use the one ART found* is the way back,
-  and it is the only way back.
+  and it is the only way back. The readout on the source step knows about
+  those choices too, so the two screens no longer say opposite things about
+  the same file.
+
+  Three lines on that readout were wrong and are not any more. Your Kickstart
+  was reported as missing from your material folders and counted against the
+  build — ART never looks for one there, and never did; it is chosen in the
+  field on that step, and the readout now says so and names the version the
+  build needs. A piece already installed into your tree, whose archive you
+  have since moved away, was drawn in red as missing directly under a green
+  line saying nothing was. And a disc ART recognises that turns out to be
+  missing part of itself now says which part, instead of telling you to go and
+  find a disc that is sitting in the folder. A complete set says everything
+  required is here rather than counting a shortfall of nought, and a folder
+  with more archives in it than ART reads in one pass says how many it read.
+
+  The archives folder is now remembered per release, like everything else
+  about a build. Removing a folder while building one release used to
+  silently repoint another release's package steps at a different folder.
 
 - **ART now looks like a Windows 11 application, in both themes.** The
   colours are the Fluent tokens Windows itself draws with (Mica background,
