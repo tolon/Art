@@ -105,7 +105,9 @@ use crate::core::osinstall::scan::{
     MediaMatch, PackageMedium,
 };
 use crate::core::osinstall::scan_cache::ScanCache;
+use crate::core::osinstall::slots::{self, Facts, SetSummary, SlotState};
 use crate::core::osinstall::source::MediaSource;
+use crate::core::osinstall::source_archive::ArchiveSource;
 use crate::core::osinstall::verify::{verify_volume, VerifyReport};
 use crate::core::osinstall::{
     destination_key, host_destination, HostPlacementBlock, RefusalReason,
@@ -716,6 +718,148 @@ pub fn osinstall_packages(
             }
         })
         .collect())
+}
+
+// ---------------------------------------------------------------------------
+// osinstall_slots
+// ---------------------------------------------------------------------------
+
+/// What one release needs and what the user's folders turn out to hold.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotReport {
+    pub states: Vec<SlotState>,
+    pub summary: SetSummary,
+}
+
+/// Resolve every slot of `release` against `folders`, the chosen tree and the
+/// chosen ROM — the one answer that replaces the four separate resolutions the
+/// OS Builder used to make (design § 3.2).
+///
+/// **Read-only, and it hashes nothing.** `core::osinstall::slots` opens no
+/// file at all; this adapter gathers the facts and every one of them comes
+/// from a reader that already exists:
+///
+/// - [`find_media_across`](scan::find_media_across) reads each disk's own
+///   volume name, as the `kaynak` step already does;
+/// - [`find_packages`] reads each archive's single top-level directory, as the
+///   `paketler` step already does;
+/// - [`mediahash::remembered_media_in`] answers **out of the scan cache
+///   only**. Hashing a 490 MB ISO belongs on the job `osinstall_identify_media`
+///   already runs (§54), never on the command thread, so a folder nobody has
+///   identified yet simply resolves at rank 2 and the readout says so.
+/// - the tree's own `distribution.json`, through
+///   [`chain::read_manifest`] — the one reader, so "installed" means the same
+///   thing here as everywhere else.
+///
+/// An unreadable folder is answered rather than refused, the same way
+/// [`osinstall_packages`] answers one: the readout itself always renders, and
+/// what a missing folder changes is which slots are filled. A chosen *tree*
+/// that carries no manifest is different and does propagate — the user just
+/// pointed at it, and `chain::read_manifest`'s refusal names what is wrong
+/// with it.
+#[tauri::command]
+pub fn osinstall_slots(
+    release: String,
+    folders: Vec<PathBuf>,
+    tree: Option<PathBuf>,
+    rom: Option<PathBuf>,
+) -> AppResult<SlotReport> {
+    let slots = slots::slots_for(&release)?;
+
+    let media = scan::find_media_across(&folders).unwrap_or_default();
+
+    // `find_packages` per folder, the same folder never twice: a user who
+    // adds their material folder a second time must not be told every archive
+    // in it is ambiguous with itself (`find_media_across`'s own rule, which
+    // has no package-side counterpart to call).
+    let mut seen: Vec<PathBuf> = Vec::new();
+    let mut packages: Vec<FoundPackage> = Vec::new();
+    let mut hashes: Vec<mediahash::MediaMatch> = Vec::new();
+    let cache = ScanCache::in_dir(crate::scratch::root()?);
+    for folder in &folders {
+        let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.clone());
+        if seen.contains(&canonical) {
+            continue;
+        }
+        seen.push(canonical);
+        packages.extend(find_packages(folder).unwrap_or_default());
+        hashes.extend(mediahash::remembered_media_in(folder, &cache).unwrap_or_default());
+    }
+
+    let manifest = match tree {
+        Some(tree) => Some(chain::read_manifest(&tree)?),
+        None => None,
+    };
+
+    let program_versions = installer_versions(&release, &packages);
+
+    let facts = Facts {
+        media: &media,
+        packages: &packages,
+        hashes: &hashes,
+        manifest: manifest.as_ref(),
+        rom: rom.as_deref(),
+        program_versions: &program_versions,
+    };
+    let states = slots::resolve(&slots, &facts);
+    let summary = slots::summarize(&release, &states);
+    Ok(SlotReport { states, summary })
+}
+
+/// What each Amiga-installable package's **own** wrapper archive says its
+/// installer program is, as `(package id, "45.15")`.
+///
+/// This is the fact that decides whether BoingBag 1's UAE overlay is needed at
+/// all (ART-186), and it is asked of the artefact rather than of the user: the
+/// archive states its own `$VER:`, a date on a download page does not.
+///
+/// Only asked of a package that declares a `minimum_version` — nothing else
+/// has a question to answer — and only ever **read**: the member's bytes come
+/// out of [`ArchiveSource`] and are never written anywhere.
+/// [`packagevol::stated_version`](crate::core::amigainstall::packagevol::stated_version)
+/// is the same function `packagevol::unpack` uses on the extracted program, so
+/// the two cannot come to different conclusions about one file.
+///
+/// Every failure is silence, not a refusal: an archive that will not open, a
+/// member that is not there, a program stating no version. A package with no
+/// entry here has an overlay slot that stays *needed*, which is the safe
+/// answer — `packagevol::unpack` still refuses the run by name if the build
+/// really is too old.
+fn installer_versions(release: &str, found: &[FoundPackage]) -> Vec<(String, String)> {
+    let Ok(packages) = package::packages_for(release) else {
+        return Vec::new();
+    };
+    let mut versions = Vec::new();
+    for pkg in packages {
+        let Some(installer) = &pkg.amiga_installer else {
+            continue;
+        };
+        if installer.minimum_version.is_none() {
+            continue;
+        }
+        let MediaMatch::Found(archive) =
+            package_for(found, &pkg.media, pkg.distinguished_by.as_deref())
+        else {
+            continue;
+        };
+        let Ok(mut source) = ArchiveSource::open(&archive.path) else {
+            continue;
+        };
+        // The program's whole path inside the archive: the archive's own
+        // top-level drawer plus the path the recipe states *inside* the
+        // package. `AmigaInstaller::program` is never a whole path and never
+        // names a volume — `validate_installer` refuses one that does.
+        let member = format!("{}/{}", pkg.media, installer.program);
+        let Ok(bytes) = source.read(&member) else {
+            continue;
+        };
+        let Some(stated) = crate::core::amigainstall::packagevol::stated_version(&bytes) else {
+            continue;
+        };
+        versions.push((pkg.id, format!("{}.{}", stated.version, stated.revision)));
+    }
+    versions
 }
 
 // ---------------------------------------------------------------------------
@@ -4327,6 +4471,72 @@ mod tests {
             // see `FoundMedia::layer`'s own doc comment.
             expect_keys(&value, &["path", "volumeName", "kind"]);
             assert_eq!(value["kind"], "floppy");
+        }
+
+        /// The slot readout's own wire shape (round 2, task 2). Pinned for
+        /// the reason every response type in this module is: `src/lib/
+        /// osinstall.ts` declares these key names by hand, and a missing
+        /// `rename_all` on one struct is what made `VerifyReport::notChecked`
+        /// read `undefined` on screen for a whole round.
+        #[test]
+        fn a_slot_report_serializes_with_the_keys_this_test_pins() {
+            let slots = crate::core::osinstall::slots::slots_for("AmigaOS 3.9").unwrap();
+            let facts = Facts {
+                media: &[],
+                packages: &[],
+                hashes: &[],
+                manifest: None,
+                rom: None,
+                program_versions: &[],
+            };
+            let states = crate::core::osinstall::slots::resolve(&slots, &facts);
+            let report = SlotReport {
+                summary: crate::core::osinstall::slots::summarize("AmigaOS 3.9", &states),
+                states,
+            };
+            let value = serde_json::to_value(&report).unwrap();
+            expect_keys(&value, &["states", "summary"]);
+            expect_keys(
+                &value["summary"],
+                &[
+                    "release",
+                    "requiredTotal",
+                    "requiredFound",
+                    "optionalTotal",
+                    "optionalFound",
+                ],
+            );
+            expect_keys(
+                &value["states"][0],
+                &[
+                    "slot",
+                    "found",
+                    "candidates",
+                    "installed",
+                    "blockedBy",
+                    "notNeeded",
+                ],
+            );
+            expect_keys(
+                &value["states"][0]["slot"],
+                &[
+                    "id",
+                    "kind",
+                    "name",
+                    "identity",
+                    "artefact",
+                    "required",
+                    "filenames",
+                    "provenance",
+                    "position",
+                    "requires",
+                    "supersededBy",
+                ],
+            );
+            assert_eq!(value["states"][0]["slot"]["kind"], "medium");
+            // The tagged shape the frontend switches on — `state`, not a bare
+            // string, so a future variant can carry its own fields.
+            assert_eq!(value["states"][0]["installed"]["state"], "no");
         }
 
         /// `ComponentSummary` is the checklist on screen, so a key renamed

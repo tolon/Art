@@ -1306,6 +1306,159 @@ export async function osinstallPackages(
   return invoke<PackageSummary[]>("osinstall_packages", { packageFolder, release });
 }
 
+// ---------------------------------------------------------------------------
+// Slots — what a release needs, resolved once (design §3.2)
+// ---------------------------------------------------------------------------
+//
+// Mirrors `core::osinstall::slots` exactly. The sentences these types are
+// allowed to produce live in `src/lib/slots.ts`, not here and not in a
+// component: a slot is data, and what is said about it is a `Phrase`.
+
+/** What kind of artefact a slot wants. Mirrors `slots::SlotKind`. */
+export type SlotKind = "medium" | "package" | "overlay" | "rom";
+
+/**
+ * How ART came to believe a file fills a slot. Mirrors `slots::MatchedBy`,
+ * **ranked** — see that module's doc comment. The order matters on screen as
+ * much as in Rust:
+ *
+ * - `hash` is a fact about the bytes;
+ * - `volume-name` / `top-level-directory` is what the medium says about
+ *   itself, which a rename cannot break;
+ * - `filename` is a **guess** and never reaches {@link SlotState.found} — a
+ *   file bearing the expected name arrives in {@link SlotState.candidates}
+ *   instead, so the row can say ART could not confirm it;
+ * - `chosen` is a file the user named by hand. Not an identification ART
+ *   made, and it must never be rendered as one.
+ */
+export type MatchedBy = "hash" | "volume-name" | "top-level-directory" | "filename" | "chosen";
+
+/** One artefact a release's build can use. Mirrors `slots::Slot`. */
+export interface Slot {
+  /** `medium:AmigaOS3.9`, `package:boingbag-39-1`,
+   *  `overlay:boingbag-39-1:BoingBag3.9-1-UAE`, `rom`. What
+   *  {@link Slot.requires} and {@link SlotState.blockedBy} name. */
+  id: string;
+  kind: SlotKind;
+  /** What the recipe calls it — a package's own name (ART-060), a medium's
+   *  volume name, an overlay's own drawer. Never translated. */
+  name: string;
+  /** The name the artefact gives for **itself**. A `rom` slot has none, so it
+   *  carries the Kickstart major the recipe states it needs (`"40"`), or `""`
+   *  when the recipe states no floor. */
+  identity: string;
+  /** The artefact id the media rows are looked up by, or `null` when neither
+   *  table names these bytes — which means the hash rank cannot fire, never
+   *  that the artefact is unknown or unwanted. */
+  artefact: string | null;
+  /** A medium a required component reads from, or a ROM the release states a
+   *  floor for. A package is a choice, so never required. */
+  required: boolean;
+  /** Names ART has seen this artefact ship under. A hint for the guide text
+   *  and for the *guess* rank — never a requirement. */
+  filenames: string[];
+  /** The media row's own `source`, verbatim. `null` when no row names it. */
+  provenance: string | null;
+  /** Chain order: media, then packages requires-first with each overlay right
+   *  after its package, then the ROM. Sort the readout by this. */
+  position: number;
+  requires: string[];
+  /** Reserved for round 3; empty today. */
+  supersededBy: string[];
+}
+
+/** The file that fills a slot, and how ART knows. Mirrors `slots::Found`. */
+export interface SlotFound {
+  path: string;
+  matchedBy: MatchedBy;
+  /** The table row — **only** for `matchedBy === "hash"`, which is the rank a
+   *  row is the evidence for. A file matched by the name it gives for itself
+   *  may be in the table under some other artefact, and showing that row here
+   *  would present one artefact's provenance as another's. */
+  row: MediaRow | null;
+  confirmed: MediaConfirmation | null;
+}
+
+/**
+ * Whether the artefact is already part of the tree, **as the tree's own
+ * `distribution.json` states it**. Mirrors `slots::Installed`.
+ *
+ * A file being in a folder is never `"placed"` or `"ran"` — that is the whole
+ * reason this comes from the manifest and not from the scan.
+ */
+export type Installed =
+  | { state: "placed"; at: string | null }
+  | { state: "ran"; command: string }
+  | { state: "no" };
+
+/** One slot, resolved. Mirrors `slots::SlotState`. */
+export interface SlotState {
+  slot: Slot;
+  /** The one file ART will say fills this slot, or `null` whenever it could
+   *  not decide — nothing matched, several did, or the only evidence was a
+   *  file name. */
+  found: SlotFound | null;
+  /** Everything that might fill it, in sorted path order. Empty when `found`
+   *  is set. */
+  candidates: string[];
+  installed: Installed;
+  /** Every requirement that is not installed yet, by slot id. */
+  blockedBy: string[];
+  /** What ART measured that makes this slot unnecessary — the artefact's own
+   *  statement about itself, e.g. `"Updater 45.15"`. A measurement, not a
+   *  sentence: the words go in the catalogue. */
+  notNeeded: string | null;
+}
+
+/**
+ * How much of this set is here. Mirrors `slots::SetSummary`.
+ *
+ * **Required and optional are counted apart, and must be shown apart.** A set
+ * missing only optional files is ready to build, and one fraction cannot say
+ * that. A slot ART measured as not needed is in neither total.
+ */
+export interface SetSummary {
+  release: string;
+  requiredTotal: number;
+  requiredFound: number;
+  optionalTotal: number;
+  optionalFound: number;
+}
+
+/** What `osinstallSlots` answers. Mirrors `commands::osinstall::SlotReport`. */
+export interface SlotReport {
+  states: SlotState[];
+  summary: SetSummary;
+}
+
+/**
+ * Resolve everything `release` can use against the material folders, the
+ * chosen tree and the chosen ROM — the one answer that replaces the four
+ * separate resolutions the OS Builder used to make.
+ *
+ * Read-only, and it hashes nothing: hash answers come out of the scan cache
+ * that `osinstallIdentifyMedia`'s own job fills, so a folder nobody has
+ * identified yet simply resolves by what its files call themselves. Call this
+ * again after that job finishes to pick the stronger rank up.
+ *
+ * An unreadable material folder is answered rather than refused (the readout
+ * always renders); a chosen `tree` that carries no `distribution.json` is a
+ * refusal, because the user just pointed at it.
+ */
+export async function osinstallSlots(
+  release: InstallRelease,
+  folders: string[],
+  tree?: string | null,
+  rom?: string | null
+): Promise<SlotReport> {
+  return invoke<SlotReport>("osinstall_slots", {
+    release,
+    folders,
+    tree: tree || null,
+    rom: rom || null,
+  });
+}
+
 /** The event `osinstall_collisions`'s own background job answers on. */
 export const OSINSTALL_COLLISIONS_EVENT = "osinstall-collisions-result";
 
