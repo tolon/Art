@@ -1617,7 +1617,6 @@ mod tests {
             hashes: &[],
             manifest,
             rom: None,
-            program_versions: &[],
             overrides: &[],
             disc_roots: &[],
         };
@@ -1806,7 +1805,6 @@ mod tests {
             hashes: &[],
             manifest: None,
             rom: None,
-            program_versions: &[],
             overrides: &[],
             disc_roots: &[],
         };
@@ -1828,24 +1826,25 @@ mod tests {
     /// 1, m2, and the design says so: *"blocked_by names rows, in position
     /// order"*).
     ///
-    /// The two halves arrive in two different orders — the packages in
-    /// `package::order`'s topological one, the media appended after them —
-    /// so BoingBag 3.9-2 blocked on both answered `["BoingBag 3.9-1",
-    /// "AmigaOS3.9"]`: rank 2 before rank 1. Telling somebody to do things
-    /// in an order that is not the order is the one thing this screen exists
-    /// to get right.
+    /// **Only one half survives, since 2026-09-08.** The two halves used to
+    /// arrive in two different orders — the packages in `package::order`'s
+    /// topological one, the media appended after them — so BoingBag 3.9-2
+    /// blocked on both answered `["BoingBag 3.9-1", "AmigaOS3.9"]`: rank 2
+    /// before rank 1. The medium half came from
+    /// `amiga_installer.required_medium` and went with the emulator route; the
+    /// sort in `package_state` is kept, because the two-source shape it
+    /// answers is still there in `state.blocked_by` and the day a second
+    /// source returns this is what keeps the order right.
     #[test]
     fn a_blocked_row_names_what_it_waits_for_in_the_order_it_goes_on() {
         let packages = [archive("D:/a/BoingBag39-2.lha", "BoingBag3.9-2")];
-        // No disc and no BoingBag 3.9-1: both halves of the block at once,
-        // which is the only arrangement that can show the order is wrong.
         let rows = rows_for("AmigaOS 3.9", None, &resolved(None, &packages, &[])).unwrap();
         assert_eq!(
             row(&rows, "boingbag-39-2").state,
             ChainState::BlockedBy {
-                names: vec!["AmigaOS3.9".to_string(), "BoingBag 3.9-1".to_string()]
+                names: vec!["BoingBag 3.9-1".to_string()]
             },
-            "the CD is row 1 and BoingBag 3.9-1 is row 2"
+            "BoingBag 3.9-1 is row 2 and this is row 3"
         );
     }
 
@@ -1969,11 +1968,6 @@ mod tests {
         for id in ["boingbag-39-1", "boingbag-39-2"] {
             let package = super::super::package::by_id(id).unwrap();
             assert_eq!(package.host_placement_block, None, "the premise for {id}");
-            assert!(
-                package.amiga_installer.is_some(),
-                "{id} still declares its Amiga-side installer; the route is not chosen by \
-                 withdrawing it"
-            );
             assert_eq!(
                 row(&rows, id).sentence_facts.runs_on_amiga,
                 Some(false),
@@ -2002,25 +1996,36 @@ mod tests {
         );
     }
 
-    /// **The disc a package's installer verifies is met by having it, not by
-    /// installing it** (ART-193, design § 2: *"`required_medium` found"*).
-    /// Both arms, because the wrong reading is the plausible one.
+    /// **A package placed from Windows waits for no disc** (review F6,
+    /// 2026-09-08).
+    ///
+    /// This test used to assert the opposite, with the comment *"BoingBag
+    /// 3.9-1's own Updater checks for it before it does anything"* — true of
+    /// the `Updater`, and the row no longer runs it. The requirement came from
+    /// `amiga_installer.required_medium`, a fact about a program, and it gated
+    /// a row that is now placed from Windows where nothing reads the disc. On
+    /// a tree whose manifest does not record the disc, the row read
+    /// `BlockedBy ["AmigaOS3.9"]` and withheld a host placement that needs no
+    /// disc at all.
+    ///
+    /// **The disc is still required — by the tree.** `medium:AmigaOS3.9`
+    /// carries `required: true` because the release's own required components
+    /// read from it, and the CD is row 1 of the chain in its own right. Both
+    /// arms here, because "no disc anywhere" is exactly the arrangement that
+    /// used to block.
     #[test]
-    fn a_required_disc_blocks_the_row_until_it_is_in_hand() {
+    fn a_package_placed_from_windows_does_not_wait_for_the_disc() {
         let packages = [archive("D:/a/BoingBag39-1.lha", "BoingBag3.9-1")];
 
-        // No disc anywhere: BoingBag 3.9-1's own Updater checks for it
-        // before it does anything, so the row waits and says for what.
         let rows = rows_for("AmigaOS 3.9", None, &resolved(None, &packages, &[])).unwrap();
         assert_eq!(
             row(&rows, "boingbag-39-1").state,
-            ChainState::BlockedBy {
-                names: vec!["AmigaOS3.9".to_string()]
-            }
+            ChainState::Ready,
+            "no disc in any folder, and the row is placed from Windows"
         );
 
-        // The ISO in the folder, and nothing installed at all: ready. Not
-        // "install the CD first", which is not a thing anybody does.
+        // And with the ISO there, unchanged — so the arm above is not simply
+        // every row answering `Ready`.
         let media = [super::super::scan::FoundMedia {
             path: std::path::PathBuf::from("D:/a/AmigaOS39.iso"),
             kind: super::super::scan::MediaKind::Disc,
@@ -2029,6 +2034,20 @@ mod tests {
         }];
         let rows = rows_for("AmigaOS 3.9", None, &resolved(None, &packages, &media)).unwrap();
         assert_eq!(row(&rows, "boingbag-39-1").state, ChainState::Ready);
+
+        // The control, and it is what makes the medium slot's own
+        // `required` the right place for the disc: the CD row itself is
+        // `Missing` until the tree's manifest says it was built from it.
+        let cd = rows
+            .iter()
+            .find(|row| row.package_id.is_none())
+            .expect("the CD is row 1 of the chain in its own right");
+        assert_eq!(cd.name, "AmigaOS3.9");
+        assert!(
+            matches!(cd.state, ChainState::Missing { .. }),
+            "got {:?}",
+            cd.state
+        );
     }
 
     /// **Superseded and installed reads *not needed*, and the row names the

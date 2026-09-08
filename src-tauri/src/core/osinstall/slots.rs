@@ -204,9 +204,6 @@ pub enum SlotKind {
     Medium,
     /// An update package's own archive.
     Package,
-    /// A second archive that patches a package before its installer runs —
-    /// BoingBag 1's UAE fix.
-    Overlay,
     /// The Kickstart the release states it needs.
     Rom,
 }
@@ -215,15 +212,13 @@ pub enum SlotKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Slot {
-    /// `medium:AmigaOS3.9`, `package:boingbag-39-1`,
-    /// `overlay:boingbag-39-1:BoingBag3.9-1-UAE`, `rom`. Stable, and what
+    /// `medium:AmigaOS3.9`, `package:boingbag-39-1`, `rom`. Stable, and what
     /// [`Slot::requires`] names.
     pub id: String,
     pub kind: SlotKind,
     /// What the recipe calls this thing — a package's own name (ART-060: it
-    /// is the package's, not ART's sentence about it), a medium's volume
-    /// name, an overlay's own drawer. Never translated, and never composed
-    /// into a sentence here.
+    /// is the package's, not ART's sentence about it), or a medium's volume
+    /// name. Never translated, and never composed into a sentence here.
     pub name: String,
     /// The name the artefact gives for **itself** and that rank 2 compares
     /// against: a volume name off a root block, an archive's single top-level
@@ -255,11 +250,21 @@ pub struct Slot {
     /// See [`provenance_for`].
     pub provenance: Option<String>,
     /// Chain order: media first, then the packages in
-    /// [`package::order`](super::package::order)'s requires-respecting order
-    /// with each package's overlays immediately after it, and the ROM last.
+    /// [`package::order`](super::package::order)'s requires-respecting order,
+    /// and the ROM last.
     pub position: u32,
     /// Slot ids that must be installed before this one — a package's own
-    /// `requires`, and the CD its installer verifies before it will work.
+    /// `requires`.
+    ///
+    /// **No longer a package's disc** (2026-09-08). It used to also carry the
+    /// medium a package's `amiga_installer.required_medium` named: BoingBag
+    /// 3.9-1's own `Updater` verifies the AmigaOS 3.9 CD-ROM before it does
+    /// anything (ART-193), so the row waited for the disc. Both BoingBags are
+    /// placed from Windows now, where nothing reads the disc, and the
+    /// requirement was a fact about a program ART no longer runs. The disc is
+    /// still required — by the *tree*: `medium:AmigaOS3.9` carries
+    /// `required: true` because the release's own required components read
+    /// from it, which is where that requirement belongs.
     pub requires: Vec<String>,
     /// A newer artefact that makes this one unnecessary.
     ///
@@ -350,20 +355,11 @@ fn slots_over(recipe: &Recipe, packages: &[Package]) -> CoreResult<Vec<Slot>> {
         let Some(pkg) = packages.iter().find(|p| p.id == id) else {
             continue;
         };
-        let mut requires: Vec<String> = pkg
+        let requires: Vec<String> = pkg
             .requires
             .iter()
             .map(|need| format!("package:{need}"))
             .collect();
-        if let Some(installer) = &pkg.amiga_installer {
-            if let Some(medium) = &installer.required_medium {
-                // Resolved against the medium slots already built rather than
-                // formatted from the recipe's own spelling: the two strings
-                // are AmigaDOS names from two different files, and a slot id
-                // that names nothing would read as a permanent blocker.
-                requires.push(medium_slot_id(&slots, &medium.volume));
-            }
-        }
         let artefact = artefact_for_package(rows, pkg);
         slots.push(Slot {
             id: format!("package:{}", pkg.id),
@@ -379,45 +375,6 @@ fn slots_over(recipe: &Recipe, packages: &[Package]) -> CoreResult<Vec<Slot>> {
             superseded_by: Vec::new(),
             expects_directories: Vec::new(),
         });
-
-        // --- and its overlays, immediately after it ------------------------
-        //
-        // **An overlay requires the package whose drawer it patches** (round
-        // 2 whole-branch review, I15). It shipped with `requires: []` and the
-        // reasoning written beside it was that an overlay patches the package
-        // *before* the run, so waiting for the package to be installed would
-        // be backwards. The first half is right and the conclusion did not
-        // follow: what the overlay waits for is not the package being
-        // *installed*, it is the package's own **archive being here** — a
-        // BoingBag 3.9-1 UAE fix with no BoingBag 3.9-1 beside it patches
-        // nothing. The empty list made the drop-folder guide print *"Nothing
-        // has to be in place before it"* about exactly that file, which is
-        // false.
-        //
-        // `resolve` is what keeps the direction right: an overlay's
-        // requirement is satisfied by the package slot being **found**, not
-        // by its being installed — see `requirement_satisfied`.
-        let Some(installer) = &pkg.amiga_installer else {
-            continue;
-        };
-        for overlay in &installer.overlays {
-            let identity = overlay.from.split('/').next().unwrap_or("").to_string();
-            let artefact = artefact_for_identity(rows, &identity);
-            slots.push(Slot {
-                id: format!("overlay:{}:{identity}", pkg.id),
-                kind: SlotKind::Overlay,
-                name: identity.clone(),
-                identity,
-                required: false,
-                filenames: filenames_for(rows, artefact.as_deref()),
-                provenance: provenance_for(rows, artefact.as_deref()),
-                artefact,
-                position: take(&mut position),
-                requires: vec![format!("package:{}", pkg.id)],
-                superseded_by: Vec::new(),
-                expects_directories: Vec::new(),
-            });
-        }
     }
 
     // --- the ROM, last ----------------------------------------------------
@@ -465,19 +422,8 @@ fn take(position: &mut u32) -> u32 {
     now
 }
 
-/// The id of the medium slot that carries `volume`, or the plain form when no
-/// slot does.
-fn medium_slot_id(slots: &[Slot], volume: &str) -> String {
-    slots
-        .iter()
-        .find(|slot| slot.kind == SlotKind::Medium && amiga_names_equal(&slot.identity, volume))
-        .map(|slot| slot.id.clone())
-        .unwrap_or_else(|| format!("medium:{volume}"))
-}
-
-/// Which artefact the rows say `identity` is — a medium's or an overlay's
-/// name for itself, and a package's `media` when no row carries the package's
-/// own id.
+/// Which artefact the rows say `identity` is — a medium's own name for
+/// itself, and a package's `media` when no row carries the package's own id.
 ///
 /// **Only ART's own rows are asked, and that is a rule rather than an
 /// optimisation** (fix round 1, F12). `identity` here is an AmigaDOS name — a
@@ -781,14 +727,6 @@ pub struct SlotState {
     /// Every [`Slot::requires`] entry that is not installed yet, in the order
     /// the slot states them. Empty is "nothing is in the way".
     pub blocked_by: Vec<String>,
-    /// Why this slot does not need filling, when something ART measured says
-    /// so — the artefact's own statement about itself, e.g. `Updater 45.15`
-    /// for a BoingBag 1 copy that already carries the fixed program, so the
-    /// UAE overlay is unnecessary.
-    ///
-    /// **A measurement, not a sentence.** The words around it belong in the
-    /// catalogue; core states what it read.
-    pub not_needed: Option<String>,
     /// The first directory [`Slot::expects_directories`] names that the disc
     /// filling this slot does **not** carry — design § 3.6's structural check
     /// beside the hash.
@@ -841,11 +779,6 @@ pub struct Facts<'a> {
     /// one, it is there", "chose one, it has gone" and "chose none" cannot be
     /// muddled by a caller setting both (fix round 1, F5).
     pub rom: Option<ChosenRom<'a>>,
-    /// What each Amiga-installable package's own wrapper archive says its
-    /// installer program is, as `(package id, "45.15")` — read by the caller
-    /// from the archive itself (`packagevol::stated_version`), because a
-    /// version is a fact about a file and this module opens none.
-    pub program_versions: &'a [(String, String)],
     /// **Files the user picked by hand, per slot** (design § 3.4).
     ///
     /// The generalisation of [`Facts::rom`], which was the first of these and
@@ -877,14 +810,6 @@ pub struct Facts<'a> {
 /// and "chose one, it has gone" is its own ending rather than a plain
 /// absence.
 ///
-/// **`slot` may name an overlay's package rather than a particular drawer.**
-/// An overlay slot's id is `overlay:<package>:<drawer>`, and the screen that
-/// holds these overrides has one *"the package's update archive"* field per
-/// package, not one per drawer — so `overlay:boingbag-39-1` matches every
-/// overlay of that package. An exact id always matches only itself. Today
-/// every shipped package declares at most one overlay, so the two readings
-/// coincide; the prefix rule is what keeps a second overlay from silently
-/// dropping the user's choice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Override<'a> {
     pub slot: &'a str,
@@ -894,11 +819,13 @@ pub struct Override<'a> {
 
 impl Override<'_> {
     /// Whether this override is about `slot`.
+    ///
+    /// An exact id and nothing else. It used to also match a prefix, so that
+    /// one *"the package's update archive"* field could name every overlay
+    /// slot of a package; the overlay slot kind went on 2026-09-08 and the
+    /// prefix rule went with it.
     fn names(&self, slot: &Slot) -> bool {
-        if slot.id == self.slot {
-            return true;
-        }
-        slot.kind == SlotKind::Overlay && slot.id.starts_with(&format!("{}:", self.slot))
+        slot.id == self.slot
     }
 }
 
@@ -922,7 +849,6 @@ pub fn resolve(slots: &[Slot], facts: &Facts<'_>) -> Vec<SlotState> {
         })
         .collect();
     for state in &mut states {
-        let kind = state.slot.kind;
         state.blocked_by = state
             .slot
             .requires
@@ -933,7 +859,7 @@ pub fn resolve(slots: &[Slot], facts: &Facts<'_>) -> Vec<SlotState> {
                 // dropping it would turn a data mistake into a run that
                 // looks ready.
                 !known.iter().any(|(id, required, installed, found)| {
-                    id == *need && requirement_met(kind, *required, *installed, *found)
+                    id == *need && requirement_met(*required, *installed, *found)
                 })
             })
             .cloned()
@@ -944,42 +870,23 @@ pub fn resolve(slots: &[Slot], facts: &Facts<'_>) -> Vec<SlotState> {
 
 /// Whether a requirement is met, given what is known about the slot it names.
 ///
-/// **An overlay asks a different question from everything else, and asking
-/// the same one produced a false sentence** (round 2 whole-branch review,
-/// I15). A package waits for the package before it to be *installed*: running
-/// BoingBag 3.9-2 against a tree BoingBag 3.9-1 never touched is a system
-/// that boots and is quietly wrong (ART-186). An overlay waits for nothing of
-/// the kind — it is copied **over its package's own drawer, before that
-/// package's installer runs**, so "BoingBag 3.9-1 must be installed first"
-/// describes the opposite of what happens. What it genuinely needs is the
-/// package's own archive to be in hand, which is `found`.
-///
-/// `installed` still satisfies an overlay: a package already on the tree is
-/// not one the overlay is waiting for either, and answering *blocked* there
-/// would be a row waiting for something that has already happened.
+/// A package waits for the package before it to be *installed*: running
+/// BoingBag 3.9-2 against a tree BoingBag 3.9-1 never touched is a system that
+/// boots and is quietly wrong (ART-186).
 ///
 /// **A required *medium* is met by having it, not by installing it** (round
-/// 3). A `required_medium` becomes a `requires` entry naming the medium slot
-/// — BoingBag 3.9-1's own `Updater` checks for the AmigaOS 3.9 CD-ROM before
-/// it does anything (ART-193) — and what that check wants is the disc in a
-/// drive, which is exactly `found`. Reading it as *installed* said "needs
-/// AmigaOS3.9 first" about a build whose ISO was sitting in the folder the
-/// user had just named, and told them to install a disc they were not
-/// installing. The design says it in as many words: ready is *"every
-/// `requires` installed and `required_medium` **found**"*.
-fn requirement_met(requiring: SlotKind, required: SlotKind, installed: bool, found: bool) -> bool {
+/// 3). Reading it as *installed* said "needs AmigaOS3.9 first" about a build
+/// whose ISO was sitting in the folder the user had just named, and told them
+/// to install a disc they were not installing.
+fn requirement_met(required: SlotKind, installed: bool, found: bool) -> bool {
     if installed {
         return true;
     }
-    match required {
-        SlotKind::Medium => found,
-        _ => requiring == SlotKind::Overlay && found,
-    }
+    required == SlotKind::Medium && found
 }
 
 fn resolve_one(slot: &Slot, facts: &Facts<'_>) -> SlotState {
     let installed = installed_state(slot, facts.manifest);
-    let not_needed = not_needed_for(slot, facts);
     let state = |found: Option<Found>, candidates: Vec<PathBuf>, chosen_missing| SlotState {
         incomplete: found
             .as_ref()
@@ -996,7 +903,6 @@ fn resolve_one(slot: &Slot, facts: &Facts<'_>) -> SlotState {
         installed: installed.clone(),
         chosen_missing,
         blocked_by: Vec::new(),
-        not_needed: not_needed.clone(),
     };
 
     // --- rank 0: the user said so ------------------------------------------
@@ -1103,7 +1009,7 @@ fn resolve_one(slot: &Slot, facts: &Facts<'_>) -> SlotState {
                 .collect::<Vec<PathBuf>>(),
             MatchedBy::VolumeName,
         ),
-        SlotKind::Package | SlotKind::Overlay => (
+        SlotKind::Package => (
             facts
                 .packages
                 .iter()
@@ -1281,43 +1187,10 @@ fn installed_state(slot: &Slot, manifest: Option<&DistributionManifest>) -> Inst
                 Installed::No
             }
         }
-        // An overlay leaves no record of its own — `unpack` reports it and
-        // the package's `Ran` record is what survives — and a ROM is not part
-        // of the tree at all. Saying `Placed` for either would be a claim
-        // nothing backs.
-        SlotKind::Overlay | SlotKind::Rom => Installed::No,
+        // A ROM is not part of the tree at all. Saying `Placed` for it would
+        // be a claim nothing backs.
+        SlotKind::Rom => Installed::No,
     }
-}
-
-/// Whether an overlay slot is unnecessary because the package's own copy
-/// already carries a program at or above the version its recipe demands.
-///
-/// The measurement, not the sentence: `Some("Updater 45.15")`. ART-186's
-/// whole point is that the archive's own `$VER:` decides this, never the
-/// user and never a file size — so `None` here covers both "the copy is
-/// older" and "nobody has read it yet", and the readout must not render the
-/// second as the first.
-fn not_needed_for(slot: &Slot, facts: &Facts<'_>) -> Option<String> {
-    if slot.kind != SlotKind::Overlay {
-        return None;
-    }
-    let package_id = slot.id.strip_prefix("overlay:")?.split_once(':')?.0;
-    let package = package::by_id(package_id).ok()?;
-    let installer = package.amiga_installer.as_ref()?;
-    let minimum = package::parse_version_pair(installer.minimum_version.as_deref()?)?;
-    let (_, stated) = facts
-        .program_versions
-        .iter()
-        .find(|(id, _)| id == package_id)?;
-    if package::parse_version_pair(stated)? < minimum {
-        return None;
-    }
-    let program = installer
-        .program
-        .rsplit('/')
-        .next()
-        .unwrap_or(&installer.program);
-    Some(format!("{program} {stated}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -1362,9 +1235,6 @@ pub fn summarize(release: &str, states: &[SlotState]) -> SetSummary {
         optional_found: 0,
     };
     for state in states {
-        if state.not_needed.is_some() {
-            continue;
-        }
         let found = state.found.is_some() || state.installed != Installed::No;
         if state.slot.required {
             summary.required_total += 1;
@@ -1944,33 +1814,6 @@ mod tests {
         assert!(!text.contains("Kickstart  or newer"), "{text}");
     }
 
-    /// **I15's own sentence, asserted** (fix round 1, m8).
-    ///
-    /// The finding was not that the data was empty — it was that the
-    /// drop-folder guide printed *"Nothing has to be in place before it"*
-    /// about a file whose whole purpose is to patch BoingBag 3.9-1. The
-    /// data-level fix is pinned elsewhere; this pins the sentence the
-    /// finding was about, in both languages, and asserts the false one is
-    /// gone rather than merely that a true one appeared.
-    #[test]
-    fn the_uae_fix_says_what_it_goes_on_after_and_no_longer_says_nothing_does() {
-        for language in ["en", "tr"] {
-            let words = guide_strings(language).unwrap();
-            let text =
-                guide_text(&slots_for("AmigaOS 3.9").unwrap(), "AmigaOS 3.9", language).unwrap();
-            let entry = guide_entry(&text, "BoingBag3.9-1-UAE");
-
-            assert!(
-                entry.contains(&fill(&words.needs_first, "needs", "BoingBag 3.9-1")),
-                "{language}: the UAE fix must name the package it patches:\n{entry}"
-            );
-            assert!(
-                !entry.contains(&words.needs_nothing),
-                "{language}: the UAE fix still says nothing has to be in place first:\n{entry}"
-            );
-        }
-    }
-
     /// **M2.** Every package slot is optional by construction — a package is a
     /// thing the user chooses — so BoingBag 3.9-1 was told "nothing else
     /// fails" four entries above this same file's own statement that BoingBag
@@ -1988,7 +1831,7 @@ mod tests {
                 entry.contains(&fill(
                     &words.without_needed_by,
                     "dependents",
-                    "BoingBag3.9-1-UAE, BoingBag 3.9-2"
+                    "BoingBag 3.9-2"
                 )),
                 "{language}: BoingBag 3.9-1 does not name what needs it:\n{entry}"
             );
@@ -2145,41 +1988,6 @@ mod tests {
         assert!(state.candidates.is_empty());
     }
 
-    /// An overlay override may name the package rather than the drawer — the
-    /// screen that holds these has one *"update archive"* field per package,
-    /// not one per overlay.
-    #[test]
-    fn an_overlay_override_may_name_the_package_it_belongs_to() {
-        let slots = slots_for("AmigaOS 3.9").unwrap();
-        let overlay_id = slots
-            .iter()
-            .find(|slot| slot.kind == SlotKind::Overlay)
-            .expect("3.9 declares one")
-            .id
-            .clone();
-        assert!(overlay_id.starts_with("overlay:boingbag-39-1:"));
-
-        let mine = PathBuf::from("D:\\pkg\\the-uae-fix.lha");
-        let chosen = [Override {
-            slot: "overlay:boingbag-39-1",
-            path: mine.as_path(),
-            on_disk: true,
-        }];
-        let gathered = Gathered::empty();
-        let states = resolve(&slots, &gathered.facts_with(None, &chosen));
-        assert_eq!(
-            state_of(&states, &overlay_id)
-                .found
-                .as_ref()
-                .map(|f| f.path.clone()),
-            Some(mine)
-        );
-        // And it does not reach across to the package's own slot: a prefix
-        // that matched anything starting with the package id would put the
-        // update archive into the package field.
-        assert!(state_of(&states, "package:boingbag-39-1").found.is_none());
-    }
-
     // -----------------------------------------------------------------------
     // The structural check beside the hash (design § 3.6, review L6)
     // -----------------------------------------------------------------------
@@ -2292,18 +2100,20 @@ mod tests {
     // -----------------------------------------------------------------
 
     #[test]
-    fn the_shipped_release_yields_the_cd_every_package_the_overlay_and_the_rom_in_order() {
+    fn the_shipped_release_yields_the_cd_every_package_and_the_rom_in_order() {
         let slots = slots_for("AmigaOS 3.9").unwrap();
         // The ids, not a count: a count passes while the list holds the
         // wrong things, and the *order* is the chain this readout is sorted
-        // by (media, then packages requires-first with each overlay right
-        // after its package, then the ROM).
+        // by (media, then packages requires-first, then the ROM).
+        //
+        // `overlay:boingbag-39-1:BoingBag3.9-1-UAE` used to sit between
+        // BoingBag 3.9-1 and the next package. The overlay slot kind went on
+        // 2026-09-08 with the emulator route the UAE fix existed for.
         assert_eq!(
             slots.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
             vec![
                 "medium:AmigaOS3.9",
                 "package:boingbag-39-1",
-                "overlay:boingbag-39-1:BoingBag3.9-1-UAE",
                 "package:locale-39",
                 "package:locale-39-turkish",
                 "package:euro-update",
@@ -2316,7 +2126,7 @@ mod tests {
         );
         assert_eq!(
             slots.iter().map(|s| s.position).collect::<Vec<_>>(),
-            (0..11).collect::<Vec<u32>>()
+            (0..10).collect::<Vec<u32>>()
         );
         // BoingBag 2 after BoingBag 1, which is the whole reason `order_over`
         // is asked rather than the shipped list being taken as written.
@@ -2355,9 +2165,16 @@ mod tests {
             .iter()
             .find(|s| s.id == "package:boingbag-39-1")
             .unwrap();
+        // **The disc is not one of them, since 2026-09-08.** It used to
+        // be: `amiga_installer.required_medium` named the AmigaOS 3.9 CD-ROM
+        // BoingBag 1's own `Updater` verifies (ART-193), and the row waited
+        // for it. Both BoingBags are placed from Windows now, where nothing
+        // reads the disc. The tree still requires it — `medium:AmigaOS3.9` is
+        // `required` because the release's own components read from it — and
+        // that is where the requirement belongs.
         assert!(
-            bb1.requires.contains(&"medium:AmigaOS3.9".to_string()),
-            "BoingBag 1's Updater checks the CD before it does anything: {:?}",
+            !bb1.requires.contains(&"medium:AmigaOS3.9".to_string()),
+            "a package placed from Windows waits for no disc: {:?}",
             bb1.requires
         );
         let bb2 = slots
@@ -2365,20 +2182,6 @@ mod tests {
             .find(|s| s.id == "package:boingbag-39-2")
             .unwrap();
         assert!(bb2.requires.contains(&"package:boingbag-39-1".to_string()));
-        // **An overlay names the package whose drawer it patches** (round 2
-        // whole-branch review, I15). It shipped with an empty list, and the
-        // drop-folder guide therefore said "Nothing has to be in place
-        // before it" about a file that patches BoingBag 3.9-1 and is useless
-        // without it. What keeps the direction right is not an empty list
-        // but `requirement_met`: the requirement is satisfied by the
-        // package's archive being **found**, never by its being installed —
-        // see `an_overlay_waits_for_its_packages_archive_not_for_its_install`.
-        let overlay = slots.iter().find(|s| s.kind == SlotKind::Overlay).unwrap();
-        assert_eq!(
-            overlay.requires,
-            vec!["package:boingbag-39-1".to_string()],
-            "the UAE fix patches BoingBag 3.9-1's own drawer"
-        );
     }
 
     #[test]
@@ -2393,12 +2196,6 @@ mod tests {
         );
         // As the table states it, never re-worded here.
         assert_eq!(cd.provenance.as_deref(), Some("Haage and Partners (3.9)"));
-        let overlay = slots
-            .iter()
-            .find(|s| s.id == "overlay:boingbag-39-1:BoingBag3.9-1-UAE")
-            .unwrap();
-        assert_eq!(overlay.artefact.as_deref(), Some("boingbag-39-1-uae-fix"));
-        assert_eq!(overlay.filenames, vec!["BoingBag39-1-UAE.lha".to_string()]);
     }
 
     #[test]
@@ -2461,7 +2258,6 @@ mod tests {
     const CD_OWN_MD5: &str = "e32a107e68edfc9b28a2fe075e32e5f6";
     const CD_ADOPTED_MD5: &str = "3cb96e77d922a4f8eb696e525a240448";
     const BB1_45_15_MD5: &str = "ef67ce2f786044dae1bce8fafb439d5e";
-    const UAE_FIX_MD5: &str = "e00a91cd6800d6a34821a156c44b1c2f";
 
     struct Gathered {
         media: Vec<FoundMedia>,
@@ -2469,7 +2265,6 @@ mod tests {
         hashes: Vec<mediahash::MediaMatch>,
         rom: Option<PathBuf>,
         rom_on_disk: bool,
-        program_versions: Vec<(String, String)>,
         disc_roots: Vec<(PathBuf, Vec<String>)>,
     }
 
@@ -2481,7 +2276,6 @@ mod tests {
                 hashes: Vec::new(),
                 rom: None,
                 rom_on_disk: true,
-                program_versions: Vec::new(),
                 disc_roots: Vec::new(),
             }
         }
@@ -2510,7 +2304,6 @@ mod tests {
                     true => ChosenRom::OnDisk(path),
                     false => ChosenRom::Absent(path),
                 }),
-                program_versions: &self.program_versions,
                 overrides,
                 disc_roots: &self.disc_roots,
             }
@@ -2602,29 +2395,30 @@ mod tests {
     #[test]
     fn a_filename_match_alone_never_fills_found() {
         // The mutation this test exists for: make rank 3 fill `found` and
-        // this fails. A file called `BoingBag39-1-UAE.lha` is evidence about
-        // whoever named it, and the readout has to be able to say ART could
-        // not confirm it.
+        // this fails. A file called `BoingBag39-1.lha` is evidence about
+        // whoever named it — this one's own top-level directory says it is
+        // something else entirely — and the readout has to be able to say ART
+        // could not confirm it.
         let slots = slots_for("AmigaOS 3.9").unwrap();
         let mut gathered = Gathered::empty();
         gathered
             .packages
-            .push(archive("D:/a/BoingBag39-1-UAE.lha", "SomethingElse"));
+            .push(archive("D:/a/BoingBag39-1.lha", "SomethingElse"));
 
         let states = resolve(&slots, &gathered.facts(None));
-        let overlay = state_of(&states, "overlay:boingbag-39-1:BoingBag3.9-1-UAE");
+        let package = state_of(&states, "package:boingbag-39-1");
         assert!(
-            overlay.found.is_none(),
+            package.found.is_none(),
             "a name is a guess: {:?}",
-            overlay.found
+            package.found
         );
         assert_eq!(
-            candidate_paths(overlay),
-            vec![PathBuf::from("D:/a/BoingBag39-1-UAE.lha")]
+            candidate_paths(package),
+            vec![PathBuf::from("D:/a/BoingBag39-1.lha")]
         );
         // Nobody hashed it, and the readout has to be able to say so rather
         // than claiming the table does not know these bytes (F1).
-        assert_eq!(overlay.candidates[0].bytes_read, BytesRead::NotRead);
+        assert_eq!(package.candidates[0].bytes_read, BytesRead::NotRead);
     }
 
     #[test]
@@ -2760,12 +2554,14 @@ mod tests {
 
         let nothing = manifest_with(vec![], vec![], vec![]);
         let states = resolve(&slots, &gathered.facts(Some(&nothing)));
+        // BoingBag 3.9-1 alone: the disc was here too until 2026-09-08,
+        // from `amiga_installer.required_medium`, and it went with the route
+        // that read it. The tree still requires the disc — on the medium slot
+        // itself, which is `required` because the release's own components
+        // read from it.
         assert_eq!(
             state_of(&states, "package:boingbag-39-2").blocked_by,
-            vec![
-                "package:boingbag-39-1".to_string(),
-                "medium:AmigaOS3.9".to_string()
-            ]
+            vec!["package:boingbag-39-1".to_string()]
         );
 
         let one_done = manifest_with(vec!["AmigaOS3.9"], vec![], vec!["boingbag-39-1"]);
@@ -2776,38 +2572,6 @@ mod tests {
                 .is_empty(),
             "{:?}",
             state_of(&states, "package:boingbag-39-2").blocked_by
-        );
-    }
-
-    #[test]
-    fn an_overlay_is_not_needed_when_the_package_already_carries_a_new_enough_program() {
-        let slots = slots_for("AmigaOS 3.9").unwrap();
-        let mut gathered = Gathered::empty();
-        gathered
-            .program_versions
-            .push(("boingbag-39-1".to_string(), "45.15".to_string()));
-        let states = resolve(&slots, &gathered.facts(None));
-        assert_eq!(
-            state_of(&states, "overlay:boingbag-39-1:BoingBag3.9-1-UAE").not_needed,
-            Some("Updater 45.15".to_string())
-        );
-
-        // The pre-fix build: the overlay is exactly as needed as it ever was,
-        // and "nobody has read it yet" answers the same way as "it is older",
-        // which is why neither may be rendered as the other.
-        let mut older = Gathered::empty();
-        older
-            .program_versions
-            .push(("boingbag-39-1".to_string(), "45.13".to_string()));
-        let states = resolve(&slots, &older.facts(None));
-        assert_eq!(
-            state_of(&states, "overlay:boingbag-39-1:BoingBag3.9-1-UAE").not_needed,
-            None
-        );
-        let states = resolve(&slots, &Gathered::empty().facts(None));
-        assert_eq!(
-            state_of(&states, "overlay:boingbag-39-1:BoingBag3.9-1-UAE").not_needed,
-            None
         );
     }
 
@@ -2826,91 +2590,19 @@ mod tests {
     }
 
     #[test]
-    fn the_summary_counts_required_and_optional_apart_and_skips_what_is_not_needed() {
+    fn the_summary_counts_required_and_optional_apart() {
         let slots = slots_for("AmigaOS 3.9").unwrap();
         let mut gathered = Gathered::empty();
         gathered.hashes.push(hashed("D:/a/cd.iso", CD_OWN_MD5));
         gathered.hashes.push(hashed("D:/a/bb1.lha", BB1_45_15_MD5));
-        gathered.hashes.push(hashed("D:/a/uae.lha", UAE_FIX_MD5));
-        gathered
-            .program_versions
-            .push(("boingbag-39-1".to_string(), "45.15".to_string()));
 
         let states = resolve(&slots, &gathered.facts(None));
         let summary = summarize("AmigaOS 3.9", &states);
         assert_eq!(summary.release, "AmigaOS 3.9");
         // The CD is found; the ROM is required and nobody chose one.
         assert_eq!((summary.required_total, summary.required_found), (2, 1));
-        // Eight packages, one of them found — and the UAE overlay, which is
-        // present but measured as unnecessary, is in neither total.
+        // Eight packages, one of them found.
         assert_eq!((summary.optional_total, summary.optional_found), (8, 1));
-    }
-
-    /// **An overlay waits for its package's *archive*, never for its
-    /// install** (round 2 whole-branch review, I15).
-    ///
-    /// Three arms, because the rule has three answers and only the middle
-    /// one is new. The overlay slot is given no requirement satisfaction of
-    /// its own in any of them; what changes is BoingBag 3.9-1's state.
-    #[test]
-    fn an_overlay_waits_for_its_packages_archive_not_for_its_install() {
-        let slots = slots_for("AmigaOS 3.9").unwrap();
-        let overlay_id = "overlay:boingbag-39-1:BoingBag3.9-1-UAE";
-        let blocked = |states: &[SlotState]| {
-            states
-                .iter()
-                .find(|state| state.slot.id == overlay_id)
-                .expect("the UAE overlay is one of 3.9's slots")
-                .blocked_by
-                .clone()
-        };
-
-        // 1 — nothing in the folders and no tree: the overlay waits, and it
-        // names what it waits for rather than reading ready.
-        let nothing = Gathered::empty();
-        assert_eq!(
-            blocked(&resolve(&slots, &nothing.facts(None))),
-            vec!["package:boingbag-39-1".to_string()],
-            "with no BoingBag 3.9-1 anywhere, the fix patches nothing"
-        );
-
-        // 2 — the archive is in the folder and nothing is installed. This is
-        // the arm the old empty `requires` could not tell from arm 1 and the
-        // new rule could get backwards: the fix is used *during* BoingBag
-        // 3.9-1's run, so an archive in hand is all it is waiting for.
-        //
-        // Matched at rank 2 by the archive's own top-level directory, so the
-        // package slot is `found` while the manifest still says nothing.
-        let mut in_folder = Gathered::empty();
-        in_folder
-            .packages
-            .push(archive("D:/a/BoingBag39-1.lha", "BoingBag3.9-1"));
-        assert!(
-            blocked(&resolve(&slots, &in_folder.facts(None))).is_empty(),
-            "an overlay must not wait for its package to be installed — that is backwards"
-        );
-
-        // 3 — installed and the archive gone. Still not waiting: a package
-        // already on the tree is not one anything is waiting for.
-        let done = manifest_with(vec![], vec![], vec!["boingbag-39-1"]);
-        assert!(
-            blocked(&resolve(&slots, &nothing.facts(Some(&done)))).is_empty(),
-            "a requirement that has already happened cannot still be blocking"
-        );
-
-        // And the control: a **package** requirement is not softened by the
-        // same fact. BoingBag 3.9-2 with BoingBag 3.9-1's archive merely
-        // sitting in a folder is exactly the run ART-186 refuses.
-        let bb2 = resolve(&slots, &in_folder.facts(None))
-            .into_iter()
-            .find(|state| state.slot.id == "package:boingbag-39-2")
-            .expect("BoingBag 3.9-2 is one of 3.9's slots");
-        assert!(
-            bb2.blocked_by
-                .contains(&"package:boingbag-39-1".to_string()),
-            "a package waits for the package before it to be installed: {:?}",
-            bb2.blocked_by
-        );
     }
 
     #[test]

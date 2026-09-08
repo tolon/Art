@@ -898,7 +898,6 @@ mod tests {
                     program: format!("{PACKAGE_DEVICE}:BoingBag3.9-2/C/Updater"),
                     args: Vec::new(),
                     working_directory: Some(format!("{PACKAGE_DEVICE}:BoingBag3.9-2")),
-                    follow_ups: Vec::new(),
                 },
                 profile: AmigaProfile::a1200_aga(),
             }

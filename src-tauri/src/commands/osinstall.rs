@@ -107,7 +107,6 @@ use crate::core::osinstall::scan::{
 use crate::core::osinstall::scan_cache::ScanCache;
 use crate::core::osinstall::slots::{self, Facts, SetSummary, SlotState};
 use crate::core::osinstall::source::MediaSource;
-use crate::core::osinstall::source_archive::ArchiveSource;
 use crate::core::osinstall::verify::{verify_volume, VerifyReport};
 use crate::core::osinstall::{
     destination_key, host_destination, HostPlacementBlock, RefusalReason,
@@ -857,7 +856,6 @@ struct GatheredFacts {
     hashes: Vec<mediahash::MediaMatch>,
     manifest: Option<crate::core::osinstall::apply::DistributionManifest>,
     rom: Option<(PathBuf, bool)>,
-    program_versions: Vec<(String, String)>,
     overrides: Vec<(String, PathBuf, bool)>,
     disc_roots: Vec<(PathBuf, Vec<String>)>,
     unreadable_folders: Vec<String>,
@@ -893,7 +891,6 @@ impl GatheredFacts {
                 true => slots::ChosenRom::OnDisk(path.as_path()),
                 false => slots::ChosenRom::Absent(path.as_path()),
             }),
-            program_versions: &self.program_versions,
             overrides,
             disc_roots: &self.disc_roots,
         }
@@ -952,8 +949,6 @@ fn gather_facts(
         None => None,
     };
 
-    let program_versions = installer_versions(release, &packages);
-
     let rom = rom.map(|path| match path.is_file() {
         true => (path, true),
         false => (path, false),
@@ -986,7 +981,6 @@ fn gather_facts(
         hashes,
         manifest,
         rom,
-        program_versions,
         overrides,
         disc_roots,
         unreadable_folders,
@@ -1031,15 +1025,26 @@ pub struct ChainReport {
 /// A chosen `tree` that carries no `distribution.json` is a refusal rather
 /// than an empty chain — the user just pointed at it, and every *installed*
 /// state on this screen comes from that file alone.
+///
+/// **`overrides` is the user's own file choices, and it is here because
+/// leaving it out made two screens say opposite things about one file**
+/// (ART-284, 2026-09-08). The owner's package folder holds two BoingBag 1
+/// builds. The source step's readout — which takes these — showed the one the
+/// owner had chosen, as *the file you chose*; this command, called without
+/// them, answered *"2 files here could be BoingBag 3.9-1, and ART will not
+/// choose between them"* and blocked the row. One resolver, two callers, one
+/// of them not handed the user's own decision. `Option`, defaulting to none,
+/// exactly as `osinstall_slots` takes it.
 #[tauri::command]
 pub fn osinstall_chain(
     release: String,
     folders: Vec<PathBuf>,
     tree: Option<PathBuf>,
     rom: Option<PathBuf>,
+    overrides: Option<Vec<(String, PathBuf)>>,
 ) -> AppResult<ChainReport> {
     let slots = slots::slots_for(&release)?;
-    let gathered = gather_facts(&release, &folders, tree, rom, None)?;
+    let gathered = gather_facts(&release, &folders, tree, rom, overrides)?;
     let chosen = gathered.overrides();
     let states = slots::resolve(&slots, &gathered.facts(&chosen));
     let rows = chain::rows_for(&release, gathered.manifest.as_ref(), &states)?;
@@ -1287,61 +1292,6 @@ fn write_material_guide(folder: &Path, release: &str, language: &str) -> AppResu
         safety::Created::Yes => Ok(GuideOutcome::Written { path: display }),
         safety::Created::AlreadyThere => Ok(GuideOutcome::AlreadyThere { path: display }),
     }
-}
-
-/// What each Amiga-installable package's **own** wrapper archive says its
-/// installer program is, as `(package id, "45.15")`.
-///
-/// This is the fact that decides whether BoingBag 1's UAE overlay is needed at
-/// all (ART-186), and it is asked of the artefact rather than of the user: the
-/// archive states its own `$VER:`, a date on a download page does not.
-///
-/// Only asked of a package that declares a `minimum_version` — nothing else
-/// has a question to answer — and only ever **read**: the member's bytes come
-/// out of [`ArchiveSource`] and are never written anywhere.
-/// [`packagevol::stated_version`](crate::core::amigainstall::packagevol::stated_version)
-/// is the same function `packagevol::unpack` uses on the extracted program, so
-/// the two cannot come to different conclusions about one file.
-///
-/// Every failure is silence, not a refusal: an archive that will not open, a
-/// member that is not there, a program stating no version. A package with no
-/// entry here has an overlay slot that stays *needed*, which is the safe
-/// answer — `packagevol::unpack` still refuses the run by name if the build
-/// really is too old.
-fn installer_versions(release: &str, found: &[FoundPackage]) -> Vec<(String, String)> {
-    let Ok(packages) = package::packages_for(release) else {
-        return Vec::new();
-    };
-    let mut versions = Vec::new();
-    for pkg in packages {
-        let Some(installer) = &pkg.amiga_installer else {
-            continue;
-        };
-        if installer.minimum_version.is_none() {
-            continue;
-        }
-        let MediaMatch::Found(archive) =
-            package_for(found, &pkg.media, pkg.distinguished_by.as_deref())
-        else {
-            continue;
-        };
-        let Ok(mut source) = ArchiveSource::open(&archive.path) else {
-            continue;
-        };
-        // The program's whole path inside the archive: the archive's own
-        // top-level drawer plus the path the recipe states *inside* the
-        // package. `AmigaInstaller::program` is never a whole path and never
-        // names a volume — `validate_installer` refuses one that does.
-        let member = format!("{}/{}", pkg.media, installer.program);
-        let Ok(bytes) = source.read(&member) else {
-            continue;
-        };
-        let Some(stated) = crate::core::amigainstall::packagevol::stated_version(&bytes) else {
-            continue;
-        };
-        versions.push((pkg.id, format!("{}.{}", stated.version, stated.revision)));
-    }
-    versions
 }
 
 // ---------------------------------------------------------------------------
@@ -3277,8 +3227,8 @@ mod tests {
         assert!(
             summaries
                 .iter()
-                .any(|p| p.id == "boingbag-39-1" && p.amiga_installable),
-            "BoingBag 3.9-1 declares C/Updater"
+                .any(|p| p.id == "boingbags-39-3-4" && p.amiga_installable),
+            "BoingBags 3&4 declares its own Install script - the one shipped declaration              since the two BoingBags were moved to the host on 2026-09-08"
         );
         assert!(
             summaries
@@ -5309,7 +5259,6 @@ mod tests {
                 hashes: &[],
                 manifest: None,
                 rom: Some(slots::ChosenRom::OnDisk(&rom)),
-                program_versions: &[],
                 overrides: &[],
                 disc_roots: &[],
             };
@@ -5349,7 +5298,6 @@ mod tests {
                     "installed",
                     "chosenMissing",
                     "blockedBy",
-                    "notNeeded",
                     "incomplete",
                 ],
             );
@@ -5431,7 +5379,6 @@ mod tests {
                 hashes: &[],
                 manifest: None,
                 rom: Some(slots::ChosenRom::Absent(&gone)),
-                program_versions: &[],
                 overrides: &[],
                 disc_roots: &[],
             };
@@ -5704,6 +5651,68 @@ mod tests {
                     "postPlace",
                 ],
             );
+        }
+
+        /// **The nested tags inside those two lists, pinned on both sides**
+        /// (review F2, 2026-09-08).
+        ///
+        /// The test above builds a `Default` outcome, so both lists are empty
+        /// and the tags never appear — which is exactly how
+        /// `src/lib/osinstall.ts`'s `AppliedStep` came to declare `"protect"`
+        /// and `"replace-keeping-backup"`, `PostStep`'s spellings, for an
+        /// enum whose own variants serialise as `"protected"` and
+        /// `"replaced"`. Nothing consumes `postPlace` yet, so nothing failed;
+        /// the first screen to render it would have matched neither arm and
+        /// shown nothing at all.
+        ///
+        /// `ExtraMemberState` is beside it as the control: its `rename_all`
+        /// renames variants only, so `at_least` really does stay snake_case
+        /// inside `applied`, and the TS declares it that way.
+        #[test]
+        fn the_nested_tags_inside_an_apply_outcome_are_the_ones_the_frontend_matches_on() {
+            use crate::core::amigainstall::finish::AppliedStep;
+            use crate::core::osinstall::apply::{ExtraMemberState, ExtraMemberVerdict};
+
+            let outcome = ApplyOutcome {
+                post_place: vec![
+                    AppliedStep::Protected {
+                        path: "C/WBRun".into(),
+                        was: "----rwed".into(),
+                        now: "--p-rwed".into(),
+                    },
+                    AppliedStep::Replaced {
+                        target: "Devs/AmigaOS ROM Update".into(),
+                        replacement: "Devs/AmigaOS ROM Update.BB39-2".into(),
+                        backup: Some("AmigaOS ROM Update.old".into()),
+                    },
+                ],
+                extra_members: vec![ExtraMemberVerdict {
+                    member: "XAD-Update".to_string(),
+                    state: ExtraMemberState::Applied {
+                        path: "Libs/xadmaster.library".to_string(),
+                        stated: "9.1".to_string(),
+                        at_least: 10,
+                    },
+                    files: 36,
+                }],
+                ..Default::default()
+            };
+            let value = serde_json::to_value(&outcome).unwrap();
+
+            expect_keys(&value["postPlace"][0], &["step", "path", "was", "now"]);
+            assert_eq!(value["postPlace"][0]["step"], "protected");
+            expect_keys(
+                &value["postPlace"][1],
+                &["step", "target", "replacement", "backup"],
+            );
+            assert_eq!(value["postPlace"][1]["step"], "replaced");
+
+            expect_keys(&value["extraMembers"][0], &["member", "state", "files"]);
+            expect_keys(
+                &value["extraMembers"][0]["state"],
+                &["state", "path", "stated", "at_least"],
+            );
+            assert_eq!(value["extraMembers"][0]["state"]["state"], "applied");
         }
 
         /// The wire shape `src/lib/osinstall.ts`'s own `MediaMatch` and
@@ -6568,8 +6577,14 @@ mod tests {
         let dir = scratch("chain-command");
         write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
 
-        let report =
-            osinstall_chain("AmigaOS 3.9".to_string(), vec![dir.clone()], None, None).unwrap();
+        let report = osinstall_chain(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(report.summary.release, "AmigaOS 3.9");
         assert_eq!(report.summary.total, 9, "the CD plus eight packages");
@@ -6616,8 +6631,14 @@ mod tests {
     fn a_chain_report_serializes_with_the_keys_this_test_pins() {
         let dir = scratch("chain-wire");
         write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
-        let report =
-            osinstall_chain("AmigaOS 3.9".to_string(), vec![dir.clone()], None, None).unwrap();
+        let report = osinstall_chain(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         let json = serde_json::to_value(&report).unwrap();
 
         for key in ["rows", "summary", "unreadableFolders", "crowdedFolders"] {
@@ -6660,14 +6681,107 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **ART-284: the chain takes the user's own file choices, and without
+    /// them it contradicted the readout about one artefact.**
+    ///
+    /// The owner's package folder holds two BoingBag 3.9-1 builds. The source
+    /// step's readout, which is handed the overrides, showed the one they had
+    /// chosen as *the file you chose*; this command, called without them,
+    /// answered *"2 files here could be BoingBag 3.9-1, and ART will not
+    /// choose between them"* and blocked the row.
+    ///
+    /// Both arms, because the first alone would pass for a command that
+    /// ignored the argument and happened to be given one candidate: without
+    /// the override the row is `Refused { Ambiguous }`, with it the row names
+    /// the user's file.
+    #[test]
+    fn the_chain_takes_the_users_own_file_choices_art_284() {
+        let dir = scratch("chain-overrides");
+        // Two archives, both carrying `BoingBag3.9-1` at their top level —
+        // the owner's own folder, in shape: `BoingBag39-1.lha` and
+        // `BoingBag39-1 (1).lha`.
+        for name in ["BoingBag39-1.lha", "BoingBag39-1 (1).lha"] {
+            std::fs::write(
+                dir.join(name),
+                crate::core::lha::tests::make_lha_with_raw_names(&[(
+                    format!("BoingBag3.9-1\\C\\{name}").as_bytes(),
+                    b"payload",
+                )]),
+            )
+            .unwrap();
+        }
+
+        let ambiguous = osinstall_chain(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let row = ambiguous
+            .rows
+            .iter()
+            .find(|row| row.package_id.as_deref() == Some("boingbag-39-1"))
+            .expect("BoingBag 3.9-1 is a chain row");
+        assert!(
+            matches!(
+                row.state,
+                chain::ChainState::Refused {
+                    reason: chain::RefusedBecause::Ambiguous { .. }
+                }
+            ),
+            "the premise: two files claim this identity and ART picks neither — got {:?}",
+            row.state
+        );
+
+        let chosen = dir.join("BoingBag39-1 (1).lha");
+        let decided = osinstall_chain(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            Some(vec![("package:boingbag-39-1".to_string(), chosen.clone())]),
+        )
+        .unwrap();
+        let row = decided
+            .rows
+            .iter()
+            .find(|row| row.package_id.as_deref() == Some("boingbag-39-1"))
+            .expect("BoingBag 3.9-1 is a chain row");
+        assert_eq!(
+            row.sentence_facts.file.as_deref(),
+            Some("BoingBag39-1 (1).lha"),
+            "the row names the file the user chose, exactly as the readout does"
+        );
+        assert!(
+            !matches!(
+                row.state,
+                chain::ChainState::Refused {
+                    reason: chain::RefusedBecause::Ambiguous { .. }
+                }
+            ),
+            "and it is no longer ambiguous: got {:?}",
+            row.state
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A tree with no `distribution.json` is a refusal, not an empty chain:
     /// every *installed* state on this screen comes from that file, and the
     /// user has just pointed at the folder.
     #[test]
     fn the_chain_refuses_a_folder_that_is_not_a_tree() {
         let dir = scratch("chain-not-a-tree");
-        let err = osinstall_chain("AmigaOS 3.9".to_string(), vec![], Some(dir.clone()), None)
-            .unwrap_err();
+        let err = osinstall_chain(
+            "AmigaOS 3.9".to_string(),
+            vec![],
+            Some(dir.clone()),
+            None,
+            None,
+        )
+        .unwrap_err();
         assert!(
             format!("{err}").contains(MANIFEST_FILE_NAME),
             "the refusal must name what is missing: {err}"

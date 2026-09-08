@@ -100,14 +100,11 @@ use crate::core::amigainstall::finish;
 use crate::core::amigainstall::run::{run_with, RealClock, RunLimits, RunRequest};
 use crate::core::amigainstall::stage::{settle, stage_with, Settlement};
 use crate::core::amigainstall::{
-    packagevol, workvol, FollowUp, FollowUpOutcome, PlannedRun, RunOutcome, PACKAGE_VOLUME,
-    RESULT_FILE, WORK_VOLUME,
+    packagevol, workvol, PlannedRun, RunOutcome, PACKAGE_VOLUME, RESULT_FILE, WORK_VOLUME,
 };
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::iso::IsoImage;
 use crate::core::jobs::{JobId, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
-use crate::core::osinstall::package::RequiredMedium;
 use crate::core::osinstall::source::MediaSource;
 use crate::core::osinstall::source_archive::ArchiveSource;
 use crate::core::osinstall::{chain, package};
@@ -153,23 +150,20 @@ pub struct AmigaInstallRequest {
     /// adds that itself.
     #[serde(default)]
     pub system_volume: Option<String>,
-    /// The package's **own** archives. The first is the wrapper the user
-    /// downloaded, `BoingBag39-1.lha`; ART unpacks it to a directory of its
-    /// own and mounts that as a third volume.
+    /// The package's **own** archive — the wrapper the user downloaded,
+    /// `BoingBags3&4.lha`; ART unpacks it to a directory of its own and mounts
+    /// that as a third volume.
     ///
     /// **Required, and added by ART-185.** Nothing else can supply the
-    /// installer: a BoingBag's payload cannot be placed into the tree from the
-    /// host at all, which is why this round exists (ART-166), so the program
-    /// the run executes is in no volume ART mounts unless it comes from here.
+    /// installer: the program the run executes is in no volume ART mounts
+    /// unless it comes from here.
     ///
-    /// **A list, and that is ART-186.** BoingBag 3.9-1's own `Updater` is
-    /// 45.13, which cannot install a BoingBag under an emulator; the fix
-    /// shipped as a second archive, and its own readme's remedy is to copy
-    /// that archive's `BoingBag3.9-1` drawer over the package's. So every
-    /// archive after the first is an **overlay medium**, matched against what
-    /// the recipe declares by what it actually carries rather than by the
-    /// order the user picked their files in.
-    pub package_archives: Vec<PathBuf>,
+    /// **One, not a list, since 2026-09-08.** It used to be a list whose
+    /// second and later entries were overlay media (ART-186's UAE fix for
+    /// BoingBag 3.9-1's 45.13 `Updater`). Both BoingBags are placed from
+    /// Windows now, no shipped recipe declares an overlay, and a second slot
+    /// nothing can fill is a field that can only be filled wrongly.
+    pub package_archive: PathBuf,
     /// Where the package's **own** files sit inside that unpacked wrapper,
     /// `/`-separated — `BoingBag3.9-1`, which is the drawer every one of the
     /// owner's real wrappers carries at its top level beside its icon.
@@ -181,30 +175,6 @@ pub struct AmigaInstallRequest {
     pub package_dir: Option<String>,
     /// The user's own licensed Kickstart. ART ships none and never will.
     pub kickstart: PathBuf,
-    /// The user's **own** copy of the medium the package's installer verifies
-    /// — an image of the original disc. `None` for a package that requires
-    /// none, and a refusal for one that does (ART-193).
-    ///
-    /// **On the request rather than in the recipe, and the split is the
-    /// point.** The recipe declares *which volume* the installer looks for —
-    /// a fact about the package, readable in the package's own binary, and
-    /// shipped data like every other fact a recipe carries
-    /// ([`RequiredMedium`](crate::core::osinstall::package::RequiredMedium)).
-    /// *Which file on this machine* is that disc is not a fact about the
-    /// package at all: ART ships no Amiga media and never will, and a path in
-    /// a recipe would be one that is true on exactly one computer. It is the
-    /// same division as [`kickstart`](Self::kickstart) and
-    /// [`package_archives`](Self::package_archives) — ART knows what is
-    /// needed, the user supplies what they own.
-    ///
-    /// The two halves are checked against each other before anything is
-    /// copied: [`compose`] opens the image and asks it its own volume name,
-    /// and a disc that does not state the name the recipe declares is refused
-    /// naming both. That is "ask the artefact what it is; never infer it"
-    /// applied to a medium — a filename is consistent with several answers,
-    /// and this project has shipped the wrong tree once for reading one.
-    #[serde(default)]
-    pub medium: Option<PathBuf>,
     /// A machine preset id (`AmigaProfile::all_presets`). `None` means
     /// [`DEFAULT_PROFILE_ID`].
     #[serde(default)]
@@ -238,38 +208,11 @@ pub struct AmigaInstallPreview {
     /// **third**, and the one ART-185 was missing. Named here for the same
     /// reason as `work_volume`: the user will see it on the Workbench.
     pub package_volume: String,
-    /// The package's own archives, as the user chose them — the wrapper
-    /// first, then any overlay medium.
-    pub package_archives: Vec<PathBuf>,
-    /// Whether **every** one of them is actually there. A preview that did not
-    /// ask would be describing a run with nothing to run; asking only about
-    /// the first would describe a run ART would refuse a moment later.
-    pub package_archives_present: bool,
-    /// The overlay media this package declares, by the path inside such an
-    /// archive that identifies one — so the screen can say what a second file
-    /// would have to be before the user goes looking for it (ART-186).
-    pub declared_overlays: Vec<String>,
-    /// The medium the run will mount, as the user chose it — `None` when the
-    /// package requires none. A person should not be surprised by a disc
-    /// appearing in the emulated machine any more than by the machine itself
-    /// (design §4).
-    pub medium: Option<PathBuf>,
-    /// The volume that image **states it has** — read from the image, never
-    /// from its filename or from the recipe. It is the whole point of the
-    /// check `compose` makes, so the screen shows the answer rather than the
-    /// question.
-    pub medium_volume: Option<String>,
-    /// What the package's own installer requires — *"the original AmigaOS 3.9
-    /// CD-ROM"* — when it requires one. `None` both for a package that
-    /// verifies no medium and for a disc the user supplied unasked, which are
-    /// two different things the screen never has to tell apart: `compose`
-    /// refuses a required medium that is missing outright, so a preview
-    /// exists only when whatever is required is already there.
-    pub required_medium: Option<String>,
-    /// The lowest version the package's installer may state, `"45.15"`, or
-    /// `None` when no build of it is known to be unfit. Named on the screen
-    /// because it is why a second archive may be needed at all.
-    pub minimum_installer_version: Option<String>,
+    /// The package's own archive, as the user chose it.
+    pub package_archive: PathBuf,
+    /// Whether it is actually there. A preview that did not ask would be
+    /// describing a run with nothing to run.
+    pub package_archive_present: bool,
     /// The drawer inside that archive the installer is expected in, or `None`
     /// for the archive's own root.
     pub package_dir: Option<String>,
@@ -343,14 +286,6 @@ pub struct AmigaInstallResult {
     /// Which of the four endings it was. Mirrored exactly in TypeScript.
     pub outcome: RunOutcome,
     pub settlement: SettlementReport,
-    /// What the package's version-gated follow-up did, or `None` when it
-    /// declared none (ART-280).
-    ///
-    /// **Beside the ending, never folded into it.** A follow-up that said no
-    /// is not the installer saying no, and a screen that showed one as the
-    /// other would be collapsing two endings into one sentence — the defect
-    /// `docs/lessons.md` opens with.
-    pub follow_up: Option<FollowUpOutcome>,
 }
 
 // ---------------------------------------------------------------------------
@@ -372,29 +307,6 @@ struct Composed {
     /// (`C/Updater`) — likewise for the unpack's proof, and likewise not the
     /// same string as `plan.program`, which is the whole AmigaDOS path.
     installer_in_package: String,
-    /// The recipe's overlay declarations, translated into the record
-    /// `core::amigainstall` declares for itself.
-    ///
-    /// **The translation is this layer's job on purpose.** `core/amigainstall`
-    /// knows nothing about recipes and must not learn: CLAUDE.md's rule is
-    /// that a lower-level `core/` module declares its own record carrying only
-    /// what it reads, and `commands/` maps between the two — the shape
-    /// `core/rom/pairing.rs` and `commands/preload.rs::rom_pairing_for`
-    /// already set.
-    overlays: Vec<packagevol::Overlay>,
-    /// ART-227: what to do to the copy after the installer succeeds, before
-    /// anything is promoted. Carried here rather than looked up again in
-    /// `perform`, so the preview and the run read one value.
-    post_install: Vec<crate::core::amigainstall::finish::PostStep>,
-    /// The recipe's `minimum_version`, parsed. `None` when the recipe declares
-    /// none, which is every package but BoingBag 3.9-1.
-    minimum_installer_version: Option<(u32, u32)>,
-    /// The same thing as the recipe wrote it, for the preview.
-    minimum_installer_version_text: Option<String>,
-    /// The medium the run mounts, once `compose` has checked that the file
-    /// the user supplied really is the disc the recipe named. `None` when the
-    /// package requires none *and* the user supplied none.
-    medium: Option<ComposedMedium>,
     /// Every *other* package `overlay_mismatch_sentence` may name in a
     /// wrong-archive refusal — scoped to the releases the selected package's
     /// own recipe declares, and with the selected package's own id already
@@ -404,20 +316,6 @@ struct Composed {
     /// `install` does not recompute it and cannot drift from what `compose`
     /// already decided was reachable.
     catalogue: Vec<packagevol::KnownPackage>,
-}
-
-/// A disc `compose` has opened and vouched for (ART-193).
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ComposedMedium {
-    /// The image on the host, as the user chose it.
-    path: PathBuf,
-    /// The volume name **the image itself states** — read with
-    /// [`IsoImage::volume_name`], never taken from the recipe or from the
-    /// filename. This is what the screen shows and what the recipe's
-    /// declaration was checked against.
-    volume: String,
-    /// What the recipe calls this disc in a sentence, when it declared one.
-    declared_as: Option<String>,
 }
 
 /// Refuse a value that cannot survive being written into the generated line.
@@ -508,7 +406,20 @@ fn join_amigados(location: &str, tail: &str) -> String {
 /// work volume must be refused before a screen offers a confirm button, not
 /// after.
 fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
-    let package = package::by_id(request.package_id.trim())?;
+    compose_over(request, package::by_id(request.package_id.trim())?)
+}
+
+/// [`compose`]'s own derivation, over a package already resolved.
+///
+/// The same split `package::order_over`, `slots::slots_over` and
+/// `known_packages_from` make in this project, and for the same reason: since
+/// 2026-09-08 the only shipped recipe declaring an `amiga_installer` is
+/// `boingbags-39-3-4`, whose declaration is `not_yet_runnable` and so refused
+/// two lines below. Without this split every guard in this file — the volume
+/// containment, the metacharacter gate, the wrong-archive refusal, the
+/// prerequisite check — would have no shipped package it could be exercised
+/// against at all.
+fn compose_over(request: &AmigaInstallRequest, package: package::Package) -> CoreResult<Composed> {
     let Some(installer) = package.amiga_installer.clone() else {
         return Err(CoreError::InvalidInput(format!(
             "ART ships no Amiga-side installer for '{}'; this is not a package it can run on \
@@ -588,49 +499,15 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
     // it because it is a fact about the run.
     args.push(format!("{volume}:"));
 
-    // ART-280. A follow-up's `program` is relative to the package's drawer
-    // exactly as the first invocation's is, and its target volume is a fact
-    // about the run and not about the package — so both are composed here, by
-    // the same two lines, rather than written into the recipe. Its gate path
-    // is left alone: it is relative to the *system* volume, and
-    // `workvol::follow_up_lines` prefixes that itself.
-    let mut follow_ups = Vec::with_capacity(installer.follow_ups.len());
-    for declared in &installer.follow_ups {
-        let program = join_amigados(&location, declared.program.trim());
-        one_token("a follow-up's path", &program)?;
-        let mut args = declared.args.clone();
-        for arg in &args {
-            one_token("a follow-up's argument", arg)?;
-        }
-        args.push(format!("{volume}:"));
-        follow_ups.push(FollowUp {
-            program,
-            args,
-            unless_file_version_at_least: declared.unless_file_version_at_least.clone(),
-        });
-    }
-
     let plan = PlannedRun {
         package_id: package.id.clone(),
         system_volume: volume,
         program,
         args,
         working_directory: Some(location),
-        follow_ups,
     };
 
     workvol::startup_sequence(&plan)?;
-
-    // The recipe's own declarations, translated — never carried across as the
-    // recipe's own type. See `Composed::overlays`.
-    let overlays = translate_overlays(&installer);
-    // `validate_installer` already refused a `minimum_version` that is not two
-    // integers, so a shipped recipe always parses. A `None` here can therefore
-    // only mean the recipe declared none.
-    let minimum_installer_version = installer
-        .minimum_version
-        .as_deref()
-        .and_then(package::parse_version_pair);
 
     // ART-277 re-review, L3/L4: release-scoped and self-excluding, built
     // once here (before the refusal below, which now also reads it — I11)
@@ -639,49 +516,16 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
 
     // ART-200/ART-201: is the file in the package's own field actually the
     // package? Asked here, so the preview refuses it too and the answer names
-    // the field to move it to when ART can tell — and, when it recognises the
-    // archive as a whole other package's own (I11), names that package too.
-    refuse_wrong_package_archive(
-        &package.media,
-        &overlays,
-        &request.package_archives,
-        &catalogue,
-    )?;
-
-    let medium = compose_medium(
-        &package.id,
-        installer.required_medium.as_ref(),
-        &request.medium,
-    )?;
+    // that package when ART can tell (I11).
+    refuse_wrong_package_archive(&package.media, &request.package_archive, &catalogue)?;
 
     Ok(Composed {
         plan,
-        medium,
         package_name: package.name,
         package_dir,
         installer_in_package,
-        overlays,
-        post_install: installer.post_install.clone(),
-        minimum_installer_version,
-        minimum_installer_version_text: installer.minimum_version.clone(),
         catalogue,
     })
-}
-
-/// A recipe's own overlay declarations, translated into
-/// `core::amigainstall`'s own record — never carried across as
-/// `core::osinstall::package::InstallerOverlay` (CLAUDE.md's inward-dependency
-/// rule). One place for the translation `compose` and `classify_archive` both
-/// need.
-fn translate_overlays(installer: &package::AmigaInstaller) -> Vec<packagevol::Overlay> {
-    installer
-        .overlays
-        .iter()
-        .map(|overlay| packagevol::Overlay {
-            from: overlay.from.clone(),
-            to: overlay.to.clone(),
-        })
-        .collect()
 }
 
 /// Every *other* package ART's catalogue ships an Amiga-side installer for
@@ -728,22 +572,10 @@ fn known_packages_from(
 /// refusal's catalogue) and `classify_top_level`'s release-scoped list
 /// (ART-277 review, Major 2) build the same shape.
 fn known_package(p: package::Package) -> packagevol::KnownPackage {
-    let overlay_drawers = p
-        .amiga_installer
-        .as_ref()
-        .map(|installer| {
-            installer
-                .overlays
-                .iter()
-                .map(|overlay| overlay.from.split('/').next().unwrap_or("").to_string())
-                .collect()
-        })
-        .unwrap_or_default();
     packagevol::KnownPackage {
         id: p.id,
         name: p.name,
         media: p.media,
-        overlay_drawers,
     }
 }
 
@@ -782,16 +614,6 @@ pub fn amigainstall_classify_archive(
     let selected = release_packages.iter().find(|p| p.id == package_id.trim());
 
     let expected_media = selected.map(|p| p.media.clone());
-    let expected_overlays: Vec<String> = selected
-        .and_then(|p| p.amiga_installer.as_ref())
-        .map(|installer| {
-            installer
-                .overlays
-                .iter()
-                .map(|overlay| overlay.from.split('/').next().unwrap_or("").to_string())
-                .collect()
-        })
-        .unwrap_or_default();
 
     let Classified { kind, shared_by } = match identity {
         None => Classified {
@@ -805,7 +627,6 @@ pub fn amigainstall_classify_archive(
         kind,
         top_level,
         expected_media,
-        expected_overlays,
         shared_by,
     })
 }
@@ -873,48 +694,20 @@ fn classify_top_level(
     archive: Option<&std::path::Path>,
 ) -> Classified {
     if let Some(selected) = selected {
-        let overlays: Vec<packagevol::Overlay> = selected
-            .amiga_installer
-            .as_ref()
-            .map(translate_overlays)
-            .unwrap_or_default();
-        match packagevol::archive_is(&selected.media, &overlays, top) {
+        match packagevol::archive_is(&selected.media, top) {
             packagevol::ArchiveIs::ThePackage => return Classified::plain("the-package"),
-            packagevol::ArchiveIs::TheUpdateArchive => {
-                return Classified::plain("the-update-archive")
-            }
             packagevol::ArchiveIs::Neither => {}
         }
     }
 
-    /// Which fact about a candidate package matched this archive's top
-    /// level — its own identity, or one of its own overlays'.
-    enum Matched {
-        Own,
-        Overlay,
-    }
-
     // ART-277 re-review, I9: one implementation of "which archive is this",
-    // not two — `archive_is` already answers `ThePackage`/`TheUpdateArchive`/
-    // `Neither` for the *selected* package above; the first round re-derived
-    // the same media/overlay-drawer comparison by hand for every *other*
-    // catalogue candidate instead of asking `archive_is` the identical
-    // question about each of them.
-    let matches: Vec<(&package::Package, Matched)> = release_packages
+    // not two — `archive_is` already answers `ThePackage`/`Neither` for the
+    // *selected* package above, and the same question is asked of every other
+    // catalogue candidate rather than re-derived by hand.
+    let matches: Vec<&package::Package> = release_packages
         .iter()
         .filter(|pkg| Some(pkg.id.as_str()) != selected.map(|s| s.id.as_str()))
-        .filter_map(|pkg| {
-            let overlays: Vec<packagevol::Overlay> = pkg
-                .amiga_installer
-                .as_ref()
-                .map(translate_overlays)
-                .unwrap_or_default();
-            match packagevol::archive_is(&pkg.media, &overlays, top) {
-                packagevol::ArchiveIs::ThePackage => Some((pkg, Matched::Own)),
-                packagevol::ArchiveIs::TheUpdateArchive => Some((pkg, Matched::Overlay)),
-                packagevol::ArchiveIs::Neither => None,
-            }
-        })
+        .filter(|pkg| packagevol::archive_is(&pkg.media, top) == packagevol::ArchiveIs::ThePackage)
         .collect();
 
     // **Narrowed by what is inside the archive before it is called
@@ -930,24 +723,16 @@ fn classify_top_level(
     // candidates whose declared path this archive does not carry: a package
     // that declares no distinguisher survives, and narrowing never picks a
     // winner — a still-ambiguous list is still ambiguous.
-    let matches: Vec<(&package::Package, Matched)> = match archive {
+    let matches: Vec<&package::Package> = match archive {
         None => matches,
         Some(path) => {
-            let narrowed: Vec<(&package::Package, Matched)> = matches
+            let narrowed: Vec<&package::Package> = matches
                 .iter()
-                .filter(|(pkg, _)| match pkg.distinguished_by.as_deref() {
+                .filter(|pkg| match pkg.distinguished_by.as_deref() {
                     Some(inner) => crate::core::osinstall::scan::archive_carries(path, inner),
                     None => true,
                 })
-                .map(|(pkg, matched)| {
-                    (
-                        *pkg,
-                        match matched {
-                            Matched::Own => Matched::Own,
-                            Matched::Overlay => Matched::Overlay,
-                        },
-                    )
-                })
+                .copied()
                 .collect();
             // Narrowing to nothing is never an improvement: an unreadable
             // archive makes `archive_carries` answer `false` for every
@@ -966,16 +751,13 @@ fn classify_top_level(
     if matches.len() > 1 {
         return Classified {
             kind: format!("shared-artefact:{top}"),
-            shared_by: matches.into_iter().map(|(pkg, _)| pkg.id.clone()).collect(),
+            shared_by: matches.into_iter().map(|pkg| pkg.id.clone()).collect(),
         };
     }
 
     match matches.into_iter().next() {
-        Some((pkg, Matched::Own)) if pkg.amiga_installer.is_some() => {
+        Some(pkg) if pkg.amiga_installer.is_some() => {
             Classified::plain(format!("another-package:{}", pkg.id))
-        }
-        Some((pkg, Matched::Overlay)) if pkg.amiga_installer.is_some() => {
-            Classified::plain(format!("another-packages-update-archive:{}", pkg.id))
         }
         // A real, single match — just not one this screen's radio offers at
         // all (every Locale package, today). Naming it by id would produce
@@ -991,14 +773,16 @@ fn classify_top_level(
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ArchiveClassification {
-    /// `"the-package"`, `"the-update-archive"`, `` "another-package:<id>" ``,
-    /// `` "another-packages-update-archive:<id>" `` (ART-277 review, Medium
-    /// 1 — the archive is recognisably a *different* package's own update
-    /// archive), `` "shared-artefact:<top-level-name>" `` (ART-277
-    /// re-review, L5 — two or more release packages declare this exact
-    /// identity; `shared_by` names which), `` "other-artefact:<top-level-name>"
-    /// `` (a single, real match, but not a package this screen can select —
-    /// not Amiga-installable), or `"unknown"`.
+    /// `"the-package"`, `` "another-package:<id>" ``,
+    /// `` "shared-artefact:<top-level-name>" `` (ART-277 re-review, L5 — two
+    /// or more release packages declare this exact identity; `shared_by`
+    /// names which), `` "other-artefact:<top-level-name>" `` (a single, real
+    /// match, but not a package this screen can select — not
+    /// Amiga-installable), or `"unknown"`.
+    ///
+    /// The two update-archive kinds went with the overlay machinery on
+    /// 2026-09-08: there is one archive field now, so there is no second field
+    /// for an archive to belong in instead.
     pub kind: String,
     pub top_level: Vec<String>,
     /// The **selected** package's own `media` — what the package field
@@ -1007,10 +791,6 @@ pub struct ArchiveClassification {
     /// field wants when the archive turns out to be something else's.
     /// `None` when the selected id is not a package this release ships.
     pub expected_media: Option<String>,
-    /// The selected package's own declared overlay drawers — what the
-    /// *update-archive* field expects. Empty for a package (every one but
-    /// BoingBag 3.9-1, today) that declares none.
-    pub expected_overlays: Vec<String>,
     /// Every release package that reads this exact identity, when `kind` is
     /// `` `shared-artefact:<top>` `` (ART-277 re-review, L5) — empty for
     /// every other kind. Ids, not names: `PackageSummary`'s own list is
@@ -1039,118 +819,29 @@ pub struct ArchiveClassification {
 /// reader merely does not understand would turn a working run into a false
 /// refusal, which is worse than the message this exists to improve.
 ///
-/// **Every slot, not only the first (ART-277 review, Major 1).** The first
-/// round checked `archives.first()` alone, so the package's own archive
-/// supplied a *second* time — as if it were the update archive — reached
-/// `apply_overlay` unrefused at preview time, and the only sentence that
-/// caught it there could, before this round's fix, match the selected
-/// package itself and tell the user to "select" the package that is already
-/// selected. The first slot must be exactly the package's own archive; every
-/// slot after it must not be — an update archive there is correct and
-/// `packagevol::unpack`'s own matching decides which declared overlay it is,
-/// which this function does not need to know.
+/// **One slot** (2026-09-08). It used to walk a list — the first entry the
+/// package's own archive, every one after it an overlay medium that must
+/// *not* be — because ART-186's UAE fix needed a second archive. There is one
+/// field now, and the only thing it can be wrong about is not being the
+/// package.
 fn refuse_wrong_package_archive(
     media: &str,
-    overlays: &[packagevol::Overlay],
-    archives: &[PathBuf],
+    archive: &Path,
     catalogue: &[packagevol::KnownPackage],
 ) -> CoreResult<()> {
-    for (index, archive) in archives.iter().enumerate() {
-        if !archive.is_file() {
-            continue;
-        }
-        let Ok(source) = ArchiveSource::open(archive) else {
-            continue;
-        };
-        let holds = MediaSource::volume_name(&source).to_string();
-        let role = packagevol::archive_is(media, overlays, &holds);
-        let wrong = if index == 0 {
-            role != packagevol::ArchiveIs::ThePackage
-        } else {
-            role == packagevol::ArchiveIs::ThePackage
-        };
-        if !wrong {
-            continue;
-        }
-        return Err(CoreError::InvalidInput(packagevol::wrong_archive_sentence(
-            archive, media, &role, &holds, catalogue,
-        )));
+    if !archive.is_file() {
+        return Ok(());
     }
-    Ok(())
-}
-
-/// Match what the package's installer requires against what the user
-/// supplied, and ask the supplied image what it actually is (ART-193).
-///
-/// **Three outcomes, and each is a different sentence.**
-///
-/// - The recipe declares a medium and nothing was supplied → refused, naming
-///   the disc and the volume, *before* anything is copied or unpacked. The
-///   alternative is what was measured on 2026-08-21: the installer starts,
-///   finds no volume, opens its own screen and never answers, and ART reports
-///   a timeout — *"nobody answered a question it asked"* — about a program
-///   that was never going to get as far as asking one. §89 forbids that
-///   sentence, so the run does not start.
-/// - Something was supplied → the image is **opened and asked its own volume
-///   name**, and when the recipe declared one they must agree. A filename is
-///   not an identity; this project shipped an AmigaOS 3.5 tree under the name
-///   3.9 for reading one artefact's appearance as proof of what it was.
-/// - Neither → `None`, and the run mounts no CD at all, exactly as before.
-///
-/// Supplying a disc an installer asks for is **meeting** its check, not
-/// bypassing one. ART deliberately does not satisfy such a check by
-/// extracting the handful of files the program happens to name.
-fn compose_medium(
-    package_id: &str,
-    required: Option<&RequiredMedium>,
-    supplied: &Option<PathBuf>,
-) -> CoreResult<Option<ComposedMedium>> {
-    let Some(path) = supplied.as_ref().filter(|p| !p.as_os_str().is_empty()) else {
-        return match required {
-            Some(medium) => Err(CoreError::SafetyRefused(format!(
-                "'{package_id}''s installer verifies {} before it will do anything — it checks \
-                 named files on a volume called '{}:'. Supply an image of your own copy of that \
-                 disc. Without it the installer gets as far as its own check and then waits on \
-                 an AmigaDOS requester asking for that volume, which nobody is there to answer, \
-                 and ART would have nothing to report but a timeout.",
-                medium.name, medium.volume
-            ))),
-            None => Ok(None),
-        };
+    let Ok(source) = ArchiveSource::open(archive) else {
+        return Ok(());
     };
-
-    if !path.is_file() {
-        return Err(CoreError::InvalidInput(format!(
-            "the medium supplied for '{package_id}' is not a file: '{}'",
-            path.display()
-        )));
+    let holds = MediaSource::volume_name(&source).to_string();
+    if packagevol::archive_is(media, &holds) == packagevol::ArchiveIs::ThePackage {
+        return Ok(());
     }
-
-    // The disc's own statement about itself. `IsoImage::open` reads a handful
-    // of sectors — a 468 MB disc is not read to answer this.
-    let image = IsoImage::open(path)?;
-    let volume = image.volume_name().trim().to_string();
-
-    if let Some(medium) = required {
-        // AmigaDOS volume names are case-insensitive, so the comparison is
-        // too — the same rule `core::amigainstall::claims_volume` follows.
-        if !volume.eq_ignore_ascii_case(medium.volume.trim()) {
-            return Err(CoreError::SafetyRefused(format!(
-                "'{package_id}''s installer verifies {}, whose volume is '{}'. The image \
-                 supplied — '{}' — states its volume as '{volume}', so it is not that disc and \
-                 the installer would not find what it looks for.",
-                medium.name,
-                medium.volume,
-                path.display()
-            )));
-        }
-    }
-
-    Ok(Some(ComposedMedium {
-        path: path.clone(),
-        volume,
-        declared_as: required.map(|medium| medium.name.clone()),
-    }))
+    Err(CoreError::InvalidInput(packagevol::wrong_archive_sentence(
+        archive, media, &holds, catalogue,
+    )))
 }
 
 /// One finished post-install step, as a sentence.
@@ -1208,7 +899,6 @@ pub(crate) fn profile_for(id: Option<&str>) -> CoreResult<AmigaProfile> {
 /// whole polls. None of the three is inside a write.
 fn perform(
     tree: &Path,
-    post_install: &[finish::PostStep],
     sink: &dyn ProgressSink,
     run: impl FnOnce(&Path, &dyn ProgressSink) -> CoreResult<RunOutcome>,
 ) -> CoreResult<(RunOutcome, SettlementReport)> {
@@ -1220,46 +910,6 @@ fn perform(
 
     match run(staged.copy_path(), sink) {
         Ok(outcome) => {
-            // **ART-227: what the installer left for somebody else to do.**
-            //
-            // Here, and only on `Succeeded`, for three reasons that are one
-            // reason: this is the last moment the copy is still only a copy.
-            // A failure below returns before `settle`, so nothing is
-            // promoted and the user's own tree is untouched — the same
-            // answer §92 gives everywhere else — and the `Err` arm further
-            // down is what says where the copy went.
-            //
-            // The other three endings get nothing. A tree the installer
-            // refused is not a tree to go on editing, and rotating a file
-            // into place there would be ART finishing a job that did not
-            // start.
-            if matches!(outcome, RunOutcome::Succeeded) && !post_install.is_empty() {
-                match finish::apply(staged.copy_path(), post_install) {
-                    Ok(applied) => {
-                        // Said out loud, one line each. A step that moved a
-                        // 321 KB ROM update into place is not a detail: the
-                        // whole reason it exists is that nothing else
-                        // reports it, and "never claim what you did not do"
-                        // has a mirror — say what you did.
-                        for step in &applied {
-                            sink.report(0, None, &describe_applied(step));
-                        }
-                    }
-                    Err(err) => {
-                        sink.report(
-                            0,
-                            None,
-                            &format!(
-                                "The installer succeeded, but ART could not finish the tree: \
-                                 {err}. '{}' was not touched; the copy is at '{}'",
-                                staged.original_path().display(),
-                                staged.copy_path().display()
-                            ),
-                        );
-                        return Err(err);
-                    }
-                }
-            }
             let settlement = settle(staged, &outcome)?;
             Ok((outcome, SettlementReport::from(settlement)))
         }
@@ -1333,13 +983,13 @@ fn perform(
 fn install(
     composed: &Composed,
     tree: &Path,
-    package_archives: &[PathBuf],
+    package_archive: &Path,
     profile: &AmigaProfile,
     kickstart: &Path,
     emulator: &Path,
     scratch_root: &Path,
     sink: &dyn ProgressSink,
-) -> CoreResult<(RunOutcome, SettlementReport, Option<FollowUpOutcome>)> {
+) -> CoreResult<(RunOutcome, SettlementReport)> {
     let plan = &composed.plan;
     let work = Scratch::in_dir(scratch_root)?;
     workvol::build(work.path(), plan)?;
@@ -1353,17 +1003,14 @@ fn install(
     // already built this release-scoped and self-excluding (L3/L4) — used
     // as `compose` left it, not recomputed here.
     let unpacked = packagevol::unpack(
-        package_archives,
+        package_archive,
         package.path(),
         &packagevol::Layout {
             drawer: composed.package_dir.as_deref(),
             installer: &composed.installer_in_package,
-            overlays: &composed.overlays,
-            minimum_installer_version: composed.minimum_installer_version,
             package_name: &composed.package_name,
             catalogue: &composed.catalogue,
         },
-        scratch_root,
         sink,
     )?;
     for refusal in &unpacked.refused {
@@ -1373,42 +1020,15 @@ fn install(
             &format!("The package's archive carries an entry ART would not write — {refusal}"),
         );
     }
-    // Said before the run, not only in the report afterwards: a run that
-    // worked because a second archive patched the first is not the same run
-    // as one of the first alone, and the user should be told which they got
-    // (ART-186).
-    for from in &unpacked.overlaid {
-        sink.report(
-            0,
-            None,
-            &format!("A second archive supplied '{from}' over the package's own files"),
-        );
-    }
     if let Some(version) = &unpacked.installer_version {
         sink.report(0, None, &format!("The installer states {version}"));
-    }
-
-    // Said before the run for the same reason the overlay line above is: a
-    // run that worked because the user supplied the disc the installer asks
-    // for is not the same run as one without it, and the volume named here is
-    // the image's own, read from the image (ART-193).
-    if let Some(medium) = &composed.medium {
-        sink.report(
-            0,
-            None,
-            &format!(
-                "Mounting '{}' as the CD the installer checks for — it states its volume as '{}'",
-                medium.path.display(),
-                medium.volume
-            ),
-        );
     }
 
     // The real launcher is built here, not in `core/`: constructing one is a
     // process-spawning decision, and `core/amigainstall::run` may not make it
     // (ART-274) — it takes an `EmulatorLauncher` directly instead.
     let launcher = WinUaeLauncher::new(emulator, scratch_root);
-    let (outcome, settlement) = perform(tree, &composed.post_install, sink, |copy, sink| {
+    let (outcome, settlement) = perform(tree, sink, |copy, sink| {
         let request = RunRequest {
             plan,
             work_volume_dir: work.path(),
@@ -1417,7 +1037,7 @@ fn install(
             scratch_root,
             profile,
             kickstart_path: kickstart,
-            cd_image: composed.medium.as_ref().map(|m| m.path.as_path()),
+            cd_image: None,
             limits: RunLimits::default(),
         };
         let outcome = run_with(&request, &launcher, &RealClock::new(), sink)?;
@@ -1425,37 +1045,7 @@ fn install(
         Ok(outcome)
     })?;
 
-    // ART-280. Read **after** `perform`, while `work` is still alive — the
-    // scratch removes itself on `Drop`, so this is the last moment the word
-    // exists. Deliberately not folded into `RunOutcome`: a follow-up is the
-    // package doing a second thing, and the install's own ending is unchanged
-    // by it. Said out loud for the same reason a `PostStep` is: nothing else
-    // reports it.
-    let follow_up = workvol::read_follow_up(work.path());
-    if let Some(word) = follow_up {
-        sink.report(0, None, describe_follow_up(word));
-    }
-    Ok((outcome, settlement, follow_up))
-}
-
-/// One sentence per follow-up word, English like every other engine string
-/// (ART-060); the user's own sentence is the screen's.
-fn describe_follow_up(word: FollowUpOutcome) -> &'static str {
-    match word {
-        FollowUpOutcome::Ran => {
-            "The package's follow-up was needed and ran: its second payload is applied"
-        }
-        FollowUpOutcome::NotNeeded => {
-            "The package's follow-up was not needed — the tree already carries that version"
-        }
-        FollowUpOutcome::Failed => {
-            "The package's follow-up ran and said no; the install itself is unaffected"
-        }
-        FollowUpOutcome::NotChecked => {
-            "The tree has no C/Version, so ART could not check whether the package's \
-             follow-up was needed; it was not run"
-        }
-    }
+    Ok((outcome, settlement))
 }
 
 /// ART-186's other half: a run that says it worked writes that into the
@@ -1519,6 +1109,16 @@ pub fn amiga_install_preview(
     winuae_path: Option<String>,
 ) -> AppResult<AmigaInstallPreview> {
     let composed = compose(&request)?;
+    Ok(preview_over(request, composed, winuae_path.as_deref())?)
+}
+
+/// [`amiga_install_preview`]'s own derivation, over a run already composed —
+/// the same split [`compose_over`] makes, and for the same reason.
+fn preview_over(
+    request: AmigaInstallRequest,
+    composed: Composed,
+    winuae_path: Option<&str>,
+) -> CoreResult<AmigaInstallPreview> {
     let profile = profile_for(request.profile.as_deref())?;
 
     Ok(AmigaInstallPreview {
@@ -1530,24 +1130,14 @@ pub fn amiga_install_preview(
         args: composed.plan.args,
         work_volume: WORK_VOLUME.to_string(),
         package_volume: PACKAGE_VOLUME.to_string(),
-        package_archives_present: !request.package_archives.is_empty()
-            && request.package_archives.iter().all(|a| a.is_file()),
-        declared_overlays: composed
-            .overlays
-            .iter()
-            .map(|overlay| overlay.from.clone())
-            .collect(),
-        minimum_installer_version: composed.minimum_installer_version_text,
-        medium: composed.medium.as_ref().map(|m| m.path.clone()),
-        medium_volume: composed.medium.as_ref().map(|m| m.volume.clone()),
-        required_medium: composed.medium.as_ref().and_then(|m| m.declared_as.clone()),
-        package_archives: request.package_archives,
+        package_archive_present: request.package_archive.is_file(),
+        package_archive: request.package_archive,
         package_dir: composed.package_dir,
         result_file: RESULT_FILE.to_string(),
         deadline_seconds: RunLimits::default().deadline.as_secs(),
         kickstart_present: request.kickstart.is_file(),
         kickstart: request.kickstart,
-        emulator: detect_winuae(winuae_path.as_deref()).executable_path,
+        emulator: detect_winuae(winuae_path).executable_path,
         profile_id: profile.id,
         profile_name: profile.name,
         tree: request.tree,
@@ -1582,7 +1172,7 @@ pub fn amiga_install_run(
 
     let plan = composed.plan.clone();
     let tree = request.tree.clone();
-    let package_archives = request.package_archives.clone();
+    let package_archive = request.package_archive.clone();
     let kickstart = request.kickstart.clone();
     let emulator = PathBuf::from(emulator);
     let log_path = oplog.path().to_path_buf();
@@ -1606,7 +1196,7 @@ pub fn amiga_install_run(
             let result = install(
                 &composed,
                 &tree,
-                &package_archives,
+                &package_archive,
                 &profile,
                 &kickstart,
                 &emulator,
@@ -1622,7 +1212,7 @@ pub fn amiga_install_run(
                 .detail("Command", command_line)
                 .detail("Machine", profile.id.clone());
             let record = match &result {
-                Ok((outcome, settlement, _)) => {
+                Ok((outcome, settlement)) => {
                     let record = record.detail("Ending", ending_of(outcome));
                     let record = match settlement {
                         SettlementReport::Promoted { left_behind, .. } => match left_behind {
@@ -1648,14 +1238,13 @@ pub fn amiga_install_run(
             };
             write_to_path(&log_path, &record);
 
-            let (outcome, settlement, follow_up) = result?;
+            let (outcome, settlement) = result?;
             let _ = emit_app.emit(
                 AMIGA_INSTALL_EVENT,
                 AmigaInstallResult {
                     job_id,
                     outcome,
                     settlement,
-                    follow_up,
                 },
             );
             Ok(())
@@ -1709,28 +1298,41 @@ mod tests {
         }
     }
 
-    /// A synthetic disc stating the volume name a BoingBag's `Updater`
-    /// verifies (ART-193), written beside `tree` — which is inside the
-    /// caller's own scratch directory, so it goes away with it.
+    /// [`compose`] with the selected package given the Amiga-side installer
+    /// the two BoingBags used to declare, when its own recipe declares none.
     ///
-    /// **Assembled byte by byte, like every fixture in this project.** The
-    /// disc the real run needs is the owner's own 468 MB AmigaOS 3.9 CD, and
-    /// a test may not depend on one: ART ships no Amiga content, ever. What
-    /// this proves is the half that is ART's — that a disc's *own* volume
-    /// name is what gets compared — and the other half is the `#[ignore]`d
-    /// hook, against the owner's real disc.
-    fn disc_beside(tree: &Path, volume: &str) -> PathBuf {
-        use crate::core::iso::fixture::{file as iso_file, IsoBuilder};
-
-        let path = tree.parent().unwrap().join(format!("{volume}.iso"));
-        let bytes = IsoBuilder {
-            volume: volume.to_string(),
-            children: vec![iso_file("ANGELS.AVI", "Angels.avi", b"synthetic")],
-            ..Default::default()
+    /// **Why a test needs one at all.** The emulator route for BoingBag 3.9-1
+    /// and 3.9-2 was removed on 2026-09-08, so the only shipped recipe that
+    /// still declares an `amiga_installer` is `boingbags-39-3-4` — and that
+    /// one is `not_yet_runnable`, which `compose` refuses before it composes
+    /// anything. Every guard in this file would then be unreachable.
+    ///
+    /// It supplies a *declaration*, not a code path: `compose_over` is the
+    /// production function, and the two lines below are exactly what a recipe
+    /// writes. A package that already declares one is passed through
+    /// untouched, so the `not_yet_runnable` refusal is still reached by the
+    /// test that is about it.
+    fn compose_runnable(request: &AmigaInstallRequest) -> CoreResult<Composed> {
+        let mut package = package::by_id(request.package_id.trim())?;
+        if package.amiga_installer.is_none() {
+            package.amiga_installer = Some(package::AmigaInstaller {
+                program: "C/Updater".to_string(),
+                args: vec!["AmigaOS-Update".to_string()],
+                not_yet_runnable: None,
+            });
         }
-        .build();
-        std::fs::write(&path, bytes).unwrap();
-        path
+        compose_over(request, package)
+    }
+
+    /// [`amiga_install_preview`] over [`compose_runnable`]'s composition — the
+    /// production `preview_over` with the same one declaration supplied. See
+    /// [`compose_runnable`] for why a test needs it.
+    fn preview_runnable(
+        request: AmigaInstallRequest,
+        winuae_path: Option<&str>,
+    ) -> CoreResult<AmigaInstallPreview> {
+        let composed = compose_runnable(&request)?;
+        preview_over(request, composed, winuae_path)
     }
 
     fn request(tree: &Path) -> AmigaInstallRequest {
@@ -1738,14 +1340,9 @@ mod tests {
             tree: tree.to_path_buf(),
             package_id: "boingbag-39-1".to_string(),
             system_volume: None,
-            package_archives: vec![PathBuf::from("BoingBag39-1.lha")],
+            package_archive: PathBuf::from("BoingBag39-1.lha"),
             package_dir: None,
             kickstart: PathBuf::from("kick.rom"),
-            // Both BoingBags declare a `required_medium`, so every request
-            // shaped like a real one carries the disc — a fixture that did
-            // not would be testing ART's refusal instead of the thing the
-            // test is named for.
-            medium: Some(disc_beside(tree, "AmigaOS3.9")),
             profile: None,
         }
     }
@@ -1885,7 +1482,7 @@ mod tests {
     fn a_recipe_declaration_becomes_a_whole_amigados_command() {
         let scratch = ScratchDir::new("art-amigainstall-cmd", "compose-line");
         let tree = tree_in(&scratch);
-        let composed = compose(&request(&tree)).unwrap();
+        let composed = compose_runnable(&request(&tree)).unwrap();
 
         assert_eq!(composed.plan.system_volume, "DH0");
         assert_eq!(composed.plan.program, "ARTPkg:BoingBag3.9-1/C/Updater");
@@ -1912,7 +1509,7 @@ mod tests {
     fn the_installer_is_reached_through_the_package_volume_and_not_the_tree() {
         let scratch = ScratchDir::new("art-amigainstall-cmd", "compose-volume");
         let tree = tree_in(&scratch);
-        let composed = compose(&request(&tree)).unwrap();
+        let composed = compose_runnable(&request(&tree)).unwrap();
 
         assert!(
             composed
@@ -1947,7 +1544,7 @@ mod tests {
         let mut req = request(&tree);
         req.package_dir = None;
 
-        let composed = compose(&req).unwrap();
+        let composed = compose_runnable(&req).unwrap();
 
         assert_eq!(
             composed.plan.working_directory.as_deref(),
@@ -1966,7 +1563,7 @@ mod tests {
         req.package_dir = Some("  ".to_string());
         req.system_volume = Some("  DH3  ".to_string());
 
-        let composed = compose(&req).unwrap();
+        let composed = compose_runnable(&req).unwrap();
 
         assert_eq!(composed.plan.program, "ARTPkg:C/Updater");
         assert_eq!(composed.plan.working_directory.as_deref(), Some("ARTPkg:"));
@@ -1988,7 +1585,7 @@ mod tests {
             let mut req = request(&tree);
             req.system_volume = Some(hostile.to_string());
 
-            let err = compose(&req).unwrap_err();
+            let err = compose_runnable(&req).unwrap_err();
 
             assert!(
                 err.to_string().contains(PACKAGE_VOLUME),
@@ -2017,7 +1614,7 @@ mod tests {
         ] {
             let mut req = request(&tree);
             req.package_dir = Some(hostile.to_string());
-            let composed = compose(&req);
+            let composed = compose_runnable(&req);
             assert!(
                 composed.is_err(),
                 "'{hostile}' must not compose, got {composed:?}"
@@ -2039,7 +1636,7 @@ mod tests {
             // tree is a real distribution tree for the same reason (fix round
             // 1): against a folder with no manifest this test would have
             // passed on the *chain* refusal instead, whatever the volume said.
-            let err = compose(&req).unwrap_err().to_string();
+            let err = compose_runnable(&req).unwrap_err().to_string();
             assert!(
                 err.contains(hostile),
                 "'{hostile}' must be refused by name: {err}"
@@ -2059,7 +1656,7 @@ mod tests {
         let mut req = request(&tree);
         req.system_volume = Some(WORK_VOLUME.to_string());
 
-        let err = compose(&req).unwrap_err();
+        let err = compose_runnable(&req).unwrap_err();
 
         assert!(
             err.to_string().contains(WORK_VOLUME),
@@ -2116,7 +1713,7 @@ mod tests {
         let sink = Sink::cancelled();
         let ran = AtomicUsize::new(0);
 
-        let result = perform(&tree, &[], &sink, |_, _| {
+        let result = perform(&tree, &sink, |_, _| {
             ran.fetch_add(1, Ordering::Relaxed);
             Ok(RunOutcome::Succeeded)
         });
@@ -2142,7 +1739,7 @@ mod tests {
         let sink = Sink::default();
         let staged_at = std::sync::Mutex::new(PathBuf::new());
 
-        let result = perform(&tree, &[], &sink, |copy, _| {
+        let result = perform(&tree, &sink, |copy, _| {
             *staged_at.lock().unwrap() = copy.to_path_buf();
             // The copy exists at this moment, which is what makes its
             // absence afterwards mean something.
@@ -2178,7 +1775,7 @@ mod tests {
         let tree = tree_in(&scratch);
         let sink = Sink::default();
 
-        let _ = perform(&tree, &[], &sink, |_, _| Err(CoreError::Cancelled));
+        let _ = perform(&tree, &sink, |_, _| Err(CoreError::Cancelled));
 
         assert!(
             sink.said("was removed"),
@@ -2218,7 +1815,7 @@ mod tests {
             let sink = Sink::default();
             let wanted = outcome.clone();
 
-            let (ending, settlement) = perform(&tree, &[], &sink, move |copy, _| {
+            let (ending, settlement) = perform(&tree, &sink, move |copy, _| {
                 std::fs::write(copy.join("Libs/version.library"), b"installed").unwrap();
                 Ok(wanted)
             })
@@ -2252,7 +1849,7 @@ mod tests {
         let tree = tree_in(&scratch);
         let sink = Sink::default();
 
-        let (outcome, settlement) = perform(&tree, &[], &sink, |copy, _| {
+        let (outcome, settlement) = perform(&tree, &sink, |copy, _| {
             std::fs::write(copy.join("Libs/version.library"), b"installed").unwrap();
             Ok(RunOutcome::Succeeded)
         })
@@ -2288,7 +1885,7 @@ mod tests {
         let tree = tree_in(&scratch);
         let sink = Sink::default();
 
-        let result = perform(&tree, &[], &sink, |_, _| {
+        let result = perform(&tree, &sink, |_, _| {
             Err(CoreError::InvalidInput("the mount went away".into()))
         });
 
@@ -2338,11 +1935,11 @@ mod tests {
         )
         .unwrap();
 
-        let composed = compose(&request(&tree)).unwrap();
+        let composed = compose_runnable(&request(&tree)).unwrap();
         let err = install(
             &composed,
             &tree,
-            std::slice::from_ref(&archive),
+            &archive,
             &AmigaProfile::a1200_aga(),
             Path::new("no-such.rom"),
             Path::new("no-such.exe"),
@@ -2378,12 +1975,12 @@ mod tests {
         let archive = scratch.join("BoingBag39-1.lha");
         std::fs::write(&archive, boingbag_lha()).unwrap();
 
-        let composed = compose(&request(&tree)).unwrap();
+        let composed = compose_runnable(&request(&tree)).unwrap();
         let sink = Sink::default();
         let err = install(
             &composed,
             &tree,
-            std::slice::from_ref(&archive),
+            &archive,
             &AmigaProfile::a1200_aga(),
             Path::new("no-such.rom"),
             Path::new("no-such.exe"),
@@ -2435,12 +2032,12 @@ mod tests {
         )
         .unwrap();
 
-        let composed = compose(&request(&tree)).unwrap();
+        let composed = compose_runnable(&request(&tree)).unwrap();
         let sink = Sink::default();
         let _ = install(
             &composed,
             &tree,
-            std::slice::from_ref(&archive),
+            &archive,
             &AmigaProfile::a1200_aga(),
             Path::new("no-such.rom"),
             Path::new("no-such.exe"),
@@ -2528,7 +2125,7 @@ mod tests {
         let request = request(&tree);
         let before = std::fs::read_dir(scratch.path()).unwrap().count();
 
-        let preview = amiga_install_preview(request, Some("no-such.exe".into())).unwrap();
+        let preview = preview_runnable(request, Some("no-such.exe")).unwrap();
 
         assert_eq!(preview.program, "ARTPkg:BoingBag3.9-1/C/Updater");
         assert_eq!(preview.work_volume, WORK_VOLUME);
@@ -2537,7 +2134,7 @@ mod tests {
             "the user will see a third volume on the Workbench; say so"
         );
         assert!(
-            !preview.package_archives_present,
+            !preview.package_archive_present,
             "and it says the package's own archive is missing too"
         );
         assert_eq!(preview.result_file, RESULT_FILE);
@@ -2572,7 +2169,7 @@ mod tests {
         let mut req = request(&tree);
         req.package_id = "boingbag-39-2".to_string();
 
-        let err = compose(&req).unwrap_err();
+        let err = compose_runnable(&req).unwrap_err();
         assert!(
             err.to_string().contains("BoingBag 3.9-1"),
             "the refusal must name what is missing: {err}"
@@ -2580,7 +2177,7 @@ mod tests {
 
         // And the preview, which is the screen the user is actually looking
         // at, refuses the same way rather than describing the run.
-        let err = amiga_install_preview(request_for(&tree, "boingbag-39-2"), None).unwrap_err();
+        let err = preview_runnable(request_for(&tree, "boingbag-39-2"), None).unwrap_err();
         assert!(err.to_string().contains("BoingBag 3.9-1"), "got {err}");
     }
 
@@ -2605,7 +2202,7 @@ mod tests {
             &["workbench-base", "boingbag-39-1", "boingbag-39-2"],
         );
 
-        let err = compose(&request_for(&tree, "boingbags-39-3-4")).unwrap_err();
+        let err = compose_runnable(&request_for(&tree, "boingbags-39-3-4")).unwrap_err();
         let text = err.to_string();
         assert!(
             text.contains("nobody has measured whether that script finishes"),
@@ -2631,112 +2228,8 @@ mod tests {
         let scratch = ScratchDir::new("art-amigainstall-cmd", "chain-ok");
         let tree = tree_with_manifest(&scratch, &["workbench-base", "boingbag-39-1"]);
 
-        let composed = compose(&request_for(&tree, "boingbag-39-2")).unwrap();
+        let composed = compose_runnable(&request_for(&tree, "boingbag-39-2")).unwrap();
         assert_eq!(composed.plan.package_id, "boingbag-39-2");
-    }
-
-    /// ART-193, the refusal half. A BoingBag's `Updater` verifies the
-    /// original AmigaOS 3.9 CD-ROM before it does anything, and without one
-    /// it opens its own screen and never answers — measured three times
-    /// against the owner's real tree, up to 1 200 s, with not one of 3 795
-    /// files written. ART would then have had nothing to report but a
-    /// timeout, which says *"nobody answered a question it asked"* about a
-    /// program that never got as far as asking. So the run is refused before
-    /// it starts, and the sentence names the disc and the volume.
-    #[test]
-    fn a_package_whose_installer_verifies_a_disc_is_refused_without_one() {
-        let scratch = ScratchDir::new("art-amigainstall-cmd", "no-disc");
-        let tree = tree_in(&scratch);
-        let mut request = request(&tree);
-        request.medium = None;
-
-        let err = compose(&request).unwrap_err();
-        assert!(matches!(err, CoreError::SafetyRefused(_)), "{err:?}");
-        let text = err.to_string();
-        assert!(text.contains("AmigaOS3.9"), "{text}");
-        assert!(
-            text.contains("AmigaOS 3.9 CD-ROM"),
-            "the sentence names the disc, not just the volume: {text}"
-        );
-    }
-
-    /// **The disc is asked what it is.** A filename is not an identity — this
-    /// project shipped an AmigaOS 3.5 tree under the name 3.9 for reading one
-    /// artefact's appearance as proof of what it was — so `compose` opens the
-    /// image and compares the volume it *states* against the one the recipe
-    /// declares.
-    #[test]
-    fn a_disc_that_states_another_volume_is_refused_and_the_message_names_both() {
-        let scratch = ScratchDir::new("art-amigainstall-cmd", "wrong-disc");
-        let tree = tree_in(&scratch);
-        let mut request = request(&tree);
-        request.medium = Some(disc_beside(&tree, "AmigaOS3.5"));
-
-        let err = compose(&request).unwrap_err();
-        assert!(matches!(err, CoreError::SafetyRefused(_)), "{err:?}");
-        let text = err.to_string();
-        assert!(text.contains("AmigaOS3.5"), "what was supplied: {text}");
-        assert!(text.contains("AmigaOS3.9"), "and what is needed: {text}");
-    }
-
-    /// The other half: the right disc composes, and the volume that reaches
-    /// the preview is the **image's own**, never the recipe's declaration
-    /// echoed back.
-    #[test]
-    fn the_right_disc_composes_and_the_preview_names_the_volume_the_image_states() {
-        let scratch = ScratchDir::new("art-amigainstall-cmd", "right-disc");
-        let tree = tree_in(&scratch);
-
-        let preview = amiga_install_preview(request(&tree), Some("no-such.exe".into())).unwrap();
-        assert_eq!(preview.medium_volume.as_deref(), Some("AmigaOS3.9"));
-        assert_eq!(
-            preview.required_medium.as_deref(),
-            Some("the original AmigaOS 3.9 CD-ROM")
-        );
-        assert!(preview.medium.is_some(), "and the screen says which file");
-    }
-
-    /// A disc reaches the emulator as a CD, and by the path the user chose.
-    /// The three volumes ART mounts are directories; this is the fourth
-    /// thing, and it is what the installer runs *against* rather than *from*.
-    #[test]
-    fn the_disc_reaches_the_generated_configuration_as_a_cd() {
-        use crate::core::amigainstall::run::media_for;
-        use crate::core::winuae::generate_uae_config;
-
-        let scratch = ScratchDir::new("art-amigainstall-cmd", "cd-config");
-        let tree = tree_in(&scratch);
-        let request = request(&tree);
-        let composed = compose(&request).unwrap();
-
-        let work = scratch.join("work");
-        workvol::build(&work, &composed.plan).unwrap();
-        let package = scratch.join("pkg");
-        std::fs::create_dir_all(&package).unwrap();
-        let kickstart = scratch.join("kick.rom");
-        std::fs::write(&kickstart, b"rom").unwrap();
-        let profile = profile_for(None).unwrap();
-        let disc = composed.medium.as_ref().unwrap().path.clone();
-
-        let media = media_for(&RunRequest {
-            scratch_root: &std::env::temp_dir(),
-            plan: &composed.plan,
-            work_volume_dir: &work,
-            tree_dir: &tree,
-            package_volume_dir: &package,
-            profile: &profile,
-            kickstart_path: &kickstart,
-            cd_image: Some(&disc),
-            limits: RunLimits::default(),
-        })
-        .unwrap();
-
-        assert_eq!(
-            media.cd_image_path.as_deref(),
-            Some(disc.to_string_lossy().as_ref())
-        );
-        let config = generate_uae_config(&profile, &media).unwrap();
-        assert!(config.contains("cdimage0="), "{config}");
     }
 
     /// **Refused before anything is copied.** The whole tree copy, both
@@ -2750,7 +2243,7 @@ mod tests {
         let request = request_for(&tree, "boingbag-39-2");
         let before = std::fs::read_dir(scratch.path()).unwrap().count();
 
-        assert!(compose(&request).is_err());
+        assert!(compose_runnable(&request).is_err());
 
         assert!(
             copies_beside(&tree).is_empty(),
@@ -2782,7 +2275,7 @@ mod tests {
         let tree = tree_without_manifest(&scratch);
         assert!(!tree.join("distribution.json").exists());
 
-        let err = compose(&request(&tree)).unwrap_err().to_string();
+        let err = compose_runnable(&request(&tree)).unwrap_err().to_string();
         assert!(err.contains("distribution.json"), "got {err}");
         assert!(
             !err.contains("BoingBag"),
@@ -2808,7 +2301,7 @@ mod tests {
                 tree_without_manifest(&scratch)
             };
 
-            let Ok(composed) = compose(&request(&tree)) else {
+            let Ok(composed) = compose_runnable(&request(&tree)) else {
                 assert!(!with_manifest, "a tree with a manifest must be accepted");
                 assert!(
                     copies_beside(&tree).is_empty(),
@@ -2822,7 +2315,7 @@ mod tests {
             );
 
             let plan = composed.plan.clone();
-            let (outcome, settlement) = perform(&tree, &[], &Sink::default(), |copy, _sink| {
+            let (outcome, settlement) = perform(&tree, &Sink::default(), |copy, _sink| {
                 let outcome = RunOutcome::Succeeded;
                 record_if_succeeded(copy, &plan, &outcome)?;
                 Ok(outcome)
@@ -2839,34 +2332,6 @@ mod tests {
         }
     }
 
-    /// The recipe's overlay declaration reaches the unpack, translated into
-    /// `core::amigainstall`'s own record rather than carried across as the
-    /// recipe's type.
-    #[test]
-    fn the_recipes_overlay_and_minimum_version_reach_the_composed_run() {
-        let scratch = ScratchDir::new("art-amigainstall-cmd", "overlay-decl");
-        let tree = tree_in(&scratch);
-
-        let composed = compose(&request(&tree)).unwrap();
-
-        assert_eq!(composed.minimum_installer_version, Some((45, 15)));
-        assert_eq!(
-            composed.overlays,
-            vec![packagevol::Overlay {
-                from: "BoingBag3.9-1-UAE/BoingBag3.9-1".to_string(),
-                to: String::new(),
-            }]
-        );
-
-        let preview = amiga_install_preview(request(&tree), None).unwrap();
-        assert_eq!(
-            preview.declared_overlays,
-            vec!["BoingBag3.9-1-UAE/BoingBag3.9-1".to_string()],
-            "the screen can say what a second file would have to be"
-        );
-        assert_eq!(preview.minimum_installer_version.as_deref(), Some("45.15"));
-    }
-
     /// A run that says it succeeded records itself in the promoted tree's own
     /// `distribution.json` — the half without which the refusal above could
     /// never be satisfied, because a BoingBag cannot be placed from the host
@@ -2879,10 +2344,10 @@ mod tests {
     fn a_successful_run_records_itself_in_the_promoted_trees_manifest() {
         let scratch = ScratchDir::new("art-amigainstall-cmd", "record");
         let tree = tree_with_manifest(&scratch, &["workbench-base"]);
-        let composed = compose(&request(&tree)).unwrap();
+        let composed = compose_runnable(&request(&tree)).unwrap();
         let plan = composed.plan.clone();
 
-        let (outcome, settlement) = perform(&tree, &[], &Sink::default(), |copy, _sink| {
+        let (outcome, settlement) = perform(&tree, &Sink::default(), |copy, _sink| {
             let outcome = RunOutcome::Succeeded;
             record_if_succeeded(copy, &plan, &outcome)?;
             Ok(outcome)
@@ -2899,7 +2364,7 @@ mod tests {
         );
 
         // And that is exactly what unblocks the next link in the chain.
-        compose(&request_for(&tree, "boingbag-39-2")).unwrap();
+        compose_runnable(&request_for(&tree, "boingbag-39-2")).unwrap();
     }
 
     /// **Only** a successful run records anything. The other three endings
@@ -2913,7 +2378,7 @@ mod tests {
     fn only_a_successful_run_records_anything() {
         let scratch = ScratchDir::new("art-amigainstall-cmd", "record-endings");
         let tree = tree_with_manifest(&scratch, &["workbench-base"]);
-        let composed = compose(&request(&tree)).unwrap();
+        let composed = compose_runnable(&request(&tree)).unwrap();
         let plan = &composed.plan;
 
         for ending in [
@@ -2931,7 +2396,7 @@ mod tests {
                 "{ending:?} must record nothing"
             );
             assert!(
-                compose(&request_for(&tree, "boingbag-39-2")).is_err(),
+                compose_runnable(&request_for(&tree, "boingbag-39-2")).is_err(),
                 "{ending:?} must leave the chain shut"
             );
         }
@@ -2940,67 +2405,7 @@ mod tests {
         // ending and nothing else.
         record_if_succeeded(&tree, plan, &RunOutcome::Succeeded).unwrap();
         assert!(chain::applied(&tree).unwrap().contains("boingbag-39-1"));
-        compose(&request_for(&tree, "boingbag-39-2")).unwrap();
-    }
-
-    /// A run whose *second* archive is missing is a run with nothing to run.
-    ///
-    /// The preview asks about **every** archive: with one present and one
-    /// absent, an `any`-shaped check would report the run as ready and the
-    /// user would meet the refusal after confirming.
-    /// The owner's own `BoingBag39-1-UAE.lha`, in shape: its top level is
-    /// `BoingBag3.9-1-UAE`, with the package's own drawer **inside** it.
-    /// Measured against the real file with 7-Zip on 2026-08-22 — seven
-    /// entries, an icon beside the wrapper, `BoingBag3.9-1/C/Updater` two
-    /// levels down.
-    fn uae_lha() -> Vec<u8> {
-        crate::core::lha::tests::make_lha_with(&[
-            ("BoingBag3.9-1-UAE.info", b"icon"),
-            ("BoingBag3.9-1-UAE/BoingBag3.9-1.info", b"icon"),
-            ("BoingBag3.9-1-UAE/BoingBag3.9-1/C/Updater", updater(45, 15)),
-            ("BoingBag3.9-1-UAE/Readme", b"read me"),
-            ("BoingBag3.9-1-UAE/Readme.info", b"icon"),
-        ])
-    }
-
-    /// **ART-201.** The preview used to describe a run that could not happen.
-    #[test]
-    fn the_preview_refuses_the_update_archive_in_the_packages_own_field() {
-        let scratch = ScratchDir::new("art-amigainstall-cmd", "preview-wrong-archive");
-        let tree = tree_in(&scratch);
-        let archive = scratch.join("BoingBag39-1-UAE.lha");
-        std::fs::write(&archive, uae_lha()).unwrap();
-
-        let mut req = request(&tree);
-        req.package_archives = vec![archive];
-
-        let err = amiga_install_preview(req, None)
-            .expect_err("the preview must refuse a run it can already see cannot happen");
-        let said = err.to_string();
-        assert!(
-            said.contains("update archive"),
-            "the preview's refusal must say what the file is: {said}"
-        );
-        assert!(
-            said.contains("update-archive field"),
-            "and where it belongs: {said}"
-        );
-    }
-
-    /// **ART-200.** The same refusal, reached through the run, so the two
-    /// cannot drift apart: both go through `compose`.
-    #[test]
-    fn the_run_refuses_it_with_the_same_sentence() {
-        let scratch = ScratchDir::new("art-amigainstall-cmd", "run-wrong-archive");
-        let tree = tree_in(&scratch);
-        let archive = scratch.join("BoingBag39-1-UAE.lha");
-        std::fs::write(&archive, uae_lha()).unwrap();
-
-        let mut req = request(&tree);
-        req.package_archives = vec![archive];
-
-        let said = compose(&req).unwrap_err().to_string();
-        assert!(said.contains("update-archive field"), "{said}");
+        compose_runnable(&request_for(&tree, "boingbag-39-2")).unwrap();
     }
 
     /// The package's own archive still passes — a check that refused
@@ -3013,10 +2418,10 @@ mod tests {
         std::fs::write(&archive, boingbag_lha()).unwrap();
 
         let mut req = request(&tree);
-        req.package_archives = vec![archive];
+        req.package_archive = archive;
 
         assert!(
-            amiga_install_preview(req, None).is_ok(),
+            preview_runnable(req, None).is_ok(),
             "the real archive must still preview"
         );
     }
@@ -3030,36 +2435,10 @@ mod tests {
         let tree = tree_in(&scratch);
 
         let mut req = request(&tree);
-        req.package_archives = vec![scratch.join("nothing-here.lha")];
+        req.package_archive = scratch.join("nothing-here.lha");
 
-        let preview = amiga_install_preview(req, None).expect("no refusal for an absent file");
-        assert!(!preview.package_archives_present);
-    }
-
-    #[test]
-    fn the_preview_asks_about_every_archive_not_just_the_first() {
-        let scratch = ScratchDir::new("art-amigainstall-cmd", "preview-archives");
-        let tree = tree_in(&scratch);
-        let present = scratch.join("BoingBag39-1.lha");
-        std::fs::write(&present, boingbag_lha()).unwrap();
-
-        let mut req = request(&tree);
-        req.package_archives = vec![present.clone()];
-        assert!(
-            amiga_install_preview(req, None)
-                .unwrap()
-                .package_archives_present,
-            "one archive, and it is there"
-        );
-
-        let mut req = request(&tree);
-        req.package_archives = vec![present, scratch.join("BoingBag39-1-UAE.lha")];
-        assert!(
-            !amiga_install_preview(req, None)
-                .unwrap()
-                .package_archives_present,
-            "the second one is not, and the screen has to say so before the confirm button"
-        );
+        let preview = preview_runnable(req, None).expect("no refusal for an absent file");
+        assert!(!preview.package_archive_present);
     }
 
     // -----------------------------------------------------------------
@@ -3084,8 +2463,13 @@ mod tests {
         package::packages_for(RELEASE).unwrap()
     }
 
-    fn boingbag_1() -> package::Package {
-        package::by_id("boingbag-39-1").unwrap()
+    /// The one package this screen's radio offers, since 2026-09-08: the
+    /// only shipped recipe still declaring an `amiga_installer`. Every
+    /// classification below is asked *as that package*, because the whole
+    /// point of the `another-package:<id>` kind is that the id it names is
+    /// selectable here.
+    fn selected_package() -> package::Package {
+        package::by_id("boingbags-39-3-4").unwrap()
     }
 
     // -----------------------------------------------------------------
@@ -3096,21 +2480,22 @@ mod tests {
 
     #[test]
     fn known_packages_from_excludes_a_package_from_a_different_release() {
-        let selected = boingbag_1();
+        let selected = selected_package();
         // A package sharing BoingBag 3.9-2's own shape but declared for a
         // release this build is not — the shipped catalogue has only one
         // release today, so this is built rather than found, per the
         // review's own note that it is otherwise untestable.
+        let installable = package::by_id("boingbags-39-3-4").unwrap();
         let other_release = package::Package {
             id: "other-release-pkg".to_string(),
             releases: vec!["AmigaOS 3.2".to_string()],
-            ..package::by_id("boingbag-39-2").unwrap()
+            ..installable.clone()
         };
         let same_release = package::Package {
             id: "same-release-pkg".to_string(),
             releases: vec!["AmigaOS 3.9".to_string()],
             media: "SameRelease".to_string(),
-            ..package::by_id("boingbag-39-2").unwrap()
+            ..installable
         };
         let all = vec![selected.clone(), other_release, same_release];
 
@@ -3127,62 +2512,37 @@ mod tests {
 
     #[test]
     fn classify_top_level_recognises_the_selected_packages_own_archive() {
-        let selected = boingbag_1();
+        let selected = selected_package();
         let catalogue = release_packages();
         assert_eq!(
-            classify_top_level("BoingBag3.9-1", Some(&selected), &catalogue, None).kind,
+            classify_top_level("BoingBag3.9-3&4", Some(&selected), &catalogue, None).kind,
             "the-package"
         );
     }
 
-    #[test]
-    fn classify_top_level_recognises_the_selected_packages_update_archive() {
-        let selected = boingbag_1();
-        let catalogue = release_packages();
-        assert_eq!(
-            classify_top_level("BoingBag3.9-1-UAE", Some(&selected), &catalogue, None).kind,
-            "the-update-archive"
-        );
-    }
-
-    /// The whole of ART-277: BoingBag 3.9-2's own archive, offered while
-    /// BoingBag 3.9-1 is still the selected package, is named by id rather
-    /// than folded into "unknown".
+    /// The whole of ART-277: an archive that is a *different* catalogued
+    /// package's own, offered while something else is selected, is named by
+    /// id rather than folded into "unknown".
+    ///
+    /// **`another-package:<id>` is only ever said of a package this screen's
+    /// radio offers**, because the sentence it produces is "select that one
+    /// instead" — so it is asked with the one shipped Amiga-installable
+    /// package as the *other*, and something else selected. Since 2026-09-08
+    /// that is `boingbags-39-3-4`, the only recipe still declaring an
+    /// installer.
     #[test]
     fn classify_top_level_names_another_catalogued_package() {
-        let selected = boingbag_1();
-        let catalogue = release_packages();
-        // Read from the archive, because round 3 gave `BoingBag3.9-2` a
-        // second claimant and the top level alone can no longer say which
-        // package this is — see
-        // `an_archive_that_can_be_read_is_narrowed_by_what_is_inside_it`.
-        let scratch = ScratchDir::new("art-amigainstall-cmd", "classify-another");
-        let archive = scratch.join("BoingBag39-2.lha");
-        std::fs::write(&archive, boingbag2_lha()).unwrap();
-        assert_eq!(
-            classify_top_level("BoingBag3.9-2", Some(&selected), &catalogue, Some(&archive)).kind,
-            "another-package:boingbag-39-2"
-        );
-    }
-
-    /// **ART-277 review, Medium 1.** BoingBag 3.9-1's own update archive,
-    /// offered while BoingBag 3.9-2 is selected, is named as *that* package's
-    /// update archive — not folded into "unknown" (the shape found reachable
-    /// with only the media comparison) and not "another-package" (it is not
-    /// BoingBag 3.9-1's own archive, it is the fix for it).
-    #[test]
-    fn classify_top_level_names_another_packages_update_archive() {
-        let selected = package::by_id("boingbag-39-2").unwrap();
+        let selected = package::by_id("boingbag-39-1").unwrap();
         let catalogue = release_packages();
         assert_eq!(
-            classify_top_level("BoingBag3.9-1-UAE", Some(&selected), &catalogue, None).kind,
-            "another-packages-update-archive:boingbag-39-1"
+            classify_top_level("BoingBag3.9-3&4", Some(&selected), &catalogue, None).kind,
+            "another-package:boingbags-39-3-4"
         );
     }
 
     #[test]
     fn classify_top_level_answers_unknown_for_an_archive_nothing_recognises() {
-        let selected = boingbag_1();
+        let selected = selected_package();
         let catalogue = release_packages();
         // `NDK39` rather than `Euro-Update`: round 3 ships a recipe whose
         // own media *is* `Euro-Update`, and the NDK installs nothing and is
@@ -3205,7 +2565,7 @@ mod tests {
     /// is only true of the *other* kind (`other-artefact`, below).
     #[test]
     fn classify_top_level_answers_shared_artefact_when_two_packages_share_the_media() {
-        let selected = boingbag_1();
+        let selected = selected_package();
         let catalogue = release_packages();
         let classified = classify_top_level("Locale3.9", Some(&selected), &catalogue, None);
         assert_eq!(classified.kind, "shared-artefact:Locale3.9");
@@ -3227,7 +2587,7 @@ mod tests {
     /// only the one match).
     #[test]
     fn classify_top_level_answers_other_artefact_for_a_match_the_radio_does_not_offer() {
-        let selected = boingbag_1();
+        let selected = selected_package();
         let catalogue = release_packages();
         let classified = classify_top_level("LocaleUpdate", Some(&selected), &catalogue, None);
         assert_eq!(classified.kind, "other-artefact:LocaleUpdate");
@@ -3242,8 +2602,8 @@ mod tests {
     fn classify_top_level_without_a_selected_package_still_names_a_catalogued_one() {
         let catalogue = release_packages();
         assert_eq!(
-            classify_top_level("BoingBag3.9-1", None, &catalogue, None).kind,
-            "another-package:boingbag-39-1"
+            classify_top_level("BoingBag3.9-3&4", None, &catalogue, None).kind,
+            "another-package:boingbags-39-3-4"
         );
     }
 
@@ -3269,8 +2629,9 @@ mod tests {
         std::fs::write(&archive, boingbag2_lha()).unwrap();
         assert_eq!(
             classify_top_level("BoingBag3.9-2", None, &catalogue, Some(&archive)).kind,
-            "another-package:boingbag-39-2",
-            "this archive carries AmigaOS-Update and not the Contribution's ClassAction"
+            "other-artefact:BoingBag3.9-2",
+            "one package claims it now — and not one this screen's radio offers, since \
+             BoingBag 3.9-2 is placed from Windows"
         );
     }
 
@@ -3286,147 +2647,22 @@ mod tests {
 
         let answer = amigainstall_classify_archive(
             archive,
-            "boingbag-39-1".to_string(),
+            "boingbags-39-3-4".to_string(),
             RELEASE.to_string(),
         )
         .unwrap();
-        assert_eq!(answer.kind, "another-package:boingbag-39-2");
+        // One package claims `BoingBag3.9-2` once the archive is read, and it
+        // is not one this screen can select — so it is named as an artefact,
+        // never as "select boingbag-39-2", which is not a thing the radio
+        // offers.
+        assert_eq!(answer.kind, "other-artefact:BoingBag3.9-2");
         assert!(
             answer.top_level.iter().any(|n| n == "BoingBag3.9-2"),
             "got {:?}",
             answer.top_level
         );
-        // The selected package's own expectations travel with the answer —
-        // BoingBag 3.9-1's own drawer, and its one declared overlay.
-        assert_eq!(answer.expected_media.as_deref(), Some("BoingBag3.9-1"));
-        assert_eq!(
-            answer.expected_overlays,
-            vec!["BoingBag3.9-1-UAE".to_string()]
-        );
-    }
-
-    // -- ART-280: the follow-up, composed and reported ---------------------
-
-    /// **The composition, pinned against the shipped recipe.** The recipe
-    /// says `C/Updater` and `XAD-Update` and deliberately names no volume;
-    /// what turns that into a runnable line is this layer, exactly as it is
-    /// for the first invocation, and it is asserted here for the same reason.
-    ///
-    /// Both volumes appear and they are different ones: the program is on
-    /// `ARTPkg:`, where ART unpacked the wrapper, and the target is `DH0:`,
-    /// the tree being installed into (ART-185). The gate's path carries
-    /// **neither** — it is relative to the system volume and the script
-    /// prefixes it, so a colon here would mean the composer had reached a
-    /// field that is not its own.
-    #[test]
-    fn the_follow_up_is_composed_onto_both_volumes_and_the_gate_is_left_alone() {
-        let scratch = ScratchDir::new("art-amigainstall-cmd", "follow-up-compose");
-        let tree = tree_with_manifest(&scratch, &["workbench-base", "boingbag-39-1"]);
-        let composed = compose(&request_for(&tree, "boingbag-39-2")).unwrap();
-
-        assert_eq!(composed.plan.follow_ups.len(), 1, "one, from the recipe");
-        let follow_up = &composed.plan.follow_ups[0];
-        assert_eq!(follow_up.program, "ARTPkg:BoingBag3.9-2/C/Updater");
-        assert_eq!(
-            follow_up.args,
-            vec!["XAD-Update".to_string(), "DH0:".into()]
-        );
-        assert_eq!(
-            follow_up.unless_file_version_at_least.path,
-            "Libs/xadmaster.library"
-        );
-        assert_eq!(follow_up.unless_file_version_at_least.version, 10);
-
-        // And the package that declares none composes none, so the assertion
-        // above is about this recipe rather than about every recipe.
-        let one = compose(&request(&tree)).unwrap();
-        assert!(one.plan.follow_ups.is_empty(), "BoingBag 1 declares none");
-    }
-
-    /// The word reaches the screen under the name the frontend reads, beside
-    /// the ending and never folded into it.
-    ///
-    /// Asserted on the serialized form because that is the contract: a
-    /// renamed field or a re-cased variant is invisible to Rust and breaks
-    /// `src/lib/amigainstall.ts` silently. `outcome` stays exactly what it
-    /// was — a follow-up that said no is **not** the installer saying no.
-    #[test]
-    fn the_follow_ups_word_travels_beside_the_ending_and_not_inside_it() {
-        for (word, wire) in [
-            (FollowUpOutcome::Ran, "\"ran\""),
-            (FollowUpOutcome::NotNeeded, "\"not-needed\""),
-            (FollowUpOutcome::Failed, "\"failed\""),
-            (FollowUpOutcome::NotChecked, "\"not-checked\""),
-        ] {
-            let json = serde_json::to_string(&AmigaInstallResult {
-                job_id: 7,
-                outcome: RunOutcome::Succeeded,
-                settlement: SettlementReport::Kept {
-                    copy: PathBuf::from("copy"),
-                    original: PathBuf::from("tree"),
-                },
-                follow_up: Some(word),
-            })
-            .unwrap();
-            assert!(
-                json.contains(&format!("\"follow_up\":{wire}")),
-                "for {word:?}: {json}"
-            );
-            assert!(
-                json.contains("\"kind\":\"succeeded\""),
-                "the ending is untouched by the follow-up: {json}"
-            );
-        }
-
-        let none = serde_json::to_string(&AmigaInstallResult {
-            job_id: 7,
-            outcome: RunOutcome::Succeeded,
-            settlement: SettlementReport::Kept {
-                copy: PathBuf::from("copy"),
-                original: PathBuf::from("tree"),
-            },
-            follow_up: None,
-        })
-        .unwrap();
-        assert!(none.contains("\"follow_up\":null"), "got {none}");
-    }
-
-    /// Four words, four sentences, and none of them says the install failed.
-    ///
-    /// `NotNeeded` is the row that matters: "the tree already carries that
-    /// version" is not a failure and must never read as one, which is the
-    /// whole reason it is a separate word rather than an absent file.
-    #[test]
-    fn every_follow_up_word_has_its_own_sentence() {
-        let said: Vec<&str> = [
-            FollowUpOutcome::Ran,
-            FollowUpOutcome::NotNeeded,
-            FollowUpOutcome::Failed,
-            FollowUpOutcome::NotChecked,
-        ]
-        .into_iter()
-        .map(describe_follow_up)
-        .collect();
-
-        let mut unique = said.clone();
-        unique.sort_unstable();
-        unique.dedup();
-        assert_eq!(
-            unique.len(),
-            said.len(),
-            "four distinct sentences: {said:?}"
-        );
-
-        assert!(
-            said[1].contains("not needed"),
-            "'not needed' must not read as a failure: {}",
-            said[1]
-        );
-        assert!(
-            said[2].contains("the install itself is unaffected"),
-            "a failed follow-up must not read as a failed install: {}",
-            said[2]
-        );
+        // The selected package's own expectation travels with the answer.
+        assert_eq!(answer.expected_media.as_deref(), Some("BoingBag3.9-3&4"));
     }
 
     /// A file that is not an archive at all — or is not there — answers
@@ -3444,40 +2680,6 @@ mod tests {
         .unwrap();
         assert_eq!(answer.kind, "unknown");
         assert!(answer.top_level.is_empty());
-    }
-
-    // -----------------------------------------------------------------
-    // ART-277 review, Major 1: every archive slot is checked against its
-    // own role, not only the first.
-    // -----------------------------------------------------------------
-
-    /// The package's own archive, supplied a *second* time as if it were the
-    /// update archive, is refused before the tree is copied — the exact
-    /// mistake the first round's `refuse_wrong_package_archive` (checking
-    /// `archives.first()` alone) let straight through to `apply_overlay`,
-    /// where the sentence could name the selected package and then tell the
-    /// user to select it.
-    #[test]
-    fn a_wrong_second_archive_is_refused_before_the_tree_is_copied() {
-        let scratch = ScratchDir::new("art-amigainstall-cmd", "wrong-second-archive");
-        let tree = tree_in(&scratch);
-        let own_archive = scratch.join("BoingBag39-1.lha");
-        std::fs::write(&own_archive, boingbag_lha()).unwrap();
-        let duplicate = scratch.join("BoingBag39-1-again.lha");
-        std::fs::write(&duplicate, boingbag_lha()).unwrap();
-
-        let mut req = request(&tree);
-        req.package_archives = vec![own_archive, duplicate];
-
-        let said = amiga_install_preview(req, None).unwrap_err().to_string();
-        assert!(
-            said.contains("package's own archive"),
-            "must name what it really is: {said}"
-        );
-        assert!(
-            said.contains("belongs in the package's own field"),
-            "must say where it belongs: {said}"
-        );
     }
 }
 
@@ -3579,34 +2781,21 @@ mod real_install_hook {
         };
 
         let tree = PathBuf::from(tree);
-        let archives: Vec<PathBuf> = packages
-            .split(';')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(PathBuf::from)
-            .collect();
+        let archive = PathBuf::from(packages.trim());
 
         let request = AmigaInstallRequest {
             tree: tree.clone(),
             package_id: package_id.clone(),
             system_volume: None,
-            package_archives: archives.clone(),
+            package_archive: archive.clone(),
             package_dir: None,
             kickstart: PathBuf::from(&rom),
-            // The disc the package's own installer verifies (ART-193).
-            // `ART_AMIGA_CD` is optional here rather than required: a package
-            // that declares no `required_medium` needs none, and one that does
-            // is refused by name when it is absent, which is itself a path
-            // this hook exists to walk.
-            medium: std::env::var("ART_AMIGA_CD").ok().map(PathBuf::from),
             profile: None,
         };
 
         let before = measure(&tree);
         println!("tree before: {} files, {} bytes", before.0, before.1);
-        for archive in &archives {
-            println!("archive: {}", archive.display());
-        }
+        println!("archive: {}", archive.display());
 
         let started = Instant::now();
         let sink = Loud(started);
@@ -3629,7 +2818,7 @@ mod real_install_hook {
         let result = install(
             &composed,
             &tree,
-            &archives,
+            &archive,
             &profile,
             &PathBuf::from(&rom),
             &PathBuf::from(&winuae),
@@ -3639,10 +2828,9 @@ mod real_install_hook {
         let elapsed = started.elapsed();
 
         match result {
-            Ok((outcome, settlement, follow_up)) => {
+            Ok((outcome, settlement)) => {
                 println!("outcome: {outcome:?}");
                 println!("settlement: {settlement:?}");
-                println!("follow-up: {follow_up:?}");
             }
             Err(err) => println!("ERROR after {elapsed:?}: {err}"),
         }

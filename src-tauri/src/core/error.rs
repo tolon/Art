@@ -354,7 +354,6 @@ mod tests {
         let said = crate::core::amigainstall::packagevol::wrong_archive_sentence(
             std::path::Path::new("E:\\dl\\BoingBag39-1-UAE.lha"),
             "BoingBag3.9-1",
-            &crate::core::amigainstall::packagevol::ArchiveIs::Neither,
             "BoingBag3.9-1-UAE, BoingBag3.9-1-UAE.info",
             &[],
         );

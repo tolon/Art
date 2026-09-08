@@ -8763,6 +8763,57 @@ mod tests {
                 println!("  {label}: {path}");
             }
         }
+
+        // **The known difference set, asserted by path** (review F1,
+        // 2026-09-08). Printing the three lists and asserting nothing made
+        // `test result: ok` mean only that `add_package` returned `Ok` twice:
+        // a run that produced five hundred differing files would print them
+        // all and still pass, which is the shape of guard this project's own
+        // rules call no guard at all.
+        //
+        // Four of the five differences are one deliberate step — the
+        // `Devs/NSDPatch.cfg` promotion (`boingbag-39-2.json`'s
+        // `_why_post_place`, and ART-227's own reasoning read out of
+        // `C/SetPatch`'s string table) — and the fifth is ART's own manifest
+        // recording this run. Everything else must be identical, and this is
+        // where a sixth would be named.
+        let known_added = ["devs/nsdpatch.cfg.old", "devs/nsdpatch.cfg.old.uaem"];
+        let known_missing = ["devs/nsdpatch.cfg.uaem"];
+        let known_differing = ["devs/nsdpatch.cfg", "distribution.json"];
+        for (label, got_list, known) in [
+            ("added", &added, &known_added[..]),
+            ("missing", &missing, &known_missing[..]),
+            ("differing", &differing, &known_differing[..]),
+        ] {
+            let unexpected: Vec<&&String> = got_list
+                .iter()
+                .filter(|path| !known.contains(&path.as_str()))
+                .collect();
+            assert!(
+                unexpected.is_empty(),
+                "{label}: {} path(s) the Updater's own tree does not account for — every one \
+                 of these is either a defect or a step nobody wrote down: {unexpected:?}",
+                unexpected.len()
+            );
+        }
+
+        // And the other direction: a placement that stopped doing the
+        // NSDPatch promotion would produce *fewer* differences and pass the
+        // subset checks above in silence. The counts are the ones the report
+        // quotes, so a change either way has to be explained rather than
+        // absorbed.
+        assert_eq!(
+            (added.len(), missing.len(), differing.len()),
+            (2, 1, 2),
+            "the promotion is one step ART does more of than the Updater; doing less of it \
+             is as much a change as doing more"
+        );
+        assert_eq!(
+            want.len() + 1,
+            got.len(),
+            "4 030 expected, 4 031 produced — the two `.old` files added and the stale \
+             sidecar removed"
+        );
     }
 
     /// A whole-tree copy, for the oracle above. `std::fs::copy` per file,

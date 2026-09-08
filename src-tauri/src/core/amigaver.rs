@@ -170,12 +170,17 @@ pub fn read_id_string(bytes: &[u8], name: &str) -> Option<AmigaVersion> {
     if name.is_empty() {
         return None;
     }
-    let needle: Vec<u8> = name.as_bytes().to_ascii_lowercase();
+    let needle = name.as_bytes();
     let mut at = 0usize;
     while at + needle.len() <= bytes.len() {
+        // `eq_ignore_ascii_case` rather than `window.to_ascii_lowercase() ==
+        // needle` (review F8, 2026-09-08): the second allocates a `Vec` per
+        // window, so a 1 MiB bounded read of a file that does not carry the
+        // name at all cost roughly a million small allocations. Same
+        // comparison, none of them.
         let found = bytes[at..]
             .windows(needle.len())
-            .position(|window| window.to_ascii_lowercase() == needle)?;
+            .position(|window| window.eq_ignore_ascii_case(needle))?;
         let start = at + found;
         // A word boundary before it: `unxadmaster 3.0` is not a statement
         // about `xadmaster`.
