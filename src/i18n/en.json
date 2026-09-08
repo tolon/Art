@@ -2331,6 +2331,7 @@
       "unconfirmedOwn": "{{file}} — matches the row ART's own install-media table calls “{{name}}” ({{version}}, {{source}}). Nobody has checked that row against a real disk here since it was recorded — it is this table's own claim, not yet confirmed by a second source.",
       "notInTable": "{{file}} — not in Emu68 Hatcher's install-media table. That is a fact about the table, not about the disk: re-imaging it, changing one byte of it or owning a different revision all change the hash. What the disk calls itself still stands.",
       "unreadable": "{{file}} — ART could not read this file's bytes, so it was never hashed. This is not “not in the table”: the table was never asked.",
+      "skipped": "{{file}} — not an install medium ART knows, so it was left alone. ART read only the disc's own name, never its contents: no recipe ART ships installs from a disc called that, so hashing half a gigabyte of it would tell nobody anything. If this really is install media, its name is not one ART recognises.",
       "notHashedYet": "Nothing has been identified by content yet.",
       "identifying": "Reading these files and hashing them…",
       "failed": "ART could not read {{folder}}, so the pass stopped there. Folders identified by content before that: {{identified}} of {{total}}. Whatever they found is still listed above, and what the disks call themselves is unaffected.",

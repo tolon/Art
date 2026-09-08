@@ -990,13 +990,14 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     let cancelled = false;
     setMediaIdentity({ kind: "identifying" });
     void (async () => {
-      // Merged across folders, because the four endings are per *file* and a
+      // Merged across folders, because the five endings are per *file* and a
       // user who added a second folder is looking at one pile of disks.
       const merged: MediaIdentification = {
         matches: [],
         unreadable: [],
         hashed: 0,
         remembered: 0,
+        skipped: [],
       };
       // What became of each folder, by name. `core/hostfs.rs`'s rule one
       // layer up: the loop below is per entry and a folder already hashed
@@ -1016,6 +1017,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           merged.unreadable.push(...found.unreadable);
           merged.hashed += found.hashed;
           merged.remembered += found.remembered;
+          merged.skipped.push(...found.skipped);
           outcomes[i] = { folder: folders[i], result: "identified" };
         } catch (err) {
           // ART-089's guard first, and before anything is put on screen: a

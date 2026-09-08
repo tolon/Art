@@ -1578,6 +1578,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       unreadable: ["d.adf"],
       hashed: 3,
       remembered: 1,
+      skipped: [],
     };
     const lines = mediaIdentityLines({ kind: "identified", identification });
     expect(lines).toHaveLength(4);

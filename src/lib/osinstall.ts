@@ -747,6 +747,10 @@ export interface MediaIdentification {
   hashed: number;
   /** How many were answered out of ART's scan cache without being read. */
   remembered: number;
+  /** Discs ART deliberately did not hash, because their own volume name is
+   *  not one any shipped recipe installs from (m7). Reported, never dropped:
+   *  a file in none of the lists reads as a file that is not in the folder. */
+  skipped: string[];
 }
 
 /** The event `osinstall_identify_media`'s own background job answers on. */
@@ -776,18 +780,19 @@ interface OsInstallIdentifyMediaResult extends MediaIdentification {
  * uses, and `remembered` says how many answers came from there.
  */
 export async function osinstallIdentifyMedia(folder: string): Promise<MediaIdentification> {
-  if (!folder) return { matches: [], unreadable: [], hashed: 0, remembered: 0 };
+  if (!folder) return { matches: [], unreadable: [], hashed: 0, remembered: 0, skipped: [] };
   // `awaitJobResult` subscribes before it calls `start` — see its own doc
   // comment: a pass answered entirely from the cache can finish before the
   // frontend has even learnt its job id.
   return awaitJobResult<OsInstallIdentifyMediaResult, MediaIdentification>(
     OSINSTALL_IDENTIFY_MEDIA_EVENT,
     () => invoke<number>("osinstall_identify_media", { folder }),
-    ({ matches, unreadable, hashed, remembered }) => ({
+    ({ matches, unreadable, hashed, remembered, skipped }) => ({
       matches,
       unreadable,
       hashed,
       remembered,
+      skipped,
     })
   );
 }
@@ -879,10 +884,19 @@ export type MediaIdentityState =
 
 /** One file, and the one sentence that is true about it. */
 export type MediaIdentityLine = {
-  /** Which of the four per-file endings this is. Kept on the object so a
-   *  screen can style them differently without re-deriving which is which
-   *  from the phrase key. */
-  kind: "confirmed" | "unconfirmed" | "not-in-table" | "unreadable";
+  /**
+   * Which of the **five** per-file endings this is. Kept on the object so a
+   * screen can style them differently without re-deriving which is which
+   * from the phrase key.
+   *
+   * `"skipped"` joined the four in round 3's whole-branch fix (m7): a disc
+   * whose own volume name is not one any shipped recipe installs from is
+   * never hashed at all. It is emphatically **not** `"not-in-table"` — that
+   * one means ART read the disc and the table did not know the hash, and this
+   * one means ART never asked, deliberately, because the file is not install
+   * media. Nor is it `"unreadable"`, which is a problem; this is not.
+   */
+  kind: "confirmed" | "unconfirmed" | "not-in-table" | "unreadable" | "skipped";
   /** The file's own name, which is what the user recognises it by. */
   file: string;
   /** Its full path, for a `key` and a tooltip. */
@@ -920,7 +934,7 @@ export function fileName(path: string): string {
  */
 export function mediaIdentityLines(state: MediaIdentityState): MediaIdentityLine[] {
   if (state.kind === "not-asked" || state.kind === "identifying") return [];
-  const { matches, unreadable } = state.identification;
+  const { matches, unreadable, skipped } = state.identification;
 
   const matched: MediaIdentityLine[] = matches.map((found) => {
     const file = fileName(found.path);
@@ -975,7 +989,18 @@ export function mediaIdentityLines(state: MediaIdentityState): MediaIdentityLine
     phrase: { key: "osinstall.mediaId.unreadable", params: { file: fileName(path) } },
   }));
 
-  return [...matched, ...unread].sort((a, b) => a.path.localeCompare(b.path));
+  // The fifth ending (m7). In the same list rather than a footnote, for the
+  // reason `unreadable` is: a file that appears nowhere reads as a file that
+  // is not in the folder — and somebody who put a game disc in their material
+  // folder should be told ART left it alone, not left to wonder.
+  const untouched: MediaIdentityLine[] = skipped.map((path) => ({
+    kind: "skipped",
+    file: fileName(path),
+    path,
+    phrase: { key: "osinstall.mediaId.skipped", params: { file: fileName(path) } },
+  }));
+
+  return [...matched, ...unread, ...untouched].sort((a, b) => a.path.localeCompare(b.path));
 }
 
 /**

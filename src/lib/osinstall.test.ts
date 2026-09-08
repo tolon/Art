@@ -1586,7 +1586,7 @@ describe("what a content-hash result is allowed to say", () => {
   function identified(over: Partial<MediaIdentification> = {}): MediaIdentityState {
     return {
       kind: "identified",
-      identification: { matches: [], unreadable: [], hashed: 0, remembered: 0, ...over },
+      identification: { matches: [], unreadable: [], hashed: 0, remembered: 0, skipped: [], ...over },
     };
   }
 
@@ -1596,7 +1596,7 @@ describe("what a content-hash result is allowed to say", () => {
    * them collapsing into one sentence, and a per-ending test would still
    * pass while two endings shared a key.
    */
-  it("gives a matched-and-checked, a matched-unchecked, a miss and an unreadable file four different sentences", () => {
+  it("gives all five per-file endings five different sentences", () => {
     const lines = mediaIdentityLines(
       identified({
         matches: [
@@ -1605,6 +1605,11 @@ describe("what a content-hash result is allowed to say", () => {
           match({ path: "c.adf" }),
         ],
         unreadable: ["d.adf"],
+        // The fifth (m7): read only far enough to learn its own name, and
+        // left alone because no shipped recipe installs from a disc called
+        // that. Emphatically not "not in the table" — the table was never
+        // asked — and not "unreadable", which is a problem; this is not.
+        skipped: ["e.iso"],
       })
     );
     expect(lines.map((l) => l.kind)).toEqual([
@@ -1612,15 +1617,27 @@ describe("what a content-hash result is allowed to say", () => {
       "unconfirmed",
       "not-in-table",
       "unreadable",
+      "skipped",
     ]);
     const keys = lines.map((l) => l.phrase.key);
-    expect(new Set(keys).size).toBe(4);
+    expect(new Set(keys).size).toBe(5);
     expect(keys).toEqual([
       "osinstall.mediaId.confirmed",
       "osinstall.mediaId.unconfirmed",
       "osinstall.mediaId.notInTable",
       "osinstall.mediaId.unreadable",
+      "osinstall.mediaId.skipped",
     ]);
+  });
+
+  /** A skipped disc is named, and the sentence says ART did not read it —
+   *  the one thing a user who put a game in their material folder needs to
+   *  know, and the one thing an empty list would not tell them. */
+  it("names the disc it left alone and says it was never hashed", () => {
+    const [line] = mediaIdentityLines(identified({ skipped: ["E:\\games\\Turrican.iso"] }));
+    expect(line.kind).toBe("skipped");
+    expect(line.file).toBe("Turrican.iso");
+    expect(line.phrase.params).toEqual({ file: "Turrican.iso" });
   });
 
   /**
@@ -1765,6 +1782,7 @@ describe("what a content-hash result is allowed to say", () => {
         unreadable: [],
         hashed: 1,
         remembered: 0,
+        skipped: [],
       },
       folders: [
         { folder: "E:\\one", result: "identified" },
@@ -1899,7 +1917,7 @@ describe("what a content-hash result is allowed to say", () => {
     expect(
       mediaIdentityLines({
         kind: "failed",
-        identification: { matches: [], unreadable: [], hashed: 0, remembered: 0 },
+        identification: { matches: [], unreadable: [], hashed: 0, remembered: 0, skipped: [] },
         folders: [{ folder: "E:\\one", result: "unreadable" }],
       })
     ).toEqual([]);

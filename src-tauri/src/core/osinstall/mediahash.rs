@@ -99,6 +99,7 @@ use crate::core::error::{CoreError, CoreResult};
 use crate::core::hashing::md5_file;
 use crate::core::jobs::{cancelled_error, ProgressSink};
 
+use super::recipe;
 use super::scan;
 use super::scan_cache::ScanCache;
 
@@ -562,6 +563,16 @@ pub struct Identification {
     pub hashed: usize,
     /// How many were answered out of the scan cache without being read.
     pub remembered: usize,
+    /// Discs this pass **did not hash**, because their own volume name is not
+    /// one any shipped recipe installs from — the owner's rule 2, second half
+    /// (round 3 whole-branch review, m7).
+    ///
+    /// Its own list and not folded into [`unreadable`](Self::unreadable): "ART
+    /// could not read this" and "ART read this and it is not an install disc"
+    /// are different facts with different next steps, and the second is not a
+    /// problem at all. A file missing from every list would read as a file
+    /// that is not in the folder.
+    pub skipped: Vec<PathBuf>,
 }
 
 /// The file extensions a media folder is searched for, lowercase.
@@ -684,6 +695,63 @@ pub fn remembered_media_in(folder: &Path, cache: &ScanCache) -> CoreResult<Vec<M
     Ok(found)
 }
 
+/// Every volume name a shipped recipe installs *from*, lowercase.
+///
+/// **The owner's own rule, in his words**: the identify pass must hash an
+/// `.iso` only when its volume name — read cheaply from the volume descriptor
+/// by [`scan::identify`] — is a medium some recipe names. This is the set
+/// that question is asked against, collected from every shipped release's
+/// components' `media` field, which *is* the volume name inside the image and
+/// never a filename.
+///
+/// Built once and cached: it is three recipe parses, and the identify pass
+/// asks it once per `.iso` in a folder that may hold thirty.
+///
+/// A recipe that will not parse contributes nothing rather than poisoning the
+/// set. The cost of that is an `.iso` being skipped that should have been
+/// hashed, which the screen says plainly; the cost of the other choice is
+/// hashing a folder of games, which is the thing this exists to stop.
+fn recipe_media_volumes() -> &'static std::collections::BTreeSet<String> {
+    static VOLUMES: OnceLock<std::collections::BTreeSet<String>> = OnceLock::new();
+    VOLUMES.get_or_init(|| {
+        let mut names = std::collections::BTreeSet::new();
+        for release in recipe::releases() {
+            let Ok(parsed) = recipe::by_release(release) else {
+                continue;
+            };
+            for component in &parsed.components {
+                names.insert(component.media.to_ascii_lowercase());
+            }
+        }
+        names
+    })
+}
+
+/// Whether this candidate may be hashed at all.
+///
+/// **Only `.iso` is gated, and that is the measurement and not a hunch.** An
+/// ADF is 880 KB and an LHA is a few megabytes — reading one costs nothing
+/// worth a rule. A disc image is ~500 MB, and a material folder holding a
+/// game collection would have every one of them read end to end by a pass the
+/// user asked to identify their *install* media. So an `.iso` has to say what
+/// it is first, through the same bounded volume-descriptor probe
+/// `find_media`/[`scan::identify`] already does — never a read of the file.
+///
+/// An `.iso` whose volume name cannot be read at all is skipped too. ART
+/// cannot establish it as a medium it knows, and "hash it anyway in case" is
+/// exactly the behaviour the rule forbids; the screen says which files were
+/// skipped, so nothing disappears.
+fn may_hash(path: &Path, cache: &ScanCache) -> bool {
+    let is_iso = path
+        .extension()
+        .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("iso"));
+    if !is_iso {
+        return true;
+    }
+    volume_name_for(path, cache)
+        .is_some_and(|volume| recipe_media_volumes().contains(&volume.to_ascii_lowercase()))
+}
+
 /// Identify every candidate file in `folder`, hashing only what the cache
 /// cannot already answer.
 ///
@@ -714,6 +782,7 @@ pub fn identify_media_in(
         unreadable: Vec::new(),
         hashed: 0,
         remembered: 0,
+        skipped: Vec::new(),
     };
 
     progress.report(0, Some(total), "");
@@ -730,6 +799,16 @@ pub fn identify_media_in(
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+
+        // The owner's rule 2, second half (m7): before a single byte of a
+        // disc image is read, ask the image what volume it is. A `.iso` that
+        // is not a medium a shipped recipe installs from is listed and left
+        // alone — never opened past its volume descriptor, never hashed.
+        if !may_hash(path, cache) {
+            found.skipped.push(path.clone());
+            progress.report(done, Some(total), &name);
+            continue;
+        }
 
         let md5 = match cache.lookup_md5(path) {
             Some(remembered) => {
@@ -1691,6 +1770,99 @@ mod tests {
     fn a_folder_that_cannot_be_read_is_an_error_not_an_empty_list() {
         let dir = ScratchDir::new("art-mediahash", "gone");
         assert!(candidates_in(&dir.join("nowhere")).is_err());
+    }
+
+    /// **The owner's own rule 2, second half: a disc that is not an install
+    /// medium ART knows is never hashed** (round 3 whole-branch review, m7).
+    ///
+    /// Two real ISO 9660 images, built by `core::iso`'s own builder so they
+    /// are the thing and not a stand-in for it. One states `AmigaOS3.9`,
+    /// which `amigaos-3.9.json`'s components name as their `media`; the other
+    /// states `GAMEDISC`, which no shipped recipe names.
+    ///
+    /// **Counted, not impressionistic**, and both arms in one pass so the
+    /// control is the same folder, the same cache and the same call: the
+    /// known disc is hashed and answered, the unknown one is listed as
+    /// skipped — and `hashed == 1` is what says the second file's ~500 MB of
+    /// bytes were never read. `hashed == 1` alone would have a second cause
+    /// (a folder with one file), which is why the skipped list and the
+    /// candidate count are asserted beside it.
+    #[test]
+    fn an_iso_no_recipe_installs_from_is_listed_and_never_hashed() {
+        let dir = ScratchDir::new("art-mediahash", "iso-gate");
+        let folder = dir.join("media");
+        std::fs::create_dir_all(&folder).unwrap();
+        let known = folder.join("a-amigaos.iso");
+        let unknown = folder.join("b-game.iso");
+        std::fs::write(&known, crate::core::iso::tests::iso_named("AmigaOS3.9")).unwrap();
+        std::fs::write(&unknown, crate::core::iso::tests::iso_named("GAMEDISC")).unwrap();
+
+        // The premise, asserted rather than assumed: both files are
+        // candidates, so a gate that dropped one at the extension check
+        // would be proving something else.
+        assert_eq!(
+            candidates_in(&folder).unwrap(),
+            vec![known.clone(), unknown.clone()]
+        );
+        // And both really are readable discs — otherwise `skipped` could be
+        // the unreadable path wearing a new name.
+        assert_eq!(
+            scan::identify(&unknown).map(|found| found.volume_name),
+            Some("GAMEDISC".to_string())
+        );
+
+        let cache_dir = dir.join("cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let cache = ScanCache::in_dir(&cache_dir);
+        let found = identify_media_in(&folder, &cache, &CancelAfter::never()).unwrap();
+
+        assert_eq!(found.skipped, vec![unknown.clone()], "the game disc, named");
+        assert_eq!(
+            found
+                .matches
+                .iter()
+                .map(|m| m.path.clone())
+                .collect::<Vec<_>>(),
+            vec![known.clone()],
+            "only the disc a recipe installs from was identified"
+        );
+        assert_eq!(
+            (found.hashed, found.remembered),
+            (1, 0),
+            "one file read, and it is the known one — this is the count that says              the game disc's bytes were never touched"
+        );
+        assert!(found.unreadable.is_empty(), "neither file is unreadable");
+
+        // The cache is the independent witness: an md5 is stored per file
+        // hashed, so the unknown disc having none is the same fact from a
+        // second source.
+        assert!(
+            cache.lookup_md5(&known).is_some(),
+            "the known disc was hashed"
+        );
+        assert_eq!(cache.lookup_md5(&unknown), None, "the game disc was not");
+    }
+
+    /// The set the gate asks against is the recipes' own, not a list written
+    /// out here — and it really does contain the volume the owner's own disc
+    /// states. A gate whose set were empty would skip everything and pass
+    /// the test above.
+    #[test]
+    fn the_gate_asks_the_shipped_recipes_what_a_medium_is() {
+        let volumes = recipe_media_volumes();
+        assert!(
+            volumes.contains("amigaos3.9"),
+            "the 3.9 recipe's own components name this volume: {volumes:?}"
+        );
+        assert!(volumes.contains("workbench3.2"), "and 3.2's: {volumes:?}");
+        assert!(!volumes.contains("gamedisc"), "and nothing invents one");
+        // An `.adf` is never gated — 880 KB is not worth a rule, and the
+        // whole point of the gate is the 490 MB one.
+        let dir = ScratchDir::new("art-mediahash", "gate-adf");
+        let disk = fixtures::media(dir.path(), "Anything", "x.adf", &[("C/x", b"c", 0x20)]);
+        let cache_dir = dir.join("cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        assert!(may_hash(&disk, &ScanCache::in_dir(&cache_dir)));
     }
 
     /// **The second pass hashes nothing, and this is a counted difference

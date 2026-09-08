@@ -508,6 +508,7 @@ beforeEach(() => {
     unreadable: [],
     hashed: 1,
     remembered: 0,
+    skipped: [],
   } satisfies MediaIdentification);
   useSettingsStore.setState({ loaded: false, settings: DEFAULT_SETTINGS });
 });
@@ -2983,6 +2984,7 @@ describe("the readout re-asks once the identification pass has landed (fix round
       unreadable: [],
       hashed: 1,
       remembered: 0,
+      skipped: [],
     });
 
     // Now the cache holds something it did not, so the readout asks again.
@@ -3501,7 +3503,7 @@ describe("identifying install media by content hash (design §4.3)", () => {
    * pass had never run at all.
    */
   it("leaves what the disks call themselves standing when nothing matches the table", async () => {
-    answersWith({ matches: [match()], unreadable: [], hashed: 1, remembered: 0 });
+    answersWith({ matches: [match()], unreadable: [], hashed: 1, remembered: 0, skipped: [] });
     await renderFull();
 
     // The name-based result, unchanged and unqualified: read off the disk's
@@ -3553,6 +3555,7 @@ describe("identifying install media by content hash (design §4.3)", () => {
       unreadable: [],
       hashed: 2,
       remembered: 0,
+      skipped: [],
     });
     await renderFull();
 
@@ -3586,6 +3589,7 @@ describe("identifying install media by content hash (design §4.3)", () => {
       unreadable: [],
       hashed: 1,
       remembered: 0,
+      skipped: [],
     });
     await renderFull();
 
@@ -3610,6 +3614,7 @@ describe("identifying install media by content hash (design §4.3)", () => {
       unreadable: ["E:\\media\\locked.adf"],
       hashed: 1,
       remembered: 0,
+      skipped: [],
     });
     await renderFull();
 
@@ -3632,7 +3637,7 @@ describe("identifying install media by content hash (design §4.3)", () => {
    * hatch is named.
    */
   it("says how much it read now and how much it remembered, and names the way out", async () => {
-    answersWith({ matches: [match()], unreadable: [], hashed: 0, remembered: 1 });
+    answersWith({ matches: [match()], unreadable: [], hashed: 0, remembered: 1, skipped: [] });
     await renderFull();
 
     const summary = await screen.findByTestId("media-identity-summary");
@@ -3726,6 +3731,7 @@ describe("identifying install media by content hash (design §4.3)", () => {
               unreadable: [],
               hashed: 1,
               remembered: 0,
+              skipped: [],
             } satisfies MediaIdentification)
       );
     seedRemembered({ ...FULL_FIELDS, "osinstall.extraMediaFolders": [EXTRA] });

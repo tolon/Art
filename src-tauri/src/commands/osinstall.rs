@@ -5587,7 +5587,14 @@ mod tests {
         }
 
         /// The wire shape `osinstallIdentifyMedia` reads: the job id beside
-        /// the identification's own four fields, flattened into one object.
+        /// the identification's own five fields, flattened into one object.
+        ///
+        /// `skipped` joined them in round 3's whole-branch fix (m7) and is
+        /// pinned here for the same reason the other four are: a field the
+        /// screen declares and the Rust does not send arrives as `undefined`,
+        /// so the list of discs ART deliberately did not read would silently
+        /// become an empty one — and a folder of games would look like a
+        /// folder ART had nothing to say about.
         #[test]
         fn identify_media_result_serializes_with_the_keys_the_frontend_declares() {
             let result = OsInstallIdentifyMediaResult {
@@ -5597,12 +5604,20 @@ mod tests {
                     unreadable: vec![PathBuf::from("E:\\amiga\\locked.adf")],
                     hashed: 2,
                     remembered: 1,
+                    skipped: vec![PathBuf::from("E:\\amiga\\Turrican.iso")],
                 },
             };
             let value = serde_json::to_value(&result).unwrap();
             expect_keys(
                 &value,
-                &["job_id", "matches", "unreadable", "hashed", "remembered"],
+                &[
+                    "job_id",
+                    "matches",
+                    "unreadable",
+                    "hashed",
+                    "remembered",
+                    "skipped",
+                ],
             );
         }
 
