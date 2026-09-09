@@ -1,11 +1,54 @@
-// Building an AmigaOS distribution tree from the user's own install disks
-// (SD-2 · G5). This is the screen for the engine `src-tauri/src/core/osinstall`
-// and `src/lib/osinstall.ts` already built and nobody could reach: media
-// folder → ROM → components → the file list → confirm → job → report, plus a
-// secondary Verify section for checking a tree once it has been copied onto a
-// real Amiga volume by the "Prepare Amiga volumes" screen.
+// Tab 1 — *Kaynak* (four-tab design § 3.1): building an AmigaOS distribution
+// tree from the user's own install disks (SD-2 · G5). This is the screen for
+// the engine `src-tauri/src/core/osinstall` and `src/lib/osinstall.ts` already
+// built and nobody could reach: material → the file list → confirm → job →
+// report.
 //
-// Three rules shape it, named directly in the brief:
+// **What this file holds, after round 3 of the four-tab rewrite
+// (2026-09-09):** the release select; the material readout
+// (`MaterialReadout`, `source-primary`) beside the folder column
+// (`MaterialFolders`, `source-secondary`), where a drop is appended to the
+// list and never replaces it; the identity pass behind one folded, counted
+// line (`media-identity-fold`), with the reuse toggle and *Scan again* inside
+// it because they are about that pass; the plan error badge; the refusals
+// card; the plan itself — the file list, grouped by component; the keymap;
+// the Run card with its blocker sentence; the result; and
+// `AmigaInstallPanel` at the foot, the run on a real or emulated Amiga,
+// which stays here until round 5 moves it.
+//
+// **What left, and where it went.** Nothing was rewritten in the move — the
+// rows are the same rows, drawn from the same catalogues:
+//
+//   - **Tab 2, `ChoiceTab.tsx`** (four-tab design § 3.2, round 3) — the
+//     release's component rows with their ticks, the confirm-off dialog, the
+//     AmigaOS 3.9 updates in the material's own order, one first-boot tick,
+//     and the folded *what this would replace* line. The ticks are the build
+//     session's now (`session.components`, ART-290), not this screen's own
+//     remembered keys; `osinstall.chosen.<release>` and
+//     `osinstall.excludedConditional.<release>` are read exactly once, by
+//     `seededComponents`, and never written again.
+//   - **Tab 3, `MachineTab.tsx`** (§ 3.3) — the Kickstart ROM field and the
+//     destination field. Both values are still *read* here, because the plan
+//     needs both, through the same remembered keys and the same guards: one
+//     value, two tabs, never two answers.
+//   - **`src/lib/useInstallPlan.ts`** — the plan computation itself
+//     (`layersFor` → `osinstall_components` → `osinstall_plan` once or twice
+//     → `osinstall_component_collisions`, with the sanitize and prune writes
+//     and the cancellation). Both tabs go through the one hook, so they
+//     cannot disagree about what is being planned, and the
+//     `basePlan`/`effectivePlan` pair lives there — the third rule below is
+//     why there are two.
+//   - **`src/lib/useChainTree.ts`** — the chain's tree, asked once with the
+//     readout's own overrides, so tab 1 and tab 2 say the same thing about
+//     one file.
+//   - The Verify section left earlier, in wave 3, to the volumes step
+//     (`components/osbuilder/VerifyAgainstCard.tsx`), where the card it
+//     compares a tree against actually is.
+//
+// Four rules shape the screen, named directly in the brief. The first three
+// govern rows that are **tab 2's** now — they were written here,
+// `ChoiceTab.tsx` points back at them, and moving the JSX changed none of
+// them; the fourth is still this file's own:
 //
 //   - **The checklist is the chosen release's own recipe.** `osinstallComponents`
 //     loads it whenever the release changes; nothing here is hardcoded. It
@@ -37,35 +80,38 @@
 //     `InstallRequest.excluded` fixes both at the source: subtracted inside
 //     `resolve_components_on`, before the media-resolution loop, so an
 //     excluded component's media is never opened, never recorded, and never
-//     a source of a refusal. This screen keeps **two** plans for exactly
-//     this reason — see the module doc on `basePlan`/`effectivePlan` below.
+//     a source of a refusal. The build keeps **two** plans for exactly this
+//     reason — see the module doc on `basePlan`/`effectivePlan` in
+//     `src/lib/useInstallPlan.ts`, which owns both since round 3.
 //   - **The file list is read-only.** Unlike G11's layout preview, where
 //     retargeting a row *is* the feature, every destination here comes from
 //     a recipe checked against real media — a hand-moved row would make
 //     `distribution.json` describe a release that was never actually built.
-//     Components are the only edit; the list itself has no controls.
+//     The components are the only edit in the whole build, and they are tab
+//     2's; the list itself has no controls.
 //
-// Remembered between runs, through `@/lib/remembered`'s guards: the media
-// folder, the ROM, the destination, the release, and the component selection
-// (`chosen` plus `excludedConditional`) — the last two **per release**, since
-// a component id means nothing outside the recipe that declares it and
-// switching release must not destroy the choices made for the other one. The
-// ROM and the destination are still *read* here — the plan needs both — but
-// their two fields moved to tab 3 on 2026-09-09 (`MachineTab`, four-tab
-// design § 3.3); the keys are unchanged, so the two tabs read the one value.
-// Nothing here arms a destructive action the
-// way the preload screen's partition picks do — building a distribution
-// tree only ever writes a *new* folder and refuses one that already exists
-// (`SAFE_CREATE`), so there is nothing of that shape to protect against by
-// leaving a choice unremembered.
+// Remembered between runs, through `@/lib/remembered`'s guards: the keymap
+// and the destination **per release** (`rememberedComponentKey`), because a
+// keymap name and a component id mean nothing outside the recipe that
+// declares them and switching release must not destroy the choices made for
+// the other one, plus the identity pass's reuse toggle, which is one
+// question about ART rather than about a release. The release itself, the
+// media folders, the ROM and the component selection are the build session's
+// — the selection per release too, seeded once from the two legacy keys and
+// written back only to the session (ART-290). Nothing here arms a
+// destructive action the way the preload screen's partition picks do —
+// building a distribution tree only ever writes a *new* folder and refuses
+// one that already exists (`SAFE_CREATE`), so there is nothing of that shape
+// to protect against by leaving a choice unremembered.
 //
 // Every function doing anything other than rendering — the exclusion state
 // machine, the reasoning behind a conditional tick, the Verify section's
 // two small parsers — lives in `@/lib/osinstall` and is unit-tested there
-// (`src/lib/osinstall.test.ts`). A review's own diagnosis of how the first
-// Critical shipped: "no test can reach [it], because it lives inside the
-// component." This screen is now the thin rendering layer that diagnosis
-// asked for.
+// (`src/lib/osinstall.test.ts`); since round 3 the plan's own sequencing is
+// out too, in `useInstallPlan` with its own tests. A review's own diagnosis
+// of how the first Critical shipped: "no test can reach [it], because it
+// lives inside the component." This screen is now the thin rendering layer
+// that diagnosis asked for.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
