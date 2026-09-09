@@ -100,27 +100,46 @@ export function readiness(
    * while the answer is still in flight would be a confident wrong sentence of
    * exactly the kind this round exists to remove.
    */
-  treeIsDistribution: boolean | null = null
+  treeIsDistribution: boolean | null = null,
+  /**
+   * **The root actually judged, when the caller has one of its own** (round 3
+   * fix wave, Critical 1).
+   *
+   * Tab 2's list reads `useChainTree`'s tree — the destination when ART has
+   * found a build in it, `session.tree.root` otherwise — **so its banner must
+   * judge the same one**. Judging the session's tree while the list works on
+   * the destination is two answers about one tab: the banner said "none is
+   * chosen yet" over a list already answered against the folder the user
+   * picked on tab 3.
+   *
+   * Omitted (`undefined`) means the session's own tree, which is every other
+   * caller and what this function did before. `null` is a caller *stating*
+   * there is no tree, and is judged as such — it is not the same as not
+   * asking.
+   */
+  treeRoot?: string | null
 ): Readiness {
   switch (step) {
     case "secim":
       // `secim` holds the package ticks and the first-boot tick in this
-      // round, both of which read the tree.
+      // round, both of which read `useChainTree`'s tree (the destination
+      // when it is an ART tree, else the session's).
       //
       // No folder beats a bad one. "Pick one" is the useful sentence, and
       // "that is not a tree" said about nothing would be nonsense.
-      if (!hasTree(session)) return "asks";
+      if (!hasTree(session, treeRoot)) return "asks";
       return treeIsDistribution === false ? "wrong-folder" : "ready";
     default:
       return "ready";
   }
 }
 
-function hasTree(session: BuildSession): boolean {
+function hasTree(session: BuildSession, treeRoot?: string | null): boolean {
+  const root = treeRoot === undefined ? session.tree.root : treeRoot;
   // An empty string is a folder nobody picked — a cleared field writes one,
   // and treating it as a path sends `""` to the backend, where the refusal
   // that comes back names a folder the user never chose.
-  return typeof session.tree.root === "string" && session.tree.root.length > 0;
+  return typeof root === "string" && root.length > 0;
 }
 
 /**

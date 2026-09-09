@@ -709,8 +709,8 @@
       "derle": "Build",
       "kart": "The card image",
       "birimler": "Prepare volumes",
-      "asksTree": "This step works on an AmigaOS folder, and none has been chosen yet. Pick one below, or build one first:",
-      "notATree": "This folder is not an AmigaOS folder ART built: it holds no distribution.json, so ART cannot say what is in it or what a package would replace. Pick another folder below, or build one here:"
+      "asksTree": "This tab works on an AmigaOS tree, and none is chosen yet. Choose the destination on the Kickstart and destination tab, or build one first:",
+      "notATree": "This folder is not an AmigaOS tree ART built: it holds no distribution.json, so ART cannot say what is in it or what an update would replace. Choose another on the Kickstart and destination tab, or build one first:"
     },
     "choice": {
       "firstboot": "At first boot on the Amiga",
@@ -2575,7 +2575,7 @@
         "label": "Distribution tree",
         "none": "No distribution tree chosen.",
         "chooseTitle": "Choose the distribution tree's own root — where distribution.json was written",
-        "hint": "The folder holding distribution.json — the same tree the Verify section below checks."
+        "hint": "The folder holding distribution.json."
       },
       "catalogue": {
         "needsFolder": "Choose the update packages folder to see which archives are actually here."
@@ -2627,6 +2627,9 @@
       "chainNote": "The order comes from the packages themselves, not from this screen: a clean AmigaOS 3.9, then BoingBag 3.9-1, then BoingBag 3.9-2, and only then the rest. ART reads the tree's own record of what has already been done before it copies anything, so a package whose predecessor is missing is refused first and told which one to install, in which order.",
       "emulatorWindow": "This opens a real emulator window on this desktop and drives it. Leave it alone while it works — closing that window ends the run before the installer has said anything.",
       "copyNote": "The install runs against a copy of your tree, never the tree itself. The copy replaces it only when the installer reports success; if it does not, your tree is left exactly as it was and this screen says where the copy is.",
+      "treeRoot": {
+        "fromDestination": "The tree is the destination chosen on the Kickstart and destination tab: {{path}}"
+      },
       "package": {
         "label": "Package",
         "needsFolder": "Choose the update packages folder above to see which packages ART can run on the Amiga.",
@@ -2644,7 +2647,7 @@
       },
       "classify": {
         "anotherPackage": "This is {{other}}'s own archive — but {{selected}} is selected. Select {{other}} to install it, or give {{selected}}'s own archive here.",
-        "sharedArtefact": "'{{path}}' is the {{media}} archive, which the Packages step places from Windows — {{packages}} all read it.",
+        "sharedArtefact": "'{{path}}' is the {{media}} archive — {{packages}} all read it.",
         "otherArtefact": "'{{path}}' is the {{media}} archive, which this step does not run — {{selected}} wants {{expected}} here.",
         "otherArtefactGeneric": "'{{path}}' is the {{media}} archive, which this step does not run."
       },

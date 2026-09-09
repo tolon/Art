@@ -46,6 +46,21 @@ export interface ChainTree {
    * the first render.
    */
   settled: boolean;
+  /**
+   * **Which of the two rules above produced {@link treeRoot}** — so a screen
+   * that owns a *field* writing `session.tree.root` can tell whether that
+   * field is the value it is showing (round 3 fix wave, Important 2).
+   *
+   * `AmigaInstallPanel`'s own *Distribution tree* Browse wrote the session's
+   * tree and then watched the path snap back, because the destination had
+   * won: a control that appears to work and changes nothing is the confident
+   * wrong sentence in its purest form. It reads this and says where the tree
+   * came from instead of offering a dead field.
+   *
+   * `"none"` is neither: no destination ART found a build in, and no session
+   * tree either — there is no path to attribute.
+   */
+  source: "destination" | "session" | "none";
 }
 
 /**
@@ -65,8 +80,15 @@ export function useChainTree(destination: string | null, check?: DestinationChec
   // holds nothing.
   const own = useDestinationCheck(check ? null : destination);
   const answer = check ?? own;
+  const fromDestination = Boolean(answer.tree?.isTree);
+  const treeRoot = fromDestination ? destination : session.tree.root;
   return {
-    treeRoot: answer.tree?.isTree ? destination : session.tree.root,
+    treeRoot,
     settled: !destination || answer.looked,
+    // Attributed to the rule that produced it, never guessed at by
+    // comparing the two paths afterwards: a session tree that happens to
+    // equal the destination is still the *session's*, and a caller that
+    // hides a field on a string comparison would hide it on a coincidence.
+    source: fromDestination ? "destination" : treeRoot ? "session" : "none",
   };
 }

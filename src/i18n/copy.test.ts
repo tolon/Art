@@ -55,6 +55,12 @@ describe("the sentences that send a user to tab 3 name it as the tab is labelled
     "osinstall.refusal.romUnknown",
     "osinstall.slots.romNotChosen",
     "osinstall.slots.romNotChosenNoFloor",
+    // Round 3's fix wave adds tab 2's own two banners. They used to say
+    // "pick one below", where `PackagePanel`'s tree picker was — deleted in
+    // round 3, so the sentences pointed at nothing on the screen. The tree a
+    // build works on is chosen once, on tab 3, and both now say so.
+    "osBuilder.step.asksTree",
+    "osBuilder.step.notATree",
   ] as const;
 
   const read = (catalogue: unknown, key: string): string =>
@@ -86,6 +92,23 @@ describe("the sentences that send a user to tab 3 name it as the tab is labelled
     expect(tr.osinstall.refusal.romUnknown).toContain("sekmesinde başka bir Kickstart seçin");
     expect(en.osinstall.blocked.destinationExists).toContain("move the old one aside — on the");
     expect(tr.osinstall.blocked.destinationExists).toContain("eskisini kenara alın — ");
+  });
+
+  /**
+   * And tab 2's two banners no longer send the reader *below*, where nothing
+   * is. Asserted as the absence of the old word plus the presence of the new
+   * instruction, because a sentence that merely dropped "below" would leave a
+   * user told there is no tree and not told where one comes from.
+   */
+  it("does not send the reader below the banner for a picker that is gone", () => {
+    expect(en.osBuilder.step.asksTree.toLowerCase()).not.toContain("below");
+    expect(en.osBuilder.step.notATree.toLowerCase()).not.toContain("below");
+    expect(tr.osBuilder.step.asksTree.toLowerCase()).not.toContain("aşağıdan");
+    expect(tr.osBuilder.step.notATree.toLowerCase()).not.toContain("aşağıdan");
+    expect(en.osBuilder.step.asksTree).toContain("Choose the destination on the");
+    expect(en.osBuilder.step.notATree).toContain("Choose another on the");
+    expect(tr.osBuilder.step.asksTree).toContain("sekmesinde seçin");
+    expect(tr.osBuilder.step.notATree).toContain("sekmesinde başka bir klasör seçin");
   });
 });
 

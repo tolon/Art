@@ -1069,7 +1069,10 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    * screen's own `revision`, so a folder a finished install has just filled
    * is re-examined here as well.
    */
-  const { treeRoot: packagesTreeRoot } = useChainTree(destination, destinationCheck);
+  const { treeRoot: packagesTreeRoot, source: packagesTreeSource } = useChainTree(
+    destination,
+    destinationCheck
+  );
 
   /**
    * The volume names the scans actually read out of **every folder the plan
@@ -1876,6 +1879,14 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       <AmigaInstallPanel
         treeRoot={packagesTreeRoot}
         onTreeRootChange={(root) => setTree({ root, builtHere: false })}
+        // **Its Browse is dead while the destination wins** (round 3 fix
+        // wave, Important 2). `onTreeRootChange` writes `session.tree.root`,
+        // which `useChainTree` overrules whenever the destination is an ART
+        // tree — the panel's field would take a folder and snap back to the
+        // destination on the next render. The panel says where the tree came
+        // from instead; the destination is changed on tab 3, which is where
+        // this value is chosen and where the sentence sends the user.
+        treeFromDestination={packagesTreeSource === "destination"}
         packageFolder={packagesFolder}
         materialFolders={materialFolders.map((entry) => entry.path)}
         release={release}

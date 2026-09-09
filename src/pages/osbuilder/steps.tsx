@@ -28,8 +28,11 @@ import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "react-router-dom";
 
 import { readiness } from "@/lib/buildSteps";
-import { osinstallDescribeTree } from "@/lib/osinstall";
+import { osinstallDescribeTree, rememberedComponentKey } from "@/lib/osinstall";
+import { isTextOrNothing } from "@/lib/remembered";
 import { useBuildSession } from "@/lib/useBuildSession";
+import { useChainTree } from "@/lib/useChainTree";
+import { useRemembered } from "@/lib/useRemembered";
 import { AppearancePanel } from "@/components/osbuilder/AppearancePanel";
 import { CardBuilder } from "@/components/osbuilder/CardBuilder";
 import { ChoiceTab } from "@/components/osbuilder/ChoiceTab";
@@ -39,16 +42,25 @@ import { NetworkPanel } from "@/components/osbuilder/NetworkPanel";
 import { VerifyAgainstCard } from "@/components/osbuilder/VerifyAgainstCard";
 import { VolumePreload } from "@/components/osbuilder/VolumePreload";
 
-/** What a step says when it has been opened without what it needs. */
+/**
+ * What a step says when it has been opened without what it needs.
+ *
+ * **It names tab 3** (round 3 fix wave, Critical 1). The sentence used to
+ * say "below", where `PackagePanel`'s own tree picker sat; that panel is
+ * deleted and there is nothing below this banner to pick a tree with. A
+ * refusal must be actionable, and where order matters it must name the
+ * order — the destination is chosen on `makine`, and this says so.
+ */
 function Asks() {
   const { t } = useTranslation();
   return (
     <div
       className="badge badge-warn"
+      data-testid="step-asks-tree"
       style={{ display: "block", padding: "8px 12px", marginBottom: 16, fontSize: 12 }}
     >
       {t("osBuilder.step.asksTree")}{" "}
-      <Link to="/os-builder/dosyalar">{t("osBuilder.step.dosyalar")}</Link>
+      <Link to="/os-builder/makine">{t("osBuilder.step.makine")}</Link>
     </div>
   );
 }
@@ -93,7 +105,7 @@ function WrongFolder() {
       style={{ display: "block", padding: "8px 12px", marginBottom: 16, fontSize: 12 }}
     >
       {t("osBuilder.step.notATree")}{" "}
-      <Link to="/os-builder/dosyalar">{t("osBuilder.step.dosyalar")}</Link>
+      <Link to="/os-builder/makine">{t("osBuilder.step.makine")}</Link>
     </div>
   );
 }
@@ -131,15 +143,41 @@ export function StepDosyalar() {
  * destination is one, so "you have not pointed this anywhere yet" is still
  * the sentence a cold step owes. Asking is a state, not a gate — the tab is
  * mounted and usable underneath it.
+ *
+ * **It judges `useChainTree`'s tree, not `session.tree.root`** (round 3 fix
+ * wave, Critical 1). The banner was reading one folder while the list under
+ * it worked on another: with the destination pointed at an ART tree and no
+ * session tree, the tab answered every row against that tree and the banner
+ * above them said no tree had been chosen. One tab, two answers — the shape
+ * this round deleted a whole panel to be rid of.
+ *
+ * The `isTree` question is asked of **that** root rather than taken from the
+ * hook's own check: the hook's check is about the *destination*, and when the
+ * tree came from the session instead it says nothing about it. One extra
+ * `describe_tree` for the destination case is the price of a banner that
+ * cannot accuse the wrong folder.
+ *
+ * And **nothing is drawn until `settled`**. `isTree` and the destination
+ * check both arrive by round trip, so for a render or two a destination that
+ * is a build looks like no tree at all — long enough to flash *choose a
+ * destination* over a list that is about to answer against one.
  */
 export function StepSecim() {
   const { session } = useBuildSession();
-  const isTree = useTreeCheck(session.tree.root);
-  const state = readiness(session, "secim", isTree);
+  // The destination, read exactly as `ChoiceTab` and `MachineTab` read it —
+  // the same per-release key, so a second one cannot invent a second folder.
+  const [destination] = useRemembered<string | null>(
+    rememberedComponentKey("osinstall.destination", session.release),
+    isTextOrNothing,
+    null
+  );
+  const { treeRoot, settled } = useChainTree(destination);
+  const isTree = useTreeCheck(treeRoot);
+  const state = readiness(session, "secim", isTree, treeRoot);
   return (
     <>
-      {state === "asks" && <Asks />}
-      {state === "wrong-folder" && <WrongFolder />}
+      {settled && state === "asks" && <Asks />}
+      {settled && state === "wrong-folder" && <WrongFolder />}
       <ChoiceTab />
     </>
   );

@@ -165,7 +165,11 @@ describe("useChainTree", () => {
       useChainTree("E:\\dist39", { taken: false, tree: A_TREE, looked: true })
     );
 
-    expect(result.current).toEqual({ treeRoot: "E:\\dist39", settled: true });
+    expect(result.current).toEqual({
+      treeRoot: "E:\\dist39",
+      settled: true,
+      source: "destination",
+    });
     expect(describeTreeMock).not.toHaveBeenCalled();
     expect(destinationTakenMock).not.toHaveBeenCalled();
   });
@@ -191,5 +195,55 @@ describe("useChainTree", () => {
 
     expect(result.current.settled).toBe(true);
     expect(result.current.treeRoot).toBeNull();
+  });
+});
+
+/**
+ * **`source` says which of the two rules produced the path** (round 3 fix
+ * wave, Important 2). `AmigaInstallPanel`'s own tree Browse wrote the
+ * session's tree and watched it snap back to the destination; a screen that
+ * owns such a field needs to know whether its field is the value on screen,
+ * and comparing the two strings would answer "destination" for a session tree
+ * that happens to equal it.
+ */
+describe("useChainTree says where the tree came from", () => {
+  it("attributes it to the destination when that is what won", async () => {
+    describeTreeMock.mockResolvedValue(A_TREE);
+    seedSessionTree("E:\\some\\other\\tree");
+
+    const { result } = renderHook(() => useChainTree("E:\\dist39"));
+
+    await waitFor(() => expect(result.current.settled).toBe(true));
+    expect(result.current.source).toBe("destination");
+  });
+
+  it("attributes it to the session when the destination is not a build", async () => {
+    seedSessionTree("E:\\amiga\\os39");
+
+    const { result } = renderHook(() => useChainTree("E:\\empty"));
+
+    await waitFor(() => expect(result.current.settled).toBe(true));
+    expect(result.current.source).toBe("session");
+  });
+
+  it("says the session even when its tree is the same folder as the destination", async () => {
+    // The reason this is a field and not a string comparison: the rule that
+    // produced the value is what the caller needs, and here the destination
+    // is *not* a build ART recognises — the panel's own Browse still works.
+    seedSessionTree("E:\\dist39");
+
+    const { result } = renderHook(() => useChainTree("E:\\dist39"));
+
+    await waitFor(() => expect(result.current.settled).toBe(true));
+    expect(result.current.treeRoot).toBe("E:\\dist39");
+    expect(result.current.source).toBe("session");
+  });
+
+  it("says neither when there is no tree at all", async () => {
+    seedSessionTree(null);
+
+    const { result } = renderHook(() => useChainTree(null));
+
+    expect(result.current.source).toBe("none");
   });
 });

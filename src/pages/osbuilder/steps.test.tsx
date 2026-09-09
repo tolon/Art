@@ -13,7 +13,7 @@
 // and the two panel test files cover the real components.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import i18n from "i18next";
 
@@ -24,9 +24,15 @@ import "@/i18n";
 // ART-199: the steps now ask ART what the folder is. Mocked at the `@/lib`
 // wrapper, the boundary this suite mocks at everywhere else.
 const describeTreeMock = vi.hoisted(() => vi.fn());
+// Round 3 fix wave: `StepSecim` reads the chain's tree, so `useChainTree`'s
+// own `useDestinationCheck` runs here too and asks both questions. Mocked
+// beside `describe_tree` for the same reason it is everywhere else — the
+// `@/lib` wrapper is this suite's boundary, never `@tauri-apps/api`.
+const destinationTakenMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
   osinstallDescribeTree: describeTreeMock,
+  osinstallDestinationTaken: destinationTakenMock,
 }));
 
 vi.mock("@/lib/settings", async (importOriginal) => ({
@@ -92,6 +98,7 @@ function renderAt(path: string, state?: unknown) {
 beforeEach(() => {
   // Answers "yes, a tree" unless a test says otherwise, so the cases that are
   // not about ART-199 are unaffected by it.
+  destinationTakenMock.mockReset().mockResolvedValue(false);
   describeTreeMock.mockReset().mockResolvedValue({
     isTree: true,
     release: "AmigaOS 3.9",
@@ -118,7 +125,7 @@ describe("a step opened on its own", () => {
     });
     renderAt("/os-builder/secim");
     expect(screen.getByTestId("choice-tab")).toBeTruthy();
-    expect(screen.queryByText(/AmigaOS folder/i)).toBeNull();
+    expect(screen.queryByTestId("step-asks-tree")).toBeNull();
   });
 
   it("asks rather than rendering empty when there is no tree", () => {
@@ -130,7 +137,7 @@ describe("a step opened on its own", () => {
     expect(screen.getByTestId("choice-tab")).toBeTruthy();
     // A rendered sentence, not the raw key — asserting on the key would pass
     // on the very failure this catches, a missing catalogue entry.
-    expect(screen.getByText(/AmigaOS folder/i)).toBeTruthy();
+    expect(screen.getByText(/AmigaOS tree/i)).toBeTruthy();
     expect(screen.queryByText(/osBuilder\.step\./)).toBeNull();
   });
 
@@ -140,7 +147,7 @@ describe("a step opened on its own", () => {
     seed({ "buildSession.kind": "install" });
     renderAt("/os-builder/secim");
 
-    expect(screen.getByText(/AmigaOS folder/i)).toBeTruthy();
+    expect(screen.getByText(/AmigaOS tree/i)).toBeTruthy();
     expect(screen.getByTestId("choice-tab")).toBeTruthy();
   });
 
@@ -149,7 +156,96 @@ describe("a step opened on its own", () => {
     renderAt("/os-builder/kart");
 
     expect(screen.getByTestId("card")).toBeTruthy();
-    expect(screen.queryByText(/AmigaOS folder/i)).toBeNull();
+    expect(screen.queryByTestId("step-asks-tree")).toBeNull();
+  });
+});
+
+/**
+ * **The banner judges the tree the tab's list works on** (round 3 fix wave,
+ * Critical 1). `ChoiceTab` reads `useChainTree(destination)`; `StepSecim`
+ * read `session.tree.root`. With the destination pointed at an ART tree and
+ * nothing in the session, the list answered every row against that tree while
+ * the banner above it said none had been chosen — and sent the user to a
+ * picker deleted this round.
+ */
+describe("the secim banner judges the chain's tree, not the session's copy", () => {
+  it("says nothing when the destination is the tree, and the session holds none", async () => {
+    seed({
+      "buildSession.kind": "install",
+      "buildSession.release": "AmigaOS 3.9",
+      "osinstall.destination.AmigaOS 3.9": "E:\\dist39",
+    });
+    renderAt("/os-builder/secim");
+
+    await screen.findByTestId("choice-tab");
+    // Waited on properly rather than asserted on the first frame: the banner
+    // is gated on `settled`, so "absent" has to survive the round trip
+    // landing, not merely precede it.
+    await waitFor(() => expect(describeTreeMock).toHaveBeenCalled());
+    expect(screen.queryByTestId("step-asks-tree")).toBeNull();
+    expect(screen.queryByTestId("step-wrong-folder")).toBeNull();
+  });
+
+  it("says nothing for a session tree with no destination, as it always did", async () => {
+    seed({
+      "buildSession.kind": "install",
+      "buildSession.tree": { root: "E:\\dist", builtHere: true },
+    });
+    renderAt("/os-builder/secim");
+
+    await screen.findByTestId("choice-tab");
+    await waitFor(() => expect(describeTreeMock).toHaveBeenCalled());
+    expect(screen.queryByTestId("step-asks-tree")).toBeNull();
+    expect(screen.queryByTestId("step-wrong-folder")).toBeNull();
+  });
+
+  it("asks, and sends the user to tab 3, when there is neither", async () => {
+    seed({ "buildSession.kind": "install" });
+    renderAt("/os-builder/secim");
+
+    const asks = await screen.findByTestId("step-asks-tree");
+    expect(asks.textContent).toContain(i18n.t("osBuilder.step.asksTree"));
+    // The link the sentence promises. It used to go to the files tab, under
+    // a sentence that said "below" — where `PackagePanel`'s picker was.
+    expect(within(asks).getByRole("link").getAttribute("href")).toBe("/os-builder/makine");
+    expect(within(asks).getByRole("link").textContent).toBe(i18n.t("osBuilder.step.makine"));
+  });
+
+  it("draws no banner at all until the destination check has landed", async () => {
+    // A destination that *is* a build looks like no tree for a render or two.
+    // Flashing "choose a destination" over a list about to answer against one
+    // is the confident wrong sentence in miniature.
+    //
+    // The gate has to *delay* the banner, not suppress it — so the same case
+    // holds the destination in flight, asserts silence, then lets it answer
+    // "not a build" and requires the banner to arrive.
+    let answer: (summary: unknown) => void = () => {};
+    describeTreeMock.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      })
+    );
+    seed({
+      "buildSession.kind": "install",
+      "buildSession.release": "AmigaOS 3.9",
+      "osinstall.destination.AmigaOS 3.9": "E:\\dist39",
+    });
+    renderAt("/os-builder/secim");
+
+    expect(screen.queryByTestId("step-asks-tree")).toBeNull();
+
+    answer({
+      isTree: false,
+      release: null,
+      files: 0,
+      components: [],
+      amigaInstalled: [],
+      problem: "holds no distribution.json",
+    });
+    // No session tree behind it, so the chain has no tree at all and the
+    // honest sentence is "choose one" — arriving once, and only once ART has
+    // stopped looking.
+    await screen.findByTestId("step-asks-tree");
   });
 });
 

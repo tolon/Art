@@ -24,7 +24,7 @@
 
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import i18n from "i18next";
@@ -2446,5 +2446,53 @@ describe("the chain", () => {
     // BoingBags and BoingBags 3&4, which is listed and disabled (§10).
     expect(await screen.findAllByTestId("amiga-package-row")).toHaveLength(3);
     expect(screen.queryByTestId("amiga-chain")).toBeNull();
+  });
+});
+
+/**
+ * **The tree field is not offered when the caller's tree is the destination**
+ * (round 3 fix wave, Important 2).
+ *
+ * `OsInstall` hands this panel `useChainTree`'s tree. When that hook picked
+ * the *destination*, this panel's own Browse wrote `session.tree.root` — a
+ * value the hook goes on overruling — so the path in the field snapped back
+ * to the destination on the next render. A control that appears to work and
+ * changes nothing is the confident wrong sentence in its purest form; the
+ * panel says where the tree came from instead, and where to change it.
+ */
+describe("the distribution tree field, when the destination is what won", () => {
+  it("draws one sentence with the path instead of a Browse row", () => {
+    render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.9"
+        treeRoot="D:/amiga/os39"
+        packageFolder={null}
+        treeFromDestination
+      />
+    );
+
+    expect(screen.queryByTestId("amiga-tree-root-field")).toBeNull();
+    const said = screen.getByTestId("amiga-tree-from-destination");
+    expect(said.textContent).toBe(
+      i18n.t("osinstall.amigaInstall.treeRoot.fromDestination", { path: "D:/amiga/os39" })
+    );
+    // The sentence carries the path itself, and names the tab that owns it —
+    // a user told "you cannot change it here" and not told where would have
+    // been given nothing.
+    expect(said.textContent).toContain("D:/amiga/os39");
+    expect(said.textContent).toContain(i18n.t("osBuilder.step.makine"));
+  });
+
+  it("still offers the Browse row when the tree is the session's own", () => {
+    // The other arm, and the one that makes the first mean something: with
+    // the prop absent this panel is what it always was.
+    render(
+      <AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder={null} />
+    );
+
+    const field = screen.getByTestId("amiga-tree-root-field");
+    expect(within(field).getByRole("button", { name: i18n.t("common.browse") })).toBeTruthy();
+    expect(field.textContent).toContain(i18n.t("osinstall.packages.treeRoot.label"));
+    expect(screen.queryByTestId("amiga-tree-from-destination")).toBeNull();
   });
 });

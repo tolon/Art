@@ -45,9 +45,12 @@ function Probe() {
       <span data-testid="kind">{session.kind}</span>
       <span data-testid="mediaFolder">{session.media.folder ?? "(none)"}</span>
       <span data-testid="firstboot-written">{String(session.firstboot.written)}</span>
+      <span data-testid="firstboot-wanted">{String(session.firstboot.wanted)}</span>
       <button onClick={() => setTree({ root: "E:\\picked", builtHere: false })}>pick</button>
+      <button onClick={() => setTree({ root: "E:\\other", builtHere: false })}>pick other</button>
       <button onClick={() => setTree({ builtHere: true })}>mark built</button>
       <button onClick={() => setFirstBoot({ written: true })}>first boot written</button>
+      <button onClick={() => setFirstBoot({ wanted: false })}>first boot not wanted</button>
     </div>
   );
 }
@@ -202,6 +205,31 @@ describe("first boot's written flag belongs to one tree", () => {
     expect(screen.getByTestId("builtHere").textContent).toBe("true");
     expect(screen.getByTestId("root").textContent).toBe("E:\\amiga\\dist");
     expect(screen.getByTestId("firstboot-written").textContent).toBe("true");
+  });
+
+  /**
+   * **`written` is a fact about a folder; `wanted` is the user's own tick**
+   * (round 3 fix wave, Minor 12). `setTree` resets one and must not touch the
+   * other: a user who untucked the first-boot row on tab 2 and then pointed
+   * the build at a different tree would find it silently ticked again —
+   * *nothing changes unless the user changes it*, broken by the reset that
+   * exists for the other field entirely.
+   */
+  it("resets written but keeps the user's own wanted tick when the root changes", async () => {
+    seed({
+      "buildSession.tree": { root: "E:\\amiga\\dist", builtHere: false },
+      "buildSession.firstboot": { written: true },
+    });
+    render(<Probe />);
+
+    await userEvent.click(screen.getByRole("button", { name: "first boot not wanted" }));
+    expect(screen.getByTestId("firstboot-wanted").textContent).toBe("false");
+
+    await userEvent.click(screen.getByRole("button", { name: "pick other" }));
+
+    expect(screen.getByTestId("root").textContent).toBe("E:\\other");
+    expect(screen.getByTestId("firstboot-written").textContent).toBe("false");
+    expect(screen.getByTestId("firstboot-wanted").textContent).toBe("false");
   });
 });
 

@@ -172,6 +172,19 @@ export interface AmigaInstallPanelProps {
    *  `useChainTree`, so this panel and `ChoiceTab` cannot be handed two. */
   treeRoot: string | null;
   onTreeRootChange?: (path: string | null) => void;
+  /**
+   * **Whether {@link treeRoot} came from the destination** rather than from
+   * the session's own tree (round 3 fix wave, Important 2).
+   *
+   * When it did, this panel's Browse writes a value that loses: `setTree`
+   * changes `session.tree.root`, `useChainTree` goes on preferring the
+   * destination, and the path in the field snaps straight back to it — a
+   * control that appears to work and changes nothing. So the field is not
+   * drawn at all in that case; one sentence says where the tree came from
+   * and where to change it, which is tab 3. Nothing is disabled and nothing
+   * is hidden that the user could still act on here.
+   */
+  treeFromDestination?: boolean;
   /** Where the user keeps their update archives. Used for the catalogue —
    *  which packages ART ships a recipe for — and as the file dialogs'
    *  starting folder. The run itself takes a whole file path, never a folder:
@@ -436,6 +449,7 @@ function SlotField({
 export function AmigaInstallPanel({
   treeRoot,
   onTreeRootChange,
+  treeFromDestination = false,
   packageFolder = null,
   materialFolders = [],
   release,
@@ -1562,14 +1576,29 @@ export function AmigaInstallPanel({
         {t("osinstall.amigaInstall.chainNote")}
       </p>
 
-      <Field
-        label={t("osinstall.packages.treeRoot.label")}
-        value={treeRoot}
-        empty={t("osinstall.packages.treeRoot.none")}
-        onChoose={() => void chooseTreeRoot()}
-        choose={t("common.browse")}
-        hint={t("osinstall.packages.treeRoot.hint")}
-      />
+      {/* **The tree, and who owns it right now.** With the destination
+          winning (`useChainTree`), a Browse here would write a value the
+          hook immediately overrules — so the row says where the tree came
+          from and where to change it instead of offering a dead field. */}
+      {treeFromDestination ? (
+        <p
+          className="faint"
+          data-testid="amiga-tree-from-destination"
+          style={{ fontSize: 11, margin: "0 0 12px", wordBreak: "break-all" }}
+        >
+          {t("osinstall.amigaInstall.treeRoot.fromDestination", { path: treeRoot ?? "" })}
+        </p>
+      ) : (
+        <Field
+          label={t("osinstall.packages.treeRoot.label")}
+          value={treeRoot}
+          empty={t("osinstall.packages.treeRoot.none")}
+          onChoose={() => void chooseTreeRoot()}
+          choose={t("common.browse")}
+          hint={t("osinstall.packages.treeRoot.hint")}
+          testId="amiga-tree-root-field"
+        />
+      )}
 
       {/*
         **The chain** (round 3 § 2): one row per link, in the material's own

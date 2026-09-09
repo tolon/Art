@@ -175,3 +175,37 @@ describe("readiness, when ART has looked at the folder (ART-199)", () => {
     expect(readiness(withTree, "dosyalar", false)).toBe("ready");
   });
 });
+
+/**
+ * **The banner judges the tree the tab's list works on** (round 3 fix wave,
+ * Critical 1). Tab 2 reads `useChainTree` — the destination when ART found a
+ * build in it, `session.tree.root` otherwise — so the readiness this function
+ * answers has to be about *that* root. Judging the session's copy while the
+ * list works on the destination is one tab giving two answers.
+ */
+describe("readiness takes the caller's own root when it is given one", () => {
+  it("says ready for a chain tree the session does not hold", () => {
+    // The exact defect: no session tree at all, the destination pointed at
+    // an ART tree. The list answers every row against that tree, and the
+    // banner used to say none had been chosen.
+    expect(readiness(sessionWith(), "secim", true, "E:\\dist39")).toBe("ready");
+  });
+
+  it("asks when the caller states there is no tree, whatever the session holds", () => {
+    // The other direction, and the reason `null` is not the same as omitting
+    // the argument: a stale `session.tree.root` must not make the banner
+    // claim a tree the tab is not working on.
+    const withTree = sessionWith({ tree: { root: "E:\\stale", builtHere: false } });
+    expect(readiness(withTree, "secim", true, null)).toBe("asks");
+  });
+
+  it("still accuses the caller's own root when ART has looked at it", () => {
+    expect(readiness(sessionWith(), "secim", false, "E:\\amiga\\os39")).toBe("wrong-folder");
+  });
+
+  it("falls back to the session when nothing is passed, as every other caller does", () => {
+    const withTree = sessionWith({ tree: { root: "E:\\dist", builtHere: false } });
+    expect(readiness(withTree, "secim", true)).toBe("ready");
+    expect(readiness(sessionWith(), "secim", true)).toBe("asks");
+  });
+});

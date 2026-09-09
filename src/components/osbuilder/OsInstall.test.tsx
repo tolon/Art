@@ -2388,7 +2388,14 @@ describe("the tree it builds is the tree the next steps get (ART-197)", () => {
     });
     render(<OsInstall />);
 
-    expect((await screen.findAllByText("E:\\dist")).length).toBeGreaterThan(0);
+    // **And it says so rather than offering a field that cannot change it**
+    // (round 3 fix wave, Important 2): the panel's own Browse wrote
+    // `session.tree.root`, which `useChainTree` overrules while the
+    // destination wins, so the path snapped straight back. The sentence
+    // carries the path and names the tab that owns it.
+    const said = await screen.findByTestId("amiga-tree-from-destination");
+    expect(said.textContent).toContain("E:\\dist");
+    expect(screen.queryByTestId("amiga-tree-root-field")).toBeNull();
     await waitFor(() =>
       expect(screen.queryByText("E:\\amiga\\somewhere-else")).toBeNull()
     );

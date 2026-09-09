@@ -709,8 +709,8 @@
       "derle": "Derle",
       "kart": "Kart imajı",
       "birimler": "Birimleri hazırla",
-      "asksTree": "Bu adım bir AmigaOS klasörü üzerinde çalışır, henüz seçilmedi. Aşağıdan birini seç ya da önce bir tane kur:",
-      "notATree": "Bu klasör ART'ın kurduğu bir AmigaOS klasörü değil: içinde distribution.json yok, bu yüzden ART içinde ne olduğunu ve bir paketin neyin yerine geçeceğini söyleyemez. Aşağıdan başka bir klasör seç ya da burada bir tane kur:"
+      "asksTree": "Bu sekme bir AmigaOS ağacı üzerinde çalışır, henüz seçilmedi. Hedefi Kickstart ve hedef sekmesinde seçin ya da önce bir tane kurun:",
+      "notATree": "Bu klasör ART'ın kurduğu bir AmigaOS ağacı değil: içinde distribution.json yok, bu yüzden ART içinde ne olduğunu ve bir güncellemenin neyin yerine geçeceğini söyleyemez. Kickstart ve hedef sekmesinde başka bir klasör seçin ya da önce bir tane kurun:"
     },
     "choice": {
       "firstboot": "Amiga'da ilk açılışta",
@@ -2575,7 +2575,7 @@
         "label": "Dağıtım ağacı",
         "none": "Dağıtım ağacı seçilmedi.",
         "chooseTitle": "Dağıtım ağacının kendi kökünü seç — distribution.json'ın yazıldığı yer",
-        "hint": "distribution.json'ı tutan klasör — aşağıdaki Doğrula bölümünün baktığı aynı ağaç."
+        "hint": "distribution.json'ı tutan klasör."
       },
       "catalogue": {
         "needsFolder": "Hangi arşivlerin gerçekten burada olduğunu görmek için güncelleme paketleri klasörünü seç."
@@ -2627,6 +2627,9 @@
       "chainNote": "Sırayı bu ekran değil, paketlerin kendisi belirler: önce temiz bir AmigaOS 3.9, sonra BoingBag 3.9-1, sonra BoingBag 3.9-2, ancak ondan sonra geri kalanlar. ART hiçbir şey kopyalamadan önce ağacın neyin yapıldığına dair kendi kaydını okur; bir önceki paketi eksik olan kurulum daha başta geri çevrilir ve hangisinin, hangi sırayla kurulacağı söylenir.",
       "emulatorWindow": "Bu, bu masaüstünde gerçek bir emülatör penceresi açar ve onu kendisi yönetir. Çalışırken ona dokunmayın — o pencereyi kapatmak, kurucu daha hiçbir şey söylemeden koşuyu bitirir.",
       "copyNote": "Kurulum ağacınızın bir kopyası üzerinde koşar, ağacın kendisi üzerinde değil. Kopya, ancak kurucu başarı bildirdiğinde ağacın yerine geçer; bildirmezse ağacınız olduğu gibi kalır ve bu ekran kopyanın nerede olduğunu söyler.",
+      "treeRoot": {
+        "fromDestination": "Ağaç, Kickstart ve hedef sekmesinde seçilen hedef: {{path}}"
+      },
       "package": {
         "label": "Paket",
         "needsFolder": "ART'ın Amiga tarafında hangi paketleri çalıştırabildiğini görmek için yukarıdan güncelleme paketleri klasörünü seçin.",
@@ -2644,7 +2647,7 @@
       },
       "classify": {
         "anotherPackage": "Bu, {{other}} paketinin kendi arşivi — ama seçili olan {{selected}}. Onu kurmak için {{other}}'ı seçin, ya da buraya {{selected}} paketinin kendi arşivini verin.",
-        "sharedArtefact": "'{{path}}', Paketler adımının Windows tarafında yerleştirdiği {{media}} arşivi — bunu {{packages}} okuyor.",
+        "sharedArtefact": "'{{path}}', {{media}} arşivi — bunu {{packages}} okuyor.",
         "otherArtefact": "'{{path}}', bu adımın çalıştırmadığı {{media}} arşivi — {{selected}} burada {{expected}} istiyor.",
         "otherArtefactGeneric": "'{{path}}', bu adımın çalıştırmadığı {{media}} arşivi."
       },
