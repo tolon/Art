@@ -630,7 +630,7 @@ export interface KeyedPhrase {
  *
  * `field` namespaces the id so two *different* phrases never collide by
  * coincidence; identical phrases (same key, same serialized params) are
- * dropped after the first, since two fields agreeing on one wrong archive
+ * dropped after the first, since two producers agreeing on one file
  * genuinely have one thing to say, not two.
  */
 export function dedupeBlockers(entries: { field: string; phrase: Phrase }[]): KeyedPhrase[] {

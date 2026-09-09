@@ -705,7 +705,7 @@
       "hedef": "Ne yapıyoruz",
       "kaynak": "Kurulum ortamı",
       "paketler": "Güncelleme paketleri",
-      "amiga-kurulum": "Amiga'da kur",
+      "amiga-kurulum": "AmigaOS güncellemeleri",
       "ilk-acilis": "Amiga'da ilk açılış",
       "kart": "Kart imajı",
       "birimler": "Birimleri hazırla",
@@ -2576,9 +2576,9 @@
       }
     },
     "amigaInstall": {
-      "heading": "Paketin kendi kurucusunu Amiga tarafında çalıştır",
-      "intro": "Bazı güncelleme paketleri Windows tarafından hiç yerleştirilemez: içindeki dosyalar kilitlidir ve anahtar yalnızca paketin kendi Amiga programındadır. ART bu kilidi kırmaz. Dağıtım ağacınızın bir kopyasını alır, bir emülatör başlatır ve paketin kendi kendini kurmasını sağlar — köklü bütün Amiga dağıtım araçları da bu paketleri böyle kurar.",
-      "chainNote": "Bunlar sırayla gider: önce temiz bir AmigaOS 3.9, sonra BoingBag 3.9-1, sonra BoingBag 3.9-2, ancak ondan sonra topluluk yapımı BoingBag 3 ve 4. ART hiçbir şeyi kopyalamadan önce ağacın kendi kaydını okur; bir önceki paketi eksik olan kurulum daha baştan geri çevrilir ve hangisinin, hangi sırayla kurulacağı söylenir.",
+      "heading": "AmigaOS 3.9 güncellemeleri",
+      "intro": "Bu sürümün bütün güncellemeleri, malzemenin kendi sırasıyla: her biri bir öncekinin üzerine gider ve her birinin kendi kurucusu bunu doğrular. BoingBag 3.9-1 ve 3.9-2, Locale paketleri ve Contribution çekmecesi doğrudan Windows üzerinden, saniyeler içinde yerleştirilir. Neyi kopyalayacağına kendi Installer betiği karar vermek zorunda olan bir paket — BoingBag 3 ve 4 — bunun yerine Amiga'da, ART'ın başlattığı bir emülatörde çalışır; o satır bunu söyler.",
+      "chainNote": "Sırayı bu ekran değil, paketlerin kendisi belirler: önce temiz bir AmigaOS 3.9, sonra BoingBag 3.9-1, sonra BoingBag 3.9-2, ancak ondan sonra geri kalanlar. ART hiçbir şey kopyalamadan önce ağacın neyin yapıldığına dair kendi kaydını okur; bir önceki paketi eksik olan kurulum daha başta geri çevrilir ve hangisinin, hangi sırayla kurulacağı söylenir.",
       "emulatorWindow": "Bu, bu masaüstünde gerçek bir emülatör penceresi açar ve onu kendisi yönetir. Çalışırken ona dokunmayın — o pencereyi kapatmak, kurucu daha hiçbir şey söylemeden koşuyu bitirir.",
       "copyNote": "Kurulum ağacınızın bir kopyası üzerinde koşar, ağacın kendisi üzerinde değil. Kopya, ancak kurucu başarı bildirdiğinde ağacın yerine geçer; bildirmezse ağacınız olduğu gibi kalır ve bu ekran kopyanın nerede olduğunu söyler.",
       "package": {

@@ -407,12 +407,9 @@ beforeEach(() => {
   slotsMock.mockResolvedValue(emptyReport());
   previewMock.mockResolvedValue(preview());
   runMock.mockResolvedValue(7);
-  // The ordinary answer: an archive named like the real UAE fix is the
-  // update archive, everything else is the package's own — path-aware
-  // rather than a single constant, so a fixture that puts the real
-  // `BoingBag39-1-UAE.lha` in the overlay field (as the shipped run does)
-  // classifies correctly regardless of which field asked. Individual tests
-  // override this to exercise ART-277's own blockers.
+  // The ordinary answer: whatever was picked is the package's own archive.
+  // One constant, because there is one field to ask about since 2026-09-09.
+  // Individual tests override this to exercise ART-277's own blockers.
   classifyMock.mockImplementation(async () => ({
     kind: "the-package",
     topLevel: [],
@@ -1888,6 +1885,107 @@ describe("the chain", () => {
     // on is the screen saying nothing about work it did.
     expect(screen.getByTestId("amiga-install-report-row").textContent).toBe(
       i18n.t("osinstall.chain.reportRow", { name: "BoingBag 3.9-2" })
+    );
+  });
+
+  /**
+   * **ART-286, both halves.** `docs/assets/chain.png`, the 10:21 build: the
+   * panel opened on a remembered selection sitting on an *already-installed*
+   * host-placed row and showed *"Checking what this would replace…"* — polled
+   * 4 min 40 s, nothing clicked, nothing in flight. `useHostPlacement`'s own
+   * `enabled` gate had correctly declined to call `osinstall_collisions` for a
+   * non-ready row; the panel's `hostSideRow` render gate had not, so the block
+   * rendered a progress sentence for a request nobody made and
+   * `placement.collisions` stayed `null` for ever.
+   *
+   * Two arms, because the fix is two changes and each needs its own:
+   *
+   * 1. the **restored** selection is no longer the Run target when it cannot
+   *    run, so the block is about the first ready row (or about nothing);
+   * 2. and a row the user **clicks** is still the target — round 3's rule —
+   *    so the render gate itself has to carry `targetReady`. This is the arm
+   *    that fails on the old `hostSideRow`.
+   */
+  function chainWithInstalledLocale(): ChainRow[] {
+    const rows = THE_CHAIN();
+    // `locale-39` is the host-placed row of this fixture (`runsOnAmiga:
+    // false`); make it already in the tree, which is the screenshot's state.
+    rows[3] = { ...rows[3], state: { state: "installed", when: null } };
+    return rows;
+  }
+
+  function withRememberedRow(id: string) {
+    useSettingsStore.setState((state) => ({
+      settings: {
+        ...state.settings,
+        remembered: {
+          ...(state.settings.remembered as Record<string, unknown>),
+          "amigaInstall.package": id,
+        },
+      },
+    }));
+  }
+
+  it("never leaves 'Checking what this would replace' on a row nothing was asked about", async () => {
+    withRememberedRow("locale-39");
+    renderChain(chainWithInstalledLocale());
+    await screen.findAllByTestId("amiga-chain-row");
+
+    // Arm 1 — the remembered row is installed, so it is not the target.
+    expect(screen.queryByTestId("amiga-chain-placement")).toBeNull();
+    expect(
+      screen.queryByText(i18n.t("osinstall.packages.preview.loading"))
+    ).toBeNull();
+    expect(
+      screen.queryByLabelText(i18n.t("osinstall.packages.confirm", { count: 1 }))
+    ).toBeNull();
+
+    // Arm 2 — a host-placed row the user **clicks**, which round 3 allows:
+    // selecting is reading, and a clicked row *is* the target whatever state
+    // it is in. Türkçe catalogs is blocked and host-placed, so `enabled` is
+    // false and nothing is asked — the render gate has to agree.
+    //
+    // A different row from arm 1's on purpose: clicking the row that is
+    // already selected fires no change event, so it would prove nothing.
+    await userEvent.setup().click(radioFor("Türkçe catalogs"));
+    await waitFor(() => expect(radioFor("Türkçe catalogs").checked).toBe(true));
+    expect(screen.queryByTestId("amiga-chain-placement")).toBeNull();
+    expect(
+      screen.queryByText(i18n.t("osinstall.packages.preview.loading"))
+    ).toBeNull();
+    // The fetch gate and the render gate now say the same thing: nothing was
+    // requested, so nothing claims to be waiting for an answer.
+    expect(collisionsMock).not.toHaveBeenCalled();
+    // …and the row's own sentence is still what says why, beside the button.
+    expect(screen.getByTestId("amiga-chain-cannot-run").textContent).toBe(
+      i18n.t("osinstall.chain.blocked", {
+        name: "Türkçe catalogs (BoingBag 3.9-2)",
+        needs: "BoingBag 3.9-2",
+      })
+    );
+  });
+
+  it("never captions the button with an action on a package already in the tree", async () => {
+    // **ART-286's other half.** With the remembered row targeted, the one Run
+    // button read *"Add the chosen packages"* directly over *"…already in this
+    // tree"* — a caption naming work on a package that needs none. A restored
+    // selection is a default, not a decision: the target falls back to the
+    // first ready row, exactly as no selection at all does.
+    withRememberedRow("locale-39");
+    renderChain(chainWithInstalledLocale());
+    await screen.findAllByTestId("amiga-chain-row");
+
+    expect(runButton().textContent).not.toBe(i18n.t("osinstall.packages.apply.run"));
+    // And it says which row it *is* about, which is round 3's own rule for a
+    // button whose row is not the one selected on screen.
+    expect(screen.getByTestId("amiga-chain-next").textContent).toBe(
+      i18n.t("osinstall.chain.next", { name: "BoingBag 3.9-2" })
+    );
+    // The remembered row keeps its selection and its own sentence — nothing
+    // changes unless the user changes it; only the *button* moved.
+    expect(radioFor("AmigaOS 3.9 Locale update").checked).toBe(true);
+    expect(screen.getByTestId("amiga-chain-cannot-run").textContent).toBe(
+      i18n.t("osinstall.chain.installed", { name: "AmigaOS 3.9 Locale update" })
     );
   });
 
