@@ -91,14 +91,10 @@ import {
   isInstallRelease,
   groupCollisionsForPreview,
   layerForMedia,
-  layersFor,
   mediaEvidence,
   onOsInstallResult,
   osinstallApply,
-  osinstallComponentCollisions,
-  osinstallComponents,
   osinstallBlocker,
-  osinstallPlan,
   osinstallIdentifyMedia,
   osinstallRescanMedia,
   osinstallReleaseForMedia,
@@ -108,38 +104,33 @@ import {
   mediaIdentitySummary,
   osinstallMediaEvidence,
   osinstallScanMedia,
-  pruneStaleExclusions,
   refusalPhrase,
   wrongMediaFolder,
   rememberedComponentKey,
   type InstallLayer,
   type ReleaseEvidence,
-  type ScanCachePolicy,
-  sanitizeChosen,
   toggleChosen,
   withoutExcluded,
   type ComponentDef,
-  type ComponentPreview,
   type InstallPlan,
   type InstallRelease,
-  type InstallRequest,
   type MediaFolderOutcome,
   type MediaIdentification,
   type MediaIdentityState,
   type MediaScanResult,
   type OsInstallResult,
-  type PlanResult,
   type SlotOverride,
 } from "@/lib/osinstall";
 import { slotOverrides } from "@/lib/amigainstall";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { isFlag, isText, isTextList, isTextOrNothing } from "@/lib/remembered";
+import { isFlag, isText, isTextOrNothing } from "@/lib/remembered";
 import { useRomIdentity } from "@/lib/useRomIdentity";
 import { useDestinationCheck } from "@/lib/useDestinationCheck";
 import { useRemembered } from "@/lib/useRemembered";
-import { foldersForPlan, type MaterialFolder } from "@/lib/buildSession";
+import { type MaterialFolder } from "@/lib/buildSession";
 import { hostAmigaForeverFolders } from "@/lib/api";
 import { useBuildSession } from "@/lib/useBuildSession";
+import { useInstallPlan } from "@/lib/useInstallPlan";
 import {
   fraction,
   isJobCancellation,
@@ -289,6 +280,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     setPackages,
     setRelease,
     setMaterial,
+    setComponents,
     addMaterialFolder,
   } = useBuildSession();
   const release = session.release;
@@ -325,70 +317,176 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     .join("\n");
 
   /**
-   * The media layers the chosen release's own recipe declares, in the
-   * recipe's own order — **one labelled folder question per layer**, rather
-   * than one folder plus a bag of extra ones the user has to guess the
-   * meaning of. Task 3 and Task 8's own work: `mediaFolders` (a folder per
-   * layer id) and `label_key` (what each layer's own field should say).
+   * **The keyboard the finished system boots with** (ART-226's other half).
    *
-   * Fetched whenever the release changes; **empty is the unlayered answer**
-   * (every shipped recipe until AmigaOS 3.2.2's own two-layer one), and it is
-   * what makes "an unlayered release renders exactly what it renders today"
-   * true rather than accidental — nothing below ever branches on `release`
-   * itself, only on whether this array is empty.
-   */
-  const [layers, setLayers] = useState<InstallLayer[]>([]);
-  /**
-   * **Which release `layers` is the answer for** — `null` before the first
-   * answer lands, and the *previous* release's name for the moment after a
-   * switch (ART-256).
+   * The `keymaps` component places every layout the media carries; until this
+   * existed nothing selected one, so a Turkish tree rendered `ç ü ş Ğ` in
+   * its menus and still typed on an American keyboard — the owner's own
+   * complaint, and the one that opened the issue.
    *
-   * `layers` alone cannot say this: `[]` is one value with two causes,
-   * "this release is unlayered" and "nobody has asked yet", and this
-   * project's own rule is that a state with more than one cause is not a
-   * state anything may branch on. Anything scoping itself with
-   * `layers.length > 0` therefore reads a layered release as unlayered until
-   * `layersFor` resolves. The extra-folder scan below is the one that
-   * noticed — it scanned a folder a layered release never sends — and it is
-   * settled the same way S1's staleness is: by asking the answer which
-   * question it answers, not by ordering the effects.
+   * Per release, like the media folder (ART-207): a layout is a name in *that*
+   * release's `Devs/Keymaps`.
+   *
+   * Empty means the ROM's `usa`, exactly as before. **No default**: choosing
+   * somebody's keyboard for them is not ART's to do.
    */
-  const [layersRelease, setLayersRelease] = useState<string | null>(null);
+  const [keymap, setKeymap] = useRemembered<string>(
+    rememberedComponentKey("osinstall.keymap", release),
+    isText,
+    ""
+  );
+
+  // A disc dropped on the panel names a *file*; the scanner takes the folder
+  // that holds it, which is also where its sibling discs and ADFs live. The
+  // user dropped it, so this is them setting the value — it goes through the
+  // session's own setter and is kept, like every other choice on this screen.
+  //
+  // **Appended, never replacing** (design § 3.1). The flat field had one slot,
+  // so a drop overwrote whatever was in it; the list has room, and a person
+  // dropping a second disc from a second folder means both folders. A folder
+  // already in the list is not added twice (`withFolder`).
+  //
+  // Do NOT touch the list when `droppedMedia` is null — arriving at this
+  // screen without a drop must leave the remembered folders alone (ART-089).
+  //
+  // Depends on `arrivalKey`, not just `path`: dropping the same disc twice —
+  // with the list changed by hand in between — must add it back, and a
+  // dependency array keyed only on the (unchanged) path string would never
+  // re-run for that second, identical-looking drop.
   useEffect(() => {
-    let cancelled = false;
-    layersFor(release)
-      .then((ls) => {
-        if (cancelled) return;
-        setLayers(ls);
-        setLayersRelease(release);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setLayers([]);
-        setLayersRelease(release);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [release]);
-  /** Whether `layers` is this release's own answer rather than the previous
-   *  one's, or none at all. A primitive, so it is a stable effect dependency. */
-  const layersKnown = layersRelease === release;
+    const folder = droppedMedia ? hostParentDir(droppedMedia.path) : null;
+    if (folder) addMaterialFolder(folder);
+  }, [droppedMedia?.path, droppedMedia?.arrivalKey, addMaterialFolder]);
+  /**
+   * **Not** per release, and that is the decision rather than an oversight
+   * (ART-207). A Kickstart is a property of the machine the tree is being
+   * built for, not of the release being installed: the owner's one licensed
+   * A1200 ROM is the right answer for 3.2 and for 3.9 alike, and making them
+   * pick it again per release would be a choice resetting itself for no
+   * reason anybody could state.
+   */
+  /**
+   * **One Kickstart for the build** (ART-197's fourth row, wave 2).
+   *
+   * This panel kept its own remembered key until 2026-08-23, so a user chose
+   * the same ROM here, on the install step and on the card step. They are one
+   * question wearing three labels — the ROM the tree is paired against, the
+   * ROM the emulator boots, and the ROM written onto the card — and a build
+   * where they differ is the mismatch G9's pairing check exists to catch.
+   *
+   * Changing it here changes it for the build, which the hint says out loud:
+   * a carry the user cannot see is the same defect as one that never
+   * happened (ART-197's own words).
+   *
+   * **The field itself moved to tab 3** on 2026-09-09 (`MachineTab`,
+   * four-tab design § 3.3). What is left here is the read: the plan sends
+   * the ROM path, and a conditional component's own line names the
+   * Kickstart. Read through the same hook the field uses, so the two tabs
+   * cannot disagree about what a file is.
+   */
+  const romPath = session.rom.path;
+  // Only the identity: this screen no longer draws the ROM's own outcome
+  // sentences (they went to tab 3 with the field), it names the Kickstart in
+  // a conditional component's reason line.
+  const { rom } = useRomIdentity(romPath);
+  /**
+   * Where the tree goes — per release, like the media folder above and for
+   * the same reason (ART-207). `E:\…\os39\art3` is a fine destination for a
+   * 3.9 build and a misleading one for a 3.2 build; a folder named for one
+   * release holding another release's tree is the quiet kind of wrongness
+   * `distribution.json` exists to make impossible.
+   *
+   * Read-only here since 2026-09-09: the picker is `MachineTab`'s, through
+   * this very key. This screen still plans into it and still runs into it.
+   */
+  const [destination] = useRemembered<string | null>(
+    rememberedComponentKey("osinstall.destination", release),
+    isTextOrNothing,
+    null
+  );
 
   /**
-   * **What the request carries, built from the one list** — `foldersForPlan`,
-   * which is also what `unusedForPlan` below is read from.
+   * Whether ART may reuse a medium's listing from an earlier scan (ART-194).
    *
-   * A layer's folder used to be its own remembered key
-   * (`osinstall.mediaFolder.<layerId>.<release>`) and the flat field another;
-   * both are now entries in `material.folders`, an entry's `layer` being the
-   * tag that says which labelled question it answers. `seededMaterial`
-   * migrates each of those keys once and they are never written again.
+   * Remembered, and guarded, like every other choice on this screen: it is
+   * something the user decided, so it comes back tomorrow. `isFlag` is the
+   * guard, so a hand-edited or older `settings.json` holding anything else
+   * falls back to `true` rather than putting a bad value on screen.
+   *
+   * `true` by default — cached is the ordinary path, and no screen should have
+   * to explain why it is not rescanning a disc that has not changed.
    */
-  const plannedFolders = useMemo(
-    () => foldersForPlan(session.material, layers),
-    [session.material, layers]
+  const [reuseScan, setReuseScan] = useRemembered<boolean>(
+    "osinstall.reuseScan",
+    isFlag,
+    true
   );
+  /** How many listings the last "Scan again" dropped, or `null` when the user
+   *  has not asked this session. Session-only: it describes an action just
+   *  taken, not a choice to remember. */
+  const [rescanned, setRescanned] = useState<number | null>(null);
+  /**
+   * Bumped by "Scan again" to make the plan effect run once more.
+   *
+   * A counter and not `setMediaFolder(mediaFolder)`: setting a state to the
+   * value it already holds is a no-op React bails out of, so the effect would
+   * never fire and the button would do nothing visible — which is precisely
+   * the "control that silently ignores the user" this round has been about.
+   */
+  const [rescanNonce, setRescanNonce] = useState(0);
+
+  /**
+   * **The plan, computed in one place** — `useInstallPlan` (round 3 of the
+   * four-tab rewrite, design § 3.2).
+   *
+   * The release's media layers, its component catalogue, the two plans and
+   * the collision preview used to be six states and four effects in this
+   * file. Tab 2 needs every one of them to draw the release's parts, and two
+   * components computing them separately would be two answers to one
+   * question — each costing its own walk of real install media. So the
+   * computation left this screen whole; what stays here is what a screen does
+   * with an answer. The hook's own module comment carries the ART-119,
+   * ART-178/ART-195 and ART-089 rules the effects travel with.
+   *
+   * **The ticks are the build session's now** (ART-290). They were this
+   * panel's own `osinstall.chosen.<release>` and
+   * `osinstall.excludedConditional.<release>`; `buildSession.components` was
+   * seeded from them and never written back, so the session's copy went stale
+   * the moment anybody ticked a box. The legacy keys are still read once by
+   * `seededComponents`, never written again and never deleted, so nobody's
+   * remembered selection is lost.
+   */
+  const plan = useInstallPlan({
+    release,
+    material: session.material,
+    keymap,
+    rom: romPath,
+    destination,
+    reuseScan,
+    rescanNonce,
+    components: session.components,
+    setComponents,
+  });
+  const {
+    layers,
+    layersKnown,
+    plannedFolders,
+    catalogue,
+    componentsError,
+    effectivePlanResult,
+    basePlan,
+    effectivePlan,
+    planError,
+    setPlanError,
+    layeringOn,
+    componentPreview,
+    componentPreviewError,
+  } = plan;
+  const chosen = session.components.chosen;
+  const excludedConditional = session.components.excludedConditional;
+  const setChosen = (next: string[]) => setComponents({ chosen: next });
+  const setExcludedConditional = (next: string[]) =>
+    setComponents({ excludedConditional: next });
 
   /**
    * The folders the request actually reads, in list order — a layered
@@ -403,20 +501,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         : [plannedFolders.mediaFolder, ...plannedFolders.extraMediaFolders].filter((f) => !!f),
     [layers, plannedFolders]
   );
-
-  /** The folder a layer is tagged with, or `null` when nobody has tagged one
-   *  yet. Read off `plannedFolders` so there is one answer to "which folder
-   *  is this layer's" and the plan request cannot disagree with the screen. */
-  function folderForLayer(layerId: string): string | null {
-    return plannedFolders.mediaFolders[layerId] ?? null;
-  }
-
-  /** A stable, primitive dependency for the layers' own folders — see the
-   *  plan effect below. Built fresh every render, but as a *string*: unlike
-   *  an object or array, two equal strings are the same value to React's own
-   *  dependency comparison, so this needs no `useStabilised`-style memo the
-   *  way an array or object read off the remembered bag would (ART-178). */
-  const layerFoldersKey = layers.map((l) => `${l.id}=${folderForLayer(l.id) ?? ""}`).join("|");
 
   /** A layer's own field label — the recipe's own `labelKey`, translated,
    *  when it names one, the bare layer id otherwise (a recipe with no
@@ -548,150 +632,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   }
 
   /**
-   * **The keyboard the finished system boots with** (ART-226's other half).
-   *
-   * The `keymaps` component places every layout the media carries; until this
-   * existed nothing selected one, so a Turkish tree rendered `ç ü ş Ğ` in
-   * its menus and still typed on an American keyboard — the owner's own
-   * complaint, and the one that opened the issue.
-   *
-   * Per release, like the media folder (ART-207): a layout is a name in *that*
-   * release's `Devs/Keymaps`.
-   *
-   * Empty means the ROM's `usa`, exactly as before. **No default**: choosing
-   * somebody's keyboard for them is not ART's to do.
-   */
-  const [keymap, setKeymap] = useRemembered<string>(
-    rememberedComponentKey("osinstall.keymap", release),
-    isText,
-    ""
-  );
-
-  // A disc dropped on the panel names a *file*; the scanner takes the folder
-  // that holds it, which is also where its sibling discs and ADFs live. The
-  // user dropped it, so this is them setting the value — it goes through the
-  // session's own setter and is kept, like every other choice on this screen.
-  //
-  // **Appended, never replacing** (design § 3.1). The flat field had one slot,
-  // so a drop overwrote whatever was in it; the list has room, and a person
-  // dropping a second disc from a second folder means both folders. A folder
-  // already in the list is not added twice (`withFolder`).
-  //
-  // Do NOT touch the list when `droppedMedia` is null — arriving at this
-  // screen without a drop must leave the remembered folders alone (ART-089).
-  //
-  // Depends on `arrivalKey`, not just `path`: dropping the same disc twice —
-  // with the list changed by hand in between — must add it back, and a
-  // dependency array keyed only on the (unchanged) path string would never
-  // re-run for that second, identical-looking drop.
-  useEffect(() => {
-    const folder = droppedMedia ? hostParentDir(droppedMedia.path) : null;
-    if (folder) addMaterialFolder(folder);
-  }, [droppedMedia?.path, droppedMedia?.arrivalKey, addMaterialFolder]);
-  /**
-   * **Not** per release, and that is the decision rather than an oversight
-   * (ART-207). A Kickstart is a property of the machine the tree is being
-   * built for, not of the release being installed: the owner's one licensed
-   * A1200 ROM is the right answer for 3.2 and for 3.9 alike, and making them
-   * pick it again per release would be a choice resetting itself for no
-   * reason anybody could state.
-   */
-  /**
-   * **One Kickstart for the build** (ART-197's fourth row, wave 2).
-   *
-   * This panel kept its own remembered key until 2026-08-23, so a user chose
-   * the same ROM here, on the install step and on the card step. They are one
-   * question wearing three labels — the ROM the tree is paired against, the
-   * ROM the emulator boots, and the ROM written onto the card — and a build
-   * where they differ is the mismatch G9's pairing check exists to catch.
-   *
-   * Changing it here changes it for the build, which the hint says out loud:
-   * a carry the user cannot see is the same defect as one that never
-   * happened (ART-197's own words).
-   *
-   * **The field itself moved to tab 3** on 2026-09-09 (`MachineTab`,
-   * four-tab design § 3.3). What is left here is the read: the plan sends
-   * the ROM path, and a conditional component's own line names the
-   * Kickstart. Read through the same hook the field uses, so the two tabs
-   * cannot disagree about what a file is.
-   */
-  const romPath = session.rom.path;
-  // Only the identity: this screen no longer draws the ROM's own outcome
-  // sentences (they went to tab 3 with the field), it names the Kickstart in
-  // a conditional component's reason line.
-  const { rom } = useRomIdentity(romPath);
-  /**
-   * Where the tree goes — per release, like the media folder above and for
-   * the same reason (ART-207). `E:\…\os39\art3` is a fine destination for a
-   * 3.9 build and a misleading one for a 3.2 build; a folder named for one
-   * release holding another release's tree is the quiet kind of wrongness
-   * `distribution.json` exists to make impossible.
-   *
-   * Read-only here since 2026-09-09: the picker is `MachineTab`'s, through
-   * this very key. This screen still plans into it and still runs into it.
-   */
-  const [destination] = useRemembered<string | null>(
-    rememberedComponentKey("osinstall.destination", release),
-    isTextOrNothing,
-    null
-  );
-  /**
-   * The components the user ticked, remembered **per release** — see
-   * `rememberedComponentKey`. A component id means something only inside the
-   * recipe that declares it (both shipped recipes carry a `workbench-base`,
-   * for different media), so one shared set would either send 3.2's ids into
-   * a 3.9 plan or destroy them the moment the user looked at 3.9. Switching
-   * release and switching back now finds the earlier selection untouched.
-   */
-  const [chosen, setChosen] = useRemembered<string[]>(
-    rememberedComponentKey("osinstall.chosen", release),
-    isTextList,
-    []
-  );
-  /**
-   * Condition-satisfied components the user has explicitly, with
-   * confirmation, turned off — sent to the engine as
-   * `InstallRequest.excluded`. Remembered, unlike the preload screen's
-   * partition picks: nothing here is destructive by itself (see the module
-   * doc comment on the remembered set as a whole).
-   */
-  const [excludedConditional, setExcludedConditional] = useRemembered<string[]>(
-    rememberedComponentKey("osinstall.excludedConditional", release),
-    isTextList,
-    []
-  );
-
-  /**
-   * Whether ART may reuse a medium's listing from an earlier scan (ART-194).
-   *
-   * Remembered, and guarded, like every other choice on this screen: it is
-   * something the user decided, so it comes back tomorrow. `isFlag` is the
-   * guard, so a hand-edited or older `settings.json` holding anything else
-   * falls back to `true` rather than putting a bad value on screen.
-   *
-   * `true` by default — cached is the ordinary path, and no screen should have
-   * to explain why it is not rescanning a disc that has not changed.
-   */
-  const [reuseScan, setReuseScan] = useRemembered<boolean>(
-    "osinstall.reuseScan",
-    isFlag,
-    true
-  );
-  /** How many listings the last "Scan again" dropped, or `null` when the user
-   *  has not asked this session. Session-only: it describes an action just
-   *  taken, not a choice to remember. */
-  const [rescanned, setRescanned] = useState<number | null>(null);
-  /**
-   * Bumped by "Scan again" to make the plan effect run once more.
-   *
-   * A counter and not `setMediaFolder(mediaFolder)`: setting a state to the
-   * value it already holds is a no-op React bails out of, so the effect would
-   * never fire and the button would do nothing visible — which is precisely
-   * the "control that silently ignores the user" this round has been about.
-   */
-  const [rescanNonce, setRescanNonce] = useState(0);
-
-  /**
    * The tree, the folder holding update archives and the package ids ticked
    * now live in the **session** (`@/lib/buildSession`), not in three keys of
    * this screen's own.
@@ -718,30 +658,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const packagesChosen = session.packages.chosen;
 
   // --- what the screen is doing --------------------------------------------
-  /**
-   * The chosen release's own component catalogue, loaded from its recipe —
-   * **carrying the release it describes**, never a bare list.
-   *
-   * `null` means "not loaded yet", and it is a distinct state from `[]` on
-   * purpose: everything that filters a remembered id against this list —
-   * `sanitizeChosen`, `pruneStaleExclusions` — would drop *everything*
-   * against an empty list and persist the drop, which is a setting changing
-   * without the user changing it (ART-089's shape, from the other side).
-   *
-   * The `release` field is the same guard against a subtler version of the
-   * same thing, and it is not hypothetical — a test caught it: for one render
-   * after the picker changes, `release` is already the new one (so `chosen`
-   * is read from the new release's remembered key) while this state still
-   * holds the *old* release's catalogue. Sanitizing the one against the other
-   * writes an empty list over a selection the user never touched. So nothing
-   * below reads `components` directly; everything reads `catalogue`, which is
-   * `null` until the two agree.
-   */
-  const [components, setComponents] = useState<{ release: string; list: ComponentDef[] } | null>(
-    null
-  );
-  const [componentsError, setComponentsError] = useState(false);
-  const catalogue = components?.release === release ? components.list : null;
   /**
    * One component's row label (ART-224).
    *
@@ -803,27 +719,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const amigaForeverOffer =
     materialFolders.length === 0 && !amigaForeverDismissed ? amigaForeverAdf : null;
 
-  /**
-   * Two plans, requested identically except for `excluded` — both read-only
-   * previews (§92), both recomputed live on every change, neither an
-   * external-tool cost the way the preload screen's plan is.
-   *
-   * `basePlan` always asks with `excluded: []`. It exists purely to reason
-   * about a conditional component's *true* state — whether its own
-   * `Condition` is satisfied at all — because a plan requested *with* a
-   * component excluded never carries it in `componentsOn` (the engine skips
-   * it entirely), which would make "is this condition-satisfied" and "is
-   * this excluded" indistinguishable from the one plan a screen that only
-   * asked once would have.
-   *
-   * `effectivePlan` asks with the real `excludedConditional`. It is what
-   * the file list shows, what `osinstallBlocker` reads, and — unmodified —
-   * what `osinstallApply` receives. Never the other way around: applying
-   * `basePlan` would silently undo every exclusion the user confirmed.
-   */
-  const [basePlanResult, setBasePlanResult] = useState<PlanResult | null>(null);
-  const [effectivePlanResult, setEffectivePlanResult] = useState<PlanResult | null>(null);
-  const [planError, setPlanError] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   /** The one component id currently showing the "this will not boot"
    *  confirmation, or `null`. Only one at a time — a second click elsewhere
@@ -831,24 +726,18 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    *  shape works. */
   const [pendingExclusion, setPendingExclusion] = useState<string | null>(null);
   /**
-   * What the switched-on layering components would replace, file by file
-   * (ART-175).
+   * **Both confirmations describe the plan that was on screen when they were
+   * given**, so a new plan answer retires them — the same rule the preload
+   * screen's own fingerprint/lastPlanned pair enforces, simplified here
+   * because the plan is always fresh rather than sometimes stale.
    *
-   * **Why this needs its own preview at all.** `plan::detect_collisions`
-   * already *refuses* an undeclared overlap at plan time, so nothing is
-   * unguarded — but a component that declares one is allowed to stand on
-   * another's file silently, and AmigaOS 3.9's `workbench-39` is exactly
-   * that: the component that turns a 3.5 tree into a 3.9 one, by replacing
-   * files `workbench-base` placed. §92's PREVIEW is the informed-consent
-   * half, and it was the half nobody built. `collide::preview` has been able
-   * to answer since ART-170 and nothing asked it.
-   *
-   * `null` means "not asked" (nothing layering is switched on, or the plan is
-   * not ready); a value with an empty `reports` means "asked, and nothing is
-   * in the way", which is a different sentence.
+   * `planVersion` bumps on every answer, a refusal included: a plan that
+   * could not be computed is not a plan the user confirmed either.
    */
-  const [componentPreview, setComponentPreview] = useState<ComponentPreview | null>(null);
-  const [componentPreviewError, setComponentPreviewError] = useState<string | null>(null);
+  useEffect(() => {
+    setConfirmed(false);
+    setPendingExclusion(null);
+  }, [plan.planVersion]);
   const [busy, setBusy] = useState(false);
   /**
    * The install job this screen started, and its latest progress.
@@ -869,38 +758,15 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   // step, where the card it compares against actually is:
   // `components/osbuilder/VerifyAgainstCard.tsx`, rendered by `StepBirimler`.
 
-  // The checklist is the chosen release's recipe, fetched when the release
-  // changes. `setComponents(null)` first, so a switch shows "loading" rather
-  // than the previous release's components for as long as the round trip
-  // takes — a stale checklist is the exact defect this replaces, and showing
-  // it for 20 ms is showing it.
-  //
-  // The `cancelled` flag is what keeps a slow load for a release the user has
-  // since switched away from out of the state it no longer describes.
-  useEffect(() => {
-    let cancelled = false;
-    setComponents(null);
-    setComponentsError(false);
-    osinstallComponents(release)
-      .then((list) => {
-        if (!cancelled) setComponents({ release, list });
-      })
-      .catch(() => {
-        if (!cancelled) setComponentsError(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [release]);
-
   /**
    * **ART-210 — nothing computed for one release survives a switch to
    * another.**
    *
    * The owner, driving this screen: *"3.2 kurayım diyorsun, 3.9'un
    * seçenekleri, hataları vb ekranda duruyor asla değişmiyor."* Only two
-   * effects here depended on `release` — the component list above and the
-   * plan below. Every other answer on this screen is a `useState` nothing
+   * effects here depended on `release` — the component list and the plan,
+   * both `useInstallPlan`'s since round 3, which clears its own three
+   * answers on the same rule. Every other answer on this screen is a `useState` nothing
    * invalidated, so a finished install's report, a failed preview, a plan
    * error and a half-asked confirmation all stayed put, describing an
    * operating system the user had moved away from. The plan updating
@@ -924,9 +790,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   useEffect(() => {
     setResult(null);
     setError(null);
-    setPlanError(null);
-    setComponentPreview(null);
-    setComponentPreviewError(null);
     setPendingExclusion(null);
     setRescanned(null);
     setConfirmed(false);
@@ -1095,151 +958,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     [overridesKey]
   );
 
-  // The two plans: read-only (§92's PREVIEW), so both are recomputed live
-  // whenever the request changes rather than behind a separate "Preview"
-  // button — there is no external tool cost here the way there is on the
-  // preload screen, and this is also what lets the component list below
-  // explain a conditional tick immediately, not only after a manual preview
-  // step.
-  useEffect(() => {
-    // Whether the request has any folder at all to read. A layered release
-    // is gated on **any** tagged folder, the same way an unlayered one is
-    // gated on the list holding anything. Partial is fine: `plan()` reads a
-    // layer nobody has tagged yet as that layer's own components reporting
-    // media-missing (Task 3), not as a reason to refuse planning altogether.
-    const hasMedia =
-      layers.length > 0
-        ? Object.keys(plannedFolders.mediaFolders).length > 0
-        : !!plannedFolders.mediaFolder;
-    if (!hasMedia) {
-      setBasePlanResult(null);
-      setEffectivePlanResult(null);
-      setPlanError(null);
-      return;
-    }
-    let cancelled = false;
-
-    // Only sanitize against a catalogue that has actually arrived. Against
-    // `null` the remembered ids are passed through untouched and nothing is
-    // written back: dropping every id because a fetch has not landed yet
-    // would be ART-089 exactly — a setting changing without the user
-    // changing it.
-    const sanitized = catalogue ? sanitizeChosen(catalogue, chosen) : chosen;
-    if (sanitized.length !== chosen.length) {
-      // A stale remembered id — one this release's recipe does not hold, or
-      // holds as Coming Later — actually clears, rather than being filtered
-      // again on every read. Safe to persist now that the key is per
-      // release: this can only ever drop an id from the release it was
-      // chosen for, never from the one the user just switched away from.
-      setChosen(sanitized);
-    }
-
-    const shared = {
-      // **All three from `foldersForPlan`**, which is the one place the
-      // material list becomes a request (design § 3.1). A layered release
-      // reads `mediaFolders` alone and gets an empty flat folder and no
-      // extras; an unlayered one gets the list's first folder plus the rest.
-      // Two hand-written branches here and one in `src/lib` is how the folder
-      // list the readout resolves and the folders the planner reads would
-      // drift apart.
-      mediaFolder: plannedFolders.mediaFolder,
-      extraMediaFolders: plannedFolders.extraMediaFolders,
-      mediaFolders: plannedFolders.mediaFolders,
-      // ART-226: empty means "leave it on the ROM's usa", so it is sent as
-      // null rather than as an empty string the Rust side would have to trim.
-      keymap: keymap.trim() ? keymap : null,
-      rom: romPath,
-      chosen: sanitized,
-      destination: destination ?? "",
-      release,
-      // ART-194. Sent every time rather than only when off, so the request
-      // says what it asked for and two plans that differ in this cannot look
-      // identical in a log.
-      scanCache: (reuseScan ? "reuse" : "ignore") as ScanCachePolicy,
-    };
-    const baseRequest: InstallRequest = { ...shared, excluded: [] };
-    const effectiveRequest: InstallRequest = { ...shared, excluded: excludedConditional };
-
-    // ART-119 (#1). With nothing excluded — which is every run until the
-    // user confirms an override, and most runs after — the two requests are
-    // *identical*, so the second call planned the same media twice and threw
-    // one answer away. `plan()` opens and walks every switched-on component's
-    // disc image, so that is real work on every keystroke in the media
-    // fields.
-    //
-    // One call, one answer, given to both. Safe because nothing here mutates
-    // a `PlanResult` — every reader takes `.plan`, `.items`, `.refusals` or
-    // `.componentsOn`, and `osinstallApply` receives the effective plan
-    // unmodified — and because nothing compares the two by identity. It also
-    // does not change *when* a round-trip happens: the remaining call is
-    // made in the same effect, in the same tick, on exactly the same
-    // dependency change as before. The moment anything is excluded, both
-    // requests are made again, because then they genuinely differ.
-    const planning = excludedConditional.length === 0
-      ? osinstallPlan(baseRequest).then((both): [PlanResult, PlanResult] => [both, both])
-      : Promise.all([osinstallPlan(baseRequest), osinstallPlan(effectiveRequest)]);
-
-    planning
-      .then(([base, effective]) => {
-        if (cancelled) return;
-        setBasePlanResult(base);
-        setEffectivePlanResult(effective);
-        setPlanError(null);
-        // Confirming an exclusion or the whole install describes the plan
-        // that was on screen at the time; once the request changes, both
-        // are stale — the same rule the preload screen's own
-        // fingerprint/lastPlanned pair enforces, simplified here because
-        // the plan is always fresh rather than sometimes stale.
-        setConfirmed(false);
-        setPendingExclusion(null);
-        if (base.outcome === "planned" && catalogue) {
-          const pruned = pruneStaleExclusions(catalogue, base.plan, sanitized, excludedConditional);
-          if (pruned.length !== excludedConditional.length) {
-            setExcludedConditional(pruned);
-          }
-        }
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        setBasePlanResult(null);
-        setEffectivePlanResult(null);
-        setPlanError(errorText(t, e));
-      });
-    return () => {
-      cancelled = true;
-    };
-    // `setChosen`/`setExcludedConditional` are deliberately out of the
-    // dependency list. They are *not* stable identities — `useRemembered`
-    // rebuilds each setter when its key changes, and the component keys are
-    // now per release — but listing them would re-plan on a release switch
-    // twice: once for `release`, once for the setters that changed with it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  // `extraMediaFolders` is in here for the reason the test that found it
-  // names: without it, adding a folder changed what ART *would* read and
-  // left the screen showing the refusals from before it was added — a
-  // preview describing a plan nobody asked for any more. `chosen` and
-  // `excludedConditional` are arrays in this list already, so the identity
-  // question ART-178/ART-195 raise is one `useRemembered` has answered.
-  //
-  // `layers` (a fresh array from `layersFor` whenever `release` changes) and
-  // `layerFoldersKey` (a derived *string* — see its own doc comment) stand in
-  // for a layered release's own folders here, the same role `mediaFolder`
-  // and `extraMediaFolders` play for an unlayered one.
-  }, [
-    plannedFolders,
-    layers,
-    layerFoldersKey,
-    keymap,
-    romPath,
-    chosen,
-    destination,
-    excludedConditional,
-    release,
-    catalogue,
-    reuseScan,
-    rescanNonce,
-  ]);
-
   // `subscribeSafely` (Task 7's own fix round, F7/ART-165): the bare
   // `.then((fn) => { unlisten = fn })` shape this used to have could both
   // leak the real Tauri listener (an unmount before the promise resolved
@@ -1308,57 +1026,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   // occupied — `apply()` decides, and blocking here would refuse an install
   // the engine would have allowed.
   const { taken: destinationTaken } = useDestinationCheck(destination, result);
-
-  /**
-   * Ask what the layering components would replace, whenever the plan
-   * changes (ART-175).
-   *
-   * **Only the components that can be in another's way**, never all of them:
-   * the preview reads every file the components it is asked about would
-   * place, off real install media, and asking about all twenty-six would
-   * mean reading a whole AmigaOS install to answer a question about a few
-   * dozen files. `ComponentDef.overrides` is what the recipe declares, and
-   * `src/lib/osinstall.test.ts` pins which five components carry one.
-   *
-   * Read-only (§92's PREVIEW) and recomputed rather than remembered: a
-   * preview of a plan the user has since changed is worse than none.
-   */
-  const layeringOn = useMemo(() => {
-    const plan = effectivePlanResult?.outcome === "planned" ? effectivePlanResult.plan : null;
-    if (!plan || !catalogue) return [];
-    return catalogue
-      .filter((def) => def.overrides.length > 0 && plan.componentsOn.includes(def.id))
-      .map((def) => def.id);
-  }, [effectivePlanResult, catalogue]);
-
-  useEffect(() => {
-    const plan = effectivePlanResult?.outcome === "planned" ? effectivePlanResult.plan : null;
-    if (!plan || layeringOn.length === 0) {
-      setComponentPreview(null);
-      setComponentPreviewError(null);
-      return;
-    }
-    let cancelled = false;
-    osinstallComponentCollisions(plan, layeringOn)
-      .then((preview) => {
-        if (cancelled) return;
-        setComponentPreview(preview);
-        setComponentPreviewError(null);
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        setComponentPreview(null);
-        // Named rather than swallowed: a preview that could not be produced
-        // must not look like a preview that found nothing (§89).
-        setComponentPreviewError(errorText(t, e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [effectivePlanResult, layeringOn]);
-
-  const basePlan = basePlanResult?.outcome === "planned" ? basePlanResult.plan : null;
-  const effectivePlan = effectivePlanResult?.outcome === "planned" ? effectivePlanResult.plan : null;
 
   /**
    * The volume names the scans actually read out of **every folder the plan
@@ -2458,3 +2125,4 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     </>
   );
 }
+

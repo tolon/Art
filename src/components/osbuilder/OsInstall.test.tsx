@@ -697,6 +697,38 @@ describe("ticking a component changes what the screen will do", () => {
     // not just an API call nobody could see the effect of.
     await waitFor(() => expect(document.body.textContent).toContain("from 2 planned items."));
   });
+
+  /**
+   * **ART-290.** `buildSession.components.<release>` was added with
+   * `seededComponents` to migrate the panel's own two keys, and nothing ever
+   * wrote it back: the session carried a one-time copy that went stale the
+   * moment anybody ticked a box, so every screen reading the session saw a
+   * different selection from the one on this one.
+   *
+   * The two halves are both asserted, because either alone passes for the
+   * wrong reason. That the session key gains the id says the write landed
+   * somewhere; that `osinstall.chosen` is **still the empty list
+   * `FULL_FIELDS` seeded** says the legacy key was not written as well —
+   * "read once, never written again" is what makes the migration safe to
+   * roll back, and a screen writing both would look identical on screen.
+   */
+  it("writes a tick to the session, never to the legacy key (ART-290)", async () => {
+    await renderFull();
+    expect(rememberedBag()["buildSession.components.AmigaOS 3.2"]).toBeUndefined();
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "Extras3.2" }));
+
+    await waitFor(() =>
+      expect(rememberedBag()["buildSession.components.AmigaOS 3.2"]).toMatchObject({
+        chosen: expect.arrayContaining(["extras"]),
+      })
+    );
+    // `rememberedComponentKey` returns the bare key for AmigaOS 3.2 — "the
+    // release before there was a picker" — so this is 3.2's own legacy key,
+    // seeded empty above and untouched here.
+    expect(rememberedBag()["osinstall.chosen"]).toEqual([]);
+    expect(rememberedBag()["osinstall.chosen.AmigaOS 3.2"]).toBeUndefined();
+  });
 });
 
 describe("the screen does not plan the same thing twice", () => {
