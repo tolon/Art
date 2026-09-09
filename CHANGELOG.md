@@ -34,6 +34,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   step of its own. A step whose job cannot say how much work there is says
   how much it has done instead of drawing a bar that means nothing. The old
   packages, Amiga-install and first-boot step URLs still redirect.
+- **The Amiga-side installer run and the first-boot rehearsal are in the WinUAE
+  studio now, not in the OS Builder.** Both start an emulator, which is what
+  that screen is for: open WinUAE and the section under the launchers runs a
+  package's own installer on the Amiga and rehearses a first boot, using the
+  tree, the archives and the release the OS Builder already knows about. The
+  OS Builder's own first boot is unchanged — one tick on the second tab, one
+  step of the build.
+- **While a build is running, the whole app says so.** The sidebar's entries
+  and the drop cards' "open in the OS Builder" actions stop navigating, each
+  with a sentence naming what to press and where: stopping the build is on the
+  OS Builder's Build tab. Before, only the tabs inside the OS Builder refused,
+  and leaving by the sidebar quietly abandoned the rest of the run.
+- OS Builder, Build tab: when first boot succeeds, the line under it says what
+  happened to `S/User-Startup` — the file the old one was backed up to, or that
+  ART created it because there was none.
+- OS Builder, Build tab: after a run has succeeded the button says **Build
+  again**, not Build.
 
 ### Fixed
 
@@ -52,6 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the rest of the build's choices, in one place, instead of in two
   stores that could disagree about the same release.
   ([ART-290](docs/ISSUES.md))
+- OS Builder: browsing for an update archive no longer writes a second,
+  separate "archives folder" setting. The folder the file came from joins the
+  one folder list the whole build uses, where it is visible on the Amiga files
+  tab and can be removed there.
 
 ## [0.9.1] - 2026-09-08
 

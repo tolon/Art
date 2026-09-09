@@ -26,6 +26,34 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-291** 🔵 **A `packages.folder` seeded from an older ART steers the archive dialogs even
+after the folder leaves the material list** — *found 2026-09-10 during four-tabs round 5, task 2*
+`src/lib/useBuildSession.ts` (the `packagesShape.folder ?? derivedFolder` read)
+
+Spec § 5 is met — nothing writes `buildSession.packages.<release>.folder` any more, and the F10
+clear went with the write it undid. What is left is the *read*: `stored ?? derived` prefers the
+stored side, so a settings file written by an older ART keeps its folder even after the user takes
+that folder out of the material list, and it is then the folder `AmigaInstallPanel`'s dialogs open
+on and the folder its catalogue is asked about. No file resolves through it — every slot resolves
+against the material list, the catalogue answers the same list whichever folder it is given, and
+`add_package` is told the folder its file was found in — so this is a starting folder, not a
+result. Pinned by `keeps a folder seeded from an older ART even after the list stops holding it`
+(`useBuildSession.test.tsx`) rather than passed over. The fix that keeps *never written* is to
+gate the read — `stored` only while the material list still holds it — never to restore a write.
+
+**ART-292** 🔵 **Browser back and forward are outside the run lock** — *found 2026-09-10 during
+four-tabs round 5, task 3; the plan's own ruling*
+`src/lib/runLock.tsx` · `src/components/layout/Sidebar.tsx` · `src/pages/Dashboard.tsx` ·
+`src/pages/OsBuilder.tsx`
+
+While a build runs, the tab strip, every sidebar entry and the dashboard's route actions refuse to
+navigate and say why. The browser's own history does not: `Alt+Left`, a mouse's back button or a
+hash edit still leaves the build tab, and `useBuildRun`'s loop stops advancing on unmount, so the
+ticked updates and first boot silently never run (round 4's I2, by the one door the fix wave did
+not close). Nothing in ART blocks history today, which is why the round ruled it out of scope
+rather than adding a `beforeunload`-shaped guard for one screen. The operation log is still the
+record of what the Rust job did.
+
 **ART-283** 🟡 **Opening the Files screen rewrites a remembered tab's location** —
 *found 2026-09-08 by the screenshot pass, reproduced twice from identical starting bytes*
 `src/pages/FileManager.tsx` · `src/lib/remembered.ts`
