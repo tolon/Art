@@ -74,7 +74,7 @@ vi.mock("@/components/osbuilder/MachineTab", () => ({
 const lockedRun = vi.hoisted(() => ({ value: false }));
 vi.mock("@/components/osbuilder/BuildTab", async () => {
   const { useEffect } = await import("react");
-  const { useRunLock } = await import("@/pages/osbuilder/runLock");
+  const { useRunLock } = await import("@/lib/runLock");
   return {
     BuildTab: () => {
       const { setRunning } = useRunLock();
@@ -106,7 +106,7 @@ const { OsBuilder } = await import("@/pages/OsBuilder");
 // the home screen through the `*` catch-all.
 const { osBuilderRoutes } = await import("@/pages/osbuilder/routes");
 const { STEP_IDS } = await import("@/lib/buildSteps");
-const { RunLockContext } = await import("@/pages/osbuilder/runLock");
+const { RunLockContext } = await import("@/lib/runLock");
 
 function seed(remembered: Record<string, unknown>) {
   useSettingsStore.setState({

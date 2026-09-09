@@ -53,7 +53,7 @@ import { useTranslation } from "react-i18next";
 import { slotOverrides } from "@/lib/amigainstall";
 import { folderOf, type SequenceInputs } from "@/lib/buildRun";
 import { chainLines, choiceRowState, type ChainLine } from "@/lib/chain";
-import { firstbootPreview } from "@/lib/firstboot";
+import { fatMountPhrase, firstbootPreview, type FatMount } from "@/lib/firstboot";
 import type { Phrase } from "@/lib/phrase";
 import {
   collisionGroupHeadingKey,
@@ -497,26 +497,52 @@ export function ChoiceTab() {
   // a refusal is not something a row whose whole content is a tick can
   // explain.
   const [firstbootWritten, setFirstbootWritten] = useState(false);
+  /**
+   * **Whether first boot will be able to mount the FAT boot partition** — the
+   * second thing the same preview answers, and the one the user can still do
+   * something about before the run.
+   *
+   * `10-hardware` mounts `EMU68BOOT:` only where the tree carries `L:fat95`,
+   * and the unavailable sentence names the Aminet path that supplies it. Said
+   * after the build it would be a post-mortem; said beside the tick it is an
+   * action. It is `fatMountPhrase`'s **only** renderer since round 5 deleted
+   * `FirstBootPanel` — `literal-keys.test.ts` claimed `FirstBootReportPanel`
+   * was one, and that panel renders a *report* of a boot that has happened,
+   * which carries neither key.
+   *
+   * `null` until the preview has answered for this tree, and back to `null`
+   * whenever it cannot be asked: a mount verdict about a folder ART has not
+   * looked at is exactly the confident wrong sentence.
+   */
+  const [firstbootFat, setFirstbootFat] = useState<FatMount | null>(null);
   useEffect(() => {
     // Same gate as the chain's: a folder the destination check has not
     // answered for is not a folder to read a first-boot block out of.
     if (!treeSettled) return;
     if (!treeRoot) {
       setFirstbootWritten(false);
+      setFirstbootFat(null);
       return;
     }
     let cancelled = false;
     firstbootPreview(treeRoot)
       .then((preview) => {
-        if (!cancelled) setFirstbootWritten(preview.alreadyWritten);
+        if (!cancelled) {
+          setFirstbootWritten(preview.alreadyWritten);
+          setFirstbootFat(preview.fatMount);
+        }
       })
       .catch(() => {
-        if (!cancelled) setFirstbootWritten(false);
+        if (!cancelled) {
+          setFirstbootWritten(false);
+          setFirstbootFat(null);
+        }
       });
     return () => {
       cancelled = true;
     };
   }, [treeRoot, treeSettled]);
+  const firstbootFatPhrase = firstbootFat ? fatMountPhrase(firstbootFat) : null;
 
   /** The one component id currently showing the "this will not boot"
    *  confirmation, or `null`. Only one at a time — a second click elsewhere
@@ -922,6 +948,20 @@ export function ChoiceTab() {
               style={{ display: "block", padding: "4px 8px", fontSize: 11, margin: "6px 0 0" }}
             >
               {t("firstboot.panel.alreadyWritten")}
+            </p>
+          )}
+          {/* **What first boot will and will not be able to do on this tree**,
+              beside the tick that decides whether it runs at all. Gated on
+              the tick as well as on the preview: *"will be mounted"* is a
+              claim about a step that is going to run, and over an unticked
+              first boot it is the screen out-claiming the build. */}
+          {(session.firstboot.wanted ?? true) && firstbootFatPhrase && (
+            <p
+              data-testid="choice-firstboot-fat"
+              className="faint"
+              style={{ fontSize: 11, margin: "6px 0 0" }}
+            >
+              {t(firstbootFatPhrase.key, firstbootFatPhrase.params)}
             </p>
           )}
         </div>

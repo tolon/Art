@@ -691,10 +691,27 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // run/running ternary. The two that went with the panel are
     // `fatMountPhrase` (the FAT-mount line of a preview this component does
     // not draw) and the write/writeAgain ternary (the write is tab 4's
-    // phase). Neither key is orphaned: `firstboot.fat.*` is
-    // `FirstBootReportPanel.tsx`'s too, and the write keys were deleted from
-    // both catalogues in the same commit, which is what `dead-keys.test.ts`
-    // is there to insist on.
-    expect(dynamicCalls).toBe(184);
+    // phase). The write keys were deleted from both catalogues in the same
+    // commit, which is what `dead-keys.test.ts` is there to insist on.
+    //
+    // **That paragraph used to end "`firstboot.fat.*` is
+    // `FirstBootReportPanel.tsx`'s too", and it was false** (round 5, task 4,
+    // from task 1's own review). That panel renders a *report* of a boot that
+    // has already happened; neither `firstboot.fat.available` nor
+    // `.unavailable` appears in it, and deleting `FirstBootPanel` left both
+    // with no reader at all. `dead-keys.test.ts` did not catch it because the
+    // keys are named in `firstboot.ts`'s mapper, which is a reader as far as
+    // that scan can see — a mapper nobody calls is exactly the blind spot its
+    // own header warns about. A confident wrong elimination costs more than
+    // no elimination, so it is corrected here rather than quietly dropped.
+    // 184 -> 186 (round 5, task 4): two, and the first is that repair.
+    // `ChoiceTab.tsx` renders `fatMountPhrase` under tab 2's first-boot tick,
+    // where the fact is still actionable — the tree can gain `L:fat95` before
+    // the run. `BuildTab.tsx`'s phase row renders the second, `phaseDetailPhrase`,
+    // which is what a first-boot success says about `S/User-Startup`: backed
+    // up (and where), created, or — returning `null` — nothing to add.
+    // The Build button's ternary is a third label wide now and still one
+    // dynamic site, so it moves nothing.
+    expect(dynamicCalls).toBe(186);
   });
 });

@@ -751,12 +751,14 @@
       },
       "unresolved": "{{name}}: more than one file carries it. Use one of them on the Amiga files tab (the readout's row offers each); it will not be written until you do.",
       "navigationLocked": "A build is running — Stop it before leaving this tab.",
+      "navigationLockedLane": "A build is running — Stop it on the OS Builder's Build tab before leaving.",
       "blocked": {
         "nothingToRun": "Nothing is ticked to run. Tick an update, or turn first boot on, on the What to install tab."
       },
       "confirmHint": "Nothing is written until you press Build.",
       "run": "Build",
       "running": "Building…",
+      "runAgain": "Build again",
       "stop": "Stop",
       "progress": {
         "soFar": "{{done}} so far"
@@ -784,6 +786,8 @@
         },
         "firstboot": {
           "succeeded": "First boot was prepared: {{files}} files written into the tree.",
+          "backup": "S/User-Startup was backed up to {{path}}.",
+          "created": "S/User-Startup did not exist; ART created it.",
           "refused": "ART would not prepare first boot — the reason is below.",
           "failed": "Preparing first boot failed: {{message}}",
           "cancelled": "Preparing first boot was stopped.",
@@ -2256,7 +2260,7 @@
   },
   "osinstall": {
     "blocked": {
-      "noFolder": "Choose the media folder first.",
+      "noFolder": "Choose the media folder on the Amiga files tab first.",
       "noDestination": "Choose where to build the distribution tree on the Kickstart and destination tab first.",
       "notPlanned": "Preview it first — nothing is built before you have seen what would be.",
       "planning": "The plan is still being computed…",
@@ -2986,6 +2990,9 @@
       "unknown": "Lines from a newer ART, carried rather than dropped:",
       "details": "Details",
       "readFailed": "This card's first-boot report could not be read:"
+    },
+    "rehearse": {
+      "needsTree": "Choose the tree above (the installer's Distribution tree field) or the destination on the OS Builder's Kickstart and destination tab."
     },
     "panel": {
       "alreadyWritten": "This tree already carries a first-boot block. Writing again replaces it.",

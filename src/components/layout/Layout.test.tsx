@@ -37,7 +37,7 @@ vi.mock("@/components/ScratchRootGate", () => ({
 vi.mock("@/components/layout/TopBar", () => ({ TopBar: () => <div data-testid="top-bar" /> }));
 
 const { Layout } = await import("./Layout");
-const { useRunLock } = await import("@/pages/osbuilder/runLock");
+const { useRunLock } = await import("@/lib/runLock");
 const { useSettingsStore } = await import("@/stores/settingsStore");
 const { DEFAULT_SETTINGS } = await import("@/lib/settings");
 
@@ -75,7 +75,7 @@ describe("the shell provides the run lock", () => {
     // The sidebar is a *sibling* of the outlet, so this fails the moment the
     // provider goes back inside the routed screen.
     expect(screen.getByTestId("sidebar-locked").textContent).toBe(
-      i18n.t("osBuilder.build.navigationLocked")
+      i18n.t("osBuilder.build.navigationLockedLane")
     );
     expect(screen.queryAllByRole("link")).toHaveLength(0);
   });

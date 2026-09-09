@@ -1198,6 +1198,84 @@ describe("the first-boot tick", () => {
     expect(said.textContent).toBe(i18n.t("firstboot.panel.alreadyWritten"));
   });
 
+  /**
+   * **`fatMountPhrase` gets a renderer back** (round 5, task 4, carried from
+   * task 1's review). The FAT-mount line was `FirstBootPanel`'s preview
+   * table; deleting that panel left `firstboot.fat.available` /
+   * `.unavailable` with **no** reader at all — `literal-keys.test.ts` claimed
+   * `FirstBootReportPanel` was one, and it is not: that panel renders a
+   * *report* of a boot that happened, and neither key appears in it.
+   *
+   * The fact belongs on the tick, because it is the one thing about this
+   * build's first boot the user can still change before the run: `10-hardware`
+   * mounts the FAT boot partition only if `L:fat95` is in the tree, and the
+   * unavailable sentence names the Aminet path that supplies it. Said after
+   * the build it would be a post-mortem; said here it is an action.
+   *
+   * Gated on the tick as well as on the preview: *"will be mounted"* is a
+   * claim about a step that is going to run, and over an unticked first boot
+   * it is the screen out-claiming what the build will do.
+   */
+  it("says the FAT boot partition will mount when the tree carries the driver", async () => {
+    destinationIsATree();
+    firstbootPreviewMock.mockResolvedValue({
+      tree: "E:\\dist39",
+      steps: [],
+      fatMount: { kind: "available" },
+      userStartupExists: true,
+      alreadyWritten: false,
+      bytesAdded: 4096,
+    } satisfies FirstBootPlan);
+
+    await renderChoice("AmigaOS 3.9");
+
+    const said = await screen.findByTestId("choice-firstboot-fat");
+    expect(said.textContent).toBe(i18n.t("firstboot.fat.available"));
+  });
+
+  it("names the driver the tree is missing when it will not mount", async () => {
+    destinationIsATree();
+    firstbootPreviewMock.mockResolvedValue({
+      tree: "E:\\dist39",
+      steps: [],
+      fatMount: { kind: "unavailable", needs: "fat95" },
+      userStartupExists: true,
+      alreadyWritten: false,
+      bytesAdded: 4096,
+    } satisfies FirstBootPlan);
+
+    await renderChoice("AmigaOS 3.9");
+
+    const said = await screen.findByTestId("choice-firstboot-fat");
+    // The specific sentence, not merely "a sentence": a refusal that does
+    // not name what is missing is not actionable, and these two differ by
+    // exactly that.
+    expect(said.textContent).toBe(i18n.t("firstboot.fat.unavailable", { needs: "fat95" }));
+    expect(said.textContent).toContain("fat95");
+    expect(said.textContent).not.toBe(i18n.t("firstboot.fat.available"));
+  });
+
+  it("says nothing about the FAT partition over a first boot nobody asked for", async () => {
+    // The control, measured rather than assumed: the preview answers the
+    // same way, and the difference is the tick. *"Will be mounted"* about a
+    // step this build is not going to run is the screen out-claiming it.
+    destinationIsATree();
+    seedRemembered({
+      ...FULL_FIELDS,
+      "buildSession.release": "AmigaOS 3.9",
+      "buildSession.firstboot": { written: false, wanted: false },
+    });
+    render(<ChoiceTab />);
+    await screen.findAllByTestId("choice-part-row");
+    await waitFor(() => expect(firstbootPreviewMock).toHaveBeenCalled());
+
+    const box = within(screen.getByTestId("choice-firstboot")).getByRole(
+      "checkbox"
+    ) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    expect(screen.queryByTestId("choice-firstboot-fat")).toBeNull();
+  });
+
   it("asks nothing at all when this build has no tree yet", async () => {
     // `firstboot_preview` reads a tree, and it reads **the** tree — the same
     // one the chain is asked about (`useChainTree`). With no destination and

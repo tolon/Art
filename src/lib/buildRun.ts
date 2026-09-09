@@ -302,6 +302,43 @@ export function phaseOutcomePhrase(report: PhaseReport): Phrase {
 }
 
 /**
+ * The **second** sentence a phase's row carries, or `null` when it has none.
+ *
+ * Only the first-boot phase has one today, and it is the one thing
+ * `FirstBootWritten` says that the file count does not: the write merges a
+ * block into `S/User-Startup`, a file the user may well have written
+ * themselves, and what happened to the previous version is not visible in
+ * *"4 files written into the tree"*. `FirstBootPanel` said it after its own
+ * Write; that panel is gone (round 5, task 1), and the write is this phase,
+ * so the sentence belongs here.
+ *
+ * **Three answers, and the third is `null`.** Backed up — naming *where*, so
+ * a user who wants their own lines back can find them — or created, because
+ * there was nothing there to back up, or nothing to add at all. A mapper that
+ * always produced a sentence would have to guess between the first two, and
+ * "ART created it" said about a file ART merged into is exactly the confident
+ * wrong sentence CLAUDE.md's first section is about.
+ *
+ * The backup wins where both are somehow set: a path ART measured outranks a
+ * boolean, and the two cannot both be true of one file on the Rust side.
+ */
+export function phaseDetailPhrase(report: PhaseReport): Phrase | null {
+  const { phase, ending } = report;
+  if (phase.kind !== "firstboot" || ending.state !== "succeeded") return null;
+  if (!isFirstBootWritten(ending.outcome)) return null;
+  if (ending.outcome.userStartupBackup) {
+    return {
+      key: "osBuilder.build.phase.firstboot.backup",
+      params: { path: ending.outcome.userStartupBackup },
+    };
+  }
+  if (ending.outcome.userStartupCreated) {
+    return { key: "osBuilder.build.phase.firstboot.created" };
+  }
+  return null;
+}
+
+/**
  * What to do about it, or null when there is nothing to do.
  *
  * `destination` is the second argument because the two endings that need it —

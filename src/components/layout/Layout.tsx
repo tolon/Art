@@ -15,7 +15,7 @@ import {
 } from "@/lib/appZoom";
 import { setupDragDrop, type DropHandler } from "@/lib/dnd";
 import { subscribeSafely } from "@/lib/jobs";
-import { RunLockContext } from "@/pages/osbuilder/runLock";
+import { RunLockContext } from "@/lib/runLock";
 import { useRecentFilesStore } from "@/stores/recentFilesStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type { DroppedAnalysis } from "@/types";
@@ -35,7 +35,7 @@ export function Layout() {
   const { t } = useTranslation();
 
   /**
-   * **The run lock** (`@/pages/osbuilder/runLock` — round 4 whole-branch
+   * **The run lock** (`@/lib/runLock` — round 4 whole-branch
    * review I2, widened in round 5).
    *
    * It lives here rather than in `OsBuilder` because the thing being refused

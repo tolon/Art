@@ -15,10 +15,13 @@
 // I4, final review). `details` (raw script lines), `unknown` (lines a newer
 // ART would carry) and a refusal's `rc=` return code are all script-internal
 // detail meant for someone who would recognise a `frobnicate 3` line — they
-// are gated on `power` here, the same way `FirstBootPanel` already gates the
-// tree-path column and the written-file list. What is never hidden is *that*
-// a step was refused: `stepOutcomePhrase`'s beginner variant still says so,
-// in one sentence, without the code underneath it.
+// are gated on `power` here. This sentence used to add "…the same way
+// `FirstBootPanel` already gates the tree-path column and the written-file
+// list"; that panel was deleted in four-tabs round 5, its preview table with
+// it, so the precedent is gone and this gate is the only one left in the
+// first-boot lane. **The rule outlived the precedent.** What is never hidden
+// is *that* a step was refused: `stepOutcomePhrase`'s beginner variant still
+// says so, in one sentence, without the code underneath it.
 
 import { useTranslation } from "react-i18next";
 

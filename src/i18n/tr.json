@@ -751,12 +751,14 @@
       },
       "unresolved": "{{name}}: birden fazla dosya taşıyor. Amiga dosyaları sekmesinde birini kullanın (okuma satırı her birini sunar); seçene kadar yazılmaz.",
       "navigationLocked": "Derleme sürüyor — sekmeden ayrılmadan önce Durdur'a basın.",
+      "navigationLockedLane": "Derleme sürüyor — ayrılmadan önce İşletim Sistemi Kurucusu'nun Derle sekmesinde Durdur'a basın.",
       "blocked": {
         "nothingToRun": "Koşulacak hiçbir şey işaretlenmedi. Ne kurulacak sekmesinden bir güncelleme işaretleyin ya da ilk açılışı açın."
       },
       "confirmHint": "Derle'ye basmadan hiçbir şey yazılmaz.",
       "run": "Derle",
       "running": "Derleniyor…",
+      "runAgain": "Yeniden derle",
       "stop": "Durdur",
       "progress": {
         "soFar": "şimdiye kadar {{done}}"
@@ -784,6 +786,8 @@
         },
         "firstboot": {
           "succeeded": "İlk açılış hazırlandı: ağaca {{files}} dosya yazıldı.",
+          "backup": "S/User-Startup şuraya yedeklendi: {{path}}.",
+          "created": "S/User-Startup yoktu; ART oluşturdu.",
           "refused": "ART ilk açılışı hazırlamayı reddetti — nedeni aşağıda.",
           "failed": "İlk açılış hazırlanamadı: {{message}}",
           "cancelled": "İlk açılış hazırlığı durduruldu.",
@@ -2256,7 +2260,7 @@
   },
   "osinstall": {
     "blocked": {
-      "noFolder": "Önce medya klasörünü seç.",
+      "noFolder": "Önce Amiga dosyaları sekmesinde ortam klasörünü seçin.",
       "noDestination": "Önce Kickstart ve hedef sekmesinde ağacın nereye yazılacağını seçin.",
       "notPlanned": "Önce önizle — ne olacağını görmeden hiçbir şey kurulmaz.",
       "planning": "Plan hâlâ hesaplanıyor…",
@@ -2986,6 +2990,9 @@
       "unknown": "Daha yeni bir ART'tan gelen, atılmayıp taşınan satırlar:",
       "details": "Ayrıntılar",
       "readFailed": "Bu kartın ilk açılış raporu okunamadı:"
+    },
+    "rehearse": {
+      "needsTree": "Ağacı yukarıdan (kurucunun Dağıtım ağacı alanı) ya da İşletim Sistemi Kurucusu'nun Kickstart ve hedef sekmesinden seçin."
     },
     "panel": {
       "alreadyWritten": "Bu ağaç zaten bir ilk-açılış bloğu taşıyor. Yeniden yazmak onun yerine geçer.",

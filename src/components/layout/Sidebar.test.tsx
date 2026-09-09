@@ -17,7 +17,7 @@ import i18n from "i18next";
 // case that names the refusal names the sentence and not the key.
 import "@/i18n";
 
-import { RunLockContext } from "@/pages/osbuilder/runLock";
+import { RunLockContext } from "@/lib/runLock";
 import { Sidebar } from "./Sidebar";
 
 afterEach(cleanup);
@@ -90,9 +90,17 @@ describe("the sidebar is locked while a build runs", () => {
     expect(files).toBeTruthy();
     expect(files?.className).toContain("sidebar-link-active");
 
-    // A refusal must be actionable, and this one names the control that
-    // lifts it — the same sentence the OS Builder's own strip carries.
+    // **A refusal must be actionable, and from here that means naming the
+    // screen as well as the control** (round 5, task 4). The strip's own
+    // sentence says *"before leaving this tab"* — true where it is drawn,
+    // over the tabs, beside the Stop it means. Repeated under the sidebar it
+    // was an instruction to press a control that is not on the screen the
+    // reader is looking at, and *this tab* named whichever tab they happen to
+    // be on. `navigationLockedLane` names both: the OS Builder's Build tab.
     expect(within(shut).getByTestId("sidebar-locked").textContent).toBe(
+      i18n.t("osBuilder.build.navigationLockedLane")
+    );
+    expect(within(shut).getByTestId("sidebar-locked").textContent).not.toBe(
       i18n.t("osBuilder.build.navigationLocked")
     );
   });

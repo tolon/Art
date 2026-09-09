@@ -15,6 +15,7 @@ import tr from "@/i18n/tr.json";
 import {
   FIRST_BOOT_PHASE_NAME,
   folderOf,
+  phaseDetailPhrase,
   phaseNextStepPhrase,
   phaseOutcomePhrase,
   phaseTone,
@@ -303,6 +304,74 @@ describe("phaseOutcomePhrase", () => {
     const cancelled = phaseOutcomePhrase(report("package", { state: "cancelled", filesLanded: 0 }));
     expect(notAttempted.key).toBe("osBuilder.build.phase.package.notAttempted");
     expect(notAttempted.key).not.toBe(cancelled.key);
+  });
+});
+
+/**
+ * **The one fact `FirstBootWritten` carries that the count does not** (four
+ * tabs round 5, task 4; carried from task 1's review).
+ *
+ * `FirstBootPanel` used to say this after its own Write — *"S/User-Startup
+ * was backed up to …"*, or *"there was none, ART created it"* — and two of
+ * the ten cases dropped when that panel went were the cases for those two
+ * sentences. The write is tab 4's phase now, and a phase that merges a block
+ * into a file the user may have written themselves and says only *"4 files
+ * written"* has dropped the half that matters: where the previous version
+ * went. CLAUDE.md's "never claim what you did not do" has a mirror — never
+ * *fail* to say what you did do to somebody's own file.
+ *
+ * Three answers, not two: backed up (and **where**), created, or nothing to
+ * add. The third is why this returns `Phrase | null` rather than always
+ * producing a sentence — a tree whose `S/User-Startup` was neither backed up
+ * nor created has nothing to report, and a row that said "created" about it
+ * would be the confident wrong sentence.
+ */
+describe("phaseDetailPhrase", () => {
+  it("names the file the backup went to", () => {
+    const phrase = phaseDetailPhrase(
+      report("firstboot", {
+        state: "succeeded",
+        outcome: { ...WRITTEN, userStartupBackup: "E:\\amiga\\dist\\S\\User-Startup.art-bak" },
+        elapsedMs: 1,
+      })
+    );
+    expect(phrase).not.toBeNull();
+    expect(phrase!.key).toBe("osBuilder.build.phase.firstboot.backup");
+    expect(phrase!.params).toEqual({ path: "E:\\amiga\\dist\\S\\User-Startup.art-bak" });
+    expectRenderable(phrase!);
+  });
+
+  it("says ART created S/User-Startup when there was none to back up", () => {
+    const phrase = phaseDetailPhrase(
+      report("firstboot", {
+        state: "succeeded",
+        outcome: { ...WRITTEN, userStartupCreated: true },
+        elapsedMs: 1,
+      })
+    );
+    expect(phrase).not.toBeNull();
+    expect(phrase!.key).toBe("osBuilder.build.phase.firstboot.created");
+    expectRenderable(phrase!);
+    // Two different sentences, never one: "created" is not "backed up".
+    expect(phrase!.key).not.toBe("osBuilder.build.phase.firstboot.backup");
+  });
+
+  it("adds nothing when the file was neither backed up nor created", () => {
+    // The control, measured rather than assumed. `WRITTEN` carries
+    // `userStartupBackup: null` and `userStartupCreated: false`; a mapper
+    // that always produced a sentence would pass both cases above.
+    expect(
+      phaseDetailPhrase(report("firstboot", { state: "succeeded", outcome: WRITTEN, elapsedMs: 1 }))
+    ).toBeNull();
+  });
+
+  it("adds nothing to a phase that is not a first-boot success", () => {
+    for (const kind of KINDS) {
+      for (const ending of everyEnding(kind)) {
+        if (kind === "firstboot" && ending.state === "succeeded") continue;
+        expect(phaseDetailPhrase(report(kind, ending)), `${kind}/${ending.state}`).toBeNull();
+      }
+    }
   });
 });
 

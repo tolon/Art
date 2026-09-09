@@ -28,6 +28,16 @@
 // outside a provider — every panel test, every screen rendered without the
 // shell — reads the default, which is *not running*: a lock has to be
 // switched on by a run, and never by an absent one.
+//
+// **Why this file is in `src/lib` and not under `src/pages/osbuilder`** (round
+// 5, task 4, from task 3's review). It was written there because the OS
+// Builder was the only thing that knew about it. It is not: `Layout` provides
+// it, `Sidebar` and `Dashboard` read it, and only two of its five importers
+// are in that folder at all. A module every screen depends on, filed under one
+// screen, invites the import that makes the shell depend on a page — and the
+// contract here is exactly what `src/lib` is for: shared state with no JSX of
+// its own beyond a context. `.tsx` rather than `.ts` only because
+// `createContext` is a React API; nothing here renders.
 
 import { createContext, useContext } from "react";
 

@@ -53,7 +53,7 @@ import { kindLabelKey, stepLabelKey, stepPath, stepsFor } from "@/lib/buildSteps
 import type { BuildKind } from "@/lib/buildSession";
 import { errorText } from "@/lib/errorText";
 import { BuildBar } from "@/pages/osbuilder/BuildBar";
-import { useRunLock } from "@/pages/osbuilder/runLock";
+import { useRunLock } from "@/lib/runLock";
 
 /** Card sizes people actually buy. Typed sizes are allowed too. */
 const CARD_SIZES_GB = [16, 32, 64, 128, 256];

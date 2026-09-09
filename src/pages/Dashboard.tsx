@@ -7,7 +7,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useRecentFilesStore } from "@/stores/recentFilesStore";
 import { runWorkflow } from "@/lib/api";
 import { usePowerMode } from "@/lib/uxmode";
-import { useRunLock } from "@/pages/osbuilder/runLock";
+import { useRunLock } from "@/lib/runLock";
 import type { DroppedAnalysis, WorkflowInfo, WorkflowOutcome } from "@/types";
 import { errorText } from "@/lib/errorText";
 import { QuickIcon, type QuickIconName } from "@/components/layout/QuickIcon";
@@ -67,7 +67,7 @@ export function Dashboard() {
   const theme = useSettingsStore((s) => s.settings.theme);
   const recent = useRecentFilesStore((s) => s.files);
   const loadRecent = useRecentFilesStore((s) => s.load);
-  // The shell's run lock (`@/pages/osbuilder/runLock`, round 5): a drop card's
+  // The shell's run lock (`@/lib/runLock`, round 5): a drop card's
   // route action navigates, and a navigation out of the lane mid-build is the
   // thing the strip and the sidebar already refuse.
   const { running } = useRunLock();
@@ -102,16 +102,18 @@ export function Dashboard() {
           </div>
 
           {/* **Why those buttons have gone dead, under the cards** — once,
-              not once per card. The same sentence the sidebar and the OS
-              Builder's strip carry, because it is the same refusal, and it
-              names the control that lifts it. */}
+              not once per card. The same refusal the sidebar and the OS
+              Builder's strip carry, and the same sentence the sidebar
+              carries: the strip's *"before leaving this tab"* is an
+              instruction to press a control that is not on this screen at
+              all, and *this tab* names no tab from here (round 5, task 4). */}
           {running && (
             <p
               className="badge badge-warn"
               data-testid="dashboard-locked"
               style={{ fontSize: 11, marginTop: 12, display: "inline-block" }}
             >
-              {t("osBuilder.build.navigationLocked")}
+              {t("osBuilder.build.navigationLockedLane")}
             </p>
           )}
         </section>
@@ -254,7 +256,7 @@ function InteractiveDropResultCard({ analysis }: { analysis: DroppedAnalysis }) 
         disabled={busy || !action.available || locked}
         title={
           locked
-            ? t("osBuilder.build.navigationLocked")
+            ? t("osBuilder.build.navigationLockedLane")
             : action.available
             ? action.description
             : t("dashboard.plan.comingLaterTitle", { description: action.description })

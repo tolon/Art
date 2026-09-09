@@ -47,7 +47,7 @@ import tr from "./tr.json";
  * "Kickstart and destination" over a tab labelled "Kickstart ve hedef" has
  * been given a name that is not on their screen.
  */
-describe("the sentences that send a user to tab 3 name it as the tab is labelled", () => {
+describe("the sentences that send a user to another tab name it as the tab is labelled", () => {
   const KEYS = [
     "osBuilder.bar.noDestination",
     "osinstall.blocked.noDestination",
@@ -109,6 +109,27 @@ describe("the sentences that send a user to tab 3 name it as the tab is labelled
     expect(en.osBuilder.step.notATree).toContain("Choose another on the");
     expect(tr.osBuilder.step.asksTree).toContain("sekmesinde seçin");
     expect(tr.osBuilder.step.notATree).toContain("sekmesinde başka bir klasör seçin");
+  });
+
+  /**
+   * **And the one sentence that sends a user to tab 1** (four tabs round 5,
+   * task 4). `osinstall.blocked.noFolder` is the Build button's blocker when
+   * no install media folder has been chosen; it said *"Choose the media
+   * folder first"* — first meaning *before this*, with nothing saying where
+   * the folder is chosen. Since round 2 that is the **Amiga files** tab,
+   * three tabs away from the button carrying the refusal, so a refusal that
+   * named no tab was a refusal the user could not act on (CLAUDE.md, "a
+   * refusal must be actionable").
+   *
+   * Asserted against `osBuilder.step.dosyalar` for the same reason as the six
+   * above: the failure guarded is drift between the label on the tab and the
+   * name the sentence uses, and a literal here would drift with it.
+   */
+  it("uses the Amiga files tab label in the blocker that sends a user there", () => {
+    expect(en.osBuilder.step.dosyalar).toBeTruthy();
+    expect(tr.osBuilder.step.dosyalar).toBeTruthy();
+    expect(en.osinstall.blocked.noFolder).toContain(en.osBuilder.step.dosyalar);
+    expect(tr.osinstall.blocked.noFolder).toContain(tr.osBuilder.step.dosyalar);
   });
 });
 

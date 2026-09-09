@@ -31,7 +31,7 @@ vi.mock("@/lib/db", async (importOriginal) => ({
 }));
 
 const { Dashboard } = await import("./Dashboard");
-const { RunLockContext } = await import("@/pages/osbuilder/runLock");
+const { RunLockContext } = await import("@/lib/runLock");
 const { useSettingsStore } = await import("@/stores/settingsStore");
 const { DEFAULT_SETTINGS } = await import("@/lib/settings");
 const { useRecentFilesStore } = await import("@/stores/recentFilesStore");
@@ -108,9 +108,16 @@ describe("the drop cards are locked while a build runs", () => {
     expect((button as HTMLButtonElement).disabled).toBe(true);
     // The title says it on the control itself, for the hand that is already
     // on it…
-    expect(button.getAttribute("title")).toBe(i18n.t("osBuilder.build.navigationLocked"));
+    // **The lane's own sentence, not the strip's** (round 5, task 4): from
+    // the dashboard, *"Stop it before leaving this tab"* names a control on
+    // a screen the reader is not looking at, and *this tab* names no tab at
+    // all. `navigationLockedLane` names the OS Builder's Build tab.
+    expect(button.getAttribute("title")).toBe(i18n.t("osBuilder.build.navigationLockedLane"));
     // …and once under the cards, for the eye that is reading the screen.
     expect(screen.getByTestId("dashboard-locked").textContent).toBe(
+      i18n.t("osBuilder.build.navigationLockedLane")
+    );
+    expect(screen.getByTestId("dashboard-locked").textContent).not.toBe(
       i18n.t("osBuilder.build.navigationLocked")
     );
   });

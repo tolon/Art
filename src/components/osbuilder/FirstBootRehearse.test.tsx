@@ -326,3 +326,38 @@ describe("changing the tree clears a stale rehearsal", () => {
     expect(screen.getByRole("button", { name: i18n.t("firstboot.panel.run") })).toBeTruthy();
   });
 });
+
+/**
+ * **A disabled button with nothing beside it is a screen that has refused and
+ * not said so** (round 5, task 4, carried from task 1's review — the same
+ * defect the sidebar's own lock sentence exists for).
+ *
+ * With no tree resolved, Rehearse is disabled and there is no `treeRoot`
+ * field on this component to point at: the tree comes either from
+ * `AmigaInstallPanel`'s own *Distribution tree* field, directly above this
+ * card in the studio, or from the OS Builder's Kickstart and destination tab,
+ * which is where the destination that wins over it is chosen. **A refusal
+ * must be actionable**, and where order matters it names the order — so the
+ * sentence names both places rather than saying "no tree".
+ */
+describe("with no tree resolved", () => {
+  it("says where a tree comes from, beside the button it has disabled", () => {
+    render(<FirstBootRehearse treeRoot={null} />);
+
+    const button = screen.getByRole("button", { name: i18n.t("firstboot.panel.run") });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId("firstboot-rehearsal-needs-tree").textContent).toBe(
+      i18n.t("firstboot.rehearse.needsTree")
+    );
+  });
+
+  it("says nothing of the kind once a tree is resolved", () => {
+    // The control, measured rather than assumed: a sentence that were always
+    // there would pass the case above and prove nothing.
+    render(<FirstBootRehearse treeRoot="D:/amiga/os39" />);
+
+    const button = screen.getByRole("button", { name: i18n.t("firstboot.panel.run") });
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByTestId("firstboot-rehearsal-needs-tree")).toBeNull();
+  });
+});

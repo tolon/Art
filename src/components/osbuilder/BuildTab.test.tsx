@@ -110,7 +110,7 @@ vi.mock("@/lib/settings", async (importOriginal) => ({
 }));
 
 const { BuildTab } = await import("@/components/osbuilder/BuildTab");
-const { RunLockContext } = await import("@/pages/osbuilder/runLock");
+const { RunLockContext } = await import("@/lib/runLock");
 const { DEFAULT_SETTINGS } = await import("@/lib/settings");
 const { OSINSTALL_EVENT, refusalPhrase } = await import("@/lib/osinstall");
 
@@ -1040,6 +1040,103 @@ describe("stopping a run, and what a finished run changes", () => {
       expect(destinationTakenMock.mock.calls.length).toBeGreaterThan(before)
     );
     expect(describeTreeMock.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  /**
+   * **The button stops offering the run that already happened** (round 5,
+   * task 4). It read *Build* both before and after a successful run, over a
+   * report saying the tree is written and a hand-off offering the card lane —
+   * a second press is a real thing to want (a tick changed, an archive
+   * replaced), but *Build* on a screen that has just built says nothing about
+   * which of the two it is. *Build again* does.
+   *
+   * The state it reads is `run.succeeded`, the same flag the hand-off badge
+   * reads, so the two cannot disagree about whether a run finished.
+   */
+  it("offers Build again once a run has succeeded, not Build", async () => {
+    seed({ ...FIELDS, "buildSession.firstboot": { written: false, wanted: false } });
+    renderTab();
+    await screen.findByTestId("build-run");
+    // The control, measured rather than assumed: before the run it is Build.
+    expect(screen.getByTestId("build-run").textContent).toBe(i18n.t("osBuilder.build.run"));
+
+    await userEvent.click(screen.getByTestId("build-confirm"));
+    await userEvent.click(screen.getByTestId("build-run"));
+    await screen.findByTestId("build-handoff");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("build-run").textContent).toBe(
+        i18n.t("osBuilder.build.runAgain")
+      )
+    );
+    expect(screen.getByTestId("build-run").textContent).not.toBe(i18n.t("osBuilder.build.run"));
+  });
+});
+
+/**
+ * **What the first-boot phase did to `S/User-Startup`** (round 5, task 4,
+ * carried from task 1's review). Two of the ten cases dropped with
+ * `FirstBootPanel` were its post-write sentences about that file; the write
+ * is this phase now, and `phaseDetailPhrase` (`buildRun.ts`) is the mapper.
+ * These two cases are that pair, arriving by their meaning rather than by
+ * their old names — the assertion is that the row on **this** screen says it.
+ */
+describe("the first-boot phase says what happened to S/User-Startup", () => {
+  /** Run to a finish with first boot on, and hand back its phase row. */
+  async function firstBootRow(written: FirstBootWritten): Promise<HTMLElement> {
+    firstbootWriteMock.mockReset().mockImplementation(async () => {
+      order.push("firstboot");
+      return written;
+    });
+    bothTicked();
+    renderTab();
+    await screen.findByTestId("build-run");
+    await userEvent.click(screen.getByTestId("build-confirm"));
+    await userEvent.click(screen.getByTestId("build-run"));
+    await waitFor(() => expect(screen.getAllByTestId("build-phase-row")).toHaveLength(4));
+    const rows = screen.getAllByTestId("build-phase-row");
+    await waitFor(() =>
+      expect(rows[3].textContent).toContain(
+        i18n.t("osBuilder.build.phase.firstboot.succeeded", { files: written.files.length })
+      )
+    );
+    return rows[3];
+  }
+
+  it("names the file the previous S/User-Startup was backed up to", async () => {
+    const BACKUP = "E:\\amiga\\Amigatolon\\sonuclar\\S\\User-Startup.art-bak";
+    const row = await firstBootRow({
+      files: ["S:ART-FirstBoot"],
+      userStartupBackup: BACKUP,
+      userStartupCreated: false,
+    });
+    // The path itself, not just "it was backed up": a user told their file
+    // was replaced and not told where the old one went has been given
+    // nothing (CLAUDE.md, "never claim what you did not do").
+    expect(row.textContent).toContain(i18n.t("osBuilder.build.phase.firstboot.backup", { path: BACKUP }));
+    expect(row.textContent).toContain(BACKUP);
+    expect(row.textContent).not.toContain(i18n.t("osBuilder.build.phase.firstboot.created"));
+  });
+
+  it("says ART created S/User-Startup when there was none to back up", async () => {
+    const row = await firstBootRow({
+      files: ["S:ART-FirstBoot"],
+      userStartupBackup: null,
+      userStartupCreated: true,
+    });
+    expect(row.textContent).toContain(i18n.t("osBuilder.build.phase.firstboot.created"));
+  });
+
+  it("adds neither sentence when the write touched no existing file and made none", async () => {
+    // The control: a row that always carried one of the two would pass both
+    // cases above and be wrong here.
+    const row = await firstBootRow({
+      files: ["S:ART-FirstBoot"],
+      userStartupBackup: null,
+      userStartupCreated: false,
+    });
+    expect(row.textContent).not.toContain(i18n.t("osBuilder.build.phase.firstboot.created"));
+    expect(within(row).queryByTestId("build-phase-detail")).toBeNull();
   });
 });
 

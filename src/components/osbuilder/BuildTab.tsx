@@ -48,6 +48,7 @@ import { Link } from "react-router-dom";
 import { useBuildSummary } from "@/components/osbuilder/buildSummary";
 import {
   isFirstBootWritten,
+  phaseDetailPhrase,
   phaseNextStepPhrase,
   phaseOutcomePhrase,
   phaseTone,
@@ -73,7 +74,7 @@ import {
 import type { Phrase } from "@/lib/phrase";
 import { useBuildRun } from "@/lib/useBuildRun";
 import { useBuildSession } from "@/lib/useBuildSession";
-import { useRunLock } from "@/pages/osbuilder/runLock";
+import { useRunLock } from "@/lib/runLock";
 
 /**
  * What the media folders actually hold, and what ART makes of it.
@@ -318,6 +319,10 @@ function PhaseRow({
 }) {
   const { t } = useTranslation();
   const outcome = phaseOutcomePhrase(report);
+  // The one extra fact a first-boot success carries — where the previous
+  // `S/User-Startup` went, or that there was none. `null` for every other
+  // (kind, ending) pair; see `phaseDetailPhrase`.
+  const detail = phaseDetailPhrase(report);
   const next = phaseNextStepPhrase(report, destination);
   const ending = report.ending;
   const applyOutcome =
@@ -344,6 +349,20 @@ function PhaseRow({
         )}
       </div>
       <PhaseProgress progress={ending} />
+      {/* **What the write did to a file the user may own.** The count above
+          says four files went into the tree; it does not say that one of
+          them was merged into `S/User-Startup` and where the version that
+          was there went. Rendered only where there is something to say —
+          `phaseDetailPhrase` returns `null` rather than guessing. */}
+      {detail && (
+        <p
+          className="muted"
+          data-testid="build-phase-detail"
+          style={{ fontSize: 11, margin: "4px 0 0", wordBreak: "break-all" }}
+        >
+          {t(detail.key, detail.params)}
+        </p>
+      )}
       {/* The refusals themselves, under the advice. "Fix what the refusal
           names" with no refusal on screen names nothing. */}
       {ending.state === "refused" && (
@@ -650,7 +669,21 @@ export function BuildTab() {
               disabled={!confirmed || run.running}
               onClick={() => run.start(phases, effectivePlan)}
             >
-              {t(run.running ? "osBuilder.build.running" : "osBuilder.build.run")}
+              {/* **Three labels, because there are three states** (round 5,
+                  task 4). It read *Build* both before and after a run that
+                  had already succeeded, standing over a report saying the
+                  tree was written and a hand-off offering the card lane. A
+                  second press is a real thing to want — a tick changed, an
+                  archive swapped — but the word for it is not the word for
+                  the first one. `run.succeeded` is the same flag the
+                  hand-off badge reads, so the two cannot disagree. */}
+              {t(
+                run.running
+                  ? "osBuilder.build.running"
+                  : run.succeeded
+                    ? "osBuilder.build.runAgain"
+                    : "osBuilder.build.run"
+              )}
             </button>
             {run.running && (
               <button className="btn btn-sm" data-testid="build-stop" onClick={() => run.stop()}>

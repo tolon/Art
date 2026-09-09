@@ -191,6 +191,24 @@ export function FirstBootRehearse({ treeRoot }: FirstBootRehearseProps) {
         )}
       </div>
 
+      {/* **A disabled button with nothing beside it is a screen that has
+          refused and not said so.** This component has no tree field of its
+          own — the tree is `AmigaInstallPanel`'s *Distribution tree* above
+          it, or the destination chosen on the OS Builder's Kickstart and
+          destination tab, which wins over it — so a reader looking for what
+          to fill in has nothing on this card to look at. The sentence names
+          both places rather than saying "no tree". Only the missing tree:
+          the Kickstart is a field right here, already empty and labelled. */}
+      {!treeRoot && (
+        <p
+          className="muted"
+          data-testid="firstboot-rehearsal-needs-tree"
+          style={{ fontSize: 11, margin: "-4px 0 12px" }}
+        >
+          {t("firstboot.rehearse.needsTree")}
+        </p>
+      )}
+
       {rehearsalCancelled && (
         <div
           className="badge badge-warn"

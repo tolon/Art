@@ -3,7 +3,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import { usePowerMode } from "@/lib/uxmode";
-import { useRunLock } from "@/pages/osbuilder/runLock";
+import { useRunLock } from "@/lib/runLock";
 import { NavIcon, type NavIconName } from "./NavIcon";
 
 /**
@@ -35,7 +35,7 @@ export function Sidebar() {
   const { t } = useTranslation();
   const powerMode = usePowerMode();
   const visible = NAV.filter((item) => powerMode || !item.powerOnly);
-  // The shell's run lock (`@/pages/osbuilder/runLock`, round 5): while a
+  // The shell's run lock (`@/lib/runLock`, round 5): while a
   // build is in flight every entry here is a way to abandon it silently, so
   // every entry stops being a link. Nothing is *hidden* — a destination that
   // is temporarily closed still has to read as a destination (§48: the mode
@@ -69,15 +69,23 @@ export function Sidebar() {
       {/* **Why the whole sidebar has gone dead, under the sidebar.** A column
           of disabled entries with no sentence beside them is a screen that
           has refused and not said so. The refusal names the control that
-          lifts it — Stop, on the build tab — and it is the same sentence the
-          OS Builder's own strip carries, because it is the same refusal. */}
+          lifts it — Stop — and, from here, the screen that carries it.
+
+          **The lane's wording, not the strip's** (round 5, task 4). The strip
+          inside the OS Builder says *"before leaving this tab"*, which is
+          true where it is drawn: over the tabs, an arm's length from the Stop
+          it means. This sidebar is on every screen in ART, so *this tab*
+          named whichever tab the reader happened to be standing on and the
+          Stop it pointed at was nowhere in sight — a refusal that is not
+          actionable from where it is read. `navigationLockedLane` names both
+          the screen and the control. */}
       {running && (
         <p
           className="faint"
           data-testid="sidebar-locked"
           style={{ fontSize: 11, margin: "8px 12px 0", lineHeight: 1.4 }}
         >
-          {t("osBuilder.build.navigationLocked")}
+          {t("osBuilder.build.navigationLockedLane")}
         </p>
       )}
     </aside>
