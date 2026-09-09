@@ -746,6 +746,7 @@
         "replaces": "{{replaced}} dosyanın yerine geçer, {{fresh}} yeni, {{unchanged}} birebir aynı",
         "replacesPending": "Henüz önizlenmedi"
       },
+      "previewNoFolder": "ART {{file}} dosyasının hangi klasörde olduğunu belirleyemedi, bu yüzden bu güncelleme önizlenmedi.",
       "phase": {
         "pending": "Sırasını bekliyor",
         "running": "Çalışıyor: {{name}}",

@@ -746,6 +746,7 @@
         "replaces": "Would replace {{replaced}} files, {{fresh}} new, {{unchanged}} identical",
         "replacesPending": "Not previewed yet"
       },
+      "previewNoFolder": "ART could not tell which folder {{file}} is in, so this update was not previewed.",
       "phase": {
         "pending": "Waiting its turn",
         "running": "Running: {{name}}",

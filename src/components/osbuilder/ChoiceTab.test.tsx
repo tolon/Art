@@ -20,7 +20,7 @@
 // nothing to catch it (ART-163's own shape).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import i18n from "i18next";
 
@@ -35,7 +35,10 @@ import type {
   InstallPlan,
   InstallRelease,
   InstallRequest,
+  MatchedBy,
   PlanResult,
+  SlotReport,
+  SlotState,
   TreeSummary,
 } from "@/lib/osinstall";
 import type { FirstBootPlan } from "@/lib/firstboot";
@@ -83,7 +86,7 @@ vi.mock("@/lib/settings", async (importOriginal) => ({
   saveSettings: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { ChoiceTab } = await import("@/components/osbuilder/ChoiceTab");
+const { ChoiceTab, useTickedUpdates } = await import("@/components/osbuilder/ChoiceTab");
 const { DEFAULT_SETTINGS } = await import("@/lib/settings");
 
 afterEach(async () => {
@@ -1250,5 +1253,261 @@ describe("in Turkish", () => {
     const tab = screen.getByTestId("choice-tab");
     expect(tab.textContent).not.toMatch(/osinstall\.|osBuilder\./);
     expect(tab.textContent).not.toContain("{{");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `useTickedUpdates` — what tab 4 runs, resolved to real files
+// ---------------------------------------------------------------------------
+//
+// Tested here rather than beside tab 4 because it is **this tab's list**: the
+// same chain, the same slot report, the same ticks, read through the same
+// input hook the rows above are drawn from. A copy of that reasoning living
+// next to the Build button is exactly the two-lanes-one-file shape ART-289 is
+// about, so the tests sit where the mocks for those inputs already are.
+
+/** One resolved slot, defaulted to everything the run does not read. */
+function slotState(
+  id: string,
+  found: { path: string; matchedBy: MatchedBy } | null,
+  candidates: string[] = []
+): SlotState {
+  return {
+    slot: {
+      id,
+      kind: "package",
+      name: id,
+      identity: id,
+      artefact: null,
+      required: false,
+      filenames: [],
+      provenance: null,
+      position: 2,
+      requires: [],
+      supersededBy: [],
+      expectsDirectories: [],
+    },
+    found: found
+      ? {
+          path: found.path,
+          matchedBy: found.matchedBy,
+          row: null,
+          confirmed: null,
+          bytesRead: { state: "read-no-row" },
+        }
+      : null,
+    candidates: candidates.map((path) => ({ path, bytesRead: { state: "not-read" } })),
+    installed: { state: "no" },
+    chosenMissing: null,
+    blockedBy: [],
+    incomplete: null,
+  };
+}
+
+function slotReportOf(states: SlotState[]): SlotReport {
+  return {
+    states,
+    summary: {
+      release: "AmigaOS 3.9",
+      requiredTotal: 0,
+      requiredFound: 0,
+      optionalTotal: 0,
+      optionalFound: 0,
+    },
+    unreadableFolders: [],
+    crowdedFolders: [],
+  };
+}
+
+const BB2_PATH = "E:\\amiga\\Amigatolon\\os39\\BoingBag39-2.lha";
+const LOCALE_PATH = "E:\\amiga\\arsiv\\Locale3_9.lha";
+
+/** The hook, with `chosen` ticked, `states` resolved and `rows` in the chain,
+ *  waited until it has finished asking. */
+async function renderTicked(
+  chosen: string[],
+  states: SlotState[],
+  rows: ChainRow[] = NINE_ROWS
+) {
+  seedRemembered({
+    ...FULL_FIELDS,
+    "buildSession.release": "AmigaOS 3.9",
+    "buildSession.packages.AmigaOS 3.9": { folder: null, chosen },
+  });
+  chainMock.mockResolvedValue(chainOf(rows));
+  slotsMock.mockResolvedValue(slotReportOf(states));
+  const view = renderHook(() => useTickedUpdates());
+  await waitFor(() => expect(view.result.current.loading).toBe(false));
+  return view;
+}
+
+describe("useTickedUpdates", () => {
+  it("resolves every ticked runnable row to the file its slot found, in the chain's order", async () => {
+    // Ticked in the **opposite** order to the chain's, because the order the
+    // run applies them in is the material's own and never the order somebody
+    // happened to click.
+    const { result } = await renderTicked(
+      ["locale-39", "boingbag-39-2"],
+      [
+        slotState("package:boingbag-39-2", { path: BB2_PATH, matchedBy: "hash" }),
+        slotState("package:locale-39", { path: LOCALE_PATH, matchedBy: "top-level-directory" }),
+      ]
+    );
+
+    expect(result.current.rows).toEqual([
+      {
+        packageId: "boingbag-39-2",
+        slotId: "package:boingbag-39-2",
+        name: "BoingBag 3.9-2",
+        file: BB2_PATH,
+      },
+      {
+        packageId: "locale-39",
+        slotId: "package:locale-39",
+        name: "Locale 3.9",
+        file: LOCALE_PATH,
+      },
+    ]);
+    expect(result.current.unresolved).toEqual([]);
+  });
+
+  it("gives the run the file the user chose by hand (ART-277/ART-289)", async () => {
+    // The owner's own case: two copies of one archive in one folder, and the
+    // one they named in `amigaInstall.archive.<pkg>`. The slot answers
+    // `chosen` for it, and *that* is the file the preview and the run must
+    // get — resolving it by identity instead is the two-answers defect this
+    // whole round is closing.
+    const chosenCopy = "E:\\amiga\\Amigatolon\\os39\\BoingBag39-2 (1).lha";
+    const { result } = await renderTicked(
+      ["boingbag-39-2"],
+      [slotState("package:boingbag-39-2", { path: chosenCopy, matchedBy: "chosen" })]
+    );
+
+    expect(result.current.rows.map((row) => row.file)).toEqual([chosenCopy]);
+    expect(result.current.unresolved).toEqual([]);
+  });
+
+  it("does not run a row whose file ART only guessed at, and names it instead", async () => {
+    // A find, never a guess. `filename` is the rank that says *a file in the
+    // folder is called what this archive is usually called*, which is
+    // consistent with several answers; handing it to the run would be the
+    // screen out-claiming the core, and quietly applying the wrong archive.
+    const { result } = await renderTicked(
+      ["boingbag-39-2", "locale-39"],
+      [
+        // Nothing decided: a candidate the resolver would not promote.
+        slotState("package:boingbag-39-2", null, [BB2_PATH]),
+        // …and the same fact wearing the rank itself, which the resolver does
+        // not currently produce and which must never be trusted if it does.
+        slotState("package:locale-39", { path: LOCALE_PATH, matchedBy: "filename" }),
+      ]
+    );
+
+    expect(result.current.rows).toEqual([]);
+    expect(result.current.unresolved).toEqual([
+      { packageId: "boingbag-39-2", name: "BoingBag 3.9-2" },
+      { packageId: "locale-39", name: "Locale 3.9" },
+    ]);
+  });
+
+  it("drops a row the moment its tick is taken back", async () => {
+    const { result } = await renderTicked(
+      ["boingbag-39-2", "locale-39"],
+      [
+        slotState("package:boingbag-39-2", { path: BB2_PATH, matchedBy: "hash" }),
+        slotState("package:locale-39", { path: LOCALE_PATH, matchedBy: "hash" }),
+      ]
+    );
+    expect(result.current.rows.length).toBe(2);
+
+    act(() =>
+      setRemembered("buildSession.packages.AmigaOS 3.9", {
+        folder: null,
+        chosen: ["locale-39"],
+      })
+    );
+
+    await waitFor(() => expect(result.current.rows.length).toBe(1));
+    expect(result.current.rows[0].packageId).toBe("locale-39");
+  });
+
+  it("never offers a row that runs on the Amiga, even with its id remembered", async () => {
+    // The wizard has one route. A row the tick list draws dead must not
+    // reappear in what the Build button runs — and a stale id from an older
+    // ART is exactly how it would.
+    const { result } = await renderTicked(
+      ["boingbags-39-3-4"],
+      [
+        slotState("package:boingbags-39-3-4", {
+          path: "E:\\amiga\\arsiv\\BoingBags34.lha",
+          matchedBy: "hash",
+        }),
+      ],
+      [
+        row({
+          position: 3,
+          packageId: "boingbags-39-3-4",
+          slotId: "package:boingbags-39-3-4",
+          name: "BoingBags 3&4",
+          sentenceFacts: { file: "BoingBags34.lha", runsOnAmiga: true },
+          state: { state: "ready" },
+        }),
+      ]
+    );
+
+    // Not a row, and not *unresolved* either: its file is right there. It is
+    // simply not something this wizard runs, which the tick list already says.
+    expect(result.current.rows).toEqual([]);
+    expect(result.current.unresolved).toEqual([]);
+  });
+
+  it("never offers a row the tick list draws closed", async () => {
+    // Every state `choiceRowState` decides is closed, ticked all at once: the
+    // tree already has it, nobody has measured its installer, ART refuses to
+    // place it, its file is not here, the material makes it redundant. A
+    // remembered id for any of them must not reach the run.
+    const { result } = await renderTicked(
+      [
+        "boingbag-39-1",
+        "boingbags-39-3-4",
+        "fonts-39",
+        "locale-39-turkish",
+        "euro-update",
+        "medium:AmigaOS3.9",
+      ],
+      NINE_ROWS.filter((r) => r.slotId).map((r) =>
+        slotState(r.slotId as string, { path: `E:\\amiga\\arsiv\\${r.name}.lha`, matchedBy: "hash" })
+      )
+    );
+
+    expect(result.current.rows).toEqual([]);
+    expect(result.current.unresolved).toEqual([]);
+  });
+
+  it("asks the chain exactly the question tab 2's own list asks", async () => {
+    // **The ART-289 rule, one layer up.** Tab 2's rows and the rows tab 4
+    // runs come from one input hook, so the two cannot drift: a second
+    // resolution of "which tree, which folders, which ROM, whose file
+    // choices" is how one wizard came to hold two answers about one archive
+    // in the first place.
+    seedRemembered({
+      ...FULL_FIELDS,
+      "buildSession.release": "AmigaOS 3.9",
+      "amigaInstall.archive.boingbag-39-2": BB2_PATH,
+    });
+    chainMock.mockResolvedValue(chainOf(NINE_ROWS));
+    slotsMock.mockResolvedValue(slotReportOf([]));
+
+    render(<ChoiceTab />);
+    await screen.findAllByTestId("choice-update-row");
+    const fromTheTab = chainMock.mock.calls.at(-1);
+    cleanup();
+
+    const view = renderHook(() => useTickedUpdates());
+    await waitFor(() => expect(view.result.current.loading).toBe(false));
+    expect(chainMock.mock.calls.at(-1)).toEqual(fromTheTab);
+    // …and the same overrides reach the slot report the files come out of —
+    // the user's own choice, ART-288's pair for this path.
+    expect(slotsMock.mock.calls.at(-1)?.[4]).toEqual([["package:boingbag-39-2", BB2_PATH]]);
   });
 });

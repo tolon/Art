@@ -51,6 +51,7 @@ import { useEffect, useLayoutEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { slotOverrides } from "@/lib/amigainstall";
+import { folderOf, type SequenceInputs } from "@/lib/buildRun";
 import { chainLines, choiceRowState, type ChainLine } from "@/lib/chain";
 import { firstbootPreview } from "@/lib/firstboot";
 import type { Phrase } from "@/lib/phrase";
@@ -67,12 +68,16 @@ import {
   hasRomUnknownRefusal,
   isForcedOnByCondition,
   osinstallChain,
+  osinstallSlots,
   rememberedComponentKey,
   toggleChosen,
   withoutExcluded,
   type ChainReport,
   type ComponentDef,
+  type InstallRelease,
   type SlotOverride,
+  type SlotReport,
+  type SlotState,
 } from "@/lib/osinstall";
 import { isFlag, isText, isTextOrNothing } from "@/lib/remembered";
 import { useBuildSession } from "@/lib/useBuildSession";
@@ -81,6 +86,264 @@ import { useInstallPlan } from "@/lib/useInstallPlan";
 import { useRemembered } from "@/lib/useRemembered";
 import { useRomIdentity } from "@/lib/useRomIdentity";
 import { useSettingsStore } from "@/stores/settingsStore";
+
+/**
+ * **The one set of inputs the update list is answered from** — read by this
+ * tab's own render and by {@link useTickedUpdates}, which is what tab 4 runs
+ * (ART-289).
+ *
+ * The defect this exists against is the round's own subject: two lanes of one
+ * wizard, each resolving *which tree, which folders, which Kickstart, whose
+ * file choices* for itself, and therefore two answers about one archive. A
+ * second copy of these six lines beside the Build button would recreate it
+ * exactly, and it would be invisible until somebody's BoingBag landed from a
+ * folder the screen above had already ruled out.
+ *
+ * So the question is asked once, here, and both readers get the same answer.
+ * The two arrays it returns (`folders`, `overrides`) are fresh identities on
+ * every render by construction — a caller starting disk work depends on
+ * `materialKey` and `overridesKey`, never on them (ART-178).
+ */
+interface ChoiceInputs {
+  release: InstallRelease;
+  /** The remembered destination for this release, read through the same key
+   *  and the same guard tab 1 and tab 3 read it through. */
+  destination: string | null;
+  romPath: string | null;
+  folders: string[];
+  /** `folders`, joined — the primitive an effect may depend on. */
+  materialKey: string;
+  treeRoot: string | null;
+  treeSettled: boolean;
+  overrides: SlotOverride[];
+  /** `overrides`, serialised — likewise. */
+  overridesKey: string;
+  /** `null` means *not answered yet*, never *no chain*: a release ART knows
+   *  no chain for answers with no rows, which is a different fact. */
+  chain: ChainReport | null;
+  /** Whether the chain has answered **this** question — false again while a
+   *  changed input is being re-asked, so a caller never reads a stale answer
+   *  as a settled one. A failed ask settles too: a screen that waits for ever
+   *  because one IPC call threw says nothing at all. */
+  chainSettled: boolean;
+}
+
+function useChoiceInputs(): ChoiceInputs {
+  const { session } = useBuildSession();
+  const release = session.release;
+  const [destination] = useRemembered<string | null>(
+    rememberedComponentKey("osinstall.destination", release),
+    isTextOrNothing,
+    null
+  );
+  const romPath = session.rom.path;
+
+  /**
+   * The user's own per-slot file choices, as `osinstall_chain` and
+   * `osinstall_slots` take them (ART-284/ART-289).
+   *
+   * **A string, deposited into the dependency array**, exactly as
+   * `AmigaInstallPanel` and `MaterialReadout` already do it: `slotOverrides`
+   * builds a fresh array on every render, and the effects below start disk
+   * work — an array identity there is ART-178's loop.
+   */
+  const rememberedBag = useSettingsStore((s) => s.settings.remembered);
+  const overridesKey = JSON.stringify(slotOverrides(rememberedBag));
+
+  /**
+   * The tree the chain is asked about — **the same one tab 1 asks about**
+   * (`useChainTree`, fix round 1's Important 2). The rule is that hook's, in
+   * one place, because two lanes with two trees is two `installed` answers
+   * about one file.
+   *
+   * `settled` gates the ask rather than merely the render: `isTree` is a
+   * round trip, so asking before it lands would put *ready* on a row the
+   * tree already carries and then swap it for *installed* under the reader.
+   */
+  const { treeRoot, settled: treeSettled } = useChainTree(destination);
+  /** A primitive dependency rather than the array, for the reason above. */
+  const materialKey = session.material.folders.map((folder) => folder.path).join("\n");
+
+  const [chain, setChain] = useState<ChainReport | null>(null);
+  const [chainSettled, setChainSettled] = useState(false);
+  useEffect(() => {
+    // Not until the tree is settled — see `treeRoot` above. One ask, about
+    // the right folder, rather than two about two.
+    if (!treeSettled) return;
+    // A changed input is a new question: the answer already held describes
+    // the old one until this comes back.
+    setChainSettled(false);
+    const folders = materialKey ? materialKey.split("\n") : [];
+    let cancelled = false;
+    osinstallChain(release, folders, treeRoot, romPath, JSON.parse(overridesKey) as SlotOverride[])
+      .then((answer) => {
+        if (cancelled) return;
+        setChain(answer);
+        setChainSettled(true);
+      })
+      .catch(() => {
+        // Silent, and for the readout's own reason: a red box here would
+        // report a fault in ART as though it were a statement about the
+        // user's files. Settled all the same — see `chainSettled`.
+        if (cancelled) return;
+        setChain(null);
+        setChainSettled(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [release, materialKey, treeRoot, treeSettled, romPath, overridesKey]);
+
+  return {
+    release,
+    destination,
+    romPath,
+    folders: materialKey ? materialKey.split("\n") : [],
+    materialKey,
+    treeRoot,
+    treeSettled,
+    overrides: JSON.parse(overridesKey) as SlotOverride[],
+    overridesKey,
+    chain,
+    chainSettled,
+  };
+}
+
+/**
+ * The path a slot fills a **run** with, or `null`.
+ *
+ * **A find, never a guess** (`AmigaInstallPanel`'s own `foundPath`, one rank
+ * wider). `filename` is *a file in the folder is called what this archive is
+ * usually called*, which is consistent with several answers — handing it to
+ * `osinstall_add_package` would quietly apply an archive nobody identified.
+ * The other four are each a fact: the bytes (`hash`), what the medium says
+ * about itself (`volume-name` / `top-level-directory`), and the file the user
+ * named by hand (`chosen`).
+ *
+ * **`chosen` is trusted here and not in the panel's field**, and the
+ * difference is what the answer is *for*: the panel fills a text box the user
+ * themselves typed into, where echoing their own choice back as an
+ * identification ART made would be a claim; this decides which file the run
+ * opens, and ART-277/ART-289 are precisely the rule that the file the user
+ * named is the file that runs. It reaches `osinstall_collisions` and
+ * `osinstall_add_package` as the `(slot, path)` override either way, so
+ * refusing it here would make the run's own answer differ from the readout's
+ * — the defect, in the other direction.
+ */
+function runnablePath(state: SlotState | null | undefined): string | null {
+  if (!state?.found) return null;
+  switch (state.found.matchedBy) {
+    case "hash":
+    case "volume-name":
+    case "top-level-directory":
+    case "chosen":
+      return state.found.path;
+    case "filename":
+      return null;
+  }
+}
+
+/** What tab 4 runs: the ticked update rows resolved to real files, and the
+ *  ticked rows it could not resolve. */
+export interface TickedUpdates {
+  /** In the chain's order, which is the order the run applies them in. */
+  rows: SequenceInputs["updates"];
+  /** Ticked, runnable, and **no file ART would trust** — tab 4 names these
+   *  and does not run them. Naming beats silently dropping: a row the user
+   *  ticked that simply vanishes from the plan is the confident wrong screen
+   *  in its quietest form. */
+  unresolved: { packageId: string; name: string }[];
+  /** True while the chain or the slot report is still being asked. Both
+   *  lists are empty then, rather than half-answered: every ticked row would
+   *  read as unresolved for the moment before the slots land. */
+  loading: boolean;
+}
+
+/**
+ * The ticked update rows, resolved to the files they will actually be run
+ * with (four-tab design § 3.2, ART-289).
+ *
+ * Exported from **this** file, not written beside the Build button, because
+ * it is this tab's own list: the same chain, the same ticks, the same slot
+ * overrides, through {@link useChoiceInputs}. A row is here when the user
+ * ticked it, when `choiceRowState` says the tick is theirs to give, and when
+ * it is not an Amiga-route row — the same three facts the checkbox above is
+ * drawn from, decided by the same function, so a row the list draws dead can
+ * never be a row the button runs.
+ */
+export function useTickedUpdates(): TickedUpdates {
+  const inputs = useChoiceInputs();
+  const { session } = useBuildSession();
+  const { release, materialKey, treeRoot, treeSettled, romPath, overridesKey } = inputs;
+
+  /**
+   * Where the files come from. `ChainLine.file` is a **filename**; the path
+   * is the slot's, resolved against the same folders, tree, ROM and overrides
+   * the chain was asked with — which is why this asks rather than reading the
+   * chain's own answer.
+   */
+  const [slots, setSlots] = useState<SlotReport | null>(null);
+  const [slotsSettled, setSlotsSettled] = useState(false);
+  useEffect(() => {
+    if (!treeSettled) return;
+    setSlotsSettled(false);
+    const folders = materialKey ? materialKey.split("\n") : [];
+    let cancelled = false;
+    osinstallSlots(release, folders, treeRoot, romPath, JSON.parse(overridesKey) as SlotOverride[])
+      .then((answer) => {
+        if (cancelled) return;
+        setSlots(answer);
+        setSlotsSettled(true);
+      })
+      .catch(() => {
+        // A readout ART could not produce is not a readout that found
+        // nothing: every ticked row comes back `unresolved`, which tab 4
+        // names, rather than silently not running.
+        if (cancelled) return;
+        setSlots(null);
+        setSlotsSettled(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [release, materialKey, treeRoot, treeSettled, romPath, overridesKey]);
+
+  const loading = !inputs.chainSettled || !slotsSettled;
+  const rows: SequenceInputs["updates"] = [];
+  const unresolved: { packageId: string; name: string }[] = [];
+  if (!loading) {
+    const chainRows = inputs.chain?.rows ?? [];
+    const chosen = session.packages.chosen;
+    // Paired **by index**, as the list above pairs them: `position` is a rank
+    // the material may give twice.
+    chainLines(chainRows).forEach((line, at) => {
+      const row = chainRows[at];
+      // The medium is not a package to add — there is nothing to hand
+      // `osinstall_add_package`.
+      if (!row.packageId || !row.slotId) return;
+      if (!chosen.includes(line.id)) return;
+      // The tick list's own decision, not a second one: `enabled` is true for
+      // exactly the rows whose box means what a box means.
+      if (!choiceRowState(line, row).enabled) return;
+      // …and the Amiga route again, independently. It is already inside
+      // `choiceRowState`, and it is repeated here because this is the list
+      // that *starts* work: a future arm that let such a row through would
+      // otherwise run an emulator nobody asked for.
+      if (row.sentenceFacts.runsOnAmiga === true) return;
+
+      const file = runnablePath(slots?.states.find((state) => state.slot.id === row.slotId));
+      // A file with no folder part is a path this core did not produce, and
+      // `osinstall_add_package` takes a folder: unresolved rather than asked
+      // with a folder nobody has.
+      if (!file || !folderOf(file)) {
+        unresolved.push({ packageId: row.packageId, name: row.name });
+        return;
+      }
+      rows.push({ packageId: row.packageId, slotId: row.slotId, name: row.name, file });
+    });
+  }
+  return { rows, unresolved, loading };
+}
 
 export function ChoiceTab() {
   const { t } = useTranslation();
@@ -98,11 +361,10 @@ export function ChoiceTab() {
     ""
   );
   const [reuseScan] = useRemembered<boolean>("osinstall.reuseScan", isFlag, true);
-  const [destination] = useRemembered<string | null>(
-    rememberedComponentKey("osinstall.destination", release),
-    isTextOrNothing,
-    null
-  );
+  // …and the four the update list is answered from, through the one hook tab
+  // 4's own `useTickedUpdates` reads them through (ART-289).
+  const inputs = useChoiceInputs();
+  const { destination, treeRoot, treeSettled, chain } = inputs;
   const romPath = session.rom.path;
   // Only the identity: a conditional component's own reason line names the
   // Kickstart, and nothing on this tab draws the ROM's outcome sentences
@@ -146,57 +408,10 @@ export function ChoiceTab() {
   // two screens cannot say different things about one file. The rows arrive
   // already sorted by `(position, id)` in Rust and are **not** re-sorted
   // here: the order is the order the material goes on, which is information.
-
-  /**
-   * The user's own per-slot file choices, as `osinstall_chain` takes them
-   * (ART-284/ART-289).
-   *
-   * **A string, deposited into the dependency array**, exactly as
-   * `AmigaInstallPanel` and `MaterialReadout` already do it: `slotOverrides`
-   * builds a fresh array on every render, and the effect below starts disk
-   * work — an array identity there is ART-178's loop.
-   */
-  const rememberedBag = useSettingsStore((s) => s.settings.remembered);
-  const overridesKey = JSON.stringify(slotOverrides(rememberedBag));
-
-  /**
-   * The tree the chain is asked about — **the same one tab 1 asks about**
-   * (`useChainTree`, fix round 1's Important 2). The rule is that hook's, in
-   * one place, because two lanes with two trees is two `installed` answers
-   * about one file.
-   *
-   * `settled` gates the ask rather than merely the render: `isTree` is a
-   * round trip, so asking before it lands would put *ready* on a row the
-   * tree already carries and then swap it for *installed* under the reader.
-   */
-  const { treeRoot, settled: treeSettled } = useChainTree(destination);
-  /** A primitive dependency rather than the array, for the reason above. */
-  const materialKey = session.material.folders.map((folder) => folder.path).join("\n");
-
-  /** `null` means *not answered yet*, never *no chain*. A release ART knows
-   *  no chain for answers with **no rows**, which is a different fact and
-   *  draws no group at all (spec § 1.5: AmigaOS 3.2 has none). */
-  const [chain, setChain] = useState<ChainReport | null>(null);
-  useEffect(() => {
-    // Not until the tree is settled — see `treeRoot` above. One ask, about
-    // the right folder, rather than two about two.
-    if (!treeSettled) return;
-    const folders = materialKey ? materialKey.split("\n") : [];
-    let cancelled = false;
-    osinstallChain(release, folders, treeRoot, romPath, JSON.parse(overridesKey) as SlotOverride[])
-      .then((answer) => {
-        if (!cancelled) setChain(answer);
-      })
-      .catch(() => {
-        // Silent, and for the readout's own reason: a red box here would
-        // report a fault in ART as though it were a statement about the
-        // user's files.
-        if (!cancelled) setChain(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [release, materialKey, treeRoot, treeSettled, romPath, overridesKey]);
+  //
+  // The chain itself is `useChoiceInputs`' — the same answer `useTickedUpdates`
+  // reads, so the list drawn here and the list the Build button runs cannot
+  // come from two questions (ART-289).
 
   const updateRows = chain?.rows ?? [];
   // Paired **by index**: `chainLines` maps one line per row, in order, and a
