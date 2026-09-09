@@ -376,7 +376,17 @@ function PhaseRow({
 export function BuildTab() {
   const { t } = useTranslation();
   const { session, setTree, setFirstBoot, setKind, setRelease } = useBuildSession();
-  const summary = useBuildSummary({ previewReplacements: true });
+  /**
+   * **A run just finished, so the folder is not what it was** (fix round 1,
+   * I2). `osinstall_destination_taken` and `osinstall_describe_tree` are
+   * answers about a folder, and a successful build fills the folder it was
+   * told to fill: without this the gate went on offering a fresh tree into
+   * a folder that now holds one, and the summary went on calling it fresh.
+   * Bumped once per completed run — `run.finished` is false again the moment
+   * the next one starts.
+   */
+  const [runStamp, setRunStamp] = useState(0);
+  const summary = useBuildSummary({ previewReplacements: true, revision: runStamp });
   const { plan, destination, taken, ticked, phases, lines, label } = summary;
   const { effectivePlan, effectivePlanResult } = plan;
 
@@ -443,11 +453,17 @@ export function BuildTab() {
    * holding a line it is not — so the ternary went and the rule is stated
    * once, here, where the mutation does fall.
    */
-  const gate: Phrase | null = treePhaseNeeded
-    ? blocker
-    : phases.length === 0
-      ? { key: "osBuilder.build.blocked.nothingToRun" }
-      : null;
+  const gate: Phrase | null = !summary.destinationChecked
+    ? // **Nothing is offered over a guess** (fix round 1, M3). Which
+      // sequence this build runs — with a tree phase or without one — is
+      // decided by a round trip that has not landed, and a button pressed
+      // before it lands runs the wrong one.
+      { key: "osBuilder.build.summary.checking" }
+    : treePhaseNeeded
+      ? blocker
+      : phases.length === 0
+        ? { key: "osBuilder.build.blocked.nothingToRun" }
+        : null;
 
   const [confirmed, setConfirmed] = useState(false);
   // A confirmation describes the plan that was on screen when it was given;
@@ -463,6 +479,10 @@ export function BuildTab() {
     onTreeWritten: (root) => setTree({ root, builtHere: true }),
     onFirstBootWritten: () => setFirstBoot({ written: true }),
   });
+
+  useEffect(() => {
+    if (run.finished) setRunStamp((stamp) => stamp + 1);
+  }, [run.finished]);
 
   const running = run.reports.find((r) => r.ending.state === "running") ?? null;
 

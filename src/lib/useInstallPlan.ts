@@ -83,6 +83,17 @@ export interface InstallPlanInputs {
   /** `useBuildSession`'s own setter. The hook writes through it in exactly
    *  two places, both of them a stale id clearing itself (ART-290). */
   setComponents: (change: Partial<ComponentChoice>) => void;
+  /**
+   * Whether to ask `osinstall_component_collisions` at all. Defaults to true,
+   * which is every caller that draws the *what would this replace* fold.
+   *
+   * Tab 4 passes `false` in update mode (round 4 task 4, fix round 1's C1):
+   * the preview partitions what the release's own **parts** would place, and
+   * with the destination already a tree there is no tree phase, so those
+   * parts are not placed at all. Asking would be work for an answer that may
+   * not be shown — and it *was* shown, which is the defect this closes.
+   */
+  previewCollisions?: boolean;
 }
 
 export interface InstallPlanState {
@@ -128,6 +139,7 @@ export function useInstallPlan(inputs: InstallPlanInputs): InstallPlanState {
     rescanNonce,
     components,
     setComponents,
+    previewCollisions = true,
   } = inputs;
   const { t } = useTranslation();
   const chosen = components.chosen;
@@ -489,7 +501,9 @@ export function useInstallPlan(inputs: InstallPlanInputs): InstallPlanState {
 
   useEffect(() => {
     const plan = effectivePlanResult?.outcome === "planned" ? effectivePlanResult.plan : null;
-    if (!plan || layeringOn.length === 0) {
+    // `previewCollisions` first: a caller that does not want this answer must
+    // not have it asked for, and must not be handed a stale one either.
+    if (!previewCollisions || !plan || layeringOn.length === 0) {
       setComponentPreview(null);
       setComponentPreviewError(null);
       return;
@@ -511,7 +525,7 @@ export function useInstallPlan(inputs: InstallPlanInputs): InstallPlanState {
     return () => {
       cancelled = true;
     };
-  }, [effectivePlanResult, layeringOn]);
+  }, [effectivePlanResult, layeringOn, previewCollisions]);
 
   const basePlan = basePlanResult?.outcome === "planned" ? basePlanResult.plan : null;
   const effectivePlan = effectivePlanResult?.outcome === "planned" ? effectivePlanResult.plan : null;

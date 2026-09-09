@@ -745,7 +745,9 @@
         "firstboot": "İlk açılış: ART'ın Amiga'da bir kez çalışacak hazırlığı",
         "firstbootOff": "İlk açılış: kapalı",
         "replaces": "{{replaced}} dosyanın yerine geçer (sistemin parçalarında {{fresh}} yeni, {{unchanged}} aynı)",
-        "replacesPending": "Henüz önizlenmedi"
+        "replacesUpdates": "Güncellemeler ağaçtaki {{replaced}} dosyanın yerine geçer",
+        "replacesPending": "Henüz önizlenmedi",
+        "checking": "Hedef denetleniyor…"
       },
       "unresolved": "{{name}}: dosyasını Amiga dosyaları sekmesinde seçin — yazılmayacak.",
       "blocked": {
@@ -789,7 +791,7 @@
       },
       "next": {
         "refused": "Reddin işaret ettiğini düzeltin, sonra yeniden Derle'ye basın.",
-        "failed": "Ağaç {{root}} yolunda; iş {{total}} öğeden {{done}}. öğede durdu.",
+        "failed": "Ağaç {{root}} yolunda; iş {{total}} öğeden {{done}}. öğede durdu. Hiçbir şey geri alınmadı.",
         "failedUnknown": "Ağaç {{root}} yolunda; ART işin ne kadarının yapıldığını söyleyecek kadar ilerleyemedi. Hiçbir şey geri alınmadı.",
         "cancelled": "Ağaç şurada: {{root}} — siz durdurmadan önce {{files}} dosya yazılmıştı. Hiçbir şey geri alınmadı."
       }
@@ -2505,7 +2507,7 @@
       "heading": "Bu henüz neden kurulamıyor"
     },
     "run": {
-      "confirm": "Yukarıdaki dosya listesini inceledim.",
+      "confirm": "Yukarıdaki özeti gözden geçirdim.",
       "progress": {
         "starting": "Başlıyor…",
         "percent": "%{{percent}} — {{total}} dosyadan {{done}} tanesi"

@@ -23,6 +23,7 @@ import {
   type Phase,
   type PhaseEnding,
   type PhaseReport,
+  type RunSummaryArgs,
   type SequenceInputs,
 } from "@/lib/buildRun";
 import type { ApplyOutcome, InstallPlan, TreeSummary } from "@/lib/osinstall";
@@ -360,6 +361,30 @@ describe("phaseNextStepPhrase", () => {
     }
   });
 
+  // **A stopped run says nothing was undone, and all three endings say it.**
+  // The reassurance is the load-bearing half of the sentence — a person whose
+  // build stopped part way needs to know the tree is where it is *and* that
+  // ART has not started tidying up behind them — and it is the half a
+  // reworded key loses silently, because dropping a trailing sentence changes
+  // no interpolation variable.
+  //
+  // Asserted as a **relation between the three keys**, never as a copy of the
+  // English: a copy drifts (testing.md), and the rule really is that the
+  // three say the same thing about undoing.
+  it("tells every mid-run ending that nothing was undone, in both languages", () => {
+    for (const catalogue of [en, tr]) {
+      const cancelled = leafText(catalogue, "osBuilder.build.next.cancelled");
+      const reassurance = cancelled.slice(cancelled.lastIndexOf(". ") + 2);
+      // A sanity check on the extraction itself, so a catalogue reworded into
+      // one long clause cannot make this test vacuous.
+      expect(reassurance.length).toBeGreaterThan(8);
+      expect(leafText(catalogue, "osBuilder.build.next.failed").endsWith(reassurance)).toBe(true);
+      expect(
+        leafText(catalogue, "osBuilder.build.next.failedUnknown").endsWith(reassurance)
+      ).toBe(true);
+    }
+  });
+
   it("claims no count when the job counted but named no total", () => {
     // `JobProgress.total` is nullable, and "item 17 of null" is not a
     // sentence. One arm rather than a third key.
@@ -444,13 +469,14 @@ const TREE: TreeSummary = {
   problem: null,
 };
 
-const SUMMARY_ARGS = {
+const SUMMARY_ARGS: RunSummaryArgs = {
   plan: PLAN,
   destinationIsTree: false,
+  destinationChecked: true,
   treeSummary: null,
   updates: INPUTS.updates,
   firstBootWanted: true,
-  replaces: { fresh: 41, unchanged: 3, replaced: 0 },
+  replaces: { state: "components", fresh: 41, unchanged: 3, replaced: 0 },
 };
 
 describe("runSummaryLines", () => {
@@ -523,9 +549,58 @@ describe("runSummaryLines", () => {
     const [, , , replaces] = runSummaryLines(SUMMARY_ARGS);
     expect(replaces.params).toEqual({ replaced: 0, fresh: 41, unchanged: 3 });
 
-    const pending = runSummaryLines({ ...SUMMARY_ARGS, replaces: null })[3];
+    const pending = runSummaryLines({ ...SUMMARY_ARGS, replaces: { state: "pending" } })[3];
     expect(pending.key).toBe("osBuilder.build.summary.replacesPending");
     expect(pending.params).toBeUndefined();
     expectRenderable(pending);
+  });
+
+  // **Update mode's own fourth line** (round 4 task 4, fix round 1's C1).
+  // The component preview's counts are about the release's own parts landing
+  // in an empty folder; in update mode they do not land at all, so the only
+  // number that survives is what the ticked updates would replace.
+  it("says only what the updates would replace when the tree already exists", () => {
+    const line = runSummaryLines({
+      ...SUMMARY_ARGS,
+      destinationIsTree: true,
+      treeSummary: TREE,
+      replaces: { state: "updates", replaced: 166 },
+    })[3];
+    expect(line.key).toBe("osBuilder.build.summary.replacesUpdates");
+    expect(line.params).toEqual({ replaced: 166 });
+    expectRenderable(line);
+  });
+
+  // **A preview ART could not produce is not a preview still coming** (I5).
+  it("says the preview failed, in its own words, rather than *not previewed yet*", () => {
+    const line = runSummaryLines({
+      ...SUMMARY_ARGS,
+      replaces: { state: "failed", detail: "the disc changed since the scan" },
+    })[3];
+    expect(line.key).toBe("osinstall.replaces.failed");
+    expect(line.params).toEqual({ error: "the disc changed since the scan" });
+    expectRenderable(line);
+    expect(line.key).not.toBe("osBuilder.build.summary.replacesPending");
+  });
+
+  // **Fresh-or-tree is one round trip away, and the first line is the
+  // sentence that states which** (M3). Guessing for a render and swapping is
+  // the confident-wrong screen at its shortest-lived.
+  it("says the destination is being checked rather than guessing which build this is", () => {
+    const lines = runSummaryLines({ ...SUMMARY_ARGS, destinationChecked: false });
+    expect(lines).toHaveLength(4);
+    expect(lines[0].key).toBe("osBuilder.build.summary.checking");
+    expect(lines[0].params).toBeUndefined();
+    expectRenderable(lines[0]);
+
+    // …and it says it for a folder that will turn out to be a tree, too —
+    // the point is that neither answer may be stated yet.
+    const asTree = runSummaryLines({
+      ...SUMMARY_ARGS,
+      destinationChecked: false,
+      destinationIsTree: true,
+      treeSummary: TREE,
+    });
+    expect(asTree[0].key).toBe("osBuilder.build.summary.checking");
   });
 });

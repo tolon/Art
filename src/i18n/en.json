@@ -745,7 +745,9 @@
         "firstboot": "First boot: ART's one-time setup on the Amiga",
         "firstbootOff": "First boot: off",
         "replaces": "Would replace {{replaced}} files ({{fresh}} new and {{unchanged}} identical among the release's parts)",
-        "replacesPending": "Not previewed yet"
+        "replacesUpdates": "The updates would replace {{replaced}} files already in the tree",
+        "replacesPending": "Not previewed yet",
+        "checking": "Checking the destination…"
       },
       "unresolved": "{{name}}: choose its file on the Amiga files tab — it will not be written.",
       "blocked": {
@@ -789,7 +791,7 @@
       },
       "next": {
         "refused": "Fix what the refusal names, then press Build again.",
-        "failed": "The tree is at {{root}}; the work stopped at item {{done}} of {{total}}.",
+        "failed": "The tree is at {{root}}; the work stopped at item {{done}} of {{total}}. Nothing was undone.",
         "failedUnknown": "The tree is at {{root}}; ART did not get far enough to say how much of the work was done. Nothing was undone.",
         "cancelled": "The tree is at {{root}}; {{files}} files were written before you stopped it. Nothing was undone."
       }
@@ -2505,7 +2507,7 @@
       "heading": "Why this cannot be built yet"
     },
     "run": {
-      "confirm": "I have reviewed the file list above.",
+      "confirm": "I have reviewed the summary above.",
       "progress": {
         "starting": "Starting…",
         "percent": "{{percent}}% — {{done}} of {{total}} files"

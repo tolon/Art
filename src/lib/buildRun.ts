@@ -361,15 +361,49 @@ export function phaseTone(report: PhaseReport): "ok" | "warn" | "err" | "muted" 
   }
 }
 
+/**
+ * What the fourth summary line may claim, and it is **four different things**
+ * rather than a number and a null (round 4 task 4, fix round 1's C1 and I5).
+ *
+ * `components` is the fresh-build answer: the component preview partitions
+ * what the release's own parts would place into landed-on-nothing,
+ * landed-on-identical-bytes and replaced-something, and the ticked updates
+ * add to the last of those alone (`osinstall_collisions` answers a list of
+ * collisions and nothing else — it has no `placed`/`contested`).
+ *
+ * `updates` is the **update-mode** answer, and it exists because the other
+ * one was a claim about work that will not run: with the destination already
+ * a tree there is no tree phase, so the release's parts are not placed at
+ * all and their preview describes a build nobody asked for. Only the ticked
+ * updates' own count survives.
+ *
+ * `failed` is the preview ART could not produce, which is not the preview
+ * that found nothing (§89) and not one still coming either.
+ */
+export type ReplacesSummary =
+  | { state: "components"; fresh: number; unchanged: number; replaced: number }
+  | { state: "updates"; replaced: number }
+  | { state: "failed"; detail: string }
+  | { state: "pending" };
+
 export interface RunSummaryArgs {
   plan: InstallPlan | null;
   destinationIsTree: boolean;
   treeSummary: TreeSummary | null;
   updates: SequenceInputs["updates"];
   firstBootWanted: boolean;
-  /** The merged collision preview — the component fold's counts plus one
-   *  `osinstall_collisions` per ticked update. Null until it has been asked. */
-  replaces: { fresh: number; unchanged: number; replaced: number } | null;
+  /**
+   * Whether ART has finished looking at the destination folder.
+   *
+   * `false` means *neither* "a fresh build" nor "an existing tree" may be
+   * said yet: the two are one round trip apart, and the first line is the
+   * sentence that states which of them this build is. A screen that guesses
+   * for a render and then swaps is the confident-wrong screen at its
+   * shortest-lived.
+   */
+  destinationChecked: boolean;
+  /** The collision preview — see {@link ReplacesSummary}. */
+  replaces: ReplacesSummary;
 }
 
 /**
@@ -384,7 +418,13 @@ export interface RunSummaryArgs {
 export function runSummaryLines(args: RunSummaryArgs): Phrase[] {
   const lines: Phrase[] = [];
 
-  if (args.destinationIsTree) {
+  if (!args.destinationChecked) {
+    // One round trip decides whether this is a fresh build or an update, and
+    // that is what the first line states. Until it lands the line says it is
+    // being looked at, which is a fact rather than a guess with a 50 % hit
+    // rate that swaps under the reader.
+    lines.push({ key: "osBuilder.build.summary.checking" });
+  } else if (args.destinationIsTree) {
     if (args.treeSummary) {
       lines.push({
         key: "osBuilder.build.summary.treeExisting",
@@ -432,18 +472,36 @@ export function runSummaryLines(args: RunSummaryArgs): Phrase[] {
       : "osBuilder.build.summary.firstbootOff",
   });
 
-  lines.push(
-    args.replaces
-      ? {
-          key: "osBuilder.build.summary.replaces",
-          params: {
-            replaced: args.replaces.replaced,
-            fresh: args.replaces.fresh,
-            unchanged: args.replaces.unchanged,
-          },
-        }
-      : { key: "osBuilder.build.summary.replacesPending" }
-  );
+  lines.push(replacesLine(args.replaces));
 
   return lines;
+}
+
+/** The fourth line, one arm per {@link ReplacesSummary} state — four literal
+ *  keys, because four different things are being said and a reader shown one
+ *  of them infers the others wrongly. */
+function replacesLine(replaces: ReplacesSummary): Phrase {
+  switch (replaces.state) {
+    case "components":
+      return {
+        key: "osBuilder.build.summary.replaces",
+        params: {
+          replaced: replaces.replaced,
+          fresh: replaces.fresh,
+          unchanged: replaces.unchanged,
+        },
+      };
+    case "updates":
+      return {
+        key: "osBuilder.build.summary.replacesUpdates",
+        params: { replaced: replaces.replaced },
+      };
+    case "failed":
+      // The install screen's own key for a preview that could not be
+      // produced, reused rather than reworded: it is the same fact, and one
+      // sentence for it is one sentence to keep true.
+      return { key: "osinstall.replaces.failed", params: { error: replaces.detail } };
+    case "pending":
+      return { key: "osBuilder.build.summary.replacesPending" };
+  }
 }

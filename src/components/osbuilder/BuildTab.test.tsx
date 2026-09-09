@@ -32,6 +32,7 @@ import type {
   ChainRow,
   ChainState,
   ComponentDef,
+  InstallLayer,
   InstallPlan,
   InstallRequest,
   MediaScanResult,
@@ -39,6 +40,7 @@ import type {
   PlanResult,
   RefusalReason,
   SlotReport,
+  StatedRelease,
   TreeSummary,
 } from "@/lib/osinstall";
 import type { RomInfo } from "@/lib/pistorm";
@@ -176,8 +178,8 @@ const ITEM = {
 
 let refusals: RefusalReason[] = [];
 
-function planResultFor(req: InstallRequest): PlanResult {
-  const plan: InstallPlan = {
+function planFor(req: InstallRequest): InstallPlan {
+  return {
     release: req.release,
     items: [ITEM],
     refusals,
@@ -193,7 +195,10 @@ function planResultFor(req: InstallRequest): PlanResult {
     removals: [],
     layers: [],
   };
-  return { outcome: "planned", plan };
+}
+
+function planResultFor(req: InstallRequest): PlanResult {
+  return { outcome: "planned", plan: planFor(req) };
 }
 
 const NOT_A_TREE: TreeSummary = {
@@ -226,12 +231,18 @@ const TREE_OUTCOME: ApplyOutcome = {
   postPlace: [],
 };
 
-const TREE_RESULT: OsInstallResult = {
-  job_id: 11,
-  destination: DEST,
-  outcome: TREE_OUTCOME,
-  stated_release: { verdict: "confirmed", stated: "39.29" },
-};
+/** What the finished tree's own release marker says. Mutable, because the
+ *  five verdicts are five sentences and each of them is a case. */
+let statedRelease: StatedRelease = { verdict: "confirmed", stated: "39.29" };
+
+function treeResult(): OsInstallResult {
+  return {
+    job_id: 11,
+    destination: DEST,
+    outcome: TREE_OUTCOME,
+    stated_release: statedRelease,
+  };
+}
 
 const PACKAGE_OUTCOME: ApplyOutcome = { ...TREE_OUTCOME, files: 166, bytes: 2_100_000 };
 
@@ -401,7 +412,7 @@ async function settles(
 ): Promise<unknown> {
   await start();
   return extract(
-    event === OSINSTALL_EVENT ? TREE_RESULT : { job_id: 12, outcome: PACKAGE_OUTCOME }
+    event === OSINSTALL_EVENT ? treeResult() : { job_id: 12, outcome: PACKAGE_OUTCOME }
   );
 }
 
@@ -428,6 +439,7 @@ beforeEach(() => {
   order = [];
   report = null;
   refusals = [];
+  statedRelease = { verdict: "confirmed", stated: "39.29" };
   componentsMock.mockReset().mockResolvedValue(COMPONENTS_39);
   layersForMock.mockReset().mockResolvedValue([]);
   planMock
@@ -797,7 +809,7 @@ describe("pressing Build", () => {
     );
     expect(screen.getByTestId("build-progress-bar")).toBeTruthy();
 
-    act(() => job.resolve(TREE_RESULT));
+    act(() => job.resolve(treeResult()));
     await flush();
   });
 });
@@ -847,6 +859,690 @@ describe("the hand-off", () => {
           "buildSession.tree"
         ]
       ).toEqual({ root: DEST, builtHere: true })
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// What the fourth line may claim, and when the tab may claim anything at all
+// ---------------------------------------------------------------------------
+//
+// Round 4 task 4, fix round 1. Three separate ways this line was a confident
+// wrong sentence: it counted tree-phase work in update mode, where no tree
+// phase runs; it said *not previewed yet* about a preview that had already
+// failed; and the whole first line picked one of "a fresh build" and "this
+// tree will be updated" before ART had looked at the folder.
+
+describe("the fourth summary line", () => {
+  it("states only what the updates would replace when the tree already exists", async () => {
+    describeTreeMock.mockResolvedValue(IS_A_TREE);
+    destinationTakenMock.mockResolvedValue(true);
+    // One collision per ticked update — the only number ART holds for an
+    // update row (`osinstall_collisions` answers a list and nothing else).
+    collisionsMock.mockResolvedValue([{ path: "C/Format", collision: { collision: "newer" } }]);
+    bothTicked();
+    renderTab();
+
+    await waitFor(() =>
+      expect(summaryLines()[3]).toBe(
+        i18n.t("osBuilder.build.summary.replacesUpdates", { replaced: 2 })
+      )
+    );
+    // …and the component preview is not merely unshown, it is never asked
+    // for: it partitions what the release's own parts would place, and in
+    // update mode they are not placed at all.
+    expect(componentCollisionsMock).not.toHaveBeenCalled();
+  });
+
+  it("says the preview failed, and does not promise one that is not coming", async () => {
+    componentCollisionsMock.mockRejectedValue(new Error("the disc changed since the scan"));
+    bothTicked();
+    renderTab();
+
+    await waitFor(() =>
+      expect(summaryLines()[3]).toContain("the disc changed since the scan")
+    );
+    expect(summaryLines()[3]).not.toBe(i18n.t("osBuilder.build.summary.replacesPending"));
+  });
+});
+
+describe("before ART has looked at the destination", () => {
+  it("says it is checking rather than calling the folder fresh, and offers no button", async () => {
+    // The window held open rather than raced — CLAUDE.md: anything
+    // timing-dependent gets an invariant, not a wait.
+    describeTreeMock.mockImplementation(() => new Promise(() => {}));
+    bothTicked();
+    renderTab();
+
+    await waitFor(() =>
+      expect(summaryLines()[0]).toBe(i18n.t("osBuilder.build.summary.checking"))
+    );
+    // Which sequence this build runs is exactly what has not been decided
+    // yet, so there is nothing to press.
+    expect(screen.queryByTestId("build-run")).toBeNull();
+    expect(screen.getByTestId("build-blocker").textContent).toBe(
+      i18n.t("osBuilder.build.summary.checking")
+    );
+  });
+});
+
+describe("stopping a run, and what a finished run changes", () => {
+  it("asks the running job to stop", async () => {
+    const job = pending();
+    seed({ ...FIELDS, "buildSession.firstboot": { written: false, wanted: false } });
+    renderTab();
+    await screen.findByTestId("build-run");
+    await userEvent.click(screen.getByTestId("build-confirm"));
+    await userEvent.click(screen.getByTestId("build-run"));
+
+    const stop = await screen.findByTestId("build-stop");
+    expect(jobCancelMock).not.toHaveBeenCalled();
+    await userEvent.click(stop);
+    // The job the run is actually waiting on — asserted by id, because
+    // "cancel was called" is true of cancelling the wrong job too.
+    expect(jobCancelMock).toHaveBeenCalledWith(11);
+
+    act(() => job.reject(new Error("cancelled")));
+    await flush();
+  });
+
+  it("asks about the destination again once a run has finished (I2)", async () => {
+    seed({ ...FIELDS, "buildSession.firstboot": { written: false, wanted: false } });
+    renderTab();
+    await screen.findByTestId("build-run");
+    await waitFor(() => expect(destinationTakenMock).toHaveBeenCalled());
+    const before = destinationTakenMock.mock.calls.length;
+
+    await userEvent.click(screen.getByTestId("build-confirm"));
+    await userEvent.click(screen.getByTestId("build-run"));
+    await screen.findByTestId("build-handoff");
+
+    // The folder is not what it was: the run just filled it. A gate still
+    // offering a fresh tree into it would be offering a run `apply` refuses.
+    await waitFor(() =>
+      expect(destinationTakenMock.mock.calls.length).toBeGreaterThan(before)
+    );
+    expect(describeTreeMock.mock.calls.length).toBeGreaterThan(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The tree's own release marker — five verdicts, five sentences (Task 9)
+// ---------------------------------------------------------------------------
+//
+// **Four of these are moved from `OsInstall.test.tsx` by name** (round 4 task
+// 5 deleted them with the result card; task 4's fix round 1 brings them here,
+// where the JSX went). CLAUDE.md's answer to the round that shipped AmigaOS
+// 3.5 labelled 3.9: ask the artefact, never assert. The fifth,
+// `reports a confirmed marker by its own text`, is already covered by
+// `carries the tree phase's own release verdict and the time it took`.
+//
+// What changed is only where the verdict arrives from: it is the tree
+// phase's `succeeded` ending now, not a result card fed by an event.
+
+describe("the tree phase's release marker", () => {
+  /** A tree-only run, to its report row. */
+  async function treeRow(): Promise<HTMLElement> {
+    seed({ ...FIELDS, "buildSession.firstboot": { written: false, wanted: false } });
+    renderTab();
+    await screen.findByTestId("build-run");
+    await userEvent.click(screen.getByTestId("build-confirm"));
+    await userEvent.click(screen.getByTestId("build-run"));
+    const rows = await screen.findAllByTestId("build-phase-row");
+    return rows[0];
+  }
+
+  // **The mutation table's third row.** Naming both sides is the point of
+  // this sentence — the frontend key this pins is exactly what collapsing
+  // the three sentences into one would break.
+  it("names both sides of a mismatch", async () => {
+    statedRelease = { verdict: "mismatch", expected: "Release 3.2.2", stated: "Release 3.2" };
+    const row_ = await treeRow();
+
+    await waitFor(() =>
+      expect(within(row_).getByTestId("build-stated-release").textContent).toBe(
+        i18n.t("osinstall.result.statedRelease.mismatch", {
+          expected: "Release 3.2.2",
+          stated: "Release 3.2",
+        })
+      )
+    );
+    expect(screen.queryByText(/\{\{/)).toBeNull();
+  });
+
+  it("says a tree with no marker states none, not a guess", async () => {
+    statedRelease = { verdict: "unstated" };
+    const row_ = await treeRow();
+    await waitFor(() =>
+      expect(within(row_).getByTestId("build-stated-release").textContent).toBe(
+        i18n.t("osinstall.result.statedRelease.unstated")
+      )
+    );
+  });
+
+  // **Fix round 1, Finding 1** (of the round that wrote it). An unreadable
+  // marker must never render the same sentence as "states none" — the two
+  // are different facts with different next steps, and folding them is the
+  // exact defect the case exists to catch.
+  it("says the marker could not be read, never the same sentence as unstated", async () => {
+    statedRelease = {
+      verdict: "unreadable",
+      detail: "malformed release marker: too many bytes",
+    };
+    const row_ = await treeRow();
+    await waitFor(() =>
+      expect(within(row_).getByTestId("build-stated-release").textContent).toBe(
+        i18n.t("osinstall.result.statedRelease.unreadable", {
+          detail: "malformed release marker: too many bytes",
+        })
+      )
+    );
+    expect(screen.queryByText(i18n.t("osinstall.result.statedRelease.unstated"))).toBeNull();
+  });
+
+  // **Final whole-branch review, Finding E.** A differing marker for a
+  // release ART has never measured must render its own sentence, and never
+  // the "mismatch" wording — that would tell the user their correct tree is
+  // wrong for a formula nobody has checked.
+  it("reports a differing marker for an unmeasured release plainly, never as a mismatch", async () => {
+    statedRelease = { verdict: "expected-unknown", stated: "Release 3.5" };
+    const row_ = await treeRow();
+    await waitFor(() =>
+      expect(within(row_).getByTestId("build-stated-release").textContent).toBe(
+        i18n.t("osinstall.result.statedRelease.expectedUnknown", { stated: "Release 3.5" })
+      )
+    );
+    expect(
+      screen.queryByText(
+        i18n.t("osinstall.result.statedRelease.mismatch", {
+          expected: "AmigaOS 3.9",
+          stated: "Release 3.5",
+        })
+      )
+    ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// What the folder actually holds — the evidence line above the refusals
+// ---------------------------------------------------------------------------
+//
+// **Six cases moved from `OsInstall.test.tsx` by name** (round 4 task 5
+// deleted them with the refusals card; task 4's fix round 1 brings them here,
+// where `useMediaEvidence` and the card went). ART-208's own subject: sixteen
+// true "this disk is missing" sentences add up to a false impression, and the
+// line above them is the context that stops it.
+//
+// The release these run on is AmigaOS 3.2 — the release before there was a
+// picker, so its remembered keys are the unsuffixed ones — because that is
+// the release the originals measured and the volume names in their
+// assertions are its own.
+
+const MEDIA_32 = "E:\\media";
+
+/** The refusal list a partly-filled folder produces. */
+const MISSING_EXTRAS: RefusalReason[] = [
+  { refusal: "media-missing", component: "extras", volume_name: "Extras3.2" },
+];
+
+/** Everything tab 4 reads, for AmigaOS 3.2 (bare keys — see
+ *  `rememberedComponentKey`). */
+const FIELDS_32: Record<string, unknown> = {
+  "buildSession.kind": "install",
+  "buildSession.release": "AmigaOS 3.2",
+  "buildSession.rom": { path: "E:\\roms\\kick.rom" },
+  "buildSession.material.AmigaOS 3.2": { folders: [{ path: MEDIA_32, layer: null }] },
+  "osinstall.destination": DEST,
+};
+
+const LAYERS_322: InstallLayer[] = [
+  { id: "base", labelKey: "osinstall.layer.base32" },
+  { id: "update-3.2.2", labelKey: "osinstall.layer.update322" },
+];
+
+/** The evidence line, waited for and read out of the refusals card. */
+async function evidenceLine(): Promise<HTMLElement> {
+  const card = await screen.findByTestId("build-refusals");
+  return card;
+}
+
+describe("what the folder holds, above the refusals", () => {
+  async function renderPartialMedia(releaseHolding: string | null) {
+    scanMediaMock.mockReset().mockResolvedValue({
+      outcome: "found",
+      media: [{ path: `${MEDIA_32}\\Disk1.adf`, volumeName: "Workbench3.2", kind: "floppy" }],
+    } satisfies MediaScanResult);
+    releaseForMediaMock.mockReset().mockResolvedValue(releaseHolding);
+    mediaEvidenceMock.mockReset().mockResolvedValue({
+      release: "AmigaOS 3.2",
+      distinguishing: ["Workbench3.2"],
+      shared: [],
+      missingRequired: ["Extras3.2"],
+    });
+    refusals = MISSING_EXTRAS;
+    seed(FIELDS_32);
+    renderTab();
+    await waitFor(() => expect(planMock).toHaveBeenCalled());
+  }
+
+  it("shows what the folder holds above the refusals when some disks are missing", async () => {
+    await renderPartialMedia("AmigaOS 3.2");
+
+    // **The sentence, named** — not `mediaEvidence(…)`'s own answer rendered
+    // back at it. Building the expectation by calling the helper made both
+    // sides move together: the key mapping could change to any other state's
+    // key and this stayed green.
+    const card = await evidenceLine();
+    await waitFor(() =>
+      expect(card.textContent).toContain(
+        i18n.t("osinstall.evidence.sameRelease", {
+          found: "Workbench3.2",
+          missing: "Extras3.2",
+        })
+      )
+    );
+
+    // Context, not a replacement: the per-disk refusal this line sits above
+    // must still be there.
+    expect(card.textContent).toContain(
+      i18n.t("osinstall.refusal.mediaMissing", { component: "extras", volume: "Extras3.2" })
+    );
+  });
+
+  // **The fixture the original ran on was one the core cannot emit**, and
+  // ART-257 is what exposed it. The real shape of "this is somebody else's
+  // folder, but not *entirely*": AmigaOS 3.9's disc beside a plain `Fonts`,
+  // while building 3.2. `Fonts` carries no version and every release asks for
+  // it, so 3.2's own evidence is `shared: ["Fonts"]` with **nothing**
+  // distinguishing — which is what keeps `wrongMediaFolder` quiet and makes
+  // this the sentence to say.
+  it("names the other release when the folder is a different one", async () => {
+    const OTHER_RELEASE_REFUSALS: RefusalReason[] = [
+      { refusal: "media-missing", component: "workbench-base", volume_name: "Workbench3.2" },
+      { refusal: "media-missing", component: "install-libs", volume_name: "Install3.2" },
+      { refusal: "media-missing", component: "extras", volume_name: "Extras3.2" },
+    ];
+    scanMediaMock.mockReset().mockResolvedValue({
+      outcome: "found",
+      media: [
+        { path: `${MEDIA_32}\\AmigaOS3.9.iso`, volumeName: "AmigaOS3.9", kind: "disc" },
+        { path: `${MEDIA_32}\\Fonts.adf`, volumeName: "Fonts", kind: "floppy" },
+      ],
+    } satisfies MediaScanResult);
+    releaseForMediaMock.mockReset().mockResolvedValue("AmigaOS 3.9");
+    mediaEvidenceMock.mockReset().mockResolvedValue({
+      release: "AmigaOS 3.2",
+      distinguishing: [],
+      shared: ["Fonts"],
+      missingRequired: ["Workbench3.2", "Install3.2"],
+    });
+    refusals = OTHER_RELEASE_REFUSALS;
+    seed(FIELDS_32);
+    renderTab();
+
+    const card = await evidenceLine();
+    await waitFor(() =>
+      expect(card.textContent).toContain(
+        i18n.t("osinstall.evidence.otherRelease", {
+          found: "AmigaOS3.9, Fonts",
+          release: "AmigaOS 3.9",
+          missing: "Workbench3.2, Install3.2, Extras3.2",
+        })
+      )
+    );
+    // Still just context — the refusal itself is still named below it.
+    expect(card.textContent).toContain(
+      i18n.t("osinstall.refusal.mediaMissing", {
+        component: "workbench-base",
+        volume: "Workbench3.2",
+      })
+    );
+  });
+
+  // ART-257. **The release with two media folders is the one most likely to
+  // arrive part-complete, and it was the one this whole feature never
+  // reached.** Both halves are asserted, because the union alone would have
+  // made the line *speak falsely*: `identify` answers `"AmigaOS 3.2"` for the
+  // base set (correctly — a based release must not be named off its base's
+  // disks alone), and the old branching would have read that as somebody
+  // else's media.
+  it("says what a layered release's own folders hold, and does not call the base set somebody else's", async () => {
+    const BASE_FOLDER = "E:\\base322";
+    const BASE_SET = ["Workbench3.2", "Install3.2", "Extras3.2", "Fonts", "Locale"];
+    layersForMock.mockImplementation((release: string) =>
+      Promise.resolve(release === "AmigaOS 3.2.2" ? LAYERS_322 : [])
+    );
+    scanMediaMock.mockReset().mockImplementation((folder: string) =>
+      Promise.resolve(
+        folder === BASE_FOLDER
+          ? ({
+              outcome: "found",
+              media: BASE_SET.map((volumeName) => ({
+                path: `${BASE_FOLDER}\\${volumeName}.adf`,
+                volumeName,
+                kind: "floppy" as const,
+              })),
+            } satisfies MediaScanResult)
+          : ({ outcome: "found", media: [] } satisfies MediaScanResult)
+      )
+    );
+    refusals = [
+      { refusal: "media-missing", component: "update-322-system", volume_name: "Update3.2.2" },
+      { refusal: "media-missing", component: "update-322-classes", volume_name: "Classes3.2.2" },
+    ];
+    // Both answers measured off the shipped recipes rather than chosen —
+    // `identify.rs::a_based_releases_own_evidence_claims_the_base_set`.
+    releaseForMediaMock.mockReset().mockResolvedValue("AmigaOS 3.2");
+    mediaEvidenceMock.mockReset().mockResolvedValue({
+      release: "AmigaOS 3.2.2",
+      distinguishing: ["Workbench3.2", "Install3.2", "Extras3.2"],
+      shared: ["Locale", "Fonts"],
+      missingRequired: ["Update3.2.2", "Classes3.2.2"],
+    });
+    seed({
+      "buildSession.kind": "install",
+      "buildSession.release": "AmigaOS 3.2.2",
+      "buildSession.rom": { path: "E:\\roms\\kick.rom" },
+      "buildSession.material.AmigaOS 3.2.2": {
+        folders: [{ path: BASE_FOLDER, layer: "base" }],
+      },
+      "osinstall.destination.AmigaOS 3.2.2": DEST,
+    });
+    renderTab();
+
+    // The whole sentence, both parameters: the base disks the layer folder
+    // really holds, and the update disks that are really absent.
+    const card = await evidenceLine();
+    await waitFor(() =>
+      expect(card.textContent).toContain(
+        i18n.t("osinstall.evidence.sameRelease", {
+          found: BASE_SET.join(", "),
+          missing: "Update3.2.2, Classes3.2.2",
+        })
+      )
+    );
+
+    // The false sentence the union alone would have produced is not on
+    // screen — this release's own base media is not called "AmigaOS 3.2
+    // media".
+    expect(card.textContent).not.toContain(
+      i18n.t("osinstall.evidence.otherRelease", {
+        found: BASE_SET.join(", "),
+        release: "AmigaOS 3.2",
+        missing: "Update3.2.2, Classes3.2.2",
+      })
+    );
+
+    // And Rust was asked about the layer folder's own disks — a screen
+    // cannot be right downstream of a lookup that was asked about nothing.
+    await waitFor(() =>
+      expect(mediaEvidenceMock).toHaveBeenCalledWith("AmigaOS 3.2.2", BASE_SET)
+    );
+  });
+
+  // ART-257's other half, and a survivor of a mutation round rather than
+  // something the reading found: `layers` is `[]` both when a release is
+  // unlayered *and* before `layersFor` has answered (ART-256 named that trap
+  // one layer down). On the render straight after a switch to a layered
+  // release, `layers` is still the previous release's answer — so a
+  // `foundVolumeNames` that did not ask whether `layers` is *this* release's
+  // answer would hand the new release's evidence lookup the **old** folder's
+  // disks, and the sentence would be about a folder this build never reads.
+  //
+  // An invariant, not a wait: the question is one Rust must never be asked,
+  // so no timing decides it. The release changes on tab 1; this tab reads it
+  // out of the session, which is what the store write below is.
+  it("never asks about the previous release's folder while a layered release is loading", async () => {
+    layersForMock.mockImplementation((release: string) =>
+      Promise.resolve(release === "AmigaOS 3.2.2" ? LAYERS_322 : [])
+    );
+    scanMediaMock.mockReset().mockImplementation((folder: string) =>
+      Promise.resolve(
+        folder === MEDIA_32
+          ? ({
+              outcome: "found",
+              media: [
+                { path: `${MEDIA_32}\\Disk1.adf`, volumeName: "Workbench3.2", kind: "floppy" },
+              ],
+            } satisfies MediaScanResult)
+          : ({ outcome: "found", media: [] } satisfies MediaScanResult)
+      )
+    );
+    releaseForMediaMock.mockReset().mockResolvedValue("AmigaOS 3.2");
+    refusals = MISSING_EXTRAS;
+    seed({
+      ...FIELDS_32,
+      "buildSession.material.AmigaOS 3.2.2": { folders: [{ path: "E:\\base322", layer: "base" }] },
+      "osinstall.destination.AmigaOS 3.2.2": DEST,
+    });
+    renderTab();
+
+    // Proven, not assumed: the flat folder really is being asked about for
+    // AmigaOS 3.2 before the switch, so the absence below is about the
+    // switch and not about a screen that never asked anything.
+    await waitFor(() =>
+      expect(mediaEvidenceMock).toHaveBeenCalledWith("AmigaOS 3.2", ["Workbench3.2"])
+    );
+
+    act(() => {
+      const state = useSettingsStore.getState();
+      useSettingsStore.setState({
+        loaded: true,
+        settings: {
+          ...state.settings,
+          remembered: {
+            ...(state.settings.remembered as Record<string, unknown>),
+            "buildSession.release": "AmigaOS 3.2.2",
+          },
+        },
+      });
+    });
+
+    // AmigaOS 3.2.2 reads its layer folders, and its own is empty. The one
+    // question that must never be asked is the new release against the old
+    // release's flat folder.
+    await waitFor(() => expect(layersForMock).toHaveBeenCalledWith("AmigaOS 3.2.2"));
+    expect(mediaEvidenceMock).not.toHaveBeenCalledWith("AmigaOS 3.2.2", ["Workbench3.2"]);
+  });
+
+  // **ART-256's rule, and the one F9 caught nothing without.** A layered
+  // release plans from its *tagged* folders alone: an untagged folder in the
+  // list is `unusedForPlan`, the request never reads it, and a line counting
+  // its disks would be the screen out-claiming the core about a folder this
+  // build does not open. The mutation this exists for is measuring the
+  // evidence over the whole material list instead — which every other case
+  // here survives, because they each have one folder and the two answers
+  // agree.
+  it("says what the folders the request actually reads hold, and not what the others do", async () => {
+    const BASE_FOLDER = "E:\\base322";
+    const UNTAGGED = "E:\\somebody-elses";
+    const BASE_SET = ["Workbench3.2", "Install3.2"];
+    layersForMock.mockImplementation((release: string) =>
+      Promise.resolve(release === "AmigaOS 3.2.2" ? LAYERS_322 : [])
+    );
+    scanMediaMock.mockReset().mockImplementation((folder: string) =>
+      Promise.resolve(
+        folder === BASE_FOLDER
+          ? ({
+              outcome: "found",
+              media: BASE_SET.map((volumeName) => ({
+                path: `${BASE_FOLDER}\\${volumeName}.adf`,
+                volumeName,
+                kind: "floppy" as const,
+              })),
+            } satisfies MediaScanResult)
+          : ({
+              outcome: "found",
+              media: [
+                { path: `${UNTAGGED}\\AmigaOS3.9.iso`, volumeName: "AmigaOS3.9", kind: "disc" },
+              ],
+            } satisfies MediaScanResult)
+      )
+    );
+    refusals = [
+      { refusal: "media-missing", component: "update-322-system", volume_name: "Update3.2.2" },
+    ];
+    releaseForMediaMock.mockReset().mockResolvedValue("AmigaOS 3.2.2");
+    mediaEvidenceMock.mockReset().mockResolvedValue({
+      release: "AmigaOS 3.2.2",
+      distinguishing: BASE_SET,
+      shared: [],
+      missingRequired: ["Update3.2.2"],
+    });
+    seed({
+      "buildSession.kind": "install",
+      "buildSession.release": "AmigaOS 3.2.2",
+      "buildSession.rom": { path: "E:\\roms\\kick.rom" },
+      "buildSession.material.AmigaOS 3.2.2": {
+        folders: [
+          { path: BASE_FOLDER, layer: "base" },
+          { path: UNTAGGED, layer: null },
+        ],
+      },
+      "osinstall.destination.AmigaOS 3.2.2": DEST,
+    });
+    renderTab();
+
+    const card = await evidenceLine();
+    await waitFor(() =>
+      expect(card.textContent).toContain(
+        i18n.t("osinstall.evidence.sameRelease", {
+          found: BASE_SET.join(", "),
+          missing: "Update3.2.2",
+        })
+      )
+    );
+    // The disc in the untagged folder is not in the sentence, and Rust was
+    // never asked about it either.
+    expect(card.textContent).not.toContain("AmigaOS3.9");
+    expect(mediaEvidenceMock.mock.calls).toEqual([["AmigaOS 3.2.2", BASE_SET]]);
+    expect(releaseForMediaMock.mock.calls).toEqual([[BASE_SET]]);
+  });
+
+  // ART-178/ART-195's own shape, one folder set further on. The scans feed
+  // the memo the two evidence lookups depend on, so an effect that writes a
+  // **fresh** empty object on every run hands `found` a new identity for no
+  // new information and both lookups are asked again for it.
+  //
+  // Counted, both arms, because "it feels the same" is not a result. Nothing
+  // is on a clock here — the count is read once the sentence those lookups
+  // produce is on screen.
+  it("asks each media lookup once for a settled folder, not once per render", async () => {
+    await renderPartialMedia("AmigaOS 3.2");
+    const card = await evidenceLine();
+    await waitFor(() =>
+      expect(card.textContent).toContain(
+        i18n.t("osinstall.evidence.sameRelease", {
+          found: "Workbench3.2",
+          missing: "Extras3.2",
+        })
+      )
+    );
+
+    expect(mediaEvidenceMock.mock.calls).toEqual([["AmigaOS 3.2", ["Workbench3.2"]]]);
+    expect(releaseForMediaMock.mock.calls).toEqual([[["Workbench3.2"]]]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ART-254 — a release switch must not leave the previous release's evidence
+// checking the new release's plan
+// ---------------------------------------------------------------------------
+//
+// **Moved from `OsInstall.test.tsx` by name.** The switch-release button is
+// tab 4's now, and it is a first-class action rather than an edge case: the
+// folder holds AmigaOS 3.2 disks, the build is on 3.9, and ART offers one
+// click. `mediaFacts` is not cleared when its effect re-runs, and the plan is
+// fetched by a different effect — so between the two there is a moment where
+// 3.2's plan is checked against 3.9's evidence, and 3.9's evidence is
+// *correctly* empty for a folder of 3.2 disks, which is exactly the shape
+// ART-253's check reads as "none of these disks are ones this release asks
+// for".
+//
+// The window is not raced: 3.2's evidence lookup simply never resolves, which
+// is the same state the window is and is deterministic.
+
+describe("switching release does not bring the wrong-folder sentence back (ART-254)", () => {
+  it("says what the folder really holds while the previous release's evidence is still the only one held", async () => {
+    const FOUND = "Workbench3.2, Fonts, Locale";
+    scanMediaMock.mockReset().mockResolvedValue({
+      outcome: "found",
+      media: [
+        { path: `${MEDIA_32}\\Disk1.adf`, volumeName: "Workbench3.2", kind: "floppy" },
+        { path: `${MEDIA_32}\\Fonts.adf`, volumeName: "Fonts", kind: "floppy" },
+        { path: `${MEDIA_32}\\Locale.adf`, volumeName: "Locale", kind: "floppy" },
+      ],
+    } satisfies MediaScanResult);
+    releaseForMediaMock.mockReset().mockResolvedValue("AmigaOS 3.2");
+    planMock.mockReset().mockImplementation((req: InstallRequest) =>
+      Promise.resolve({
+        outcome: "planned",
+        plan: {
+          ...planFor(req),
+          refusals: [
+            req.release === "AmigaOS 3.9"
+              ? { refusal: "media-missing", component: "extras", volume_name: "AmigaOS3.9" }
+              : { refusal: "media-missing", component: "extras", volume_name: "Extras3.2" },
+          ] as RefusalReason[],
+        },
+      } satisfies PlanResult)
+    );
+    mediaEvidenceMock.mockReset().mockImplementation((release: string) =>
+      release === "AmigaOS 3.9"
+        ? Promise.resolve({
+            release: "AmigaOS 3.9",
+            distinguishing: [],
+            shared: [],
+            missingRequired: ["AmigaOS3.9"],
+          })
+        : // Never resolves: the window, held open.
+          new Promise(() => {})
+    );
+    seed({
+      "buildSession.kind": "install",
+      "buildSession.release": "AmigaOS 3.9",
+      "buildSession.rom": { path: "E:\\roms\\kick.rom" },
+      "buildSession.material.AmigaOS 3.9": { folders: [{ path: MEDIA_32, layer: null }] },
+      "buildSession.material.AmigaOS 3.2": { folders: [{ path: MEDIA_32, layer: null }] },
+      "osinstall.destination.AmigaOS 3.9": DEST,
+      "osinstall.destination": DEST,
+    });
+    renderTab();
+
+    // The setup is proven rather than assumed: on 3.9 this folder really is
+    // the wrong one, the sentence really is true, and it really is on screen.
+    await waitFor(() =>
+      expect(screen.getByTestId("build-blocker").textContent).toBe(
+        i18n.t("osinstall.blocked.wrongFolderIsRelease", {
+          release: "AmigaOS 3.2",
+          found: FOUND,
+        })
+      )
+    );
+
+    await userEvent.click(screen.getByTestId("build-switch-release"));
+
+    // What the screen must say instead — the whole sentence, key and both
+    // parameters. "Says nothing" would have been true here for at least three
+    // other reasons (no plan yet, no refusals, an empty folder); this state
+    // has one cause, and it is that the stale evidence withdrew.
+    const card = await evidenceLine();
+    await waitFor(() =>
+      expect(card.textContent).toContain(
+        i18n.t("osinstall.evidence.sameRelease", { found: FOUND, missing: "Extras3.2" })
+      )
+    );
+
+    // And ART-253's own sentence, in both of its forms, is nowhere on screen.
+    const tab = screen.getByTestId("build-tab");
+    expect(tab.textContent).not.toContain(
+      i18n.t("osinstall.blocked.wrongFolder", { found: FOUND })
+    );
+    expect(tab.textContent).not.toContain(
+      i18n.t("osinstall.blocked.wrongFolderIsRelease", {
+        release: "AmigaOS 3.2",
+        found: FOUND,
+      })
     );
   });
 });

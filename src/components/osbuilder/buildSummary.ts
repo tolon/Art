@@ -16,7 +16,12 @@
 import { useTranslation } from "react-i18next";
 
 import { useTickedUpdates, type TickedUpdates } from "@/components/osbuilder/ChoiceTab";
-import { runSummaryLines, sequenceFor, type Phase } from "@/lib/buildRun";
+import {
+  runSummaryLines,
+  sequenceFor,
+  type Phase,
+  type ReplacesSummary,
+} from "@/lib/buildRun";
 import { componentDef, componentLabel, rememberedComponentKey, type InstallRelease } from "@/lib/osinstall";
 import type { Phrase } from "@/lib/phrase";
 import { isFlag, isText, isTextOrNothing } from "@/lib/remembered";
@@ -37,6 +42,10 @@ export interface BuildSummary {
   destinationIsTree: boolean;
   ticked: TickedUpdates;
   firstBootWanted: boolean;
+  /** Whether ART has finished asking about the destination folder. Until it
+   *  has, *fresh build* and *existing tree* are both guesses — and they are
+   *  two different sequences, so nothing is offered on one. */
+  destinationChecked: boolean;
   /** What the run will do, in order — empty when there is nothing to do. */
   phases: Phase[];
   /** The four summary lines, in the design's order. */
@@ -50,13 +59,18 @@ export interface BuildSummary {
  *
  * @param previewReplacements whether to ask `osinstall_collisions` for each
  *   ticked update — disk work, an archive opened per row, for the fourth
- *   line alone. A caller that does not draw that line passes `false` and
- *   reads {@link BuildSummary.lines} three long.
+ *   line alone. A caller that does not draw that line passes `false`.
+ * @param revision anything whose change means the destination folder may have
+ *   changed under ART — tab 4 passes its run's completion, because a run that
+ *   just succeeded has filled the folder it was told to fill and the next
+ *   answer about it is a different one (fix round 1, I2).
  */
 export function useBuildSummary({
   previewReplacements,
+  revision = null,
 }: {
   previewReplacements: boolean;
+  revision?: unknown;
 }): BuildSummary {
   const { t } = useTranslation();
   const { session, setComponents } = useBuildSession();
@@ -77,6 +91,14 @@ export function useBuildSummary({
     null
   );
 
+  // **Before the plan**, because the plan is now asked a question that
+  // depends on the answer: whether this build writes a tree at all.
+  const { taken, tree, looked } = useDestinationCheck(destination, revision);
+  const destinationIsTree = tree?.isTree === true;
+  // With no path there is nothing to have looked at, and `looked` is false
+  // for that too — which is not the same fact and must not read as one.
+  const destinationChecked = destination === null || looked;
+
   const plan = useInstallPlan({
     release,
     material: session.material,
@@ -88,10 +110,15 @@ export function useBuildSummary({
     rescanNonce: 0,
     components: session.components,
     setComponents,
+    // **Not in update mode, and not before ART knows** (fix round 1, C1).
+    // The component preview partitions what the release's own parts would
+    // place, and in update mode they are not placed at all — so the answer
+    // is neither shown nor asked for. Asking while the destination check is
+    // still in flight would ask it for exactly the folders that turn out to
+    // be trees, which is the work this saves and the answer this must not
+    // hold.
+    previewCollisions: destinationChecked && !destinationIsTree,
   });
-
-  const { taken, tree } = useDestinationCheck(destination);
-  const destinationIsTree = tree?.isTree === true;
 
   const ticked = useTickedUpdates();
   const firstBootWanted = session.firstboot.wanted ?? true;
@@ -143,13 +170,30 @@ export function useBuildSummary({
     : plan.effectivePlan && plan.layeringOn.length === 0 && !plan.componentPreviewError
       ? { fresh: 0, unchanged: 0, replaced: 0 }
       : null;
-  const replaces =
-    previewReplacements && componentReplaces && updatesPreview.totals
-      ? {
-          ...componentReplaces,
-          replaced: componentReplaces.replaced + updatesPreview.totals.replaced,
-        }
-      : null;
+
+  const replaces: ReplacesSummary = !previewReplacements
+    ? { state: "pending" }
+    : destinationIsTree
+      ? // **Update mode says only what the updates would do** (fix round 1,
+        // C1). The component preview describes the release's own parts
+        // landing in an empty folder, and in update mode they do not land at
+        // all — printing its counts here is a claim about work that will not
+        // run, in the sentence that is meant to tell the user what will.
+        updatesPreview.totals
+        ? { state: "updates", replaced: updatesPreview.totals.replaced }
+        : { state: "pending" }
+      : plan.componentPreviewError
+        ? // A preview ART could not produce is its own ending (fix round 1,
+          // I5): "not previewed yet" says one is still coming, which is a
+          // promise nothing is going to keep.
+          { state: "failed", detail: plan.componentPreviewError }
+        : componentReplaces && updatesPreview.totals
+          ? {
+              state: "components",
+              ...componentReplaces,
+              replaced: componentReplaces.replaced + updatesPreview.totals.replaced,
+            }
+          : { state: "pending" };
 
   const phases = sequenceFor({
     destination: destination ?? "",
@@ -162,6 +206,7 @@ export function useBuildSummary({
   const lines = runSummaryLines({
     plan: plan.effectivePlan,
     destinationIsTree,
+    destinationChecked,
     treeSummary: tree,
     updates: ticked.rows,
     firstBootWanted,
@@ -187,6 +232,7 @@ export function useBuildSummary({
     plan,
     taken,
     destinationIsTree,
+    destinationChecked,
     ticked,
     firstBootWanted,
     phases,
