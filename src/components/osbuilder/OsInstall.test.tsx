@@ -2392,6 +2392,12 @@ describe("the tree it builds is the tree the next steps get (ART-197)", () => {
     await waitFor(() =>
       expect(screen.queryByText("E:\\amiga\\somewhere-else")).toBeNull()
     );
+
+    // **Asked once for the one path** (fix round 2). This screen already asks
+    // `useDestinationCheck` for its occupied-folder refusal and hands that
+    // answer to `useChainTree`; a hook asking again would be a second reader
+    // of the one fact it exists to have one of.
+    expect(describeTreeMock.mock.calls.filter((call) => call[0] === "E:\\dist")).toHaveLength(1);
   });
 });
 

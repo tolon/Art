@@ -137,6 +137,53 @@ describe("useChainTree", () => {
     expect(describeTreeMock).not.toHaveBeenCalled();
   });
 
+  it("settles on the session's own tree when the look itself failed", async () => {
+    // **A dead IPC call must not silence the tab** (fix round 2). `tree`
+    // stays `null` after a rejection — the same `null` it holds before ART
+    // has looked — so a `settled` that watched the value would never come
+    // true and tab 2 would ask the chain nothing, for ever. Falling back to
+    // the tree the session already carries is the honest answer: it is what
+    // every screen used before this hook existed.
+    describeTreeMock.mockRejectedValue(new Error("no IPC bridge"));
+    destinationTakenMock.mockRejectedValue(new Error("no IPC bridge"));
+    seedSessionTree("E:\\amiga\\os39");
+
+    const { result } = renderHook(() => useChainTree("E:\\dist39"));
+
+    await waitFor(() => expect(result.current.settled).toBe(true));
+    expect(result.current.treeRoot).toBe("E:\\amiga\\os39");
+  });
+
+  it("uses the caller's own answer, and asks nothing of its own for it", async () => {
+    // `OsInstall` already asks `useDestinationCheck` for its occupied-folder
+    // refusal. Handing that answer over is what keeps one screen to one round
+    // trip per path — two identical `osinstall_describe_tree` calls would be
+    // a second reader of the one fact this hook exists to have one of.
+    seedSessionTree("E:\\amiga\\os39");
+
+    const { result } = renderHook(() =>
+      useChainTree("E:\\dist39", { taken: false, tree: A_TREE, looked: true })
+    );
+
+    expect(result.current).toEqual({ treeRoot: "E:\\dist39", settled: true });
+    expect(describeTreeMock).not.toHaveBeenCalled();
+    expect(destinationTakenMock).not.toHaveBeenCalled();
+  });
+
+  it("waits on the caller's answer exactly as it waits on its own", async () => {
+    // The handed-over check carries `looked` too, so a screen that passes one
+    // in mid-flight gets the same gate — never a treeRoot presented as
+    // settled because it came from somewhere else.
+    seedSessionTree("E:\\amiga\\os39");
+
+    const { result } = renderHook(() =>
+      useChainTree("E:\\dist39", { taken: false, tree: null, looked: false })
+    );
+
+    expect(result.current.settled).toBe(false);
+    expect(result.current.treeRoot).toBe("E:\\amiga\\os39");
+  });
+
   it("answers no tree at all rather than a path, when neither is set", async () => {
     seedSessionTree(null);
 

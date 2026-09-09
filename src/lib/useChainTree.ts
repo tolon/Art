@@ -13,8 +13,8 @@
 //   - **the destination, when ART has looked at it and found a build** — the
 //     user is building into that folder, so the run is an update of it;
 //   - **the session's own tree otherwise** — what every screen used before
-//     this hook, including a destination that is empty (a fresh build) or is
-//     not a build at all.
+//     this hook, including a destination that is empty (a fresh build), one
+//     that is not a build at all, and one ART could not look at.
 //
 // `settled` is the other half, and it is not a convenience. `isTree` is
 // answered by a round trip, so for the first render or two a destination that
@@ -23,9 +23,17 @@
 // carries, and then swap it for *installed* under the reader's eyes. A caller
 // that starts disk work waits for `settled`; one that only renders a path
 // need not.
+//
+// **A look that failed settles too** (fix round 2). `settled` reads
+// `DestinationCheck.looked`, which counts both questions finishing rather
+// than watching `tree` change — because a refusal leaves `tree` at exactly
+// the `null` it had before the question was asked. Waiting on the value
+// instead would leave a tab that asks nothing, for ever, because one IPC call
+// threw: a screen that says nothing is worse than one that falls back to the
+// tree the session already carries and says so.
 
 import { useBuildSession } from "@/lib/useBuildSession";
-import { useDestinationCheck } from "@/lib/useDestinationCheck";
+import { useDestinationCheck, type DestinationCheck } from "@/lib/useDestinationCheck";
 
 export interface ChainTree {
   /** The tree an update run is about, or `null` when this build has none. */
@@ -33,25 +41,32 @@ export interface ChainTree {
   /**
    * Whether {@link treeRoot} is the answer or a placeholder.
    *
-   * `false` only while a destination is set and ART has not finished looking
-   * at it. With no destination there is nothing to wait for, so it is `true`
-   * from the first render.
+   * `false` only while ART is still looking at a destination that is set.
+   * With no destination there is nothing to wait for, so it is `true` from
+   * the first render.
    */
   settled: boolean;
 }
 
-export function useChainTree(destination: string | null): ChainTree {
+/**
+ * @param check the caller's **own** already-computed answer for this same
+ *   destination, when it has one. `OsInstall` asks
+ *   `useDestinationCheck(destination, result)` for its occupied-folder
+ *   refusal and hands the whole thing over, so one screen makes one round
+ *   trip per path instead of two identical ones; it also means that screen's
+ *   `revision` — a finished install — is honoured here without this hook
+ *   growing a second parameter about it. Omit it and the hook asks for
+ *   itself, which is what tab 2 does.
+ */
+export function useChainTree(destination: string | null, check?: DestinationCheck): ChainTree {
   const { session } = useBuildSession();
-  const { tree } = useDestinationCheck(destination);
+  // Hooks are unconditional, so the question is turned off by passing `null`
+  // rather than by not calling: `useDestinationCheck(null)` asks nothing and
+  // holds nothing.
+  const own = useDestinationCheck(check ? null : destination);
+  const answer = check ?? own;
   return {
-    treeRoot: tree?.isTree ? destination : session.tree.root,
-    // `tree` is `null` both before ART has looked and when the look itself
-    // failed, which `useDestinationCheck` cannot tell apart — a failed look
-    // therefore never settles. That is deliberate rather than overlooked:
-    // `osinstall_describe_tree` answers `isTree: false` with a `problem` for
-    // every folder it can reach, so a rejection means the IPC bridge is gone,
-    // and asking the chain about a guessed tree in that state would produce a
-    // list of confident sentences with nothing behind them.
-    settled: !destination || tree !== null,
+    treeRoot: answer.tree?.isTree ? destination : session.tree.root,
+    settled: !destination || answer.looked,
   };
 }

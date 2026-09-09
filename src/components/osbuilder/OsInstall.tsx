@@ -630,16 +630,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    * the picker never goes away.
    */
 
-  /**
-   * **The same tree tab 2 asks about** (`useChainTree`, round 3 task 3's fix
-   * round). This was `session.tree.root` alone while the choice tab asked the
-   * chain about the *destination* when that turned out to be a build — two
-   * lanes, two trees, and two `installed` answers about one file. The rule
-   * now lives in one hook and both read it: the destination when ART has
-   * looked at it and found a build, the session's own tree otherwise, which
-   * is exactly what this screen had before in every other case.
-   */
-  const { treeRoot: packagesTreeRoot } = useChainTree(destination);
   const packagesFolder = session.packages.folder;
 
   // --- what the screen is doing --------------------------------------------
@@ -1014,7 +1004,26 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   // holds the rule: a path ART cannot examine is not a path ART may declare
   // occupied — `apply()` decides, and blocking here would refuse an install
   // the engine would have allowed.
-  const { taken: destinationTaken } = useDestinationCheck(destination, result);
+  const destinationCheck = useDestinationCheck(destination, result);
+  const { taken: destinationTaken } = destinationCheck;
+
+  /**
+   * **The same tree tab 2 asks about** (`useChainTree`, round 3 task 3's fix
+   * round). This was `session.tree.root` alone while the choice tab asked the
+   * chain about the *destination* when that turned out to be a build — two
+   * lanes, two trees, and two `installed` answers about one file. The rule
+   * now lives in one hook and both read it: the destination when ART has
+   * looked at it and found a build, the session's own tree otherwise, which
+   * is exactly what this screen had before in every other case.
+   *
+   * The check above is **handed over** rather than asked for again (fix round
+   * 2): this screen already has the answer for this path, and two identical
+   * `osinstall_describe_tree` round trips per destination is a second reader
+   * of one fact — the shape this hook exists to remove. It also carries this
+   * screen's own `revision`, so a folder a finished install has just filled
+   * is re-examined here as well.
+   */
+  const { treeRoot: packagesTreeRoot } = useChainTree(destination, destinationCheck);
 
   /**
    * The volume names the scans actually read out of **every folder the plan

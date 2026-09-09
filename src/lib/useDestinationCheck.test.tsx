@@ -32,7 +32,7 @@ afterEach(() => {
 describe("useDestinationCheck", () => {
   it("asks nothing without a path", () => {
     const { result } = renderHook(() => useDestinationCheck(null));
-    expect(result.current).toEqual({ taken: false, tree: null });
+    expect(result.current).toEqual({ taken: false, tree: null, looked: false });
     expect(takenMock).not.toHaveBeenCalled();
     expect(describeMock).not.toHaveBeenCalled();
   });
@@ -80,7 +80,7 @@ describe("useDestinationCheck", () => {
     });
     await waitFor(() => expect(result.current.taken).toBe(true));
     rerender({ p: null });
-    expect(result.current).toEqual({ taken: false, tree: null });
+    expect(result.current).toEqual({ taken: false, tree: null, looked: false });
   });
 
   it("asks again when the revision moves, so a folder an install just filled reads as taken", async () => {
@@ -111,6 +111,40 @@ describe("useDestinationCheck", () => {
     expect(result.current.tree?.isTree).toBe(false);
   });
 
+  it("has not looked while a question is still in flight, and has once both are in", async () => {
+    // **`looked` is counted, not read off the values.** `tree === null` is
+    // the value before ART has looked *and* the value after a look that
+    // threw, so a caller waiting on it waits for ever on the second
+    // (round 3 task 3, fix round 2). This is the fact such a caller actually
+    // needs: ART has stopped asking.
+    let answerTaken: (v: boolean) => void = () => {};
+    takenMock.mockReturnValue(new Promise<boolean>((r) => { answerTaken = r; }));
+    describeMock.mockResolvedValue(NOT_TREE);
+    const { result } = renderHook(() => useDestinationCheck("E:\\dist"));
+
+    // One of the two has landed and the other has not: not looked.
+    await waitFor(() => expect(result.current.tree).not.toBeNull());
+    expect(result.current.looked).toBe(false);
+
+    answerTaken(true);
+    await waitFor(() => expect(result.current.looked).toBe(true));
+  });
+
+  it("has looked even when the look was refused", async () => {
+    // The case the field exists for. Both questions threw, so both fields
+    // are their empty values — and *that is the answer*, not a state to wait
+    // out. A tab that will not ask the chain until the destination is known
+    // must be released here, or one dead IPC call leaves it saying nothing
+    // for ever.
+    takenMock.mockRejectedValue(new Error("access is denied"));
+    describeMock.mockRejectedValue(new Error("no IPC bridge"));
+    const { result } = renderHook(() => useDestinationCheck("E:\\dist"));
+
+    await waitFor(() => expect(result.current.looked).toBe(true));
+    expect(result.current.tree).toBeNull();
+    expect(result.current.taken).toBe(false);
+  });
+
   it("takes the previous answers down the moment the path changes", async () => {
     takenMock.mockResolvedValue(true);
     describeMock.mockResolvedValue(TREE);
@@ -121,6 +155,6 @@ describe("useDestinationCheck", () => {
     describeMock.mockImplementation(() => new Promise(() => {}));
     takenMock.mockImplementation(() => new Promise(() => {}));
     rerender({ p: "E:\\b" });
-    expect(result.current).toEqual({ taken: false, tree: null });
+    expect(result.current).toEqual({ taken: false, tree: null, looked: false });
   });
 });

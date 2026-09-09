@@ -15,6 +15,23 @@ export interface DestinationCheck {
    *  non-tree answers `isTree: false` with its `problem` — never `null`,
    *  so "not asked" and "not a tree" stay apart. */
   tree: TreeSummary | null;
+  /**
+   * Whether both questions of the **current** generation have finished —
+   * answered *or* refused.
+   *
+   * `tree === null` cannot say this on its own: it is the value before ART
+   * has looked and the value after a look that threw, and a caller who waits
+   * for one of them waits for ever on the other (round 3 task 3, fix round
+   * 2). A screen that will not ask anything until the destination is known
+   * needs to know that ART has *stopped* asking, which is a different fact
+   * from what it found.
+   *
+   * `false` while a look is in flight, and `false` with no path at all —
+   * there is nothing to have looked at, and the fields beside it are their
+   * empty values for the same reason. A caller with no path is not waiting
+   * for anything and should not read this as though it were.
+   */
+  looked: boolean;
 }
 
 /**
@@ -26,11 +43,13 @@ export interface DestinationCheck {
 export function useDestinationCheck(path: string | null, revision: unknown = null): DestinationCheck {
   const [taken, setTaken] = useState(false);
   const [tree, setTree] = useState<TreeSummary | null>(null);
+  const [looked, setLooked] = useState(false);
 
   useEffect(() => {
     if (!path) {
       setTaken(false);
       setTree(null);
+      setLooked(false);
       return;
     }
     let cancelled = false;
@@ -39,25 +58,38 @@ export function useDestinationCheck(path: string | null, revision: unknown = nul
     // stale `tree`.
     setTaken(false);
     setTree(null);
+    setLooked(false);
+    // **Counted, not inferred from the values.** A refusal leaves a field at
+    // exactly the value it had before the question was asked, so the only
+    // way to know both questions are over is to count them being over.
+    // Local to this effect run, so a superseded generation counts its own
+    // two down and never touches the new one's.
+    let outstanding = 2;
+    const settled = () => {
+      outstanding -= 1;
+      if (!cancelled && outstanding === 0) setLooked(true);
+    };
     void osinstallDestinationTaken(path)
       .then((answer) => {
         if (!cancelled) setTaken(answer);
       })
       .catch(() => {
         if (!cancelled) setTaken(false);
-      });
+      })
+      .finally(settled);
     void osinstallDescribeTree(path)
       .then((summary) => {
         if (!cancelled) setTree(summary);
       })
       .catch(() => {
         if (!cancelled) setTree(null);
-      });
+      })
+      .finally(settled);
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, revision]);
 
-  return { taken, tree };
+  return { taken, tree, looked };
 }
