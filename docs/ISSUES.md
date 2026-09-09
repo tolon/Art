@@ -26,19 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-290** 🟡 **Component ticks live in two stores** —
-*found 2026-09-09 while planning round 3 of the four-tab rewrite*
-`src/components/osbuilder/OsInstall.tsx` · `src/lib/useBuildSession.ts`
-
-`OsInstall.tsx` reads and writes `osinstall.chosen.<release>` and
-`osinstall.excludedConditional.<release>` directly (`OsInstall.tsx:~646-662`), while
-`buildSession.components.<release>` — seeded once from those very keys by `seededComponents`
-(`useBuildSession.ts:158-162`) — is the session's copy that nothing writes. Two values for one
-tick set; the session's goes stale after the first change, and any screen that reads
-`session.components` reads the ticks as they were on first seed. Closed by round 3 of the
-four-tab rewrite, which moves the ticks to the session and retires the direct keys (they stay
-as a one-time seed).
-
 **ART-289** 🟠 **The packages step's preview refuses two copies of BoingBag 1 that the readout already resolved** —
 *found 2026-09-09 by the owner on the 0.9.1 build, screenshot 1 and 3 of that afternoon*
 `src/components/osbuilder/PackagePanel.tsx` · `src/components/osbuilder/HostPlacement.tsx` · `src-tauri/src/commands/osinstall.rs:2361`
@@ -380,6 +367,45 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-290** 🟡 **Component ticks lived in two stores, and the session's copy
+went stale after the first change** — *found 2026-09-09 while planning round 3
+of the four-tab rewrite; fixed 2026-09-09 in that round*
+`src/components/osbuilder/OsInstall.tsx` · `src/components/osbuilder/ChoiceTab.tsx` ·
+`src/lib/useInstallPlan.ts` · `src/lib/useBuildSession.ts`
+
+`OsInstall.tsx` read and wrote `osinstall.chosen.<release>` and
+`osinstall.excludedConditional.<release>` directly, while
+`buildSession.components.<release>` — seeded once from those very keys by
+`seededComponents` — was the session's copy that nothing wrote. Two values for
+one tick set. The session's went stale the moment a tick changed, so any screen
+reading `session.components` read the ticks as they were on first seed, and the
+tabs the four-tab rewrite was building would have disagreed with each other
+about what the build contains.
+
+**Fixed by making the session the only writer.** The component ticks are
+`session.components.<release>`, through `setComponents`; the two legacy keys
+are read **exactly once** by `seededComponents`, when the session holds nothing
+for that release, and are never written again and never deleted — a migration,
+not a rename, so a settings file written by 0.9.1 opens with its ticks intact
+and a downgrade still finds them where it left them (CLAUDE.md's *nothing
+changes unless the user changes it*). The rows that do the ticking moved to
+tab 2 (`ChoiceTab.tsx`) in the same round, and `useInstallPlan.ts` — the one
+plan hook both tabs use — is what writes the sanitize and prune results back,
+so there is one writer rather than one per screen.
+
+*Tests:* `ticks through the session, never the legacy key (ART-290)`
+(`src/components/osbuilder/ChoiceTab.test.tsx`) asserts **both** halves —
+`buildSession.components.AmigaOS 3.2` gains the ticked id, *and*
+`osinstall.chosen` is still the empty list the test seeded — because either
+half alone passes for the wrong reason. Supported by `keeps each release's own
+ticks when the release changes and comes back` (the per-release scoping the
+seed depends on) and, on the hook, `does not write a tick set while the
+catalogue has not arrived (ART-089)`. **Mutations:** a tick made to write the
+legacy key *as well as* the session fell on the second assertion
+(*"+ [ \"extras\" ]"* where the seeded `[]` was expected); a tick made to write
+nothing fell on three cases at once; and sanitizing against `catalogue ?? []`
+before the catalogue lands fell on the ART-089 case (*"Number of calls: 2"*).
 
 **ART-288** 🔴 ✅ **The headline feature of 0.9.1 refused on the owner's
 own material: the host placement resolved a package's archive by identity

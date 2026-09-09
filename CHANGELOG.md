@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OS Builder: the Kickstart and the destination folder have their own tab; the
   per-file "what these files are" list is folded behind one line on the files
   tab.
+- OS Builder: what to install is one list — the release's parts, the AmigaOS
+  3.9 updates in order, first boot — with the parts' ticks now kept with the
+  rest of the build's choices.
 
 ## [0.9.1] - 2026-09-08
 
