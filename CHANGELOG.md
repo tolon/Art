@@ -41,11 +41,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tree, the archives and the release the OS Builder already knows about. The
   OS Builder's own first boot is unchanged — one tick on the second tab, one
   step of the build.
-- **While a build is running, the whole app says so.** The sidebar's entries
-  and the drop cards' "open in the OS Builder" actions stop navigating, each
-  with a sentence naming what to press and where: stopping the build is on the
-  OS Builder's Build tab. Before, only the tabs inside the OS Builder refused,
-  and leaving by the sidebar quietly abandoned the rest of the run.
+- **While a build is running, the sidebar says so.** Its entries stop
+  navigating, each with a sentence naming what to press and where: stopping
+  the build is on the OS Builder's Build tab. Before, only the tabs inside the
+  OS Builder refused, and leaving by the sidebar quietly abandoned the rest of
+  the run. The dashboard's drop cards honour the same lock, though no run
+  reaches them today — a run lives on the Build tab, and the dashboard is not
+  on screen while one is going.
 - OS Builder, Build tab: when first boot succeeds, the line under it says what
   happened to `S/User-Startup` — the file the old one was backed up to, or that
   ART created it because there was none.
