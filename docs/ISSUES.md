@@ -26,6 +26,21 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-289** 🟠 **The packages step's preview refuses two copies of BoingBag 1 that the readout already resolved** —
+*found 2026-09-09 by the owner on the 0.9.1 build, screenshot 1 and 3 of that afternoon*
+`src/components/osbuilder/PackagePanel.tsx` · `src/components/osbuilder/HostPlacement.tsx` · `src-tauri/src/commands/osinstall.rs:2361`
+
+Over `E:\amiga\Amigatolon\os39`, which holds `BoingBag39-1.lha` and `BoingBag39-1 (1).lha`, the
+readout says *BoingBag39-1 (1).lha — the file you chose* while the packages step's preview two
+sections below says *invalid input: more than one archive carries 'BoingBag3.9-1' … (ART-INPUT-INVALID)*
+and the add button stays disabled. Two answers to one file on one screen. Cause: `osinstall_collisions`
+takes `overrides: Option<Vec<(String, PathBuf)>>` exactly as `osinstall_add_package` does, and
+`AmigaInstallPanel` passes the slot overrides (`amigaInstall.archive.<pkg>`), but `PackagePanel`'s
+`useHostPlacement` call passes none — ART-288 fixed the add path and never reached this preview.
+Closed by the four-tab design (`docs/superpowers/specs/2026-09-09-os-builder-four-tabs-design.md`
+§ 3.2): one list, and it always passes the file the readout resolved; the guard is *ART-289: the
+preview gets the user's file* in § 7.
+
 **ART-283** 🟡 **Opening the Files screen rewrites a remembered tab's location** —
 *found 2026-09-08 by the screenshot pass, reproduced twice from identical starting bytes*
 `src/pages/FileManager.tsx` · `src/lib/remembered.ts`
