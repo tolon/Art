@@ -131,10 +131,10 @@ export function errorPhrase(value: unknown): Phrase {
   // **Two fallbacks, because an empty id is worse than none.** With
   // `errors.verbatim` alone, an error carrying no `ART-*` trailer rendered a
   // bare "Error ID:" with nothing after it — a line telling the user to quote
-  // something that is not there. Caught by
-  // `FilesTab.test.tsx`'s own preview-failure test, which is the sort of
-  // thing this project keeps learning: the defect was in the sentence, and
-  // only a test that read the sentence saw it.
+  // something that is not there. Held by `errorText.test.ts`'s
+  // `an error with no id renders the sentence and nothing else` — which
+  // is the sort of thing this project keeps learning: the defect was in
+  // the sentence, and only a test that read the sentence saw it.
   if (parsed.id === null) {
     return { key: "errors.verbatimNoId", params: { sentence: parsed.sentence } };
   }

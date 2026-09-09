@@ -410,6 +410,72 @@ function seedRemembered(overrides: Record<string, unknown>) {
  * The ROM is deliberately shared: a Kickstart belongs to the machine being
  * built for, not to the release being installed.
  */
+/** The folder `FULL_FIELDS` points AmigaOS 3.2 at, and one a test adds
+ *  beside it. Named rather than spelled out at each site: a Windows path
+ *  written through a shell heredoc loses its backslashes and nothing
+ *  fails (CLAUDE.md), so the two this file adds by hand live here. */
+const MAIN_FOLDER = "E:\\media";
+const UPDATE_FOLDER = "E:\\media\\Update";
+
+/**
+ * A **different** disk in the added folder from the one in the main folder.
+ *
+ * The default fixture answers `Workbench3.2` for every folder, and
+ * `foundVolumeNames` folds duplicates — so a found line reading "1 install
+ * disk found: Workbench3.2" is what a screen that read both folders and a
+ * screen that read only the first both produce. Naming two disks is what
+ * makes "every folder in the list" a claim a test can fail.
+ */
+/** The folder column's found line, exactly — count and names together, so
+ *  "one name" and "the right name" stay different claims. */
+function foundLine(names: string[]): string {
+  return i18n.t("osinstall.media.found", {
+    count: names.length,
+    names: names.join(", "),
+  });
+}
+
+function scanTwoFolders(extra: string, extraVolume: string) {
+  scanMediaMock.mockImplementation((folder: string) =>
+    Promise.resolve(
+      (folder === extra
+        ? {
+            outcome: "found",
+            media: [{ path: `${extra}\\Disk.adf`, volumeName: extraVolume, kind: "floppy" }],
+          }
+        : {
+            outcome: "found",
+            media: [
+              { path: `${MAIN_FOLDER}\\Disk1.adf`, volumeName: "Workbench3.2", kind: "floppy" },
+            ],
+          }) satisfies MediaScanResult
+    )
+  );
+  // **The identify pass needs a distinct file per folder too.** It merges its
+  // matches across folders and the per-file lines are keyed by path, so the
+  // default fixture — one `Disk1.adf` whatever folder is asked about —
+  // renders two children under one React key the moment a second folder is in
+  // the list. A duplicate key is not this file's subject, but React warning
+  // about one is output nobody asked for.
+  identifyMediaMock.mockImplementation((folder: string) =>
+    Promise.resolve({
+      matches: [
+        {
+          path: `${folder}\\Disk.adf`,
+          volumeName: folder === extra ? extraVolume : "Workbench3.2",
+          row: null,
+          md5: "0".repeat(32),
+          confirmed: null,
+        },
+      ],
+      unreadable: [],
+      hashed: 1,
+      remembered: 0,
+      skipped: [],
+    } satisfies MediaIdentification)
+  );
+}
+
 const FULL_FIELDS = {
   "osinstall.mediaFolder": "E:\\media",
   "osinstall.rom": "E:\\roms\\kick.rom",
@@ -525,15 +591,14 @@ beforeEach(() => {
 async function renderFull() {
   seedRemembered(FULL_FIELDS);
   const utils = render(<FilesTab />);
-  await waitFor(() => expect(planMock).toHaveBeenCalled());
-  await screen.findByTestId("source-columns");
-  // The catalogue is still loaded on this tab — it is one of the plan's own
-  // dependencies — so a plan asked for means it has landed.
-  await waitFor(() => expect(componentsMock).toHaveBeenCalled());
-  // And the recipe's layers, which decide whether the folder rows offer a
-  // layer tag at all. `layers === []` has two causes, and every case below
-  // that reads the folder column needs the settled one.
+  // **Nothing here waits on a plan** (round 4 task 5's fix round): tab 1 does
+  // not ask for one. What it does ask is the recipe's layers — which decide
+  // whether a folder row offers a layer tag at all, and `layers === []` has
+  // two causes, so every case below that reads the folder column needs the
+  // settled one — and a scan of each folder in the list.
   await waitFor(() => expect(layersForMock).toHaveBeenCalled());
+  await screen.findByTestId("source-columns");
+  await waitFor(() => expect(scanMediaMock).toHaveBeenCalled());
   return utils;
 }
 
@@ -584,25 +649,37 @@ async function browseLayerFolder(layerId: string, path: string) {
   await tagFolder(path, layerId);
 }
 
-/** Renders on AmigaOS 3.2.2, browses every named layer's own folder in turn,
- *  and answers the request `osinstallPlan` was actually sent. */
-async function planWithFolders(folders: Record<string, string>): Promise<InstallRequest> {
+/** Renders on AmigaOS 3.2.2 and browses every named layer's own folder in
+ *  turn, then waits for the recipe's layers to have landed — which is what
+ *  decides whether the tags mean anything at all. */
+async function withLayerFolders(folders: Record<string, string>): Promise<void> {
   renderFilesTab({ release: "AmigaOS 3.2.2" });
   for (const [layerId, path] of Object.entries(folders)) {
     await browseLayerFolder(layerId, path);
   }
-  await waitFor(() => expect(planMock).toHaveBeenCalled());
-  return planMock.mock.calls.at(-1)![0] as InstallRequest;
+  await waitFor(() => expect(layersForMock).toHaveBeenCalledWith("AmigaOS 3.2.2"));
 }
 
 // ---------------------------------------------------------------------------
 // What left this file with the sections it belonged to (round 4 task 5)
 // ---------------------------------------------------------------------------
 //
-// Every `it(...)` removed on 2026-09-09, by name, with where it went. The
-// keymap five went in task 4 and are named in `MachineTab.test.tsx`; the rest
-// went here, with the plan-error badge, the refusals card, the plan card, the
-// run card and the result card.
+// **Twenty-four** `it(...)`s were removed on 2026-09-09, with the plan-error
+// badge, the refusals card, the plan card, the run card and the result card.
+// Every one of them is below, by name, with where it went. (The keymap five
+// left a commit earlier, in task 4, and are named in `MachineTab.test.tsx`.)
+//
+// The count is stated because this list has already been wrong once: the
+// first version of it named twenty-three, and `names the component to tick by
+// its own label, never the raw recipe id` — the one refusal that tells a
+// person to go and tick a component themselves — went out unnamed and
+// unheld. A fates list that does not say how many it is accounting for cannot
+// be checked against the diff that produced it.
+//
+// A second correction, made in place rather than left to decay: the first
+// version of this list called ten of these guards lost. **Task 4's own fix
+// round moved all ten**, by their original names, into `BuildTab.test.tsx` —
+// so they are under "moved" below, not under "dropped".
 //
 // **Moved to `MachineTab.test.tsx` in task 4** (that file names all five):
 //   says nothing when the install places no keymaps · offers what the plan
@@ -621,6 +698,11 @@ async function planWithFolders(folders: Record<string, string>): Promise<Install
 //     `renders the plan's refusal and no Build button (design § 7)`.
 //   - `shows the real, translated refusal text` → the same case, which reads
 //     `osinstall.refusal.mediaMissing` out of `build-refusals`.
+//   - `names the component to tick by its own label, never the raw recipe id`
+//     → the case of the same name, moved whole in round 4 task 5's fix round.
+//     It covers **both** places a refusal is drawn on tab 4 now — the
+//     refusals card in the Build button's place, and a refused phase's own
+//     list under its advice — which is one more than this file ever had.
 //   - `hands a finished install's destination to the session` (ART-197) →
 //     `hands the finished tree to the session, once, and never on render
 //     (ART-197)`, which additionally proves nothing is written on render.
@@ -648,30 +730,46 @@ async function planWithFolders(folders: Record<string, string>): Promise<Install
 //     card's own carried-tree sentence, whose key is deleted with it; tab 4
 //     states the hand-off in the tree phase's report instead, and `sets the
 //     kind the card lane needs and points at it` is the case for it.
-//   - `names both sides of a mismatch` · `says a tree with no marker states
-//     none, not a guess` · `says the marker could not be read, never the same
-//     sentence as unstated` · `reports a differing marker for an unmeasured
-//     release plainly, never as a mismatch` (Task 9) — the four remaining
-//     `statedRelease` verdicts. The five sentences are unchanged in meaning
-//     and `BuildTab.tsx` renders all five; only one of them has a case there.
-//     **A guard this file held and no file holds now** — flagged in round 4
-//     task 5's report rather than left to be discovered.
 //   - `takes a finished install's report down when the release changes`
 //     (ART-210) — the report is not on this tab. Its sibling,
 //     `takes an answer a control gave down when the release changes`, stays
 //     and is the case that proves the rule.
+//
+// **Moved to `BuildTab.test.tsx` by task 4's fix round**, each under its own
+// original name — these were reported as lost when task 5 landed, and were
+// not left that way:
+//   - `names both sides of a mismatch` · `says a tree with no marker states
+//     none, not a guess` · `says the marker could not be read, never the same
+//     sentence as unstated` · `reports a differing marker for an unmeasured
+//     release plainly, never as a mismatch` (Task 9) — the four `statedRelease`
+//     verdicts beside the confirmed one, in that file's
+//     `the tree phase's release marker` describe.
 //   - `shows what the folder holds above the refusals when some disks are
 //     missing` · `names the other release when the folder is a different
 //     one` · `says what a layered release's own folders hold, and does not
 //     call the base set somebody else's` (ART-257) · `never asks about the
 //     previous release's folder while a layered release is loading`
 //     (ART-257) · `asks each media lookup once for a settled folder, not once
-//     per render` — the evidence line above the refusals, and the effects
-//     behind it, are `BuildTab.tsx`'s `useMediaEvidence` now. **Five guards
-//     this file held and no file holds now**, likewise flagged in the report.
+//     per render` — the evidence line above the refusals and the effects
+//     behind it, in `what the folder holds, above the refusals`.
 //   - `says what the folder really holds while the previous release's
-//     evidence is still the only one held` (ART-254) — same section, same
-//     flag.
+//     evidence is still the only one held` (ART-254) — its own describe there.
+//
+// ---------------------------------------------------------------------------
+// What round 4 task 5's **fix round** changed about the cases that stayed
+// ---------------------------------------------------------------------------
+//
+// Tab 1 stopped calling `useInstallPlan` (it read three fields of the answer
+// and paid for a walk of every ADF in the list to get them). Every case that
+// asserted through `osinstallPlan` therefore had to say what it means without
+// one; none of them left the file, and each carries the reasoning at its own
+// site rather than here. In short: what the *request* carries is
+// `foldersForPlan`'s and `useInstallPlan`'s and is asserted against those
+// (`buildSession.test.ts`, `useInstallPlan.test.tsx`, `ChoiceTab.test.tsx`);
+// what this tab still owes is that every folder in the list is read and
+// named, which the folder column's own found line states. The one case that
+// left in that pass, `asks once for a request shape it has already asked for`
+// (ART-119), is named where it stood.
 
 describe("FilesTab renders past its heading", () => {
   it("mounts with the material, and with nothing that belongs to another tab", async () => {
@@ -773,80 +871,81 @@ describe("nothing on screen is a raw i18n key or an unrendered interpolation", (
   });
 });
 
-describe("the screen does not plan the same thing twice", () => {
-  // ART-119 (#1). This screen keeps two plans on purpose — one asked with
-  // nothing excluded, so a conditional component's *true* state is knowable,
-  // and one asked with the real exclusions — but with nothing excluded the
-  // two requests are byte-identical, so the second call planned the same
-  // media over again and threw the answer away. `plan()` opens and walks
-  // every switched-on component's disc image, so that is real work on every
-  // keystroke in the media, ROM and destination fields alike.
+describe("tab 1 asks for layers, not a plan (round 4 task 5's fix round)", () => {
+  // **The cost this replaces.** This screen called `useInstallPlan` and read
+  // three fields of the answer — `layers`, `layersKnown`, `plannedFolders` —
+  // which between them cost one `osinstall_layers`, a read of a shipped JSON
+  // recipe. The rest of that hook costs `osinstall_components` and then
+  // `osinstall_plan`, and `plan()` opens and walks every switched-on
+  // component's disc image. Nothing on this tab read one byte of it. That is
+  // ART-119's own cost, on the tab a person opens first and stays on longest
+  // while they are still adding folders — each added folder starting the walk
+  // again.
+  //
+  // The case that stood here, `asks once for a request shape it has already
+  // asked for`, is **covered by `useInstallPlan.test.tsx`**'s `plans once
+  // when nothing is excluded, twice when something is`, which measures the
+  // dedupe at the hook rather than through a screen that no longer calls it.
 
-  /** How often each distinct request shape was submitted. */
-  function requestCounts(): Map<string, number> {
-    const seen = new Map<string, number>();
-    for (const [req] of planMock.mock.calls as [InstallRequest][]) {
-      const key = JSON.stringify(req);
-      seen.set(key, (seen.get(key) ?? 0) + 1);
-    }
-    return seen;
-  }
-
-  it("asks once for a request shape it has already asked for", async () => {
+  it("asks for no plan and no component catalogue, however many folders it holds", async () => {
     await renderFull();
+    await addFolder(UPDATE_FOLDER);
 
-    // Every request so far carries no exclusions, which is the case where
-    // the base and effective requests are identical.
-    expect(
-      (planMock.mock.calls as [InstallRequest][]).every(([req]) => req.excluded.length === 0)
-    ).toBe(true);
-
-    // Measured, not reasoned about: reverting the dedupe to the old
-    // `Promise.all([plan(base), plan(effective)])` makes this same render
-    // submit **4** requests, all four byte-identical. It is 2 now. (Two and
-    // not one because the effect settles twice — `useRemembered` hands back
-    // a fresh array identity when the persisted value lands, which is its
-    // own duplication and not this one; halving each pass is what this fix
-    // does, and it is the half that was a duplicate *within* a pass.)
-    expect(planMock.mock.calls.length).toBe(2);
-    expect([...requestCounts().values()]).toEqual([2]);
+    // Waited on a *later* answer than the ones counted, so this is not a
+    // snapshot taken before anything could have been asked: the second
+    // folder's own scan has landed by here.
+    await waitFor(() => expect(scanMediaMock).toHaveBeenCalledWith(UPDATE_FOLDER));
+    // Counted zeroes, named one by one so a failure says which command came
+    // back.
+    expect({ osinstallPlan: planMock.mock.calls.length }).toEqual({ osinstallPlan: 0 });
+    expect({ osinstallComponents: componentsMock.mock.calls.length }).toEqual({
+      osinstallComponents: 0,
+    });
+    expect({ osinstallComponentCollisions: componentCollisionsMock.mock.calls.length }).toEqual({
+      osinstallComponentCollisions: 0,
+    });
+    // …and the one it *does* ask, so this is not a screen that asks nothing
+    // at all: the recipe's own layers, once per release.
+    expect(layersForMock).toHaveBeenCalledWith("AmigaOS 3.2");
   });
 });
 
 describe("reusing the last scan, and asking for a fresh one (ART-194)", () => {
-  it("plans with the cache on by default, and remembers the user turning it off", async () => {
+  // **The toggle is on this tab; what reads it is not.** Tab 1 stopped
+  // planning in round 4 task 5's fix round, so what this control does is
+  // write the one remembered key the planning tabs pass as `scanCache` —
+  // which `useInstallPlan.test.tsx` and `ChoiceTab.test.tsx` see from the
+  // other side. The half of the old case that asserted `scanCache: "reuse"`
+  // on this screen's own request went with the request.
+  it("is on by default, and remembers the user turning it off", async () => {
     await renderFull();
-
-    // Cached by default: nobody had to switch this on, and the very first
-    // request the screen ever sends already says so.
-    expect(planMock.mock.calls.length).toBeGreaterThan(0);
-    for (const [req] of planMock.mock.calls as [InstallRequest][]) {
-      expect(req.scanCache).toBe("reuse");
-    }
 
     const box = screen.getByRole("checkbox", {
       name: i18n.t("osinstall.media.reuseScan"),
     }) as HTMLInputElement;
+    // Cached by default: nobody had to switch this on.
     expect(box.checked).toBe(true);
 
-    planMock.mockClear();
     await userEvent.click(box);
 
-    // Two things, and the second is the one that would go unnoticed: the plan
-    // is re-asked *with the new answer*, and the choice was written to the
-    // remembered store so tomorrow's run starts where this one ended.
-    await waitFor(() =>
-      expect(planMock).toHaveBeenCalledWith(expect.objectContaining({ scanCache: "ignore" }))
-    );
+    // The choice was written to the remembered store, so tomorrow's run
+    // starts where this one ended — and so the tab that plans reads it.
     await waitFor(() => {
       const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
       expect(bag["osinstall.reuseScan"]).toBe(false);
     });
+    expect(
+      (
+        screen.getByRole("checkbox", {
+          name: i18n.t("osinstall.media.reuseScan"),
+        }) as HTMLInputElement
+      ).checked
+    ).toBe(false);
   });
 
-  it("asks the backend to forget what it remembered, and re-plans against the discs", async () => {
+  it("asks the backend to forget what it remembered, and re-scans the discs", async () => {
     await renderFull();
-    planMock.mockClear();
+    scanMediaMock.mockClear();
 
     await userEvent.click(screen.getByRole("button", { name: i18n.t("osinstall.media.rescan") }));
 
@@ -854,9 +953,11 @@ describe("reusing the last scan, and asking for a fresh one (ART-194)", () => {
     // that merely skipped the cache for one call would leave the stale answer
     // sitting there for the next one.
     await waitFor(() => expect(rescanMock).toHaveBeenCalled());
-    // …and the screen really re-plans afterwards, rather than showing the
-    // answer it already had.
-    await waitFor(() => expect(planMock).toHaveBeenCalled());
+    // …and the screen really re-reads the folders afterwards, rather than
+    // leaving the listing it already had on screen. (It used to re-plan too;
+    // tab 1 does not plan, and `forget_all` has deleted the listings, so the
+    // tabs that do cannot be served a stale one either.)
+    await waitFor(() => expect(scanMediaMock).toHaveBeenCalledWith(MAIN_FOLDER));
     // …and says what it did, so the button cannot be mistaken for one that
     // ignored the click.
     await screen.findByText(i18n.t("osinstall.media.rescanned", { count: 1 }));
@@ -892,7 +993,7 @@ describe("reusing the last scan, and asking for a fresh one (ART-194)", () => {
   });
 });
 
-describe("the screen settles instead of re-planning for ever (ART-195)", () => {
+describe("the screen settles instead of re-asking for ever (ART-195)", () => {
   // What the owner saw, and the number that made it undeniable: the release
   // build's `%TEMP%` held preview staging roots numbered up to **2,149** from
   // one session, five of them created inside two seconds. That is not a
@@ -913,32 +1014,44 @@ describe("the screen settles instead of re-planning for ever (ART-195)", () => {
   //
   // So this test switches to 3.9 and counts. It is deliberately about the
   // *release the owner used*, not the one the fixture defaults to.
-  it("does not keep re-planning a release whose remembered keys are empty", async () => {
+  //
+  // **What is counted changed in round 4 task 5's fix round, and the rule did
+  // not.** The plan is not this tab's any more, and `useInstallPlan.test.tsx`
+  // counts it where it lives. What tab 1 still starts per render if a
+  // dependency is rebuilt per render is the *folder scan* and the *identity
+  // pass* — both of which walk real media, both of which key on a list read
+  // off the remembered bag, and both of which are exactly the shape ART-195
+  // was. So the same measurement is made against them.
+  it("does not keep re-asking about a release whose remembered keys are empty", async () => {
     await renderFull();
 
     const picker = screen.getByRole("combobox", {
       name: i18n.t("osinstall.release.label"),
     }) as HTMLSelectElement;
     await userEvent.selectOptions(picker, "AmigaOS 3.9");
-    await waitFor(() =>
-      expect(planMock).toHaveBeenCalledWith(expect.objectContaining({ release: "AmigaOS 3.9" }))
-    );
+    await waitFor(() => expect(layersForMock).toHaveBeenCalledWith("AmigaOS 3.9"));
 
     // Let the screen settle, then measure how much more work it starts while
     // nothing at all is happening. Against the defect this climbs without
     // bound; the assertion is that it climbs by nothing.
     await new Promise((resolve) => setTimeout(resolve, 120));
-    const planned = planMock.mock.calls.length;
-    const previewed = componentCollisionsMock.mock.calls.length;
+    const scanned = scanMediaMock.mock.calls.length;
+    const identified = identifyMediaMock.mock.calls.length;
+    const asked = layersForMock.mock.calls.length;
     await new Promise((resolve) => setTimeout(resolve, 250));
 
-    expect(planMock.mock.calls.length).toBe(planned);
-    expect(componentCollisionsMock.mock.calls.length).toBe(previewed);
+    expect(scanMediaMock.mock.calls.length).toBe(scanned);
+    expect(identifyMediaMock.mock.calls.length).toBe(identified);
+    expect(layersForMock.mock.calls.length).toBe(asked);
   });
 });
 
-describe("choosing the release re-plans against it", () => {
-  it("plans the release the user chose", async () => {
+describe("choosing the release re-asks against it", () => {
+  // What tab 1 asks *of* a release is its recipe's layers — which decide
+  // whether a folder row is offered a layer tag at all. That the release also
+  // reaches the planner is `ChoiceTab.test.tsx`'s and
+  // `useInstallPlan.test.tsx`'s, on the tabs that plan.
+  it("asks the release the user chose about its own layers", async () => {
     await renderFull();
 
     const picker = screen.getByRole("combobox", {
@@ -949,9 +1062,7 @@ describe("choosing the release re-plans against it", () => {
     await userEvent.selectOptions(picker, "AmigaOS 3.9");
     expect(picker.value).toBe("AmigaOS 3.9");
 
-    await waitFor(() =>
-      expect(planMock).toHaveBeenCalledWith(expect.objectContaining({ release: "AmigaOS 3.9" }))
-    );
+    await waitFor(() => expect(layersForMock).toHaveBeenCalledWith("AmigaOS 3.9"));
   });
 });
 
@@ -982,39 +1093,39 @@ describe("a media folder belongs to the release it holds (ART-207)", () => {
       name: i18n.t("osinstall.release.label"),
     }) as HTMLSelectElement;
     await userEvent.selectOptions(picker, "AmigaOS 3.9");
-    await waitFor(() => expect(componentsMock).toHaveBeenCalledWith("AmigaOS 3.9"));
+    await waitFor(() => expect(layersForMock).toHaveBeenCalledWith("AmigaOS 3.9"));
 
     expect((await screen.findAllByText("E:\\media39")).length).toBeGreaterThan(0);
     expect(screen.queryAllByText("E:\\media")).toHaveLength(0);
   });
 
-  it("plans a release into its own destination, not the other release's", async () => {
+  // **The destination reached the planner from here until round 4 task 5's
+  // fix round**, and that half of this case went with the plan — it is
+  // `useInstallPlan.test.tsx`'s and `MachineTab.test.tsx`'s now, on the tabs
+  // that read the field and the tabs that plan. What is left here is the half
+  // this tab can still get wrong: the panel at its foot is handed a tree, and
+  // that tree is looked up **per release**, so a release switch must not
+  // leave ART examining the folder the other release was going to be built
+  // into.
+  it("looks at each release's own destination, not the other release's", async () => {
     await renderFull();
-    // `getAllByText`: the path is on screen more than once — this field, and
-    // the build session's own tree root, which is a different thing (ART-197)
-    // and is not what this test is about. So the assertion that matters is
-    // made against the request `plan()` is actually given, not the DOM.
-    expect(screen.getAllByText("E:\\dist").length).toBeGreaterThan(0);
+    await waitFor(() => expect(describeTreeMock).toHaveBeenCalledWith("E:\\dist"));
 
     const picker = screen.getByRole("combobox", {
       name: i18n.t("osinstall.release.label"),
     }) as HTMLSelectElement;
     await userEvent.selectOptions(picker, "AmigaOS 3.9");
 
-    await waitFor(() =>
-      expect(planMock).toHaveBeenCalledWith(
-        expect.objectContaining({ release: "AmigaOS 3.9", destination: "E:\\dist39" })
-      )
-    );
-    // Not one 3.9 plan may name the folder the user set aside for their 3.2
-    // build — `toHaveBeenCalledWith` above would be satisfied by a single
-    // correct call among wrong ones.
-    const planned39 = planMock.mock.calls
-      .map((call) => call[0] as InstallRequest)
-      .filter((req) => req.release === "AmigaOS 3.9");
-    expect(planned39.length).toBeGreaterThan(0);
-    for (const req of planned39) {
-      expect(req.destination).not.toBe("E:\\dist");
+    await waitFor(() => expect(describeTreeMock).toHaveBeenCalledWith("E:\\dist39"));
+    // And it does not go on asking about the 3.2 folder afterwards —
+    // `toHaveBeenCalledWith` alone would be satisfied by one right call among
+    // wrong ones.
+    const after = describeTreeMock.mock.calls.length;
+    describeTreeMock.mockClear();
+    expect(after).toBeGreaterThan(0);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    for (const call of describeTreeMock.mock.calls) {
+      expect(call[0]).not.toBe("E:\\dist");
     }
   });
 
@@ -1025,7 +1136,7 @@ describe("a media folder belongs to the release it holds (ART-207)", () => {
       name: i18n.t("osinstall.release.label"),
     }) as HTMLSelectElement;
     await userEvent.selectOptions(picker, "AmigaOS 3.9");
-    await waitFor(() => expect(componentsMock).toHaveBeenCalledWith("AmigaOS 3.9"));
+    await waitFor(() => expect(layersForMock).toHaveBeenCalledWith("AmigaOS 3.9"));
 
     // Through the one folder picker (design § 3.1) rather than the flat
     // field's own Browse button, which no longer exists. The 3.9 list is
@@ -1083,12 +1194,14 @@ describe("a disc dropped on the panel", () => {
       expect.stringContaining("E:\\media"),
       expect.stringContaining("E:\\amiga\\Amigatolon\\iso"),
     ]);
-    // And the folder that was already there is still what the planner reads
-    // first \u2014 a drop is an addition, not a re-pick.
-    await waitFor(() => expect(planMock).toHaveBeenCalled());
-    const sent = planMock.mock.calls.at(-1)![0] as InstallRequest;
-    expect(sent.mediaFolder).toBe("E:\\media");
-    expect(sent.extraMediaFolders).toEqual(["E:\\amiga\\Amigatolon\\iso"]);
+    // And the folder that was already there is still read — a drop is an
+    // addition, not a re-pick. (What the *planner* is then handed as its
+    // first folder is `foldersForPlan`'s, unit-tested in
+    // `buildSession.test.ts`, and reaches Rust from the tabs that plan.)
+    await waitFor(() => expect(scanMediaMock).toHaveBeenCalledWith("E:\\media"));
+    await waitFor(() =>
+      expect(scanMediaMock).toHaveBeenCalledWith("E:\\amiga\\Amigatolon\\iso")
+    );
   });
 
   it("takes effect again when the same disc is dropped a second time", async () => {
@@ -1128,14 +1241,6 @@ describe("a disc dropped on the panel", () => {
 describe("the found line covers the added folders too (ART-256)", () => {
   const EXTRA = "E:\\media\\extras";
 
-  /** The folder column's found line, exactly — count and names together, so
-   *  "one name" and "the right name" stay different claims. */
-  function foundLine(names: string[]): string {
-    return i18n.t("osinstall.media.found", {
-      count: names.length,
-      names: names.join(", "),
-    });
-  }
 
   /** `Workbench3.2` in the main folder, `Extras3.2` in an added one — and the
    *  plan, which reads both, still short of `Install3.2`. */
@@ -1210,7 +1315,7 @@ describe("the found line covers the added folders too (ART-256)", () => {
   // not carry — the layered fields have their own scans (`layerScans`), and
   // counting a folder twice would be the mistake this fix is preventing in
   // the other direction.
-  it("plans a layered release from its tagged folders and names the ones it will not read", async () => {
+  it("reads a layered release's tagged folders and names the ones it will not", async () => {
     scanPerFolder();
     seedRemembered({
       ...FULL_FIELDS,
@@ -1222,20 +1327,18 @@ describe("the found line covers the added folders too (ART-256)", () => {
     });
     render(<FilesTab />);
 
-    // Waits for the request made **once the recipe's layers have landed**:
-    // `layers === []` is one value with two causes, and until `layersFor`
-    // answers, a layered release honestly looks unlayered from here
-    // (ART-256/ART-257's own `layersKnown` reasoning).
-    await waitFor(() => {
-      const last = planMock.mock.calls.at(-1)![0] as InstallRequest;
-      expect(Object.keys(last.mediaFolders ?? {}).length).toBeGreaterThan(0);
-    });
-    const request = planMock.mock.calls.at(-1)![0] as InstallRequest;
-    // A layered request is the map alone: `plan.rs` ignores the flat fields
-    // outright for one.
-    expect(request.extraMediaFolders).toEqual([]);
-    expect(request.mediaFolder).toBe("");
-    expect(request.mediaFolders).toEqual({ base: "E:\\base322" });
+    // Waits until **the recipe's layers have landed**: `layers === []` is one
+    // value with two causes, and until `layersFor` answers, a layered release
+    // honestly looks unlayered from here (ART-256/ART-257's own `layersKnown`
+    // reasoning).
+    //
+    // The *shape* of the request a layered release sends — the map alone,
+    // `mediaFolder: ""`, `extraMediaFolders: []`, because `plan.rs` ignores
+    // the flat fields for one — is `foldersForPlan`'s, and is asserted
+    // against it directly in `buildSession.test.ts`. Tab 1 stopped planning
+    // in round 4 task 5's fix round; what it still owes is that the tags
+    // reach that function, which is what the two assertions below measure.
+    await waitFor(() => expect(layersForMock).toHaveBeenCalledWith("AmigaOS 3.2.2"));
 
     // **The untagged folder is named, not dropped.** It is in the list, ART
     // resolves it in the readout, and the plan cannot carry it — a screen
@@ -1452,7 +1555,7 @@ describe("the release the user picks is the release the whole screen is on (ART-
   it("moves the build session's own release, which is what the steps read", async () => {
     seedRemembered(FULL_FIELDS);
     render(<FilesTab />);
-    await waitFor(() => expect(planMock).toHaveBeenCalled());
+    await waitFor(() => expect(layersForMock).toHaveBeenCalled());
 
     const picker = screen.getByRole("combobox", {
       name: i18n.t("osinstall.release.label"),
@@ -1494,7 +1597,7 @@ describe("a release switch does not leave the other release's answers on screen 
     // as happily as against the fix.
     seedRemembered(FULL_FIELDS);
     render(<FilesTab />);
-    await waitFor(() => expect(planMock).toHaveBeenCalled());
+    await waitFor(() => expect(layersForMock).toHaveBeenCalled());
 
     await userEvent.click(
       screen.getByRole("button", { name: i18n.t("osinstall.media.rescan") })
@@ -1595,16 +1698,28 @@ describe("the tree the next steps get (ART-197)", () => {
 // `MediaMissing` -- so the install could not be expressed at all.
 
 describe("the one material folder list (design § 3.1)", () => {
-  it("sends every folder in the list to the planner, not only the first", async () => {
+  // **Read through the found line since round 4 task 5's fix round.** This
+  // asserted the request `osinstall_plan` was handed — `mediaFolder` plus
+  // `extraMediaFolders` — and tab 1 does not plan. The claim is the same one
+  // either way: every folder in the list is material, not just the first.
+  // What draws it here is `foundVolumeNames`, which walks exactly the folders
+  // `foldersForPlan` says the request carries; what hands those folders to
+  // Rust is `useInstallPlan`, asserted in `useInstallPlan.test.tsx` and from
+  // the screen in `ChoiceTab.test.tsx`.
+  it("reads every folder in the list, not only the first", async () => {
+    scanTwoFolders(UPDATE_FOLDER, "Extras3.2");
     await renderFull();
-    planMock.mockClear();
+    await addFolder(UPDATE_FOLDER);
 
-    await addFolder("E:\\media\\Update");
-
-    await waitFor(() => expect(planMock).toHaveBeenCalled());
-    const sent = planMock.mock.calls.at(-1)![0] as InstallRequest;
-    expect(sent.mediaFolder).toBe("E:\\media");
-    expect(sent.extraMediaFolders).toEqual(["E:\\media\\Update"]);
+    await waitFor(() => expect(scanMediaMock).toHaveBeenCalledWith(UPDATE_FOLDER));
+    expect(scanMediaMock).toHaveBeenCalledWith(MAIN_FOLDER);
+    // Both folders' disks in one sentence, in list order — the added folder's
+    // `Extras3.2` beside the first folder's `Workbench3.2`.
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.media.found", { count: 2, names: "Workbench3.2, Extras3.2" })
+      )
+    ).toBeTruthy();
   });
 
   it("shows one row per folder, so the user can see what ART will read", async () => {
@@ -1619,20 +1734,29 @@ describe("the one material folder list (design § 3.1)", () => {
   });
 
   it("takes one back out again", async () => {
+    scanTwoFolders(UPDATE_FOLDER, "Extras3.2");
     await renderFull();
-    await addFolder("E:\\media\\Update");
+    await addFolder(UPDATE_FOLDER);
+    await screen.findByText(
+      i18n.t("osinstall.media.found", { count: 2, names: "Workbench3.2, Extras3.2" })
+    );
 
-    planMock.mockClear();
     await userEvent.click(
       screen.getByRole("button", {
-        name: i18n.t("osinstall.media.removeFolderAriaLabel", { folder: "E:\\media\\Update" }),
+        name: i18n.t("osinstall.media.removeFolderAriaLabel", { folder: UPDATE_FOLDER }),
       })
     );
 
     await waitFor(() => expect(screen.queryAllByTestId("material-folder")).toHaveLength(1));
-    await waitFor(() => expect(planMock).toHaveBeenCalled());
-    const sent = planMock.mock.calls.at(-1)![0] as InstallRequest;
-    expect(sent.extraMediaFolders).toEqual([]);
+    // And the removed folder's disks stop being material — the row going is
+    // not the whole claim, since the list is what everything downstream is
+    // computed from. (It used to be read off the plan request; tab 1 does not
+    // plan.)
+    await waitFor(() =>
+      expect(
+        screen.getByText(i18n.t("osinstall.media.found", { count: 1, names: "Workbench3.2" }))
+      ).toBeTruthy()
+    );
   });
 
   // ART-240 (found by the media-step accessibility sweep filed alongside
@@ -1649,15 +1773,17 @@ describe("the one material folder list (design § 3.1)", () => {
     const removeHotfix = screen.getByRole("button", { name: /remove.*hotfix/i });
     expect(removeUpdate).not.toBe(removeHotfix);
 
-    planMock.mockClear();
     await userEvent.click(removeUpdate);
 
-    await waitFor(() => expect(planMock).toHaveBeenCalled());
-    const sent = planMock.mock.calls.at(-1)![0] as InstallRequest;
     // Removing the row named "Update" left "Hotfix" behind — proof the
     // accessible name actually picked out the right row, not just any one
-    // with visible text "Remove".
-    expect(sent.extraMediaFolders).toEqual(["E:\\media\\Hotfix"]);
+    // with visible text "Remove". Read off the rows themselves since round 4
+    // task 5's fix round; it used to be read off the plan request, and tab 1
+    // does not plan.
+    await waitFor(() => expect(screen.queryAllByTestId("material-folder")).toHaveLength(2));
+    const left = screen.getAllByTestId("material-folder").map((row) => row.textContent ?? "");
+    expect(left.some((row) => row.includes("Hotfix"))).toBe(true);
+    expect(left.some((row) => row.includes("Update"))).toBe(false);
   });
 
   it("does not add the same folder twice, in any spelling", async () => {
@@ -1687,9 +1813,9 @@ describe("the one material folder list (design § 3.1)", () => {
       "osinstall.extraMediaFolders": ["E:\\media\\Update"],
     });
     render(<FilesTab />);
-    // The plan section left this tab in round 4 task 5, so the wait is on
-    // the request having gone out rather than on a heading it would draw.
-    await waitFor(() => expect(planMock).toHaveBeenCalled());
+    // The plan left this tab in round 4 task 5's fix round, so the wait is on
+    // the one question it does ask about a release.
+    await waitFor(() => expect(layersForMock).toHaveBeenCalledWith("AmigaOS 3.2"));
     // The 3.2 list migrates to two folders: its flat one and its extra.
     expect(screen.queryAllByTestId("material-folder")).toHaveLength(2);
 
@@ -2055,15 +2181,26 @@ describe("saying which part of a layered release a folder holds (Task 10)", () =
     ]);
   });
 
-  it("sends one folder per layer", async () => {
-    const sent = await planWithFolders({
-      base: "E:\\media\\3.2",
-      "update-3.2.2": "E:\\media\\Update3.2.2",
-    });
-    expect(sent.mediaFolders).toEqual({
-      base: "E:\\media\\3.2",
-      "update-3.2.2": "E:\\media\\Update3.2.2",
-    });
+  // **What the map itself looks like is `foldersForPlan`'s**, asserted
+  // against that function in `buildSession.test.ts` — this used to read it
+  // out of the request `osinstall_plan` was handed, and tab 1 does not plan
+  // since round 4 task 5's fix round. What a screen can still get wrong is
+  // upstream of it: a tag that never reaches the list. So both tagged folders
+  // must be material and neither may be listed as one the request will skip.
+  it("makes one folder per layer material, and calls neither of them unused", async () => {
+    const BASE = "E:\\media\\3.2";
+    const UPDATE = "E:\\media\\Update3.2.2";
+    scanTwoFolders(UPDATE, "Update3.2.2");
+    await withLayerFolders({ base: BASE, "update-3.2.2": UPDATE });
+
+    // Both tagged folders' own disks, in layer order — `foundVolumeNames`
+    // walks exactly the folders `foldersForPlan` says the request carries, so
+    // a tag that failed to land would drop its folder out of this sentence.
+    expect(
+      await screen.findByText(foundLine(["Workbench3.2", "Update3.2.2"]))
+    ).toBeTruthy();
+    // And neither is called a folder the request will not read.
+    expect(screen.queryByTestId("material-unused")).toBeNull();
   });
 
   it("offers no layer at all for an unlayered release", async () => {
@@ -2521,7 +2658,7 @@ describe("identifying install media by content hash (design §4.3)", () => {
       );
     seedRemembered({ ...FULL_FIELDS, "osinstall.extraMediaFolders": [EXTRA] });
     render(<FilesTab />);
-    await waitFor(() => expect(planMock).toHaveBeenCalled());
+    await waitFor(() => expect(layersForMock).toHaveBeenCalled());
 
     // What the first folder produced is still on screen, in full.
     const kept = await screen.findByTestId("media-identity-unconfirmed");

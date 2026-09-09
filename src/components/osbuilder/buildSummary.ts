@@ -57,21 +57,16 @@ export interface BuildSummary {
 /**
  * Everything the build's summary is computed from, asked once.
  *
- * @param previewReplacements whether to ask `osinstall_collisions` for each
- *   ticked update — disk work, an archive opened per row, for the fourth
- *   line alone. A caller that does not draw that line passes `false`.
  * @param revision anything whose change means the destination folder may have
  *   changed under ART — tab 4 passes its run's completion, because a run that
  *   just succeeded has filled the folder it was told to fill and the next
  *   answer about it is a different one (fix round 1, I2).
  */
 export function useBuildSummary({
-  previewReplacements,
   revision = null,
 }: {
-  previewReplacements: boolean;
   revision?: unknown;
-}): BuildSummary {
+} = {}): BuildSummary {
   const { t } = useTranslation();
   const { session, setComponents } = useBuildSession();
   const release = session.release;
@@ -123,10 +118,16 @@ export function useBuildSummary({
   const ticked = useTickedUpdates();
   const firstBootWanted = session.firstboot.wanted ?? true;
 
+  // **Every ticked row, always.** There was a `previewReplacements: false`
+  // arm here for the bar under the tabs, which drew a size line and not the
+  // replace line and must not have paid an archive-per-row for one it did
+  // not draw. The bar stopped reading this hook in round 4 task 5 and tab 4
+  // is its only caller, so the gate had one value — and a gate with one
+  // value reads as though it were holding a line it is not.
   const updatesPreview = useUpdatesPreview({
     destination,
     destinationIsTree,
-    updates: previewReplacements ? ticked.rows : [],
+    updates: ticked.rows,
   });
 
   /**
@@ -171,29 +172,27 @@ export function useBuildSummary({
       ? { fresh: 0, unchanged: 0, replaced: 0 }
       : null;
 
-  const replaces: ReplacesSummary = !previewReplacements
-    ? { state: "pending" }
-    : destinationIsTree
-      ? // **Update mode says only what the updates would do** (fix round 1,
-        // C1). The component preview describes the release's own parts
-        // landing in an empty folder, and in update mode they do not land at
-        // all — printing its counts here is a claim about work that will not
-        // run, in the sentence that is meant to tell the user what will.
-        updatesPreview.totals
-        ? { state: "updates", replaced: updatesPreview.totals.replaced }
-        : { state: "pending" }
-      : plan.componentPreviewError
-        ? // A preview ART could not produce is its own ending (fix round 1,
-          // I5): "not previewed yet" says one is still coming, which is a
-          // promise nothing is going to keep.
-          { state: "failed", detail: plan.componentPreviewError }
-        : componentReplaces && updatesPreview.totals
-          ? {
-              state: "components",
-              ...componentReplaces,
-              replaced: componentReplaces.replaced + updatesPreview.totals.replaced,
-            }
-          : { state: "pending" };
+  const replaces: ReplacesSummary = destinationIsTree
+    ? // **Update mode says only what the updates would do** (fix round 1,
+      // C1). The component preview describes the release's own parts
+      // landing in an empty folder, and in update mode they do not land at
+      // all — printing its counts here is a claim about work that will not
+      // run, in the sentence that is meant to tell the user what will.
+      updatesPreview.totals
+      ? { state: "updates", replaced: updatesPreview.totals.replaced }
+      : { state: "pending" }
+    : plan.componentPreviewError
+      ? // A preview ART could not produce is its own ending (fix round 1,
+        // I5): "not previewed yet" says one is still coming, which is a
+        // promise nothing is going to keep.
+        { state: "failed", detail: plan.componentPreviewError }
+      : componentReplaces && updatesPreview.totals
+        ? {
+            state: "components",
+            ...componentReplaces,
+            replaced: componentReplaces.replaced + updatesPreview.totals.replaced,
+          }
+        : { state: "pending" };
 
   const phases = sequenceFor({
     destination: destination ?? "",

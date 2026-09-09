@@ -348,7 +348,7 @@ describe("sanitizeChosen", () => {
 
   it("drops everything against an empty catalogue — which is why the screen must not call it before one loads", () => {
     // Stated as a test rather than only as a comment: this is the ART-089
-    // shape. `OsInstall.tsx` holds `null` for "not loaded yet" and passes
+    // shape. `useInstallPlan` holds `null` for "not loaded yet" and passes
     // the remembered ids through untouched until a real list arrives.
     expect(sanitizeChosen([], ["workbench-base", "extras"])).toEqual([]);
   });

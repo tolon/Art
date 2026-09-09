@@ -110,7 +110,7 @@ vi.mock("@/lib/settings", async (importOriginal) => ({
 
 const { BuildTab } = await import("@/components/osbuilder/BuildTab");
 const { DEFAULT_SETTINGS } = await import("@/lib/settings");
-const { OSINSTALL_EVENT } = await import("@/lib/osinstall");
+const { OSINSTALL_EVENT, refusalPhrase } = await import("@/lib/osinstall");
 
 // ---------------------------------------------------------------------------
 // What the core answers with
@@ -610,6 +610,65 @@ describe("the button, and what stands in its place", () => {
     // is said once.
     expect(screen.queryByTestId("build-refusals")).toBeNull();
     expect(screen.queryByTestId("build-run")).toBeNull();
+  });
+
+  // **Moved from `OsInstall.test.tsx` by name** in round 4 task 5's fix round
+  // — the twenty-fifth case, which that task's own fate list missed. Final
+  // whole-branch review, Finding F: this is the one refusal that tells the
+  // user to go and tick the named component *themselves*, and a raw recipe id
+  // ("workbench-39") is not a checkbox a person can find on screen. Every
+  // other refusal names a component purely for identification; `refusalPhrase`
+  // is pure `src/lib` and has no catalogue to resolve one with, so the two
+  // places that draw a refusal resolve it through `label()` before rendering.
+  //
+  // **Both of those places, in one case**, because there are two of them now
+  // and they cannot be on screen together: the refusals card stands *instead
+  // of* the Build button, and a phase row only exists once a run the plan
+  // allowed has started. So the case renders twice, with a `cleanup()`
+  // between — the arm that was `OsInstall.test.tsx`'s, and the arm task 4's
+  // copy added.
+  it("names the component to tick by its own label, never the raw recipe id", async () => {
+    const refusal: RefusalReason = {
+      refusal: "resident-table-unreadable",
+      component: "workbench-39",
+      resident: "exec",
+    };
+    // Computed the way the screen computes it: the raw id resolved through
+    // the loaded catalogue to `COMPONENTS_39`'s own `labelKey`, which is a
+    // real sentence in both catalogues ("Workbench 3.9 overlay").
+    const phrase = refusalPhrase(refusal);
+    const expected = i18n.t(phrase.key, {
+      ...phrase.params,
+      component: i18n.t("osinstall.components.name.os39.overlay"),
+    });
+
+    // Arm 1 — the plan's own refusal, in the Build button's place.
+    refusals = [refusal];
+    seed(FIELDS);
+    renderTab();
+
+    const card = await screen.findByTestId("build-refusals");
+    expect(within(card).getByText(expected)).toBeTruthy();
+    expect(card.textContent).not.toContain("workbench-39");
+
+    // Arm 2 — the same refusal earned by a phase of a run, listed under that
+    // phase's own advice. The plan has to allow the run for a phase to exist
+    // at all, so the refusal comes back from `osinstall_add_package` instead.
+    cleanup();
+    refusals = [];
+    addPackageMock.mockImplementation(async () => {
+      order.push("addPackage");
+      return { outcome: "refused", refusals: [refusal] };
+    });
+    bothTicked();
+    renderTab();
+    await screen.findByTestId("build-run");
+    await userEvent.click(screen.getByTestId("build-confirm"));
+    await userEvent.click(screen.getByTestId("build-run"));
+
+    const listed = await screen.findByTestId("build-phase-refusal");
+    expect(listed.textContent).toBe(expected);
+    expect(listed.textContent).not.toContain("workbench-39");
   });
 
   it("will not run until the person says they have read the summary", async () => {

@@ -155,14 +155,14 @@ import {
 } from "@/lib/osinstall";
 import { slotOverrides } from "@/lib/amigainstall";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { isFlag, isText, isTextOrNothing } from "@/lib/remembered";
+import { isFlag, isTextOrNothing } from "@/lib/remembered";
 import { useChainTree } from "@/lib/useChainTree";
 import { useDestinationCheck } from "@/lib/useDestinationCheck";
 import { useRemembered } from "@/lib/useRemembered";
-import { type MaterialFolder } from "@/lib/buildSession";
+import { foldersForPlan, type MaterialFolder } from "@/lib/buildSession";
 import { hostAmigaForeverFolders } from "@/lib/api";
 import { useBuildSession } from "@/lib/useBuildSession";
-import { useInstallPlan } from "@/lib/useInstallPlan";
+import { useLayers } from "@/lib/useLayers";
 import { isJobCancellation } from "@/lib/jobs";
 import { MaterialFolders } from "@/components/osbuilder/MaterialFolders";
 import { MaterialReadout } from "@/components/osbuilder/MaterialReadout";
@@ -221,7 +221,6 @@ export function FilesTab({ droppedMedia = null }: { droppedMedia?: DroppedMedia 
     setTree,
     setRelease,
     setMaterial,
-    setComponents,
     addMaterialFolder,
   } = useBuildSession();
   const release = session.release;
@@ -257,30 +256,10 @@ export function FilesTab({ droppedMedia = null }: { droppedMedia?: DroppedMedia 
     .map((entry) => `${entry.layer ?? ""}=${entry.path}`)
     .join("\n");
 
-  /**
-   * **The keyboard the finished system boots with** (ART-226's other half).
-   *
-   * The `keymaps` component places every layout the media carries; until this
-   * existed nothing selected one, so a Turkish tree rendered `ç ü ş Ğ` in
-   * its menus and still typed on an American keyboard — the owner's own
-   * complaint, and the one that opened the issue.
-   *
-   * Per release, like the media folder (ART-207): a layout is a name in *that*
-   * release's `Devs/Keymaps`.
-   *
-   * Empty means the ROM's `usa`, exactly as before. **No default**: choosing
-   * somebody's keyboard for them is not ART's to do.
-   *
-   * **Read-only here since round 4 task 4.** The select moved to `MachineTab`
-   * (four-tab design § 3.3); this screen still *plans* with the value, so it
-   * still reads it — through the same key, which is what makes the two tabs
-   * one choice rather than two.
-   */
-  const [keymap] = useRemembered<string>(
-    rememberedComponentKey("osinstall.keymap", release),
-    isText,
-    ""
-  );
+  // **The keyboard the finished system boots with is not read here at all**
+  // any more (ART-226's other half). The select is `MachineTab`'s since round
+  // 4 task 4 and the value only ever reached the plan; this tab stopped
+  // planning in that round's fix pass, so it stopped reading it.
 
   // A disc dropped on the panel names a *file*; the scanner takes the folder
   // that holds it, which is also where its sibling discs and ADFs live. The
@@ -373,56 +352,38 @@ export function FilesTab({ droppedMedia = null }: { droppedMedia?: DroppedMedia 
    *  for itself when it does not. */
   const [rescanError, setRescanError] = useState<string | null>(null);
   /**
-   * Bumped by "Scan again" to make the plan effect run once more.
+   * **Tab 1 does not plan** (round 4 task 5's fix round).
    *
-   * A counter and not `setMediaFolder(mediaFolder)`: setting a state to the
-   * value it already holds is a no-op React bails out of, so the effect would
-   * never fire and the button would do nothing visible — which is precisely
-   * the "control that silently ignores the user" this round has been about.
+   * This screen computed the whole plan — `useInstallPlan`, as it had since
+   * round 3 — and read three fields of the answer: `layers`, `layersKnown`
+   * and `plannedFolders`. Those three cost one `osinstall_layers`, a read of
+   * a shipped JSON recipe. The rest of that hook costs `osinstall_components`
+   * and then `osinstall_plan`, which **opens and walks every ADF and ISO in
+   * the material list**, and nothing on this tab read a byte of the result.
+   *
+   * That is ART-119's own cost — the same work done for an answer nobody
+   * uses — on the tab the user opens first and stays on longest, adding
+   * folders, while every added folder starts the walk again. So the layers
+   * effect is `src/lib/useLayers.ts` now, `useInstallPlan` calls that same
+   * hook (one implementation of *which release is this the answer for*), and
+   * tab 1 asks for the layers alone.
+   *
+   * **`plannedFolders` is pure and composed here.** `foldersForPlan` is
+   * `buildSession.ts`'s, takes the material list and the layers, and reaches
+   * nothing: a layered release plans from its tagged folders alone, an
+   * unlayered one from every folder in the list. Memoized on the two, so it
+   * is one identity per answer rather than one per render — ART-178/ART-195
+   * was a fresh identity per render driving an effect that starts disk work.
+   *
+   * What the tabs that *do* plan read is unchanged: `ChoiceTab` and
+   * `BuildTab` both go through `useInstallPlan`, so no two tabs can describe
+   * two builds.
    */
-  const [rescanNonce, setRescanNonce] = useState(0);
-
-  /**
-   * **The plan, computed in one place** — `useInstallPlan` (round 3 of the
-   * four-tab rewrite, design § 3.2).
-   *
-   * The release's media layers, its component catalogue, the two plans and
-   * the collision preview used to be six states and four effects in this
-   * file. Tab 2 needs every one of them to draw the release's parts, and two
-   * components computing them separately would be two answers to one
-   * question — each costing its own walk of real install media. So the
-   * computation left this screen whole; what stays here is what a screen does
-   * with an answer. The hook's own module comment carries the ART-119,
-   * ART-178/ART-195 and ART-089 rules the effects travel with.
-   *
-   * **The ticks are the build session's now** (ART-290). They were this
-   * panel's own `osinstall.chosen.<release>` and
-   * `osinstall.excludedConditional.<release>`; `buildSession.components` was
-   * seeded from them and never written back, so the session's copy went stale
-   * the moment anybody ticked a box. The legacy keys are still read once by
-   * `seededComponents`, never written again and never deleted, so nobody's
-   * remembered selection is lost.
-   */
-  const plan = useInstallPlan({
-    release,
-    material: session.material,
-    keymap,
-    rom: romPath,
-    destination,
-    reuseScan,
-    rescanNonce,
-    components: session.components,
-    setComponents,
-  });
-  // **What this screen still draws of the answer: the folder column, and
-  // nothing else.** Which layers the release declares (so a row can be
-  // tagged), which folders the request will actually read, and whether ART
-  // has asked yet. The rows, the ticks and the collision preview are
-  // `ChoiceTab`'s since 2026-09-09 (four-tab design § 3.2); the plan's own
-  // totals, its refusals and its error badge are `BuildTab`'s since round 4
-  // task 5. Every one of them reads this same hook, so no two tabs can
-  // describe two builds.
-  const { layers, layersKnown, plannedFolders } = plan;
+  const { layers, layersKnown } = useLayers(release);
+  const plannedFolders = useMemo(
+    () => foldersForPlan(session.material, layers),
+    [session.material, layers]
+  );
 
   /**
    * The folders the request actually reads, in list order — a layered
@@ -980,20 +941,22 @@ export function FilesTab({ droppedMedia = null }: { droppedMedia?: DroppedMedia 
       const dropped = await osinstallRescanMedia();
       setRescanError(null);
       setRescanned(dropped);
-      // Re-plan against what is actually on the discs now. A new object
-      // identity is the point: the plan effect keys on these values, and
-      // nothing else about the request has changed.
-      setRescanNonce((n) => n + 1);
+      // **No plan nonce here since round 4 task 5's fix round.** This used to
+      // bump a counter the plan effect keyed on, so the request went out
+      // again against the discs themselves. Tab 1 does not plan, and the tabs
+      // that do read `osinstall.reuseScan` — the toggle beside this button —
+      // through the same remembered key: `forget_all` has already deleted the
+      // listings, so their next plan cannot be served a stale one either.
+      //
       // `forget_all` drops the remembered *hashes* too, not only the
       // remembered listings — so the content-hash lines above are now about
       // nothing and have to be recomputed. Leaving them on screen would be
       // the stale answer this button exists to escape, still being shown
       // after the user pressed the escape hatch.
       setIdentifyNonce((n) => n + 1);
-      // Every folder in the list, not the first alone: they are all read on
-      // the next plan, and a screen showing one folder's fresh listing beside
-      // another's stale one is the same stale answer this button exists to
-      // escape, half-hidden.
+      // Every folder in the list, not the first alone: a screen showing one
+      // folder's fresh listing beside another's stale one is the same stale
+      // answer this button exists to escape, half-hidden.
       void Promise.all(
         materialFolders.map(async (entry) => {
           try {

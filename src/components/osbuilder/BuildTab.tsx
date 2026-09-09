@@ -24,13 +24,16 @@
 // try to write a tree over it.
 //
 // **The plan's refusals, the wrong-folder sentence and the switch-release
-// button are moved from `OsInstall.tsx` as a copy** — the original goes with
-// that file in task 5 of this round. So is the media scan they are computed
-// from, and the `label()` helper (which is `buildSummary.ts`'s now).
+// button came from `OsInstall.tsx`** in task 4 of this round; task 5 renamed
+// that file `FilesTab.tsx` and deleted the originals, so this is the only
+// place they are drawn. So is the media scan they are computed from, and the
+// `label()` helper (which is `buildSummary.ts`'s).
 //
 // The four lines themselves, and everything they are computed from, are
-// `buildSummary.ts`'s `useBuildSummary` — shared with the bar under the tabs,
-// so the bar and the button can never state two different builds.
+// `buildSummary.ts`'s `useBuildSummary`. **This tab is its only reader**:
+// the bar under the tabs shared it until task 5, which cost a second plan,
+// chain and slot report on every one of tabs 1-3 for a one-line summary the
+// session already holds.
 //
 // **What is deliberately not here:** a progress bar for a job that reports no
 // total (CLAUDE.md — a fixed width that looks like progress and carries no
@@ -386,7 +389,7 @@ export function BuildTab() {
    * the next one starts.
    */
   const [runStamp, setRunStamp] = useState(0);
-  const summary = useBuildSummary({ previewReplacements: true, revision: runStamp });
+  const summary = useBuildSummary({ revision: runStamp });
   const { plan, destination, taken, ticked, phases, lines, label } = summary;
   const { effectivePlan, effectivePlanResult } = plan;
 

@@ -446,9 +446,9 @@ export function runSummaryLines(args: RunSummaryArgs): Phrase[] {
         files: args.plan.totalFiles,
         bytes: size(args.plan.totalBytes),
         // Raw component ids. A component with a catalogue can replace this
-        // param with its own resolved labels — the way `OsInstall.tsx`
-        // resolves `resident-table-unreadable`'s component — since `src/lib`
-        // has no catalogue to resolve them with.
+        // param with its own resolved labels — the way `BuildTab.tsx`'s
+        // `label()` resolves `resident-table-unreadable`'s component — since
+        // `src/lib` has no catalogue to resolve them with.
         components: args.plan.componentsOn.join(", "),
       },
     });

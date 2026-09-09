@@ -40,7 +40,7 @@ export function MachineTab() {
 
   /**
    * Where the tree goes — per release, and through the very key the install
-   * step reads (`OsInstall.tsx`'s own `useRemembered` call): a second key
+   * files tab reads (`FilesTab.tsx`'s own `useRemembered` call): a second key
    * would mean a destination chosen here and a build written somewhere else.
    */
   const [destination, setDestination] = useRemembered<string | null>(

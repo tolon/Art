@@ -47,8 +47,8 @@ import { useTranslation } from "react-i18next";
 
 import { errorText } from "@/lib/errorText";
 import { foldersForPlan, type ComponentChoice, type MaterialChoice } from "@/lib/buildSession";
+import { useLayers } from "@/lib/useLayers";
 import {
-  layersFor,
   osinstallComponentCollisions,
   osinstallComponents,
   osinstallPlan,
@@ -101,7 +101,6 @@ export interface InstallPlanState {
   /** Whether `layers` is this release's own answer rather than the previous
    *  one's, or none at all (ART-256) — a primitive, so it is a stable effect
    *  dependency. */
-  layersKnown: boolean;
   plannedFolders: ReturnType<typeof foldersForPlan>;
   layerFoldersKey: string;
   /** `null` until the catalogue has loaded **for this release** — never `[]`,
@@ -156,42 +155,22 @@ export function useInstallPlan(inputs: InstallPlanInputs): InstallPlanState {
    * what makes "an unlayered release renders exactly what it renders today"
    * true rather than accidental — nothing below ever branches on `release`
    * itself, only on whether this array is empty.
-   */
-  const [layers, setLayers] = useState<InstallLayer[]>([]);
-  /**
-   * **Which release `layers` is the answer for** — `null` before the first
-   * answer lands, and the *previous* release's name for the moment after a
-   * switch (ART-256).
    *
-   * `layers` alone cannot say this: `[]` is one value with two causes,
-   * "this release is unlayered" and "nobody has asked yet", and this
-   * project's own rule is that a state with more than one cause is not a
-   * state anything may branch on. Anything scoping itself with
-   * `layers.length > 0` therefore reads a layered release as unlayered until
-   * `layersFor` resolves. The extra-folder scan on the screen is the one that
-   * noticed — it scanned a folder a layered release never sends — and it is
-   * settled the same way S1's staleness is: by asking the answer which
-   * question it answers, not by ordering the effects.
+   * **`useLayers`, not a copy of its effect** (round 4 task 5's fix round).
+   * (round 4 task 5's fix round). `FilesTab` needs the layers and nothing
+   * else of this hook — the folder column is drawn from them — so the effect
+   * moved to `src/lib/useLayers.ts` and this hook calls it. Two
+   * implementations of *which release is this the answer for* would be two
+   * answers to that question, and `layersKnown` (ART-256) is that answer.
+   *
+   * **`layersKnown` is not re-exported from here**, and the mutation pass is
+   * why: putting `layersKnown: true` back in this hook killed no test,
+   * because `FilesTab` was its only reader and reads `useLayers` directly
+   * now. A field nothing consults is not a guard that needs strengthening —
+   * it is output that has to go, or the next reader will take its presence
+   * for a promise this hook keeps. A tab that needs it calls `useLayers`.
    */
-  const [layersRelease, setLayersRelease] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    layersFor(release)
-      .then((ls) => {
-        if (cancelled) return;
-        setLayers(ls);
-        setLayersRelease(release);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setLayers([]);
-        setLayersRelease(release);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [release]);
-  const layersKnown = layersRelease === release;
+  const { layers } = useLayers(release);
 
   /**
    * **What the request carries, built from the one list** — `foldersForPlan`,
@@ -532,7 +511,6 @@ export function useInstallPlan(inputs: InstallPlanInputs): InstallPlanState {
 
   return {
     layers,
-    layersKnown,
     plannedFolders,
     layerFoldersKey,
     catalogue,
