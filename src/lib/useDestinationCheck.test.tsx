@@ -84,4 +84,33 @@ describe("useDestinationCheck", () => {
     rerender({ rev: { finished: true } });
     await waitFor(() => expect(result.current.taken).toBe(true));
   });
+
+  it("drops a superseded generation's answers, and never mixes two", async () => {
+    let resolveFirstTree: (v: typeof TREE) => void = () => {};
+    takenMock.mockResolvedValue(false);
+    describeMock
+      .mockImplementationOnce(() => new Promise((r) => { resolveFirstTree = r; }))
+      .mockResolvedValueOnce(NOT_TREE);
+    const { result, rerender } = renderHook(({ p }) => useDestinationCheck(p), {
+      initialProps: { p: "E:\\a" as string | null },
+    });
+    rerender({ p: "E:\\b" });
+    await waitFor(() => expect(result.current.tree?.isTree).toBe(false));
+    resolveFirstTree(TREE);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(result.current.tree?.isTree).toBe(false);
+  });
+
+  it("takes the previous answers down the moment the path changes", async () => {
+    takenMock.mockResolvedValue(true);
+    describeMock.mockResolvedValue(TREE);
+    const { result, rerender } = renderHook(({ p }) => useDestinationCheck(p), {
+      initialProps: { p: "E:\\a" as string | null },
+    });
+    await waitFor(() => expect(result.current.tree?.isTree).toBe(true));
+    describeMock.mockImplementation(() => new Promise(() => {}));
+    takenMock.mockImplementation(() => new Promise(() => {}));
+    rerender({ p: "E:\\b" });
+    expect(result.current).toEqual({ taken: false, tree: null });
+  });
 });

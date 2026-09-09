@@ -34,6 +34,11 @@ export function useDestinationCheck(path: string | null, revision: unknown = nul
       return;
     }
     let cancelled = false;
+    // Both fields belong to one generation: a new path or revision takes the
+    // old answers down before asking, so a fast `taken` never sits beside a
+    // stale `tree`.
+    setTaken(false);
+    setTree(null);
     void osinstallDestinationTaken(path)
       .then((answer) => {
         if (!cancelled) setTaken(answer);
