@@ -114,18 +114,20 @@ export interface PackageChoice {
    * The folder the Amiga-side install panel reads archives out of. It was
    * two panels' until round 3 task 3 deleted `PackagePanel`.
    *
-   * **Still stored, and that is a decision rather than an oversight** (fix
-   * round 1, F1). It is *also* in {@link MaterialChoice.folders} — adding a
-   * folder here adds it there — but it keeps its own value while
-   * `AmigaInstallPanel` still takes one folder. Making
-   * it a pure view onto the list's first untagged entry broke two things at
-   * once for a user whose archives live apart from their disks: on upgrade
-   * the panels were handed the *disks* folder and their own already-chosen
-   * packages sat above a catalogue that could not see them, and afterwards
-   * the panel's own Browse button became a no-op, because it appended to the
-   * list while the field went on showing the list's head. "Nothing changes
-   * unless the user changes it", running backwards: they changed it and
-   * nothing changed.
+   * @deprecated **Read only since round 5** (spec § 5): seeded once from an
+   * older settings file by {@link seedPackagesFolder}, and written by
+   * nothing. `setPackages` does not take it, and the panel's own Browse adds
+   * the folder it was given to {@link MaterialChoice.folders} — the one list
+   * the slots resolve against — rather than storing a second copy here.
+   *
+   * It is **kept, not deleted**, and that is a decision rather than an
+   * oversight (fix round 1, F1). Making it a pure view onto the list's first
+   * untagged entry broke two things at once for a user whose archives live
+   * apart from their disks: on upgrade the panels were handed the *disks*
+   * folder and their own already-chosen packages sat above a catalogue that
+   * could not see them. So an older ART's value is still read; it is now
+   * exactly one thing — the folder `AmigaInstallPanel` starts its dialogs and
+   * its catalogue on until the user picks another.
    *
    * `null` here means *nothing stored*, and only then does the session derive
    * {@link firstUntaggedFolder} — which is what makes a user who never had a

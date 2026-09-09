@@ -24,7 +24,6 @@ import {
   COMPONENT_SPEC,
   DEFAULT_FIRSTBOOT,
   DEFAULT_MEDIA,
-  DEFAULT_PACKAGES,
   FIRSTBOOT_SPEC,
   LEGACY_KEYS,
   MATERIAL_SPEC,
@@ -33,7 +32,6 @@ import {
   ROM_SPEC,
   SESSION_KEYS,
   TREE_SPEC,
-  canonicalFolder,
   firstUntaggedFolder,
   isBuildKind,
   seedCardImage,
@@ -83,9 +81,16 @@ export interface BuildSessionApi {
   setRelease: (next: InstallRelease) => void;
   setTree: (change: Partial<TreeChoice>) => void;
   setComponents: (change: Partial<ComponentChoice>) => void;
-  /** `chosen` is this panel's own; `folder` is the same deprecated view
-   *  {@link BuildSessionApi.setMedia} carries, and adds to the list. */
-  setPackages: (change: Partial<PackageChoice>) => void;
+  /**
+   * The updates ticked for this release — **and nothing else**.
+   *
+   * `folder` is not a parameter any more (round 5, task 2; spec § 5).
+   * `packages.folder` is seeded from an older settings file and read; no
+   * caller writes it. A screen that has just been handed an archives folder
+   * calls {@link BuildSessionApi.addMaterialFolder}, which is where every
+   * other folder in the build goes and what the slots resolve against.
+   */
+  setPackages: (change: { chosen?: string[] }) => void;
   /** The card this build writes and then prepares — one value for both steps
    *  (ART-197's remaining duplicate). */
   setCard: (image: string | null) => void;
@@ -161,10 +166,13 @@ export function useBuildSession(): BuildSessionApi {
     seededComponents(bag, release)
   );
 
-  // **`folder` is still stored here** (fix round 1, F1) — see
-  // `PackageChoice.folder` for why. It is in `material.folders` too, but a
-  // user whose archives live apart from their disks must keep *their* folder
-  // for the two package panels while those panels each take one.
+  // **`folder` is read here and written nowhere** (round 5, task 2; spec
+  // § 5). It is still *seeded*, because a settings file written by an older
+  // ART holds one and losing it would repoint a user's archives folder at
+  // their disks folder — F1's own defect. What changed is that its one
+  // writer went with `PackagePanel` in round 3: an archives folder chosen
+  // today is added to `material.folders`, the list every slot resolves
+  // against, and `folder` is the seed plus a view onto that list.
   const [packagesShape, setPackagesShape] = useRememberedShape<PackageChoice>(
     SESSION_KEYS.packages(release),
     PACKAGE_SPEC,
@@ -190,57 +198,26 @@ export function useBuildSession(): BuildSessionApi {
   );
 
   /**
-   * Replace the list — and **drop the stored archives folder when the list no
-   * longer holds it** (round 2, task 3's F10).
+   * Replace the list — and **write nothing else** (round 5, task 2).
    *
-   * `packages.folder` keeps a value of its own as well as being a list entry
-   * (see `PackageChoice.folder`: `AmigaInstallPanel` hands a single folder to
-   * `osinstallCollisions` and `osinstallAddPackage`, and neither has a
-   * list-shaped form). So a user who removed that folder from the list used
-   * to leave the stored copy behind, and the step then said two things at
-   * once: the Amiga Forever offer appeared — shown only while the list is
-   * empty, so ART is claiming to have nothing — directly above two package
-   * panels still reading archives out of the folder just removed. One
-   * gesture, half applied.
+   * This used to drop the stored `packages.folder` when the list stopped
+   * holding it (round 2, task 3's F10): the archives folder was written by
+   * `PackagePanel`'s own Browse as well as being a list entry, so removing
+   * the folder from the list left the stored copy behind and the step said
+   * two things at once — the Amiga Forever offer, drawn only while the list
+   * is empty, directly above a panel still reading archives out of the folder
+   * just removed.
    *
-   * **Only the stored value is dropped, and only when it is stored.** When
-   * nothing is stored, `packages.folder` is a *view* onto the list's first
-   * untagged entry and follows the removal by itself; writing `null` there
-   * would create a stored value where the user has none and switch that view
-   * off for good — a setting changing without the user changing it, which is
-   * the rule this is meant to be keeping.
-   *
-   * Compared through `canonicalFolder`, the same rule the list dedupes with,
-   * so `E:\pkg` and `E:/pkg/` are one folder here too.
+   * **The write it undid is gone** (spec § 5), and a clear is itself a write:
+   * with nothing storing a folder, the only stored value left is the seed
+   * from an older settings file, and clearing that would change a setting the
+   * user did not change. What is left of F10 is the rule that replaced it —
+   * an archives folder goes into *this* list, and `packages.folder` is the
+   * seed with the list's first untagged folder behind it.
    */
   const setMaterial = useCallback(
-    (folders: MaterialFolder[]) => {
-      setMaterialShape({ folders });
-      // **Read from the store, not from the render closure** (fix round 1,
-      // L10) — the rule `addMaterialFolder` below already keeps and for the
-      // same reason: two controls writing in one tick (a drop landing while a
-      // Browse dialog resolves) must not decide against a stale copy. Rebuilt
-      // through `recallInto` with the section's own spec and fallback, so this
-      // reads exactly what `packagesShape.folder` would have been — a stored
-      // `null` stays `null` here rather than falling back to a legacy key and
-      // resurrecting a folder the user has already had removed.
-      const latest = useSettingsStore.getState().settings.remembered;
-      const stored = recallInto<PackageChoice>(
-        latest,
-        SESSION_KEYS.packages(release),
-        PACKAGE_SPEC,
-        {
-          folder: seedPackagesFolder(latest, release),
-          chosen: DEFAULT_PACKAGES.chosen,
-        }
-      ).folder;
-      if (!stored) return;
-      const wanted = canonicalFolder(stored);
-      if (!folders.some((entry) => canonicalFolder(entry.path) === wanted)) {
-        setPackagesShape({ folder: null });
-      }
-    },
-    [release, setMaterialShape, setPackagesShape]
+    (folders: MaterialFolder[]) => setMaterialShape({ folders }),
+    [setMaterialShape]
   );
 
   // Reads the store rather than the rendered `material`, exactly as
@@ -275,16 +252,16 @@ export function useBuildSession(): BuildSessionApi {
     [addMaterialFolder, setMediaShape]
   );
 
-  // **Both**, and that is F1's fix: the panel's own field has to follow the
-  // pick (the stored value) *and* the folder has to reach the readout and the
-  // planner (the list). Writing only the list made Browse a no-op for anyone
-  // whose archives were not already the list's head.
+  // The ticks, and only the ticks (round 5, task 2; spec § 5). F1's "both" —
+  // the stored folder *and* the list — was written for a panel whose own
+  // Browse wrote this key; that panel went in round 3, and `AmigaInstallPanel`
+  // adds the folder its dialog returns to the material list directly. The
+  // folder a Browse hands over is not lost by that: the list is what the
+  // slots resolve against, and the panel keeps the folder it just picked for
+  // its own dialogs for the rest of the session.
   const setPackages = useCallback(
-    (change: Partial<PackageChoice>) => {
-      if (change.folder) addMaterialFolder(change.folder);
-      setPackagesShape(change);
-    },
-    [addMaterialFolder, setPackagesShape]
+    (change: { chosen?: string[] }) => setPackagesShape(change),
+    [setPackagesShape]
   );
 
   const setRom = useCallback((path: string | null) => setRomShape({ path }), [setRomShape]);
@@ -318,6 +295,15 @@ export function useBuildSession(): BuildSessionApi {
   // untagged folder otherwise (fix round 1, F1). A user who never kept a
   // separate archives folder gets the one list's answer for free; a user who
   // did keeps theirs.
+  //
+  // Since round 5 the stored side can only be a **seed** — a folder an older
+  // ART wrote here — because nothing writes this key any more (spec § 5). It
+  // is kept ahead of the derived folder for the population F1 was written
+  // for: their archives folder is not their disks folder, and repointing it
+  // at one is the defect, not the fix. What it still decides is which folder
+  // `AmigaInstallPanel`'s dialogs open on and which folder its catalogue is
+  // asked about — both of which the panel overrides with the folder the user
+  // picked this session, and neither of which resolves a file.
   const packages = useMemo<PackageChoice>(
     () => ({ folder: packagesShape.folder ?? derivedFolder, chosen: packagesShape.chosen }),
     [derivedFolder, packagesShape.folder, packagesShape.chosen]

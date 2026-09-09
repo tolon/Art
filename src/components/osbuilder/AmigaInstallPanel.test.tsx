@@ -1640,6 +1640,67 @@ describe("the fields are filled from the slots (design § 3.4)", () => {
       )
     ).toBeTruthy();
   });
+
+  /// **Round 5, task 2 (spec § 5, spec § 3.4).** This Browse is the panel's
+  /// one dialog that reaches a folder full of the user's archives, and until
+  /// this round the folder it reached went nowhere: the file became the
+  /// per-package override and the folder was forgotten. `packages.folder` —
+  /// the key the retired `PackagePanel`'s own Browse used to write — is read
+  /// only now, so the folder goes where every other folder in this build
+  /// goes and where the slots are actually resolved from: the material list.
+  it("adds the folder of an archive chosen by hand to the material list", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValue("F:/downloads/BoingBag39-1.lha");
+    withPackageChosen();
+    slotsMock.mockResolvedValue(slotReport([slotState()]));
+    renderPanel();
+
+    await screen.findByTestId("amiga-slot-archive");
+    await userEvent
+      .setup()
+      .click(browseFor(i18n.t("osinstall.amigaInstall.archive.label")) as HTMLElement);
+
+    await waitFor(() =>
+      expect(bag()["buildSession.material.AmigaOS 3.9"]).toEqual({
+        folders: [
+          { path: "E:/material", layer: null },
+          { path: "F:/downloads", layer: null },
+        ],
+      })
+    );
+    // **And not into `packages`**, which is what spec § 5 turns into a rule:
+    // the seeded object is exactly as this test seeded it, folder included.
+    expect(bag()["buildSession.packages.AmigaOS 3.9"]).toEqual({
+      folder: "D:/pkg",
+      chosen: [],
+    });
+    // The file itself is still the choice it always was.
+    expect(bag()["amigaInstall.archive.boingbag-39-1"]).toBe("F:/downloads/BoingBag39-1.lha");
+  });
+
+  /// The other half of that move, and the reason the panel keeps a
+  /// `useState` for it: `addMaterialFolder` **appends**, so the folder the
+  /// person just pointed at is the list's last entry, while the catalogue
+  /// reads `packages.folder ?? materialFolders[0]` — the folder they picked
+  /// would be the one folder the catalogue does not ask about.
+  it("asks the catalogue about the folder just browsed to, not the list's first", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValue("F:/downloads/BoingBag39-1.lha");
+    withPackageChosen();
+    slotsMock.mockResolvedValue(slotReport([slotState()]));
+    renderPanel();
+
+    // The control: before the click it is the seeded archives folder.
+    await waitFor(() => expect(packagesMock).toHaveBeenCalledWith("D:/pkg", "AmigaOS 3.9"));
+    await screen.findByTestId("amiga-slot-archive");
+    await userEvent
+      .setup()
+      .click(browseFor(i18n.t("osinstall.amigaInstall.archive.label")) as HTMLElement);
+
+    await waitFor(() =>
+      expect(packagesMock).toHaveBeenLastCalledWith("F:/downloads", "AmigaOS 3.9")
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

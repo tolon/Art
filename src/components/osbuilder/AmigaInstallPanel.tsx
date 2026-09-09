@@ -425,7 +425,7 @@ function SlotField({
  */
 export function AmigaInstallPanel() {
   const { t } = useTranslation();
-  const { session, setRom, setTree } = useBuildSession();
+  const { session, setRom, setTree, addMaterialFolder } = useBuildSession();
   const power = usePowerMode();
   const release = session.release;
   /**
@@ -983,8 +983,19 @@ export function AmigaInstallPanel() {
    * `available`, filtering on `amigaInstallable` alone). So the fallback
    * changes which folder the picker opens on and nothing else about what is
    * offered.
+   *
+   * **`pickedFolder` is ahead of both, and it is a `useState`** (round 5,
+   * task 2). The archive Browse below adds the folder it was handed to the
+   * material list — `packages.folder` is read only now (spec § 5) — and
+   * `addMaterialFolder` *appends*, so the folder the person just pointed at
+   * is the list's last entry while this reads its first. Without this line
+   * the one folder the catalogue would not be asked about is the one they
+   * chose. It is deliberately **not remembered**: a dialog answer is not a
+   * setting, and the folder itself is already kept, in the material list
+   * where the rest of the build can see it.
    */
-  const catalogueFolder = packageFolder ?? materialFolders[0] ?? null;
+  const [pickedFolder, setPickedFolder] = useState<string | null>(null);
+  const catalogueFolder = pickedFolder ?? packageFolder ?? materialFolders[0] ?? null;
 
   /**
    * The folder a **host-placed** row's archive is actually in.
@@ -1328,6 +1339,22 @@ export function AmigaInstallPanel() {
     if (typeof picked === "string") setTree({ root: picked, builtHere: false });
   }
 
+  /**
+   * Pick an archive by hand — and **keep the folder it came out of** (round
+   * 5, task 2; spec § 3.4).
+   *
+   * The file becomes this package's own override, as it always has. The
+   * folder goes into the build's material list, because that list is what
+   * every slot on this screen is resolved against and what
+   * `osinstall_add_package` is told to look in: a folder known only to this
+   * dialog is a folder the next row cannot see, and the panel would go on
+   * saying "not in the folders you named" about a file the user has just
+   * pointed at. It is not written to `packages.folder`, which nothing writes
+   * any more.
+   *
+   * `pickedFolder` is the same folder held for this session's own dialogs and
+   * catalogue — see `catalogueFolder`.
+   */
   async function chooseArchive(set: (path: string | null) => void, title: string) {
     const picked = await open({
       multiple: false,
@@ -1335,7 +1362,12 @@ export function AmigaInstallPanel() {
       defaultPath: catalogueFolder ?? undefined,
       filters: [{ name: "Package archive", extensions: ["lha", "lzh", "zip", "7z"] }],
     });
-    if (typeof picked === "string") set(picked);
+    if (typeof picked !== "string") return;
+    set(picked);
+    const folder = folderOf(picked);
+    if (!folder) return;
+    addMaterialFolder(folder);
+    setPickedFolder(folder);
   }
 
   async function chooseKickstart() {
