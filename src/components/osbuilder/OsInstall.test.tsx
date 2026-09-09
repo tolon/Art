@@ -3166,6 +3166,62 @@ describe("Amiga Forever, offered and never added", () => {
   });
 });
 
+describe("the readout first (simplification design § 4)", () => {
+  /// **The answer before the question.** The owner's third cause on
+  /// 2026-09-08: *which folder holds what* was built and sat two hundred
+  /// lines under the folder list. First in the DOM is first for a screen
+  /// reader and first at a narrow width, so the DOM order is the guard, not
+  /// a pixel position jsdom cannot measure.
+  it("puts the readout before the folder list in document order", async () => {
+    await renderFull();
+    const readout = await screen.findByTestId("material-readout");
+    const folders = screen.getByTestId("material-folders");
+    expect(readout.compareDocumentPosition(folders) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Both inside the one row, so a narrow window stacks them rather than
+    // scattering them.
+    const row = screen.getByTestId("source-columns");
+    expect(row.contains(readout)).toBe(true);
+    expect(row.contains(folders)).toBe(true);
+  });
+
+  /// A question nobody has asked is not an answer of "nothing found". With
+  /// no folder the readout renders nothing (its own rule), and what stands
+  /// in its place is the next action — never a set line, which would be a
+  /// claim about the user's disk.
+  it("asks for a folder rather than reporting on none", async () => {
+    seedRemembered({});
+    render(<OsInstall />);
+    const ask = await screen.findByTestId("material-ask");
+    expect(ask.textContent).toBe(i18n.t("osinstall.material.askFolders"));
+    expect(screen.queryByTestId("material-set-line")).toBeNull();
+    expect(screen.queryByTestId("material-readout")).toBeNull();
+    // The two sentences do not share a place: the list's own "no folder
+    // chosen" line stays in the folder column.
+    expect(screen.getByTestId("source-secondary").textContent).toContain(
+      i18n.t("osinstall.media.none")
+    );
+    expect(screen.getByTestId("source-primary").textContent).not.toContain(
+      i18n.t("osinstall.media.none")
+    );
+  });
+
+  it("drops the ask the moment a folder is in the list", async () => {
+    await renderFull();
+    await screen.findByTestId("material-readout");
+    expect(screen.queryByTestId("material-ask")).toBeNull();
+  });
+
+  it("renders the ask in Turkish as a sentence, not a key", async () => {
+    await changeLanguage("tr");
+    seedRemembered({});
+    render(<OsInstall />);
+    const ask = await screen.findByTestId("material-ask");
+    expect(ask.textContent).toBe(i18n.t("osinstall.material.askFolders"));
+    expect(ask.textContent).not.toContain("osinstall.");
+    expect(ask.textContent).not.toContain("{{");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // ART-226's other half: choosing the keyboard, having placed it
 // ---------------------------------------------------------------------------

@@ -1749,67 +1749,91 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         </label>
 
         {/*
-          **The folder column** — the one material list (intake design
-          § 3.1), its tags, Add, the folders a layered plan will not read,
-          and the Amiga Forever offer, as one component. Every value is this
-          step's and every change comes back through a callback; see
-          `MaterialFolders.tsx` for why it holds no setting of its own.
+          **The answer first, the question beside it** (simplification design
+          § 4). Two columns at a comfortable width, one under the other at a
+          narrow one — a wrapping flex row, no stylesheet, no media query,
+          because the builder is inline-styled and a query cannot see the
+          shell's zoom (dockLayout.ts's own argument). The readout is the
+          primary column and comes **first in the DOM**: first for a screen
+          reader, and on top when the row wraps.
+
+          **With no folders the primary column still speaks.** The readout
+          renders nothing for an empty list — right, because a set line about
+          a release the user has pointed nothing at would be a claim about
+          their disk — so the step says what to do next in its place. A
+          question nobody has asked is not an answer of "nothing found", and
+          the two never share a sentence.
         */}
-        <MaterialFolders
-          release={release}
-          folders={materialFolders}
-          layers={layers}
-          layerLabel={layerLabel}
-          folderScans={folderScans}
-          wrongLayerHint={wrongLayerHintFor}
-          unusedForPlan={plannedFolders.unusedForPlan}
-          amigaForeverOffer={amigaForeverOffer}
-          onAdd={() => void addFolder()}
-          onRemove={removeFolder}
-          onTag={tagFolder}
-          onAmigaForeverAdd={() => {
-            // Safe: this callback is only reachable from a button
-            // `MaterialFolders` draws while `amigaForeverOffer` is a string.
-            addMaterialFolder(amigaForeverOffer!);
-            setAmigaForeverDismissed(true);
-          }}
-          onAmigaForeverDismiss={() => setAmigaForeverDismissed(true)}
-        />
-        {/*
-          ART-256. Both lines read `foundVolumeNames`, which is every folder
-          the request carries. Two sentences on one screen counting the same
-          disks differently — "1 install disk found" above an evidence line
-          naming two — is a contradiction from the inside, and there is no
-          reading of "this folder holds" that makes it right.
-        */}
-        {materialFolders.length > 0 && foundVolumeNames.length === 0 && (
-          <p id="osinstall-media-empty" className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
-            {t("osinstall.media.empty")}
-          </p>
-        )}
-        {foundVolumeNames.length > 0 && (
-          <p id="osinstall-media-found" className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
-            {t("osinstall.media.found", {
-              count: foundVolumeNames.length,
-              names: foundVolumeNames.join(", "),
-            })}
-          </p>
-        )}
-        {/*
-          **The readout: one row per artefact this release can use** (design
-          § 3.3). Above the per-file identity lines below, and separate from
-          them on purpose: those are per *file* — what the bytes in this
-          folder are — and this is per *slot* — what the release needs and
-          which file fills it.
-        */}
-        <MaterialReadout
-          release={release}
-          folders={materialFolders.map((entry) => entry.path)}
-          treeRoot={packagesTreeRoot}
-          rom={romPath}
-          identifiedPass={identifiedPass}
-          overrides={materialOverrides}
-        />
+        <div
+          data-testid="source-columns"
+          style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start", margin: "0 0 12px" }}
+        >
+          <div data-testid="source-primary" style={{ flex: "1 1 26em", minWidth: 0 }}>
+            {materialFolders.length === 0 && (
+              <p className="muted" data-testid="material-ask" style={{ fontSize: 12, margin: 0 }}>
+                {t("osinstall.material.askFolders")}
+              </p>
+            )}
+            {/*
+              **The readout: one row per artefact this release can use**
+              (intake design § 3.3). Per *slot* — what the release needs and
+              which file fills it — where the identity lines further down are
+              per *file*.
+            */}
+            <MaterialReadout
+              release={release}
+              folders={materialFolders.map((entry) => entry.path)}
+              treeRoot={packagesTreeRoot}
+              rom={romPath}
+              identifiedPass={identifiedPass}
+              overrides={materialOverrides}
+            />
+          </div>
+          <div data-testid="source-secondary" style={{ flex: "1 1 18em", minWidth: 0 }}>
+            <MaterialFolders
+              release={release}
+              folders={materialFolders}
+              layers={layers}
+              layerLabel={layerLabel}
+              folderScans={folderScans}
+              wrongLayerHint={wrongLayerHintFor}
+              unusedForPlan={plannedFolders.unusedForPlan}
+              amigaForeverOffer={amigaForeverOffer}
+              onAdd={() => void addFolder()}
+              onRemove={removeFolder}
+              onTag={tagFolder}
+              // Only reachable from a button drawn while the offer is a string.
+              onAmigaForeverAdd={() => {
+                addMaterialFolder(amigaForeverOffer!);
+                setAmigaForeverDismissed(true);
+              }}
+              onAmigaForeverDismiss={() => setAmigaForeverDismissed(true)}
+            />
+            {/*
+              ART-256. Both lines read `foundVolumeNames`, which is every
+              folder the request carries. Two sentences on one screen counting
+              the same disks differently — "1 install disk found" above an
+              evidence line naming two — is a contradiction from the inside.
+              They are claims about the *folders'* scans, so they live in the
+              folder column (the readout is per slot). ART-285 — that this
+              sentence counts game discs as install disks — is open and not
+              touched by the move.
+            */}
+            {materialFolders.length > 0 && foundVolumeNames.length === 0 && (
+              <p id="osinstall-media-empty" className="faint" style={{ fontSize: 11, margin: "8px 0 0" }}>
+                {t("osinstall.media.empty")}
+              </p>
+            )}
+            {foundVolumeNames.length > 0 && (
+              <p id="osinstall-media-found" className="faint" style={{ fontSize: 11, margin: "8px 0 0" }}>
+                {t("osinstall.media.found", {
+                  count: foundVolumeNames.length,
+                  names: foundVolumeNames.join(", "),
+                })}
+              </p>
+            )}
+          </div>
+        </div>
 
         {/*
           **What the same files are by content** — design §4.3, and the whole

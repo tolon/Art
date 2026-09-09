@@ -2244,6 +2244,7 @@
       "amigaForeverAdd": "Ekle",
       "amigaForeverDismiss": "Şimdi değil",
       "readoutHeading": "Bu sürüm neye ihtiyaç duyuyor, klasörlerinizde ne var",
+      "askFolders": "Henüz bildirilecek bir şey yok. Bu sürümün disklerini ve arşivlerini tutan bir klasör ekleyin; ART ne bulduğunu burada söyler.",
       "readoutFailed": "ART bu klasörlerde ne olduğunu çıkaramadı: {{detail}}. Bu ART'ın kusuru, dosyalarınız hakkında bir yargı değil.",
       "required": "zorunlu",
       "optional": "isteğe bağlı",

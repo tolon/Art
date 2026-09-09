@@ -2244,6 +2244,7 @@
       "amigaForeverAdd": "Add it",
       "amigaForeverDismiss": "Not now",
       "readoutHeading": "What this release needs, and what your folders hold",
+      "askFolders": "Nothing to report yet. Add a folder holding this release's disks and archives, and ART will say here what it found.",
       "readoutFailed": "ART could not work out what these folders hold: {{detail}}. That is a fault in ART, not a statement about your files.",
       "required": "required",
       "optional": "optional",
