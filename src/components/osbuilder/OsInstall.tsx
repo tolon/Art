@@ -94,7 +94,6 @@ import {
   osinstallComponentCollisions,
   osinstallComponents,
   osinstallBlocker,
-  osinstallDestinationTaken,
   osinstallPlan,
   osinstallIdentifyMedia,
   osinstallRescanMedia,
@@ -130,8 +129,9 @@ import {
 } from "@/lib/osinstall";
 import { slotOverrides } from "@/lib/amigainstall";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
 import { isFlag, isText, isTextList, isTextOrNothing } from "@/lib/remembered";
+import { useRomIdentity } from "@/lib/useRomIdentity";
+import { useDestinationCheck } from "@/lib/useDestinationCheck";
 import { useRemembered } from "@/lib/useRemembered";
 import { foldersForPlan, type MaterialFolder } from "@/lib/buildSession";
 import { hostAmigaForeverFolders } from "@/lib/api";
@@ -609,6 +609,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    */
   const romPath = session.rom.path;
   const setRomPath = setSessionRom;
+  const { rom, unreadable: romError } = useRomIdentity(romPath);
   /**
    * Where the tree goes — per release, like the media folder above and for
    * the same reason (ART-207). `E:\…\os39\art3` is a fine destination for a
@@ -806,8 +807,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const amigaForeverRomOffer =
     !romPath && !amigaForeverRomDismissed ? amigaForeverRom : null;
 
-  const [rom, setRom] = useState<RomInfo | null>(null);
-  const [romError, setRomError] = useState(false);
   /**
    * Two plans, requested identically except for `excluded` — both read-only
    * previews (§92), both recomputed live on every change, neither an
@@ -1100,30 +1099,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     [overridesKey]
   );
 
-  // Re-identify whatever ROM was remembered, for the same reason.
-  useEffect(() => {
-    if (!romPath) {
-      setRom(null);
-      setRomError(false);
-      return;
-    }
-    let cancelled = false;
-    pistormIdentifyRom(romPath)
-      .then((r) => {
-        if (cancelled) return;
-        setRom(r);
-        setRomError(false);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setRom(null);
-        setRomError(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [romPath]);
-
   // The two plans: read-only (§92's PREVIEW), so both are recomputed live
   // whenever the request changes rather than behind a separate "Preview"
   // button — there is no external tool cost here the way there is on the
@@ -1332,28 +1307,11 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
 
   // Is the destination already occupied? Asked while it is being chosen, so
   // the refusal `apply()` would raise is on screen before the button, not
-  // after a long operation appears to have done nothing.
-  const [destinationTaken, setDestinationTaken] = useState(false);
-  useEffect(() => {
-    if (!destination) {
-      setDestinationTaken(false);
-      return;
-    }
-    let cancelled = false;
-    void osinstallDestinationTaken(destination)
-      .then((taken) => {
-        if (!cancelled) setDestinationTaken(taken);
-      })
-      // A path ART cannot examine is not a path ART may declare occupied:
-      // `apply()` decides, and blocking here would refuse an install the
-      // engine would have allowed.
-      .catch(() => {
-        if (!cancelled) setDestinationTaken(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [destination, result]);
+  // after a long operation appears to have done nothing. `useDestinationCheck`
+  // holds the rule: a path ART cannot examine is not a path ART may declare
+  // occupied — `apply()` decides, and blocking here would refuse an install
+  // the engine would have allowed.
+  const { taken: destinationTaken } = useDestinationCheck(destination);
 
   /**
    * Ask what the layering components would replace, whenever the plan
