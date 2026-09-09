@@ -717,6 +717,11 @@
       "makineNotYet": "The Kickstart, the keyboard layout and the destination folder are on the files tab for now:",
       "derleNotYet": "The plan and the Build button are on the files tab for now:"
     },
+    "bar": {
+      "destination": "Tree: {{path}}",
+      "noDestination": "No destination folder chosen yet.",
+      "goToBuild": "Go to Build"
+    },
     "intro": "The AmigaOS distributions that run on a PiStorm, what each one needs from you, and whether what you have suits it. ART never downloads a distribution — you fetch it yourself and point ART at the file.",
     "notBuiltYet": "ART cannot write a distribution card yet. This screen tells you what a distribution requires and checks the ROM and card you have against it.",
     "what": {

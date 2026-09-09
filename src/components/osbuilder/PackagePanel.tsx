@@ -422,9 +422,10 @@ export function PackagePanel({
                 </button>
                 {updates && (
                   <p style={{ fontSize: 11, margin: "0 0 6px" }}>
+                    {/* The updates panel renders at the foot of the files tab in round 1 of the four-tab rewrite; round 3 folds it into secim. */}
                     <Link
                       data-testid="tree-picker-updates"
-                      to="/os-builder/amiga-kurulum"
+                      to="/os-builder/dosyalar"
                       onClick={() => onTreeRootChange?.(found.path)}
                     >
                       {t("osinstall.chain.updatesLink", { release: updates })}

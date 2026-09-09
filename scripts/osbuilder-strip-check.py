@@ -146,17 +146,17 @@ MEASURE_JS = r"""
     if (await chooseKind("osBuilder.what.prepareVolumes")) {
       await measure(lng + " kind=prepare-volumes");
     }
-    // Install is the widest: four steps.
+    // Install is the widest: the hedef chip plus four numbered tabs.
     if (await chooseKind("osBuilder.what.install")) {
       await measure(lng + " kind=install    ");
-      location.hash = "#/os-builder/paketler";
-      await measure(lng + " kind=install@paketler");
+      location.hash = "#/os-builder/secim";
+      await measure(lng + " kind=install@secim");
 
       // **Application Size.** It exists because most of the people using this
       // are over fifty, and CLAUDE.md's rule is that a new screen inherits it
-      // from the shell rather than fighting it. The widest strip (four steps)
-      // in the longer language is the case that would break first, so it is
-      // the one measured at every size.
+      // from the shell rather than fighting it. The widest strip (the chip
+      // plus four) in the longer language is the case that would break first,
+      // so it is the one measured at every size.
       for (const z of [1, 1.3, 2]) {
         document.documentElement.style.setProperty("--app-zoom", String(z));
         document.body.offsetHeight;

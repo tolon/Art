@@ -615,6 +615,10 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // checking, the counts, and refused — so `previewHeadingPhrase` in
     // `@/lib/osinstall` decides which key and the two panels only render it.
     // Both panels count, because both render that heading.
-    expect(dynamicCalls).toBe(178);
+    // 178 -> 179 (2026-09-09, four tabs round 1, task 3). One: the `hedef`
+    // chip in `OsBuilder.tsx`'s strip renders `t(kindLabelKey(session.kind))`
+    // — the same pattern the numbered tabs already use for `stepLabelKey`,
+    // now covering the kind's own name too.
+    expect(dynamicCalls).toBe(179);
   });
 });

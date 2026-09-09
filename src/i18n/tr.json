@@ -717,6 +717,11 @@
       "makineNotYet": "Kickstart, klavye düzeni ve hedef klasör şimdilik Amiga dosyaları sekmesinde:",
       "derleNotYet": "Plan ve Derle düğmesi şimdilik Amiga dosyaları sekmesinde:"
     },
+    "bar": {
+      "destination": "Ağaç: {{path}}",
+      "noDestination": "Hedef klasör henüz seçilmedi.",
+      "goToBuild": "Derle'ye git"
+    },
     "intro": "PiStorm üzerinde çalışan AmigaOS dağıtımları, her birinin sizden ne istediği ve elinizdekinin uyup uymadığı. ART hiçbir dağıtımı indirmez — siz indirir, ART'a dosyayı gösterirsiniz.",
     "notBuiltYet": "ART henüz dağıtım kartı yazamıyor. Bu ekran bir dağıtımın neye ihtiyaç duyduğunu söyler ve elinizdeki ROM ile kartı buna göre denetler.",
     "what": {

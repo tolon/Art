@@ -651,7 +651,7 @@ describe("the link to a build's updates", () => {
     const link = await screen.findByRole("link", {
       name: i18n.t("osinstall.chain.updatesLink", { release: "AmigaOS 3.9" }),
     });
-    expect(link.getAttribute("href")).toBe("/os-builder/amiga-kurulum");
+    expect(link.getAttribute("href")).toBe("/os-builder/dosyalar");
     // The other build's release was asked about and answered "no chain" —
     // so this is a measured absence, not a question nobody put.
     await waitFor(() => expect(chainMock).toHaveBeenCalledWith("AmigaOS 3.2", []));

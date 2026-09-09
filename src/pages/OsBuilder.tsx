@@ -27,7 +27,7 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
-import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import {
   distroCheckCard,
@@ -49,9 +49,10 @@ import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
 import { isTextOrNothing, isWholeNumberBetween } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useBuildSession } from "@/lib/useBuildSession";
-import { stepLabelKey, stepsFor, type StepId } from "@/lib/buildSteps";
+import { kindLabelKey, stepLabelKey, stepsFor, type StepId } from "@/lib/buildSteps";
 import type { BuildKind } from "@/lib/buildSession";
 import { errorText } from "@/lib/errorText";
+import { BuildBar } from "@/pages/osbuilder/BuildBar";
 
 /** Card sizes people actually buy. Typed sizes are allowed too. */
 const CARD_SIZES_GB = [16, 32, 64, 128, 256];
@@ -107,36 +108,43 @@ export function OsBuilder() {
       </p>
 
       <nav
-        style={{
-          display: "flex",
-          gap: 8,
-          flexWrap: "wrap",
-          marginBottom: 16,
-          paddingBottom: 12,
-          borderBottom: "1px solid var(--border)",
-        }}
+        aria-label={t("nav.osBuilder")}
+        style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}
       >
-        {steps.map((step, at) => {
-          const here = location.pathname === stepPath(step);
-          return (
-            <Link
-              key={step}
-              to={stepPath(step)}
-              className="btn"
-              style={{
-                fontSize: 12,
-                textDecoration: "none",
-                border: here ? "1px solid var(--accent)" : "1px solid var(--border)",
-                background: here ? "var(--bg-hover)" : "var(--bg)",
-              }}
-            >
-              {at + 1}. {t(stepLabelKey(step))}
-            </Link>
-          );
-        })}
+        {/* `hedef` is the entry, not a numbered step (four-tab design § 2):
+            the chip names the kind and links back to the picker. */}
+        <NavLink
+          to={stepPath("hedef")}
+          className="btn"
+          data-testid="strip-hedef"
+          style={({ isActive }) => ({
+            fontSize: 12,
+            textDecoration: "none",
+            border: isActive ? "1px solid var(--accent)" : "1px solid var(--border)",
+            background: isActive ? "var(--bg-hover)" : "var(--bg)",
+          })}
+        >
+          {t(kindLabelKey(session.kind))}
+        </NavLink>
+        {steps.slice(1).map((step, at) => (
+          <NavLink
+            key={step}
+            to={stepPath(step)}
+            className="btn"
+            style={({ isActive }) => ({
+              fontSize: 12,
+              textDecoration: "none",
+              border: isActive ? "1px solid var(--accent)" : "1px solid var(--border)",
+              background: isActive ? "var(--bg-hover)" : "var(--bg)",
+            })}
+          >
+            {at + 1}. {t(stepLabelKey(step))}
+          </NavLink>
+        ))}
       </nav>
 
       <Outlet />
+      <BuildBar />
     </div>
   );
 }

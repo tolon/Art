@@ -40,11 +40,6 @@ vi.mock("@/components/osbuilder/PackagePanel", () => ({
     <div data-testid="packages">{treeRoot ?? "(no tree)"}</div>
   ),
 }));
-vi.mock("@/components/osbuilder/AmigaInstallPanel", () => ({
-  AmigaInstallPanel: ({ treeRoot }: { treeRoot: string | null }) => (
-    <div data-testid="amiga">{treeRoot ?? "(no tree)"}</div>
-  ),
-}));
 vi.mock("@/components/osbuilder/FirstBootPanel", () => ({
   FirstBootPanel: ({ treeRoot }: { treeRoot: string | null }) => (
     <div data-testid="firstboot">{treeRoot ?? "(no tree)"}</div>
@@ -74,6 +69,7 @@ const { OsBuilder } = await import("@/pages/OsBuilder");
 // deleted fails a case here rather than silently sending a remembered URL to
 // the home screen through the `*` catch-all.
 const { osBuilderRoutes } = await import("@/pages/osbuilder/routes");
+const { STEP_IDS } = await import("@/lib/buildSteps");
 
 function seed(remembered: Record<string, unknown>) {
   useSettingsStore.setState({
@@ -308,6 +304,32 @@ describe("the retired routes still resolve (four-tab design § 2)", () => {
       expect(
         screen.getByRole("link", { name: /^2\. What to install/ }).getAttribute("aria-current")
       ).toBe("page");
+      view.unmount();
+    }
+  });
+});
+
+describe("every step id in the lane has a route", () => {
+  // A step id with no row in the route table would give the strip a link
+  // that falls through to the `*` catch-all and lands on the home screen —
+  // the confident-wrong form of "this moved".
+  it("renders each step's own content, never the home screen", () => {
+    seed({
+      "buildSession.kind": "install",
+      "buildSession.tree": { root: "E:\\dist", builtHere: true },
+    });
+    const expected: Record<string, string> = {
+      dosyalar: "install",
+      secim: "packages",
+      makine: "tab-makine",
+      derle: "tab-derle",
+      kart: "card",
+      birimler: "volumes",
+    };
+    for (const id of STEP_IDS) {
+      if (id === "hedef") continue;
+      const view = renderAt(`/os-builder/${id}`);
+      expect(screen.getByTestId(expected[id])).toBeTruthy();
       view.unmount();
     }
   });
