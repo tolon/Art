@@ -12,47 +12,29 @@
 // It is the bar under the **tabs**, so it is absent on `hedef`, which is the
 // entry chip rather than a tab of the lane.
 //
-// **The size line** (round 4, task 4) is tab 4's own first two summary lines —
-// what will be written, and what will be updated — computed by the one hook
-// tab 4 computes them with (`useBuildSummary`), so the bar and the Build
-// button can never state two different builds. It is drawn on tabs 1-3 and
-// **not** on `derle`, for the same reason the button is not: tab 4 renders
-// all four lines two inches above this bar, and the same sentence twice on
-// one screen is ART-202 ("aynı uyarı tek ekranda 2 tane"). Mounting the hook
-// in a child rather than here is what keeps that a real saving — on tab 4
-// nothing here asks anything at all.
+// **The size line** (round 4, task 4; rewritten in task 5) says what the
+// *session* carries: how many updates are ticked, and whether first boot is
+// on. It asks nothing — no plan, no chain, no slots. It computed tab 4's own
+// first two summary lines through `useBuildSummary` until 2026-09-09, which
+// meant a second plan, a second chain and a second slot report on every one
+// of tabs 1-3, beside the tab's own, for a line under the fold of the
+// screen. The plan's totals are tab 4's alone; what the bar owes a person
+// halfway through the wizard is what *they* have chosen so far, and that is
+// two fields of the session.
+//
+// It is drawn on tabs 1-3 and **not** on `derle`, for the same reason the
+// button is not: tab 4 states both facts in full two inches above this bar,
+// and the same sentence twice on one screen is ART-202 ("aynı uyarı tek
+// ekranda 2 tane").
 
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 
-import { useBuildSummary } from "@/components/osbuilder/buildSummary";
 import { isTextOrNothing } from "@/lib/remembered";
 import { rememberedComponentKey } from "@/lib/osinstall";
 import { useRemembered } from "@/lib/useRemembered";
 import { useBuildSession } from "@/lib/useBuildSession";
 import { stepPath } from "@/lib/buildSteps";
-
-/**
- * How big this build is, in the bar.
- *
- * `previewReplacements: false` because the fourth summary line — *what this
- * would replace* — costs an `osinstall_collisions` per ticked update, which
- * opens an archive each. The bar does not draw that line, so it must not pay
- * for it on every tab.
- */
-function BuildBarSize() {
-  const { t } = useTranslation();
-  const { sizeLines } = useBuildSummary({ previewReplacements: false });
-  return (
-    <span
-      className="faint"
-      data-testid="build-bar-size"
-      style={{ flex: 1, minWidth: "12em", wordBreak: "break-word" }}
-    >
-      {sizeLines.map((line) => t(line.key, line.params)).join(" · ")}
-    </span>
-  );
-}
 
 export function BuildBar() {
   const { t } = useTranslation();
@@ -64,6 +46,12 @@ export function BuildBar() {
     isTextOrNothing,
     null
   );
+
+  // **Absent means ticked**, the same rule tab 2's own tick reads it by
+  // (`session.firstboot.wanted ?? true`): a build nobody has said anything
+  // about gets a first-boot block, and the bar says what will happen rather
+  // than what has been stored.
+  const firstBootWanted = session.firstboot.wanted ?? true;
 
   if (session.kind !== "install") return null;
   // **Not on the entry chip.** `hedef` is where the kind is chosen, not a tab
@@ -93,7 +81,18 @@ export function BuildBar() {
       <span className="muted" data-testid="build-bar-destination" style={{ flex: 1, minWidth: "12em", wordBreak: "break-all" }}>
         {destination ? t("osBuilder.bar.destination", { path: destination }) : t("osBuilder.bar.noDestination")}
       </span>
-      {!onBuildTab && <BuildBarSize />}
+      {!onBuildTab && (
+        <span
+          className="faint"
+          data-testid="build-bar-size"
+          style={{ flex: 1, minWidth: "12em", wordBreak: "break-word" }}
+        >
+          {t("osBuilder.bar.size", {
+            updates: session.packages.chosen.length,
+            firstboot: t(firstBootWanted ? "osBuilder.bar.firstboot.on" : "osBuilder.bar.firstboot.off"),
+          })}
+        </span>
+      )}
       {!onBuildTab && (
         <button className="btn" data-testid="build-bar-go" onClick={() => navigate(stepPath("derle"))}>
           {t("osBuilder.bar.goToBuild")}

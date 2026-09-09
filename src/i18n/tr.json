@@ -728,6 +728,11 @@
     "bar": {
       "destination": "Ağaç: {{path}}",
       "noDestination": "Hedef klasör henüz seçilmedi — Kickstart ve hedef sekmesinde seçin.",
+      "size": "{{updates}} güncelleme işaretli · ilk açılış {{firstboot}}",
+      "firstboot": {
+        "on": "açık",
+        "off": "kapalı"
+      },
       "goToBuild": "Derle'ye git"
     },
     "build": {
@@ -2499,30 +2504,14 @@
     "refusals": {
       "heading": "Bu henüz neden kurulamıyor"
     },
-    "plan": {
-      "heading": "Ne yazılacağı",
-      "summary_one": "{{count}} dosya, toplam {{bytes}}",
-      "summary_other": "{{count}} dosya, toplam {{bytes}}",
-      "summaryItems_one": "{{count}} plan öğesinden.",
-      "summaryItems_other": "{{count}} plan öğesinden."
-    },
     "run": {
-      "heading": "Kur",
       "confirm": "Yukarıdaki dosya listesini inceledim.",
-      "run": "Dağıtım ağacını kur",
-      "running": "Kuruluyor…",
       "progress": {
         "starting": "Başlıyor…",
         "percent": "%{{percent}} — {{total}} dosyadan {{done}} tanesi"
-      },
-      "cancelled": "Kurulum iptal edildi. {{files}} dosya zaten yazılmıştı ve diskte duruyor."
+      }
     },
     "result": {
-      "heading": "Kuruldu",
-      "summary": "{{files}} dosya, {{directories}} klasör, toplam {{bytes}}.",
-      "root": "Dağıtım ağacı: {{root}}",
-      "carried": "Ne kurulacak sekmesi bu klasör üzerinde çalışacak: {{root}}",
-      "nextStep": "Bunu bir karta kopyalamak için OS Builder → Amiga birimlerini hazırla ekranını bu klasöre yönlendir.",
       "statedRelease": {
         "confirmed": "Ağacın kendisi \"{{stated}}\" diyor — kendi Prefs/Env-Archive/Versions/Release imi, yapılan kurulumla uyuşuyor.",
         "mismatch": "Ağacın kendisi bu kurulumun hedeflediği \"{{expected}}\" değil, \"{{stated}}\" diyor — bir sorun bildirirken bu ekrana değil ağacın kendi imine güven.",

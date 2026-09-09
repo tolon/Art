@@ -470,6 +470,23 @@ export function BuildTab() {
     <section className="card" data-testid="build-tab" style={{ marginBottom: 16 }}>
       <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osBuilder.step.derle")}</h2>
 
+      {/* **The plan error belongs to whoever shows the plan** (round 4 task
+          5). It was a badge at the top of the install screen; the summary
+          below is the plan now, so the badge is above the summary. Without
+          it the blocker's *"Preview it first"* was the only thing on screen
+          for a plan that had been asked for and had **failed** — the right
+          shape of sentence for the wrong reason. Rust's own words, through
+          `useInstallPlan`'s `errorText`. */}
+      {plan.planError && (
+        <p
+          className="badge badge-err"
+          data-testid="build-plan-error"
+          style={{ display: "block", padding: "8px 12px", fontSize: 12, margin: "0 0 12px" }}
+        >
+          {plan.planError}
+        </p>
+      )}
+
       <div style={{ margin: "8px 0 12px" }}>
         {lines.map((line) => (
           <p

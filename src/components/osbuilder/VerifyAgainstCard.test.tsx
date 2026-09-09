@@ -6,7 +6,7 @@
 //
 // Mocked at the `@/lib/*` boundary, the house pattern — never
 // `@tauri-apps/api` itself. `@/lib/settings` is mocked one layer down for the
-// reason `OsInstall.test.tsx` records: `useRemembered` writes through
+// reason `FilesTab.test.tsx` records: `useRemembered` writes through
 // `useSettingsStore` and the real `saveSettings` rejects in jsdom with nothing
 // to catch it, which Vitest counts as an unhandled rejection.
 //

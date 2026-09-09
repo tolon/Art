@@ -35,8 +35,8 @@ import { AppearancePanel } from "@/components/osbuilder/AppearancePanel";
 import { BuildTab } from "@/components/osbuilder/BuildTab";
 import { CardBuilder } from "@/components/osbuilder/CardBuilder";
 import { ChoiceTab } from "@/components/osbuilder/ChoiceTab";
+import { FilesTab } from "@/components/osbuilder/FilesTab";
 import { MachineTab } from "@/components/osbuilder/MachineTab";
-import { OsInstall } from "@/components/osbuilder/OsInstall";
 import { NetworkPanel } from "@/components/osbuilder/NetworkPanel";
 import { VerifyAgainstCard } from "@/components/osbuilder/VerifyAgainstCard";
 import { VolumePreload } from "@/components/osbuilder/VolumePreload";
@@ -110,7 +110,10 @@ function WrongFolder() {
 }
 
 /**
- * Tab 1 — Amiga files. In round 1 this is the whole of today's source step.
+ * Tab 1 — Amiga files: **the material and nothing else** since round 4 task 5
+ * (four-tab design § 3.1). In round 1 this mounted the whole of the old source
+ * step; `OsInstall.tsx` was renamed to `FilesTab.tsx` once every other section
+ * of it had a tab of its own.
  *
  * A disc dropped on the drop panel arrives here through router state, carried
  * on by the shell. `arrivalKey` is `location.key` — unique per navigation — so
@@ -122,7 +125,7 @@ export function StepDosyalar() {
   const location = useLocation();
   const dropped = (location.state as { path?: string } | null)?.path ?? null;
   return (
-    <OsInstall droppedMedia={dropped ? { path: dropped, arrivalKey: location.key } : null} />
+    <FilesTab droppedMedia={dropped ? { path: dropped, arrivalKey: location.key } : null} />
   );
 }
 

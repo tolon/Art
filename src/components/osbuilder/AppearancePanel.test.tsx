@@ -7,7 +7,7 @@
 //
 // Mocked at the `@/lib/*` boundary, the house pattern `NetworkPanel.test.tsx`
 // already established for this same step. `@/lib/settings` is mocked one
-// layer further down for the reason `OsInstall.test.tsx` records:
+// layer further down for the reason `FilesTab.test.tsx` records:
 // `useRemembered` writes through `useSettingsStore`, and the real
 // `saveSettings` rejects in jsdom with nothing to catch it.
 
@@ -225,7 +225,7 @@ describe("a choice survives a remount", () => {
 
     // Remount without re-seeding — a real remount reads back whatever the
     // live settings store already holds, the same shape
-    // `OsInstall.test.tsx`'s own remount test uses. `wallpaperOn` is itself
+    // `FilesTab.test.tsx`'s own remount test uses. `wallpaperOn` is itself
     // remembered and is already `true` from the click above, so the section
     // is open again without touching the checkbox a second time — clicking
     // it again would toggle it back off.

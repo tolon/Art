@@ -1,23 +1,29 @@
-// Tab 1 — *Kaynak* (four-tab design § 3.1): building an AmigaOS distribution
-// tree from the user's own install disks (SD-2 · G5). This is the screen for
-// the engine `src-tauri/src/core/osinstall` and `src/lib/osinstall.ts` already
-// built and nobody could reach: material → the file list → confirm → job →
-// report.
+// Tab 1 — *Amiga dosyaları* (four-tab design § 3.1): **the material, and
+// nothing else.** Which release is being built, which folders hold its disks,
+// and what ART makes of what is in them (SD-2 · G5).
 //
-// **What this file holds, after round 3 of the four-tab rewrite
-// (2026-09-09):** the release select; the material readout
+// This file **is** `OsInstall.tsx`, renamed on 2026-09-09 by round 4 task 5
+// with every section that had found another tab deleted out of it —
+// `git log --follow` shows the rename, so the material's own history is
+// unbroken. That screen was the whole wizard on one route (design § 1.1);
+// what is left here is the one question this tab asks.
+//
+// **What this file holds:** the release select; the material readout
 // (`MaterialReadout`, `source-primary`) beside the folder column
 // (`MaterialFolders`, `source-secondary`), where a drop is appended to the
 // list and never replaces it; the identity pass behind one folded, counted
 // line (`media-identity-fold`), with the reuse toggle and *Scan again* inside
-// it because they are about that pass; the plan error badge; the refusals
-// card; the plan itself — the file list, grouped by component; the keymap;
-// the Run card with its blocker sentence; the result; and
-// `AmigaInstallPanel` at the foot, the run on a real or emulated Amiga,
-// which stays here until round 5 moves it.
+// it because they are about that pass; and `AmigaInstallPanel` at the foot,
+// the run on a real or emulated Amiga, which stays here until round 5 moves
+// it to the WinUAE studio.
 //
-// **What left, and where it went.** Nothing was rewritten in the move — the
-// rows are the same rows, drawn from the same catalogues:
+// It still computes the **whole** plan (`useInstallPlan`), because the folder
+// column is drawn from it: which layers this release declares, and which
+// folders the request will actually read (`plannedFolders.unusedForPlan`). It
+// draws none of the plan itself.
+//
+// **What left, and where it went.** Nothing was rewritten in any of the
+// moves — the rows are the same rows, drawn from the same catalogues:
 //
 //   - **Tab 2, `ChoiceTab.tsx`** (four-tab design § 3.2, round 3) — the
 //     release's component rows with their ticks, the confirm-off dialog, the
@@ -27,10 +33,17 @@
 //     remembered keys; `osinstall.chosen.<release>` and
 //     `osinstall.excludedConditional.<release>` are read exactly once, by
 //     `seededComponents`, and never written again.
-//   - **Tab 3, `MachineTab.tsx`** (§ 3.3) — the Kickstart ROM field and the
-//     destination field. Both values are still *read* here, because the plan
-//     needs both, through the same remembered keys and the same guards: one
-//     value, two tabs, never two answers.
+//   - **Tab 3, `MachineTab.tsx`** (§ 3.3) — the Kickstart ROM field, the
+//     keymap select and the destination field. All three values are still
+//     *read* here, because the plan needs them, through the same remembered
+//     keys and the same guards: one value, two tabs, never two answers.
+//   - **Tab 4, `BuildTab.tsx`** (§ 3.4, round 4) — the plan error badge, the
+//     plan's refusals with the folder's own evidence above them and the
+//     switch-release button beside them, the summary of what will be
+//     written, the confirmation, the Build button, the run and every phase's
+//     own ending. The result card's five `statedRelease` verdicts and its
+//     removed/icons lists are the tree phase's report there, and the ART-197
+//     hand-off of a finished tree to the session is the tree phase's too.
 //   - **`src/lib/useInstallPlan.ts`** — the plan computation itself
 //     (`layersFor` → `osinstall_components` → `osinstall_plan` once or twice
 //     → `osinstall_component_collisions`, with the sanitize and prune writes
@@ -45,10 +58,10 @@
 //     (`components/osbuilder/VerifyAgainstCard.tsx`), where the card it
 //     compares a tree against actually is.
 //
-// Four rules shape the screen, named directly in the brief. The first three
+// Three rules were named directly in the brief that built this screen. They
 // govern rows that are **tab 2's** now — they were written here,
 // `ChoiceTab.tsx` points back at them, and moving the JSX changed none of
-// them; the fourth is still this file's own:
+// them, so they are kept where that pointer lands:
 //
 //   - **The checklist is the chosen release's own recipe.** `osinstallComponents`
 //     loads it whenever the release changes; nothing here is hardcoded. It
@@ -83,12 +96,12 @@
 //     a source of a refusal. The build keeps **two** plans for exactly this
 //     reason — see the module doc on `basePlan`/`effectivePlan` in
 //     `src/lib/useInstallPlan.ts`, which owns both since round 3.
-//   - **The file list is read-only.** Unlike G11's layout preview, where
-//     retargeting a row *is* the feature, every destination here comes from
-//     a recipe checked against real media — a hand-moved row would make
-//     `distribution.json` describe a release that was never actually built.
-//     The components are the only edit in the whole build, and they are tab
-//     2's; the list itself has no controls.
+//
+// A fourth rule went with the plan's own file list, which no tab draws any
+// more: **it was read-only.** Unlike G11's layout preview, where retargeting
+// a row *is* the feature, every destination in that list came from a recipe
+// checked against real media, and a hand-moved row would have made
+// `distribution.json` describe a release that was never actually built.
 //
 // Remembered between runs, through `@/lib/remembered`'s guards: the keymap
 // and the destination **per release** (`rememberedComponentKey`), because a
@@ -113,7 +126,7 @@
 // lives inside the component." This screen is now the thin rendering layer
 // that diagnosis asked for.
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
@@ -123,35 +136,21 @@ import { errorText } from "@/lib/errorText";
 
 import { hostParentDir } from "@/lib/hostPath";
 import {
-  componentDef,
-  componentLabel,
   INSTALL_RELEASES,
-  isInstallRelease,
   layerForMedia,
-  mediaEvidence,
-  onOsInstallResult,
-  osinstallApply,
-  osinstallBlocker,
   osinstallIdentifyMedia,
   osinstallRescanMedia,
-  osinstallReleaseForMedia,
   mediaIdentityFolderLines,
   mediaIdentityLines,
   mediaIdentitySummary,
-  osinstallMediaEvidence,
   osinstallScanMedia,
-  refusalPhrase,
-  wrongMediaFolder,
   rememberedComponentKey,
   type InstallLayer,
-  type ReleaseEvidence,
-  type InstallPlan,
   type InstallRelease,
   type MediaFolderOutcome,
   type MediaIdentification,
   type MediaIdentityState,
   type MediaScanResult,
-  type OsInstallResult,
   type SlotOverride,
 } from "@/lib/osinstall";
 import { slotOverrides } from "@/lib/amigainstall";
@@ -164,40 +163,10 @@ import { type MaterialFolder } from "@/lib/buildSession";
 import { hostAmigaForeverFolders } from "@/lib/api";
 import { useBuildSession } from "@/lib/useBuildSession";
 import { useInstallPlan } from "@/lib/useInstallPlan";
-import {
-  fraction,
-  isJobCancellation,
-  onJobProgress,
-  subscribeSafely,
-  type JobProgress,
-} from "@/lib/jobs";
+import { isJobCancellation } from "@/lib/jobs";
 import { MaterialFolders } from "@/components/osbuilder/MaterialFolders";
 import { MaterialReadout } from "@/components/osbuilder/MaterialReadout";
 import { AmigaInstallPanel } from "@/components/osbuilder/AmigaInstallPanel";
-
-const GIB = 1024 * 1024 * 1024;
-
-/** A size the way the rest of the OS Builder prints one. */
-function size(bytes: number): string {
-  if (bytes >= GIB) return `${Math.round((bytes / GIB) * 100) / 100} GB`;
-  return `${Math.round((bytes / (1024 * 1024)) * 10) / 10} MB`;
-}
-
-/** Plan items, grouped by component, in the order the plan itself already
- *  lists them (recipe order — `plan()` walks `recipe.components` in
- *  declaration order, so this needs no sort of its own). */
-function groupByComponent(plan: InstallPlan): { component: string; items: InstallPlan["items"] }[] {
-  const order: string[] = [];
-  const byComponent = new Map<string, InstallPlan["items"]>();
-  for (const item of plan.items) {
-    if (!byComponent.has(item.component)) {
-      byComponent.set(item.component, []);
-      order.push(item.component);
-    }
-    byComponent.get(item.component)!.push(item);
-  }
-  return order.map((component) => ({ component, items: byComponent.get(component)! }));
-}
 
 /**
  * One arrival of a disc dropped on the panel. `arrivalKey` is
@@ -221,66 +190,7 @@ export function resetIfEmpty<T>(prev: Record<string, T>): Record<string, T> {
   return Object.keys(prev).length === 0 ? prev : {};
 }
 
-/**
- * How far the install has got, beside the button that started it.
- *
- * Three things, and each is there because its absence was the complaint:
- * a percentage, the file count behind it, and the file landing right now.
- * "Installing…" on its own says a job exists, not that it is moving — a
- * 588-file tree took twenty seconds with nothing on screen changing, and a
- * frozen application and a working one looked identical.
- *
- * A job with no total gets a fixed sliver and no percentage rather than a
- * bar that pretends to know how far along it is — the same choice `JobBar`
- * makes, for the same reason (§89: ART does not state what it has not
- * measured).
- */
-function InstallProgress({ progress }: { progress: JobProgress | null }) {
-  const { t } = useTranslation();
-
-  const pct = progress ? fraction(progress) : null;
-  return (
-    <div style={{ flex: 1, minWidth: 160, maxWidth: 420 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, gap: 8 }}>
-        <span>
-          {pct === null
-            ? t("osinstall.run.progress.starting")
-            : t("osinstall.run.progress.percent", {
-                percent: Math.round(pct * 100),
-                done: progress?.done ?? 0,
-                total: progress?.total ?? 0,
-              })}
-        </span>
-      </div>
-      <div
-        aria-hidden
-        style={{
-          height: 4,
-          marginTop: 4,
-          borderRadius: 2,
-          background: "var(--border)",
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            height: "100%",
-            width: pct === null ? "25%" : `${pct * 100}%`,
-            background: "var(--accent)",
-            transition: "width 120ms linear",
-          }}
-        />
-      </div>
-      {progress?.message && (
-        <div className="faint" style={{ fontSize: 11, marginTop: 2, wordBreak: "break-all" }}>
-          {progress.message}
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia }) {
+export function FilesTab({ droppedMedia = null }: { droppedMedia?: DroppedMedia }) {
   const { t } = useTranslation();
 
   // --- what the user chose, remembered -------------------------------------
@@ -457,6 +367,11 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    *  has not asked this session. Session-only: it describes an action just
    *  taken, not a choice to remember. */
   const [rescanned, setRescanned] = useState<number | null>(null);
+  /** Why the last "Scan again" could not forget anything, or `null`. Session
+   *  only, like the count beside it, and rendered in the fold next to the
+   *  button — a control that answers for itself when it works has to answer
+   *  for itself when it does not. */
+  const [rescanError, setRescanError] = useState<string | null>(null);
   /**
    * Bumped by "Scan again" to make the plan effect run once more.
    *
@@ -499,21 +414,15 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     components: session.components,
     setComponents,
   });
-  // What this screen still draws of the answer. The catalogue is here for
-  // the one thing left that needs it — resolving a component id to its own
-  // label, in a refusal's sentence and above each group of planned files.
-  // The rows themselves, the ticks and the collision preview are `ChoiceTab`'s
-  // since 2026-09-09 (four-tab design § 3.2), which reads this same hook.
-  const {
-    layers,
-    layersKnown,
-    plannedFolders,
-    catalogue,
-    effectivePlanResult,
-    effectivePlan,
-    planError,
-    setPlanError,
-  } = plan;
+  // **What this screen still draws of the answer: the folder column, and
+  // nothing else.** Which layers the release declares (so a row can be
+  // tagged), which folders the request will actually read, and whether ART
+  // has asked yet. The rows, the ticks and the collision preview are
+  // `ChoiceTab`'s since 2026-09-09 (four-tab design § 3.2); the plan's own
+  // totals, its refusals and its error badge are `BuildTab`'s since round 4
+  // task 5. Every one of them reads this same hook, so no two tabs can
+  // describe two builds.
+  const { layers, layersKnown, plannedFolders } = plan;
 
   /**
    * The folders the request actually reads, in list order — a layered
@@ -675,34 +584,18 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    * the user acting is exactly what the remembered-settings rule forbids.
    * **That objection is answered rather than dropped.** Pressing Build *is*
    * the user acting — they chose the folder and asked ART to fill it — and
-   * the change is stated on screen (`osinstall.result.carried`) instead of
-   * being made silently. A user who wants a different tree still picks one;
-   * the picker never goes away.
+   * the change is stated on screen instead of being made silently. A user who
+   * wants a different tree still picks one; the picker never goes away.
+   *
+   * The writing itself is **tab 4's** since round 4 task 5: the tree phase's
+   * report is where a finished build says what it did and where. This tab
+   * only ever *reads* the value, and writes it once — when the person points
+   * the panel below at a tree by hand.
    */
 
   const packagesFolder = session.packages.folder;
 
   // --- what the screen is doing --------------------------------------------
-  /**
-   * One component's row label (ART-224).
-   *
-   * `media` — the volume the component comes from — is what every row used
-   * to show, and for AmigaOS 3.2's sixteen disks it is better than any
-   * sentence ART could write. AmigaOS 3.9 is five components off one disc,
-   * so every row read `AmigaOS3.9`: three identical labels before ART-159
-   * added two more, two of them tick-boxes the user is asked to decide
-   * about. A recipe now names its own key where that happens, and the Rust
-   * side refuses a recipe that shares a medium without naming one.
-   *
-   * Resolved here rather than in `src/lib`, which holds no i18next singleton
-   * and returns `Phrase`s instead of sentences — a `labelKey` is a whole key
-   * with no parameters, so it needs no `Phrase` wrapper, only a `t` call at
-   * the place that draws it.
-   */
-  function label(id: string): string {
-    const key = componentDef(catalogue ?? [], id)?.labelKey;
-    return key ? t(key) : componentLabel(catalogue ?? [], id);
-  }
   /**
    * **Amiga Forever, offered** (design § 3.5) — the path the host answers
    * with, or `null` when there is nothing to offer or the user has said no.
@@ -744,41 +637,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const amigaForeverOffer =
     materialFolders.length === 0 && !amigaForeverDismissed ? amigaForeverAdf : null;
 
-  const [confirmed, setConfirmed] = useState(false);
-  /**
-   * **The run confirmation describes the plan that was on screen when it was
-   * given**, so a new plan answer retires it — the same rule the preload
-   * screen's own fingerprint/lastPlanned pair enforces, simplified here
-   * because the plan is always fresh rather than sometimes stale.
-   *
-   * `planVersion` bumps on every answer, a refusal included: a plan that
-   * could not be computed is not a plan the user confirmed either.
-   *
-   * `useLayoutEffect`, not `useEffect`: a `useEffect` runs *after* the
-   * browser has painted, so a confirmation given against the previous plan
-   * would be on screen for one frame beside a plan it does not describe —
-   * and one frame is enough to press Build. (The component checklist's own
-   * confirmation moved to `ChoiceTab` with the rows; it retires itself on
-   * `planVersion` there, for this same reason.)
-   */
-  useLayoutEffect(() => {
-    setConfirmed(false);
-  }, [plan.planVersion]);
-  const [busy, setBusy] = useState(false);
-  /**
-   * The install job this screen started, and its latest progress.
-   *
-   * `apply()` already reports per file — `sink.report(done, total, item.to)`
-   * — and that has always reached the webview as `job-progress`. Nothing
-   * here listened, so the screen said "Installing…" and nothing else for
-   * however long a 588-file tree takes. A ref rather than state for the id:
-   * it is read inside the listener and must not re-subscribe on every tick.
-   */
-  const installJob = useRef<number | null>(null);
-  const [progress, setProgress] = useState<JobProgress | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<OsInstallResult | null>(null);
-
   // The Verify section is not here any more. Row 3 moved it out whole (it
   // shared no state with the install) and wave 3 moved it to the volumes
   // step, where the card it compares against actually is:
@@ -799,28 +657,26 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    * underneath them made it worse rather than better: one release's plan
    * beside another release's result is a screen contradicting itself.
    *
+   * **The list is one line long now** — the *Scan again* count, the only
+   * answer this tab still holds that is about a release. The install report,
+   * the plan error and the run confirmation went to `BuildTab` in round 4
+   * task 5 and clear themselves there; the component checklist's pending
+   * confirmation went to `ChoiceTab` in round 3, where it retires itself on
+   * `planVersion`, which a release change bumps.
+   *
    * **What is deliberately NOT cleared**, so a later reader does not "fix"
-   * it: the ROM (a property of the machine, not the release — ART-207), the
-   * media scan (its own effect re-runs, because ART-207 keyed the folder per
-   * release and the folder therefore changed too), and the Verify section,
-   * which names the tree and image it is talking about on screen and is not
-   * about the picker at all.
+   * it: the ROM (a property of the machine, not the release — ART-207) and
+   * the media scan (its own effect re-runs, because ART-207 keyed the folder
+   * per release and the folder therefore changed too).
    *
    * **An honest limit.** This is a list, and a list can be forgotten: a
    * future card added without a line here would sit stale exactly as these
    * did. The structural answer is to remount the body on a `key={release}`,
-   * which cannot be forgotten — but that needs `release` owned by a parent,
-   * which is the `OsInstall.tsx` split already on the work list. Said here
-   * rather than discovered later.
+   * which cannot be forgotten — but that needs `release` owned by a parent.
+   * Said here rather than discovered later.
    */
   useEffect(() => {
-    setResult(null);
-    setError(null);
-    // The component checklist's pending confirmation is not on this list any
-    // more — it moved to `ChoiceTab` with the rows, where it retires itself
-    // on `planVersion`, which a release change bumps.
     setRescanned(null);
-    setConfirmed(false);
   }, [release]);
 
   /**
@@ -987,75 +843,19 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     [overridesKey]
   );
 
-  // `subscribeSafely` (Task 7's own fix round, F7/ART-165): the bare
-  // `.then((fn) => { unlisten = fn })` shape this used to have could both
-  // leak the real Tauri listener (an unmount before the promise resolved
-  // left nothing to call) and surface an unhandled rejection (no IPC bridge
-  // to reach, e.g. under test) — see `docs/ISSUES.md`'s ART-165.
-  useEffect(() => {
-    return subscribeSafely(() =>
-      onOsInstallResult((r) => {
-        setResult(r);
-        setBusy(false);
-        setConfirmed(false);
-        // ART-197: the tree ART has just written **is** the tree the next
-        // steps act on. One variable, so the carry holds by structure rather
-        // than by anyone remembering to wire it — and the result card says so
-        // (`osinstall.result.carried`), because a carry the user cannot see
-        // is the same defect as one that never happened.
-        //
-        // This used to be followed by `setVerifyDistRoot(r.destination)` as
-        // well. `VerifyAgainstCard` now reads `session.tree.root` itself, so
-        // the one line below carries both — and carries it to a step that has
-        // not been built yet, which is what wave 3 needs.
-        setTree({ root: r.destination, builtHere: true });
-        installJob.current = null;
-        setProgress(null);
-      })
-    );
-  }, [setTree]);
-
-  // The install's own progress. `job-progress` is application-wide, so every
-  // update is checked against this screen's job id — an Aminet download
-  // running alongside must not move this bar. A cancelled or failed job never
-  // sends an `osinstall-result`, so the terminal states are cleared here too,
-  // otherwise the bar would sit at its last percentage for ever.
-  useEffect(() => {
-    return subscribeSafely(() =>
-      onJobProgress((job) => {
-        if (job.id !== installJob.current) return;
-        setProgress(job);
-        if (job.state.state === "running") return;
-
-        installJob.current = null;
-        setBusy(false);
-        // A finished install announces itself through `osinstall-result`. A
-        // **failed or cancelled** one never sends that event, so without this
-        // the screen simply stopped saying "Installing…" and said nothing at
-        // all — the user's own report: "it did something, but did it install?
-        // what did it install? there is no feedback on screen." A job that
-        // ended badly has to say so where the button is.
-        if (job.state.state === "failed") {
-          setError(`${job.state.message} (${job.state.error_code})`);
-        } else if (job.state.state === "cancelled") {
-          setError(
-            t("osinstall.run.cancelled", {
-              files: job.state.files_landed ?? 0,
-            })
-          );
-        }
-      })
-    );
-  }, [t]);
-
-  // Is the destination already occupied? Asked while it is being chosen, so
-  // the refusal `apply()` would raise is on screen before the button, not
-  // after a long operation appears to have done nothing. `useDestinationCheck`
-  // holds the rule: a path ART cannot examine is not a path ART may declare
-  // occupied — `apply()` decides, and blocking here would refuse an install
-  // the engine would have allowed.
-  const destinationCheck = useDestinationCheck(destination, result);
-  const { taken: destinationTaken } = destinationCheck;
+  // **Asked here for the tree below, not for a blocker.** Whether the
+  // destination is occupied is `BuildTab`'s question since round 4 task 5 —
+  // it owns the button that refusal blocks. What this tab needs of the same
+  // answer is the other half: whether the destination is already an ART
+  // tree, which is what `useChainTree` decides the readout's `installed`
+  // badge from. One `osinstall_describe_tree` per destination, handed over
+  // rather than asked twice.
+  //
+  // **No `revision`**: nothing on this tab fills the folder, so there is no
+  // moment at which the answer goes stale under it. The install's own result
+  // bumped it while the run was here; the run is tab 4's now, and so is its
+  // check.
+  const destinationCheck = useDestinationCheck(destination);
 
   /**
    * **The same tree tab 2 asks about** (`useChainTree`, round 3 task 3's fix
@@ -1082,10 +882,13 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    * The volume names the scans actually read out of **every folder the plan
    * request carries** — the main one and each added one for an unlayered
    * release (ART-256), each layer's own for a layered one (ART-257), never
-   * the main one alone. Memoized on the scans themselves so this is one identity
-   * per scan and not one per render: ART-195 was a fresh `[]` per render
-   * driving an effect into a loop, and both effects below list this among
-   * their dependencies.
+   * the main one alone. **The folder column's own found line** — the
+   * evidence sentences that used to read this too (`mediaEvidence`,
+   * `wrongMediaFolder`, the blocker) are `BuildTab`'s since round 4 task 5,
+   * where the refusals they qualify are. Memoized on the scans themselves so
+   * this is one identity per scan and not one per render: ART-195 was a fresh
+   * `[]` per render driving an effect into a loop, and this has been an
+   * effect's dependency for most of its life.
    *
    * **Duplicates are collapsed, first spelling kept.** Two folders can hold
    * the same volume name; the core refuses that by name (`scan::media_for`
@@ -1123,100 +926,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     for (const folder of plannedFolderPaths) take(folderScans[folder]);
     return names;
   }, [layersKnown, plannedFolderPaths, folderScans]);
-  /**
-   * ART-208. Non-null when the folder holds media and this release wants
-   * none of it — the owner's own screen, where sixteen `MediaMissing`
-   * refusals meant one wrong folder rather than sixteen missing disks. A
-   * string or `null`, so it is a stable dependency for the lookup below.
-   */
-  /**
-   * ART-253. What the release being built makes of the names in the folder —
-   * the only thing that can *check* `wrongMediaFolder`'s claim rather than
-   * infer it. Held as its own state, and `null` until it lands: the sentence
-   * withdraws while it is in flight, because a specific claim with nothing
-   * to check it against is what the defect was.
-   */
-  const [mediaFacts, setMediaFacts] = useState<ReleaseEvidence | null>(null);
-  useEffect(() => {
-    if (foundVolumeNames.length === 0) {
-      setMediaFacts(null);
-      return;
-    }
-    let cancelled = false;
-    osinstallMediaEvidence(release, foundVolumeNames)
-      .then((facts) => {
-        if (!cancelled) setMediaFacts(facts);
-      })
-      // A release with no shipped recipe throws, and there is nothing
-      // truthful to say about a folder against a recipe ART does not have.
-      // `null` is "not checked", which withdraws the claim.
-      .catch(() => {
-        if (!cancelled) setMediaFacts(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [release, foundVolumeNames]);
-  const wrongFolder = effectivePlan
-    ? wrongMediaFolder(effectivePlan, foundVolumeNames, mediaFacts)
-    : null;
-  const [releaseHolding, setReleaseHolding] = useState<string | null>(null);
-  useEffect(() => {
-    // Looked up whenever the folder holds media, not only for the
-    // all-or-nothing `wrongFolder` sentence above: the ordinary partial
-    // case's own evidence line (`mediaEvidence` below, refusal-evidence
-    // round Task 2) needs the same answer to tell "this release's own
-    // media, some disks short" from "somebody else's media" apart.
-    if (foundVolumeNames.length === 0) {
-      setReleaseHolding(null);
-      return;
-    }
-    let cancelled = false;
-    osinstallReleaseForMedia(foundVolumeNames)
-      .then((named) => {
-        if (!cancelled) setReleaseHolding(named);
-      })
-      // A folder ART cannot put a name to is the ordinary case, not an error
-      // worth a badge: the sentence without a release still says what is
-      // wrong and what to do about it.
-      .catch(() => {
-        if (!cancelled) setReleaseHolding(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [foundVolumeNames]);
-  /**
-   * ART-208's follow-on (refusal-evidence round, Task 2). What the folder
-   * holds, for the ordinary partial case the refusals list already names
-   * disk-by-disk — `mediaEvidence` itself refuses to speak over
-   * `wrongMediaFolder`'s own sentence, so the two can never both render.
-   */
-  const mediaEvidenceLine = effectivePlan
-    ? mediaEvidence({
-        plan: effectivePlan,
-        found: foundVolumeNames,
-        releaseHolding,
-        release,
-        evidence: mediaFacts,
-      })
-    : null;
-
-  // `osinstallBlocker` asks one question of `mediaFolder`: has *any* material
-  // been pointed at yet. Answered from the folders the request actually
-  // carries, so a layered release with two tagged folders is not told "no
-  // folder chosen" because it sets no flat one, and an unlayered release
-  // with a list is not told it either.
-  const blocker = osinstallBlocker({
-    mediaFolder: plannedFolderPaths.length > 0 ? (plannedFolderPaths[0] ?? release) : null,
-    destination,
-    destinationTaken,
-    plan: effectivePlanResult,
-    found: foundVolumeNames,
-    releaseHolding,
-    mediaFacts,
-  });
-
   /**
    * The one folder picker (design § 3.1). Adding the same folder twice is
    * not an error and not a second folder: the core reads it once either way,
@@ -1269,6 +978,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   async function rescanMedia() {
     try {
       const dropped = await osinstallRescanMedia();
+      setRescanError(null);
       setRescanned(dropped);
       // Re-plan against what is actually on the discs now. A new object
       // identity is the point: the plan effect keys on these values, and
@@ -1294,27 +1004,13 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         })
       ).then((entries) => setFolderScans(Object.fromEntries(entries)));
     } catch (e) {
-      setPlanError(errorText(t, e));
-    }
-  }
-
-  async function runInstall() {
-    if (!destination || !effectivePlan) return;
-    setBusy(true);
-    setError(null);
-    setProgress(null);
-    try {
-      // The job id is what tells this screen's progress from every other
-      // job's: `job-progress` is a single application-wide event, and an
-      // install running beside an Aminet download would otherwise drive
-      // this bar with the download's numbers.
-      installJob.current = await osinstallApply(effectivePlan, destination);
-      // `busy` clears on the result event, or here if the job never starts.
-    } catch (e) {
-      setError(errorText(t, e));
-      setBusy(false);
-      installJob.current = null;
-      setProgress(null);
+      // **Said beside the button that failed** (round 4 task 5). This used to
+      // set the plan's own error, which the plan-error badge at the top of
+      // this screen drew; the badge is `BuildTab`'s now, and routing a
+      // *Scan again* failure into another tab's badge would be a control
+      // that silently ignored the user — the exact defect the `setRescanned`
+      // line above exists against.
+      setRescanError(errorText(t, e));
     }
   }
 
@@ -1544,277 +1240,22 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
                 : t("osinstall.media.rescanned", { count: rescanned })}
             </p>
           )}
+          {/* A button that did nothing has to say so where it is (round 4
+              task 5). Rust's own sentence, through `errorText` — no key of
+              this screen's, because there is nothing this screen knows about
+              the failure that the core did not say better. */}
+          {rescanError && (
+            <p
+              className="badge badge-err"
+              data-testid="rescan-error"
+              style={{ display: "inline-block", fontSize: 11, margin: "0 0 12px" }}
+            >
+              {rescanError}
+            </p>
+          )}
           </details>
         )}
       </section>
-
-      {planError && (
-        <section className="card" style={{ marginBottom: 16 }}>
-          <p className="badge badge-err" style={{ display: "block", padding: "8px 12px", fontSize: 12 }}>
-            {planError}
-          </p>
-        </section>
-      )}
-
-      {/*
-        ART-208. One wrong folder is one sentence, not one absence per
-        component — so this whole card is suppressed for that case and the
-        sentence is said once, beside the button it blocks (`osinstallBlocker`
-        returns it; see the run card below). Sixteen copies of "this disk is
-        not in the folder", about a folder holding somebody else's release,
-        is sixteen true sentences adding up to a false impression: the owner
-        read them as "a lot of programs are missing".
-
-        The list stays for every other case, which is most of them — one
-        absent disk in an otherwise right folder has to say *which* disk.
-      */}
-      {effectivePlan && effectivePlan.refusals.length > 0 && !wrongFolder && (
-        <section className="card" style={{ marginBottom: 16 }}>
-          <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osinstall.refusals.heading")}</h2>
-          {/* Refusal-evidence round, Task 2: context the list below cannot
-              give on its own — what the folder actually holds. Adds to the
-              per-disk list, never replaces it (`wrongMediaFolder` above owns
-              the all-or-nothing sentence instead, so the two never both
-              show). */}
-          {mediaEvidenceLine && (
-            <p className="faint" style={{ fontSize: 12, margin: "0 0 8px" }}>
-              {t(mediaEvidenceLine.key, mediaEvidenceLine.params)}
-            </p>
-          )}
-          <ul className="muted" style={{ fontSize: 12, margin: 0, paddingLeft: 20 }}>
-            {effectivePlan.refusals.map((r, i) => {
-              const phrase = refusalPhrase(r);
-              // Final whole-branch review, Finding F. `refusalPhrase` (pure
-              // `src/lib`, no catalogue) can only carry the raw recipe
-              // component id — every other refusal names it purely for
-              // identification, but this is the one that tells the user to
-              // go and tick it themselves, and a raw id is not a checkbox a
-              // person can find. Resolved here, through the same `label()`
-              // the component list itself uses, rather than in
-              // `refusalPhrase`, which has no catalogue to resolve it with.
-              const params =
-                r.refusal === "resident-table-unreadable"
-                  ? { ...phrase.params, component: label(r.component) }
-                  : phrase.params;
-              return (
-                <li key={i} style={{ padding: "2px 0" }}>
-                  {t(phrase.key, params)}
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      )}
-
-      {effectivePlan && effectivePlan.items.length > 0 && (
-        <section className="card" style={{ marginBottom: 16 }}>
-          <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osinstall.plan.heading")}</h2>
-          <p className="muted" style={{ fontSize: 12, margin: "4px 0 12px" }}>
-            {t("osinstall.plan.summary", {
-              count: effectivePlan.totalFiles,
-              bytes: size(effectivePlan.totalBytes),
-            })}{" "}
-            {/* The tree and the work are two numbers, and the second explains
-                why the list below is longer than the first: a file two
-                components both write is planned twice and lands once
-                (ART-205). */}
-            {t("osinstall.plan.summaryItems", { count: effectivePlan.items.length })}
-          </p>
-          <div
-            style={{
-              maxHeight: 360,
-              overflowY: "auto",
-              border: "1px solid var(--border)",
-              borderRadius: 4,
-              padding: "6px 10px",
-            }}
-          >
-            {groupByComponent(effectivePlan).map(({ component, items }) => (
-              <div key={component} style={{ marginBottom: 8 }}>
-                <div className="muted" style={{ fontSize: 11, fontWeight: 600, margin: "6px 0 2px" }}>
-                  {label(component)}
-                </div>
-                {items.map((item, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      gap: 8,
-                      fontSize: 11,
-                      padding: "1px 0",
-                    }}
-                  >
-                    <span style={{ wordBreak: "break-all" }}>
-                      {item.to}
-                      {item.isDir ? "/" : ""}
-                    </span>
-                    <span className="faint">{item.isDir ? "" : size(item.bytes)}</span>
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* **The keyboard select is gone from this screen** (four-tab round 4,
-          task 4). It is ART-226's other half — choose the keyboard, having
-          placed it — and it belongs beside the Kickstart, on tab 3, which is
-          where the machine is described. This screen still plans *with* the
-          value, through the same remembered key. */}
-
-      <section className="card" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osinstall.run.heading")}</h2>
-
-        {error && (
-          <div className="badge badge-err" style={{ display: "block", padding: "6px 12px", fontSize: 12, marginBottom: 12 }}>
-            {error}
-          </div>
-        )}
-
-        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, marginBottom: 10 }}>
-          <input
-            type="checkbox"
-            checked={confirmed}
-            disabled={!!blocker}
-            onChange={(e) => setConfirmed(e.target.checked)}
-          />
-          {t("osinstall.run.confirm")}
-        </label>
-
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button className="btn btn-primary" onClick={() => void runInstall()} disabled={busy || !confirmed || !!blocker}>
-            {t(busy ? "osinstall.run.running" : "osinstall.run.run")}
-          </button>
-          {busy && <InstallProgress progress={progress} />}
-          {blocker && (
-            <span className="faint" style={{ fontSize: 11 }}>
-              {t(blocker.key, blocker.params)}
-            </span>
-          )}
-          {/*
-            ART-208's one click, beside the control it unblocks. The refusals
-            card above is suppressed for this case (see there), so this is the
-            only place the sentence appears — ART-202's rule, which the owner
-            stated for us: "aynı uyarı tek ekranda 2 tane".
-          */}
-          {wrongFolder && releaseHolding && isInstallRelease(releaseHolding) && (
-            <button className="btn btn-sm" onClick={() => setRelease(releaseHolding)}>
-              {t("osinstall.blocked.switchRelease", { release: releaseHolding })}
-            </button>
-          )}
-        </div>
-      </section>
-
-      {result && (
-        <section className="card" style={{ marginBottom: 16 }}>
-          <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osinstall.result.heading")}</h2>
-          <p style={{ fontSize: 12, margin: "4px 0 8px" }}>
-            {t("osinstall.result.summary", {
-              files: result.outcome.files,
-              directories: result.outcome.directories,
-              bytes: size(result.outcome.bytes),
-            })}
-          </p>
-          <p className="faint" style={{ fontSize: 11, margin: "0 0 8px", wordBreak: "break-all" }}>
-            {t("osinstall.result.root", { root: result.destination })}
-          </p>
-          {/* ART-197: the screen may not change what the next step points at
-              without saying so. */}
-          <p className="muted" style={{ fontSize: 12, margin: "0 0 8px", wordBreak: "break-all" }}>
-            {t("osinstall.result.carried", { root: result.destination })}
-          </p>
-          <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
-            {t("osinstall.result.nextStep")}
-          </p>
-          {/* Task 9: what the tree's own release marker says, compared with
-              what this build was for — five distinct sentences, never
-              folded into a pass/fail (CLAUDE.md's answer to the round that
-              shipped AmigaOS 3.5 labelled 3.9: ask the artefact, never
-              assert). "unreadable" (fix round 1, Finding 1) is never
-              rendered as "unstated" — the tree may state a release just
-              fine, ART simply could not read it. "expected-unknown" (final
-              whole-branch review, Finding E) is never rendered as
-              "mismatch" — the Rust side only asserts disagreement for a
-              release it has actually measured a correct tree's marker for,
-              so a correct AmigaOS 3.9 tree is never told it is wrong. */}
-          <p className="muted" style={{ fontSize: 12, margin: 0 }}>
-            {result.stated_release.verdict === "confirmed"
-              ? t("osinstall.result.statedRelease.confirmed", {
-                  stated: result.stated_release.stated,
-                })
-              : result.stated_release.verdict === "mismatch"
-                ? t("osinstall.result.statedRelease.mismatch", {
-                    expected: result.stated_release.expected,
-                    stated: result.stated_release.stated,
-                  })
-                : result.stated_release.verdict === "expected-unknown"
-                  ? t("osinstall.result.statedRelease.expectedUnknown", {
-                      stated: result.stated_release.stated,
-                    })
-                  : result.stated_release.verdict === "unreadable"
-                    ? t("osinstall.result.statedRelease.unreadable", {
-                        detail: result.stated_release.detail,
-                      })
-                    : t("osinstall.result.statedRelease.unstated")}
-          </p>
-          {/* An update's own `removes` (Component.removes) — reported per
-              entry, by name and by result, so the screen never claims a file
-              was removed when the core said it could not (CLAUDE.md). Hidden
-              entirely when nothing removed anything, which is every shipped
-              recipe until AmigaOS 3.2.2's own recipe uses the field. */}
-          {result.outcome.removed.length > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <h3 style={{ fontSize: 13, margin: "0 0 4px" }}>
-                {t("osinstall.result.removed.heading")}
-              </h3>
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11 }}>
-                {result.outcome.removed.map((verdict) => (
-                  <li key={verdict.to}>
-                    {verdict.to} —{" "}
-                    {verdict.state === "removed"
-                      ? t("osinstall.result.removed.state.removed")
-                      : verdict.state === "not-present"
-                        ? t("osinstall.result.removed.state.notPresent")
-                        : t("osinstall.result.removed.state.failed", {
-                            detail: verdict.state.failed,
-                          })}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {/* An `icon-tooltypes` rule (RuleKind) — reported per entry, by
-              name and by result, the same discipline `removed` follows just
-              above and for the same reason: "not present" is a legitimate
-              build (the component that would have placed the icon may be
-              switched off), never a failure. Hidden entirely when nothing
-              amended an icon, which is every shipped recipe until AmigaOS
-              3.2.2's own recipe uses the rule. */}
-          {result.outcome.icons.length > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <h3 style={{ fontSize: 13, margin: "0 0 4px" }}>
-                {t("osinstall.result.icons.heading")}
-              </h3>
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11 }}>
-                {result.outcome.icons.map((verdict) => (
-                  <li key={verdict.to}>
-                    {verdict.to} —{" "}
-                    {verdict.state === "merged"
-                      ? t("osinstall.result.icons.state.merged")
-                      : verdict.state === "destination-absent"
-                        ? t("osinstall.result.icons.state.destinationAbsent")
-                        : t("osinstall.result.icons.state.failed", {
-                            detail: verdict.state.failed,
-                          })}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </section>
-      )}
 
       {/* **The update checklist is gone from this screen** (four-tabs round
           3, task 3). `PackagePanel` was a flat catalogue that never joined

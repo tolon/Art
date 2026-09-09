@@ -7,9 +7,9 @@
 // 974-line component that renders it, and a screen nobody has proved *mounts*
 // is a screen whose every other guarantee is conditional.
 //
-// Mocked at the `@/lib/*` boundary, the house pattern (`OsInstall.test.tsx`,
+// Mocked at the `@/lib/*` boundary, the house pattern (`FilesTab.test.tsx`,
 // `useRomPairing.test.tsx`) — never `@tauri-apps/api` itself. `@/lib/settings`
-// is mocked one layer further down for the reason `OsInstall.test.tsx`
+// is mocked one layer further down for the reason `FilesTab.test.tsx`
 // records: `useRemembered` writes through `useSettingsStore` on every tick and
 // the real `saveSettings` rejects in jsdom with nothing to catch it, which
 // Vitest counts as an unhandled rejection and fails the run.
@@ -35,7 +35,7 @@
 //
 // What this does NOT establish: layout. jsdom measures nothing, so "does the
 // Turkish sentence fit" is still a real-screen job — the same limit
-// `OsInstall.test.tsx` records for ART-062.
+// `FilesTab.test.tsx` records for ART-062.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";

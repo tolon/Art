@@ -65,7 +65,7 @@ export interface ChainTree {
 
 /**
  * @param check the caller's **own** already-computed answer for this same
- *   destination, when it has one. `OsInstall` asks
+ *   destination, when it has one. `FilesTab` asks
  *   `useDestinationCheck(destination, result)` for its occupied-folder
  *   refusal and hands the whole thing over, so one screen makes one round
  *   trip per path instead of two identical ones; it also means that screen's

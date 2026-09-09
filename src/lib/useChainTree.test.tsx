@@ -155,7 +155,7 @@ describe("useChainTree", () => {
   });
 
   it("uses the caller's own answer, and asks nothing of its own for it", async () => {
-    // `OsInstall` already asks `useDestinationCheck` for its occupied-folder
+    // `FilesTab` already asks `useDestinationCheck` for the destination
     // refusal. Handing that answer over is what keeps one screen to one round
     // trip per path — two identical `osinstall_describe_tree` calls would be
     // a second reader of the one fact this hook exists to have one of.

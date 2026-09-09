@@ -668,6 +668,22 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // in **both** catalogues and that the params each phrase supplies are
     // exactly the ones both sentences name, which is the check this scan
     // cannot make.
-    expect(dynamicCalls).toBe(191);
+    // 191 -> 186 (2026-09-09, four tabs round 4, task 5). **Five, all of them
+    // the *originals* of sites task 4 copied**, going out with the sections
+    // they belonged to as `OsInstall.tsx` became `FilesTab.tsx`: the refusals
+    // card's list (`refusalPhrase`), the evidence line above it
+    // (`mediaEvidence`), the blocker in the Build button's place
+    // (`osinstallBlocker`), the Build button's own two-literal ternary, and
+    // `label()`'s `t(def.labelKey)`, which is `buildSummary.ts`'s now. Every
+    // one of the five is still counted — on `BuildTab.tsx` and
+    // `buildSummary.ts`, in the ten "181 -> 191" added. Five survive here,
+    // and they are the material's: the folded pass's summary and its per-file
+    // and per-folder lines (`mediaIdentity*`), and `layerLabel`'s
+    // `t(layer.labelKey)`. **`BuildBar.tsx` is a net zero rather than an
+    // untouched file**: its `t(line.key, line.params)` over `useBuildSummary`
+    // went with that hook, and the bar's own `t(wanted ? on : off)` took its
+    // place — one dynamic site either way, over a value the session holds
+    // instead of a plan the bar had to compute.
+    expect(dynamicCalls).toBe(186);
   });
 });

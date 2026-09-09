@@ -1,19 +1,17 @@
-// The build's own summary — what tab 4 states in four lines, and what the bar
-// under every tab states in one (four-tab design § 3.4, round 4 task 4).
+// The build's own summary — what tab 4 states in four lines (four-tab design
+// § 3.4, round 4 task 4).
 //
-// **One hook, because two would be two answers.** The bar says how big this
-// build is; tab 4 says the same thing above the button that runs it. Two
-// copies of that arithmetic — reading the plan, the destination, the chain's
-// ticked rows — is exactly the shape of defect this round exists to remove:
-// one screen saying two things about one build. So the question is asked
-// once, here, and the two readers differ only in how much of the answer they
-// draw.
+// **`BuildTab.tsx`'s only reader since round 4 task 5.** The bar under the
+// tabs read it too, for a size line of its own, until that turned out to mean
+// a second plan, a second chain and a second slot report on every one of tabs
+// 1-3; the bar states what the session carries now and asks nothing. The
+// module stays where it is rather than folding back into `BuildTab.tsx`,
+// because `steps.test.tsx` mocks that component and a hook imported out of a
+// mocked module is a hook that does not exist.
 //
 // It lives beside the tab rather than in `src/lib` because it composes
 // `useTickedUpdates`, which is `ChoiceTab`'s — `src/lib` may not import a
-// component — and beside the bar rather than inside `BuildTab.tsx` because
-// the bar is a page-level control that must not have to mount a tab to ask a
-// question.
+// component.
 
 import { useTranslation } from "react-i18next";
 
@@ -43,8 +41,6 @@ export interface BuildSummary {
   phases: Phase[];
   /** The four summary lines, in the design's order. */
   lines: Phrase[];
-  /** The two of them that say *what will be written* — the bar's line. */
-  sizeLines: Phrase[];
   /** A component's own name for the screen, from the loaded catalogue. */
   label: (id: string) => string;
 }
@@ -52,14 +48,10 @@ export interface BuildSummary {
 /**
  * Everything the build's summary is computed from, asked once.
  *
- * Exported because the bar under the tabs says the same size line, and two
- * copies of this arithmetic is two answers to *how big is this build* — the
- * shape of defect this whole round exists to remove. The bar reads
- * {@link BuildSummary.sizeLines} and nothing else.
- *
  * @param previewReplacements whether to ask `osinstall_collisions` for each
- *   ticked update. The tab does; the bar must not — that is disk work
- *   (an archive opened per row) for a line the bar does not draw.
+ *   ticked update — disk work, an archive opened per row, for the fourth
+ *   line alone. A caller that does not draw that line passes `false` and
+ *   reads {@link BuildSummary.lines} three long.
  */
 export function useBuildSummary({
   previewReplacements,
@@ -114,8 +106,10 @@ export function useBuildSummary({
    * A component's own name for the screen — the recipe's `labelKey` when it
    * declares one, its media name otherwise.
    *
-   * Moved from `OsInstall.tsx` (the original goes with that file in task 5).
-   * Resolved here rather than in `src/lib`, which holds no i18next singleton.
+   * Moved from `OsInstall.tsx` in task 4; the original went with that file
+   * when task 5 renamed it `FilesTab.tsx` and deleted everything the plan
+   * drew. Resolved here rather than in `src/lib`, which holds no i18next
+   * singleton.
    */
   function label(id: string): string {
     const key = componentDef(plan.catalogue ?? [], id)?.labelKey;
@@ -187,18 +181,6 @@ export function useBuildSummary({
       : line
   );
 
-  // **By key, not by index.** `runSummaryLines` returns three lines rather
-  // than four when there is no plan (the plan's own refusal stands in the
-  // button's place instead), so slicing the front of the list would hand the
-  // bar the first-boot line on exactly the builds that have nothing to say.
-  const sizeLines = lines.filter(
-    (line) =>
-      line.key === "osBuilder.build.summary.tree" ||
-      line.key === "osBuilder.build.summary.treeExisting" ||
-      line.key === "osBuilder.build.summary.updates" ||
-      line.key === "osBuilder.build.summary.updatesNone"
-  );
-
   return {
     release,
     destination,
@@ -209,7 +191,6 @@ export function useBuildSummary({
     firstBootWanted,
     phases,
     lines,
-    sizeLines,
     label,
   };
 }

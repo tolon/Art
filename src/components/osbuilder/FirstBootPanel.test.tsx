@@ -57,7 +57,7 @@ vi.mock("@/lib/jobs", async (importOriginal) => ({
 
 // `useRemembered`/`useRememberedShape` write through `useSettingsStore.update()`,
 // which calls the real `tauri-plugin-store` IPC on every tick — an unhandled
-// rejection in jsdom otherwise (see `OsInstall.test.tsx`'s own note).
+// rejection in jsdom otherwise (see `FilesTab.test.tsx`'s own note).
 vi.mock("@/lib/settings", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/settings")>()),
   saveSettings: saveSettingsMock,

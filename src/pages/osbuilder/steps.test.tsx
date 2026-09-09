@@ -9,7 +9,7 @@
 // "çok karmaşık gereksiz derecede uzun".
 //
 // The panels are replaced by markers. Each reaches Tauri on mount, and this
-// file is about routing and what a step hands its panel — `OsInstall.test.tsx`
+// file is about routing and what a step hands its panel — `FilesTab.test.tsx`
 // and the two panel test files cover the real components.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -67,17 +67,15 @@ vi.mock("@/components/osbuilder/MachineTab", () => ({
 vi.mock("@/components/osbuilder/BuildTab", () => ({
   BuildTab: () => <div data-testid="build-tab" />,
 }));
-// …and the summary the **bar** states, which the shell mounts on every tab of
-// this lane. Its real hook computes a plan, a destination check and the chain,
-// none of which this file is about — and all of which would reach `invoke`
-// for real. What is under test here is that the bar is mounted at all, and by
-// which route.
-vi.mock("@/components/osbuilder/buildSummary", () => ({
-  useBuildSummary: () => ({ sizeLines: [] }),
-}));
-vi.mock("@/components/osbuilder/OsInstall", () => ({
-  OsInstall: ({ droppedMedia }: { droppedMedia?: { path: string } | null }) => (
-    <div data-testid="install">{droppedMedia?.path ?? "(no drop)"}</div>
+// The bar the shell mounts on every tab of this lane needs no mock of its
+// own: since round 4 task 5 it reads the session and asks nothing, so
+// mounting it here reaches no `invoke`. (It used to compute a plan, a
+// destination check and the chain through `buildSummary`, which this file
+// mocked out for exactly that reason.) What is under test here is that the
+// bar is mounted at all, and by which route.
+vi.mock("@/components/osbuilder/FilesTab", () => ({
+  FilesTab: ({ droppedMedia }: { droppedMedia?: { path: string } | null }) => (
+    <div data-testid="files-tab">{droppedMedia?.path ?? "(no drop)"}</div>
   ),
 }));
 
@@ -321,7 +319,7 @@ describe("a disc dropped on the panel", () => {
     seed({ "buildSession.kind": "boot-card" });
     renderAt("/os-builder", { path: "E:\\amiga\\iso\\AmigaOS39.iso" });
 
-    expect(screen.getByTestId("install").textContent).toBe("E:\\amiga\\iso\\AmigaOS39.iso");
+    expect(screen.getByTestId("files-tab").textContent).toBe("E:\\amiga\\iso\\AmigaOS39.iso");
   });
 });
 
@@ -399,13 +397,13 @@ describe("Verify against a card is on the volumes step (ART-197 wave 3)", () => 
     expect(screen.queryByTestId("verify")).toBeNull();
   });
 
-  /// And not on the step it came from. `OsInstall.test.tsx` asserts the same
+  /// And not on the step it came from. `FilesTab.test.tsx` asserts the same
   /// thing from the other side, against the real component rather than a
   /// marker.
   it("is not on the install step any more", () => {
     seed({});
     renderAt("/os-builder/dosyalar");
-    expect(screen.getByTestId("install")).toBeTruthy();
+    expect(screen.getByTestId("files-tab")).toBeTruthy();
     expect(screen.queryByTestId("verify")).toBeNull();
   });
 });
@@ -424,7 +422,7 @@ describe("the retired routes still resolve (four-tab design § 2)", () => {
 
   it("sends kaynak to the files tab", () => {
     renderAt("/os-builder/kaynak");
-    expect(screen.getByTestId("install")).toBeTruthy();
+    expect(screen.getByTestId("files-tab")).toBeTruthy();
     expect(
       screen.getByRole("link", { name: /^1\. Amiga files/ }).getAttribute("aria-current")
     ).toBe("page");
@@ -452,7 +450,7 @@ describe("every step id in the lane has a route", () => {
       "buildSession.tree": { root: "E:\\dist", builtHere: true },
     });
     const expected: Record<string, string> = {
-      dosyalar: "install",
+      dosyalar: "files-tab",
       // The tab's **own** list. Written this way in round 3 task 2, while
       // `secim` still carried two panels below `ChoiceTab`, precisely so
       // that task 3 removing them could not go on passing here over a tab

@@ -1,10 +1,18 @@
 // @vitest-environment jsdom
 //
 // The bar under every tab of the install lane (four-tab design § 2): the
-// destination, and one button that only navigates in this round. Two rules
-// it must keep: it never writes a setting (it reads the same remembered
-// destination the files tab writes), and its button is absent on the build
-// tab, where round 4 puts the real Derle — one label, one effect.
+// destination, what the person has chosen so far, and one button that only
+// navigates in this round. Three rules it must keep: it never writes a
+// setting (it reads the same remembered destination the files tab writes),
+// its button is absent on the build tab, where round 4 puts the real Derle —
+// one label, one effect — and **it asks Rust nothing at all**.
+//
+// That last rule is round 4 task 5's. Until then the bar computed tab 4's own
+// first two summary lines through `useBuildSummary`, which meant a second
+// plan, a second chain and a second slot report on every one of tabs 1-3,
+// beside the tab's own. The line says what the *session* carries now — the
+// ticked update count and the first-boot tick — so every wrapper below is
+// mocked to prove it is never reached, not to answer.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
@@ -20,9 +28,10 @@ vi.mock("@/lib/settings", async (importOriginal) => ({
   getSettings: vi.fn(),
 }));
 
-// Round 4, task 4: the bar states the size of the build, through the very
-// hook tab 4 states it with. So the wrappers behind that hook answer here
-// too — mocked at the `@/lib/*` boundary, as everywhere else in this suite.
+// Every wrapper the bar reached through `useBuildSummary` before round 4 task
+// 5, still mocked — **as an assertion, not as an answer.** A mock that is
+// never called is how "the bar asks nothing" is measured; leaving them
+// unmocked would only prove that jsdom has no IPC bridge.
 const componentsMock = vi.hoisted(() => vi.fn());
 const layersForMock = vi.hoisted(() => vi.fn());
 const planMock = vi.hoisted(() => vi.fn());
@@ -33,9 +42,6 @@ const slotsMock = vi.hoisted(() => vi.fn());
 const describeTreeMock = vi.hoisted(() => vi.fn());
 const destinationTakenMock = vi.hoisted(() => vi.fn());
 const scanMediaMock = vi.hoisted(() => vi.fn());
-const mediaEvidenceMock = vi.hoisted(() => vi.fn());
-const releaseForMediaMock = vi.hoisted(() => vi.fn());
-const identifyRomMock = vi.hoisted(() => vi.fn());
 const firstbootPreviewMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
@@ -50,8 +56,6 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   osinstallDescribeTree: describeTreeMock,
   osinstallDestinationTaken: destinationTakenMock,
   osinstallScanMedia: scanMediaMock,
-  osinstallMediaEvidence: mediaEvidenceMock,
-  osinstallReleaseForMedia: releaseForMediaMock,
 }));
 
 vi.mock("@/lib/firstboot", async (importOriginal) => ({
@@ -59,14 +63,31 @@ vi.mock("@/lib/firstboot", async (importOriginal) => ({
   firstbootPreview: firstbootPreviewMock,
 }));
 
-vi.mock("@/lib/pistorm", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/pistorm")>()),
-  pistormIdentifyRom: identifyRomMock,
-}));
-
 const { useSettingsStore } = await import("@/stores/settingsStore");
 const { DEFAULT_SETTINGS } = await import("@/lib/settings");
 const { BuildBar } = await import("@/pages/osbuilder/BuildBar");
+
+/** Every wrapper that must stay untouched, by name, so a failure says which
+ *  one the bar started asking. */
+const NEVER_ASKED = {
+  osinstallPlan: planMock,
+  osinstallChain: chainMock,
+  osinstallSlots: slotsMock,
+  osinstallComponents: componentsMock,
+  layersFor: layersForMock,
+  osinstallCollisions: collisionsMock,
+  osinstallComponentCollisions: componentCollisionsMock,
+  osinstallDescribeTree: describeTreeMock,
+  osinstallDestinationTaken: destinationTakenMock,
+  osinstallScanMedia: scanMediaMock,
+  firstbootPreview: firstbootPreviewMock,
+};
+
+function expectNothingAsked() {
+  for (const [name, mock] of Object.entries(NEVER_ASKED)) {
+    expect({ [name]: mock.mock.calls.length }).toEqual({ [name]: 0 });
+  }
+}
 
 function seed(remembered: Record<string, unknown>) {
   useSettingsStore.setState({ loaded: true, settings: { ...DEFAULT_SETTINGS, remembered } });
@@ -97,127 +118,8 @@ function renderAt(path: string) {
 
 const MEDIA = "E:\\amiga\\os39";
 
-/** A plan that places 1980 files, and a chain with one ticked update — the
- *  two facts the bar's own line states. */
 beforeEach(() => {
-  componentsMock.mockReset().mockResolvedValue([
-    {
-      id: "workbench-base",
-      media: "AmigaOS3.9",
-      labelKey: null,
-      required: true,
-      available: true,
-      conditionMajor: null,
-      requiresRomMajor: null,
-      exclusiveGroup: null,
-      overrides: [],
-    },
-  ]);
-  layersForMock.mockReset().mockResolvedValue([]);
-  planMock.mockReset().mockImplementation((req: { release: string }) =>
-    Promise.resolve({
-      outcome: "planned",
-      plan: {
-        release: req.release,
-        items: [
-          {
-            component: "workbench-base",
-            media: "AmigaOS3.9",
-            from: "AmigaOS3.9:C/Format",
-            to: "C/Format",
-            isDir: false,
-            decompress: false,
-            bytes: 2048,
-            mergeIcon: false,
-          },
-        ],
-        refusals: [],
-        totalBytes: 18_300_000,
-        totalFiles: 1980,
-        componentsOn: ["workbench-base"],
-        mediaPaths: {},
-        packages: [],
-        packageMedia: {},
-        userStartup: [],
-        activations: [],
-        mediaStamps: {},
-        removals: [],
-        layers: [],
-      },
-    })
-  );
-  componentCollisionsMock.mockReset().mockResolvedValue({ reports: [], placed: 0, contested: 0 });
-  collisionsMock.mockReset().mockResolvedValue([]);
-  chainMock.mockReset().mockResolvedValue({
-    rows: [
-      {
-        position: 2,
-        packageId: "boingbag-39-1",
-        slotId: "package:boingbag-39-1",
-        name: "BoingBag 3.9-1",
-        sentenceFacts: { file: null, runsOnAmiga: false },
-        state: { state: "ready" },
-      },
-    ],
-    summary: { release: "AmigaOS 3.9", total: 1, installed: 0, notNeeded: 0 },
-    unreadableFolders: [],
-    crowdedFolders: [],
-  });
-  slotsMock.mockReset().mockResolvedValue({
-    states: [
-      {
-        slot: {
-          id: "package:boingbag-39-1",
-          kind: "package",
-          name: "package:boingbag-39-1",
-          identity: "package:boingbag-39-1",
-          artefact: null,
-          required: false,
-          filenames: [],
-          provenance: null,
-          position: 2,
-          requires: [],
-          supersededBy: [],
-          expectsDirectories: [],
-        },
-        found: {
-          path: `${MEDIA}\\BoingBag39-1.lha`,
-          matchedBy: "hash",
-          row: null,
-          confirmed: null,
-          bytesRead: { state: "read-no-row" },
-        },
-        candidates: [],
-        installed: { state: "no" },
-        chosenMissing: null,
-        blockedBy: [],
-        incomplete: null,
-      },
-    ],
-    summary: {
-      release: "AmigaOS 3.9",
-      requiredTotal: 0,
-      requiredFound: 0,
-      optionalTotal: 1,
-      optionalFound: 1,
-    },
-    unreadableFolders: [],
-    crowdedFolders: [],
-  });
-  describeTreeMock.mockReset().mockResolvedValue({
-    isTree: false,
-    release: null,
-    files: 0,
-    components: [],
-    amigaInstalled: [],
-    problem: "holds no distribution.json",
-  });
-  destinationTakenMock.mockReset().mockResolvedValue(false);
-  scanMediaMock.mockReset().mockResolvedValue({ outcome: "found", media: [] });
-  mediaEvidenceMock.mockReset().mockResolvedValue(null);
-  releaseForMediaMock.mockReset().mockResolvedValue(null);
-  identifyRomMock.mockReset().mockResolvedValue(null);
-  firstbootPreviewMock.mockReset().mockRejectedValue(new Error("no tree"));
+  for (const mock of Object.values(NEVER_ASKED)) mock.mockReset();
 });
 
 afterEach(() => {
@@ -225,7 +127,8 @@ afterEach(() => {
   useSettingsStore.setState({ loaded: false, settings: DEFAULT_SETTINGS });
 });
 
-/** Everything the size line is computed from. */
+/** Everything the size line is computed from: one ticked update, and no
+ *  first-boot answer at all — absent means ticked. */
 const BUILD: Record<string, unknown> = {
   "buildSession.kind": "install",
   "buildSession.release": "AmigaOS 3.9",
@@ -275,29 +178,56 @@ describe("the build bar", () => {
     expect(screen.queryByTestId("build-bar")).toBeNull();
   });
 
-  // Round 4, task 4.
-  it("says how big the build is and which updates it carries", async () => {
+  // Round 4, task 5.
+  it("says how many updates are ticked and that first boot is on", async () => {
     seed(BUILD);
     renderAt("/os-builder/dosyalar");
     const line = await screen.findByTestId("build-bar-size");
-    await waitFor(() => expect(line.textContent).toContain("1980"));
-    // The same two sentences tab 4 draws — the plan's totals and the chain's
-    // own order — and not the first-boot tick or the replace preview, which
-    // are tab 4's alone.
-    await waitFor(() => expect(line.textContent).toContain("BoingBag 3.9-1"));
-    expect(line.textContent).not.toContain(i18n.t("osBuilder.build.summary.firstboot"));
-    expect(line.textContent).not.toContain(i18n.t("osBuilder.build.summary.replacesPending"));
+    // The whole sentence, both parameters — a line that said "1 updates
+    // ticked" and left the tick unnamed would pass a `toContain("1")`.
+    expect(line.textContent).toBe(
+      i18n.t("osBuilder.bar.size", {
+        updates: 1,
+        firstboot: i18n.t("osBuilder.bar.firstboot.on"),
+      })
+    );
+    // Absent means ticked, and this fixture stores no `firstboot` at all.
+    expect(line.textContent).toContain(i18n.t("osBuilder.bar.firstboot.on"));
   });
 
-  it("does not repeat it on the build tab, which states it in full", async () => {
+  it("says first boot is off once the person has unticked it", async () => {
+    seed({ ...BUILD, "buildSession.firstboot": { written: false, wanted: false } });
+    renderAt("/os-builder/dosyalar");
+    const line = await screen.findByTestId("build-bar-size");
+    expect(line.textContent).toBe(
+      i18n.t("osBuilder.bar.size", {
+        updates: 1,
+        firstboot: i18n.t("osBuilder.bar.firstboot.off"),
+      })
+    );
+  });
+
+  // **The rule this file exists for since round 4 task 5.** Not "it is fast":
+  // a counted zero against every wrapper the old hook reached, on the tab
+  // where the bar draws the most.
+  it("asks Rust nothing at all — no plan, no chain, no slots", async () => {
+    seed(BUILD);
+    renderAt("/os-builder/dosyalar");
+    await screen.findByTestId("build-bar-size");
+    // Waited on a *later* answer than the line, so this is not simply a
+    // snapshot taken before anything could have been asked: the destination
+    // sentence and the size line are both settled here.
+    await waitFor(() => expect(screen.getByTestId("build-bar-destination")).toBeTruthy());
+    expectNothingAsked();
+  });
+
+  it("does not repeat the size line on the build tab, which states it in full", async () => {
     seed(BUILD);
     renderAt("/os-builder/derle");
     expect(screen.getByTestId("build-bar")).toBeTruthy();
     expect(screen.queryByTestId("build-bar-size")).toBeNull();
-    // …and nothing is asked for a line that is not drawn.
     await waitFor(() => expect(screen.getByTestId("build-bar-destination")).toBeTruthy());
-    expect(planMock).not.toHaveBeenCalled();
-    expect(chainMock).not.toHaveBeenCalled();
+    expectNothingAsked();
   });
 
   it("never writes a setting by rendering", () => {

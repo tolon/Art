@@ -30,7 +30,7 @@ import { MemoryRouter } from "react-router-dom";
 import i18n from "i18next";
 
 // Side-effecting: gives `useTranslation` a real, synchronously-initialised
-// instance, the way `OsInstall.test.tsx` does.
+// instance, the way `FilesTab.test.tsx` does.
 import "@/i18n";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type {
@@ -91,7 +91,7 @@ vi.mock("@/lib/jobs", async (importOriginal) => ({
 
 // `useRemembered` writes through `useSettingsStore.update()`, which calls the
 // real `tauri-plugin-store` IPC on every tick — an unhandled rejection in
-// jsdom (see `OsInstall.test.tsx`'s own note).
+// jsdom (see `FilesTab.test.tsx`'s own note).
 vi.mock("@/lib/settings", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/settings")>()),
   saveSettings: saveSettingsMock,
@@ -2453,7 +2453,7 @@ describe("the chain", () => {
  * **The tree field is not offered when the caller's tree is the destination**
  * (round 3 fix wave, Important 2).
  *
- * `OsInstall` hands this panel `useChainTree`'s tree. When that hook picked
+ * `FilesTab` hands this panel `useChainTree`'s tree. When that hook picked
  * the *destination*, this panel's own Browse wrote `session.tree.root` — a
  * value the hook goes on overruling — so the path in the field snapped back
  * to the destination on the next render. A control that appears to work and

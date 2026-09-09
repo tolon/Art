@@ -1226,7 +1226,7 @@ export async function osinstallMediaEvidence(
  *
  * Mirrors `core::osinstall::MediaLayer` — `labelKey` is an **i18n key**, not
  * a sentence, resolved the same way `ComponentDef.labelKey` already is (see
- * `OsInstall.tsx`'s own `label()`): a recipe is data with no compiler between
+ * `buildSummary.ts`'s own `label()`): a recipe is data with no compiler between
  * it and the screen, so the key travels and the translation happens at the
  * place that draws it.
  */
@@ -2936,7 +2936,7 @@ export function componentDef(components: ComponentDef[], id: string): ComponentD
  *
  *  Deliberately not translation-aware. `src/lib` holds no i18next singleton
  *  and never renders a sentence, so a row that has a `labelKey` is resolved
- *  by the component that draws it — see `OsInstall.tsx`'s `label()`. This
+ *  by the component that draws it — see `buildSummary.ts`'s `label()`. This
  *  stays the fallback both sides call. */
 export function componentLabel(components: ComponentDef[], id: string): string {
   return componentDef(components, id)?.media ?? id;

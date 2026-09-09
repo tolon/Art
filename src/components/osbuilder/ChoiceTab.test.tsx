@@ -110,7 +110,7 @@ const ROM: RomInfo = {
 };
 
 /** The two shipped recipes cut down to what this tab reasons about — the
- *  same fixtures `OsInstall.test.tsx` carries, and **different lists** on
+ *  same fixtures `FilesTab.test.tsx` carries, and **different lists** on
  *  purpose: the checklist is the chosen release's own recipe, never a
  *  hardcoded one. */
 const COMPONENTS_32: ComponentDef[] = [

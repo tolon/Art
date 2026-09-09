@@ -16,8 +16,8 @@
 //
 // Mocked at the same boundary the rest of this suite mocks at — the
 // `@/lib/*` wrappers around `invoke`/`listen`, never `@tauri-apps/api` itself
-// (`useRomPairing.test.tsx`, `OsInstall.test.tsx`). `@/lib/settings` is
-// mocked one layer further down for the reason `OsInstall.test.tsx` records:
+// (`useRomPairing.test.tsx`, `FilesTab.test.tsx`). `@/lib/settings` is
+// mocked one layer further down for the reason `FilesTab.test.tsx` records:
 // `useRemembered` writes through `useSettingsStore.update()` into
 // `saveSettings`, the real `tauri-plugin-store` boundary, which in jsdom
 // rejects with nothing to catch it and fails the run as an unhandled

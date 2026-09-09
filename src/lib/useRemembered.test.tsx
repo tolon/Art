@@ -39,13 +39,13 @@ beforeEach(() => {
 });
 
 /**
- * The exact shape `OsInstall.tsx` has: a remembered list with an inline `[]`
+ * The exact shape `FilesTab.tsx` has: a remembered list with an inline `[]`
  * fallback, feeding an effect that does expensive work, plus a piece of state
  * the effect itself sets — which is what makes the loop close.
  */
 const RUN_CEILING = 25;
 
-function useScreenLikeOsInstall(key: string) {
+function useScreenLikeFilesTab(key: string) {
   const [chosen] = useRemembered<string[]>(key, isTextList, []);
   const [, setPlan] = useState<object | null>(null);
   const runs = useRef(0);
@@ -66,7 +66,7 @@ function useScreenLikeOsInstall(key: string) {
 
 describe("a remembered value's identity", () => {
   it("does not change on re-render when nothing is stored, so an effect depending on it settles", () => {
-    const { result } = renderHook(() => useScreenLikeOsInstall("art.test.nothing-stored"));
+    const { result } = renderHook(() => useScreenLikeFilesTab("art.test.nothing-stored"));
 
     // One run for the mount. If the fallback identity were fresh per render,
     // the effect's own `setPlan` would re-render, the dependency would compare
@@ -80,12 +80,12 @@ describe("a remembered value's identity", () => {
       ...s,
       settings: { ...s.settings, remembered: { "art.test.stored": ["workbench-base"] } },
     }));
-    const { result } = renderHook(() => useScreenLikeOsInstall("art.test.stored"));
+    const { result } = renderHook(() => useScreenLikeFilesTab("art.test.stored"));
     expect(result.current.current).toBe(1);
   });
 
   it("still changes when the value itself changes, so the effect does run again", () => {
-    const { result } = renderHook(() => useScreenLikeOsInstall("art.test.changes"));
+    const { result } = renderHook(() => useScreenLikeFilesTab("art.test.changes"));
     expect(result.current.current).toBe(1);
 
     act(() => {
@@ -107,7 +107,7 @@ describe("a remembered value's identity", () => {
     // array and every dependent effect ran again with a byte-identical
     // request — for the OS Builder, a second full walk of every switched-on
     // component's disc image.
-    const { result } = renderHook(() => useScreenLikeOsInstall("art.test.lands-equal"));
+    const { result } = renderHook(() => useScreenLikeFilesTab("art.test.lands-equal"));
     expect(result.current.current).toBe(1);
 
     act(() => {

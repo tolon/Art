@@ -132,7 +132,7 @@ export interface MaterialReadoutProps {
    * disagreeing about the same files, which is ART-256's shape and CLAUDE.md's
    * "confident, wrong, and invisible".
    *
-   * The caller decides what makes it move (see `OsInstall.tsx`); this only
+   * The caller decides what makes it move (see `FilesTab.tsx`); this only
    * has to re-ask when it does. Re-asking is safe: a superseded answer is
    * already dropped by the cancellation below.
    */

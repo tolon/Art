@@ -3,7 +3,7 @@
 // The session's React half, tested where it actually runs.
 //
 // `@/lib/settings` is mocked one layer below the hook for the reason
-// `OsInstall.test.tsx` documents: `useRemembered`'s setter calls
+// `FilesTab.test.tsx` documents: `useRemembered`'s setter calls
 // `saveSettings` — the real `tauri-plugin-store` IPC boundary — and fires the
 // promise without catching it. Left real, that rejects in jsdom with nothing
 // to catch it, which Vitest counts as an unhandled rejection and fails the

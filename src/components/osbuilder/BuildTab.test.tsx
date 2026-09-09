@@ -610,6 +610,33 @@ describe("the button, and what stands in its place", () => {
     await waitFor(() => expect((screen.getByTestId("build-run") as HTMLButtonElement).disabled).toBe(false));
   });
 
+  // Round 4 task 5: the plan-error badge moved here from the install screen,
+  // because the summary above is the plan now. Without it a plan that had
+  // been asked for and had **failed** showed only the blocker's "Preview it
+  // first" — the right shape of sentence for the wrong reason, and Rust's own
+  // words nowhere on screen.
+  it("says what the planner refused to answer, not 'preview it first'", async () => {
+    planMock.mockReset().mockRejectedValue(new Error("could not open E:\\amiga\\os39\\Disk1.adf"));
+    seed(FIELDS);
+    renderTab();
+
+    const badge = await screen.findByTestId("build-plan-error");
+    expect(badge.textContent).toContain("could not open E:\\amiga\\os39\\Disk1.adf");
+    // The blocker still stands — the button must not be offered over a plan
+    // that does not exist — but it is no longer the only thing said.
+    expect(screen.queryByTestId("build-run")).toBeNull();
+  });
+
+  it("draws no plan-error badge when the plan answers", async () => {
+    // The control, measured rather than assumed: a badge that is always there
+    // proves nothing about the failure above.
+    bothTicked();
+    renderTab();
+
+    await screen.findByTestId("build-run");
+    expect(screen.queryByTestId("build-plan-error")).toBeNull();
+  });
+
   it("says what is missing when nothing at all is ticked on an existing tree", async () => {
     describeTreeMock.mockResolvedValue(IS_A_TREE);
     destinationTakenMock.mockResolvedValue(true);

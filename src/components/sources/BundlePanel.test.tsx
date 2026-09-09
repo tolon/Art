@@ -3,7 +3,7 @@
 // Task 7 (package bundles — "the screen"). Mocked at the same boundary the
 // rest of this project's component tests mock at — the `@/lib/*` wrappers
 // around `invoke`/`listen`, never `@tauri-apps/api` itself (see
-// `OsInstall.test.tsx`'s own note on this).
+// `FilesTab.test.tsx`'s own note on this).
 //
 // **Six outcomes, not five.** Task 5's review found a Critical defect: a
 // cold-cache download over an occupied library slot is `not-placed`, never
@@ -36,7 +36,7 @@ vi.mock("@/lib/bundles", async (importOriginal) => ({
 
 // No real Tauri IPC bridge exists in jsdom — `onJobProgress` would reject
 // with nothing to catch it, which Vitest counts as an unhandled rejection
-// (the same shape `OsInstall.test.tsx` mocks this same module for).
+// (the same shape `FilesTab.test.tsx` mocks this same module for).
 vi.mock("@/lib/jobs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/jobs")>()),
   onJobProgress: onJobProgressMock,

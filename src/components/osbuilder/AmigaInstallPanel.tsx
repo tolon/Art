@@ -91,7 +91,7 @@
 // Remembered through `@/lib/remembered`'s guards — the package, its two
 // archives and the Kickstart, because every one of them is a decision the
 // user made and would be annoyed to make again tomorrow. The tree itself is
-// the caller's (`OsInstall.tsx` remembers one for both package panels): which
+// the caller's (`FilesTab.tsx` remembers one for both package panels): which
 // tree a screen has open is not a setting, which the collection wave already
 // ruled.
 
@@ -463,7 +463,7 @@ export function AmigaInstallPanel({
    * `osinstall_chain` take them (ART-284).
    *
    * **A string, deposited into a `useMemo`, because both effects below start
-   * disk work** — the same rule `OsInstall.tsx` and `MaterialReadout.tsx`
+   * disk work** — the same rule `FilesTab.tsx` and `MaterialReadout.tsx`
    * already keep for this exact value: an array rebuilt each render is a
    * fresh identity and would re-scan the folders on every keystroke.
    */
@@ -1101,7 +1101,7 @@ export function AmigaInstallPanel({
    *
    * Guarded on `catalogue !== null` for ART-089's reason, and on
    * `packageId !== null` so this cannot loop. `sanitizeChosen`'s own
-   * comment on `OsInstall.tsx` says the same thing about the same hazard.
+   * comment on `FilesTab.tsx` says the same thing about the same hazard.
    */
   useEffect(() => {
     if (!catalogue || !packageId) return;
@@ -1110,7 +1110,7 @@ export function AmigaInstallPanel({
 
   // The catalogue. Loaded whenever the package folder changes, `null` (never
   // `[]`) until something arrives, so "not loaded yet" and "loaded and empty"
-  // stay different states — the distinction `OsInstall.tsx` already draws.
+  // stay different states — the distinction `FilesTab.tsx` already draws.
   useEffect(() => {
     if (!catalogueFolder) {
       setCatalogue(null);
@@ -1183,7 +1183,7 @@ export function AmigaInstallPanel({
   // button is ever offered and before one byte is copied.
   //
   // The `cancelled` guard is ART-089's, the same one every effect on
-  // `OsInstall.tsx` carries: a late-landing answer must not overwrite what
+  // `FilesTab.tsx` carries: a late-landing answer must not overwrite what
   // the user has since chosen.
   useEffect(() => {
     setConfirmed(false);
@@ -2056,7 +2056,7 @@ export function AmigaInstallPanel({
           changed nothing the reader could see, and the honest conclusion
           available to them was that it had done nothing. The owner's operation
           log recorded seven identical runs of an unchanged request.
-          `OsInstall.tsx` already carried this lesson in the owner's own words:
+          `BuildTab.tsx` carries this lesson in the owner's own words:
           a job that ended badly has to say so where the button is.
 
           The first fix rendered it in **both** places, and the owner read the
