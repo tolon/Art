@@ -6,7 +6,7 @@
 // time, in order, and gives each one the ending it earned. It calls no
 // command of its own — `osinstallApply`, `osinstallAddPackage` and
 // `firstbootWrite` are the typed wrappers the screens already use, and the
-// jobs go through `awaitJobResult` exactly as `FirstBootPanel` and
+// jobs go through `awaitJobResult` exactly as `FirstBootRehearse` and
 // `AppearancePanel` do.
 //
 // **The sequence stops at the first ending that is not a success**, and every
@@ -102,8 +102,9 @@ export interface BuildRunArgs {
   destination: string | null;
   /** The tree phase succeeded — the session's `setTree` hand-off (ART-197). */
   onTreeWritten(root: string): void;
-  /** The first-boot phase succeeded — `session.firstboot.written`, as
-   *  `FirstBootPanel` set it. */
+  /** The first-boot phase succeeded — `session.firstboot.written`, which
+   *  this phase is now the only writer of (round 5 deleted the panel that
+   *  used to set it from a screen of its own). */
   onFirstBootWritten(): void;
 }
 

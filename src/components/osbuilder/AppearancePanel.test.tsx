@@ -34,7 +34,7 @@ vi.mock("@/lib/appearance", async (importOriginal) => ({
 
 // ART-248: `appearanceApply` now only starts the job (it resolves with a job
 // id) and the outcome arrives through `awaitJobResult` — the same seam
-// `FirstBootPanel.test.tsx` mocks for its own rehearsal job. `isJobCancellation`
+// `FirstBootRehearse.test.tsx` mocks for its own rehearsal job. `isJobCancellation`
 // stays real, the same reason: it is a pure predicate and the whole point of
 // the "stopped, not an error" test below is that the panel's own use of it is
 // correct. `fraction` and `subscribeSafely` stay real for the identical
@@ -107,7 +107,7 @@ beforeEach(() => {
   // `awaitJobResult`'s own contract: it calls `start` itself (which is what
   // actually invokes `appearanceApply` and sets the panel's own job id) and
   // hands back a promise this default resolves with `currentOutcome` — the
-  // same shape `FirstBootPanel.test.tsx`'s own `awaitJobResultMock` uses.
+  // same shape `FirstBootRehearse.test.tsx`'s own `awaitJobResultMock` uses.
   awaitJobResultMock.mockReset().mockImplementation((_event: string, start: () => Promise<number>) => {
     void start();
     return Promise.resolve(currentOutcome);

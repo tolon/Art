@@ -12,14 +12,42 @@ import {
   type LaunchMedia,
 } from "@/lib/winuae";
 import { romIdentify, type RomInfo } from "@/lib/rom";
+import { rememberedComponentKey } from "@/lib/osinstall";
 import { isFlag, isTextOrNothing } from "@/lib/remembered";
+import { useBuildSession } from "@/lib/useBuildSession";
+import { useChainTree } from "@/lib/useChainTree";
 import { useRemembered } from "@/lib/useRemembered";
 import { useOpenObject } from "@/stores/openObjectStore";
 import { errorText } from "@/lib/errorText";
+import { AmigaInstallPanel } from "@/components/osbuilder/AmigaInstallPanel";
+import { FirstBootRehearse } from "@/components/osbuilder/FirstBootRehearse";
+
+/**
+ * **The tree the install section is about** — `useChainTree`'s one rule,
+ * applied here for the one card that takes the tree as a prop.
+ *
+ * `AmigaInstallPanel` resolves its own (round 5, task 1) and
+ * `FirstBootRehearse` takes `treeRoot` as a prop, because its whole
+ * stale-clearing behaviour is written in terms of *the tree changed* and its
+ * tests drive that by prop. Rather than give the rehearsal a second rule, the
+ * studio reads the same one: tab 3's destination when ART has looked at it
+ * and found a build, the build session's own tree otherwise. Two readers of
+ * one rule, never two rules.
+ */
+function useStudioTree(): string | null {
+  const { session } = useBuildSession();
+  const [destination] = useRemembered<string | null>(
+    rememberedComponentKey("osinstall.destination", session.release),
+    isTextOrNothing,
+    null
+  );
+  return useChainTree(destination).treeRoot;
+}
 
 export function WinuaeStudio() {
   const { t } = useTranslation();
   const location = useLocation();
+  const treeRoot = useStudioTree();
 
   const [install, setInstall] = useState<WinUaeInstallation | null>(null);
   const [profiles, setProfiles] = useState<AmigaProfile[]>([]);
@@ -385,6 +413,30 @@ export function WinuaeStudio() {
           </button>
         </section>
       </div>
+
+      {/* **The Amiga-side install section** (four tabs, round 5).
+
+          Two operations left the OS Builder's wizard for this card: running a
+          package's own installer under the emulator, and rehearsing first
+          boot. Both open an emulator window on this desktop, and neither
+          writes into the material the wizard is assembling — so they belong
+          where a person already comes to run an Amiga, not on a step about
+          which disks ART has.
+
+          Both read the build's own values (release, material folders,
+          archives folder, tree) for themselves, so this screen configures
+          neither: `AmigaInstallPanel` resolves them from `useBuildSession`
+          and `useChainTree`, and `useStudioTree` above applies that same
+          `useChainTree` rule once more for the rehearsal's tree. One rule,
+          one answer, whichever card asks. */}
+      <section className="card" data-testid="winuae-install-section" style={{ marginTop: 16 }}>
+        <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("winuae.installHeading")}</h2>
+        <p className="muted" style={{ fontSize: 12, margin: "4px 0 12px" }}>
+          {t("winuae.installIntro")}
+        </p>
+        <AmigaInstallPanel />
+        <FirstBootRehearse treeRoot={treeRoot} />
+      </section>
 
       {/* Modal: Missing Kickstart ROM Prompt */}
       {showRomPromptModal && (

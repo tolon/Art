@@ -684,6 +684,17 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // went with that hook, and the bar's own `t(wanted ? on : off)` took its
     // place — one dynamic site either way, over a value the session holds
     // instead of a plan the bar had to compute.
-    expect(dynamicCalls).toBe(186);
+    // 186 -> 184 (four tabs round 5, task 1): `FirstBootPanel.tsx` is deleted
+    // and `FirstBootRehearse.tsx` is what came out of it, so five dynamic
+    // sites become three. The three that moved are the rehearsal's own —
+    // `rehearsalOutcomePhrase`, `rehearsalNextStepPhrase` and the
+    // run/running ternary. The two that went with the panel are
+    // `fatMountPhrase` (the FAT-mount line of a preview this component does
+    // not draw) and the write/writeAgain ternary (the write is tab 4's
+    // phase). Neither key is orphaned: `firstboot.fat.*` is
+    // `FirstBootReportPanel.tsx`'s too, and the write keys were deleted from
+    // both catalogues in the same commit, which is what `dead-keys.test.ts`
+    // is there to insist on.
+    expect(dynamicCalls).toBe(184);
   });
 });

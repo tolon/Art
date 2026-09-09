@@ -911,8 +911,10 @@ export function ChoiceTab() {
           {/* A fact about the folder, not about the tick — `written` and
               `wanted` are different questions, and saying the first where it
               is true makes a second write a decision rather than a surprise.
-              The sentence is `FirstBootPanel`'s own, so the two screens
-              cannot word one fact differently. */}
+              The sentence was `FirstBootPanel`'s until round 5 deleted that
+              panel, and this tab kept the key rather than writing a second
+              wording for one fact: `firstboot.panel.alreadyWritten` has one
+              renderer, and it is here. */}
           {firstbootWritten && (
             <p
               data-testid="choice-firstboot-already-written"

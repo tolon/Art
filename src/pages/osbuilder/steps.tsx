@@ -136,9 +136,10 @@ export function StepDosyalar() {
  * The two panels that used to sit under it are gone from the wizard.
  * `PackagePanel` is deleted — its flat catalogue never joined the chain, so
  * one lane held two lists of one release's packages that could say different
- * things about one file — and `FirstBootPanel` leaves the lane with its own
- * card: the tick is here, and the *write* is round 4's run. The panel's file
- * stays in the tree until then.
+ * things about one file — and `FirstBootPanel` is deleted too (round 5): the
+ * tick is here, the *write* is round 4's run, and the one thing neither could
+ * do — booting a copy under an emulator — is `FirstBootRehearse` in the
+ * WinUAE studio.
  *
  * The readiness banner stays, and it still reads the tree rather than the
  * tab: the list's second group is answered *against* a tree when the

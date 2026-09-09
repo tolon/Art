@@ -13,9 +13,13 @@
 // (`MaterialFolders`, `source-secondary`), where a drop is appended to the
 // list and never replaces it; the identity pass behind one folded, counted
 // line (`media-identity-fold`), with the reuse toggle and *Scan again* inside
-// it because they are about that pass; and `AmigaInstallPanel` at the foot,
-// the run on a real or emulated Amiga, which stays here until round 5 moves
-// it to the WinUAE studio.
+// it because they are about that pass.
+//
+// **`AmigaInstallPanel` is no longer at the foot** (round 5, task 1). Running
+// a package's own installer opens an emulator window and writes into a
+// distribution tree rather than into the material this tab is about; it is a
+// section of the WinUAE studio now, and resolves the release, the folders and
+// the tree for itself.
 //
 // **It does not plan** (round 4 task 5's fix round). The folder column needs
 // two things of a plan and no more — which layers this release declares
@@ -169,7 +173,6 @@ import { useLayers } from "@/lib/useLayers";
 import { isJobCancellation } from "@/lib/jobs";
 import { MaterialFolders } from "@/components/osbuilder/MaterialFolders";
 import { MaterialReadout } from "@/components/osbuilder/MaterialReadout";
-import { AmigaInstallPanel } from "@/components/osbuilder/AmigaInstallPanel";
 
 /**
  * One arrival of a disc dropped on the panel. `arrivalKey` is
@@ -221,7 +224,6 @@ export function FilesTab({ droppedMedia = null }: { droppedMedia?: DroppedMedia 
    */
   const {
     session,
-    setTree,
     setRelease,
     setMaterial,
     addMaterialFolder,
@@ -553,11 +555,13 @@ export function FilesTab({ droppedMedia = null }: { droppedMedia?: DroppedMedia 
    *
    * The writing itself is **tab 4's** since round 4 task 5: the tree phase's
    * report is where a finished build says what it did and where. This tab
-   * only ever *reads* the value, and writes it once — when the person points
-   * the panel below at a tree by hand.
+   * only ever *reads* the value.
+   *
+   * **`session.packages.folder` is not read here at all any more** (round 5,
+   * task 1): its one reader on this tab was `AmigaInstallPanel`'s
+   * `packageFolder` prop, and the panel reads the session for itself in the
+   * studio. The tree below is still read, by the readout's `installed` badge.
    */
-
-  const packagesFolder = session.packages.folder;
 
   // --- what the screen is doing --------------------------------------------
   /**
@@ -868,10 +872,7 @@ export function FilesTab({ droppedMedia = null }: { droppedMedia?: DroppedMedia 
    * screen's own `revision`, so a folder a finished install has just filled
    * is re-examined here as well.
    */
-  const { treeRoot: packagesTreeRoot, source: packagesTreeSource } = useChainTree(
-    destination,
-    destinationCheck
-  );
+  const { treeRoot: packagesTreeRoot } = useChainTree(destination, destinationCheck);
 
   /**
    * The volume names the scans actually read out of **every folder the plan
@@ -1254,37 +1255,6 @@ export function FilesTab({ droppedMedia = null }: { droppedMedia?: DroppedMedia 
           </details>
         )}
       </section>
-
-      {/* **The update checklist is gone from this screen** (four-tabs round
-          3, task 3). `PackagePanel` was a flat catalogue that never joined
-          the chain: two independent lists of one release's packages, on one
-          lane, able to say different things about one file. Tab 2 draws the
-          chain's own rows now — one tick each, one sentence each, the
-          material's order — and this panel's remaining job is the *other*
-          route, the one that cannot be placed from Windows at all (ART-166)
-          and runs a package's own installer on the Amiga. It stays until
-          round 5 moves it to the WinUAE studio.
-
-          `packageFolder` is still what its dialogs open on and what its
-          catalogue is loaded from; the list is what its *slots* are resolved
-          against, which is the question "which of these files is BoingBag
-          3.9-1" — and that has to be asked of everything the user has, not
-          of one folder (design § 3.4). */}
-      <AmigaInstallPanel
-        treeRoot={packagesTreeRoot}
-        onTreeRootChange={(root) => setTree({ root, builtHere: false })}
-        // **Its Browse is dead while the destination wins** (round 3 fix
-        // wave, Important 2). `onTreeRootChange` writes `session.tree.root`,
-        // which `useChainTree` overrules whenever the destination is an ART
-        // tree — the panel's field would take a folder and snap back to the
-        // destination on the next render. The panel says where the tree came
-        // from instead; the destination is changed on tab 3, which is where
-        // this value is chosen and where the sentence sends the user.
-        treeFromDestination={packagesTreeSource === "destination"}
-        packageFolder={packagesFolder}
-        materialFolders={materialFolders.map((entry) => entry.path)}
-        release={release}
-      />
 
     </>
   );

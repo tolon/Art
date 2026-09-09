@@ -1175,6 +1175,8 @@
     "msg": {
       "launched": "🚀 WinUAE launched successfully (PID: {{pid}}) with {{name}}"
     },
+    "installHeading": "Run a package's own installer",
+    "installIntro": "For updates whose installer must run on the Amiga. The tree and the archives come from the OS Builder's choices.",
     "profilesHeading": "Amiga Hardware Profiles",
     "profilesIntro": "Choose an accurate hardware configuration preset:",
     "launcherHeading": "Emulation Launcher",
@@ -2986,19 +2988,7 @@
       "readFailed": "This card's first-boot report could not be read:"
     },
     "panel": {
-      "heading": "First boot on the Amiga",
-      "intro": "The Amiga finishes what ART cannot start from the host: it detects the hardware, mounts the FAT boot partition and runs the packages that need to run on the machine itself. Write it once, then boot the card to see it happen.",
-      "tree": "AmigaOS folder",
-      "preview": "What first boot will write",
-      "steps": "What it will do, in order",
-      "bytes": "The tree grows by about {{kb}} KB.",
       "alreadyWritten": "This tree already carries a first-boot block. Writing again replaces it.",
-      "write": "Write first boot",
-      "writeAgain": "Write again",
-      "written": "{{count}} files written into the tree.",
-      "backup": "S/User-Startup already existed; the previous copy was kept at {{path}}.",
-      "created": "S/User-Startup did not exist; ART created it.",
-      "nothingWritten": "Nothing was written.",
       "rehearse": "Rehearse under WinUAE",
       "rehearseIntro": "Boots a copy of the tree, never the tree itself, and proves the mechanism runs: the dispatcher starts, each step reports and the block removes itself on success. The hardware step always skips under an emulator — that half only proves out on the real machine.",
       "kickstart": "Kickstart for the rehearsal",

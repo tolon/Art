@@ -80,11 +80,9 @@ const onJobProgressMock = vi.hoisted(() => vi.fn());
 const rescanMock = vi.hoisted(() => vi.fn());
 const releaseForMediaMock = vi.hoisted(() => vi.fn());
 const mediaEvidenceMock = vi.hoisted(() => vi.fn());
-const packagesMock = vi.hoisted(() => vi.fn());
 const identifyMediaMock = vi.hoisted(() => vi.fn());
 const slotsMock = vi.hoisted(() => vi.fn());
 const amigaForeverMock = vi.hoisted(() => vi.fn());
-const chainMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
@@ -98,12 +96,10 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   osinstallMediaEvidence: mediaEvidenceMock,
   osinstallIdentifyMedia: identifyMediaMock,
   osinstallSlots: slotsMock,
-  // `AmigaInstallPanel` asks for the chain on mount (round 3, task 2).
-  // Mocked at the same boundary as everything else here; the default is a
-  // release ART knows no chain for, which is what this screen's own
-  // fixtures are.
-  osinstallChain: chainMock,
-  osinstallPackages: packagesMock,
+  // **`osinstallChain` and `osinstallPackages` are not mocked here any
+  // more** (round 5, task 1): `AmigaInstallPanel` asked for both on mount and
+  // is the WinUAE studio's now, so nothing this screen renders calls either.
+  // A mock for a command nobody reaches is a reader of nothing.
   osinstallComponentCollisions: componentCollisionsMock,
   // `useChainTree` asks this about the destination (round 3 task 3, fix
   // round 1). Mocked at the same boundary as the rest, and defaulting to
@@ -112,11 +108,11 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   osinstallDescribeTree: describeTreeMock,
 }));
 
-// `AmigaInstallPanel` is mounted inside this screen, and both it and this
-// screen's own install job subscribe to `onJobProgress` on mount — real
-// `listen()` has no Tauri IPC bridge to reach in jsdom and rejects, which
-// Vitest counts as an unhandled rejection at teardown (ART-163's own shape).
-// Mocked here for the same reason `osinstallPlan`/`osinstallApply` above are.
+// This screen's own identification job subscribes to `onJobProgress` on
+// mount — real `listen()` has no Tauri IPC bridge to reach in jsdom and
+// rejects, which Vitest counts as an unhandled rejection at teardown
+// (ART-163's own shape). Mocked here for the same reason
+// `osinstallPlan`/`osinstallApply` above are.
 vi.mock("@/lib/jobs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/jobs")>()),
   onJobProgress: onJobProgressMock,
@@ -532,13 +528,6 @@ beforeEach(() => {
     shared: [],
     missingRequired: ["Install3.2"],
   });
-  packagesMock.mockReset().mockResolvedValue([]);
-  chainMock.mockReset().mockResolvedValue({
-    rows: [],
-    summary: { release: "AmigaOS 3.2", total: 0, installed: 0, notNeeded: 0 },
-    unreadableFolders: [],
-    crowdedFolders: [],
-  });
   // The material readout's own round trip. The honest default is an empty
   // release: no slots, nothing found, nothing unreadable — so the readout
   // renders its heading and an all-zero set line and takes nothing away from
@@ -789,13 +778,11 @@ describe("FilesTab renders past its heading", () => {
     // a number rather than left unsaid, because a control rendered on *two*
     // tabs is the state these moves must not leave behind.
     //
-    // **`AmigaInstallPanel`'s own is not among them either, and that changed
-    // in round 3.** This fixture is AmigaOS 3.2, whose catalogue answers with
-    // no runnable package at all, so that panel renders no form — and its
-    // emulator confirmation is part of the form. It used to render on its own
-    // under the "nothing runnable for this release" sentence, which is
-    // ART-212's own complaint one control further on: a confirmation for a
-    // run that cannot be configured.
+    // **`AmigaInstallPanel`'s own emulator confirmation is not among them
+    // either, and since round 5 it cannot be:** the panel is a section of the
+    // WinUAE studio, not of this tab. The count stays asserted, because a
+    // control rendered on two screens is exactly what these moves must not
+    // leave behind.
     const checkboxes = screen.getAllByRole("checkbox");
     expect(checkboxes.length).toBe(1);
     expect(screen.queryByTestId("choice-part-row")).toBeNull();
@@ -1502,49 +1489,20 @@ describe("the release the user picks is the release the whole screen is on (ART-
   // panel mounted from the OS Builder's own step routes, which read the
   // session, would have been handed the wrong answer.
   //
-  // Asserted through what the panel actually asks for, not through what is
-  // stored: a test reading the remembered key would pass against a screen
-  // that stored the release correctly and still showed the other release's
-  // packages.
-  it("asks for the chosen release's packages, and asks again when it changes", async () => {
-    seedRemembered({
-      ...FULL_FIELDS,
-      "buildSession.packages": { folder: "E:\\archives", chosen: [] },
-    });
-    render(<FilesTab />);
+  // **`it("asks for the chosen release's packages, and asks again when it
+  // changes")` is gone** (round 5, task 1): it asserted on every
+  // `osinstallPackages` call this screen produced, and the only caller was
+  // `AmigaInstallPanel`, which is the WinUAE studio's now. The panel reads
+  // `session.release` for itself there, and
+  // `AmigaInstallPanel.test.tsx` asks the stronger question in its place —
+  // `previews nothing for a package the chosen release does not carry`
+  // renders the panel on a seeded 3.2 session and asserts
+  // `osinstallPackages` was asked about 3.2. What is left here is the half
+  // that was always this screen's: the picker moves the *session's* release,
+  // which is the only channel connecting it to anything the panel reads.
 
-    await waitFor(() => expect(packagesMock).toHaveBeenCalled());
-
-    // **Every** call, never "some call" — and that is not pedantry, it is
-    // what a mutation caught. Two panels used to ask this same question, so
-    // `toHaveBeenCalledWith(...)` was satisfied by either one of them alone:
-    // hardcoding the release inside one panel left the first version of this
-    // test green, because the other panel still passed the right one. Only
-    // `AmigaInstallPanel` asks it on this screen now, and the assertion stays
-    // in its stronger form because a second caller is one round away — tab 2
-    // asks `osinstall_chain` the same way. An assertion that one caller is
-    // correct says nothing at all about the other.
-    const releasesAsked = () => packagesMock.mock.calls.map((call) => call[1]);
-    expect(releasesAsked().length).toBeGreaterThan(0);
-    for (const asked of releasesAsked()) expect(asked).toBe("AmigaOS 3.2");
-    // The archives folder the user actually chose, not the disks folder the
-    // material list happens to start with (fix round 1, F1). What this test
-    // is about is unchanged: the release, and that it is *every* caller's.
-    expect(packagesMock).toHaveBeenCalledWith("E:\\archives", "AmigaOS 3.2");
-
-    packagesMock.mockClear();
-    const picker = screen.getByRole("combobox", {
-      name: i18n.t("osinstall.release.label"),
-    }) as HTMLSelectElement;
-    await userEvent.selectOptions(picker, "AmigaOS 3.9");
-
-    await waitFor(() => expect(packagesMock).toHaveBeenCalled());
-    for (const asked of releasesAsked()) expect(asked).toBe("AmigaOS 3.9");
-  });
-
-  // **This one deliberately asserts on storage**, which the test above says
-  // it will not do — because for ART-211 storage is not an implementation
-  // detail, it *is* the channel. The OS Builder's step routes
+  // **This one deliberately asserts on storage** — because for ART-211
+  // storage is not an implementation detail, it *is* the channel. The OS Builder's step routes
   // (`pages/osbuilder/steps.tsx`) mount `ChoiceTab` and the panels themselves
   // and read `useBuildSession`, so the only thing connecting the picker on
   // this screen to what those steps offer is
@@ -1614,78 +1572,26 @@ describe("a release switch does not leave the other release's answers on screen 
   });
 });
 
-describe("the tree the next steps get (ART-197)", () => {
-  // **This tab does not build one any more** (round 4 task 5). The two cases
-  // about a finished install — the hand-off to the session and the sentence
-  // that says so — went with the run; `BuildTab.test.tsx` holds the first as
-  // `hands the finished tree to the session, once, and never on render
-  // (ART-197)`. What is left here is the other half of ART-197, which is
-  // still this tab's: the panel at its foot reads the *one* session value,
-  // whether the user picked the tree by hand or ART found a build in the
-  // destination.
-  it("carries a tree the user picked by hand, without a build", async () => {
-    // The migration's own case, at the screen: a user upgrading into this
-    // build finds the packages panel pointing where they last pointed it.
-    seedRemembered({
-      ...FULL_FIELDS,
-      "osinstall.packages.treeRoot": "E:\\amiga\\picked-by-hand",
-    });
-    render(<FilesTab />);
-
-    // `AmigaInstallPanel` renders the tree root through `Field`, as plain
-    // text beside its Browse button, and reads it from the session rather
-    // than from a key of its own — which is the whole of the migration.
-    //
-    // **Once, and it has been three and two before.** `VerifyAgainstCard`
-    // moved to the volumes step in wave 3 and `PackagePanel` is deleted in
-    // round 3 task 3; each move cost nothing precisely because every panel
-    // reads the one session value. The count is asserted rather than "at
-    // least one" so a panel that started reading a key of its own again
-    // would be caught here, which is the defect this case is named for.
-    const shown = await screen.findAllByText("E:\\amiga\\picked-by-hand");
-    expect(shown.length).toBe(1);
-  });
-
-  it("hands the panels the destination once ART finds a build in it", async () => {
-    // **One tree for both tabs** (fix round 1, Important 2). Tab 2 asks the
-    // chain about the destination when `osinstall_describe_tree` calls it a
-    // build; this screen used `session.tree.root` regardless, so the two
-    // lanes could give two `installed` answers about one file. Both read
-    // `useChainTree` now, and this is the case that says so from the screen's
-    // side: the session's own tree is *not* what the panel is handed.
-    describeTreeMock.mockResolvedValue({
-      isTree: true,
-      release: "AmigaOS 3.2",
-      files: 1915,
-      components: ["workbench-base"],
-      amigaInstalled: [],
-      problem: null,
-    });
-    seedRemembered({
-      ...FULL_FIELDS,
-      "buildSession.tree": { root: "E:\\amiga\\somewhere-else", builtHere: false },
-    });
-    render(<FilesTab />);
-
-    // **And it says so rather than offering a field that cannot change it**
-    // (round 3 fix wave, Important 2): the panel's own Browse wrote
-    // `session.tree.root`, which `useChainTree` overrules while the
-    // destination wins, so the path snapped straight back. The sentence
-    // carries the path and names the tab that owns it.
-    const said = await screen.findByTestId("amiga-tree-from-destination");
-    expect(said.textContent).toContain("E:\\dist");
-    expect(screen.queryByTestId("amiga-tree-root-field")).toBeNull();
-    await waitFor(() =>
-      expect(screen.queryByText("E:\\amiga\\somewhere-else")).toBeNull()
-    );
-
-    // **Asked once for the one path** (fix round 2). This screen already asks
-    // `useDestinationCheck` for its occupied-folder refusal and hands that
-    // answer to `useChainTree`; a hook asking again would be a second reader
-    // of the one fact it exists to have one of.
-    expect(describeTreeMock.mock.calls.filter((call) => call[0] === "E:\\dist")).toHaveLength(1);
-  });
-});
+// **`describe("the tree the next steps get (ART-197)")` is gone, and both its
+// cases with it** (round 5, task 1). Both asserted on what
+// `AmigaInstallPanel` drew — the tree root as plain text beside its Browse
+// button, and the sentence it puts there instead when the destination won —
+// and the panel is the WinUAE studio's now. Nothing on this tab renders a
+// tree path at all any more.
+//
+// Both rules are still guarded, one level down and one level along:
+//
+//   - `carries a tree the user picked by hand, without a build` —
+//     `useBuildSession.test.tsx`'s `leaves a tree the user picked by hand
+//     exactly where they put it`, which is the migration itself rather than
+//     a screen reading it.
+//   - `hands the panels the destination once ART finds a build in it` —
+//     `useChainTree.test.tsx` holds the rule (`takes the destination when ART
+//     has looked at it and found a build`) *and* the handed-over check this
+//     case's last assertion was about (`uses the caller's own answer, and
+//     asks nothing of its own for it`), while the sentence the panel draws in
+//     place of a dead field is `AmigaInstallPanel.test.tsx`'s own `the
+//     distribution tree field, when the destination is what won`.
 
 // ---------------------------------------------------------------------------
 // Work-list item 8: media in more than one folder
@@ -1869,64 +1775,25 @@ describe("the one material folder list (design § 3.1)", () => {
 // nobody chose is the settings-change-without-a-user the remembered-settings
 // rule forbids outright.
 
-describe("archives in one folder, disks in another (fix round 1, F1)", () => {
-  /// **The configuration an upgrade must not lose.** A user with
-  /// `osinstall.mediaFolder = E:\disks` and `buildSession.packages.folder =
-  /// E:\archives` has both in the one material list after the migration, in
-  /// that order — but the two package panels take *one* folder each, and
-  /// handing them the list's head means `osinstallPackages` finds no archives
-  /// and their already-chosen packages sit above a catalogue that cannot see
-  /// them.
-  it("keeps the archives folder for the package panels after the upgrade", async () => {
-    seedRemembered({
-      "osinstall.mediaFolder": "E:\\disks",
-      "osinstall.rom": "E:\\roms\\kick.rom",
-      "osinstall.destination": "E:\\dist",
-      "buildSession.packages": { folder: "E:\\archives", chosen: [] },
-    });
-    render(<FilesTab />);
-
-    await waitFor(() => expect(packagesMock).toHaveBeenCalled());
-    // **Every** call, never "some call": two panels used to ask, and one of
-    // them being right said nothing about the other. Kept in that form now
-    // that one asks, because the weaker assertion is what let the defect
-    // through the first time.
-    for (const call of packagesMock.mock.calls) expect(call[0]).toBe("E:\\archives");
-
-    // And both folders really are in the one list, which is what makes the
-    // readout and the planner see the archives at all.
-    const rows = await screen.findAllByTestId("material-folder");
-    expect(rows.map((row) => row.textContent)).toEqual([
-      expect.stringContaining("E:\\disks"),
-      expect.stringContaining("E:\\archives"),
-    ]);
-  });
-
-  /// **`it("follows the packages panel's own Browse")` was here, and its
-  /// control is gone** (round 3 task 3). The case drove `PackagePanel`'s
-  /// package-folder field, which is deleted with the panel; the rule it
-  /// guarded is not this screen's and did not go with it. `setPackages({
-  /// folder })` writing **both** the stored value and the material list —
-  /// the half a report once missed, where Browse appended to the list while
-  /// the field went on showing the list's head — is asserted at the hook, in
-  /// `useBuildSession.test.tsx` ("drops the stored archives folder when the
-  /// list stops holding it", which clicks *choose archives* and reads both
-  /// back). `AmigaInstallPanel` still takes `packageFolder` from the session
-  /// and has no picker of its own.
-
-  /// A user who never kept a separate archives folder gets the one list's
-  /// answer for free — which is the whole point of deriving at all.
-  it("derives the list's first folder when nothing was ever stored", async () => {
-    seedRemembered({
-      "osinstall.mediaFolder": "E:\\media",
-      "osinstall.rom": "E:\\roms\\kick.rom",
-      "osinstall.destination": "E:\\dist",
-    });
-    render(<FilesTab />);
-    await waitFor(() => expect(packagesMock).toHaveBeenCalled());
-    for (const call of packagesMock.mock.calls) expect(call[0]).toBe("E:\\media");
-  });
-});
+/// **`describe("archives in one folder, disks in another (fix round 1, F1)")`
+/// is gone, and both its cases with it** (round 5, task 1). Both read their
+/// answer out of `osinstallPackages`' arguments, and the only caller of that
+/// command on this tab was `AmigaInstallPanel` — the panel is the WinUAE
+/// studio's now and resolves `session.packages.folder` for itself, so the
+/// question these cases listened to is one this screen no longer asks.
+///
+/// Neither rule leaves the suite:
+///
+///   - `keeps the archives folder for the package panels after the upgrade`
+///     — that a *stored* archives folder wins over the list's head is
+///     `useBuildSession.test.tsx`'s (`drops the stored archives folder when
+///     the list stops holding it`, and its two neighbours), and that the
+///     migration puts both legacy folders into the one list in order is
+///     `buildSession.test.ts`'s `seededMaterial` block.
+///   - `derives the list's first folder when nothing was ever stored` —
+///     `useBuildSession.test.tsx`'s `writes nothing at all when the folder
+///     was only ever the list's own`, which reads `packagesFolder` back off
+///     the list's head and then off its successor.
 
 describe("the readout re-asks once the identification pass has landed (fix round 1, F2)", () => {
   /// `osinstall_slots` hashes nothing: it reads the scan cache

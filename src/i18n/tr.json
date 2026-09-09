@@ -1175,6 +1175,8 @@
     "msg": {
       "launched": "🚀 WinUAE, {{name}} ile başarıyla başlatıldı (PID: {{pid}})"
     },
+    "installHeading": "Paket kurucusunu WinUAE'de koştur",
+    "installIntro": "Kurucusu Amiga'da koşması gereken güncellemeler için. Ağaç ve arşivler İşletim Sistemi Kurucusu'ndaki seçimlerden gelir.",
     "profilesHeading": "Amiga Donanım Profilleri",
     "profilesIntro": "Doğru bir donanım yapılandırma ön ayarı seçin:",
     "launcherHeading": "Emülasyon Başlatıcı",
@@ -2986,19 +2988,7 @@
       "readFailed": "Bu kartın ilk açılış raporu okunamadı:"
     },
     "panel": {
-      "heading": "Amiga'da ilk açılış",
-      "intro": "Amiga, ART'ın host tarafından başlatamadığını tamamlar: donanımı algılar, FAT önyükleme bölümünü bağlar ve makinenin kendisinde çalışması gereken paketleri çalıştırır. Bir kez yazın, sonra kartı açıp gerçekleştiğini görün.",
-      "tree": "AmigaOS klasörü",
-      "preview": "İlk açılışın yazacakları",
-      "steps": "Ne yapacağı, sırasıyla",
-      "bytes": "Ağaç yaklaşık {{kb}} KB büyür.",
       "alreadyWritten": "Bu ağaç zaten bir ilk-açılış bloğu taşıyor. Yeniden yazmak onun yerine geçer.",
-      "write": "İlk açılışı yaz",
-      "writeAgain": "Yeniden yaz",
-      "written": "Ağaca {{count}} dosya yazıldı.",
-      "backup": "S/User-Startup zaten vardı; önceki kopyası {{path}} konumunda saklandı.",
-      "created": "S/User-Startup yoktu; ART onu oluşturdu.",
-      "nothingWritten": "Hiçbir şey yazılmadı.",
       "rehearse": "WinUAE altında prova et",
       "rehearseIntro": "Ağacın kendisini değil, bir kopyasını açar ve mekanizmanın çalıştığını kanıtlar: dağıtıcı başlar, her adım bildirir ve blok başarıyla kendini kaldırır. Donanım adımı emülatör altında her zaman atlanır — o yarı yalnızca gerçek makinede kanıtlanır.",
       "kickstart": "Prova için Kickstart",
