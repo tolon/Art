@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- OS Builder, source step: what ART found comes first, with the folder list
+  beside it; with no folder chosen the step says what to do next instead of
+  reporting nothing.
+
 ## [0.9.1] - 2026-09-08
 
 ### Added
