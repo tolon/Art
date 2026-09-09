@@ -713,7 +713,7 @@
       "notATree": "Bu klasör ART'ın kurduğu bir AmigaOS klasörü değil: içinde distribution.json yok, bu yüzden ART içinde ne olduğunu ve bir paketin neyin yerine geçeceğini söyleyemez. Aşağıdan başka bir klasör seç ya da burada bir tane kur:"
     },
     "tab": {
-      "makineNotYet": "Kickstart, klavye düzeni ve hedef klasör şimdilik Amiga dosyaları sekmesinde:",
+      "makineKeymapNote": "Klavye düzeni şimdilik Amiga dosyaları sekmesinde, planın altında seçiliyor:",
       "derleNotYet": "Plan ve Derle düğmesi şimdilik Amiga dosyaları sekmesinde:"
     },
     "bar": {
@@ -2361,7 +2361,10 @@
       "label": "Şuraya kur",
       "none": "Hedef seçilmedi.",
       "chooseTitle": "Dağıtım ağacının nereye kurulacağını seç",
-      "hint": "Yeni ya da boş bir klasör. Seçme penceresinde Yeni klasör ile oluşturup seçebilirsin — ART yalnızca içinde bir şey olan klasörü reddeder."
+      "hint": "Yeni ya da boş bir klasör. Seçme penceresinde Yeni klasör ile oluşturup seçebilirsin — ART yalnızca içinde bir şey olan klasörü reddeder.",
+      "taken": "Bu klasörde zaten bir şey var. ART yalnızca yeni ya da boş bir klasöre yazar — başka bir klasör seçin ya da bunu boşaltın.",
+      "tree": "Bu klasörde ART'ın kurduğu bir ağaç var: {{release}}, {{count}} dosya.",
+      "fresh": "Boş klasör: buraya yeni bir ağaç yazılır."
     },
     "layer": {
       "base32": "AmigaOS 3.2 temel ortamı",

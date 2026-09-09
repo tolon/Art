@@ -713,7 +713,7 @@
       "notATree": "This folder is not an AmigaOS folder ART built: it holds no distribution.json, so ART cannot say what is in it or what a package would replace. Pick another folder below, or build one here:"
     },
     "tab": {
-      "makineNotYet": "The Kickstart, the keyboard layout and the destination folder are on the files tab for now:",
+      "makineKeymapNote": "The keyboard layout is still chosen on the files tab, under the plan:",
       "derleNotYet": "The plan and the Build button are on the files tab for now:"
     },
     "bar": {
@@ -2361,7 +2361,10 @@
       "label": "Build into",
       "none": "No destination chosen.",
       "chooseTitle": "Choose where to build the distribution tree",
-      "hint": "A new or empty folder. In the picker you can make one with New folder and choose it — ART refuses only a folder that already has something in it."
+      "hint": "A new or empty folder. In the picker you can make one with New folder and choose it — ART refuses only a folder that already has something in it.",
+      "taken": "This folder already has something in it. ART writes only into a new or empty folder — choose another, or empty this one.",
+      "tree": "This folder holds a tree ART built: {{release}}, {{count}} files.",
+      "fresh": "Empty folder: a new tree will be written here."
     },
     "layer": {
       "base32": "AmigaOS 3.2 base media",

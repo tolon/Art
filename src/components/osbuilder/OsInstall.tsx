@@ -49,7 +49,11 @@
 // folder, the ROM, the destination, the release, and the component selection
 // (`chosen` plus `excludedConditional`) — the last two **per release**, since
 // a component id means nothing outside the recipe that declares it and
-// switching release must not destroy the choices made for the other one. Nothing here arms a destructive action the
+// switching release must not destroy the choices made for the other one. The
+// ROM and the destination are still *read* here — the plan needs both — but
+// their two fields moved to tab 3 on 2026-09-09 (`MachineTab`, four-tab
+// design § 3.3); the keys are unchanged, so the two tabs read the one value.
+// Nothing here arms a destructive action the
 // way the preload screen's partition picks do — building a distribution
 // tree only ever writes a *new* folder and refuses one that already exists
 // (`SAFE_CREATE`), so there is nothing of that shape to protect against by
@@ -143,7 +147,6 @@ import {
   subscribeSafely,
   type JobProgress,
 } from "@/lib/jobs";
-import { Field } from "@/components/osbuilder/Field";
 import { MaterialFolders } from "@/components/osbuilder/MaterialFolders";
 import { MaterialReadout } from "@/components/osbuilder/MaterialReadout";
 import { PackagePanel } from "@/components/osbuilder/PackagePanel";
@@ -285,7 +288,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     setTree,
     setPackages,
     setRelease,
-    setRom: setSessionRom,
     setMaterial,
     addMaterialFolder,
   } = useBuildSession();
@@ -606,18 +608,29 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    * Changing it here changes it for the build, which the hint says out loud:
    * a carry the user cannot see is the same defect as one that never
    * happened (ART-197's own words).
+   *
+   * **The field itself moved to tab 3** on 2026-09-09 (`MachineTab`,
+   * four-tab design § 3.3). What is left here is the read: the plan sends
+   * the ROM path, and a conditional component's own line names the
+   * Kickstart. Read through the same hook the field uses, so the two tabs
+   * cannot disagree about what a file is.
    */
   const romPath = session.rom.path;
-  const setRomPath = setSessionRom;
-  const { rom, unreadable: romError } = useRomIdentity(romPath);
+  // Only the identity: this screen no longer draws the ROM's own outcome
+  // sentences (they went to tab 3 with the field), it names the Kickstart in
+  // a conditional component's reason line.
+  const { rom } = useRomIdentity(romPath);
   /**
    * Where the tree goes — per release, like the media folder above and for
    * the same reason (ART-207). `E:\…\os39\art3` is a fine destination for a
    * 3.9 build and a misleading one for a 3.2 build; a folder named for one
    * release holding another release's tree is the quiet kind of wrongness
    * `distribution.json` exists to make impossible.
+   *
+   * Read-only here since 2026-09-09: the picker is `MachineTab`'s, through
+   * this very key. This screen still plans into it and still runs into it.
    */
-  const [destination, setDestination] = useRemembered<string | null>(
+  const [destination] = useRemembered<string | null>(
     rememberedComponentKey("osinstall.destination", release),
     isTextOrNothing,
     null
@@ -766,23 +779,22 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    * choice about every future build from one click.
    */
   const [amigaForeverAdf, setAmigaForeverAdf] = useState<string | null>(null);
-  const [amigaForeverRom, setAmigaForeverRom] = useState<string | null>(null);
   const [amigaForeverDismissed, setAmigaForeverDismissed] = useState(false);
-  const [amigaForeverRomDismissed, setAmigaForeverRomDismissed] = useState(false);
   useEffect(() => {
     let cancelled = false;
+    // Only `adf` is read here since 2026-09-09: the ROM half of this offer
+    // went to tab 3 with the Kickstart field it answers (`MachineTab`),
+    // which asks the host itself. One cheap command, no shared state.
     hostAmigaForeverFolders()
       .then((found) => {
         if (cancelled) return;
         setAmigaForeverAdf(found.adf);
-        setAmigaForeverRom(found.rom);
       })
       // A host that cannot answer is a host with nothing to suggest. There is
       // no sentence to write about a suggestion that could not be made.
       .catch(() => {
         if (cancelled) return;
         setAmigaForeverAdf(null);
-        setAmigaForeverRom(null);
       });
     return () => {
       cancelled = true;
@@ -790,22 +802,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   }, []);
   const amigaForeverOffer =
     materialFolders.length === 0 && !amigaForeverDismissed ? amigaForeverAdf : null;
-  /**
-   * **The ROM half of the same offer** (fix round 1, F6). `Shared\rom` is the
-   * one folder that answers the Kickstart field on this very step, and the
-   * command was already returning it while nothing consumed it — a value on
-   * the wire that nothing reads is a later reader's wrong assumption.
-   *
-   * Its own dismissal, because it is its own suggestion: somebody who has a
-   * ROM and no disks should not have to refuse a sentence about disks to get
-   * rid of a sentence about ROMs. Offered only while no Kickstart is chosen,
-   * for `amigaForeverOffer`'s reason.
-   *
-   * It names the **folder**, not a file: ART does not pick somebody's
-   * Kickstart for them, and a folder of ROMs is what the picker opens on.
-   */
-  const amigaForeverRomOffer =
-    !romPath && !amigaForeverRomDismissed ? amigaForeverRom : null;
 
   /**
    * Two plans, requested identically except for `excluded` — both read-only
@@ -1604,35 +1600,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     }
   }
 
-  async function chooseRom() {
-    return chooseRomIn(undefined);
-  }
-
-  /** The Kickstart picker, optionally opened on a folder ART already knows
-   *  about (fix round 1, F6: Amiga Forever's `Shared\rom`). The **user**
-   *  still picks the file; ART only says where to look. */
-  async function chooseRomIn(defaultPath?: string) {
-    const picked = await open({
-      multiple: false,
-      title: t("osinstall.rom.chooseTitle"),
-      defaultPath,
-      filters: [{ name: "Kickstart ROM", extensions: ["rom", "bin"] }],
-    });
-    if (typeof picked === "string") {
-      setRomPath(picked);
-      setAmigaForeverRomDismissed(true);
-    }
-  }
-
-  async function chooseDestination() {
-    const picked = await open({
-      directory: true,
-      multiple: false,
-      title: t("osinstall.destination.chooseTitle"),
-    });
-    if (typeof picked === "string") setDestination(picked);
-  }
-
   function toggleConditional(def: ComponentDef, catalogue: ComponentDef[]) {
     const excluded = excludedConditional.includes(def.id);
     const forcedOn = isForcedOnByCondition(catalogue, basePlan, chosen, def.id);
@@ -1873,78 +1840,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
               : t("osinstall.media.rescanned", { count: rescanned })}
           </p>
         )}
-
-        <Field
-          label={t("osinstall.rom.label")}
-          value={romPath}
-          empty={t("osinstall.rom.none")}
-          onChoose={() => void chooseRom()}
-          choose={t("common.browse")}
-          hint={t("osinstall.rom.hint")}
-          testId="osinstall-rom-field"
-          // ART-241: the Browse button is described by whichever of the two
-          // paragraphs below actually renders — `romError` and `rom` are
-          // mutually exclusive (a ROM is either unreadable or identified,
-          // never both), so exactly one id or none applies.
-          describedBy={
-            romError ? "osinstall-rom-unreadable" : rom ? "osinstall-rom-identified" : undefined
-          }
-        />
-        {/*
-          **Amiga Forever's ROM folder, offered** (fix round 1, F6; design
-          § 3.5). `Shared\rom` is the one folder that answers this very
-          field, and the command already knew where it was. Its own dismissal
-          rather than the disks offer's: somebody who has a Kickstart and no
-          disks should not have to refuse a sentence about disks to be rid of
-          a sentence about ROMs. The Add button opens the picker on that
-          folder — ART does not choose somebody's Kickstart for them.
-        */}
-        {amigaForeverRomOffer && (
-          <p
-            className="faint"
-            data-testid="amiga-forever-rom-offer"
-            style={{ fontSize: 11, margin: "0 0 12px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
-          >
-            <span>{t("osinstall.material.amigaForeverRom", { path: amigaForeverRomOffer })}</span>
-            <button
-              className="btn"
-              style={{ fontSize: 11 }}
-              onClick={() => void chooseRomIn(amigaForeverRomOffer)}
-            >
-              {t("osinstall.material.amigaForeverAdd")}
-            </button>
-            <button
-              className="btn"
-              style={{ fontSize: 11 }}
-              onClick={() => setAmigaForeverRomDismissed(true)}
-            >
-              {t("osinstall.material.amigaForeverDismiss")}
-            </button>
-          </p>
-        )}
-        {romError && (
-          <p
-            id="osinstall-rom-unreadable"
-            className="badge badge-err"
-            style={{ fontSize: 11, margin: "0 0 12px", display: "inline-block" }}
-          >
-            {t("osinstall.rom.unreadable")}
-          </p>
-        )}
-        {rom && (
-          <p id="osinstall-rom-identified" className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
-            {t("osinstall.rom.identified", { rom: rom.name })}
-          </p>
-        )}
-
-        <Field
-          label={t("osinstall.destination.label")}
-          value={destination}
-          empty={t("osinstall.destination.none")}
-          onChoose={() => void chooseDestination()}
-          choose={t("common.browse")}
-          hint={t("osinstall.destination.hint")}
-        />
       </section>
 
       <section className="card" style={{ marginBottom: 16 }}>

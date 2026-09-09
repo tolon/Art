@@ -56,6 +56,12 @@ vi.mock("@/components/osbuilder/VolumePreload", () => ({
 vi.mock("@/components/osbuilder/VerifyAgainstCard", () => ({
   VerifyAgainstCard: () => <div data-testid="verify" />,
 }));
+// Round 2, task 2: `makine` now mounts a real component. Mocked like every
+// other panel — `MachineTab.test.tsx` owns what it renders; what this file is
+// about is which step renders it.
+vi.mock("@/components/osbuilder/MachineTab", () => ({
+  MachineTab: () => <div data-testid="machine-tab" />,
+}));
 vi.mock("@/components/osbuilder/OsInstall", () => ({
   OsInstall: ({ droppedMedia }: { droppedMedia?: { path: string } | null }) => (
     <div data-testid="install">{droppedMedia?.path ?? "(no drop)"}</div>
@@ -342,7 +348,7 @@ describe("every step id in the lane has a route", () => {
     const expected: Record<string, string> = {
       dosyalar: "install",
       secim: "packages",
-      makine: "tab-makine",
+      makine: "machine-tab",
       derle: "tab-derle",
       kart: "card",
       birimler: "volumes",
@@ -356,14 +362,19 @@ describe("every step id in the lane has a route", () => {
   });
 });
 
-describe("the two tabs that hold nothing yet say where their fields are", () => {
+describe("a tab still says where a field of its own is", () => {
   beforeEach(() => seed({ "buildSession.kind": "install" }));
 
-  it("makine names the files tab", () => {
+  /// Round 2 gave `makine` its two fields; the keymap select stayed on the
+  /// files tab because its option list is derived from the plan, and the
+  /// plan is round 4's. A user who opens this tab looking for the keyboard
+  /// layout is told where it is — the alternative is a tab that silently
+  /// lacks a field the design says it has.
+  it("makine names the files tab for the keymap it does not hold yet", () => {
     renderAt("/os-builder/makine");
-    const tab = screen.getByTestId("tab-makine");
-    expect(tab.textContent).toContain(i18n.t("osBuilder.tab.makineNotYet"));
-    expect(within(tab).getByRole("link").getAttribute("href")).toBe("/os-builder/dosyalar");
+    const note = screen.getByTestId("tab-makine-keymap-note");
+    expect(note.textContent).toContain(i18n.t("osBuilder.tab.makineKeymapNote"));
+    expect(within(note).getByRole("link").getAttribute("href")).toBe("/os-builder/dosyalar");
   });
 
   it("derle names the files tab", () => {

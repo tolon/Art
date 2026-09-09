@@ -585,15 +585,15 @@ async function planWithFolders(folders: Record<string, string>): Promise<Install
 }
 
 describe("OsInstall renders past its headings", () => {
-  it("mounts with the real media, ROM, destination, checklist and action controls", async () => {
+  it("mounts with the real media, checklist and action controls", async () => {
     await renderFull();
 
     // The five headings a browser probe once confirmed are not the news
     // here — everything below them, which the probe never survived to see,
-    // is.
+    // is. The Kickstart and destination rows left this screen for tab 3 on
+    // 2026-09-09 (`MachineTab.test.tsx` mounts them there); the checkbox
+    // count below is unchanged by that, because both were `Field` rows.
     expect(screen.getByText(i18n.t("osinstall.material.label"))).toBeTruthy();
-    expect(screen.getByText(i18n.t("osinstall.rom.label"))).toBeTruthy();
-    expect(screen.getByText(i18n.t("osinstall.destination.label"))).toBeTruthy();
 
     // The component checklist is the screen's real input (requirement 4) —
     // one row per component of the release's own loaded recipe. `+ 2` are the
@@ -3042,7 +3042,8 @@ describe("ART-241: a row's controls are described by the row's own paragraphs", 
 
 describe("Amiga Forever, offered and never added", () => {
   const AF = "E:\\amiga\\Shared\\adf";
-  const AF_ROM = "E:\\amiga\\Shared\\rom";
+  // The ROM half of this offer moved to `MachineTab.test.tsx` on 2026-09-09
+  // with the Kickstart field it answers — three cases, by name.
 
   /** An empty material list plus a host that has Amiga Forever. */
   function renderWithOffer() {
@@ -3109,60 +3110,6 @@ describe("Amiga Forever, offered and never added", () => {
     await renderFull();
     await waitFor(() => expect(amigaForeverMock).toHaveBeenCalled());
     expect(screen.queryByTestId("amiga-forever-offer")).toBeNull();
-  });
-
-  /// **The ROM folder is used** (fix round 1, F6). The command already
-  /// answered it and nothing consumed it; `Shared\rom` is the one folder
-  /// that answers the Kickstart field on this very step.
-  it("offers the ROM folder for the Kickstart field, on its own dismissal", async () => {
-    amigaForeverMock.mockResolvedValue({ adf: AF, rom: AF_ROM });
-    seedRemembered({});
-    render(<OsInstall />);
-
-    const offer = await screen.findByTestId("amiga-forever-rom-offer");
-    expect(offer.textContent).toContain(AF_ROM);
-    // Nothing is chosen by the line existing.
-    expect(rememberedBag()["buildSession.rom"]).toBeUndefined();
-
-    // Its own dismissal: somebody who has a Kickstart and no disks should not
-    // have to refuse a sentence about disks to be rid of one about ROMs.
-    await userEvent.click(
-      within(offer).getByRole("button", {
-        name: i18n.t("osinstall.material.amigaForeverDismiss"),
-      })
-    );
-    await waitFor(() => expect(screen.queryByTestId("amiga-forever-rom-offer")).toBeNull());
-    expect(screen.getByTestId("amiga-forever-offer")).toBeTruthy();
-  });
-
-  it("opens the Kickstart picker on that folder, and the user still picks the file", async () => {
-    amigaForeverMock.mockResolvedValue({ adf: AF, rom: AF_ROM });
-    seedRemembered({});
-    render(<OsInstall />);
-    const offer = await screen.findByTestId("amiga-forever-rom-offer");
-
-    dialogOpenMock.mockResolvedValueOnce("E:\\amiga\\Shared\\rom\\amiga-os-310-a1200.rom");
-    await userEvent.click(
-      within(offer).getByRole("button", { name: i18n.t("osinstall.material.amigaForeverAdd") })
-    );
-
-    // The picker was opened **on** the folder, not handed a file.
-    await waitFor(() => expect(dialogOpenMock).toHaveBeenCalled());
-    expect(dialogOpenMock.mock.calls.at(-1)![0]).toMatchObject({ defaultPath: AF_ROM });
-    // What the user picked is the ROM, and the line goes.
-    await waitFor(() =>
-      expect(rememberedBag()["buildSession.rom"]).toMatchObject({
-        path: "E:\\amiga\\Shared\\rom\\amiga-os-310-a1200.rom",
-      })
-    );
-    expect(screen.queryByTestId("amiga-forever-rom-offer")).toBeNull();
-  });
-
-  it("says nothing about ROMs when a Kickstart is already chosen", async () => {
-    amigaForeverMock.mockResolvedValue({ adf: AF, rom: AF_ROM });
-    await renderFull();
-    await waitFor(() => expect(amigaForeverMock).toHaveBeenCalled());
-    expect(screen.queryByTestId("amiga-forever-rom-offer")).toBeNull();
   });
 });
 
@@ -3871,62 +3818,5 @@ describe("resetIfEmpty (ART-260)", () => {
     const reset = resetIfEmpty(populated);
     expect(reset).toEqual({});
     expect(reset).not.toBe(populated);
-  });
-});
-
-// ART-241: the ROM field's Browse button used to sit beside its own
-// identified/unreadable paragraph with nothing wiring the two together — a
-// screen reader user tabbing to Browse heard only its own name and had to
-// go hunting forward in the page for whether the ROM they had already
-// chosen was recognised at all.
-function describedByIds(el: Element): string[] {
-  return (el.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean);
-}
-
-describe("ART-241: the ROM field's Browse button is described by its own outcome paragraph", () => {
-  it("names the identified paragraph once the ROM resolves", async () => {
-    await renderFull();
-
-    const field = screen.getByTestId("osinstall-rom-field");
-    const button = within(field).getByRole("button", { name: i18n.t("common.browse") });
-    // Not `findByText`: the ROM's own name ("Kickstart 3.2 (47.96)") also
-    // appears elsewhere on this screen (a component's condition line), so
-    // more than one element matches the text alone — the paragraph's own
-    // id is what actually identifies it here.
-    const identified = await waitFor(() => {
-      const el = document.getElementById("osinstall-rom-identified");
-      if (!el) throw new Error("not rendered yet");
-      return el;
-    });
-
-    expect(identified.textContent).toContain("Kickstart 3.2 (47.96)");
-    // Also carries the hint's own id (ROM's `Field` sets a `hint` too) — the
-    // point is that the outcome paragraph's id is *among* them, not that it
-    // is the only one.
-    expect(describedByIds(button)).toContain("osinstall-rom-identified");
-    expect(describedByIds(button)).not.toContain("osinstall-rom-unreadable");
-  });
-
-  it("names the unreadable paragraph when the ROM fails to identify, not the identified one", async () => {
-    identifyRomMock.mockReset().mockRejectedValue(new Error("not a Kickstart"));
-    await renderFull();
-
-    const field = screen.getByTestId("osinstall-rom-field");
-    const button = within(field).getByRole("button", { name: i18n.t("common.browse") });
-    await screen.findByText(i18n.t("osinstall.rom.unreadable"));
-
-    expect(describedByIds(button)).toContain("osinstall-rom-unreadable");
-    expect(describedByIds(button)).not.toContain("osinstall-rom-identified");
-    expect(screen.queryByText(/Kickstart 3\.2 \(47\.96\)/)).toBeNull();
-  });
-
-  it("names neither outcome paragraph before any ROM has been chosen", async () => {
-    seedRemembered({});
-    render(<OsInstall />);
-
-    const field = screen.getByTestId("osinstall-rom-field");
-    const button = within(field).getByRole("button", { name: i18n.t("common.browse") });
-    expect(describedByIds(button)).not.toContain("osinstall-rom-identified");
-    expect(describedByIds(button)).not.toContain("osinstall-rom-unreadable");
   });
 });
