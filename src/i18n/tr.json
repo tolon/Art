@@ -2179,7 +2179,7 @@
   "osinstall": {
     "blocked": {
       "noFolder": "Önce medya klasörünü seç.",
-      "noDestination": "Önce dağıtım ağacının nereye kurulacağını seç.",
+      "noDestination": "Önce Kickstart ve hedef sekmesinde ağacın nereye yazılacağını seçin.",
       "notPlanned": "Önce önizle — ne olacağını görmeden hiçbir şey kurulmaz.",
       "folderUnreadable": "ART bu klasörü okuyamadı — yolu kontrol et.",
       "refusals": "Önce reddedilen(ler)i çöz — plan ilerleyemezken hiçbir şey kurulmaz.",
@@ -2275,8 +2275,8 @@
       "setLine": "{{release}} · {{total}} taneden {{found}} tanesi bulundu · {{missingRequired}} zorunlu eksik",
       "setLineReady": "{{release}} · {{total}} taneden {{found}} tanesi bulundu · zorunlu olan her şey burada",
       "romChosen": "Kickstart {{identity}} ya da daha yenisi: {{path}}, bu yapı için seçildi.",
-      "romNotChosen": "Henüz Kickstart seçilmedi — bu adımdaki alandan Kickstart {{identity}} ya da daha yenisini seçin. ART malzeme klasörlerinizde Kickstart aramaz.",
-      "romNotChosenNoFloor": "Henüz Kickstart seçilmedi — bu adımdaki alandan birini seçin. ART malzeme klasörlerinizde Kickstart aramaz.",
+      "romNotChosen": "Henüz Kickstart seçilmedi — Kickstart ve hedef sekmesinde {{identity}} ya da daha yeni bir Kickstart seçin. ART malzeme klasörlerinizde Kickstart aramaz.",
+      "romNotChosenNoFloor": "Henüz Kickstart seçilmedi — Kickstart ve hedef sekmesinde bir Kickstart seçin. ART malzeme klasörlerinizde Kickstart aramaz.",
       "installedArchiveGone": "{{name}} bu ağaçta zaten var ve geldiği arşiv artık adını verdiğiniz klasörlerde değil. Yeniden gerekmiyor.",
       "incomplete": "{{file}} dosyası {{name}}, ama bu kopya eksik: {{directory}} taşımıyor. Başka bir kopya aramak yerine elinizdekine bakın.",
       "crowdedFolder": "{{folder}} klasörü ART’ın tek seferde açtığından fazla dosya tutuyor; ART ilk {{bound}} tanesine baktı. Bu kadar arşiv tutan bir klasör malzeme klasörü değildir — ART’ı daha küçük bir klasöre yöneltin, yoksa içindeki bir şeyin gözden kaçmasını bekleyin.",

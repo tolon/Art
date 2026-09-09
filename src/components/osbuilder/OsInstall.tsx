@@ -1164,8 +1164,8 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     // user confirms an override, and most runs after — the two requests are
     // *identical*, so the second call planned the same media twice and threw
     // one answer away. `plan()` opens and walks every switched-on component's
-    // disc image, so that is real work on every keystroke in the media,
-    // ROM and destination fields alike.
+    // disc image, so that is real work on every keystroke in the media
+    // fields.
     //
     // One call, one answer, given to both. Safe because nothing here mutates
     // a `PlanResult` — every reader takes `.plan`, `.items`, `.refusals` or

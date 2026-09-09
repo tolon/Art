@@ -162,6 +162,8 @@ export function MachineTab() {
         choose={t("common.browse")}
         hint={t("osinstall.destination.hint")}
         testId="osinstall-destination-field"
+        // `tree` is null whenever the path is — `useDestinationCheck`'s own
+        // rule — so the fresh id is never named for an unrendered paragraph.
         describedBy={
           taken
             ? "osinstall-destination-taken"

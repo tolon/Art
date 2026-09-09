@@ -2179,7 +2179,7 @@
   "osinstall": {
     "blocked": {
       "noFolder": "Choose the media folder first.",
-      "noDestination": "Choose where to build the distribution tree first.",
+      "noDestination": "Choose where to build the distribution tree on the Kickstart and destination tab first.",
       "notPlanned": "Preview it first — nothing is built before you have seen what would be.",
       "folderUnreadable": "ART could not read that folder — check the path.",
       "refusals": "Resolve the refusal(s) first — nothing is built while the plan cannot proceed.",
@@ -2275,8 +2275,8 @@
       "setLine": "{{release}} · {{found}} of {{total}} found · {{missingRequired}} required missing",
       "setLineReady": "{{release}} · {{found}} of {{total}} found · everything required is here",
       "romChosen": "Kickstart {{identity}} or newer: {{path}}, chosen for this build.",
-      "romNotChosen": "No Kickstart chosen yet — choose a Kickstart {{identity}} or newer in the field on this step. ART does not look for one in your material folders.",
-      "romNotChosenNoFloor": "No Kickstart chosen yet — choose one in the field on this step. ART does not look for one in your material folders.",
+      "romNotChosen": "No Kickstart chosen yet — choose a Kickstart {{identity}} or newer on the Kickstart and destination tab. ART does not look for one in your material folders.",
+      "romNotChosenNoFloor": "No Kickstart chosen yet — choose a Kickstart on the Kickstart and destination tab. ART does not look for one in your material folders.",
       "installedArchiveGone": "{{name}} is already in this tree, and the archive it came from is no longer in the folders you named. It is not needed again.",
       "incomplete": "{{file}} is {{name}}, and this copy is incomplete: it does not carry {{directory}}. Look at the copy you have rather than going to find another.",
       "crowdedFolder": "{{folder}} holds more files than ART opens in one pass; ART looked at the first {{bound}}. A folder with that many archives in it is not a material folder — point ART at a smaller one, or expect something in it to be missed.",

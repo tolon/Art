@@ -355,8 +355,9 @@ export function slotLines(states: SlotState[]): SlotLine[] {
       // **A ROM nobody has chosen** (M1). It is not missing from a folder,
       // because ART never looks for one in a folder: `resolve_one` fills a
       // ROM slot from `Facts::rom` alone, and this row is the first thing a
-      // fresh build shows. The next step is a field a few rows up on the same
-      // step, and the sentence names it.
+      // fresh build shows. The field is on the Kickstart and destination tab
+      // (four-tab design § 3.3), and the sentence names it — a refusal a user
+      // can fix names where.
       if (state.slot.kind === "rom") {
         return {
           ...line,
