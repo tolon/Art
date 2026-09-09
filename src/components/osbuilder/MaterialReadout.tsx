@@ -8,13 +8,14 @@
 // `src/lib/slots.ts` turns each resolved slot into exactly one `Phrase`. This
 // component draws them, and does nothing else: there is no decision here, and
 // deliberately no *choice* either — an ambiguous row lists its candidates and
-// leaves the picking to the user (Task 4 puts the override on the panel).
+// leaves the picking to the user (the override is the caller's, see
+// `overrides`).
 //
 // Three rules from CLAUDE.md shape it and are worth naming here, because each
 // one is a sentence somebody could have written instead:
 //
-//   - **Endings stay distinct.** Eight of them, one per row kind, each with
-//     its own sentence and its own next step. "Not found" and "not needed"
+//   - **Endings stay distinct.** One per row kind, each with its own
+//     sentence and its own next step. "Not found" and "not needed"
 //     are not the same row; neither are "ART did not look at the bytes" and
 //     "ART looked and the table does not know them".
 //   - **The screen may not out-claim the core.** Every sentence on a row is a
@@ -178,8 +179,8 @@ export function MaterialReadout({
     const list = foldersKey ? foldersKey.split("\n") : [];
     if (list.length === 0) {
       // Nothing pointed at yet is not "nothing found": it is a question
-      // nobody has asked. The readout renders its own empty line instead of
-      // a set line claiming a release is missing everything.
+      // nobody has asked. The readout renders nothing; the step puts its ask
+      // (`osinstall.material.askFolders`) in this column's place.
       setReport(null);
       setRunning(false);
       setFailed(null);

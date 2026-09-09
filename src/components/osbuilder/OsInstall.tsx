@@ -1799,49 +1799,27 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
               wrongLayerHint={wrongLayerHintFor}
               unusedForPlan={plannedFolders.unusedForPlan}
               amigaForeverOffer={amigaForeverOffer}
+              foundVolumeNames={foundVolumeNames}
               onAdd={() => void addFolder()}
               onRemove={removeFolder}
               onTag={tagFolder}
-              // Only reachable from a button drawn while the offer is a string.
-              onAmigaForeverAdd={() => {
-                addMaterialFolder(amigaForeverOffer!);
+              onAmigaForeverAdd={(path) => {
+                addMaterialFolder(path);
                 setAmigaForeverDismissed(true);
               }}
               onAmigaForeverDismiss={() => setAmigaForeverDismissed(true)}
             />
-            {/*
-              ART-256. Both lines read `foundVolumeNames`, which is every
-              folder the request carries. Two sentences on one screen counting
-              the same disks differently — "1 install disk found" above an
-              evidence line naming two — is a contradiction from the inside.
-              They are claims about the *folders'* scans, so they live in the
-              folder column (the readout is per slot). ART-285 — that this
-              sentence counts game discs as install disks — is open and not
-              touched by the move.
-            */}
-            {materialFolders.length > 0 && foundVolumeNames.length === 0 && (
-              <p id="osinstall-media-empty" className="faint" style={{ fontSize: 11, margin: "8px 0 0" }}>
-                {t("osinstall.media.empty")}
-              </p>
-            )}
-            {foundVolumeNames.length > 0 && (
-              <p id="osinstall-media-found" className="faint" style={{ fontSize: 11, margin: "8px 0 0" }}>
-                {t("osinstall.media.found", {
-                  count: foundVolumeNames.length,
-                  names: foundVolumeNames.join(", "),
-                })}
-              </p>
-            )}
           </div>
         </div>
 
         {/*
           **What the same files are by content** — design §4.3, and the whole
-          risk surface of the hash round. Deliberately *below* the line above
-          and deliberately separate from it: that line is what the disks call
-          themselves, this is what Emu68 Hatcher's table makes of their bytes,
-          and a row's `volume` is measurably not a disk's volume name (0 of 12
-          matched). Two facts from two sources, never one reconciled answer.
+          risk surface of the hash round. Deliberately *below* the found line
+          in the folder column and deliberately separate from it: that line
+          is what the disks call themselves, this is what Emu68 Hatcher's
+          table makes of their bytes, and a row's `volume` is measurably not
+          a disk's volume name (0 of 12 matched). Two facts from two
+          sources, never one reconciled answer.
 
           Nothing here is gated on Power mode. `usePowerMode` only ever hides
           what a user can do without, and "is this disk the one the table

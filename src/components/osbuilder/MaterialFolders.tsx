@@ -49,10 +49,14 @@ export interface MaterialFoldersProps {
   unusedForPlan: string[];
   /** Amiga Forever's disks folder while the offer stands, else `null`. */
   amigaForeverOffer: string | null;
+  /** The volume names every folder in the list actually holds, from the
+   *  step's scans — the two ART-256 lines are claims about the folders, so
+   *  they render here, under the list and before the guide. */
+  foundVolumeNames: string[];
   onAdd: () => void;
   onRemove: (path: string) => void;
   onTag: (path: string, layer: string) => void;
-  onAmigaForeverAdd: () => void;
+  onAmigaForeverAdd: (path: string) => void;
   onAmigaForeverDismiss: () => void;
 }
 
@@ -65,6 +69,7 @@ export function MaterialFolders({
   wrongLayerHint,
   unusedForPlan,
   amigaForeverOffer,
+  foundVolumeNames,
   onAdd,
   onRemove,
   onTag,
@@ -108,7 +113,7 @@ export function MaterialFolders({
   return (
     <>
       {/*
-        **One list, one row per folder** (design § 3.1). This replaced three
+        **One list, one row per folder** (intake design § 3.1). This replaced three
         controls: the install-disks field, the bag of added folders under
         it, and one labelled field per media layer. They were three shapes
         for one question, and a person who simply has the files had to work
@@ -220,7 +225,7 @@ export function MaterialFolders({
             className="btn"
             style={{ fontSize: 11 }}
             data-testid="material-add-folder"
-            onClick={() => void onAdd()}
+            onClick={onAdd}
           >
             {t("osinstall.media.addFolder")}
           </button>
@@ -250,7 +255,7 @@ export function MaterialFolders({
         )}
       </div>
       {/*
-        **Amiga Forever, offered — never added** (design § 3.5). Shown only
+        **Amiga Forever, offered — never added** (intake design § 3.5). Shown only
         while the list is empty, and only when the environment variable is
         set and the folders are really there; the Add button is the user
         acting, which is the whole of `remembered.ts`'s rule. Dismissing it
@@ -268,7 +273,7 @@ export function MaterialFolders({
           <button
             className="btn"
             style={{ fontSize: 11 }}
-            onClick={onAmigaForeverAdd}
+            onClick={() => onAmigaForeverAdd(amigaForeverOffer)}
           >
             {t("osinstall.material.amigaForeverAdd")}
           </button>
@@ -282,7 +287,30 @@ export function MaterialFolders({
         </p>
       )}
       {/*
-        **The list, in the folder** (design § 3.7). The readout is on screen
+        ART-256. Both lines read `foundVolumeNames`, which is every
+        folder the request carries. Two sentences on one screen counting
+        the same disks differently — "1 install disk found" above an
+        evidence line naming two — is a contradiction from the inside.
+        They are claims about the *folders'* scans, so they live in the
+        folder column (the readout is per slot). ART-285 — that this
+        sentence counts game discs as install disks — is open and not
+        touched by the move.
+      */}
+      {folders.length > 0 && foundVolumeNames.length === 0 && (
+        <p id="osinstall-media-empty" className="faint" style={{ fontSize: 11, margin: "8px 0 0" }}>
+          {t("osinstall.media.empty")}
+        </p>
+      )}
+      {foundVolumeNames.length > 0 && (
+        <p id="osinstall-media-found" className="faint" style={{ fontSize: 11, margin: "8px 0 0" }}>
+          {t("osinstall.media.found", {
+            count: foundVolumeNames.length,
+            names: foundVolumeNames.join(", "),
+          })}
+        </p>
+      )}
+      {/*
+        **The list, in the folder** (intake design § 3.7). The readout is on screen
         while ART is open; a person filling a folder over a weekend is at
         their file manager. The same slots compose a text file saying what
         goes there — REQUIRED or OPTIONAL, the names ART expects, where each
@@ -295,8 +323,10 @@ export function MaterialFolders({
       */}
       {/* **The intro belongs to the buttons** (fix round 1, L8): it is a
           sentence about pressing them, so it is inside the same guard rather
-          than beside it. The early return above already covers today's only
-          empty case; this makes it true of the block itself. */}
+          than beside it. This component has no early return — an empty list
+          still draws the label, the *no folder chosen* line and Add — so
+          this guard is the one thing keeping a sentence about pressing
+          buttons off a column that has none. */}
       {folders.length > 0 && (
       <div data-testid="material-guide" style={{ margin: "8px 0 0" }}>
         <p className="faint" style={{ fontSize: 10, margin: "0 0 4px" }}>
@@ -311,7 +341,7 @@ export function MaterialFolders({
                   it. One button per folder with the same three words on each
                   is the identical-accessible-name defect ART-240 is about,
                   and a path repeated next to the button is the same path this
-                  step already lists a few lines up. */}
+                  column already lists a few lines up. */}
               <button
                 className="btn"
                 style={{ fontSize: 11, textAlign: "left", wordBreak: "break-all" }}

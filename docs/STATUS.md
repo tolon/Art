@@ -194,7 +194,7 @@ leave the previous one below it; on 2026-09-04 four such blocks were collapsed
 into this one, because the oldest still contradicted the newest. **Update this
 block — do not stack another on top of it.**
 
-### Start here (2026-09-08)
+### Start here (2026-09-09)
 
 00. **`art-091-fixes` was merged as `7ee91fa` and is 0.9.1; item 0 has the release.** ART-282 landed on it first, then **ART-166 closed**: the owner reversed the BoingBag ruling and ART places BoingBag 1 and 2 from Windows, checked against the tree two real emulator runs produced (4 030 files; 2 added, 1 missing, 2 differing, every one explained). The oracle is re-runnable — `the_host_placement_hashes_to_the_updaters_own_tree` in `core::osinstall::apply`, `#[ignore]`d and env-gated; its command line is in its own doc comment, and since 2026-09-09 it **asserts** its known difference set by path and pins the counts rather than printing three lists. Reports `.superpowers/sdd/2026-09-08-intake/bb-host-report.md` and `…/cleanup-report.md`.
 

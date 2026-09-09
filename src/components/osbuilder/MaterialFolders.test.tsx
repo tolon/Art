@@ -42,6 +42,7 @@ function renderFolders(over: Partial<Props> = {}) {
     wrongLayerHint: () => null,
     unusedForPlan: [],
     amigaForeverOffer: null,
+    foundVolumeNames: [],
     onAdd: vi.fn(),
     onRemove: vi.fn(),
     onTag: vi.fn(),
@@ -133,6 +134,32 @@ describe("the list", () => {
   });
 });
 
+describe("what the folders hold (ART-256)", () => {
+  it("says what was found, under the list and before the guide", () => {
+    renderFolders({ foundVolumeNames: ["Workbench3.1", "Install3.1"] });
+    const found = document.getElementById("osinstall-media-found");
+    expect(found).toBeTruthy();
+    expect(found!.textContent).toBe(
+      i18n.t("osinstall.media.found", { count: 2, names: "Workbench3.1, Install3.1" })
+    );
+    const guide = screen.getByTestId("material-guide");
+    expect(found!.compareDocumentPosition(guide) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("says nothing was found while a folder is there to read, and neither line with no folders", () => {
+    renderFolders({ foundVolumeNames: [] });
+    const empty = document.getElementById("osinstall-media-empty");
+    expect(empty).toBeTruthy();
+    expect(empty!.textContent).toBe(i18n.t("osinstall.media.empty"));
+    expect(document.getElementById("osinstall-media-found")).toBeNull();
+
+    cleanup();
+    renderFolders({ folders: [], foundVolumeNames: [] });
+    expect(document.getElementById("osinstall-media-empty")).toBeNull();
+    expect(document.getElementById("osinstall-media-found")).toBeNull();
+  });
+});
+
 describe("Amiga Forever, offered — never added here", () => {
   it("shows the path, and both buttons only call the step", async () => {
     const { props } = renderFolders({ folders: [], amigaForeverOffer: "E:\\amiga\\Shared\\adf" });
@@ -143,6 +170,7 @@ describe("Amiga Forever, offered — never added here", () => {
       within(offer).getByRole("button", { name: i18n.t("osinstall.material.amigaForeverAdd") })
     );
     expect(props.onAmigaForeverAdd).toHaveBeenCalledTimes(1);
+    expect(props.onAmigaForeverAdd).toHaveBeenCalledWith("E:\\amiga\\Shared\\adf");
     await user.click(
       within(offer).getByRole("button", { name: i18n.t("osinstall.material.amigaForeverDismiss") })
     );

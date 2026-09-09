@@ -16,6 +16,7 @@
 - § 4.1 does not say where the two ART-256 lines (`osinstall-media-found` / `osinstall-media-empty`, *"N install disks found: …"*) go. They are claims about the **folders'** scans, not about slots, so they go in the folder column under the list. ART-285 (that sentence counts game discs as install disks) is **not** touched here — the sentence moves, its words do not.
 - The `media-identity` block (*what the same files are by content*) is below the readout today and stays below the two columns, full width. It is neither the readout nor the list.
 - The list's own *"No folder chosen."* line (`osinstall.media.none`) stays inside the list. The new ask sentence is the **readout column's**; the two do not share a sentence and do not share a place.
+- § 4.1's third paragraph puts the Amiga Forever offer "beside" the ask in the primary column, while its second paragraph and § 4.2 put it in the secondary column with the folders. It is in the secondary column: the offer is an action on the list, and the ask is the readout's one sentence.
 
 ## Global Constraints
 
@@ -1105,4 +1106,4 @@ Get-Item "E:\amiga\ProjeART\build\Amiga Retro Toolkit_0.9.1_x64-setup_simplify-a
 
 **Placeholders:** the three arrows in Task 2 Step 3 point at line ranges that exist in the tree and are to be moved verbatim, not written; the report's `<…>` fields are measurements the executor fills and Step 3 says so.
 
-**Type consistency:** `MaterialFoldersProps` is defined once (Task 2) and consumed with the same fourteen names in Task 3 Step 5 and Task 4 Step 4; the four new testids are named in Task 4's Interfaces and used in its tests and its JSX; `guideMock` leaves `MaterialReadout.test.tsx` in Task 3 and lives in `MaterialFolders.test.tsx` from Task 2.
+**Type consistency:** `MaterialFoldersProps` is defined once (Task 2) and consumed with the same thirteen names in Task 3 Step 5 and Task 4 Step 4; the four new testids are named in Task 4's Interfaces and used in its tests and its JSX; `guideMock` leaves `MaterialReadout.test.tsx` in Task 3 and lives in `MaterialFolders.test.tsx` from Task 2.
