@@ -2347,7 +2347,9 @@
       "folderIdentified": "{{folder}} — identified by content.",
       "folderUnreadable": "{{folder}} — ART could not read this folder, so nothing in it was identified.",
       "folderStopped": "{{folder}} — you stopped the pass while ART was reading this folder, so nothing in it was identified. That is not a fault in the folder.",
-      "folderNotReached": "{{folder}} — the pass ended before this folder’s turn, so it was never opened. Nothing is known about it either way."
+      "folderNotReached": "{{folder}} — the pass ended before this folder’s turn, so it was never opened. Nothing is known about it either way.",
+      "foldSummary_one": "Details: what {{count}} file in these folders is, by content",
+      "foldSummary_other": "Details: what {{count}} files in these folders are, by content"
     },
     "rom": {
       "label": "Paired Kickstart",

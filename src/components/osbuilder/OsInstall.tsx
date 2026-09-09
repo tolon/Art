@@ -1751,94 +1751,110 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           knows" is not an advanced question — it is the question somebody
           with a folder of ADFs of uncertain provenance actually has.
         */}
-        <div data-testid="media-identity" style={{ margin: "0 0 12px" }}>
-          {identityLines.length > 0 && (
-            <p className="faint" style={{ fontSize: 11, margin: "0 0 4px", fontWeight: 600 }}>
-              {t("osinstall.mediaId.heading")}
-            </p>
-          )}
-          {identityLines.map((line) => (
-            <p
-              key={line.path}
-              data-testid={`media-identity-${line.kind}`}
-              className={line.kind === "unreadable" ? "badge badge-err" : "faint"}
-              style={{
-                fontSize: 11,
-                margin: "0 0 3px",
-                ...(line.kind === "unreadable" ? { display: "inline-block" } : {}),
-              }}
-              title={line.path}
-            >
-              {t(line.phrase.key, line.phrase.params)}
-            </p>
-          ))}
-          {identitySummary && (
-            <p
-              className="faint"
-              data-testid="media-identity-summary"
-              style={{ fontSize: 11, margin: "0 0 4px" }}
-            >
-              {t(identitySummary.key, identitySummary.params)}
-            </p>
-          )}
-          {/*
-            A pass that stopped early, reported **per folder, by name and by
-            result** — `core/hostfs.rs`'s rule for an operation that cannot be
-            undone as a whole. Nothing renders here when the pass covered
-            every folder: the per-file list above is then the whole report,
-            and a second list repeating it would be the screen answering the
-            same question twice.
-          */}
-          {identityFolders.map((line) => (
-            <p
-              key={line.folder}
-              data-testid={`media-identity-folder-${line.result}`}
-              className={line.result === "unreadable" ? "badge badge-err" : "faint"}
-              style={{
-                fontSize: 11,
-                margin: "0 0 3px",
-                ...(line.result === "unreadable" ? { display: "inline-block" } : {}),
-              }}
-              title={line.folder}
-            >
-              {t(line.phrase.key, line.phrase.params)}
-            </p>
-          ))}
-        </div>
-
         {/*
-          ART-194's two controls, and they belong together: the toggle says
-          whether ART may trust what it remembers, and the button is what a
-          user reaches for when it should not have. Shown in Beginner mode as
-          well as Power — "the disc I am looking at is not the disc I put in"
-          is not an advanced problem, and `usePowerMode` only ever hides
-          things the user can do without.
+          **The identity wall, folded** (four-tab design § 3.1). One line per
+          file over every folder — 45 on the owner's three, 23 of them game
+          discs — was half the screen's noise. The pass still runs (the
+          readout's rank-2 and rank-3 rows read the cache it fills, F2); only
+          the lines are behind a closed line whose count is the pass's own.
+          The reuse toggle and Scan again are about that pass, so they live
+          inside it.
         */}
-        <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "0 0 4px", flexWrap: "wrap" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-            <input
-              type="checkbox"
-              checked={reuseScan}
-              onChange={(e) => {
-                setReuseScan(e.target.checked);
-                setRescanned(null);
-              }}
-            />
-            {t("osinstall.media.reuseScan")}
-          </label>
-          <button className="btn btn-sm" onClick={() => void rescanMedia()}>
-            {t("osinstall.media.rescan")}
-          </button>
-        </div>
-        <p className="faint" style={{ fontSize: 11, margin: "0 0 4px" }}>
-          {t("osinstall.media.reuseScanHelp")}
-        </p>
-        {rescanned !== null && (
-          <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
-            {rescanned === 0
-              ? t("osinstall.media.rescannedNone")
-              : t("osinstall.media.rescanned", { count: rescanned })}
+        {mediaIdentity.kind !== "not-asked" && (
+          <details data-testid="media-identity-fold" style={{ margin: "0 0 12px" }}>
+            <summary className="muted" style={{ fontSize: 12, cursor: "pointer" }}>
+              {t("osinstall.mediaId.foldSummary", { count: identityLines.length })}
+            </summary>
+          <div data-testid="media-identity" style={{ margin: "0 0 12px" }}>
+            {identityLines.length > 0 && (
+              <p className="faint" style={{ fontSize: 11, margin: "0 0 4px", fontWeight: 600 }}>
+                {t("osinstall.mediaId.heading")}
+              </p>
+            )}
+            {identityLines.map((line) => (
+              <p
+                key={line.path}
+                data-testid={`media-identity-${line.kind}`}
+                className={line.kind === "unreadable" ? "badge badge-err" : "faint"}
+                style={{
+                  fontSize: 11,
+                  margin: "0 0 3px",
+                  ...(line.kind === "unreadable" ? { display: "inline-block" } : {}),
+                }}
+                title={line.path}
+              >
+                {t(line.phrase.key, line.phrase.params)}
+              </p>
+            ))}
+            {identitySummary && (
+              <p
+                className="faint"
+                data-testid="media-identity-summary"
+                style={{ fontSize: 11, margin: "0 0 4px" }}
+              >
+                {t(identitySummary.key, identitySummary.params)}
+              </p>
+            )}
+            {/*
+              A pass that stopped early, reported **per folder, by name and by
+              result** — `core/hostfs.rs`'s rule for an operation that cannot be
+              undone as a whole. Nothing renders here when the pass covered
+              every folder: the per-file list above is then the whole report,
+              and a second list repeating it would be the screen answering the
+              same question twice.
+            */}
+            {identityFolders.map((line) => (
+              <p
+                key={line.folder}
+                data-testid={`media-identity-folder-${line.result}`}
+                className={line.result === "unreadable" ? "badge badge-err" : "faint"}
+                style={{
+                  fontSize: 11,
+                  margin: "0 0 3px",
+                  ...(line.result === "unreadable" ? { display: "inline-block" } : {}),
+                }}
+                title={line.folder}
+              >
+                {t(line.phrase.key, line.phrase.params)}
+              </p>
+            ))}
+          </div>
+
+          {/*
+            ART-194's two controls, and they belong together: the toggle says
+            whether ART may trust what it remembers, and the button is what a
+            user reaches for when it should not have. Shown in Beginner mode as
+            well as Power — "the disc I am looking at is not the disc I put in"
+            is not an advanced problem, and `usePowerMode` only ever hides
+            things the user can do without.
+          */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "0 0 4px", flexWrap: "wrap" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+              <input
+                type="checkbox"
+                checked={reuseScan}
+                onChange={(e) => {
+                  setReuseScan(e.target.checked);
+                  setRescanned(null);
+                }}
+              />
+              {t("osinstall.media.reuseScan")}
+            </label>
+            <button className="btn btn-sm" onClick={() => void rescanMedia()}>
+              {t("osinstall.media.rescan")}
+            </button>
+          </div>
+          <p className="faint" style={{ fontSize: 11, margin: "0 0 4px" }}>
+            {t("osinstall.media.reuseScanHelp")}
           </p>
+          {rescanned !== null && (
+            <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
+              {rescanned === 0
+                ? t("osinstall.media.rescannedNone")
+                : t("osinstall.media.rescanned", { count: rescanned })}
+            </p>
+          )}
+          </details>
         )}
       </section>
 

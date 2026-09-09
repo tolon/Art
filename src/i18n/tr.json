@@ -2347,7 +2347,9 @@
       "folderIdentified": "{{folder}} — içeriğine göre tanımlandı.",
       "folderUnreadable": "{{folder}} — ART bu klasörü okuyamadı, dolayısıyla içindeki hiçbir şey tanımlanmadı.",
       "folderStopped": "{{folder}} — ART bu klasörü okurken taramayı durdurdunuz, dolayısıyla içindeki hiçbir şey tanımlanmadı. Bu, klasörde bir kusur olduğu anlamına gelmez.",
-      "folderNotReached": "{{folder}} — tarama bu klasörün sırası gelmeden bitti, klasör hiç açılmadı. Hakkında ne olumlu ne olumsuz bir şey biliniyor."
+      "folderNotReached": "{{folder}} — tarama bu klasörün sırası gelmeden bitti, klasör hiç açılmadı. Hakkında ne olumlu ne olumsuz bir şey biliniyor.",
+      "foldSummary_one": "Ayrıntılar: bu klasörlerdeki {{count}} dosya içeriğine göre ne",
+      "foldSummary_other": "Ayrıntılar: bu klasörlerdeki {{count}} dosya içeriğine göre ne"
     },
     "rom": {
       "label": "Eşlenen Kickstart",

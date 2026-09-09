@@ -3798,6 +3798,43 @@ describe("identifying install media by content hash (design §4.3)", () => {
   });
 });
 
+describe("the identity wall is folded (four-tab design § 3.1)", () => {
+  it("draws one closed line whose count is the pass's own, and keeps the lines inside", async () => {
+    await renderFull();
+    const fold = await screen.findByTestId("media-identity-fold");
+    expect((fold as HTMLDetailsElement).open).toBe(false);
+    const lines = within(fold).queryAllByTestId(
+      /^media-identity-(confirmed|unconfirmed|not-in-table|unreadable|skipped)$/
+    );
+    expect(fold.textContent).toBeTruthy();
+    expect(fold.querySelector("summary")!.textContent).toBe(
+      i18n.t("osinstall.mediaId.foldSummary", { count: lines.length })
+    );
+    expect(within(fold).getByTestId("media-identity")).toBeTruthy();
+  });
+
+  it("keeps the reuse toggle and Scan again inside the fold, still working", async () => {
+    await renderFull();
+    const fold = await screen.findByTestId("media-identity-fold");
+    const toggle = within(fold).getByRole("checkbox", { name: i18n.t("osinstall.media.reuseScan") });
+    expect(toggle).toBeTruthy();
+    await userEvent.click(within(fold).getByRole("button", { name: i18n.t("osinstall.media.rescan") }));
+    await waitFor(() => expect(rescanMock).toHaveBeenCalled());
+  });
+
+  it("still runs the identification pass while the fold is closed", async () => {
+    await renderFull();
+    await screen.findByTestId("media-identity-fold");
+    await waitFor(() => expect(identifyMediaMock).toHaveBeenCalled());
+  });
+
+  it("draws no fold before any folder is chosen", () => {
+    seedRemembered({});
+    render(<OsInstall />);
+    expect(screen.queryByTestId("media-identity-fold")).toBeNull();
+  });
+});
+
 // ART-260: `layerScans`, `layerIdentified` and `extraScans` all clear to
 // `{}` through this one guard rather than their own inline `{}` literal, so
 // a no-op reset (already empty, resetting to empty again -- what happens on
