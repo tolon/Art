@@ -35,6 +35,9 @@ vi.mock("@/lib/settings", async (importOriginal) => ({
   saveSettings: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("@/components/osbuilder/ChoiceTab", () => ({
+  ChoiceTab: () => <div data-testid="choice-tab" />,
+}));
 vi.mock("@/components/osbuilder/PackagePanel", () => ({
   PackagePanel: ({ treeRoot }: { treeRoot: string | null }) => (
     <div data-testid="packages">{treeRoot ?? "(no tree)"}</div>
@@ -347,7 +350,11 @@ describe("every step id in the lane has a route", () => {
     });
     const expected: Record<string, string> = {
       dosyalar: "install",
-      secim: "packages",
+      // The tab's **own** list, not one of the panels it still carries: from
+      // round 3 task 2 `secim` renders `ChoiceTab`, and task 3 takes the two
+      // panels away. Asserting on `packages` here would have gone on passing
+      // through that removal while the tab rendered nothing of its own.
+      secim: "choice-tab",
       makine: "machine-tab",
       derle: "tab-derle",
       kart: "card",

@@ -712,6 +712,12 @@
       "asksTree": "This step works on an AmigaOS folder, and none has been chosen yet. Pick one below, or build one first:",
       "notATree": "This folder is not an AmigaOS folder ART built: it holds no distribution.json, so ART cannot say what is in it or what a package would replace. Pick another folder below, or build one here:"
     },
+    "choice": {
+      "lead": "One list, in the material's own order. Ticked rows are written; a row that cannot be written says why and stays closed.",
+      "parts": "The release's parts",
+      "replaces_one": "Would replace {{count}} file already in the tree (open to see which)",
+      "replaces_other": "Would replace {{count}} files already in the tree (open to see which)"
+    },
     "tab": {
       "makineKeymapNote": "The keyboard layout is still chosen on the files tab, under the plan:",
       "derleNotYet": "The plan and the Build button are on the files tab for now:"
@@ -2374,8 +2380,6 @@
       "wrongLayer": "This folder holds {{actual}} disks ({{found}}), not what this field asks for. Move it to the {{actual}} field, or choose the folder holding what this field wants."
     },
     "components": {
-      "heading": "Components",
-      "intro": "The components of the release chosen above. Some are always installed; the rest are optional, or switch on by themselves when the paired Kickstart needs them.",
       "required": "Required",
       "loading": "Reading this release's components…",
       "unavailable": "ART could not read this release's components.",
@@ -2685,7 +2689,6 @@
       }
     },
     "replaces": {
-      "heading": "What this would replace",
       "summary": "{{components}} would place {{placed}} files: {{fresh}} new, {{unchanged}} already identical, and {{replaced}} over files another part of this release puts down first.",
       "failed": "ART could not work out what this would replace: {{error}}"
     },

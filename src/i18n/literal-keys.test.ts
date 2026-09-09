@@ -625,6 +625,14 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // decides that key, and the summary only renders it. Counting lines that
     // do not exist yet would say "what 0 files … are" over folders ART is at
     // that moment reading.
-    expect(dynamicCalls).toBe(180);
+    // 180 -> 181 (2026-09-09, four tabs round 3, task 2). One: `ChoiceTab`
+    // resolves a component's own name the way `OsInstall.tsx` already does —
+    // `t(def.labelKey)` when the recipe declares one — because the component
+    // rows moved to tab 2 while the plan section and a refusal's sentence,
+    // which name a component the same way, stayed on tab 1. Two screens
+    // drawing one catalogue, not a new pattern: `recipe-component-keys.test.ts`
+    // checks every `labelKey` a shipped recipe names against both catalogues,
+    // which is the check this scan cannot make.
+    expect(dynamicCalls).toBe(181);
   });
 });

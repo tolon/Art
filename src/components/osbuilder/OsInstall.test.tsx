@@ -520,9 +520,12 @@ async function renderFull() {
   const utils = render(<OsInstall />);
   await waitFor(() => expect(planMock).toHaveBeenCalled());
   await screen.findByText(i18n.t("osinstall.plan.heading"));
-  // The checklist is loaded, not hardcoded, so it arrives on its own round
-  // trip — wait for it rather than racing it.
-  await screen.findByRole("checkbox", { name: "Extras3.2" });
+  // The component checklist moved to tab 2 (`ChoiceTab`) on 2026-09-09, so
+  // there is no component checkbox here to wait for. The catalogue is still
+  // loaded on this tab — the plan section labels each group of files with it,
+  // and a refusal names the component through it — and it is one of the
+  // plan's own dependencies, so a plan on screen means it has landed.
+  await waitFor(() => expect(componentsMock).toHaveBeenCalled());
   return utils;
 }
 
@@ -595,12 +598,15 @@ describe("OsInstall renders past its headings", () => {
     // count below is unchanged by that, because both were `Field` rows.
     expect(screen.getByText(i18n.t("osinstall.material.label"))).toBeTruthy();
 
-    // The component checklist is the screen's real input (requirement 4) —
-    // one row per component of the release's own loaded recipe. `+ 2` are the
-    // tickboxes that are not components: the run card's confirmation and the
-    // media section's "reuse the last scan" (ART-194). `PackagePanel`'s
-    // confirmation is not among them — it renders only once a package has been
-    // ticked, and nothing here ticks one.
+    // **Two tickboxes, and neither is a component** (four-tab design § 3.2):
+    // the run card's confirmation and the media section's "reuse the last
+    // scan" (ART-194). The component checklist moved to tab 2 on 2026-09-09,
+    // and `ChoiceTab.test.tsx` counts its rows against the same fixture —
+    // asserted as a number here rather than left unsaid, because a checklist
+    // rendered on *both* tabs is the state this move must not leave behind.
+    //
+    // `PackagePanel`'s confirmation is not among them — it renders only once
+    // a package has been ticked, and nothing here ticks one.
     //
     // **`AmigaInstallPanel`'s own is not among them either, and that changed
     // in round 3.** This fixture is AmigaOS 3.2, whose catalogue answers with
@@ -610,7 +616,8 @@ describe("OsInstall renders past its headings", () => {
     // ART-212's own complaint one control further on: a confirmation for a
     // run that cannot be configured.
     const checkboxes = screen.getAllByRole("checkbox");
-    expect(checkboxes.length).toBe(COMPONENTS_32.length + 2);
+    expect(checkboxes.length).toBe(2);
+    expect(screen.queryByTestId("choice-part-row")).toBeNull();
     expect(
       screen.getByRole("checkbox", { name: i18n.t("osinstall.media.reuseScan") })
     ).toBeTruthy();
@@ -668,66 +675,37 @@ describe("nothing on screen is a raw i18n key or an unrendered interpolation", (
   });
 });
 
-describe("ticking a component changes what the screen will do", () => {
-  it("reaches the request osinstallPlan is asked to plan, and what the plan section shows", async () => {
-    await renderFull();
-
+describe("the plan section counts what the session's ticks planned", () => {
+  // **The tick itself is tab 2's now** (four-tab design 3.2): the checklist,
+  // the confirm-off dialog and the ART-290 "write to the session, never the
+  // legacy key" case moved to `ChoiceTab.test.tsx` with the rows. What stays
+  // here is the half that is about *this* screen - the plan section, whose
+  // counts have to follow the session's component set, because the two tabs
+  // are now separate mounts joined by nothing but that set.
+  it("shows one release's own item count, and a ticked component's second item", async () => {
     // ART-205: the tree the plan predicts (one file) and the work it
     // describes (one item), which are the same number only while nothing
     // overrides anything.
+    await renderFull();
     expect(document.body.textContent).toContain("1 file, ");
     expect(document.body.textContent).toContain("from 1 planned item.");
+    cleanup();
 
-    const checkbox = screen.getByRole("checkbox", { name: "Extras3.2" }) as HTMLInputElement;
-    expect(checkbox.checked).toBe(false);
-
-    await userEvent.click(checkbox);
-    expect(checkbox.checked).toBe(true);
-
-    // The real input this screen has: the tick has to reach the request
-    // that gets planned, not just flip local checkbox state.
-    await waitFor(() => {
-      const askedForExtras = (planMock.mock.calls as [InstallRequest][]).some(([req]) =>
-        req.chosen.includes("extras")
-      );
-      expect(askedForExtras).toBe(true);
+    // The same screen, with `extras` ticked - through the session, exactly as
+    // `ChoiceTab` writes it. A second planned item is shown, so the tick a
+    // user makes on tab 2 is visible in what tab 1 says it will do.
+    seedRemembered({
+      ...FULL_FIELDS,
+      "buildSession.components.AmigaOS 3.2": { chosen: ["extras"], excludedConditional: [] },
     });
-
-    // ...and what the user sees changes with it — a second plan item shown,
-    // not just an API call nobody could see the effect of.
-    await waitFor(() => expect(document.body.textContent).toContain("from 2 planned items."));
-  });
-
-  /**
-   * **ART-290.** `buildSession.components.<release>` was added with
-   * `seededComponents` to migrate the panel's own two keys, and nothing ever
-   * wrote it back: the session carried a one-time copy that went stale the
-   * moment anybody ticked a box, so every screen reading the session saw a
-   * different selection from the one on this one.
-   *
-   * The two halves are both asserted, because either alone passes for the
-   * wrong reason. That the session key gains the id says the write landed
-   * somewhere; that `osinstall.chosen` is **still the empty list
-   * `FULL_FIELDS` seeded** says the legacy key was not written as well —
-   * "read once, never written again" is what makes the migration safe to
-   * roll back, and a screen writing both would look identical on screen.
-   */
-  it("writes a tick to the session, never to the legacy key (ART-290)", async () => {
-    await renderFull();
-    expect(rememberedBag()["buildSession.components.AmigaOS 3.2"]).toBeUndefined();
-
-    await userEvent.click(screen.getByRole("checkbox", { name: "Extras3.2" }));
-
+    render(<OsInstall />);
+    await screen.findByText(i18n.t("osinstall.plan.heading"));
     await waitFor(() =>
-      expect(rememberedBag()["buildSession.components.AmigaOS 3.2"]).toMatchObject({
-        chosen: expect.arrayContaining(["extras"]),
-      })
+      expect(
+        (planMock.mock.calls as [InstallRequest][]).some(([req]) => req.chosen.includes("extras"))
+      ).toBe(true)
     );
-    // `rememberedComponentKey` returns the bare key for AmigaOS 3.2 — "the
-    // release before there was a picker" — so this is 3.2's own legacy key,
-    // seeded empty above and untouched here.
-    expect(rememberedBag()["osinstall.chosen"]).toEqual([]);
-    expect(rememberedBag()["osinstall.chosen.AmigaOS 3.2"]).toBeUndefined();
+    await waitFor(() => expect(document.body.textContent).toContain("from 2 planned items."));
   });
 });
 
@@ -768,49 +746,6 @@ describe("the screen does not plan the same thing twice", () => {
     // does, and it is the half that was a duplicate *within* a pass.)
     expect(planMock.mock.calls.length).toBe(2);
     expect([...requestCounts().values()]).toEqual([2]);
-  });
-
-  it("still asks twice when the two requests genuinely differ", async () => {
-    // `modules-a1200` has to be *forced on by its condition* for excluding
-    // it to mean anything — an unforced component is turned off by plain
-    // unticking, which changes `chosen` and never populates `excluded`. The
-    // default fixture's V47 ROM leaves it off, so this test supplies a plan
-    // where the engine switched it on without it being chosen: exactly what
-    // a pre-V47 ROM produces, and the only state in which the screen offers
-    // "turn it off anyway".
-    planMock.mockImplementation((req: InstallRequest) => {
-      const base = planResultFor(req);
-      if (base.outcome !== "planned" || req.excluded.includes("modules-a1200")) return Promise.resolve(base);
-      return Promise.resolve({
-        ...base,
-        plan: { ...base.plan, componentsOn: [...base.plan.componentsOn, "modules-a1200"] },
-      } satisfies PlanResult);
-    });
-
-    await renderFull();
-
-    const modules = screen.getByRole("checkbox", { name: "ModulesA1200_3.2" }) as HTMLInputElement;
-    expect(modules.checked).toBe(true);
-    await userEvent.click(modules);
-    await userEvent.click(
-      await screen.findByRole("button", { name: i18n.t("osinstall.components.confirmOff.confirm") })
-    );
-
-    // Both requests are made again, because now they differ. The dedupe must
-    // have removed the duplicate, never the second plan — dropping the base
-    // plan would make "is this condition satisfied" and "is this excluded"
-    // indistinguishable, which is the whole reason there are two.
-    await waitFor(() => {
-      const calls = planMock.mock.calls as [InstallRequest][];
-      expect(calls.some(([req]) => req.excluded.includes("modules-a1200"))).toBe(true);
-      expect(
-        calls.some(([req]) => req.excluded.length === 0 && req.chosen.length === 0)
-      ).toBe(true);
-    });
-    // Two distinct shapes, not one — the base plan is still being asked for
-    // alongside the effective one. `requestCounts` has more than one key
-    // exactly when both survived.
-    expect(requestCounts().size).toBeGreaterThan(1);
   });
 });
 
@@ -924,60 +859,6 @@ describe("choosing the release re-plans against it", () => {
     await waitFor(() =>
       expect(planMock).toHaveBeenCalledWith(expect.objectContaining({ release: "AmigaOS 3.9" }))
     );
-  });
-
-  it("shows the chosen release's own components, not the previous release's", async () => {
-    // The Major finding a whole-branch review called the worst on its list:
-    // the picker changed the plan and left a hardcoded AmigaOS 3.2 checklist
-    // on screen, so the user was shown one operating system's parts while
-    // ART installed another's (§89). The old test asserted only that
-    // `planMock` was called with the new release — it never looked at the
-    // checklist, which is why this survived.
-    await renderFull();
-    expect(screen.getByRole("checkbox", { name: "Extras3.2" })).toBeTruthy();
-
-    const picker = screen.getByRole("combobox", {
-      name: i18n.t("osinstall.release.label"),
-    }) as HTMLSelectElement;
-    await userEvent.selectOptions(picker, "AmigaOS 3.9");
-
-    // The list is re-read for the release actually chosen...
-    await waitFor(() => expect(componentsMock).toHaveBeenCalledWith("AmigaOS 3.9"));
-    // ...3.2's own components are gone...
-    await waitFor(() => expect(screen.queryByRole("checkbox", { name: "Extras3.2" })).toBeNull());
-    // ...and 3.9's base component is labelled with 3.9's media, not 3.2's,
-    // even though both recipes call it `workbench-base`.
-    // `getAllBy`, not `getBy`: every component in the shipped AmigaOS 3.9
-    // recipe carries the media name `AmigaOS3.9`, so more than one row
-    // matches — which the fixture only started reflecting when ART-175 added
-    // `workbench-39` to it. A `getBy` here was passing because the fixture
-    // was thinner than the recipe, not because the screen shows one row.
-    expect(screen.getAllByRole("checkbox", { name: /AmigaOS3\.9/ }).length).toBeGreaterThan(0);
-    expect(screen.queryByRole("checkbox", { name: /Workbench3\.2/ })).toBeNull();
-  });
-
-  it("keeps each release's own ticks when the user switches away and back", async () => {
-    // "Nothing changes unless the user changes it", applied to a choice made
-    // for a release the user then looked away from. The remembered set is
-    // keyed per release (`rememberedComponentKey`), so 3.9 — whose recipe
-    // holds none of 3.2's ids — cannot sanitize them away.
-    await renderFull();
-
-    const extras = screen.getByRole("checkbox", { name: "Extras3.2" }) as HTMLInputElement;
-    await userEvent.click(extras);
-    expect(extras.checked).toBe(true);
-
-    const picker = screen.getByRole("combobox", {
-      name: i18n.t("osinstall.release.label"),
-    }) as HTMLSelectElement;
-    await userEvent.selectOptions(picker, "AmigaOS 3.9");
-    await waitFor(() => expect(screen.queryByRole("checkbox", { name: "Extras3.2" })).toBeNull());
-
-    await userEvent.selectOptions(picker, "AmigaOS 3.2");
-    const backAgain = (await screen.findByRole("checkbox", {
-      name: "Extras3.2",
-    })) as HTMLInputElement;
-    expect(backAgain.checked).toBe(true);
   });
 });
 
@@ -2285,113 +2166,6 @@ describe("a refusal renders as a sentence, not a blank", () => {
     const expectedSentence = i18n.t(phrase.key, { ...phrase.params, component: "ModulesA1200_3.2" });
     const rendered = await screen.findByText(expectedSentence);
     expect(rendered.textContent).not.toContain("modules-a1200");
-  });
-});
-
-describe("the screen says what a layering component would replace (ART-175)", () => {
-  // `collide::preview` has been able to answer for a release recipe's own
-  // component since ART-170, and nothing asked it. These are the ask, from
-  // the screen's side: the request that goes out, and the rows that come
-  // back.
-
-  /** Switch to AmigaOS 3.9, whose fixture carries a layering component. */
-  async function render39() {
-    await renderFull();
-    const picker = screen.getByRole("combobox", {
-      name: i18n.t("osinstall.release.label"),
-    }) as HTMLSelectElement;
-    await userEvent.selectOptions(picker, "AmigaOS 3.9");
-    // The checklist is loaded, not hardcoded, so the 3.9 catalogue arrives on
-    // its own round trip — wait for it rather than racing it.
-    await waitFor(() =>
-      expect(planMock).toHaveBeenCalledWith(expect.objectContaining({ release: "AmigaOS 3.9" }))
-    );
-  }
-
-  it("asks about the layering components only, never the whole checklist", async () => {
-    await render39();
-
-    // The preview reads every file the components it is asked about would
-    // place, off real install media — asking about all of them would mean
-    // reading a whole AmigaOS install to answer a question about a few dozen
-    // files. `workbench-base` declares no override and must not be in here.
-    await waitFor(() => expect(componentCollisionsMock).toHaveBeenCalled());
-    for (const [, components] of componentCollisionsMock.mock.calls as [InstallPlan, string[]][]) {
-      expect(components).toEqual(["workbench-39"]);
-    }
-  });
-
-  it("shows what would be replaced, and what would merely be placed", async () => {
-    // Three files placed: one replaced, one already byte-for-byte identical,
-    // one landing on nothing. The middle one is what review F4 was about —
-    // `collide::preview` drops it, so counting `placed - reports.length` as
-    // "new" would report two new files when there is one.
-    componentCollisionsMock.mockResolvedValue({
-      placed: 3,
-      contested: 2,
-      reports: [
-        {
-          path: "Libs/workbench.library",
-          collision: { kind: "upgrade", from: "44.5", to: "45.1" },
-          declared: true,
-        },
-      ],
-    });
-
-    await render39();
-
-    await screen.findByText(i18n.t("osinstall.replaces.heading"));
-    // The row itself, with the version change read off both files.
-    await screen.findByText("Libs/workbench.library");
-    expect(document.querySelectorAll('[data-testid="component-collision-row"]').length).toBe(1);
-
-    // And the sentence that keeps "nothing to report" from reading like
-    // "nothing to place": three files placed, one of them over something.
-    const summary = i18n.t("osinstall.replaces.summary", {
-      components: "AmigaOS3.9",
-      placed: 3,
-      fresh: 1,
-      unchanged: 1,
-      replaced: 1,
-    });
-    expect(document.body.textContent).toContain(summary);
-
-    // And explicitly not the miscount: two new files, when one of the two is
-    // a file that already exists byte-for-byte.
-    expect(document.body.textContent).not.toContain(
-      i18n.t("osinstall.replaces.summary", {
-        components: "AmigaOS3.9",
-        placed: 3,
-        fresh: 2,
-        unchanged: 0,
-        replaced: 1,
-      })
-    );
-  });
-
-  it("says nothing at all when nothing layering is switched on", async () => {
-    // AmigaOS 3.2's fixture has no component declaring an override, so the
-    // section must not appear — and the engine must not be asked either.
-    await renderFull();
-    await waitFor(() => expect(planMock).toHaveBeenCalled());
-
-    expect(screen.queryByText(i18n.t("osinstall.replaces.heading"))).toBeNull();
-    expect(componentCollisionsMock).not.toHaveBeenCalled();
-  });
-
-  it("a preview that failed says so instead of looking like one that found nothing", async () => {
-    componentCollisionsMock.mockRejectedValue(new Error("the disc could not be read"));
-
-    await render39();
-
-    // **No stray "Error: " any more** (ART-060). This used to render
-    // `String(e)`, which on an `Error` object prepends the word "Error" to a
-    // sentence that is already introduced as a failure — the user read it
-    // twice. `errorText` takes the message.
-    await screen.findByText(
-      i18n.t("osinstall.replaces.failed", { error: "the disc could not be read" })
-    );
-    expect(document.querySelectorAll('[data-testid="component-collision-row"]').length).toBe(0);
   });
 });
 

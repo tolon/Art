@@ -32,6 +32,7 @@ import { osinstallDescribeTree } from "@/lib/osinstall";
 import { useBuildSession } from "@/lib/useBuildSession";
 import { AppearancePanel } from "@/components/osbuilder/AppearancePanel";
 import { CardBuilder } from "@/components/osbuilder/CardBuilder";
+import { ChoiceTab } from "@/components/osbuilder/ChoiceTab";
 import { FirstBootPanel } from "@/components/osbuilder/FirstBootPanel";
 import { MachineTab } from "@/components/osbuilder/MachineTab";
 import { OsInstall } from "@/components/osbuilder/OsInstall";
@@ -129,6 +130,12 @@ export function StepSecim() {
     <>
       {state === "asks" && <Asks />}
       {state === "wrong-folder" && <WrongFolder />}
+      {/* The tab's own list (four-tab design § 3.2), first: the release's
+          parts and what turning them on would replace. The two panels below
+          it are the update and first-boot halves of the same question, still
+          in their own cards — round 3 task 3 folds them into this list and
+          removes them from here. */}
+      <ChoiceTab />
       <PackagePanel
         treeRoot={session.tree.root}
         onTreeRootChange={(root) => setTree({ root, builtHere: false })}
