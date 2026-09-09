@@ -1311,7 +1311,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   // holds the rule: a path ART cannot examine is not a path ART may declare
   // occupied — `apply()` decides, and blocking here would refuse an install
   // the engine would have allowed.
-  const { taken: destinationTaken } = useDestinationCheck(destination);
+  const { taken: destinationTaken } = useDestinationCheck(destination, result);
 
   /**
    * Ask what the layering components would replace, whenever the plan

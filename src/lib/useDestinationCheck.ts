@@ -17,7 +17,13 @@ export interface DestinationCheck {
   tree: TreeSummary | null;
 }
 
-export function useDestinationCheck(path: string | null): DestinationCheck {
+/**
+ * @param revision anything whose change means the folder may have changed
+ *   under us — the install screen passes the last install result, because a
+ *   successful apply fills the folder it was told to fill and the next run
+ *   must be refused, as it was before this hook existed.
+ */
+export function useDestinationCheck(path: string | null, revision: unknown = null): DestinationCheck {
   const [taken, setTaken] = useState(false);
   const [tree, setTree] = useState<TreeSummary | null>(null);
 
@@ -45,7 +51,8 @@ export function useDestinationCheck(path: string | null): DestinationCheck {
     return () => {
       cancelled = true;
     };
-  }, [path]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, revision]);
 
   return { taken, tree };
 }

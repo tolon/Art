@@ -72,4 +72,16 @@ describe("useDestinationCheck", () => {
     rerender({ p: null });
     expect(result.current).toEqual({ taken: false, tree: null });
   });
+
+  it("asks again when the revision moves, so a folder an install just filled reads as taken", async () => {
+    takenMock.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    describeMock.mockResolvedValue(NOT_TREE);
+    const { result, rerender } = renderHook(({ rev }) => useDestinationCheck("E:\\dist", rev), {
+      initialProps: { rev: null as unknown },
+    });
+    await waitFor(() => expect(takenMock).toHaveBeenCalledTimes(1));
+    expect(result.current.taken).toBe(false);
+    rerender({ rev: { finished: true } });
+    await waitFor(() => expect(result.current.taken).toBe(true));
+  });
 });
