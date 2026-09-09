@@ -1099,12 +1099,11 @@ export function AmigaInstallPanel({
 
   // ART-277: ask what an archive *is* at the moment it is picked (or
   // restored from a remembered choice), rather than finding out only once
-  // `compose` refuses it a moment later. Two effects, one per field, because
-  // the two fields ask two different questions of the same file — the
-  // package's own field expects `"the-package"`, the second field expects
-  // `"the-update-archive"` — and `archiveFieldBlockerPhrase` reads which is
-  // which. Scoped to `release` (ART-277 review, Major 2): the same list the
-  // radio below actually offers.
+  // `compose` refuses it a moment later. One effect, because there is one
+  // archive field — the second one went with the overlay machinery on
+  // 2026-09-09, and with it the `"the-update-archive"` kind that told the user
+  // which of two fields a file belonged in. Scoped to `release` (ART-277
+  // review, Major 2): the same list the radio below actually offers.
   //
   // **M1 (round 1 whole-branch review).** `setArchiveClassification(null)`
   // is the *first* statement, before the new question is even asked —

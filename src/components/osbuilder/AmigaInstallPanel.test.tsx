@@ -1082,7 +1082,7 @@ describe("ART-277: switching the selected package does not carry its archives", 
             topLevel: ["BoingBag3.9-2", "BoingBag3.9-2.info"],
             expectedMedia: null,
                 }
-        : { kind: "the-package", topLevel: [], expectedMedia: null, expectedOverlays: [] }
+        : { kind: "the-package", topLevel: [], expectedMedia: null, sharedBy: [] }
     );
     useSettingsStore.setState((state) => ({
       settings: {

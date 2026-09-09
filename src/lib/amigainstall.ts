@@ -547,19 +547,11 @@ export function readinessBlockers(
  *   the first round's "the Packages step places it from Windows", which
  *   assumed a specific other step `shared-artefact`'s own cause does not
  *   establish (L5's own finding: one sentence asserting one cause for two).
- * - **This package's own archive, in the wrong field** — `the-package` in
- *   the *overlay* field (Major 1: the mirror of the update archive already
- *   caught by the equivalent case at the other end, which Rust's own preview
- *   refuses on its own) and `the-update-archive` in the *package* field.
- *   **Named by the field's own label, never by direction** (ART-277
- *   re-review): the first fix round's "the second field below"/"the first
- *   field above" were written for a badge that used to sit directly beside
- *   the specific field; moved into a `blockers` box below *both* fields, one
- *   became backwards (the overlay field is above the box, not below it) and
- *   the other was only right by coincidence. `fieldLabels` carries the exact
- *   strings the two `Field`s themselves render — interpolated in, so the
- *   sentence cannot say a label the screen does not — and is immune to a
- *   future reordering of the two fields.
+ * - **The package's own archive** — nothing to say: it is what the one field
+ *   is for. There were two more shapes here until 2026-09-09, both about a
+ *   file being in the *wrong* of two fields; the second field went with the
+ *   overlay machinery, so a file is now either this package's archive or it is
+ *   not.
  * - **Nothing** — an archive ART does not recognise, or one that is exactly
  *   right, is accepted silently: Rust still validates the real thing at
  *   `compose`, and inventing a warning for "unknown" would be a confident
