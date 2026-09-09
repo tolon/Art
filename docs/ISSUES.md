@@ -368,7 +368,7 @@ re-audits them without reason:
 
 ## Fixed
 
-**ART-290** 🟡 **Component ticks lived in two stores, and the session's copy
+**ART-290** ✅ **Component ticks lived in two stores, and the session's copy
 went stale after the first change** — *found 2026-09-09 while planning round 3
 of the four-tab rewrite; fixed 2026-09-09 in that round*
 `src/components/osbuilder/OsInstall.tsx` · `src/components/osbuilder/ChoiceTab.tsx` ·

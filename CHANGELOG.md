@@ -22,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   3.9 updates in order, first boot — with the parts' ticks now kept with the
   rest of the build's choices.
 
+### Fixed
+
+- OS Builder, what to install: the "choose a tree first" and "this is not a
+  tree ART built" banners judge the same folder the list under them works on,
+  and send you to the Kickstart and destination tab instead of to a picker
+  that is no longer there.
+- OS Builder, files tab: the Amiga-side update panel no longer offers a
+  Distribution tree Browse that could not change anything — when the tree is
+  the destination you chose, it says so and names the tab that owns it.
+
 ## [0.9.1] - 2026-09-08
 
 ### Added
