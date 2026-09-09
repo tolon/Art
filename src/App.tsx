@@ -11,15 +11,8 @@ import { RomStudio } from "@/pages/RomStudio";
 import { HardDiskStudio } from "@/pages/HardDiskStudio";
 import { GotekStudio } from "@/pages/GotekStudio";
 import { PistormStudio } from "@/pages/PistormStudio";
-import { OsBuilder, StepHedef } from "@/pages/OsBuilder";
-import {
-  StepAmigaKurulum,
-  StepBirimler,
-  StepIlkAcilis,
-  StepKart,
-  StepKaynak,
-  StepPaketler,
-} from "@/pages/osbuilder/steps";
+import { OsBuilder } from "@/pages/OsBuilder";
+import { osBuilderRoutes } from "@/pages/osbuilder/routes";
 import { ContentLayout } from "@/pages/ContentLayout";
 import { HexTools } from "@/pages/HexTools";
 import { CollectionStudio } from "@/pages/CollectionStudio";
@@ -84,14 +77,7 @@ export default function App() {
               parent still renders, which is what keeps `route::OS_BUILDER` a
               real route for `builtin.rs` to point a workflow at. */}
           <Route path="os-builder" element={<OsBuilder />}>
-            <Route index element={<Navigate to="hedef" replace />} />
-            <Route path="hedef" element={<StepHedef />} />
-            <Route path="kaynak" element={<StepKaynak />} />
-            <Route path="paketler" element={<StepPaketler />} />
-            <Route path="amiga-kurulum" element={<StepAmigaKurulum />} />
-            <Route path="ilk-acilis" element={<StepIlkAcilis />} />
-            <Route path="kart" element={<StepKart />} />
-            <Route path="birimler" element={<StepBirimler />} />
+            {osBuilderRoutes()}
           </Route>
           <Route path="layout" element={<ContentLayout />} />
           <Route path="tools" element={<HexTools />} />

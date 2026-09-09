@@ -94,8 +94,8 @@ export function OsBuilder() {
     const state = location.state as { path?: string } | null;
     if (!state?.path) return;
     setKind("install");
-    if (location.pathname !== stepPath("kaynak")) {
-      navigate(stepPath("kaynak"), { state, replace: true });
+    if (location.pathname !== stepPath("dosyalar")) {
+      navigate(stepPath("dosyalar"), { state, replace: true });
     }
   }, [location.state, location.key, location.pathname, setKind, navigate]);
 

@@ -13,8 +13,13 @@
 // and the two panel test files cover the real components.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import i18n from "i18next";
+
+// Side-effecting: a real, synchronously-initialised i18next instance, so a
+// case that names a sentence names the sentence and not the key.
+import "@/i18n";
 
 // ART-199: the steps now ask ART what the folder is. Mocked at the `@/lib`
 // wrapper, the boundary this suite mocks at everywhere else.
@@ -65,8 +70,10 @@ vi.mock("@/components/osbuilder/OsInstall", () => ({
 const { useSettingsStore } = await import("@/stores/settingsStore");
 const { DEFAULT_SETTINGS } = await import("@/lib/settings");
 const { OsBuilder } = await import("@/pages/OsBuilder");
-const { StepPaketler, StepAmigaKurulum, StepIlkAcilis, StepKaynak, StepKart, StepBirimler } =
-  await import("@/pages/osbuilder/steps");
+// The application's own route table, not a copy of it: a redirect that is
+// deleted fails a case here rather than silently sending a remembered URL to
+// the home screen through the `*` catch-all.
+const { osBuilderRoutes } = await import("@/pages/osbuilder/routes");
 
 function seed(remembered: Record<string, unknown>) {
   useSettingsStore.setState({
@@ -80,12 +87,7 @@ function renderAt(path: string, state?: unknown) {
     <MemoryRouter initialEntries={[{ pathname: path, state }]}>
       <Routes>
         <Route path="/os-builder" element={<OsBuilder />}>
-          <Route path="kaynak" element={<StepKaynak />} />
-          <Route path="paketler" element={<StepPaketler />} />
-          <Route path="amiga-kurulum" element={<StepAmigaKurulum />} />
-          <Route path="ilk-acilis" element={<StepIlkAcilis />} />
-          <Route path="kart" element={<StepKart />} />
-          <Route path="birimler" element={<StepBirimler />} />
+          {osBuilderRoutes()}
         </Route>
       </Routes>
     </MemoryRouter>
@@ -116,7 +118,7 @@ describe("a step opened on its own", () => {
       "buildSession.kind": "install",
       "buildSession.tree": { root: "E:\\dist", builtHere: true },
     });
-    renderAt("/os-builder/paketler");
+    renderAt("/os-builder/secim");
     expect(screen.getByTestId("packages").textContent).toBe("E:\\dist");
   });
 
@@ -124,7 +126,7 @@ describe("a step opened on its own", () => {
     // The design's fourth mutation: a step navigated to cold must *ask*,
     // never throw and never render a blank card.
     seed({ "buildSession.kind": "install" });
-    renderAt("/os-builder/paketler");
+    renderAt("/os-builder/secim");
 
     expect(screen.getByTestId("packages").textContent).toBe("(no tree)");
     // A rendered sentence, not the raw key — asserting on the key would pass
@@ -133,14 +135,14 @@ describe("a step opened on its own", () => {
     expect(screen.queryByText(/osBuilder\.step\./)).toBeNull();
   });
 
-  it("asks on the Amiga-side step too, and does not gate it", () => {
+  it("asks on the choice tab too, and does not gate it", () => {
     // Optional stays optional: asking is a state, not a refusal. The panel is
     // still mounted and still usable.
     seed({ "buildSession.kind": "install" });
-    renderAt("/os-builder/amiga-kurulum");
+    renderAt("/os-builder/secim");
 
     expect(screen.getByText(/AmigaOS folder/i)).toBeTruthy();
-    expect(screen.getByTestId("amiga")).toBeTruthy();
+    expect(screen.getByTestId("packages")).toBeTruthy();
   });
 
   it("does not ask on a step that never reads a tree", () => {
@@ -158,12 +160,16 @@ describe("the progress strip", () => {
       "buildSession.kind": "install",
       "buildSession.tree": { root: "E:\\dist", builtHere: true },
     });
-    renderAt("/os-builder/paketler");
+    renderAt("/os-builder/secim");
 
-    // `install` has five steps and no card step.
+    // `install` is the hedef chip plus four numbered tabs, and no card step.
     expect(screen.getAllByRole("link").length).toBe(5);
     expect(screen.queryByTestId("card")).toBeNull();
-    expect(screen.getByRole("link", { name: /Update packages/i })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /^1\. Amiga files/ })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /^4\. Build/ })).toBeTruthy();
+    // The chip is not a numbered tab: numbering it would say the kind is a
+    // step of the build rather than the choice the build begins from.
+    expect(screen.queryByRole("link", { name: /^1\. What are we building/ })).toBeNull();
     expect(screen.queryByRole("link", { name: /card image/i })).toBeNull();
   });
 
@@ -206,7 +212,7 @@ describe("a folder that is not a tree (ART-199)", () => {
       "buildSession.kind": "install",
       "buildSession.tree": { root: "E:\\amiga\\os39", builtHere: false },
     });
-    renderAt("/os-builder/paketler");
+    renderAt("/os-builder/secim");
 
     const said = await screen.findByTestId("step-wrong-folder");
     expect(said.textContent).toMatch(/distribution\.json/);
@@ -218,7 +224,7 @@ describe("a folder that is not a tree (ART-199)", () => {
       "buildSession.kind": "install",
       "buildSession.tree": { root: "E:\dist", builtHere: true },
     });
-    renderAt("/os-builder/paketler");
+    renderAt("/os-builder/secim");
     await screen.findByTestId("packages");
     expect(screen.queryByTestId("step-wrong-folder")).toBeNull();
   });
@@ -230,7 +236,7 @@ describe("a folder that is not a tree (ART-199)", () => {
       "buildSession.kind": "install",
       "buildSession.tree": { root: "E:\dist", builtHere: true },
     });
-    renderAt("/os-builder/paketler");
+    renderAt("/os-builder/secim");
     await screen.findByTestId("packages");
     expect(screen.queryByTestId("step-wrong-folder")).toBeNull();
   });
@@ -268,8 +274,59 @@ describe("Verify against a card is on the volumes step (ART-197 wave 3)", () => 
   /// marker.
   it("is not on the install step any more", () => {
     seed({});
-    renderAt("/os-builder/kaynak");
+    renderAt("/os-builder/dosyalar");
     expect(screen.getByTestId("install")).toBeTruthy();
     expect(screen.queryByTestId("verify")).toBeNull();
+  });
+});
+
+describe("the retired routes still resolve (four-tab design § 2)", () => {
+  // A URL that stopped resolving is a link in the operation log, a remembered
+  // position and a habit that now goes nowhere; the `*` catch-all would send
+  // it home, which is the confident-wrong form of "this moved". So the guard
+  // asserts the specific tab, never "something rendered".
+  beforeEach(() => {
+    seed({
+      "buildSession.kind": "install",
+      "buildSession.tree": { root: "E:\\dist", builtHere: true },
+    });
+  });
+
+  it("sends kaynak to the files tab", () => {
+    renderAt("/os-builder/kaynak");
+    expect(screen.getByTestId("install")).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: /^1\. Amiga files/ }).getAttribute("aria-current")
+    ).toBe("page");
+  });
+
+  it("sends paketler, amiga-kurulum and ilk-acilis to the choice tab", () => {
+    for (const old of ["paketler", "amiga-kurulum", "ilk-acilis"]) {
+      const view = renderAt(`/os-builder/${old}`);
+      expect(screen.getByTestId("packages")).toBeTruthy();
+      expect(screen.getByTestId("firstboot")).toBeTruthy();
+      expect(
+        screen.getByRole("link", { name: /^2\. What to install/ }).getAttribute("aria-current")
+      ).toBe("page");
+      view.unmount();
+    }
+  });
+});
+
+describe("the two tabs that hold nothing yet say where their fields are", () => {
+  beforeEach(() => seed({ "buildSession.kind": "install" }));
+
+  it("makine names the files tab", () => {
+    renderAt("/os-builder/makine");
+    const tab = screen.getByTestId("tab-makine");
+    expect(tab.textContent).toContain(i18n.t("osBuilder.tab.makineNotYet"));
+    expect(within(tab).getByRole("link").getAttribute("href")).toBe("/os-builder/dosyalar");
+  });
+
+  it("derle names the files tab", () => {
+    renderAt("/os-builder/derle");
+    const tab = screen.getByTestId("tab-derle");
+    expect(tab.textContent).toContain(i18n.t("osBuilder.tab.derleNotYet"));
+    expect(within(tab).getByRole("link").getAttribute("href")).toBe("/os-builder/dosyalar");
   });
 });

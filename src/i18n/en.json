@@ -703,14 +703,19 @@
   "osBuilder": {
     "step": {
       "hedef": "What are we building",
+      "dosyalar": "Amiga files",
+      "secim": "What to install",
+      "makine": "Kickstart and destination",
+      "derle": "Build",
       "kaynak": "Install media",
-      "paketler": "Update packages",
-      "amiga-kurulum": "AmigaOS updates",
-      "ilk-acilis": "First boot on the Amiga",
       "kart": "The card image",
       "birimler": "Prepare volumes",
       "asksTree": "This step works on an AmigaOS folder, and none has been chosen yet. Pick one below, or build one first:",
       "notATree": "This folder is not an AmigaOS folder ART built: it holds no distribution.json, so ART cannot say what is in it or what a package would replace. Pick another folder below, or build one here:"
+    },
+    "tab": {
+      "makineNotYet": "The Kickstart, the keyboard layout and the destination folder are on the files tab for now:",
+      "derleNotYet": "The plan and the Build button are on the files tab for now:"
     },
     "intro": "The AmigaOS distributions that run on a PiStorm, what each one needs from you, and whether what you have suits it. ART never downloads a distribution — you fetch it yourself and point ART at the file.",
     "notBuiltYet": "ART cannot write a distribution card yet. This screen tells you what a distribution requires and checks the ROM and card you have against it.",

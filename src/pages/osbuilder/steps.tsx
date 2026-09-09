@@ -6,6 +6,16 @@
 // reaches the step that needs it without anyone remembering to wire it
 // (ART-197).
 //
+// **The install lane is four numbered tabs** since the owner's 2026-09-09
+// verdict on the five-step lane (four-tab design § 2): `dosyalar` · `secim` ·
+// `makine` · `derle`. Round 1 only moves the panels; rounds 2-4 move the
+// fields. So `dosyalar` mounts today's install step whole, `secim` mounts the
+// two panels that read the tree, and `makine` and `derle` say in one sentence
+// where their fields are today rather than rendering an empty card — a tab
+// that showed nothing would hide features that work (CLAUDE.md: register
+// unready, never hide). The retired `kaynak` · `paketler` · `amiga-kurulum` ·
+// `ilk-acilis` are redirects in `routes.tsx`, not steps.
+//
 // A step opened on its own **asks** rather than rendering empty, and asking is
 // a state rather than a refusal — the panel stays mounted and stays usable, so
 // nothing here turns an optional step into a gate. The sentence names the step
@@ -19,7 +29,6 @@ import { Link, useLocation } from "react-router-dom";
 import { readiness } from "@/lib/buildSteps";
 import { osinstallDescribeTree } from "@/lib/osinstall";
 import { useBuildSession } from "@/lib/useBuildSession";
-import { AmigaInstallPanel } from "@/components/osbuilder/AmigaInstallPanel";
 import { AppearancePanel } from "@/components/osbuilder/AppearancePanel";
 import { CardBuilder } from "@/components/osbuilder/CardBuilder";
 import { FirstBootPanel } from "@/components/osbuilder/FirstBootPanel";
@@ -38,20 +47,11 @@ function Asks() {
       style={{ display: "block", padding: "8px 12px", marginBottom: 16, fontSize: 12 }}
     >
       {t("osBuilder.step.asksTree")}{" "}
-      <Link to="/os-builder/kaynak">{t("osBuilder.step.kaynak")}</Link>
+      <Link to="/os-builder/dosyalar">{t("osBuilder.step.dosyalar")}</Link>
     </div>
   );
 }
 
-/**
- * Building the tree.
- *
- * A disc dropped on the drop panel arrives here through router state, carried
- * on by the shell. `arrivalKey` is `location.key` — unique per navigation — so
- * a second drop of the *same* file is still a distinct value the screen can
- * react to; the path string alone is value-equal and a dependency array would
- * treat it as no change.
- */
 /**
  * What ART makes of the folder the session is pointing at (ART-199).
  *
@@ -92,25 +92,37 @@ function WrongFolder() {
       style={{ display: "block", padding: "8px 12px", marginBottom: 16, fontSize: 12 }}
     >
       {t("osBuilder.step.notATree")}{" "}
-      <Link to="/os-builder/kaynak">{t("osBuilder.step.kaynak")}</Link>
+      <Link to="/os-builder/dosyalar">{t("osBuilder.step.dosyalar")}</Link>
     </div>
   );
 }
 
-export function StepKaynak() {
+/**
+ * Tab 1 — Amiga files. In round 1 this is the whole of today's source step.
+ *
+ * A disc dropped on the drop panel arrives here through router state, carried
+ * on by the shell. `arrivalKey` is `location.key` — unique per navigation — so
+ * a second drop of the *same* file is still a distinct value the screen can
+ * react to; the path string alone is value-equal and a dependency array would
+ * treat it as no change.
+ */
+export function StepDosyalar() {
   const location = useLocation();
   const dropped = (location.state as { path?: string } | null)?.path ?? null;
   return (
-    <OsInstall
-      droppedMedia={dropped ? { path: dropped, arrivalKey: location.key } : null}
-    />
+    <OsInstall droppedMedia={dropped ? { path: dropped, arrivalKey: location.key } : null} />
   );
 }
 
-export function StepPaketler() {
+/**
+ * Tab 2 — what to install. In round 1 it holds the two panels round 3 turns
+ * into ticks: the package checklist and the first-boot block. Both read the
+ * tree, so one readiness banner covers both.
+ */
+export function StepSecim() {
   const { session, setTree, setPackages } = useBuildSession();
   const isTree = useTreeCheck(session.tree.root);
-  const state = readiness(session, "paketler", isTree);
+  const state = readiness(session, "secim", isTree);
   return (
     <>
       {state === "asks" && <Asks />}
@@ -124,47 +136,64 @@ export function StepPaketler() {
         onChosenChange={(chosen) => setPackages({ chosen })}
         release={session.release}
       />
-    </>
-  );
-}
-
-export function StepAmigaKurulum() {
-  const { session, setTree } = useBuildSession();
-  const isTree = useTreeCheck(session.tree.root);
-  const state = readiness(session, "amiga-kurulum", isTree);
-  return (
-    <>
-      {state === "asks" && <Asks />}
-      {state === "wrong-folder" && <WrongFolder />}
-      <AmigaInstallPanel
-        treeRoot={session.tree.root}
-        onTreeRootChange={(root) => setTree({ root, builtHere: false })}
-        packageFolder={session.packages.folder}
-        // **The whole material list** (round 3, task 2). The chain and the
-        // slots are both resolved against everything the user has, not
-        // against the one folder this panel's dialogs open on — and this
-        // step is the route the chain screen actually lives at, so a list
-        // that stopped here would leave the chain resolving against nothing.
-        materialFolders={session.material.folders.map((entry) => entry.path)}
-        release={session.release}
-      />
-    </>
-  );
-}
-
-export function StepIlkAcilis() {
-  const { session, setTree } = useBuildSession();
-  const isTree = useTreeCheck(session.tree.root);
-  const state = readiness(session, "ilk-acilis", isTree);
-  return (
-    <>
-      {state === "asks" && <Asks />}
-      {state === "wrong-folder" && <WrongFolder />}
       <FirstBootPanel
         treeRoot={session.tree.root}
         onTreeRootChange={(root) => setTree({ root, builtHere: false })}
       />
     </>
+  );
+}
+
+/**
+ * A tab whose fields still live on the files tab — says so, links there.
+ *
+ * The two sentences arrive **already rendered**, from a literal key at each
+ * call site rather than one composed here from `id`:
+ * `literal-keys.test.ts` checks that every literal key resolves in both
+ * catalogues, and a composed key would buy a dynamic call site for nothing —
+ * nothing decides these keys, they are simply this tab's own.
+ */
+function NotYet({
+  id,
+  heading,
+  sentence,
+}: {
+  id: "makine" | "derle";
+  heading: string;
+  sentence: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <section className="card" data-testid={`tab-${id}`} style={{ marginBottom: 16 }}>
+      <h2 style={{ fontSize: 16, marginTop: 0 }}>{heading}</h2>
+      <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+        {sentence} <Link to="/os-builder/dosyalar">{t("osBuilder.step.dosyalar")}</Link>
+      </p>
+    </section>
+  );
+}
+
+/** Tab 3 — Kickstart and destination. Round 2 moves the three fields here. */
+export function StepMakine() {
+  const { t } = useTranslation();
+  return (
+    <NotYet
+      id="makine"
+      heading={t("osBuilder.step.makine")}
+      sentence={t("osBuilder.tab.makineNotYet")}
+    />
+  );
+}
+
+/** Tab 4 — build. Round 4 moves the plan, the button and the run here. */
+export function StepDerle() {
+  const { t } = useTranslation();
+  return (
+    <NotYet
+      id="derle"
+      heading={t("osBuilder.step.derle")}
+      sentence={t("osBuilder.tab.derleNotYet")}
+    />
   );
 }
 

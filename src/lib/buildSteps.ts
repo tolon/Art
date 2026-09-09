@@ -7,6 +7,10 @@
 // state so browser back/forward and a jump to a step work at the router
 // level, not through a switch somebody has to keep in sync.
 //
+// **Four numbered tabs for a tree**, after the owner's 2026-09-09 verdict on
+// the five-step lane (four-tab design § 1.1): `dosyalar`, `secim`, `makine`,
+// `derle`.
+//
 // **A step opens standalone.** Navigating straight to a step is legal:
 // `readiness` is how the step knows whether it can act on what the session
 // already holds or has to ask first. It never *blocks* — asking is a state,
@@ -19,25 +23,22 @@
 import type { BuildKind, BuildSession } from "@/lib/buildSession";
 
 /**
- * The steps that exist today.
+ * The steps that exist.
  *
- * Turkish path segments, matching the design. Paths are deliberately not
- * translated: a URL that changed with the language would break every
- * remembered link and every `builtin.rs::route` value, and a route is not
- * user-facing copy.
- *
- * `bilesenler` (components) and `ozet` (summary) are **not here yet** — the
- * components live inside `OsInstall.tsx` until wave 2 splits it, and the
- * summary is wave 3's own scope. A route that renders nothing is worse than a
- * route that does not exist; §96's "Coming Later" is about actions ART
- * offers, not about empty pages.
+ * Turkish path segments, deliberately untranslated (a URL that changed with
+ * the language would break every remembered link and every
+ * `builtin.rs::route` value). `hedef` is the entry every kind has; the four
+ * after it are the install lane's numbered tabs (four-tab design § 2). The
+ * retired `kaynak · paketler · amiga-kurulum · ilk-acilis` are redirects in
+ * `pages/osbuilder/routes.tsx`, not steps — a step id no strip draws is dead
+ * weight the next reader has to eliminate again.
  */
 export const STEP_IDS = [
   "hedef",
-  "kaynak",
-  "paketler",
-  "amiga-kurulum",
-  "ilk-acilis",
+  "dosyalar",
+  "secim",
+  "makine",
+  "derle",
   "kart",
   "birimler",
 ] as const;
@@ -67,7 +68,7 @@ export type Readiness = "ready" | "asks" | "wrong-folder";
 export function stepsFor(kind: BuildKind): StepId[] {
   switch (kind) {
     case "install":
-      return ["hedef", "kaynak", "paketler", "amiga-kurulum", "ilk-acilis"];
+      return ["hedef", "dosyalar", "secim", "makine", "derle"];
     case "boot-card":
       return ["hedef", "kart"];
     case "prepare-volumes":
@@ -82,10 +83,11 @@ export function stepsFor(kind: BuildKind): StepId[] {
 /**
  * Whether a step has what it needs.
  *
- * Only the two tree-consuming steps can be short of anything in this wave.
- * `kaynak`, `kart` and `birimler` each own their own inputs and ask for them
+ * Only the tree-consuming step can be short of anything in this round.
+ * `dosyalar`, `kart` and `birimler` each own their own inputs and ask for them
  * inline, exactly as they do today — gating them on a value they never read
- * would invent a dependency that does not exist.
+ * would invent a dependency that does not exist. `makine` and `derle` hold
+ * nothing of their own yet.
  */
 export function readiness(
   session: BuildSession,
@@ -101,9 +103,10 @@ export function readiness(
   treeIsDistribution: boolean | null = null
 ): Readiness {
   switch (step) {
-    case "paketler":
-    case "amiga-kurulum":
-    case "ilk-acilis":
+    case "secim":
+      // `secim` holds the package ticks and the first-boot tick in this
+      // round, both of which read the tree.
+      //
       // No folder beats a bad one. "Pick one" is the useful sentence, and
       // "that is not a tree" said about nothing would be nonsense.
       if (!hasTree(session)) return "asks";
@@ -123,4 +126,18 @@ function hasTree(session: BuildSession): boolean {
 /** The i18n key for a step's name in the progress strip. */
 export function stepLabelKey(step: StepId): string {
   return `osBuilder.step.${step}`;
+}
+
+/** The i18n key for a kind's own name — the `hedef` chip in the strip. */
+export function kindLabelKey(kind: BuildKind): string {
+  switch (kind) {
+    case "install":
+      return "osBuilder.what.install";
+    case "boot-card":
+      return "osBuilder.what.bootCard";
+    case "prepare-volumes":
+      return "osBuilder.what.prepareVolumes";
+    case "distro":
+      return "osBuilder.what.distro";
+  }
 }

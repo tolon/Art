@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import en from "@/i18n/en.json";
+import tr from "@/i18n/tr.json";
 import {
   DEFAULT_COMPONENTS,
   DEFAULT_CARD,
@@ -9,7 +11,7 @@ import {
   DEFAULT_PACKAGES,
   type BuildSession,
 } from "./buildSession";
-import { readiness, stepLabelKey, stepsFor, STEP_IDS } from "./buildSteps";
+import { kindLabelKey, readiness, stepLabelKey, stepsFor, STEP_IDS } from "./buildSteps";
 
 function sessionWith(over: Partial<BuildSession> = {}): BuildSession {
   return {
@@ -28,14 +30,8 @@ function sessionWith(over: Partial<BuildSession> = {}): BuildSession {
 }
 
 describe("stepsFor", () => {
-  it("gives the install job its own steps and not the card's", () => {
-    expect(stepsFor("install")).toEqual([
-      "hedef",
-      "kaynak",
-      "paketler",
-      "amiga-kurulum",
-      "ilk-acilis",
-    ]);
+  it("gives the install job hedef and its four numbered tabs, nothing else", () => {
+    expect(stepsFor("install")).toEqual(["hedef", "dosyalar", "secim", "makine", "derle"]);
   });
 
   it("gives the card job the card step and none of the install's", () => {
@@ -56,35 +52,26 @@ describe("stepsFor", () => {
     }
   });
 
-  it("offers no step that is not a real step", () => {
+  it("offers no step that is not a real step, and no retired one", () => {
     for (const kind of ["distro", "boot-card", "install", "prepare-volumes"] as const) {
       for (const step of stepsFor(kind)) {
         expect(STEP_IDS).toContain(step);
       }
     }
+    for (const retired of ["kaynak", "paketler", "amiga-kurulum", "ilk-acilis"]) {
+      expect(STEP_IDS as readonly string[]).not.toContain(retired);
+    }
   });
 });
 
 describe("readiness", () => {
-  it("says a packages step with no tree must ask", () => {
-    expect(readiness(sessionWith(), "paketler")).toBe("asks");
+  it("says the choice tab with no tree must ask", () => {
+    expect(readiness(sessionWith(), "secim")).toBe("asks");
   });
 
-  it("says a packages step with a tree is ready", () => {
+  it("says the choice tab with a tree is ready", () => {
     const s = sessionWith({ tree: { root: "E:\\dist", builtHere: true } });
-    expect(readiness(s, "paketler")).toBe("ready");
-  });
-
-  it("says the Amiga-side install must ask without a tree, and is ready with one", () => {
-    expect(readiness(sessionWith(), "amiga-kurulum")).toBe("asks");
-    const s = sessionWith({ tree: { root: "E:\\dist", builtHere: false } });
-    expect(readiness(s, "amiga-kurulum")).toBe("ready");
-  });
-
-  it("says first boot must ask without a tree, and is ready with one", () => {
-    expect(readiness(sessionWith(), "ilk-acilis")).toBe("asks");
-    const s = sessionWith({ tree: { root: "E:\\dist", builtHere: false } });
-    expect(readiness(s, "ilk-acilis")).toBe("ready");
+    expect(readiness(s, "secim")).toBe("ready");
   });
 
   it("never makes the first step ask — it is where a build begins", () => {
@@ -95,17 +82,16 @@ describe("readiness", () => {
     // A cleared field writes "", and sending "" to the backend as a path is
     // how a refusal ends up naming a folder nobody chose.
     const s = sessionWith({ tree: { root: "", builtHere: false } });
-    expect(readiness(s, "paketler")).toBe("asks");
+    expect(readiness(s, "secim")).toBe("asks");
   });
 
   it("does not make a step ask for something it does not use", () => {
-    // `kaynak`, `kart` and `birimler` own their own inputs and ask for them
-    // inline, exactly as they do today. A tree they never read must not gate
-    // them.
+    // `dosyalar` owns its own inputs; `makine` and `derle` hold nothing yet
+    // in this round; `kart` and `birimler` are the other lanes.
     const s = sessionWith();
-    expect(readiness(s, "kaynak")).toBe("ready");
-    expect(readiness(s, "kart")).toBe("ready");
-    expect(readiness(s, "birimler")).toBe("ready");
+    for (const step of ["dosyalar", "makine", "derle", "kart", "birimler"] as const) {
+      expect(readiness(s, step)).toBe("ready");
+    }
   });
 });
 
@@ -117,6 +103,30 @@ describe("stepLabelKey", () => {
       expect(key).not.toContain(" ");
     }
   });
+
+  it("resolves to a leaf in both catalogues for every step", () => {
+    for (const step of STEP_IDS) {
+      expect(en.osBuilder.step[step]).toEqual(expect.any(String));
+      expect(tr.osBuilder.step[step]).toEqual(expect.any(String));
+    }
+  });
+});
+
+describe("kindLabelKey", () => {
+  it("names each kind by its own 'what are we building' label", () => {
+    expect(kindLabelKey("install")).toBe("osBuilder.what.install");
+    expect(kindLabelKey("boot-card")).toBe("osBuilder.what.bootCard");
+    expect(kindLabelKey("prepare-volumes")).toBe("osBuilder.what.prepareVolumes");
+    expect(kindLabelKey("distro")).toBe("osBuilder.what.distro");
+  });
+
+  it("resolves to a leaf in both catalogues", () => {
+    for (const kind of ["distro", "boot-card", "install", "prepare-volumes"] as const) {
+      const leaf = kindLabelKey(kind).replace("osBuilder.what.", "");
+      expect((en.osBuilder.what as Record<string, string>)[leaf]).toEqual(expect.any(String));
+      expect((tr.osBuilder.what as Record<string, string>)[leaf]).toEqual(expect.any(String));
+    }
+  });
 });
 
 describe("readiness, when ART has looked at the folder (ART-199)", () => {
@@ -125,29 +135,27 @@ describe("readiness, when ART has looked at the folder (ART-199)", () => {
   it("says the folder is the wrong one when ART has looked and it is not a tree", () => {
     // The owner pointed the Amiga-side step at their own AmigaOS folder. The
     // step said ready, and the refusal arrived on the button.
-    expect(readiness(withTree, "paketler", false)).toBe("wrong-folder");
-    expect(readiness(withTree, "amiga-kurulum", false)).toBe("wrong-folder");
-    expect(readiness(withTree, "ilk-acilis", false)).toBe("wrong-folder");
+    expect(readiness(withTree, "secim", false)).toBe("wrong-folder");
   });
 
   it("is ready once ART has looked and it is a tree", () => {
-    expect(readiness(withTree, "paketler", true)).toBe("ready");
+    expect(readiness(withTree, "secim", true)).toBe("ready");
   });
 
   it("does not accuse a folder ART has not looked at yet", () => {
     // `null` is "not asked". Rendering "wrong folder" while the answer is
     // still in flight would be a confident wrong sentence of its own.
-    expect(readiness(withTree, "paketler", null)).toBe("ready");
+    expect(readiness(withTree, "secim", null)).toBe("ready");
   });
 
   it("still asks first when there is no folder at all", () => {
     // No folder beats a bad one: "pick one" is the useful sentence, and
     // "that is not a tree" about nothing would be nonsense.
-    expect(readiness(sessionWith(), "paketler", false)).toBe("asks");
+    expect(readiness(sessionWith(), "secim", false)).toBe("asks");
   });
 
   it("never accuses a step that does not read a tree", () => {
     expect(readiness(withTree, "kart", false)).toBe("ready");
-    expect(readiness(withTree, "kaynak", false)).toBe("ready");
+    expect(readiness(withTree, "dosyalar", false)).toBe("ready");
   });
 });
