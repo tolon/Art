@@ -2250,7 +2250,7 @@ describe("the chain", () => {
     expect(radioAt(7).checked).toBe(true);
   });
 
-  it("sends the CD row to the top of this tab, where a disc is chosen, and never runs it", async () => {
+  it("sends the CD row to the Amiga files tab, where a disc is chosen, and never runs it", async () => {
     renderChain();
     await screen.findAllByTestId("amiga-chain-row");
 

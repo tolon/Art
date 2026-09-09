@@ -162,6 +162,21 @@ describe("the sentences that send a user to another tab name it as the tab is la
   });
 
   /**
+   * `osinstall.chain.mediumNotBuiltFrom` had the same defect on the same
+   * screen (the fix wave's concern 2): "point ART at that disc at the top of
+   * this tab" — and the studio has no disc list. Same pin, same reason.
+   */
+  it("names the Amiga files tab in the wrong-medium sentence too", () => {
+    expect(en.osinstall.chain.mediumNotBuiltFrom).toContain(en.osBuilder.step.dosyalar);
+    expect(tr.osinstall.chain.mediumNotBuiltFrom).toContain(tr.osBuilder.step.dosyalar);
+    expect(en.osinstall.chain.mediumNotBuiltFrom.toLowerCase()).not.toContain("top of this tab");
+    expect(tr.osinstall.chain.mediumNotBuiltFrom.toLowerCase()).not.toContain("bu sekmenin üstünde");
+    // The link beside it is the action, and it goes to that tab too.
+    expect(en.osinstall.chain.cdLink).toContain(en.osBuilder.step.dosyalar);
+    expect(tr.osinstall.chain.cdLink).toContain(tr.osBuilder.step.dosyalar);
+  });
+
+  /**
    * **Two more sentences that name a tab or a field label** (whole-branch
    * review of round 5, Minor 1). Neither was pinned, and both were written
    * in round 5 — the wave that renamed nothing is exactly the wave after

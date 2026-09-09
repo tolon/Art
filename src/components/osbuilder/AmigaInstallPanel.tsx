@@ -1776,9 +1776,10 @@ export function AmigaInstallPanel() {
                       {t(line.where.key, line.where.params)}
                     </span>
                   )}
-                  {/* The first link is a disc, and it is not chosen down
-                      here. The link says where it is chosen — the top of
-                      this same tab — instead of leaving a row nobody can
+                  {/* The first link is a disc, and it is not chosen here.
+                      The link says where it is chosen — the OS Builder's
+                      Amiga files tab (this panel lives in the WinUAE studio
+                      since round 5) — instead of leaving a row nobody can
                       act on. */}
                   {row.packageId === null && (
                     <span style={{ marginLeft: 6 }}>

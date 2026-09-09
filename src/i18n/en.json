@@ -2387,7 +2387,7 @@
       "blockedComponent": "{{name}} needs the {{components}} component installed on the tree first — that is chosen when the tree is built, not here.",
       "missing": "{{name}} is not in the folders you named. Expected {{filenames}}.",
       "missingUnnamed": "{{name}} is not in the folders you named.",
-      "mediumNotBuiltFrom": "This tree was not built from {{name}}. Point ART at that disc at the top of this tab.",
+      "mediumNotBuiltFrom": "This tree was not built from {{name}}. Point ART at that disc on the OS Builder's Amiga files tab.",
       "notNeeded": "{{name}} is not needed — {{supersededBy}} already contains it.",
       "refusedAmbiguous": "{{count}} files here could be {{name}}, and ART will not choose between them: {{candidates}}. Pick the one you mean.",
       "notYetRunnable": {
@@ -2399,7 +2399,7 @@
       "setLineNotNeeded": "{{release}} updates — {{installed}} of {{total}} applied — {{notNeeded}} not needed",
       "tree": "tree {{root}}",
       "treeNone": "No distribution tree chosen yet — nothing here can be recorded as applied until one is.",
-      "cdLink": "Choose the disc at the top of this tab",
+      "cdLink": "Choose the disc on the Amiga files tab",
       "next": "Next: {{name}}",
       "reportRow": "This report is about {{name}}.",
       "noneReady": "Nothing here can run yet.",

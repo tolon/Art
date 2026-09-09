@@ -2387,7 +2387,7 @@
       "blockedComponent": "{{name}} için önce ağaçta {{components}} bileşeninin kurulu olması gerekiyor — bu, ağaç kurulurken seçilir, burada değil.",
       "missing": "{{name}} adını verdiğiniz klasörlerde yok. Beklenen: {{filenames}}.",
       "missingUnnamed": "{{name}} adını verdiğiniz klasörlerde yok.",
-      "mediumNotBuiltFrom": "Bu ağaç {{name}} diskinden kurulmamış. O diski bu sekmenin üstünde gösterin.",
+      "mediumNotBuiltFrom": "Bu ağaç {{name}} diskinden kurulmamış. O diski İşletim Sistemi Kurucusu'nun Amiga dosyaları sekmesinde gösterin.",
       "notNeeded": "{{name}} gerekmiyor — {{supersededBy}} bunu zaten içeriyor.",
       "refusedAmbiguous": "Buradaki {{count}} dosya {{name}} olabilir ve ART aralarında seçim yapmaz: {{candidates}}. Hangisini kastettiğinizi siz seçin.",
       "notYetRunnable": {
@@ -2399,7 +2399,7 @@
       "setLineNotNeeded": "{{release}} güncellemeleri — {{total}} satırın {{installed}} tanesi uygulandı — {{notNeeded}} tanesi gerekmiyor",
       "tree": "ağaç {{root}}",
       "treeNone": "Henüz bir dağıtım ağacı seçilmedi — biri seçilene kadar buradaki hiçbir şey uygulanmış olarak kaydedilemez.",
-      "cdLink": "Diski bu sekmenin üstünde seçin",
+      "cdLink": "Diski Amiga dosyaları sekmesinde seçin",
       "next": "Sıradaki: {{name}}",
       "reportRow": "Bu rapor {{name}} hakkında.",
       "noneReady": "Burada henüz çalıştırılabilecek bir şey yok.",
