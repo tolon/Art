@@ -353,6 +353,91 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-288** 🔴 ✅ **The headline feature of 0.9.1 refused on the owner's
+own material: the host placement resolved a package's archive by identity
+alone, and their folder holds two builds of BoingBag 3.9-1** — *found
+2026-09-09 on the third real-screen capture (`docs/assets/chain.png`, the 11:2x
+build); fixed the same day*
+`src-tauri/src/core/osinstall/slots.rs` ·
+`src-tauri/src/commands/osinstall.rs` ·
+`src/components/osbuilder/{AmigaInstallPanel,HostPlacement}.tsx` ·
+`src/lib/osinstall.ts`
+
+`E:\amiga\Amigatolon\os39` holds `BoingBag39-1.lha` (`Updater` 45.13) and
+`BoingBag39-1 (1).lha` (45.15, the build ART's own hash table names). Both carry
+the top-level directory `BoingBag3.9-1`, so the preview refused:
+
+    invalid input: more than one archive carries 'BoingBag3.9-1', the media
+    'boingbag-39-1' needs: E:\amiga\Amigatolon\os39\BoingBag39-1 (1).lha,
+    E:\amiga\Amigatolon\os39\BoingBag39-1.lha (ART-INPUT-INVALID)
+
+**Two screens, two answers, and the one that refused was the one that does the
+work.** The chain row directly above it named `BoingBag39-1 (1).lha` — the
+owner's override, and rank 1 by hash — and the source step's readout said the
+same. The placement path (`osinstall_collisions` → `resolve_packages_for_add`
+→ `scan::package_for`) knew neither fact: it matched on `media` and
+`distinguished_by` and nothing else. So the feature this whole branch is about
+could not place a BoingBag on the folder it was written for.
+
+**Fixed by giving the placement path the chain's own rule**, not by teaching it
+a second one. `slots::package_archive_for` is that rule, in `core/osinstall`
+beside the rank rules it mirrors, and both callers go through it:
+
+0. the user's override — an override is not an identification ART made, so it
+   is not compared with one;
+1. a single candidate after `media` and `distinguished_by` — the ordinary
+   case, and all there was before;
+2. **the bytes**: of several archives claiming one identity, the one whose md5
+   row names this package's own artefact, when *exactly* one does.
+
+Anything else is the ambiguity refusal, unchanged and naming both — two
+builds ART can say nothing about are still two, and nothing here picks a winner
+between files it has no evidence about. **This closes ART-284's deferred second
+half** (*"a hash-known build outranks an unknown one at the same identity"*),
+which that entry declined in writing and said would need its own measurement;
+the owner's own folder is that measurement.
+
+The overrides reach Rust the way they already reach `osinstall_slots` and
+`osinstall_chain`: `osinstall_collisions` and `osinstall_add_package` take
+`overrides`, `useHostPlacement` forwards them, and the panel passes the same
+list it already builds with `slotOverrides`. Nothing hashes anything on this
+path — the hash answers are the scan cache's, read the way `gather_facts`
+reads them, so a folder nobody has identified simply falls back to the refusal
+it gave before.
+
+*Tests:* `core::osinstall::slots::a_hash_known_build_outranks_an_unknown_one_at_the_same_identity_art_288`,
+`…::two_unknown_builds_at_one_identity_are_still_ambiguous`,
+`…::an_override_outranks_the_hash_even_when_it_names_the_unknown_build`,
+`…::one_candidate_is_that_candidate_and_none_is_missing`, and
+`commands::osinstall::resolve_packages_for_add_settles_two_builds_of_one_package_art_288`
+— the owner's shape end to end, all three ranks. **Mutation: the hash rank
+made to never resolve, and both the core and the command test fell**:
+*"expected the hash-known build, got Ambiguous([… (1).lha, … .lha])"*.
+
+**ART-287** 🟡 ✅ **"Checking what this would replace…" stayed on
+screen above the preview's own refusal** — *found 2026-09-09 on the same
+capture; fixed the same day*
+`src/lib/osinstall.ts` · `src/components/osbuilder/{AmigaInstallPanel,PackagePanel}.tsx`
+
+The heading above a host-placement preview was a two-way ternary in both
+panels: the counts once the answer arrived, *"Checking what this would
+replace…"* otherwise. *Otherwise* covers a refusal — so with ART-288's
+refusal in the red box directly beneath it, the screen said it was still
+working over a finished failure. Checking, done and refused are three states
+and a person does three different things about them; collapsing two of them is
+the rule `docs/lessons.md` opens with.
+
+`previewHeadingPhrase` decides which of the three the heading is, in
+`@/lib/osinstall` where a test can reach it, and both panels only render it.
+`null` is a fourth state — nothing asked — and the caller renders no
+heading at all for it, which is ART-286's fix and not this one's to repeat.
+
+*Tests:* `stops saying it is checking once the preview has refused` — both
+halves, because asserting only that the refusal's heading appears would pass
+for a screen showing both at once, which is the frame this is about.
+**Mutation: the refused arm removed and it fell** — *"expected 'Checking what
+this would replace…inva…' to contain 'The check did not finish…'"*.
+
 **ART-286** 🟡 ✅ **"Checking what this would replace…" never resolves:
 the panel renders the host-placement preview for a row it never asks about** —
 *found 2026-09-09 by the owner on `docs/assets/chain.png` (the 10:21 build),

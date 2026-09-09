@@ -325,6 +325,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A BoingBag installs even when you have two copies of it.** If your folder
+  held two builds of the same package — the original download and the later
+  one, which is exactly what a careful person ends up with — adding it
+  refused, saying it could not tell them apart, while the row above it was
+  already showing you which one it would use. ART now uses the same answer in
+  both places: the file you picked if you picked one, otherwise the build it
+  recognises by its contents. Two copies it knows nothing about are still a
+  question it puts to you rather than a guess.
+
+- **“Checking what this would replace…” no longer sits above a check that
+  has already failed.** The heading now says the check did not finish, and the
+  reason is where it always was, directly beneath.
+
 - **The updates step no longer sits on “Checking what this would
   replace…” for ever.** If ART reopened on a row that is already in
   your tree, that line appeared and stayed — nothing was being checked, and
