@@ -409,6 +409,48 @@ describe("the build run's sequence", () => {
     expect(result.current.running).toBe(false);
   });
 
+  it("starts no later phase when Stop lands while a phase is still succeeding", async () => {
+    // **The rule the between-phases check actually holds, and the only case
+    // that can see it.** In the case above the cancel reaches the job and the
+    // job rejects as cancelled, so the loop would have stopped on that ending
+    // alone — the flag is redundant there, and round 4's mutation round
+    // measured exactly that: removing `stopRequested.current ||` from the
+    // loop's guard killed no test. Here the tree job answers **successfully**
+    // after Stop was pressed (`jobCancel` answers false for a job that has
+    // already finished — the real race, not a theoretical one), so the only
+    // thing that can stop the run is the flag, checked between whole phases.
+    const job = pending();
+    const { result, onFirstBootWritten } = setup();
+
+    act(() => {
+      result.current.start([TREE_PHASE, PACKAGE_PHASE, FIRSTBOOT_PHASE], PLAN);
+    });
+    await waitFor(() => expect(applyMock).toHaveBeenCalled());
+
+    act(() => {
+      result.current.stop();
+    });
+    await act(async () => {
+      job.resolve(TREE_RESULT);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.finished).toBe(true));
+
+    // The phase that finished keeps the ending it earned — a success, not a
+    // cancellation this hook invented on its behalf — and every phase after
+    // it says it was never attempted rather than going quiet.
+    expect(states(result.current.reports)).toEqual([
+      "succeeded",
+      "not-attempted",
+      "not-attempted",
+    ]);
+    expect(order).toEqual(["apply"]);
+    expect(addPackageMock).not.toHaveBeenCalled();
+    expect(firstbootWriteMock).not.toHaveBeenCalled();
+    expect(onFirstBootWritten).not.toHaveBeenCalled();
+    expect(result.current.running).toBe(false);
+  });
+
   it("never asks for a tree when the sequence has no tree phase", async () => {
     const { result, onTreeWritten, onFirstBootWritten } = setup();
 
