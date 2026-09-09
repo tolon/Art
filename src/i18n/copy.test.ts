@@ -61,6 +61,11 @@ describe("the sentences that send a user to another tab name it as the tab is la
     // build works on is chosen once, on tab 3, and both now say so.
     "osBuilder.step.asksTree",
     "osBuilder.step.notATree",
+    // The whole-branch review of round 5 (Minor 1). `AmigaInstallPanel`'s
+    // one sentence for the case where the destination won names the tab that
+    // owns the destination — the panel draws no field then, so the name is
+    // the whole of what the user is given to act on, and it was unpinned.
+    "osinstall.amigaInstall.treeRoot.fromDestination",
   ] as const;
 
   const read = (catalogue: unknown, key: string): string =>
@@ -130,6 +135,79 @@ describe("the sentences that send a user to another tab name it as the tab is la
     expect(tr.osBuilder.step.dosyalar).toBeTruthy();
     expect(en.osinstall.blocked.noFolder).toContain(en.osBuilder.step.dosyalar);
     expect(tr.osinstall.blocked.noFolder).toContain(tr.osBuilder.step.dosyalar);
+  });
+
+  /**
+   * **And the badge that says ART has nowhere to look** (whole-branch review
+   * of round 5, Important 1). `osinstall.chain.noFolders` said *"add the
+   * folders your archives are in at the top of this tab"*, written when
+   * `AmigaInstallPanel` sat at the foot of the **Amiga files** tab, above
+   * which the folder list really was. Since round 5 the panel's only mount is
+   * the WinUAE studio, which has no folder list on it anywhere — so the
+   * badge sent the reader to the top of the screen they were already on while
+   * the `Link` a space later sent them to another tab. Two contradictory
+   * instructions one sentence apart.
+   *
+   * Pinned against `osBuilder.step.dosyalar` for the same drift reason as the
+   * blocker above: the sentence and the link must name one tab, and the tab's
+   * label is where that name comes from.
+   */
+  it("names the Amiga files tab in the badge whose link goes there", () => {
+    expect(en.osinstall.chain.noFolders).toContain(en.osBuilder.step.dosyalar);
+    expect(tr.osinstall.chain.noFolders).toContain(tr.osBuilder.step.dosyalar);
+    // And no longer points at the top of a screen that has no folder list:
+    // the presence check above would pass on a sentence that said both.
+    expect(en.osinstall.chain.noFolders.toLowerCase()).not.toContain("top of this tab");
+    expect(tr.osinstall.chain.noFolders.toLowerCase()).not.toContain("bu sekmenin üstünde");
+  });
+
+  /**
+   * **Two more sentences that name a tab or a field label** (whole-branch
+   * review of round 5, Minor 1). Neither was pinned, and both were written
+   * in round 5 — the wave that renamed nothing is exactly the wave after
+   * which a rename would go unnoticed.
+   *
+   * `firstboot.rehearse.needsTree` sits under the studio's disabled
+   * *Rehearse* button and names two places a tree can come from: the field
+   * above it (`osinstall.packages.treeRoot.label`) and the tab that owns the
+   * destination (`osBuilder.step.makine`). `osBuilder.build.navigationLockedLane`
+   * is the shell's own sentence while a build runs, and it names where the
+   * Stop button is: the OS Builder (`nav.osBuilder`), Build tab
+   * (`osBuilder.step.derle`).
+   */
+  it("names the tree field and the Kickstart tab in the rehearsal's own refusal", () => {
+    expect(en.osinstall.packages.treeRoot.label).toBeTruthy();
+    expect(tr.osinstall.packages.treeRoot.label).toBeTruthy();
+    expect(en.firstboot.rehearse.needsTree).toContain(en.osinstall.packages.treeRoot.label);
+    expect(en.firstboot.rehearse.needsTree).toContain(en.osBuilder.step.makine);
+    expect(tr.firstboot.rehearse.needsTree).toContain(tr.osinstall.packages.treeRoot.label);
+    expect(tr.firstboot.rehearse.needsTree).toContain(tr.osBuilder.step.makine);
+  });
+
+  it("names the OS Builder and its Build tab in the shell's locked sentence", () => {
+    expect(en.nav.osBuilder).toBeTruthy();
+    expect(tr.nav.osBuilder).toBeTruthy();
+    expect(en.osBuilder.step.derle).toBeTruthy();
+    expect(tr.osBuilder.step.derle).toBeTruthy();
+    expect(en.osBuilder.build.navigationLockedLane).toContain(en.nav.osBuilder);
+    expect(en.osBuilder.build.navigationLockedLane).toContain(en.osBuilder.step.derle);
+    expect(tr.osBuilder.build.navigationLockedLane).toContain(tr.nav.osBuilder);
+    expect(tr.osBuilder.build.navigationLockedLane).toContain(tr.osBuilder.step.derle);
+  });
+
+  /**
+   * **And the sentence after a refused run names the button as it reads**
+   * (whole-branch review of round 5, Minor 2). It said *"press Build
+   * again"*, but `run.succeeded` is `false` after a refusal, so
+   * `BuildTab` draws `osBuilder.build.run` — *Build* — and never
+   * `osBuilder.build.runAgain`. "Again" told the reader to look for a label
+   * that is not on the screen.
+   */
+  it("names the Build button as it reads after a refusal, not as it reads after a success", () => {
+    expect(en.osBuilder.build.next.refused).toContain(en.osBuilder.build.run);
+    expect(tr.osBuilder.build.next.refused).toContain(tr.osBuilder.build.run);
+    expect(en.osBuilder.build.next.refused).not.toContain(en.osBuilder.build.runAgain);
+    expect(tr.osBuilder.build.next.refused).not.toContain(tr.osBuilder.build.runAgain);
   });
 });
 

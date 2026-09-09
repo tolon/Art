@@ -470,8 +470,20 @@ export function AmigaInstallPanel() {
    * one sentence says where the tree came from and where to change it, which
    * is tab 3. Nothing is disabled and nothing is hidden that the user could
    * still act on here.
+   *
+   * **`treeSettled` is the other half, and this panel owes it the same
+   * answer tabs 2 and 3 give** (whole-branch review of round 5, Important 2).
+   * `isTree` arrives by round trip, so for the first render or two a
+   * destination that *is* a build looks like one that is not: without this
+   * flag the panel drew the Browse row for the *session's* tree and swapped
+   * it for the destination sentence a moment later, and asked the chain and
+   * the slots about the session tree first — a row reading *ready* and then
+   * *installed* about one file, which is exactly the defect `useChainTree`'s
+   * own comment names. So while the check is in flight the panel draws
+   * neither branch and asks nothing; `ChoiceTab` gates the same ask on
+   * `treeSettled` and `StepSecim` draws nothing until `settled`.
    */
-  const { treeRoot, source: treeSource } = useChainTree(destination);
+  const { treeRoot, source: treeSource, settled: treeSettled } = useChainTree(destination);
   const treeFromDestination = treeSource === "destination";
   const winuaePath = useSettingsStore((s) => s.settings.winuaePath);
   /**
@@ -559,6 +571,9 @@ export function AmigaInstallPanel() {
    *  be offered, without the user reloading the step. */
   const [chainAsked, setChainAsked] = useState(0);
   useEffect(() => {
+    // Not until the tree is settled — see `treeSettled` above. One ask,
+    // about the right folder, rather than two about two.
+    if (!treeSettled) return;
     const list = materialKey ? materialKey.split("\n") : [];
     let cancelled = false;
     osinstallChain(release, list, treeRoot, kickstart, JSON.parse(overridesKey))
@@ -574,7 +589,7 @@ export function AmigaInstallPanel() {
     return () => {
       cancelled = true;
     };
-  }, [release, materialKey, treeRoot, kickstart, chainAsked, overridesKey]);
+  }, [release, materialKey, treeRoot, kickstart, chainAsked, overridesKey, treeSettled]);
 
   /**
    * The rows and their sentences, paired **by index**: `chainLines` maps one
@@ -844,6 +859,10 @@ export function AmigaInstallPanel() {
    */
   const [slotReport, setSlotReport] = useState<SlotReport | null>(null);
   useEffect(() => {
+    // The same gate as the chain's, for the same reason: every field below
+    // is resolved against the tree, so asking before the destination check
+    // has answered fills them from one tree and then from another.
+    if (!treeSettled) return;
     const list = materialKey ? materialKey.split("\n") : [];
     let cancelled = false;
     osinstallSlots(release, list, treeRoot, kickstart, JSON.parse(overridesKey))
@@ -863,7 +882,7 @@ export function AmigaInstallPanel() {
     };
     // `chainAsked` too: a package placed from Windows changes what the
     // manifest records, and the fields above are resolved against it.
-  }, [release, materialKey, treeRoot, kickstart, chainAsked, overridesKey]);
+  }, [release, materialKey, treeRoot, kickstart, chainAsked, overridesKey, treeSettled]);
 
   const slotStates = slotReport?.states ?? [];
   /** The chosen package's own slot. */
@@ -1630,8 +1649,22 @@ export function AmigaInstallPanel() {
       {/* **The tree, and who owns it right now.** With the destination
           winning (`useChainTree`), a Browse here would write a value the
           hook immediately overrules — so the row says where the tree came
-          from and where to change it instead of offering a dead field. */}
-      {treeFromDestination ? (
+          from and where to change it instead of offering a dead field.
+
+          **And neither until the check has answered** (whole-branch review
+          of round 5, Important 2). A Browse row drawn for one render and
+          replaced by the destination sentence is a control the user may have
+          reached for; one faint line saying what ART is doing is the honest
+          state, and it is the same wait tabs 2 and 3 already keep. */}
+      {!treeSettled ? (
+        <p
+          className="faint"
+          data-testid="amiga-tree-checking"
+          style={{ fontSize: 11, margin: "0 0 12px" }}
+        >
+          {t("osinstall.chain.checkingDestination")}
+        </p>
+      ) : treeFromDestination ? (
         <p
           className="faint"
           data-testid="amiga-tree-from-destination"
@@ -1674,9 +1707,10 @@ export function AmigaInstallPanel() {
           {/* **Where ART was told to look, when it was told nowhere**
               (fix round 1, F6). Once, above the rows, carrying where the
               folders are added; each row says the short form of it for
-              itself. Since the four-tab rewrite this panel's only mount is
-              the foot of the `dosyalar` tab, so the place to act is the top
-              of this same tab — not another step. */}
+              itself. Since round 5 this panel's only mount is the WinUAE
+              studio, which holds no folder list at all, so the sentence
+              names the Amiga files tab — the same tab the link below it goes
+              to (whole-branch review of round 5, Important 1). */}
           {noFolders && (
             <p className="badge badge-warn" data-testid="amiga-chain-no-folders" style={{ display: "block", padding: "6px 12px", fontSize: 12, margin: "0 0 8px" }}>
               {t("osinstall.chain.noFolders")}{" "}

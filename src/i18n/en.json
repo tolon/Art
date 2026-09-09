@@ -795,7 +795,7 @@
         }
       },
       "next": {
-        "refused": "Fix what the refusal names, then press Build again.",
+        "refused": "Fix what the refusal names, then press Build.",
         "failed": "The tree is at {{root}}; {{done}} of {{total}} items were placed before this. Nothing was undone.",
         "failedUnknown": "The tree is at {{root}}; ART did not get far enough to say how much of the work was done. Nothing was undone.",
         "cancelled": "The tree is at {{root}}; {{files}} files were written before you stopped it. Nothing was undone."
@@ -2404,7 +2404,8 @@
       "reportRow": "This report is about {{name}}.",
       "noneReady": "Nothing here can run yet.",
       "allApplied": "Every link of this chain is accounted for — there is nothing left to run.",
-      "noFolders": "ART has nowhere to look for these files: add the folders your archives are in at the top of this tab.",
+      "noFolders": "ART has nowhere to look for these files: add the folders your archives are in on the OS Builder's Amiga files tab.",
+      "checkingDestination": "Checking the destination…",
       "missingNoFolders": "{{name}} — no material folders chosen yet.",
       "runRow": "Run this row",
       "refusedNotPlaceable": {

@@ -795,7 +795,7 @@
         }
       },
       "next": {
-        "refused": "Reddin işaret ettiğini düzeltin, sonra yeniden Derle'ye basın.",
+        "refused": "Reddin işaret ettiğini düzeltin, sonra Derle'ye basın.",
         "failed": "Ağaç {{root}} yolunda; {{total}} öğeden {{done}} tanesi yerleşmişti. Hiçbir şey geri alınmadı.",
         "failedUnknown": "Ağaç {{root}} yolunda; ART işin ne kadarının yapıldığını söyleyecek kadar ilerleyemedi. Hiçbir şey geri alınmadı.",
         "cancelled": "Ağaç şurada: {{root}} — siz durdurmadan önce {{files}} dosya yazılmıştı. Hiçbir şey geri alınmadı."
@@ -2404,7 +2404,8 @@
       "reportRow": "Bu rapor {{name}} hakkında.",
       "noneReady": "Burada henüz çalıştırılabilecek bir şey yok.",
       "allApplied": "Bu zincirin her halkası hesaba katıldı — çalıştırılacak bir şey kalmadı.",
-      "noFolders": "ART bu dosyaları arayacak bir yer bilmiyor: arşivlerinizin bulunduğu klasörleri bu sekmenin üstünde ekleyin.",
+      "noFolders": "ART bu dosyaları arayacak bir yer bilmiyor: arşivlerinizin bulunduğu klasörleri İşletim Sistemi Kurucusu'nun Amiga dosyaları sekmesinde ekleyin.",
+      "checkingDestination": "Hedef denetleniyor…",
       "missingNoFolders": "{{name}} — henüz hiçbir malzeme klasörü seçilmedi.",
       "runRow": "Bu satırı çalıştır",
       "refusedNotPlaceable": {

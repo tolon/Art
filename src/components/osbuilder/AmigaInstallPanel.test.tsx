@@ -49,6 +49,7 @@ import type {
   SlotCandidate,
   SlotReport,
   SlotState,
+  TreeSummary,
 } from "@/lib/osinstall";
 import type { JobProgress } from "@/lib/jobs";
 
@@ -141,6 +142,18 @@ interface PanelSeeds {
    * because `useDestinationCheck(null)` makes no round trip.
    */
   treeFromDestination?: boolean;
+  /**
+   * The destination path itself, when it has to differ from `treeRoot`.
+   *
+   * **Two distinct paths is what makes the destination-wins assertion a
+   * guard** (whole-branch review of round 5, Minor 9). Seeding one path into
+   * both the session's tree and tab 3's destination key made the sentence
+   * true of either rule, so a panel that read `session.tree.root` alone
+   * would have printed the same string. Pass this and the two are told
+   * apart. Defaults to `treeRoot`, which is what the cases written before
+   * the review already assumed.
+   */
+  destination?: string;
 }
 
 /** Put this build's own values where `useBuildSession` and `useRemembered`
@@ -160,7 +173,10 @@ function seedSession(seeds: PanelSeeds) {
         [`buildSession.packages.${release}`]: { folder: packageFolder, chosen: [] },
         "buildSession.tree": { root: treeRoot, builtHere: false },
         ...(seeds.treeFromDestination
-          ? { [rememberedComponentKey("osinstall.destination", release)]: treeRoot }
+          ? {
+              [rememberedComponentKey("osinstall.destination", release)]:
+                seeds.destination ?? treeRoot,
+            }
           : {}),
       },
     },
@@ -2626,10 +2642,16 @@ describe("the chain", () => {
  */
 describe("the distribution tree field, when the destination is what won", () => {
   it("draws one sentence with the path instead of a Browse row", async () => {
+    // **Two distinct paths** (whole-branch review, Minor 9): the session
+    // carries one tree, tab 3's destination is another, and the sentence
+    // must print the destination. Seeded to one path — as this case was
+    // until the review — a panel reading `session.tree.root` alone would
+    // print the same string and pass.
     render(
       <AmigaInstallPanel
         release="AmigaOS 3.9"
-        treeRoot="D:/amiga/os39"
+        treeRoot="D:/amiga/session-tree"
+        destination="D:/amiga/os39"
         packageFolder={null}
         treeFromDestination
       />
@@ -2638,9 +2660,8 @@ describe("the distribution tree field, when the destination is what won", () => 
     // **`find`, not `get`** (round 5, task 1): the panel asks
     // `osinstall_describe_tree` about the destination itself now, so *the
     // destination is a build* is a round trip rather than a prop. Until it
-    // lands the panel is what the other arm below asserts — a Browse row —
-    // which is `useChainTree`'s own documented behaviour and not a state
-    // this case is about.
+    // lands the panel draws the checking line the case below asserts — not
+    // the Browse row it drew until the whole-branch review's Important 2.
     const said = await screen.findByTestId("amiga-tree-from-destination");
     expect(screen.queryByTestId("amiga-tree-root-field")).toBeNull();
     expect(said.textContent).toBe(
@@ -2650,6 +2671,9 @@ describe("the distribution tree field, when the destination is what won", () => 
     // a user told "you cannot change it here" and not told where would have
     // been given nothing.
     expect(said.textContent).toContain("D:/amiga/os39");
+    // And it is the *destination*, not the session's own tree: the two are
+    // different paths in this case on purpose.
+    expect(said.textContent).not.toContain("session-tree");
     expect(said.textContent).toContain(i18n.t("osBuilder.step.makine"));
   });
 
@@ -2694,5 +2718,127 @@ describe("the distribution tree field, when the destination is what won", () => 
         builtHere: false,
       });
     });
+  });
+});
+
+/**
+ * **Neither branch, and no question, until the destination check has
+ * answered** (whole-branch review of round 5, Important 2).
+ *
+ * `useChainTree`'s `settled` exists for one defect and its own comment names
+ * it: `isTree` arrives by round trip, so for the first render or two a
+ * destination that *is* a build looks like one that is not. The panel
+ * ignored the flag, so it
+ *
+ *   - drew the *Distribution tree* Browse row for the session's tree and
+ *     replaced it with the destination sentence a moment later — a control
+ *     the user may have reached for, gone by the time they got there; and
+ *   - asked `osinstall_chain` and `osinstall_slots` about the session's tree
+ *     first and the destination second, so a row could read *ready* and then
+ *     *installed* about one file, which is the exact contradiction the hook
+ *     was written to end.
+ *
+ * `ChoiceTab` gates its ask on `treeSettled` and `StepSecim` draws nothing
+ * until `settled`; these three cases are the panel saying the same thing.
+ * The two arms below are the control: whichever way the check answers, the
+ * panel commits to one branch and asks once.
+ */
+describe("the tree, while ART is still looking at the destination", () => {
+  /** A `describe_tree` held open, plus the resolver for it. */
+  function heldTree(): (summary: TreeSummary) => void {
+    let answer: (summary: TreeSummary) => void = () => {};
+    describeTreeMock.mockImplementation(
+      () =>
+        new Promise<TreeSummary>((resolve) => {
+          answer = resolve;
+        })
+    );
+    return (summary: TreeSummary) => act(() => answer(summary));
+  }
+
+  const A_TREE: TreeSummary = {
+    isTree: true,
+    release: "AmigaOS 3.9",
+    files: 1915,
+    components: ["workbench-base"],
+    amigaInstalled: [],
+    problem: null,
+  };
+  const NOT_A_TREE: TreeSummary = {
+    isTree: false,
+    release: null,
+    files: 0,
+    components: [],
+    amigaInstalled: [],
+    problem: "holds no distribution.json",
+  };
+
+  /** The destination and the session's tree are different paths on purpose:
+   *  the chain's third argument then says which of the two was asked about. */
+  function renderPending() {
+    render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.9"
+        treeRoot="D:/amiga/session-tree"
+        destination="D:/amiga/os39"
+        packageFolder={null}
+        treeFromDestination
+      />
+    );
+  }
+
+  it("draws one line about the wait, offers no field and asks no question", async () => {
+    heldTree();
+    renderPending();
+
+    const line = await screen.findByTestId("amiga-tree-checking");
+    expect(line.textContent).toBe(i18n.t("osinstall.chain.checkingDestination"));
+    // Neither branch of the ternary: not the Browse row for a tree that may
+    // be about to lose, and not a sentence about a destination ART has not
+    // finished looking at.
+    expect(screen.queryByTestId("amiga-tree-root-field")).toBeNull();
+    expect(screen.queryByTestId("amiga-tree-from-destination")).toBeNull();
+    // And nothing was asked about either tree. Asserted as "not called at
+    // all" rather than "not called with the session tree", because a call
+    // with `null` would be the same defect wearing a different argument.
+    expect(chainMock).not.toHaveBeenCalled();
+    expect(slotsMock).not.toHaveBeenCalled();
+  });
+
+  it("commits to the destination sentence and asks once, when the look finds a build", async () => {
+    const answer = heldTree();
+    renderPending();
+    await screen.findByTestId("amiga-tree-checking");
+
+    answer(A_TREE);
+
+    const said = await screen.findByTestId("amiga-tree-from-destination");
+    expect(said.textContent).toContain("D:/amiga/os39");
+    expect(screen.queryByTestId("amiga-tree-checking")).toBeNull();
+    expect(screen.queryByTestId("amiga-tree-root-field")).toBeNull();
+    // **Once, and about the destination.** Two calls is the `ready →
+    // installed` flip; one call naming `D:/amiga/session-tree` is the wrong
+    // tree asked once.
+    await waitFor(() => expect(chainMock).toHaveBeenCalledTimes(1));
+    expect(chainMock.mock.calls[0][2]).toBe("D:/amiga/os39");
+    await waitFor(() => expect(slotsMock).toHaveBeenCalledTimes(1));
+    expect(slotsMock.mock.calls[0][2]).toBe("D:/amiga/os39");
+  });
+
+  it("offers the Browse row and asks about the session's tree, when the look finds no build", async () => {
+    const answer = heldTree();
+    renderPending();
+    await screen.findByTestId("amiga-tree-checking");
+
+    answer(NOT_A_TREE);
+
+    const field = await screen.findByTestId("amiga-tree-root-field");
+    expect(within(field).getByRole("button", { name: i18n.t("common.browse") })).toBeTruthy();
+    expect(screen.queryByTestId("amiga-tree-checking")).toBeNull();
+    expect(screen.queryByTestId("amiga-tree-from-destination")).toBeNull();
+    await waitFor(() => expect(chainMock).toHaveBeenCalledTimes(1));
+    expect(chainMock.mock.calls[0][2]).toBe("D:/amiga/session-tree");
+    await waitFor(() => expect(slotsMock).toHaveBeenCalledTimes(1));
+    expect(slotsMock.mock.calls[0][2]).toBe("D:/amiga/session-tree");
   });
 });
