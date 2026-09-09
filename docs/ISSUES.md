@@ -26,6 +26,19 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-290** 🟡 **Component ticks live in two stores** —
+*found 2026-09-09 while planning round 3 of the four-tab rewrite*
+`src/components/osbuilder/OsInstall.tsx` · `src/lib/useBuildSession.ts`
+
+`OsInstall.tsx` reads and writes `osinstall.chosen.<release>` and
+`osinstall.excludedConditional.<release>` directly (`OsInstall.tsx:~646-662`), while
+`buildSession.components.<release>` — seeded once from those very keys by `seededComponents`
+(`useBuildSession.ts:158-162`) — is the session's copy that nothing writes. Two values for one
+tick set; the session's goes stale after the first change, and any screen that reads
+`session.components` reads the ticks as they were on first seed. Closed by round 3 of the
+four-tab rewrite, which moves the ticks to the session and retires the direct keys (they stay
+as a one-time seed).
+
 **ART-289** 🟠 **The packages step's preview refuses two copies of BoingBag 1 that the readout already resolved** —
 *found 2026-09-09 by the owner on the 0.9.1 build, screenshot 1 and 3 of that afternoon*
 `src/components/osbuilder/PackagePanel.tsx` · `src/components/osbuilder/HostPlacement.tsx` · `src-tauri/src/commands/osinstall.rs:2361`

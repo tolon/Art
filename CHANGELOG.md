@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OS Builder: the install lane is four tabs (Amiga files · What to install ·
   Kickstart and destination · Build); the old step URLs redirect. This release
   moves no content between them yet.
+- OS Builder: the Kickstart and the destination folder have their own tab; the
+  per-file "what these files are" list is folded behind one line on the files
+  tab.
 
 ## [0.9.1] - 2026-09-08
 
