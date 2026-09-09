@@ -213,6 +213,23 @@ pub enum CoreError {
     /// `core::osinstall::source_cd::CdSource::open` moved onto it.
     #[error("{subject}: {detail}")]
     LimitExceeded { subject: String, detail: String },
+
+    /// An update package's own encrypted payload did not open with the key
+    /// ART's recipe carries for it (ART-166, 2026-09-08).
+    ///
+    /// **Its own ending, not a `Malformed`.** The archive is not damaged and
+    /// ART is not confused about the format: this is *"the file you have is
+    /// not the build this key belongs to"*, and its next step is to check
+    /// which copy of the package is in the folder — a different sentence and
+    /// a different action from "this file is corrupt", which is what
+    /// `ART-FORMAT-MALFORMED` tells someone. Collapsing the two is CLAUDE.md's
+    /// "endings stay distinct" exactly.
+    #[error(
+        "the payload inside '{archive}' did not open with the password ART carries for this \
+         package — the archive may be a different build of it. Check that the file in your \
+         package folder is the published one; ART will not try any other key."
+    )]
+    PayloadPasswordRefused { archive: String },
 }
 
 /// The sentence for [`CoreError::NonAsciiPfs3Names`] — pulled out of the
@@ -263,6 +280,7 @@ impl CoreError {
             Self::FirstBootNotATree { .. } => "ART-FIRSTBOOT-NOT-A-TREE",
             Self::FirstBootNeedsCommand { .. } => "ART-FIRSTBOOT-NEEDS-COMMAND",
             Self::LimitExceeded { .. } => "ART-LIMIT-EXCEEDED",
+            Self::PayloadPasswordRefused { .. } => "ART-PAYLOAD-PASSWORD",
         }
     }
 
@@ -336,7 +354,6 @@ mod tests {
         let said = crate::core::amigainstall::packagevol::wrong_archive_sentence(
             std::path::Path::new("E:\\dl\\BoingBag39-1-UAE.lha"),
             "BoingBag3.9-1",
-            &crate::core::amigainstall::packagevol::ArchiveIs::Neither,
             "BoingBag3.9-1-UAE, BoingBag3.9-1-UAE.info",
             &[],
         );

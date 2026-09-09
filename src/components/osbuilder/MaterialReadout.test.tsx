@@ -63,7 +63,6 @@ interface StateOptions {
   installed?: Installed;
   chosenMissing?: string | null;
   blockedBy?: string[];
-  notNeeded?: string | null;
   incomplete?: string | null;
   expectsDirectories?: string[];
 }
@@ -89,7 +88,6 @@ function state(options: StateOptions = {}): SlotState {
     installed: options.installed ?? { state: "no" },
     chosenMissing: options.chosenMissing ?? null,
     blockedBy: options.blockedBy ?? [],
-    notNeeded: options.notNeeded ?? null,
     incomplete: options.incomplete ?? null,
   };
 }
@@ -186,7 +184,6 @@ describe("every ending gets its own sentence, in both languages", () => {
       }),
     ],
     ["not-found", state()],
-    ["not-needed", state({ notNeeded: "Updater 45.15" })],
   ];
 
   for (const language of ["en", "tr"] as const) {
@@ -347,27 +344,25 @@ describe("the set line", () => {
     expect(line.className).toContain("badge-err");
   });
 
-  it("says how many are not needed, so a shrinking denominator is not a disappearance", async () => {
-    // `slots::summarize` leaves a not-needed slot out of both totals, so
-    // "5 of 6" legitimately becomes "5 of 5" between two calls. Without this
-    // clause the line reads as material vanishing.
+  it("says a complete set is ready rather than counting a shortfall that is not there", async () => {
+    // Round 2 review, L8. The "not needed" clause this test used to be about
+    // went with the overlay slot kind on 2026-09-08 — no slot leaves the
+    // totals any more, so the denominator cannot shrink between two calls
+    // and there is nothing for that clause to explain.
     slotsMock.mockResolvedValue(
       report({
-        states: [state({ notNeeded: "Updater 45.15" }), state({ id: "other", position: 2 })],
-        summary: summary({ optionalTotal: 1, optionalFound: 1 }),
+        states: [state(), state({ id: "other", position: 2 })],
+        summary: summary({ optionalTotal: 2, optionalFound: 2 }),
       })
     );
     renderReadout();
     const line = await screen.findByTestId("material-set-line");
     expect(line.textContent).toBe(
-      // The **ready** pair: this set is complete, so the line says so instead
-      // of counting a shortfall that is not there (round 2 review, L8).
-      i18n.t("osinstall.slots.setLineReadyNotNeeded", {
+      i18n.t("osinstall.slots.setLineReady", {
         release: "AmigaOS 3.9",
-        found: 2,
-        total: 2,
+        found: 3,
+        total: 3,
         missingRequired: 0,
-        notNeeded: 1,
       })
     );
   });
@@ -495,10 +490,10 @@ describe("a superseded answer is dropped, never rendered", () => {
 
     // The first call now settles, with a report about a folder nobody is
     // looking at any more.
-    settleFirst(
-      report({ states: [state({ name: "the first answer", notNeeded: "Updater 45.15" })] })
+    settleFirst(report({ states: [state({ name: "the first answer" })] }));
+    await waitFor(() =>
+      expect(screen.queryByTestId("material-row-not-found")).toBeNull()
     );
-    await waitFor(() => expect(screen.queryByTestId("material-row-not-needed")).toBeNull());
     expect(screen.getByTestId("material-row-found-by-hash").textContent).toContain(
       "the second answer"
     );

@@ -505,7 +505,61 @@ export interface ApplyOutcome {
    *  "did anything fail" computes it from both rather than trusting one
    *  number that could quietly disagree with them. */
   iconMergeFailures: number;
+  /** One verdict per extra payload unit the package declares — **including
+   *  the ones that did not run**. "Not needed, the tree is already newer"
+   *  and "never considered" are two different things to tell somebody, and
+   *  an absent row says the second while meaning the first. Empty for every
+   *  package that declares none, which is all but BoingBag 3.9-2. */
+  extraMembers: ExtraMemberVerdict[];
+  /** What the package's own host-side after-steps did to the tree once the
+   *  last file was written, in order. Reported rather than implied:
+   *  `Devs/AmigaOS ROM Update` being rotated is the difference between a
+   *  tree whose ROM update loads and one whose does not. */
+  postPlace: AppliedStep[];
 }
+
+/** Whether an extra payload unit ran, and what the tree said when it was
+ *  asked. Four states, and `"not-checked"` must never read as `"applied"` —
+ *  that would be ART claiming a version reading it never made. */
+export type ExtraMemberState =
+  | { state: "unconditional" }
+  | { state: "applied"; path: string; stated: string; at_least: number }
+  | { state: "not-needed"; path: string; stated: string; at_least: number }
+  | { state: "not-checked"; path: string };
+
+export interface ExtraMemberVerdict {
+  /** The member's own name inside the wrapper — `XAD-Update`. */
+  member: string;
+  state: ExtraMemberState;
+  /** How many files this unit placed; `0` for one that did not run. */
+  files: number;
+}
+
+/**
+ * What one host-side after-step actually did — `core::amigainstall::finish`'s
+ * `AppliedStep`, tagged by `step` with **that enum's own variant names**.
+ *
+ * **Corrected 2026-09-08 (review F2).** These used to read `"protect"` and
+ * `"replace-keeping-backup"`, which are `PostStep`'s spellings — a different
+ * enum, the one a *recipe* writes. `finish::AppliedStep` derives
+ * `#[serde(tag = "step", rename_all = "kebab-case")]` over `Protected` and
+ * `Replaced`, so the wire carries `"protected"` and `"replaced"`, and the
+ * second arm carries `replacement` as well. Nothing consumed `postPlace` yet,
+ * which is exactly why it would have bitten: the first screen to render what
+ * the after-steps did would have matched neither arm and rendered nothing —
+ * a screen saying less than the core did, silently.
+ *
+ * `apply_outcome_serializes_with_the_keys_the_frontend_declares`
+ * (`commands/osinstall.rs`) pins both tags against a non-empty list.
+ */
+export type AppliedStep =
+  | { step: "protected"; path: string; was: string; now: string }
+  | {
+      step: "replaced";
+      target: string;
+      replacement: string;
+      backup: string | null;
+    };
 
 export const OSINSTALL_EVENT = "osinstall-result";
 
@@ -1540,10 +1594,6 @@ export interface SlotState {
   chosenMissing: string | null;
   /** Every requirement that is not installed yet, by slot id. */
   blockedBy: string[];
-  /** What ART measured that makes this slot unnecessary — the artefact's own
-   *  statement about itself, e.g. `"Updater 45.15"`. A measurement, not a
-   *  sentence: the words go in the catalogue. */
-  notNeeded: string | null;
   /**
    * The first directory {@link Slot.expectsDirectories} names that the disc
    * filling this slot does **not** carry (design § 3.6).
@@ -1751,18 +1801,27 @@ export interface ChainReport {
  *
  * A chosen `tree` with no `distribution.json` is a refusal rather than an
  * empty chain — every *installed* state here comes from that file alone.
+ *
+ * `overrides` is the user's own per-slot file choices, in the same shape
+ * `osinstallSlots` takes them (`slotOverrides` in `@/lib/amigainstall`).
+ * **ART-284**: without them the source step's readout said *the file you
+ * chose* about the owner's own BoingBag 1 build while this screen called the
+ * same slot ambiguous and blocked the row — one resolver, two callers, one of
+ * them not handed the decision.
  */
 export async function osinstallChain(
   release: InstallRelease,
   folders: string[],
   tree?: string | null,
-  rom?: string | null
+  rom?: string | null,
+  overrides?: SlotOverride[]
 ): Promise<ChainReport> {
   return invoke<ChainReport>("osinstall_chain", {
     release,
     folders,
     tree: tree || null,
     rom: rom || null,
+    overrides: overrides && overrides.length > 0 ? overrides : null,
   });
 }
 
@@ -1828,11 +1887,20 @@ interface OsInstallCollisionsResult {
  * thread); this wrapper hides that behind the same
  * `Promise<CollisionReport[]>` shape it always had, by starting the job and
  * awaiting its own result event.
+ *
+ * `overrides` is the user's own per-slot file choices, in the same shape
+ * `osinstallSlots` and `osinstallChain` take them (`slotOverrides` in
+ * `@/lib/amigainstall`). **ART-288**: without them this path resolved a
+ * package's archive by identity alone, so a folder holding two builds of one
+ * BoingBag refused here while the chain row above it named the file it would
+ * use — two screens, two answers, and the one that refused was the one that
+ * does the work.
  */
 export async function osinstallCollisions(
   treeRoot: string,
   packageFolder: string,
-  packages: string[]
+  packages: string[],
+  overrides?: SlotOverride[]
 ): Promise<CollisionReport[]> {
   if (!treeRoot || !packageFolder || packages.length === 0) return [];
   // `awaitJobResult` itself subscribes before calling `start` (the `invoke`
@@ -1842,7 +1910,13 @@ export async function osinstallCollisions(
   // event outright.
   return awaitJobResult<OsInstallCollisionsResult, CollisionReport[]>(
     OSINSTALL_COLLISIONS_EVENT,
-    () => invoke<number>("osinstall_collisions", { treeRoot, packageFolder, packages }),
+    () =>
+      invoke<number>("osinstall_collisions", {
+        treeRoot,
+        packageFolder,
+        packages,
+        overrides: overrides && overrides.length > 0 ? overrides : null,
+      }),
     (payload) => payload.reports
   );
 }
@@ -1945,12 +2019,14 @@ export type AddPackageResult =
 export async function osinstallAddPackage(
   treeRoot: string,
   packageFolder: string,
-  packages: string[]
+  packages: string[],
+  overrides?: SlotOverride[]
 ): Promise<AddPackageResult> {
   return invoke<AddPackageResult>("osinstall_add_package", {
     treeRoot,
     packageFolder,
     packages,
+    overrides: overrides && overrides.length > 0 ? overrides : null,
   });
 }
 
@@ -2026,6 +2102,37 @@ export interface CollisionCounts {
   upgrades: number;
   sameVersion: number;
   unversioned: number;
+}
+
+/**
+ * The one heading above a host-placement preview — **three states, and they
+ * stay three** (ART-287).
+ *
+ * It was a two-way ternary in both panels: counts when the answer had
+ * arrived, *"Checking what this would replace…"* otherwise. *Otherwise*
+ * covers a refusal, so a preview that finished and **failed** kept the
+ * checking sentence over the top of its own red refusal box — which
+ * `docs/assets/chain.png` caught: the screen saying it was still working
+ * directly above a finished failure. Checking, done and refused are three
+ * things a person does three different things about, and CLAUDE.md's rule is
+ * that endings stay distinct.
+ *
+ * `null` for a preview that has neither started nor been asked for; the
+ * caller renders no heading at all then, which is its own fourth state and
+ * not this function's to invent.
+ */
+export function previewHeadingPhrase(
+  collisions: CollisionReport[] | null,
+  collisionsError: string | null
+): Phrase | null {
+  if (collisionsError !== null) return { key: "osinstall.packages.preview.refused" };
+  if (collisions !== null) {
+    return {
+      key: "osinstall.packages.preview.heading",
+      params: { ...collisionCounts(collisions) },
+    };
+  }
+  return { key: "osinstall.packages.preview.loading" };
 }
 
 export function collisionCounts(reports: CollisionReport[]): CollisionCounts {

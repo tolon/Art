@@ -691,15 +691,17 @@ user here is the refusal before the run**
 which is a *bookkeeping* guard: it reads a manifest only a successful ART run
 writes. Numbers and both arms: ART-227.
 
-**The same script now carries a second, version-gated invocation** — a
+**The script carried a second, version-gated invocation for one day** — a
 package's `follow_ups`, HstWB's own shape for BoingBag 3.9-2's `XAD-Update`
-(ART-280) — and its placement is the seventh rule: **`Version … FILE` sets WARN
-as its answer**, so the gate is emitted strictly *below* the `If Warn` that
-turns the installer's own return code into the result word. Above it, every
-successful run on a tree with an old `xadmaster` would be reported as *the
-installer said no*. The follow-up reports separately, in `art-followup.txt`,
-with four words of its own — an install's ending is not changed by what the
-package did afterwards.
+(ART-280) — and the rule it bought is worth keeping even though the mechanism
+went with the two BoingBags' emulator route on 2026-09-09: **`Version … FILE`
+sets WARN as its answer, not as an error**, so a gate emitted *above* the
+`If Warn` that turns the installer's own return code into the result word would
+overwrite the installer's verdict with the gate's, and every successful run on a
+tree with an old `xadmaster` would be reported as *the installer said no*. The
+second payload is placed from the host now (`boingbag-39-2.json`'s
+`extra_members`, behind the same gate read from HstWB's own script), so the
+generated script is back to one invocation and one result word.
 
 ## Config files are user data
 

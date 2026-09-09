@@ -64,6 +64,36 @@
 //! engine's job, not this task's. `overrides` records the fact for that
 //! engine to read; it does not yet act on it.
 //!
+//! ### Corrected 2026-09-08: `overrides` is a claim about the **tree**
+//!
+//! **The two paragraphs above name the right field for the wrong reason, and
+//! the reason is left standing because a wrong elimination costs more than
+//! none.** *"Every one of BoingBag 3.9-1's 210 files, and every one of 3.9-2's
+//! 121, sits at a path `workbench-base` already writes"* is a measurement
+//! about the **media** — it says which paths the AmigaOS 3.9 disc's own
+//! `workbench-base` component *would* write. `overrides` answers a different
+//! question: which component `distribution.json` records as having actually
+//! placed each file in **this** tree. AmigaOS 3.9's recipe splits the
+//! Workbench across `workbench-base` (the 3.5 half) and `workbench-39` (the
+//! 3.9 half), so a tree built from that recipe records most of these paths to
+//! `workbench-39`, which neither BoingBag named.
+//!
+//! Measured against the owner's own tree's own manifest on 2026-09-08, the
+//! first time either package was placed from Windows:
+//!
+//! ```text
+//!                        workbench-39  workbench-base  new
+//!   BoingBag 3.9-1 (210)          122              24   64
+//!   BoingBag 3.9-2 (121)           84              17   20
+//!   XAD-Update      (36)           29               —    7
+//! ```
+//!
+//! The undeclared 122 is what `add_package` refused on, by name. Both recipes
+//! now declare `workbench-39` as well, and
+//! `both_boingbags_override_the_two_halves_of_the_workbench_the_tree_records`
+//! pins both lists with these counts — before it, deleting `"workbench-39"`
+//! from either recipe left the whole suite green.
+//!
 //! ## `requires` is a dependency, not a suggestion
 //!
 //! BoingBag 3.9-2 assumes BoingBag 3.9-1 is already on the volume (spec §8:
@@ -265,6 +295,35 @@ pub struct Package {
     /// The member holding the payload, for a package whose files sit inside
     /// a second archive. `None` for loose files at direct paths.
     pub member: Option<String>,
+    /// The key that opens [`member`](Self::member), for a package whose
+    /// publisher shipped its payload encrypted. `None` for every package
+    /// whose payload is in clear.
+    ///
+    /// **The owner's decision, 2026-09-08 (ART-166).** Their words:
+    /// *"inatla BoingBag'ı Windows üzerinden yerleştirmedin; diğer proje
+    /// yapıyor bu işi, bu yüzden iş kilitlendi"* / *"avukatlık yapma,
+    /// mühendisiz biz"*. It reverses the 2026-08-19 ruling that ART would
+    /// write no bypass. What ART does now is what **Emu68 Hatcher** and
+    /// **Emu68-Imager** — both MIT, both distribution builders for the same
+    /// hardware — already do: open the package's own payload with the key
+    /// those projects publish
+    /// (`src/main/python/emu68hatcher/builder/staging/boingbag.py`) and copy
+    /// the files onto the tree. Two BoingBags that took ~140 s each inside an
+    /// emulator, needed a ROM and a licence, and could not run at all on a
+    /// machine without one, now take seconds on the host.
+    ///
+    /// **Recipe data, never code.** A third such package is a JSON file. The
+    /// value travels to the reader on [`super::scan::PackageMedium`] and
+    /// reaches `core::archive::zip`, which uses it and nothing else: ART
+    /// derives no key, tries no second key, and refuses once
+    /// ([`CoreError::PayloadPasswordRefused`](crate::core::error::CoreError))
+    /// when the one it carries does not fit.
+    ///
+    /// Only meaningful with a [`member`](Self::member) — the wrapper LHA is
+    /// never the encrypted half — and `validate_payload_password` refuses the
+    /// combination rather than letting a key be carried where nothing can use
+    /// it.
+    pub payload_password: Option<String>,
     /// The second half of this package's identity: a path that must exist
     /// **inside** the archive, below its top-level directory, for that
     /// archive to be this package's — `locale/catalogs/türkçe` for the
@@ -341,6 +400,104 @@ pub struct Package {
     /// were in between ART-166 and this round. Folding them into one enum
     /// would have made that state unrepresentable and so unreportable.
     pub amiga_installer: Option<AmigaInstaller>,
+    /// What the tree needs done **after this package's files are placed from
+    /// the host** — the host-side counterpart of
+    /// [`AmigaInstaller::post_install`], and the same
+    /// [`PostStep`](crate::core::amigainstall::finish::PostStep) vocabulary.
+    ///
+    /// **Two lists rather than one shared one, because the two routes leave
+    /// different work behind** (2026-09-08). The Amiga-side list is what the
+    /// package's own `Updater` does *not* do after it runs; this list is what
+    /// ART's own placement does not do after *it* runs. They overlap heavily
+    /// today — BoingBag 3.9-1's ten protection bits are wanted either way —
+    /// and they are not the same list: Emu68 Hatcher renames BoingBag 3.9-2's
+    /// `Devs/NSDPatch.cfg.BB39-2` into place and the `Updater` does not, so a
+    /// single list would have to be wrong on one route.
+    ///
+    /// Runs against the tree root after the last file is written and after
+    /// any [`extra_members`](Self::extra_members), in declaration order.
+    pub post_place: Vec<crate::core::amigainstall::finish::PostStep>,
+    /// Further payload archives inside the same wrapper, each with its own
+    /// rules and its own condition — see [`ExtraMember`].
+    ///
+    /// Empty for every package but BoingBag 3.9-2, whose wrapper carries
+    /// `XAD-Update` beside `AmigaOS-Update`.
+    pub extra_members: Vec<ExtraMember>,
+}
+
+impl Package {
+    /// True when this package **cannot be ticked on the host Packages step**
+    /// and there *is* an Amiga-side route that can install it — the one case
+    /// where *"do that one on the Amiga-side step first"* is both necessary
+    /// advice and possible advice.
+    ///
+    /// **Keyed on the block, not on the installer** (ART-282 review,
+    /// 2026-09-08). What decides whether a row can be ticked is
+    /// [`host_placement_block`](Self::host_placement_block) — `PackagePanel`
+    /// disables a row exactly when `hostPlacementBlock !== null` — and
+    /// [`amiga_installer`](Self::amiga_installer) is a different question
+    /// with a different answer. Both BoingBags declare an installer *and* are
+    /// host-placeable since the owner's 2026-09-08 reversal, so a predicate
+    /// reading the installer alone would go on telling somebody that BoingBag
+    /// 3.9-2 "cannot be ticked on this list" while the checkbox sat there,
+    /// enabled, in front of them: advice that is wrong in the one way this
+    /// project pays most for.
+    ///
+    /// Both halves, not just the first: a package that is blocked and has no
+    /// installer (`euro-update`, `needs-fixfonts`) cannot be done on the
+    /// Amiga either, and sending somebody to a step that will refuse it is
+    /// the same defect from the other end. Nothing shipped names such a
+    /// package as a `requires`, and this is what keeps the sentence honest if
+    /// something ever does.
+    pub fn only_installable_on_the_amiga(&self) -> bool {
+        self.host_placement_block.is_some() && self.amiga_installer.is_some()
+    }
+}
+
+/// A second payload archive inside a package's wrapper, applied after the
+/// main [`member`](Package::member) when its own condition says so.
+///
+/// **A placement unit, not a second package.** BoingBag 3.9-2's wrapper holds
+/// `AmigaOS-Update` (the update itself) *and* `XAD-Update` (the xadmaster
+/// client set), and the package's own `Updater` applies the second one only
+/// when the tree's `Libs/xadmaster.library` is older than 10 — HstWB
+/// Installer's `Install-Boing-Bag-2` does the same, lines 32-36 (MIT):
+///
+/// ```text
+/// ; run xad updater, if xadmaster.library version is less than 10
+/// Version >>SYS:hstwb-installer.log "SYS:Libs/xadmaster.library" 10 FILE
+/// IF WARN
+///   SYS:T/BoingBags/BoingBag3.9-2/C/Updater …/XAD-Update "SYS:"
+/// ENDIF
+/// ```
+///
+/// So it is one package's files, recorded under one component id, and not a
+/// package of its own: a second recipe would have to be `requires`d, ordered,
+/// ticked and reported separately for something the user never chose apart
+/// from the package it is inside.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ExtraMember {
+    /// The member's name inside the wrapper, relative to its top-level
+    /// directory — `XAD-Update`, never `BoingBag3.9-2/XAD-Update`.
+    pub member: String,
+    /// What to place out of it, in the same shape every other placement takes.
+    pub rules: Vec<PathRule>,
+    /// Skip this unit when the tree's own file at `path` already states
+    /// `version` or newer. `None` means always apply it.
+    ///
+    /// **Read on the host, from the tree, before anything is placed.** The
+    /// timing is deliberate and it is only safe because it was measured: the
+    /// gate's file must not be one the *main* member would place, or the
+    /// answer would be about a file that is one step out of date. BoingBag
+    /// 3.9-2's `AmigaOS-Update` carries 121 files and **no
+    /// `Libs/xadmaster.library`** among them (the owner's own
+    /// `BoingBag39-2.lha`, every entry decrypted and listed, 2026-09-08), so
+    /// for the one shipped unit the two orders give the same answer. Reading
+    /// it first is what lets every overwrite this unit would make be checked
+    /// against the manifest *before a byte is written*, which is the rule the
+    /// whole module is built on.
+    #[serde(default)]
+    pub unless_file_version_at_least: Option<crate::core::amigainstall::FileVersionGate>,
 }
 
 /// What to run on the Amiga to install this package, when ART cannot place
@@ -383,83 +540,6 @@ pub struct AmigaInstaller {
     /// such a drawer would be undeclarable if this refused one.
     #[serde(default)]
     pub args: Vec<String>,
-    /// The lowest `$VER:` version ART will launch this program at, written
-    /// the way AmigaOS writes it — `"45.15"`. `None` when nothing is known
-    /// to be wrong with any build of it, which is the ordinary case.
-    ///
-    /// **Measured, and it is the reason this field exists (ART-186).**
-    /// `BoingBag39-1.lha`'s own `C/Updater` states `$VER: Updater 45.13
-    /// (3.4.2001)`; `BoingBag39-1-UAE.lha`'s states `$VER: Updater 45.15
-    /// (17.4.2001)`, and that archive's readme says exactly what changed —
-    /// *"This archive contains a file, Updater 45.15, that fixes the
-    /// following problem: You can install the BoingBag on UAE now."* This
-    /// round launches that program **inside an emulator**, so 45.13 cannot
-    /// work; left alone it would fail, the generated script's `If Warn`
-    /// would write `failed`, and ART would report that the installer ran and
-    /// refused — about a program that could not have worked. §89 forbids
-    /// exactly that, so the run is refused before it starts instead.
-    ///
-    /// **A version, not a size.** `25 588` bytes is not an identity: it is
-    /// consistent with any build that happens to be that long, and reading a
-    /// coincidence as proof is the mistake that shipped an AmigaOS 3.5 tree
-    /// labelled 3.9. The `$VER:` string is the file's own statement about
-    /// itself, which is what "ask the artefact what it is; never infer it"
-    /// asks for. All three of the owner's real archives carry one, and
-    /// `the_owners_real_updaters_state_the_versions_this_recipe_relies_on`
-    /// re-reads them on demand.
-    #[serde(default)]
-    pub minimum_version: Option<String>,
-    /// Second and later media whose files are copied **over** the package's
-    /// own drawer before the installer is looked for, in the order written.
-    ///
-    /// The remedy the same readme prescribes: *"Simply update your old
-    /// BoingBag3.9-1 by copying the contents within the `BoingBag3.9-1`
-    /// drawer in this package to it."* Declared here as data so a fifth
-    /// package with the same shape is a JSON file, not a code path.
-    ///
-    /// Supplying one is the **user's** choice, not ART's: a copy downloaded
-    /// after 2001-04-20 already carries the fix, and
-    /// [`minimum_version`](Self::minimum_version) is what decides whether
-    /// one was needed. ART never fetches an overlay itself.
-    #[serde(default)]
-    pub overlays: Vec<InstallerOverlay>,
-    /// The medium this package's installer verifies before it will work —
-    /// see [`RequiredMedium`]. `None` for an installer that checks nothing,
-    /// which is the ordinary case.
-    #[serde(default)]
-    pub required_medium: Option<RequiredMedium>,
-    /// What the tree needs done **after** this installer has run, and the
-    /// installer does not do itself (ART-227).
-    ///
-    /// Measured against the owner's own material rather than copied from
-    /// another builder's script: BoingBag 2's `Updater` leaves
-    /// `Devs/AmigaOS ROM Update.BB39-2` beside the old file under a name
-    /// nothing loads, and BoingBag 1 leaves seven `C:` commands without the
-    /// `p` bit that `Resident` needs. Both are ordinary file operations, so
-    /// ART performs them **on the host**, against the staged copy, before it
-    /// decides whether to promote — see
-    /// [`crate::core::amigainstall::finish`] for why that is better than
-    /// appending AmigaDOS lines to the boot script.
-    #[serde(default)]
-    pub post_install: Vec<crate::core::amigainstall::finish::PostStep>,
-    /// A second, version-gated invocation of this same installer, in the
-    /// **same boot** (ART-280).
-    ///
-    /// Distinct from [`post_install`](Self::post_install) in kind, not only in
-    /// degree: a `PostStep` is a host file operation on the staged copy, and
-    /// this is the package's own program running again on the Amiga — the only
-    /// thing that can, because the second payload is ZipCrypto too and ART
-    /// writes no bypass (ART-166).
-    ///
-    /// Measured before it was declared, and taken from the one distribution
-    /// builder whose source can be read: `Libs/xadmaster.library` reads 9.0 on
-    /// a clean AmigaOS 3.9 tree, 9.1 after BoingBag 1 and **9.1 still** after
-    /// BoingBag 2 (2026-09-08, every file of every state hashed), and HstWB
-    /// Installer's `Install-Boing-Bag-2` lines 32-36 gate exactly this
-    /// invocation on `Version … 10 FILE`. See
-    /// [`crate::core::amigainstall::FollowUp`].
-    #[serde(default)]
-    pub follow_ups: Vec<crate::core::amigainstall::FollowUp>,
     /// `Some` when this declaration is written down but **nobody has run
     /// it** — the sentence says what has not been measured yet.
     ///
@@ -511,82 +591,6 @@ pub enum NotYetRunnable {
     InstallerNotMeasured,
 }
 
-/// A disc a package's own installer insists on seeing (ART-193).
-///
-/// **Measured, and it is the reason this field exists.** Both AmigaOS 3.9
-/// BoingBags carry an `Updater` that verifies the original CD-ROM before it
-/// does anything, and each says so in its own printable strings — read on
-/// the host on 2026-08-21 from the owner's own archives:
-///
-/// ```text
-///   Checking AmigaOS 3.9 CD-ROM ...
-///   Failed to check AmigaOS 3.9 CD-ROM.
-///   Did you really insert a original AmigaOS 3.9 CD-ROM
-///   into a mounted CD-ROM drive?
-///   AmigaOS3.9:Videos/Angels.avi                     (45.15 and 45.19 both)
-///   AmigaOS3.9:Audio/Circle Orbital.mp3              (45.15)
-///   AmigaOS3.9:Audio/Circle - Orbital.mp3            (45.19)
-/// ```
-///
-/// Without that disc the program opens its own screen and never finishes —
-/// measured three times, up to 1 200 s, with not one file written.
-///
-/// **This is a medium the user has, not a protection to be worked around.**
-/// Supplying the disc the installer asks for is *meeting* its check. Nothing
-/// here decrypts anything, and ART deliberately does **not** satisfy such a
-/// check by extracting the handful of files a program happens to name: that
-/// would be satisfying a media check rather than meeting it.
-///
-/// **What this type says and what it does not.** It names the *volume* the
-/// installer looks for — a fact about the package, readable in the package's
-/// own binary, and shipped data like everything else in a recipe. It never
-/// names a file on the host: ART ships no Amiga media and never will, so
-/// *which* image is a fact about the run and arrives on the request
-/// (`commands::amigainstall::AmigaInstallRequest::medium`), exactly as the
-/// user's own Kickstart and the user's own package archives do.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RequiredMedium {
-    /// The Amiga volume name the installer checks for — `AmigaOS3.9`,
-    /// **without** a trailing colon.
-    ///
-    /// A recipe naming a volume is refused everywhere else in this file
-    /// ([`AmigaInstaller::program`]), and this is not that: there the volume
-    /// would be one ART mounts, which is ART's decision to make. Here the
-    /// volume is the disc's *own* name, which neither ART nor the recipe
-    /// chooses — the disc carries it, and the command layer asks the image
-    /// what it is called rather than assuming.
-    pub volume: String,
-    /// What to call the disc in a sentence — *"the original AmigaOS 3.9
-    /// CD-ROM"*. Untranslated, like a package's `name` (ART-060).
-    pub name: String,
-}
-
-/// One overlay medium: where its files are inside its own archive, and where
-/// they land inside the package's drawer.
-///
-/// **`from` is a whole path from the overlay archive's own root, including
-/// that archive's top-level drawer**, because a real one is not shaped like
-/// the package it patches. Measured with 7-Zip 26.02 on 2026-08-21 against
-/// the owner's `BoingBag39-1-UAE.lha`: its seven entries sit under
-/// `BoingBag3.9-1-UAE\`, and the `Updater` is at
-/// `BoingBag3.9-1-UAE\BoingBag3.9-1\C\Updater` — one drawer deeper than the
-/// `BoingBag3.9-1\C\Updater` it replaces. Extracting it over the package with
-/// an overwrite policy would therefore have written a second, parallel
-/// drawer and left the old `Updater` exactly where it was; the archive had to
-/// be opened to find that out, which is why it was.
-///
-/// It doubles as the archive's identity: an archive carrying no such path is
-/// refused by name rather than silently contributing nothing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InstallerOverlay {
-    /// `/`-separated, from the overlay archive's own root.
-    pub from: String,
-    /// `/`-separated, inside the package's own drawer. Empty — the default —
-    /// means the drawer itself, which is what the readme's remedy describes.
-    #[serde(default)]
-    pub to: String,
-}
-
 /// The flat shape a person actually edits. `id`/`media`/`rules`/`overrides`
 /// fold into [`Package::component`] at parse time — the file on disk should
 /// not have to know the engine's own struct layout.
@@ -624,6 +628,8 @@ struct RawPackage {
     #[serde(default)]
     member: Option<String>,
     #[serde(default)]
+    payload_password: Option<String>,
+    #[serde(default)]
     distinguished_by: Option<String>,
     #[serde(default)]
     requires: Vec<String>,
@@ -637,6 +643,10 @@ struct RawPackage {
     host_placement_block: Option<HostPlacementBlock>,
     #[serde(default)]
     amiga_installer: Option<AmigaInstaller>,
+    #[serde(default)]
+    post_place: Vec<crate::core::amigainstall::finish::PostStep>,
+    #[serde(default)]
+    extra_members: Vec<ExtraMember>,
     #[serde(default)]
     overrides: Vec<String>,
     rules: Vec<PathRule>,
@@ -706,6 +716,7 @@ impl RawPackage {
             releases: self.releases,
             media: self.media,
             member: self.member,
+            payload_password: self.payload_password,
             distinguished_by: self.distinguished_by,
             requires: self.requires,
             requires_components: self.requires_components,
@@ -714,6 +725,8 @@ impl RawPackage {
             host_placement_block: self.host_placement_block,
             component,
             amiga_installer: self.amiga_installer,
+            post_place: self.post_place,
+            extra_members: self.extra_members,
         }
     }
 }
@@ -792,171 +805,7 @@ fn validate_installer(package: &Package) -> CoreResult<()> {
         }
         refuse_shell_metacharacters("installer argument", arg)?;
     }
-    if let Some(minimum) = &installer.minimum_version {
-        if parse_version_pair(minimum).is_none() {
-            return Err(CoreError::Malformed {
-                format: "package".into(),
-                detail: format!(
-                    "'{}': the installer's minimum_version '{minimum}' is not a version and a \
-                     revision — AmigaOS writes one as '45.15'",
-                    package.id
-                ),
-            });
-        }
-    }
-    // **One follow-up per package, until there is a marker per follow-up**
-    // (round 3 whole-branch review, L9). `workvol::follow_up_lines` writes
-    // every follow-up's word to the same `art-followup.txt` and
-    // `read_follow_up` returns one `FollowUpOutcome`, so two of them would
-    // report only the last: "the first failed, the second was not needed"
-    // would reach the user as *not needed*. That is the collapse this
-    // module's own neighbours refuse one level up, and a recipe author has no
-    // way to see it happening.
-    //
-    // A refusal at parse time rather than a silent last-one-wins, and a cap
-    // rather than a per-follow-up marker file, because exactly one is shipped
-    // and building indexing for a second nobody has asked for is how a
-    // vocabulary grows past what anyone can check. The day a package needs
-    // two, this refusal is what sends whoever writes it to the marker.
-    if installer.follow_ups.len() > 1 {
-        return Err(CoreError::Malformed {
-            format: "package".into(),
-            detail: format!(
-                "'{}': {} follow-ups are declared and ART can report only one — they all write \
-                 the same result file, so the last would be the only one anybody heard about. \
-                 Declare one, or give each its own marker first",
-                package.id,
-                installer.follow_ups.len()
-            ),
-        });
-    }
-    // A follow-up reaches the same generated AmigaDOS script as the
-    // invocation above, so every one of its fields goes through the same two
-    // gates — a path inside the package, and no shell metacharacter. The gate
-    // file is checked as a path too: it is joined to the system volume by the
-    // script, so `../` in it would reach outside the tree exactly as it would
-    // anywhere else ART turns a recipe name into a path.
-    for follow_up in &installer.follow_ups {
-        if follow_up.program.contains(':') {
-            return Err(CoreError::Malformed {
-                format: "package".into(),
-                detail: format!(
-                    "'{}': the follow-up path '{}' names a volume; it must be a path inside \
-                     the package, and the volume it is reached under is ART's to decide",
-                    package.id, follow_up.program
-                ),
-            });
-        }
-        validate_path(
-            "package",
-            &package.id,
-            "amiga_installer.follow_ups[].program",
-            &follow_up.program,
-            false,
-        )?;
-        refuse_shell_metacharacters("follow-up path", &follow_up.program)?;
-        for arg in &follow_up.args {
-            if arg.trim().is_empty() {
-                return Err(CoreError::Malformed {
-                    format: "package".into(),
-                    detail: format!("'{}': a follow-up argument is empty", package.id),
-                });
-            }
-            refuse_shell_metacharacters("follow-up argument", arg)?;
-        }
-        validate_path(
-            "package",
-            &package.id,
-            "amiga_installer.follow_ups[].unless_file_version_at_least.path",
-            &follow_up.unless_file_version_at_least.path,
-            false,
-        )?;
-        refuse_shell_metacharacters(
-            "follow-up version gate",
-            &follow_up.unless_file_version_at_least.path,
-        )?;
-        // Zero would make the gate always closed — `Version … 0 FILE` never
-        // warns — so a follow-up declared with it could never run, which is
-        // the same shape as declaring nothing while looking like something.
-        if follow_up.unless_file_version_at_least.version == 0 {
-            return Err(CoreError::Malformed {
-                format: "package".into(),
-                detail: format!(
-                    "'{}': a follow-up's version gate of 0 can never open; declare the version \
-                     the file has to already state, or drop the follow-up",
-                    package.id
-                ),
-            });
-        }
-    }
-    for overlay in &installer.overlays {
-        // `from` carries the overlay archive's own top-level drawer, so it is
-        // never empty; `to` is inside the package's drawer and an empty one
-        // means the drawer itself, which is what every overlay declared today
-        // says.
-        validate_path(
-            "package",
-            &package.id,
-            "amiga_installer.overlays[].from",
-            &overlay.from,
-            false,
-        )?;
-        validate_path(
-            "package",
-            &package.id,
-            "amiga_installer.overlays[].to",
-            &overlay.to,
-            true,
-        )?;
-        refuse_shell_metacharacters("installer overlay path", &overlay.from)?;
-        refuse_shell_metacharacters("installer overlay path", &overlay.to)?;
-    }
-    // A required medium is a **volume name**, not a path and not a device
-    // reference. A trailing colon is the mistake a recipe author will make —
-    // the installer's own strings carry one (`AmigaOS3.9:Videos/…`) — and
-    // letting it through would make ART compare `AmigaOS3.9:` against the
-    // name a disc actually states, `AmigaOS3.9`, and refuse the right disc.
-    if let Some(medium) = &installer.required_medium {
-        for (field, value) in [("volume", &medium.volume), ("name", &medium.name)] {
-            if value.trim().is_empty() {
-                return Err(CoreError::Malformed {
-                    format: "package".into(),
-                    detail: format!(
-                        "'{}': the installer's required_medium.{field} is empty",
-                        package.id
-                    ),
-                });
-            }
-            refuse_shell_metacharacters("required medium", value)?;
-        }
-        if medium.volume.contains(':') || medium.volume.contains('/') {
-            return Err(CoreError::Malformed {
-                format: "package".into(),
-                detail: format!(
-                    "'{}': the installer's required_medium.volume '{}' is a path or carries a \
-                     colon; it must be the disc's own volume name alone, as the image states it",
-                    package.id, medium.volume
-                ),
-            });
-        }
-    }
     Ok(())
-}
-
-/// `"45.15"` → `(45, 15)`; `None` for anything that is not two whole numbers
-/// separated by a dot.
-///
-/// Deliberately the same shape [`crate::core::amigaver`] reads out of a
-/// file's own `$VER:` marker, so a declaration and the thing it is compared
-/// against are never two different notions of a version. It is a separate
-/// two-line function rather than a call into that module because what is
-/// parsed here is a bare number a recipe author typed, not a marker found by
-/// substring search inside arbitrary bytes — the surrounding guards that
-/// module needs (bounded window, plausible-name check) have nothing to do
-/// here, and reusing it would mean writing `$VER: x 45.15` to make it fit.
-pub fn parse_version_pair(text: &str) -> Option<(u32, u32)> {
-    let (version, revision) = text.trim().split_once('.')?;
-    Some((version.trim().parse().ok()?, revision.trim().parse().ok()?))
 }
 
 /// Parse and validate one package's JSON — `recipe::parse`'s own validation
@@ -974,7 +823,152 @@ fn parse(json: &str) -> CoreResult<Package> {
     validate_component("package", &package.component)?;
     validate_installer(&package)?;
     validate_releases(&package)?;
+    validate_host_placement(&package)?;
     Ok(package)
+}
+
+/// The three things a host placement declares beyond its rules —
+/// `payload_password`, `post_place` and `extra_members` — checked at the
+/// boundary where the JSON is read, exactly as `validate_installer` checks the
+/// Amiga-side half.
+///
+/// Every path here becomes a real path inside a real tree, so each goes
+/// through the same [`validate_path`] gate a rule's does. A recipe is shipped
+/// data and is still parsed (see [`validate_installer`]'s own doc comment):
+/// the file can be hand-edited, and a `..` in an `extra_members` rule would
+/// reach outside the tree exactly as it would anywhere else.
+fn validate_host_placement(package: &Package) -> CoreResult<()> {
+    // A key with nothing to unlock. `open_package_staging_in` drops it in
+    // that case rather than applying it to the wrapper, and a recipe that
+    // carries one is either a typo or a misunderstanding about which of the
+    // two archives is locked — either way, something the author has to be
+    // told rather than have quietly ignored.
+    if package.payload_password.is_some() && package.member.is_none() {
+        return Err(CoreError::Malformed {
+            format: "package".into(),
+            detail: format!(
+                "'{}': a payload_password is declared and no member is — the key opens the \
+                 nested payload, and the wrapper archive is never the encrypted half",
+                package.id
+            ),
+        });
+    }
+    if package
+        .payload_password
+        .as_deref()
+        .is_some_and(|p| p.trim().is_empty())
+    {
+        return Err(CoreError::Malformed {
+            format: "package".into(),
+            detail: format!(
+                "'{}': the payload_password is empty — declare the key or declare none",
+                package.id
+            ),
+        });
+    }
+
+    for step in &package.post_place {
+        for (field, value) in post_step_paths(step) {
+            validate_path("package", &package.id, field, value, false)?;
+        }
+    }
+
+    for extra in &package.extra_members {
+        if extra.member.trim().is_empty() {
+            return Err(CoreError::Malformed {
+                format: "package".into(),
+                detail: format!("'{}': an extra_members entry names no member", package.id),
+            });
+        }
+        validate_path(
+            "package",
+            &package.id,
+            "extra_members[].member",
+            &extra.member,
+            false,
+        )?;
+        // Not a placement plan at all if it is empty, and a unit that places
+        // nothing would still be reported as *applied* — the claim-what-you-
+        // did-not-do shape.
+        if extra.rules.is_empty() {
+            return Err(CoreError::Malformed {
+                format: "package".into(),
+                detail: format!(
+                    "'{}': the extra member '{}' declares no rules, so applying it would place \
+                     nothing while reporting that it ran",
+                    package.id, extra.member
+                ),
+            });
+        }
+        // The same two gates a component's own rules go through
+        // (`recipe::validate_component`), reusing the one path validator
+        // rather than a second copy of what a rule may say. The id in the
+        // refusal names the unit, not just the package, so an author with two
+        // extra members can tell which one they mistyped.
+        let unit = format!("{}:{}", package.id, extra.member);
+        for rule in &extra.rules {
+            validate_path(
+                "package",
+                &unit,
+                "extra_members[].rules.from",
+                &rule.from,
+                true,
+            )?;
+            validate_path(
+                "package",
+                &unit,
+                "extra_members[].rules.to",
+                &rule.to,
+                false,
+            )?;
+        }
+        if let Some(gate) = &extra.unless_file_version_at_least {
+            validate_path(
+                "package",
+                &package.id,
+                "extra_members[].unless_file_version_at_least.path",
+                &gate.path,
+                false,
+            )?;
+            // Zero can never close: every file that states anything states at
+            // least 0, so the unit could never be skipped — a gate that
+            // reads as a condition and is not one.
+            if gate.version == 0 {
+                return Err(CoreError::Malformed {
+                    format: "package".into(),
+                    detail: format!(
+                        "'{}': the extra member '{}' has a version gate of 0, which can never \
+                         close; declare the version the file has to already state, or declare \
+                         no gate",
+                        package.id, extra.member
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Every recipe-supplied path inside one [`PostStep`], with the field name a
+/// refusal should quote.
+///
+/// A `match` rather than a method on `PostStep`, so a new variant is a compile
+/// error **here** — where the question is "does this one carry a path that has
+/// to be validated?" — rather than a variant that quietly validates nothing.
+fn post_step_paths(
+    step: &crate::core::amigainstall::finish::PostStep,
+) -> Vec<(&'static str, &String)> {
+    use crate::core::amigainstall::finish::PostStep;
+    match step {
+        PostStep::Protect { path, .. } => vec![("post_place[].path", path)],
+        PostStep::ReplaceKeepingBackup {
+            target,
+            replacement,
+        } => vec![
+            ("post_place[].target", target),
+            ("post_place[].replacement", replacement),
+        ],
+    }
 }
 
 /// ART-209 — a package belongs to at least one release ART ships a recipe
@@ -1153,6 +1147,29 @@ pub(super) fn order_over(chosen: &[String], all: &[Package]) -> CoreResult<Vec<S
     order_over_with_installed(chosen, all, &[])
 }
 
+/// Why ART cannot place a package from Windows, as a clause for the middle of
+/// an English `CoreError` sentence (ART-060 — the user's own sentence is the
+/// screen's, keyed on [`HostPlacementBlock`] itself).
+///
+/// Its one caller is [`order_over_with_installed`]'s third refusal (review
+/// F5): a requirement that is blocked *and* has no Amiga-side installer
+/// cannot be ticked here and cannot be done there either, so neither of the
+/// other two sentences is true of it.
+fn describe_block(block: HostPlacementBlock) -> &'static str {
+    match block {
+        HostPlacementBlock::EncryptedPayload => {
+            "its payload is encrypted and only the package's own Amiga-side Updater has the key"
+        }
+        HostPlacementBlock::NeedsFixfonts => {
+            "its installer runs FixFonts to rebuild a font index, which ART cannot do"
+        }
+        HostPlacementBlock::NeedsInstallerScript => {
+            "it installs through its own Installer script, which chooses files from answers \
+             only a person can give"
+        }
+    }
+}
+
 /// [`order_over`], plus the ids the **tree already carries**.
 ///
 /// **A requirement can be met by the tree instead of by the selection, and
@@ -1194,11 +1211,64 @@ pub(super) fn order_over_with_installed(
             .get(id.as_str())
             .ok_or_else(|| CoreError::InvalidInput(format!("ART ships no package '{id}'")))?;
         for need in &package.requires {
-            if !chosen_set.contains(need.as_str()) && !installed_set.contains(need.as_str()) {
-                return Err(CoreError::InvalidInput(format!(
-                    "'{id}' requires '{need}', which was not chosen"
-                )));
+            if chosen_set.contains(need.as_str()) || installed_set.contains(need.as_str()) {
+                continue;
             }
+            // ART-282: this fires only when a caller reaches `order` (or
+            // `order_with_installed`) without having run
+            // `plan::detect_package_refusals` first — the screen itself
+            // never should, now that both `osinstall_collisions` and
+            // `resolve_packages_for_add` check refusals before ordering.
+            // But this is the one place that check is *not* guaranteed —
+            // it stays a real `CoreError`, not a panic — so it names the
+            // requirement the same way the typed refusal does: by the
+            // catalogue's own name when the id resolves, the raw id only
+            // when it does not, and the Amiga-side advice when the
+            // requirement can never be ticked from this list at all,
+            // rather than "which was not chosen" — advice that is simply
+            // wrong for a requirement nobody could have chosen here.
+            //
+            // **Through `only_installable_on_the_amiga`, the one predicate**
+            // (ART-282 review): reading `amiga_installer` here and the block
+            // on the screen is two answers to "can this be ticked?", and
+            // since 2026-09-08 they disagree — both BoingBags declare an
+            // installer and are tickable.
+            //
+            // **Three combinations, three sentences** (review F5,
+            // 2026-09-08). The conjunction below is right about the first two
+            // and the fallback was not right about the third: a package that
+            // is blocked *and* has no installer — `euro-update`, whose row
+            // `PackagePanel` renders disabled — was told "tick it too" about
+            // a checkbox that cannot be ticked, which is the same
+            // unactionable advice from the other end. It gets the block's own
+            // reason instead, because that is the only true thing there is to
+            // say about it.
+            let required = index.get(need.as_str());
+            let requirement = required
+                .map(|other| other.name.clone())
+                .unwrap_or_else(|| need.clone());
+            if let Some(other) = required {
+                if let Some(block) = other.host_placement_block {
+                    if other.amiga_installer.is_none() {
+                        return Err(CoreError::InvalidInput(format!(
+                            "'{}' requires '{requirement}', and ART cannot install \
+                             '{requirement}' at all: {}",
+                            package.name,
+                            describe_block(block)
+                        )));
+                    }
+                }
+            }
+            let advice = match required {
+                Some(other) if other.only_installable_on_the_amiga() => {
+                    " — install it first on the Amiga-side step"
+                }
+                _ => "",
+            };
+            return Err(CoreError::InvalidInput(format!(
+                "'{}' requires '{requirement}', which was not chosen{advice}",
+                package.name
+            )));
         }
     }
 
@@ -1469,24 +1539,34 @@ mod tests {
             Some(NotYetRunnable::InstallerNotMeasured),
             "a value the catalogue translates, never prose (fix round 1, m6)"
         );
-        for id in ["boingbag-39-1", "boingbag-39-2"] {
-            assert_eq!(
-                super::by_id(id)
-                    .unwrap()
-                    .amiga_installer
-                    .unwrap()
-                    .not_yet_runnable,
-                None,
-                "{id} has been run on the owner's own material (ART-193)"
+        // And it is the **only** one, since 2026-09-08: the emulator route
+        // for the two BoingBags was removed with the recipes' own
+        // `amiga_installer` blocks, so nothing else in the catalogue declares
+        // one at all. `boingbags-39-3-4` is registered unready rather than
+        // hidden (section 10), which is the whole reason the engine stays.
+        for package in packages().expect("the shipped packages must parse") {
+            if package.id == "boingbags-39-3-4" {
+                continue;
+            }
+            assert!(
+                package.amiga_installer.is_none(),
+                "'{}' declares an Amiga-side installer; the only shipped one is BoingBags 3&4's",
+                package.id
             );
         }
     }
 
-    /// **The three packages ART cannot place from Windows each say a
-    /// different thing about why**, and the two that it can say nothing.
+    /// **The two packages ART cannot place from Windows each say a
+    /// different thing about why**, and the rest say nothing.
     /// A block that spread would silently turn the feature off and still
     /// look safe; a block that collapsed into one variant would send half
     /// its readers to the wrong fix.
+    ///
+    /// **Both BoingBags left this list on 2026-09-08** — see
+    /// `Package::payload_password` and ART-166. They are asserted `None`
+    /// here, not merely absent, because "no longer blocked" is the change
+    /// and a test that only lists the blocked ones would pass just as well
+    /// if a block came back.
     #[test]
     fn each_blocked_package_names_the_reason_that_is_true_of_it() {
         use super::super::HostPlacementBlock;
@@ -1502,14 +1582,18 @@ mod tests {
             Some(HostPlacementBlock::NeedsInstallerScript),
             "its Install script chooses files by CPU, machine and language"
         );
-        assert_eq!(
-            block("boingbag-39-1"),
-            Some(HostPlacementBlock::EncryptedPayload)
-        );
+        for id in ["boingbag-39-1", "boingbag-39-2"] {
+            assert_eq!(
+                block(id),
+                None,
+                "{id} is placed from Windows with the key its recipe carries (ART-166, \
+                 the owner's 2026-09-08 reversal)"
+            );
+        }
         assert_eq!(
             block("boingbag-39-2-contribution"),
             None,
-            "plain files, no program, no script — the one host-placeable archive of the chain"
+            "plain files, no program, no script"
         );
         assert_eq!(block("locale-turkish"), None);
     }
@@ -1649,25 +1733,228 @@ mod tests {
         assert!(two.requires.contains(&"boingbag-39-1".to_string()));
     }
 
-    /// **ART-166, as shipped data rather than as prose.** Both BoingBag
-    /// recipes name a payload ART cannot read on the host, so neither may
-    /// be offered as placeable; the Turkish catalog pack has no such block
-    /// and must not acquire one by accident. Asserted in both directions
-    /// because a block that spreads to every package would silently turn
-    /// the whole feature off and still look "safe".
+    /// **ART-166 as shipped data, after the owner's 2026-09-08 reversal.**
+    /// Both BoingBag recipes carry the key that opens their own payload and
+    /// **no** `host_placement_block`, so both are offered on the Packages
+    /// step; the Turkish catalog pack needs no key and must not acquire one
+    /// by accident.
+    ///
+    /// Asserted in every direction that matters, because each half fails
+    /// silently in a different way: a block coming back would turn the
+    /// feature off while still looking "safe", a key that spread to a
+    /// package whose payload is in clear would be handed to a reader that
+    /// has nothing to unlock, and a key that quietly went missing would
+    /// leave a tickable row whose payload cannot be opened at all.
     #[test]
-    fn both_boingbags_declare_the_encrypted_payload_block_and_the_catalog_pack_does_not() {
-        use super::super::HostPlacementBlock;
+    fn both_boingbags_carry_their_payload_key_and_no_block_and_the_catalog_pack_carries_neither() {
         for id in ["boingbag-39-1", "boingbag-39-2"] {
+            let package = super::by_id(id).unwrap();
             assert_eq!(
-                super::by_id(id).unwrap().host_placement_block,
-                Some(HostPlacementBlock::EncryptedPayload),
-                "{id} names an encrypted payload and cannot be placed from the host"
+                package.host_placement_block, None,
+                "{id} is placed from the host now (ART-166)"
+            );
+            assert!(
+                package.payload_password.is_some(),
+                "{id} must carry the key its own payload needs"
+            );
+            assert!(
+                package.member.is_some(),
+                "{id}'s key opens a nested member, and a key without one is refused at parse"
             );
         }
+        // The two keys are Emu68 Hatcher's own, and they are **different** —
+        // one value used for both would open one payload and refuse the
+        // other, which is the mistake copying rather than reading produces.
         assert_eq!(
-            super::by_id("locale-turkish").unwrap().host_placement_block,
-            None,
+            super::by_id("boingbag-39-1")
+                .unwrap()
+                .payload_password
+                .as_deref(),
+            Some("93ABDF11")
+        );
+        assert_eq!(
+            super::by_id("boingbag-39-2")
+                .unwrap()
+                .payload_password
+                .as_deref(),
+            Some("3FB6986B-B0AD6339-4FF3254B")
+        );
+
+        let pack = super::by_id("locale-turkish").unwrap();
+        assert_eq!(pack.host_placement_block, None);
+        assert_eq!(pack.payload_password, None, "its payload is in clear");
+    }
+
+    /// **A key with nothing to unlock is a refusal, not a shrug.** The
+    /// wrapper archive is never the encrypted half, so a recipe declaring a
+    /// `payload_password` and no `member` has misunderstood which of the two
+    /// archives the key belongs to — and `open_package_staging_in` would
+    /// silently drop it, leaving a package that reads as configured and is
+    /// not.
+    #[test]
+    fn a_payload_password_without_a_member_is_refused() {
+        let err = parse(
+            r#"{ "id": "x", "name": "X", "releases": ["AmigaOS 3.9"], "media": "X",
+                 "payload_password": "secret",
+                 "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ] }"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("payload_password"), "{err}");
+        assert!(err.contains("no member"), "{err}");
+
+        // And the control: the same recipe with a member parses, so the
+        // refusal is about the missing member and not about the key.
+        assert!(parse(
+            r#"{ "id": "x", "name": "X", "releases": ["AmigaOS 3.9"], "media": "X",
+                 "member": "Payload", "payload_password": "secret",
+                 "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ] }"#,
+        )
+        .is_ok());
+    }
+
+    /// The extra-payload unit, as shipped data: one member, its own gate,
+    /// and rules that cover the archive the recipe's `_why` measured.
+    #[test]
+    fn boingbag_two_declares_the_xad_unit_with_the_gate_hstwb_states() {
+        let two = super::by_id("boingbag-39-2").unwrap();
+        assert_eq!(two.extra_members.len(), 1);
+        let xad = &two.extra_members[0];
+        assert_eq!(xad.member, "XAD-Update");
+        let gate = xad.unless_file_version_at_least.as_ref().expect(
+            "the unit is conditional; applying it unconditionally would downgrade a \
+                     tree that already carries a newer xadmaster",
+        );
+        assert_eq!(gate.path, "Libs/xadmaster.library");
+        assert_eq!(gate.version, 10, "HstWB's own number, not one ART chose");
+        let mut froms: Vec<&str> = xad.rules.iter().map(|r| r.from.as_str()).collect();
+        froms.sort_unstable();
+        assert_eq!(
+            froms,
+            vec!["C", "Libs"],
+            "the measured top level of XAD-Update, whole"
+        );
+
+        // Nobody else has one, and that is the point of it being data.
+        for id in ["boingbag-39-1", "locale-turkish", "boingbags-39-3-4"] {
+            assert!(
+                super::by_id(id).unwrap().extra_members.is_empty(),
+                "{id} declares no second payload"
+            );
+        }
+    }
+
+    /// **What each BoingBag owes the tree once ART has placed its files**
+    /// (ART-227), asserted whole.
+    ///
+    /// Both lists used to have an Amiga-side twin — `amiga_installer.
+    /// post_install` — and this test asserted the *difference* between the
+    /// two routes, including that BoingBag 2's routes deliberately disagreed
+    /// about `Devs/NSDPatch.cfg`. The emulator route for these two packages
+    /// went on 2026-09-08, so there is one list each and one answer to what a
+    /// BoingBag'd tree boots with.
+    ///
+    /// Whole, not `contains`: every path was checked to exist in the tree a
+    /// real run produced before it was written into a recipe, because
+    /// [`crate::core::amigainstall::finish`] refuses a file that is not there
+    /// rather than skipping it.
+    #[test]
+    fn each_boingbags_host_side_steps_are_the_ones_its_own_route_owes() {
+        use crate::core::amigainstall::finish::PostStep;
+
+        let one = super::by_id("boingbag-39-1").unwrap();
+        let expected_one: Vec<PostStep> = [
+            ("C/LoadMonDrvs", "p"),
+            ("C/LoadResource", "p"),
+            ("C/MakeDir", "p"),
+            ("C/MakeLink", "p"),
+            ("C/SetEnv", "p"),
+            ("C/WBInfo", "p"),
+            ("C/WBRun", "p"),
+            ("S/Start-Amplifier.rexx", "s"),
+            ("S/Startup-Sequence-BB3.9-1", "s"),
+            ("S/Stream-Amplifier.rexx", "s"),
+        ]
+        .into_iter()
+        .map(|(path, add)| PostStep::Protect {
+            path: path.into(),
+            add: add.into(),
+        })
+        .collect();
+        assert_eq!(
+            one.post_place, expected_one,
+            "the seven commands `Resident` needs the pure bit on, and the three scripts \
+             that need the script bit"
+        );
+
+        let two = super::by_id("boingbag-39-2").unwrap();
+        assert_eq!(
+            two.post_place,
+            vec![
+                PostStep::ReplaceKeepingBackup {
+                    target: "Devs/AmigaOS ROM Update".into(),
+                    replacement: "Devs/AmigaOS ROM Update.BB39-2".into(),
+                },
+                PostStep::ReplaceKeepingBackup {
+                    target: "Devs/NSDPatch.cfg".into(),
+                    replacement: "Devs/NSDPatch.cfg.BB39-2".into(),
+                },
+            ],
+            "the ROM update `SetPatch` loads by name, and the device config it reads by \
+             name in the same string table"
+        );
+
+        // And nothing else has grown one by accident.
+        for package in packages().expect("the shipped packages must parse") {
+            if package.id.starts_with("boingbag-") {
+                continue;
+            }
+            assert!(
+                package.post_place.is_empty(),
+                "'{}' declares after-steps nobody has measured a need for",
+                package.id
+            );
+        }
+    }
+
+    /// **F1, 2026-09-08: both BoingBags' `overrides` pinned, with the counts
+    /// the recipes' own `_why_overrides` record.**
+    ///
+    /// The defect this closes was real and had no unit-level guard at all:
+    /// both recipes shipped `overrides: ["workbench-base"]`, recorded from a
+    /// measurement about the **media**, and `overrides` is a claim about the
+    /// **tree's manifest**. The first real host placement refused with
+    /// *"'boingbag-39-1' would write over 122 file(s) it never declared it may
+    /// replace"*. Nothing failed until an archive and a real tree were in
+    /// hand.
+    ///
+    /// The counts, against the owner's own tree (2026-09-08): of BoingBag
+    /// 3.9-1's 210 files, 122 are recorded to `workbench-39`, 24 to
+    /// `workbench-base` and 64 are new; of 3.9-2's 121, 84 / 17 / 20, and its
+    /// `XAD-Update` unit lands on 29 more `workbench-39` files and 7 new ones.
+    /// `boingbag-39-1` is on 3.9-2's list because BoingBag 1 rewrites many of
+    /// the same paths first and the manifest then records **it** as the owner.
+    ///
+    /// Literals, not a read-back off the recipe: a test that builds its
+    /// expectation from the file it checks proves only that the file equals
+    /// itself.
+    #[test]
+    fn both_boingbags_override_the_two_halves_of_the_workbench_the_tree_records() {
+        let overrides_of = |id: &str| super::by_id(id).unwrap().component.overrides.clone();
+
+        assert_eq!(
+            overrides_of("boingbag-39-1"),
+            vec!["workbench-base".to_string(), "workbench-39".to_string()],
+            "122 of its 210 files are recorded to workbench-39 and 24 to workbench-base"
+        );
+        assert_eq!(
+            overrides_of("boingbag-39-2"),
+            vec![
+                "workbench-base".to_string(),
+                "workbench-39".to_string(),
+                "boingbag-39-1".to_string()
+            ],
+            "84 / 17 to the two Workbench halves, and BoingBag 1 owns the rest by then"
         );
     }
 
@@ -1689,44 +1976,49 @@ mod tests {
     // this package's files.
     // -----------------------------------------------------------------
 
-    /// Both BoingBags declare an installer; the Turkish pack does not, because
-    /// ART already places its files directly.
+    /// **Neither BoingBag declares an installer any more, and that is the
+    /// change** (2026-09-08). Both are placed from Windows with the key their
+    /// own recipes carry (ART-166, the owner's reversal), so a second route
+    /// nothing takes would be ART claiming an install path it does not run.
+    ///
+    /// Asserted `None` rather than left unmentioned, because "the emulator
+    /// route went" is the fact, and a test that merely stopped naming them
+    /// would pass just as well if the block came back.
+    ///
+    /// The measured command line the two used to declare — `C/Updater
+    /// AmigaOS-Update "<target>"`, read out of the owner's own archives on
+    /// 2026-08-20 with 7-Zip 26.02, line 858 of `BoingBag3.9-1/Install` and
+    /// line 1615 of `BoingBag3.9-2/Install` — is in this file's git history
+    /// and in `.superpowers/sdd/2026-08-20-amiga-side-install`.
     #[test]
-    fn the_boingbags_declare_an_installer_and_the_locale_pack_does_not() {
-        assert!(super::by_id("boingbag-39-1")
-            .unwrap()
-            .amiga_installer
-            .is_some());
-        assert!(super::by_id("boingbag-39-2")
-            .unwrap()
-            .amiga_installer
-            .is_some());
-        assert!(super::by_id("locale-turkish")
-            .unwrap()
-            .amiga_installer
-            .is_none());
+    fn the_boingbags_declare_no_installer_and_neither_does_the_locale_pack() {
+        for id in ["boingbag-39-1", "boingbag-39-2", "locale-turkish"] {
+            assert!(
+                super::by_id(id).unwrap().amiga_installer.is_none(),
+                "{id} is placed from Windows"
+            );
+        }
     }
 
-    /// The measured command line, pinned. Both BoingBags' own `Install`
-    /// scripts run `C/Updater AmigaOS-Update "<target>"` — read out of the
-    /// owner's real archives on 2026-08-20 with 7-Zip 26.02, line 858 of
-    /// `BoingBag3.9-1/Install` and line 1615 of `BoingBag3.9-2/Install` —
-    /// and `C/Updater` is a real entry in each wrapper LHA (25 588 bytes in
-    /// 3.9-1, 42 676 in 3.9-2), not an assumption.
-    ///
-    /// Pinned rather than left to
-    /// [`the_boingbags_declare_an_installer_and_the_locale_pack_does_not`],
-    /// which only asks whether *something* is declared: the AmigaOS 3.9
-    /// recipe shipped fourteen paths nobody had read out of the medium, and
-    /// every one of them was wrong. A test that says "some path is declared"
-    /// would have passed for all fourteen.
+    /// The one shipped declaration, pinned. `boingbags-39-3-4`'s own `Install`
+    /// is the archive's Installer script, read out of the owner's own
+    /// `BoingBags3&4.lha` with 7-Zip 26.02 on 2026-09-08 — not an assumption:
+    /// the AmigaOS 3.9 release recipe shipped fourteen paths nobody had read
+    /// out of the medium and every one was wrong.
     #[test]
-    fn the_declared_updater_is_the_one_the_packages_own_install_script_runs() {
-        for id in ["boingbag-39-1", "boingbag-39-2"] {
-            let installer = super::by_id(id).unwrap().amiga_installer.unwrap();
-            assert_eq!(installer.program, "C/Updater", "{id}");
-            assert_eq!(installer.args, vec!["AmigaOS-Update".to_string()], "{id}");
-        }
+    fn the_declared_installer_is_the_one_the_packages_own_archive_carries() {
+        let installer = super::by_id("boingbags-39-3-4")
+            .unwrap()
+            .amiga_installer
+            .unwrap();
+        assert_eq!(installer.program, "Install");
+        assert_eq!(
+            installer.args,
+            Vec::<String>::new(),
+            "deliberately empty: nobody has measured what `Installer` accepts against this \
+             script, and arguments ART has never passed would be a claim about a run that \
+             has never happened"
+        );
     }
 
     /// **The installer path is inside the package, and only inside it.**
@@ -1961,11 +2253,6 @@ mod tests {
         let installer = AmigaInstaller {
             program: program.to_string(),
             args: args.iter().map(|a| a.to_string()).collect(),
-            minimum_version: None,
-            overlays: Vec::new(),
-            required_medium: None,
-            follow_ups: Vec::new(),
-            post_install: Vec::new(),
             not_yet_runnable: None,
         };
         let json = serde_json::json!({
@@ -2320,94 +2607,6 @@ mod tests {
         assert!(checked > 0, "no package with an installer was checked");
     }
 
-    // -----------------------------------------------------------------
-    // ART-186: the declaration a BoingBag 1 run needs
-    // -----------------------------------------------------------------
-
-    /// What the shipped recipes actually say. Both halves matter: BoingBag
-    /// 3.9-1 declares the minimum and the overlay because its own `Updater` is
-    /// 45.13, and BoingBag 3.9-2 declares **neither**, because no source says
-    /// any build of its 45.19 is unfit and inventing a requirement would be
-    /// §89's mistake from the other side.
-    #[test]
-    fn only_boingbag_one_declares_a_minimum_version_and_an_overlay() {
-        let one = super::by_id("boingbag-39-1")
-            .unwrap()
-            .amiga_installer
-            .unwrap();
-        assert_eq!(one.minimum_version.as_deref(), Some("45.15"));
-        assert_eq!(
-            one.overlays,
-            vec![InstallerOverlay {
-                from: "BoingBag3.9-1-UAE/BoingBag3.9-1".to_string(),
-                to: String::new(),
-            }],
-            "the overlay's `from` is a whole path from the UAE archive's own root, because that \
-             archive nests the drawer one level deeper than the package it patches"
-        );
-
-        let two = super::by_id("boingbag-39-2")
-            .unwrap()
-            .amiga_installer
-            .unwrap();
-        assert_eq!(two.minimum_version, None);
-        assert_eq!(two.overlays, Vec::new());
-    }
-
-    /// `"45.15"` is two integers or it is refused at parse time — so a `Some`
-    /// reaching the command layer always parses, and the command layer never
-    /// has to decide what a malformed one means.
-    #[test]
-    fn a_minimum_version_that_is_not_two_numbers_is_refused() {
-        for bad in ["45", "forty-five.fifteen", "45.", ".15", "", "45.15.3"] {
-            let json = serde_json::json!({
-                "id": "x",
-                "name": "X", "releases": ["AmigaOS 3.9"],
-                "media": "X",
-                "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
-                "amiga_installer": { "program": "C/Updater", "minimum_version": bad },
-            });
-            let err = parse(&json.to_string()).unwrap_err().to_string();
-            assert!(
-                err.contains("minimum_version"),
-                "'{bad}' must be refused by name, got {err}"
-            );
-        }
-        // And a well-formed one parses to the pair the run compares against.
-        assert_eq!(super::parse_version_pair("45.15"), Some((45, 15)));
-        assert_eq!(super::parse_version_pair("45.13"), Some((45, 13)));
-    }
-
-    /// An overlay path is a path inside an archive, and every gate a rule's
-    /// own `from` goes through applies to it — a recipe that could climb out
-    /// would be naming files outside the archive ART unpacked.
-    #[test]
-    fn an_overlay_path_that_leaves_its_archive_is_refused() {
-        for (from, to) in [
-            ("../outside", ""),
-            ("BoingBag3.9-1-UAE/../../outside", ""),
-            ("/absolute", ""),
-            ("", ""),
-            ("BoingBag3.9-1-UAE/BoingBag3.9-1", "../../outside"),
-            ("BoingBag3.9-1-UAE/BoingBag3.9-1", "/absolute"),
-        ] {
-            let json = serde_json::json!({
-                "id": "x",
-                "name": "X", "releases": ["AmigaOS 3.9"],
-                "media": "X",
-                "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
-                "amiga_installer": {
-                    "program": "C/Updater",
-                    "overlays": [ { "from": from, "to": to } ],
-                },
-            });
-            assert!(
-                parse(&json.to_string()).is_err(),
-                "'{from}' -> '{to}' must be refused"
-            );
-        }
-    }
-
     /// An unknown id is refused by name, never defaulted to some other
     /// package — the same rule `recipe::by_release` follows, for the same
     /// reason.
@@ -2432,13 +2631,31 @@ mod tests {
 
     /// Choosing a package without what it requires is refused, saying what
     /// is missing — not silently added, because adding a whole package the
-    /// user did not ask for is a bigger surprise than a refusal.
+    /// user did not ask for is a bigger surprise than a refusal. By the
+    /// catalogue's own **name**, never the bare id (ART-282).
+    ///
+    /// **The advice changed on 2026-09-08 and this test changed with it.**
+    /// It used to assert "Amiga-side step", because BoingBag 3.9-1 declared
+    /// an `amiga_installer` and was blocked from the host. It still declares
+    /// the installer and is no longer blocked, so the box the user is being
+    /// sent to is right there on this list — and the ordinary sentence is
+    /// the true one. The negative arm is the point: the old advice must be
+    /// **gone**, not merely joined by the new one.
     #[test]
     fn a_requirement_that_was_not_chosen_is_refused_by_name() {
         let err = super::order(&["boingbag-39-2".into()])
             .unwrap_err()
             .to_string();
-        assert!(err.contains("boingbag-39-1"), "got {err}");
+        assert!(err.contains("BoingBag 3.9-1"), "got {err}");
+        assert!(err.contains("which was not chosen"), "got {err}");
+        assert!(
+            !err.contains("Amiga-side step"),
+            "BoingBag 3.9-1 can be ticked on this very list now: got {err}"
+        );
+        assert!(
+            !err.contains("boingbag-39-1"),
+            "the id must not leak: got {err}"
+        );
     }
 
     /// A minimal, valid `Package` for the synthetic tests below — real
@@ -2451,8 +2668,11 @@ mod tests {
             name: id.to_string(),
             media: "SyntheticMedia".to_string(),
             member: None,
+            payload_password: None,
             distinguished_by: None,
             amiga_installer: None,
+            post_place: Vec::new(),
+            extra_members: Vec::new(),
             requires: requires.iter().map(|s| s.to_string()).collect(),
             requires_components: Vec::new(),
             chain_position: None,
@@ -2515,54 +2735,168 @@ mod tests {
         assert!(!err.contains("cycle"), "got {err}");
     }
 
+    /// ART-282: the screen must never reach this — both command paths now
+    /// run `plan::detect_package_refusals` before ordering — but
+    /// `order_over_with_installed`'s own sentence still has to be one a
+    /// person could act on if some future caller ever *does* skip that
+    /// check, and it must never read out ART's own ids the way it used to:
+    /// `'locale-turkish' requires 'boingbag-39-2', which was not chosen`
+    /// named neither package by anything a person watching the Packages
+    /// step could recognise, and told them the missing package "was not
+    /// chosen" — advice that is simply wrong for one that cannot be, because
+    /// it runs on the Amiga.
+    #[test]
+    fn order_over_with_installeds_own_error_names_the_amiga_side_step() {
+        let x = synthetic("x", &["y"]);
+        let mut y = synthetic("y", &[]);
+        y.name = "Y Display Name".to_string();
+        // **Both halves, because both are what makes the advice true**
+        // (ART-282 review, 2026-09-08). What stops a row being ticked is the
+        // block; the installer is what makes the Amiga-side step able to do
+        // anything about it. A requirement with only the installer — which
+        // is what both BoingBags are now — is tickable right here, and the
+        // arm below must not fire for it (see the next test).
+        y.host_placement_block = Some(super::super::HostPlacementBlock::EncryptedPayload);
+        y.amiga_installer = Some(AmigaInstaller {
+            program: "C/Updater".to_string(),
+            args: Vec::new(),
+            not_yet_runnable: None,
+        });
+
+        let err = super::order_over(&["x".to_string()], &[x, y])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Y Display Name"), "got {err}");
+        assert!(err.contains("Amiga-side step"), "got {err}");
+        assert!(!err.contains("'y'"), "the id must not leak: got {err}");
+    }
+
+    /// **The third combination, and it needs a third sentence** (review F5,
+    /// 2026-09-08). A requirement that is blocked from host placement *and*
+    /// has no Amiga-side installer — `euro-update`, `needs-fixfonts` — cannot
+    /// be ticked on the Packages step (`PackagePanel` disables the row) and
+    /// cannot be done on the Amiga step either. "Tick it too" and "do it on
+    /// the Amiga first" are both false about it, so it gets the block's own
+    /// reason.
+    ///
+    /// Unreachable through the shipped data today — nothing's `requires`
+    /// names a blocked-without-installer package, and `chain::package_state`
+    /// answers `Refused { NotPlaceable }` for the row itself — and it is
+    /// asserted anyway, because the day one does the wrong sentence would
+    /// come back silently. The synthetic pair is exactly `euro-update`'s
+    /// shape.
+    #[test]
+    fn a_requirement_that_can_be_installed_neither_way_says_why_rather_than_tick_it_too() {
+        let x = synthetic("x", &["y"]);
+        let mut y = synthetic("y", &[]);
+        y.name = "Euro-Update".to_string();
+        y.host_placement_block = Some(super::super::HostPlacementBlock::NeedsFixfonts);
+        assert!(
+            y.amiga_installer.is_none(),
+            "the premise: no Amiga-side route either"
+        );
+
+        let err = super::order_over(&["x".to_string()], &[x, y])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Euro-Update"), "got {err}");
+        assert!(
+            err.contains("FixFonts"),
+            "the block's own reason is the only true thing to say: got {err}"
+        );
+        assert!(
+            !err.contains("which was not chosen"),
+            "it cannot be chosen — the row is disabled: got {err}"
+        );
+        assert!(
+            !err.contains("Amiga-side step"),
+            "and there is nothing to run there: got {err}"
+        );
+    }
+
+    /// The shipped half of the same finding: **no package's `requires` names
+    /// a package that is blocked with no installer**, so the refusal above is
+    /// unreachable today. The day one does, the sentence it now gets is the
+    /// one the test above pins — this is what makes that a decision rather
+    /// than an accident of the data.
+    #[test]
+    fn nothing_shipped_requires_a_package_that_can_be_installed_neither_way() {
+        let packages = packages().expect("the shipped packages must parse");
+        for package in &packages {
+            for need in &package.requires {
+                let Some(other) = packages.iter().find(|p| &p.id == need) else {
+                    continue;
+                };
+                assert!(
+                    other.host_placement_block.is_none() || other.amiga_installer.is_some(),
+                    "'{}' requires '{}', which can be installed neither way",
+                    package.id,
+                    other.id
+                );
+            }
+        }
+    }
+
+    /// The plain arm beside it: a requirement that is an ordinary,
+    /// host-placeable package (no `amiga_installer`) keeps the old advice —
+    /// "which was not chosen" is correct there, because it really could be.
+    #[test]
+    fn order_over_with_installeds_own_error_keeps_the_ordinary_advice_for_a_host_package() {
+        let x = synthetic("x", &["y"]);
+        let mut y = synthetic("y", &[]);
+        y.name = "Y Display Name".to_string();
+
+        let err = super::order_over(&["x".to_string()], &[x, y])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Y Display Name"), "got {err}");
+        assert!(err.contains("which was not chosen"), "got {err}");
+        assert!(!err.contains("Amiga-side step"), "got {err}");
+    }
+
+    /// **The shape both BoingBags are in since 2026-09-08: an
+    /// `amiga_installer` and no block.** ART-282's review found this
+    /// predicate keyed on the installer in two places, and with the reversal
+    /// that reading became wrong in the worst direction — telling somebody a
+    /// package "cannot be ticked on this list" while its checkbox sat in
+    /// front of them, enabled.
+    ///
+    /// The third arm is here rather than only the two above because it is
+    /// the one a reader would think is covered by them and is not: without
+    /// the block the row is ordinary, whatever else it declares.
+    #[test]
+    fn a_host_placeable_requirement_that_also_has_an_installer_gets_the_ordinary_advice() {
+        let x = synthetic("x", &["y"]);
+        let mut y = synthetic("y", &[]);
+        y.name = "BoingBag 3.9-2".to_string();
+        y.amiga_installer = Some(AmigaInstaller {
+            program: "C/Updater".to_string(),
+            args: Vec::new(),
+            not_yet_runnable: None,
+        });
+        assert_eq!(y.host_placement_block, None, "the premise of this test");
+        assert!(
+            !y.only_installable_on_the_amiga(),
+            "an installer alone does not make a package Amiga-only"
+        );
+
+        let err = super::order_over(&["x".to_string()], &[x, y])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("BoingBag 3.9-2"), "got {err}");
+        assert!(err.contains("which was not chosen"), "got {err}");
+        assert!(
+            !err.contains("Amiga-side step"),
+            "it can be ticked on this list: got {err}"
+        );
+    }
+
     /// Two shipped JSON files naming the same id is the failure mode that
     /// silently drops a third: a copy-paste of one entry in `SHIPPED_JSON`
     /// leaves the array's length looking right while one real package
     /// vanishes. `parse_all` — what `packages()` itself calls — catches it
     /// directly; this test constructs the collision without touching the
     /// real shipped list.
-    /// ART-193. Both BoingBags' `Updater`s verify the original AmigaOS 3.9
-    /// CD-ROM — their own printable strings say so, and each recipe's
-    /// `_why_required_medium` records the reading — so both must declare it.
-    /// The volume is written the way a disc states it: no colon, whatever the
-    /// installer's own `AmigaOS3.9:Videos/…` strings look like.
-    #[test]
-    fn both_boingbags_declare_the_disc_their_updater_verifies() {
-        for id in ["boingbag-39-1", "boingbag-39-2"] {
-            let package = by_id(id).unwrap();
-            let medium = package
-                .amiga_installer
-                .as_ref()
-                .and_then(|i| i.required_medium.as_ref())
-                .unwrap_or_else(|| panic!("{id} declares no required medium"));
-            assert_eq!(medium.volume, "AmigaOS3.9", "{id}");
-            assert!(!medium.volume.contains(':'), "{id}");
-            assert!(!medium.name.trim().is_empty(), "{id}");
-        }
-    }
-
-    /// A recipe author will copy the volume out of the installer's own
-    /// strings, colon and all. Left alone, `AmigaOS3.9:` would be compared
-    /// against the name a disc actually states — `AmigaOS3.9` — and the right
-    /// disc would be refused.
-    #[test]
-    fn a_required_medium_written_as_a_device_reference_is_refused() {
-        let json = serde_json::json!({
-            "id": "x",
-            "name": "X", "releases": ["AmigaOS 3.9"],
-            "media": "M",
-            "amiga_installer": {
-                "program": "C/Updater",
-                "required_medium": { "volume": "AmigaOS3.9:", "name": "the disc" }
-            },
-            "rules": [{ "from": "C", "to": "C", "kind": "subtree" }]
-        })
-        .to_string();
-        let err = parse(&json).unwrap_err();
-        assert!(matches!(err, CoreError::Malformed { .. }), "{err:?}");
-        assert!(err.to_string().contains("volume name"), "{err}");
-    }
-
     #[test]
     fn two_shipped_packages_sharing_an_id_are_refused() {
         let err = super::parse_all(&[BOINGBAG_39_1_JSON, BOINGBAG_39_1_JSON])
@@ -2750,232 +3084,5 @@ mod tests {
              shelf's 22, its 23 `.language` files cover locale-base's, its flags and \
              providers cover workbench-39's, and `L`/`Devs` are drawers workbench-base owns"
         );
-    }
-
-    /// **ART-227.** What the two BoingBags need done after their own
-    /// `Updater` has run, pinned against the shipped data.
-    ///
-    /// Every path here was checked to exist in the tree ART's own run
-    /// produced before it was written into a recipe, because
-    /// [`crate::core::amigainstall::finish`] refuses a file that is not there
-    /// rather than skipping it — a list with one wrong name would turn every
-    /// BoingBag 1 install into a failure at the last step.
-    ///
-    /// The rotation is the one with teeth and is asserted whole: BoingBag 2's
-    /// `Updater` leaves a 321 768-byte ROM update under a name `SetPatch`
-    /// does not load, and without this step a tree reports itself updated
-    /// while running the ROM update it had before.
-    ///
-    /// **The lists are asserted whole rather than "contains", and that is what
-    /// makes them the guard for the three steps HstWB has and ART does not.**
-    /// All three were measured on 2026-09-08 (round 3, task 3) on the owner's
-    /// own material, and none of them may be added here without a measurement
-    /// of its own — this test is what would fail:
-    ///
-    /// - `C/Installer`: the tree's `Utilities/Installer` is **byte-identical**
-    ///   to BoingBag 3.9-2's own (154 804 bytes, sha256 `6e28d173…`,
-    ///   `$VER: installer 44.10 (1.10.99)`). Not older. *Measured, not needed.*
-    /// - Locale catalogs: **597 catalog files in 20 languages, 0 added, 0
-    ///   removed, 0 changed** by both BoingBags; neither payload carries a
-    ///   single `Locale/` entry. *Measured, not needed.*
-    /// - `XAD-Update`: needed — `Libs/xadmaster.library` is still
-    ///   `xadmaster 9.1 (05.01.2001)` after both, and 9.1 < 10 — but it is a
-    ///   second `Updater` run inside the emulator on a second ZipCrypto
-    ///   archive, gated on a requester the package puts to the user. It is not
-    ///   a `PostStep` and must not become one; see
-    ///   `core::amigainstall::finish`'s module documentation.
-    #[test]
-    fn the_boingbags_declare_what_their_updater_leaves_undone_art_227() {
-        use crate::core::amigainstall::finish::PostStep;
-
-        let packages = packages().expect("the shipped packages must parse");
-        let installer_of = |id: &str| {
-            packages
-                .iter()
-                .find(|p| p.id == id)
-                .unwrap_or_else(|| panic!("no shipped package '{id}'"))
-                .amiga_installer
-                .clone()
-                .unwrap_or_else(|| panic!("'{id}' declares no Amiga-side installer"))
-        };
-
-        // --- BoingBag 1: ten files, two groups of protection bits ----------
-        let one = installer_of("boingbag-39-1").post_install;
-        let expected_one: Vec<PostStep> = [
-            ("C/LoadMonDrvs", "p"),
-            ("C/LoadResource", "p"),
-            ("C/MakeDir", "p"),
-            ("C/MakeLink", "p"),
-            ("C/SetEnv", "p"),
-            ("C/WBInfo", "p"),
-            ("C/WBRun", "p"),
-            ("S/Start-Amplifier.rexx", "s"),
-            ("S/Startup-Sequence-BB3.9-1", "s"),
-            ("S/Stream-Amplifier.rexx", "s"),
-        ]
-        .into_iter()
-        .map(|(path, add)| PostStep::Protect {
-            path: path.into(),
-            add: add.into(),
-        })
-        .collect();
-        assert_eq!(
-            one, expected_one,
-            "the seven commands `Resident` needs the pure bit on, and the three scripts \
-             that need the script bit"
-        );
-
-        // --- BoingBag 2: the rotation --------------------------------------
-        assert_eq!(
-            installer_of("boingbag-39-2").post_install,
-            vec![PostStep::ReplaceKeepingBackup {
-                target: "Devs/AmigaOS ROM Update".into(),
-                replacement: "Devs/AmigaOS ROM Update.BB39-2".into(),
-            }],
-            "without this the 321 768-byte ROM update sits beside the old one under a \
-             name SetPatch does not load"
-        );
-
-        // --- and nothing else has grown one by accident --------------------
-        for package in &packages {
-            if package.id.starts_with("boingbag-") {
-                continue;
-            }
-            let steps = package
-                .amiga_installer
-                .as_ref()
-                .map(|i| i.post_install.len())
-                .unwrap_or(0);
-            assert_eq!(
-                steps, 0,
-                "'{}' declares post-install steps nobody has measured a need for",
-                package.id
-            );
-        }
-    }
-
-    /// **Two follow-ups are refused at parse time, with the reason** (round
-    /// 3 whole-branch review, L9).
-    ///
-    /// `workvol::follow_up_lines` writes every follow-up's word to one
-    /// `art-followup.txt` and `read_follow_up` returns one outcome, so a
-    /// second one would be the only one anybody heard about: "the first
-    /// failed, the second was not needed" would reach the user as *not
-    /// needed*. Refused rather than silently last-one-wins, because a recipe
-    /// author has no way to see that happening.
-    ///
-    /// The control is beside it: **one** follow-up parses, so this is a cap
-    /// and not a ban.
-    #[test]
-    fn a_package_may_declare_only_one_follow_up_until_each_has_its_own_marker() {
-        let one = serde_json::json!([{
-            "program": "C/Updater",
-            "args": ["XAD-Update"],
-            "unless_file_version_at_least": { "path": "Libs/xadmaster.library", "version": 10 },
-        }]);
-        let two = serde_json::json!([
-            {
-                "program": "C/Updater",
-                "args": ["XAD-Update"],
-                "unless_file_version_at_least": { "path": "Libs/xadmaster.library", "version": 10 },
-            },
-            {
-                "program": "C/Updater",
-                "args": ["Other-Update"],
-                "unless_file_version_at_least": { "path": "Libs/other.library", "version": 3 },
-            },
-        ]);
-        let with = |follow_ups: serde_json::Value| {
-            let json = serde_json::json!({
-                "id": "x",
-                "name": "X", "releases": ["AmigaOS 3.9"],
-                "media": "X",
-                "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
-                "amiga_installer": {
-                    "program": "C/Updater",
-                    "args": ["AmigaOS-Update"],
-                    "follow_ups": follow_ups,
-                },
-            });
-            parse(&json.to_string())
-        };
-
-        with(one).expect("one follow-up is the shipped shape and must parse");
-
-        let err = with(two).unwrap_err().to_string();
-        assert!(
-            err.contains("only one"),
-            "must say what the limit is: {err}"
-        );
-        assert!(
-            err.contains("result file"),
-            "and why, so a recipe author knows what would have to change: {err}"
-        );
-    }
-
-    /// **ART-280: the one follow-up ART ships, asserted whole.**
-    ///
-    /// Same shape and same reason as the `post_install` pin above: the list
-    /// is the measurement, so a second follow-up cannot arrive without
-    /// meeting this test and, through it, the requirement that somebody
-    /// measured the need. What was measured here (2026-09-08, a chain ART
-    /// produced itself, every file of every state hashed):
-    /// `Libs/xadmaster.library` reads `9.0` clean, `9.1` after BoingBag 1 and
-    /// **`9.1` still** after BoingBag 2 — below the `10` HstWB's own
-    /// `Install-Boing-Bag-2` gates on.
-    ///
-    /// The values are written out as literals rather than read back off the
-    /// recipe, because a test that builds its expectation from the file it
-    /// checks proves only that the file equals itself.
-    #[test]
-    fn boingbag_two_declares_the_xad_follow_up_and_nothing_else_declares_one_art_280() {
-        use crate::core::amigainstall::{FileVersionGate, FollowUp};
-
-        let packages = packages().expect("the shipped packages must parse");
-        let follow_ups_of = |id: &str| {
-            packages
-                .iter()
-                .find(|p| p.id == id)
-                .unwrap_or_else(|| panic!("no shipped package '{id}'"))
-                .amiga_installer
-                .as_ref()
-                .map(|i| i.follow_ups.clone())
-                .unwrap_or_default()
-        };
-
-        assert_eq!(
-            follow_ups_of("boingbag-39-2"),
-            vec![FollowUp {
-                program: "C/Updater".into(),
-                args: vec!["XAD-Update".into()],
-                unless_file_version_at_least: FileVersionGate {
-                    path: "Libs/xadmaster.library".into(),
-                    version: 10,
-                },
-            }],
-            "the second payload the first invocation never applies"
-        );
-
-        // The target volume is a fact about the run, not about the package —
-        // the same rule `amiga_installer.args` follows — so it must not be
-        // written here. `compose` appends it.
-        assert!(
-            !follow_ups_of("boingbag-39-2")[0]
-                .args
-                .iter()
-                .any(|a| a.contains(':')),
-            "a recipe may not name the volume; that is the composer's"
-        );
-
-        for package in &packages {
-            if package.id == "boingbag-39-2" {
-                continue;
-            }
-            assert!(
-                follow_ups_of(&package.id).is_empty(),
-                "'{}' declares a follow-up nobody has measured a need for",
-                package.id
-            );
-        }
     }
 }

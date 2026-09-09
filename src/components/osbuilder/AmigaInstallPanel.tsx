@@ -32,8 +32,8 @@
 //     verbatim rather than replaced by one translated "it was refused",
 //     because the whole value of a refusal is *which* one it is — a missing
 //     prerequisite names the package to install first and in what order, and
-//     an `Updater` too old to run under an emulator names the second archive
-//     that fixes it. A translated line beside them says the thing ART can
+//     a wrong archive names which package's it really is. A translated line
+//     beside them says the thing ART can
 //     say in the user's own language and that the English does not: nothing
 //     was copied.
 //   - **A run that did not succeed says where the copy is.** A user told "it
@@ -114,20 +114,19 @@ import {
   archiveFieldBlockerPhrase,
   dedupeBlockers,
   onAmigaInstallResult,
-  followUpPhrase,
   outcomeNextStepPhrase,
   outcomePhrase,
   outcomeTone,
-  overlayAdvicePhrase,
   readinessBlockers,
   settlementPhrase,
   type AmigaInstallPreview,
   type AmigaInstallRequest,
   type AmigaInstallResult,
   type ArchiveClassification,
+  slotOverrides,
 } from "@/lib/amigainstall";
 import {
-  collisionCounts,
+  previewHeadingPhrase,
   fileName,
   notYetRunnablePanelKey,
   osinstallChain,
@@ -138,6 +137,7 @@ import {
   type ChainRow,
   type InstallRelease,
   type PackageSummary,
+  type SlotOverride,
   type SlotReport,
   type SlotState,
 } from "@/lib/osinstall";
@@ -170,8 +170,8 @@ export interface AmigaInstallPanelProps {
   onTreeRootChange?: (path: string | null) => void;
   /** Where the user keeps their update archives. Used for the catalogue —
    *  which packages ART ships a recipe for — and as the file dialogs'
-   *  starting folder. The run itself takes whole file paths, never a folder:
-   *  the second archive is chosen deliberately, not guessed at. */
+   *  starting folder. The run itself takes a whole file path, never a folder:
+   *  the archive is chosen deliberately, not guessed at. */
   packageFolder?: string | null;
   /**
    * **Every folder this build's material is in** (design § 3.1), in list
@@ -318,16 +318,13 @@ function SlotField({
   const name = displayName(state);
 
   /** The sentence a filled field carries, and `null` when it is not filled.
-   *  Three producers, never folded into one: the user's own choice, ART's
-   *  measurement that nobody has to obtain this at all, and the readout's own
-   *  row for the file ART identified. */
+   *  Two producers, never folded into one: the user's own choice, and the
+   *  readout's own row for the file ART identified. */
   const filled: Phrase | null = override
     ? { key: "osinstall.slots.chosen", params: { file: fileName(override), name } }
-    : state.notNeeded
-      ? { key: "osinstall.slots.notNeeded", params: { name, carries: state.notNeeded } }
-      : found
-        ? slotLines([state])[0].phrase
-        : null;
+    : found
+      ? slotLines([state])[0].phrase
+      : null;
 
   if (filled) {
     return (
@@ -459,6 +456,17 @@ export function AmigaInstallPanel({
   const { session, setRom } = useBuildSession();
   const power = usePowerMode();
   const winuaePath = useSettingsStore((s) => s.settings.winuaePath);
+  /**
+   * The user's own per-slot file choices, as both `osinstall_slots` and
+   * `osinstall_chain` take them (ART-284).
+   *
+   * **A string, deposited into a `useMemo`, because both effects below start
+   * disk work** — the same rule `OsInstall.tsx` and `MaterialReadout.tsx`
+   * already keep for this exact value: an array rebuilt each render is a
+   * fresh identity and would re-scan the folders on every keystroke.
+   */
+  const rememberedBag = useSettingsStore((s) => s.settings.remembered);
+  const overridesKey = JSON.stringify(slotOverrides(rememberedBag));
 
   const [packageId, setPackageId] = useRemembered<string | null>(
     "amigaInstall.package",
@@ -476,10 +484,21 @@ export function AmigaInstallPanel({
    */
   const [mediumSelected, setMediumSelected] = useState(false);
   /**
-   * The two archives, **scoped per package** (ART-277). `useRemembered`
-   * takes its key as a plain argument re-read on every render, so a key that
-   * changes with `packageId` is exactly what it already supports — no
-   * lower-level `@/lib/remembered` call is needed. Switching the radio to
+   * Whether the row selection was made **in this session**, by a click.
+   *
+   * Deliberately not remembered, and it is the whole of ART-286's fix: a
+   * click is somebody saying *this row*, and a restored `packageId` is only
+   * where they were last looking. The two need different answers from the Run
+   * button — see `target`.
+   */
+  const [pickedByHand, setPickedByHand] = useState(false);
+  /**
+   * The package's own archive, **scoped per package** (ART-277). There were
+   * two of these until 2026-09-09; the update-archive field went with the
+   * overlay machinery. `useRemembered` takes its key as a plain argument
+   * re-read on every render, so a key that changes with `packageId` is
+   * exactly what it already supports — no lower-level `@/lib/remembered`
+   * call is needed. Switching the radio to
    * BoingBag 3.9-2 therefore reads BoingBag 3.9-2's own remembered archive
    * (empty the first time), while BoingBag 3.9-1's stays exactly where it
    * was under its own key. See `amigaInstallArchiveKey`'s own comment for
@@ -524,7 +543,7 @@ export function AmigaInstallPanel({
   useEffect(() => {
     const list = materialKey ? materialKey.split("\n") : [];
     let cancelled = false;
-    osinstallChain(release, list, treeRoot, kickstart)
+    osinstallChain(release, list, treeRoot, kickstart, JSON.parse(overridesKey))
       .then((answer) => {
         if (!cancelled) setChain(answer);
       })
@@ -537,7 +556,7 @@ export function AmigaInstallPanel({
     return () => {
       cancelled = true;
     };
-  }, [release, materialKey, treeRoot, kickstart, chainAsked]);
+  }, [release, materialKey, treeRoot, kickstart, chainAsked, overridesKey]);
 
   /**
    * The rows and their sentences, paired **by index**: `chainLines` maps one
@@ -570,8 +589,30 @@ export function AmigaInstallPanel({
    *  user has selected nothing. `chainLines` decides which row that is, so
    *  there is one answer to "which row is next". */
   const firstReady = entries.find((entry) => entry.line.runnable) ?? null;
-  /** The row the Run button is about. */
-  const target = selected ?? firstReady;
+  /**
+   * The row the Run button is about.
+   *
+   * **A row the user clicked is the target whatever state it is in**, and
+   * that is round 3's own rule: selecting is reading, Run is then disabled,
+   * and the row's own sentence beside it says why. `pickedByHand` is what
+   * makes that a rule about a *click* rather than about a stored value.
+   *
+   * **A remembered selection is a default, not a decision** (ART-286,
+   * 2026-09-09). `packageId` survives between sessions, so the panel opens on
+   * whichever row somebody last looked at — and if that row is already in the
+   * tree, targeting it made the one Run button read *"Add the chosen
+   * packages"* over *"…already in this tree"*, a caption naming an action on a
+   * package that needs none. A restored selection that cannot run therefore
+   * falls back to the first ready row, exactly as no selection at all does,
+   * and the screen says both things: `Next: X` for what Run will do, and the
+   * remembered row's own sentence for why it is not that.
+   *
+   * `kind === "ready"` and not `line.runnable`: `runnable` marks the *first*
+   * ready row only, so a second ready row at the same rank (`locale-39` and
+   * `locale-39-turkish`) is a perfectly good target the user picked.
+   */
+  const selectionCanRun = selected?.line.kind === "ready";
+  const target = selected && (pickedByHand || selectionCanRun) ? selected : firstReady;
   /**
    * The rows still owed — neither already in the tree nor made redundant by
    * something that is.
@@ -658,28 +699,6 @@ export function AmigaInstallPanel({
     isTextOrNothing,
     null
   );
-  const [overlayArchive, setOverlayArchive, forgetOverlayArchive] = useRemembered<string | null>(
-    amigaInstallArchiveKey("amigaInstall.overlayArchive", activePackageId),
-    isTextOrNothing,
-    null
-  );
-  /**
-   * The user's own copy of the disc a package's installer verifies
-   * (ART-193). Remembered like every other choice on this screen: nothing
-   * the user chose resets itself between runs.
-   *
-   * **Deliberately global, unlike `archive`/`overlayArchive` (ART-277).**
-   * The AmigaOS 3.9 CD image is one fact about the *build*, not about which
-   * package is selected — both BoingBags verify the same `AmigaOS3.9:`
-   * volume — so scoping this per package would make the owner re-browse to
-   * the same file for BoingBag 3.9-2 having just given it for BoingBag
-   * 3.9-1, which is exactly the annoyance this module exists to prevent.
-   */
-  const [medium, setMedium, forgetMedium] = useRemembered<string | null>(
-    "amigaInstall.medium",
-    isTextOrNothing,
-    null
-  );
 
   const [catalogue, setCatalogue] = useState<PackageSummary[] | null>(null);
   const [catalogueError, setCatalogueError] = useState(false);
@@ -693,8 +712,6 @@ export function AmigaInstallPanel({
   const [archiveClassification, setArchiveClassification] = useState<ArchiveClassification | null>(
     null
   );
-  const [overlayClassification, setOverlayClassification] =
-    useState<ArchiveClassification | null>(null);
   const [preview, setPreview] = useState<AmigaInstallPreview | null>(null);
   /** A refusal, exactly as Rust wrote it (ART-060). Never folded into one
    *  translated sentence: which reason applies is the whole content. */
@@ -811,7 +828,7 @@ export function AmigaInstallPanel({
   useEffect(() => {
     const list = materialKey ? materialKey.split("\n") : [];
     let cancelled = false;
-    osinstallSlots(release, list, treeRoot, kickstart)
+    osinstallSlots(release, list, treeRoot, kickstart, JSON.parse(overridesKey))
       .then((answer) => {
         if (!cancelled) setSlotReport(answer);
       })
@@ -828,40 +845,13 @@ export function AmigaInstallPanel({
     };
     // `chainAsked` too: a package placed from Windows changes what the
     // manifest records, and the fields above are resolved against it.
-  }, [release, materialKey, treeRoot, kickstart, chainAsked]);
+  }, [release, materialKey, treeRoot, kickstart, chainAsked, overridesKey]);
 
   const slotStates = slotReport?.states ?? [];
   /** The chosen package's own slot. */
   const packageSlot =
     (activePackageId &&
       slotStates.find((state) => state.slot.id === `package:${activePackageId}`)) ||
-    null;
-  /** Its overlay, when the recipe declares one — the id shape is
-   *  `overlay:<package>:<drawer>`, so the package's own prefix is what names
-   *  it without this screen having to know the drawer. */
-  const overlaySlot =
-    (activePackageId &&
-      slotStates.find(
-        (state) =>
-          state.slot.kind === "overlay" &&
-          state.slot.id.startsWith(`overlay:${activePackageId}:`)
-      )) ||
-    null;
-  /**
-   * The disc this package's installer verifies — **read off the package
-   * slot's own `requires`**, never a `medium:AmigaOS3.9` written here.
-   *
-   * `slots_for` turns a recipe's `required_medium` into a `requires` entry
-   * naming the medium slot it already built, so the link is data. A hardcoded
-   * volume name would be this screen knowing something the recipes are the
-   * authority on, and it would be wrong the day a package for another release
-   * declares a disc.
-   */
-  const mediumSlot =
-    (packageSlot &&
-      slotStates.find(
-        (state) => state.slot.kind === "medium" && packageSlot.slot.requires.includes(state.slot.id)
-      )) ||
     null;
 
   /**
@@ -915,27 +905,10 @@ export function AmigaInstallPanel({
   }
 
   const archiveFound = foundPath(packageSlot);
-  // A slot ART measured as unnecessary fills nothing: the wrapper already
-  // carries an `Updater` new enough, so there is no second archive to obtain
-  // and none to pass to the run.
-  const overlayFound = overlaySlot?.notNeeded ? null : foundPath(overlaySlot);
-  const mediumFound = foundPath(mediumSlot);
 
   /** What the run actually uses: the user's own choice where they made one,
    *  ART's find otherwise. */
   const chosenArchive = archive ?? archiveFound;
-  const chosenOverlay = overlayArchive ?? overlayFound;
-  const chosenMedium = medium ?? mediumFound;
-
-  // The archives, wrapper first. The order is the wire's own: everything
-  // after the first is an overlay medium, matched by what it carries.
-  const archives = useMemo(
-    () =>
-      [chosenArchive, chosenOverlay].filter(
-        (path): path is string => path !== null && path !== ""
-      ),
-    [chosenArchive, chosenOverlay]
-  );
 
   // The disc is **not** part of the "have you chosen enough to preview"
   // test. Whether this package needs one is the recipe's answer, not this
@@ -1027,6 +1000,9 @@ export function AmigaInstallPanel({
     treeRoot,
     packageFolder: hostFolder,
     chosen: activePackageId && targetRunsOnAmiga === false ? [activePackageId] : [],
+    // ART-288: the placement path resolves this package's archive the way the
+    // chain row above it does — the user's own choice first.
+    overrides: JSON.parse(overridesKey) as SlotOverride[],
     enabled: targetRunsOnAmiga === false && targetReady,
   });
 
@@ -1112,9 +1088,8 @@ export function AmigaInstallPanel({
       ? {
           tree: treeRoot,
           packageId: activePackageId,
-          packageArchives: archives,
+          packageArchive: chosenArchive,
           kickstart,
-          medium: chosenMedium,
         }
       : null;
 
@@ -1161,12 +1136,11 @@ export function AmigaInstallPanel({
 
   // ART-277: ask what an archive *is* at the moment it is picked (or
   // restored from a remembered choice), rather than finding out only once
-  // `compose` refuses it a moment later. Two effects, one per field, because
-  // the two fields ask two different questions of the same file — the
-  // package's own field expects `"the-package"`, the second field expects
-  // `"the-update-archive"` — and `archiveFieldBlockerPhrase` reads which is
-  // which. Scoped to `release` (ART-277 review, Major 2): the same list the
-  // radio below actually offers.
+  // `compose` refuses it a moment later. One effect, because there is one
+  // archive field — the second one went with the overlay machinery on
+  // 2026-09-09, and with it the `"the-update-archive"` kind that told the user
+  // which of two fields a file belonged in. Scoped to `release` (ART-277
+  // review, Major 2): the same list the radio below actually offers.
   //
   // **M1 (round 1 whole-branch review).** `setArchiveClassification(null)`
   // is the *first* statement, before the new question is even asked —
@@ -1200,24 +1174,6 @@ export function AmigaInstallPanel({
       cancelled = true;
     };
   }, [chosenArchive, activePackageId, release]);
-
-  useEffect(() => {
-    setOverlayClassification(null);
-    if (!chosenOverlay || !activePackageId) {
-      return;
-    }
-    let cancelled = false;
-    amigainstallClassifyArchive(chosenOverlay, activePackageId, release)
-      .then((answer) => {
-        if (!cancelled) setOverlayClassification(answer);
-      })
-      .catch(() => {
-        if (!cancelled) setOverlayClassification(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [chosenOverlay, activePackageId, release]);
 
   // §92's PREVIEW: read-only, recomputed whenever the request changes, and
   // the place every refusal lands — `compose` is shared with the run, so a
@@ -1272,11 +1228,6 @@ export function AmigaInstallPanel({
     // the request became valid and no effect ever noticed. A boolean, so it
     // is a stable dependency and not a fresh identity per render.
     //
-    // `chosenMedium` is listed where the raw `medium` never was, and that was
-    // a real gap: the disc is part of `request` and the preview names the
-    // volume the image itself states, so choosing one and not re-previewing
-    // left that line describing the previous disc. It matters more now that a
-    // disc can arrive from the slots rather than only from a click.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     //
     // `targetRunsOnAmiga` and `targetReady` are the chain's own two gates on
@@ -1286,8 +1237,6 @@ export function AmigaInstallPanel({
     treeRoot,
     activePackageId,
     chosenArchive,
-    chosenOverlay,
-    chosenMedium,
     kickstart,
     winuaePath,
     packageBelongsHere,
@@ -1367,15 +1316,6 @@ export function AmigaInstallPanel({
     if (typeof picked === "string") set(picked);
   }
 
-  async function chooseMedium() {
-    const picked = await open({
-      multiple: false,
-      title: t("osinstall.amigaInstall.medium.chooseTitle"),
-      filters: [{ name: "Disc image", extensions: ["iso", "cue", "bin", "img"] }],
-    });
-    if (typeof picked === "string") setMedium(picked);
-  }
-
   async function chooseKickstart() {
     const picked = await open({
       multiple: false,
@@ -1395,6 +1335,7 @@ export function AmigaInstallPanel({
    */
   function selectRow(row: ChainRow) {
     clearReport();
+    setPickedByHand(true);
     setMediumSelected(row.packageId === null);
     if (row.packageId !== null) setPackageId(row.packageId);
   }
@@ -1439,30 +1380,11 @@ export function AmigaInstallPanel({
   // lesson, from this exact screen, is that a reason Run is dead has to say
   // so where the button is (review Medium 2).
   const selectedPackageName = activePackageId ? nameOf(activePackageId) : "";
-  // ART-277 re-review: the two fields' own labels, named rather than
-  // "above"/"below" — a "wrong field" sentence rendered a screen away from
-  // either field must say which one by name, and interpolating the exact
-  // label the `Field` below renders is what keeps the two from drifting
-  // apart if either wording ever changes.
-  const fieldLabels = {
-    package: t("osinstall.amigaInstall.archive.label"),
-    overlay: t("osinstall.amigaInstall.overlayArchive.label"),
-  };
   const archiveBlocker = archiveFieldBlockerPhrase(
     archiveClassification,
-    "package",
     chosenArchive ?? "",
     selectedPackageName,
-    nameOf,
-    fieldLabels
-  );
-  const overlayBlocker = archiveFieldBlockerPhrase(
-    overlayClassification,
-    "overlay",
-    chosenOverlay ?? "",
-    selectedPackageName,
-    nameOf,
-    fieldLabels
+    nameOf
   );
   /**
    * **The package's own archive is not there, said where the button is.**
@@ -1501,21 +1423,21 @@ export function AmigaInstallPanel({
   //
   // **M2 (round 1 whole-branch review).** Keyed and deduplicated —
   // `readinessBlockers` was the only producer when `blocker.key` was used
-  // as the React key directly, so every key was unique by construction.
-  // Both archive fields can now hold the same wrong archive (the identical
-  // `Phrase`, same key and params, from two different fields), which used
-  // to render as a duplicate React key and the same sentence twice —
-  // ART-202's own "aynı uyarı tek ekranda 2 tane" mistake, reached through
-  // a producer this screen did not have when that rule was written.
+  // as the React key directly, so every key was unique by construction. It
+  // stopped being the only one, and the two producers can still agree: the
+  // slot's own missing-archive sentence and the preview's are the same
+  // `Phrase` for the same file. Rendering it twice is ART-202's own
+  // "aynı uyarı tek ekranda 2 tane" mistake. (The case that bought this was
+  // two archive *fields* holding one wrong file; the second field went on
+  // 2026-09-09 and the rule outlived it.)
   //
   // **m5.** The archives ART resolved itself are named, so a file that has
   // gone since the scan is not reported as *"the archive you chose"* — the
   // user chose nothing, and the read-only line directly above still says the
   // file was identified by its bytes.
-  const artsOwnArchives = [
-    archive === null ? archiveFound : null,
-    overlayArchive === null ? overlayFound : null,
-  ].filter((path): path is string => path !== null);
+  const artsOwnArchives = [archive === null ? archiveFound : null].filter(
+    (path): path is string => path !== null
+  );
   const blockers = dedupeBlockers([
     ...(preview
       ? readinessBlockers(preview, artsOwnArchives).map((phrase) => ({
@@ -1525,16 +1447,10 @@ export function AmigaInstallPanel({
       : []),
     ...(missingArchiveBlocker ? [{ field: "slot", phrase: missingArchiveBlocker }] : []),
     ...(archiveBlocker ? [{ field: "package", phrase: archiveBlocker }] : []),
-    ...(overlayBlocker ? [{ field: "overlay", phrase: overlayBlocker }] : []),
   ]);
-  const overlayAdvice = preview ? overlayAdvicePhrase(preview) : null;
   const outcome = result ? outcomePhrase(result.outcome) : null;
   const nextStep = result ? outcomeNextStepPhrase(result.outcome) : null;
   const settlement = result ? settlementPhrase(result.settlement) : null;
-  // ART-280. `null` for every package that declares no follow-up, which is
-  // all but one — so the line simply is not there rather than saying nothing
-  // happened, which would be a claim about a thing nobody declared.
-  const followUp = result?.follow_up ? followUpPhrase(result.follow_up) : null;
   const tone = result ? outcomeTone(result.outcome) : null;
 
   const chainSummary = chain ? chainSummaryLine(chain) : null;
@@ -1560,9 +1476,26 @@ export function AmigaInstallPanel({
    * not take.
    */
   const amigaSideForm = !nothingRunnableHere && (!hasChain || targetRunsOnAmiga === true);
-  /** …and its opposite: this row's files are placed from Windows. */
-  const hostSideRow = hasChain && targetRunsOnAmiga === false;
-  const placementCounts = placement.collisions ? collisionCounts(placement.collisions) : null;
+  /**
+   * …and its opposite: this row's files are placed from Windows **and it is
+   * ready to be placed**.
+   *
+   * **`targetReady` is not redundant here, and leaving it out was ART-286.**
+   * `useHostPlacement`'s own `enabled` already carries it, so for a non-ready
+   * row no `osinstall_collisions` call is ever made — while this gate, without
+   * it, still rendered the block. `placement.collisions` and
+   * `placement.collisionsError` then stay `null` for ever, nothing is in
+   * flight, nothing can error, and the heading falls back to *"Checking what
+   * this would replace…"* permanently. Measured on the owner's screen:
+   * 4 min 40 s, nothing clicked, on a remembered selection sitting on an
+   * already-installed row.
+   *
+   * A fetch gate and a render gate that disagree is a progress indicator for a
+   * request nobody made — the fixed-width bar CLAUDE.md names, wearing a
+   * sentence. They are one expression now.
+   */
+  const hostSideRow = hasChain && targetRunsOnAmiga === false && targetReady;
+  const placementHeading = previewHeadingPhrase(placement.collisions, placement.collisionsError);
   /** The one Run button's own two questions: is it busy, and how far. */
   const running = hostSideRow ? placement.busy : busy;
   const runProgress = hostSideRow ? placement.progress : progress;
@@ -1862,24 +1795,6 @@ export function AmigaInstallPanel({
           onUseFound={forgetArchive}
           onClear={forgetArchive}
         />
-        <SlotField
-          testId="amiga-slot-overlay"
-          label={t("osinstall.amigaInstall.overlayArchive.label")}
-          empty={t("osinstall.amigaInstall.overlayArchive.none")}
-          hint={t("osinstall.amigaInstall.overlayArchive.hint", expectation(overlaySlot))}
-          state={overlaySlot}
-          override={overlayArchive}
-          found={overlayFound}
-          onChoose={() =>
-            void chooseArchive(
-              setOverlayArchive,
-              t("osinstall.amigaInstall.overlayArchive.chooseTitle")
-            )
-          }
-          onOverride={setOverlayArchive}
-          onUseFound={forgetOverlayArchive}
-          onClear={forgetOverlayArchive}
-        />
         <Field
           label={t("osinstall.amigaInstall.kickstart.label")}
           value={kickstart}
@@ -1887,21 +1802,6 @@ export function AmigaInstallPanel({
           onChoose={() => void chooseKickstart()}
           choose={t("common.browse")}
           hint={t("osinstall.amigaInstall.kickstart.hint")}
-        />
-        {/* ART-193. Optional on the screen because it is optional for some
-            packages; the refusal above says when it is not. */}
-        <SlotField
-          testId="amiga-slot-medium"
-          label={t("osinstall.amigaInstall.medium.label")}
-          empty={t("osinstall.amigaInstall.medium.none")}
-          hint={t("osinstall.amigaInstall.medium.hint", expectation(mediumSlot))}
-          state={mediumSlot}
-          override={medium}
-          found={mediumFound}
-          onChoose={() => void chooseMedium()}
-          onOverride={setMedium}
-          onUseFound={forgetMedium}
-          onClear={forgetMedium}
         />
       </div>
       )}
@@ -1926,9 +1826,7 @@ export function AmigaInstallPanel({
       {hostSideRow && (
         <div data-testid="amiga-chain-placement" style={{ marginBottom: 12 }}>
           <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>
-            {placementCounts
-              ? t("osinstall.packages.preview.heading", { ...placementCounts })
-              : t("osinstall.packages.preview.loading")}
+            {placementHeading && t(placementHeading.key, placementHeading.params)}
           </h3>
           {!hostFolder && (
             <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
@@ -1985,19 +1883,6 @@ export function AmigaInstallPanel({
               {t("osinstall.amigaInstall.preview.emulator")}: {preview.emulator}
             </div>
           )}
-          {/* ART-193. Not in the power-mode block below: a disc going into
-              the machine is something the run does, like the machine window
-              itself, and design §4 says a person should not be surprised by
-              it. The volume shown is the one the **image itself states** —
-              read from the image, never from its filename. */}
-          {preview.medium && (
-            <div style={{ fontSize: 12, wordBreak: "break-all" }}>
-              {t("osinstall.amigaInstall.preview.medium", {
-                volume: preview.mediumVolume ?? "",
-              })}
-              : {preview.medium}
-            </div>
-          )}
           <p className="faint" style={{ fontSize: 11, margin: "6px 0 0" }}>
             {t("osinstall.amigaInstall.preview.deadline", {
               minutes: Math.round(preview.deadlineSeconds / 60),
@@ -2029,19 +1914,6 @@ export function AmigaInstallPanel({
             </div>
           )}
         </div>
-      )}
-
-      {/* ART-186, and the obligation task 4's review handed this screen: a
-          refusal the user can fix with one download must be visible before
-          the run, naming the archive to go and get. */}
-      {overlayAdvice && (
-        <p
-          className="badge badge-warn"
-          data-testid="amiga-install-overlay-advice"
-          style={{ display: "block", padding: "6px 12px", fontSize: 12, marginBottom: 12 }}
-        >
-          {t(overlayAdvice.key, overlayAdvice.params)}
-        </p>
       )}
 
       {blockers.length > 0 && (
@@ -2147,15 +2019,6 @@ export function AmigaInstallPanel({
           <p data-testid="amiga-install-outcome" style={{ margin: "0 0 6px" }}>
             {t(outcome.key, outcome.params)}
           </p>
-          {/* ART-280: the package's own second step, on its own line and
-              **below the ending**, because it is a different fact. A
-              follow-up that said no does not make the install a failure, and
-              the badge's colour still comes from `outcome` alone. */}
-          {followUp && (
-            <p data-testid="amiga-install-follow-up" style={{ margin: "0 0 6px" }}>
-              {t(followUp.key, followUp.params)}
-            </p>
-          )}
           <p data-testid="amiga-install-settlement" style={{ margin: "0 0 6px", wordBreak: "break-all" }}>
             {t(settlement.key, settlement.params)}
           </p>
@@ -2201,11 +2064,12 @@ export function AmigaInstallPanel({
         >
           {t(runLabel)}
         </button>
-        {/* **Which row this button is about.** Named when the user has
-            selected none — pressing Run then runs the first ready row, and a
-            button that does not say which row it will run is the confident
-            action this screen exists to prevent. */}
-        {hasChain && !selected && target && (
+        {/* **Which row this button is about.** Named whenever the button is
+            about a row other than the one on screen as selected — nothing
+            selected at all, or a remembered selection that cannot run
+            (ART-286) — because a button that does not say which row it will
+            run is the confident action this screen exists to prevent. */}
+        {hasChain && target && target !== selected && (
           <span className="faint" data-testid="amiga-chain-next" style={{ fontSize: 11 }}>
             {t("osinstall.chain.next", { name: target.line.name })}
           </span>
@@ -2213,7 +2077,7 @@ export function AmigaInstallPanel({
         {/* And when the selected row cannot be run, **its own sentence** says
             why — the state's own words, never a second wording composed
             here. */}
-        {hasChain && selected && !targetReady && (
+        {hasChain && selected && !selectionCanRun && (
           <span className="faint" data-testid="amiga-chain-cannot-run" style={{ fontSize: 11 }}>
             {t(sentenceFor(selected.line).key, sentenceFor(selected.line).params)}
           </span>

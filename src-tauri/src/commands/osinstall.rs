@@ -107,7 +107,6 @@ use crate::core::osinstall::scan::{
 use crate::core::osinstall::scan_cache::ScanCache;
 use crate::core::osinstall::slots::{self, Facts, SetSummary, SlotState};
 use crate::core::osinstall::source::MediaSource;
-use crate::core::osinstall::source_archive::ArchiveSource;
 use crate::core::osinstall::verify::{verify_volume, VerifyReport};
 use crate::core::osinstall::{
     destination_key, host_destination, HostPlacementBlock, RefusalReason,
@@ -857,7 +856,6 @@ struct GatheredFacts {
     hashes: Vec<mediahash::MediaMatch>,
     manifest: Option<crate::core::osinstall::apply::DistributionManifest>,
     rom: Option<(PathBuf, bool)>,
-    program_versions: Vec<(String, String)>,
     overrides: Vec<(String, PathBuf, bool)>,
     disc_roots: Vec<(PathBuf, Vec<String>)>,
     unreadable_folders: Vec<String>,
@@ -893,7 +891,6 @@ impl GatheredFacts {
                 true => slots::ChosenRom::OnDisk(path.as_path()),
                 false => slots::ChosenRom::Absent(path.as_path()),
             }),
-            program_versions: &self.program_versions,
             overrides,
             disc_roots: &self.disc_roots,
         }
@@ -952,8 +949,6 @@ fn gather_facts(
         None => None,
     };
 
-    let program_versions = installer_versions(release, &packages);
-
     let rom = rom.map(|path| match path.is_file() {
         true => (path, true),
         false => (path, false),
@@ -986,7 +981,6 @@ fn gather_facts(
         hashes,
         manifest,
         rom,
-        program_versions,
         overrides,
         disc_roots,
         unreadable_folders,
@@ -1031,15 +1025,26 @@ pub struct ChainReport {
 /// A chosen `tree` that carries no `distribution.json` is a refusal rather
 /// than an empty chain — the user just pointed at it, and every *installed*
 /// state on this screen comes from that file alone.
+///
+/// **`overrides` is the user's own file choices, and it is here because
+/// leaving it out made two screens say opposite things about one file**
+/// (ART-284, 2026-09-08). The owner's package folder holds two BoingBag 1
+/// builds. The source step's readout — which takes these — showed the one the
+/// owner had chosen, as *the file you chose*; this command, called without
+/// them, answered *"2 files here could be BoingBag 3.9-1, and ART will not
+/// choose between them"* and blocked the row. One resolver, two callers, one
+/// of them not handed the user's own decision. `Option`, defaulting to none,
+/// exactly as `osinstall_slots` takes it.
 #[tauri::command]
 pub fn osinstall_chain(
     release: String,
     folders: Vec<PathBuf>,
     tree: Option<PathBuf>,
     rom: Option<PathBuf>,
+    overrides: Option<Vec<(String, PathBuf)>>,
 ) -> AppResult<ChainReport> {
     let slots = slots::slots_for(&release)?;
-    let gathered = gather_facts(&release, &folders, tree, rom, None)?;
+    let gathered = gather_facts(&release, &folders, tree, rom, overrides)?;
     let chosen = gathered.overrides();
     let states = slots::resolve(&slots, &gathered.facts(&chosen));
     let rows = chain::rows_for(&release, gathered.manifest.as_ref(), &states)?;
@@ -1289,61 +1294,6 @@ fn write_material_guide(folder: &Path, release: &str, language: &str) -> AppResu
     }
 }
 
-/// What each Amiga-installable package's **own** wrapper archive says its
-/// installer program is, as `(package id, "45.15")`.
-///
-/// This is the fact that decides whether BoingBag 1's UAE overlay is needed at
-/// all (ART-186), and it is asked of the artefact rather than of the user: the
-/// archive states its own `$VER:`, a date on a download page does not.
-///
-/// Only asked of a package that declares a `minimum_version` — nothing else
-/// has a question to answer — and only ever **read**: the member's bytes come
-/// out of [`ArchiveSource`] and are never written anywhere.
-/// [`packagevol::stated_version`](crate::core::amigainstall::packagevol::stated_version)
-/// is the same function `packagevol::unpack` uses on the extracted program, so
-/// the two cannot come to different conclusions about one file.
-///
-/// Every failure is silence, not a refusal: an archive that will not open, a
-/// member that is not there, a program stating no version. A package with no
-/// entry here has an overlay slot that stays *needed*, which is the safe
-/// answer — `packagevol::unpack` still refuses the run by name if the build
-/// really is too old.
-fn installer_versions(release: &str, found: &[FoundPackage]) -> Vec<(String, String)> {
-    let Ok(packages) = package::packages_for(release) else {
-        return Vec::new();
-    };
-    let mut versions = Vec::new();
-    for pkg in packages {
-        let Some(installer) = &pkg.amiga_installer else {
-            continue;
-        };
-        if installer.minimum_version.is_none() {
-            continue;
-        }
-        let MediaMatch::Found(archive) =
-            package_for(found, &pkg.media, pkg.distinguished_by.as_deref())
-        else {
-            continue;
-        };
-        let Ok(mut source) = ArchiveSource::open(&archive.path) else {
-            continue;
-        };
-        // The program's whole path inside the archive: the archive's own
-        // top-level drawer plus the path the recipe states *inside* the
-        // package. `AmigaInstaller::program` is never a whole path and never
-        // names a volume — `validate_installer` refuses one that does.
-        let member = format!("{}/{}", pkg.media, installer.program);
-        let Ok(bytes) = source.read(&member) else {
-            continue;
-        };
-        let Some(stated) = crate::core::amigainstall::packagevol::stated_version(&bytes) else {
-            continue;
-        };
-        versions.push((pkg.id, format!("{}.{}", stated.version, stated.revision)));
-    }
-    versions
-}
-
 // ---------------------------------------------------------------------------
 // osinstall_collisions
 // ---------------------------------------------------------------------------
@@ -1536,8 +1486,10 @@ fn preview_cache() -> &'static Mutex<PreviewCache> {
 fn resolve_package_archive<'a>(
     package: &Package,
     found: &'a [FoundPackage],
+    evidence: ArchiveEvidence<'_>,
 ) -> Result<&'a FoundPackage, RefusalReason> {
-    match package_for(found, &package.media, package.distinguished_by.as_deref()) {
+    let chosen = override_for(evidence.overrides, &package.id);
+    match slots::package_archive_for(found, package, evidence.hashes, chosen.as_deref()) {
         MediaMatch::Found(archive) => Ok(archive),
         MediaMatch::Missing => Err(RefusalReason::PackageArchiveMissing {
             package: package.id.clone(),
@@ -1552,6 +1504,59 @@ fn resolve_package_archive<'a>(
                 .collect(),
         }),
     }
+}
+
+/// What the caller already knows about the files in the package folder, and
+/// the two things this layer must not work out for itself.
+///
+/// **A record rather than two more parameters**, and the shape is
+/// `slots::Facts`': the resolution rule reads the user's own picks and the
+/// scan cache's own hash answers, and neither is something the placement path
+/// may go and compute — one belongs to a screen, the other to
+/// `osinstall_identify_media`'s job. Naming them together also stops the two
+/// being swapped: they are both borrowed slices of pairs at a call site.
+#[derive(Clone, Copy, Default)]
+struct ArchiveEvidence<'a> {
+    /// Per-slot file choices, as `osinstall_slots` and `osinstall_chain` take
+    /// them. Empty is "the user chose nothing by hand".
+    overrides: &'a [(String, PathBuf)],
+    /// What the scan cache already answered for these files. Empty is
+    /// "nobody has identified this folder yet", which costs the hash rank and
+    /// nothing else.
+    hashes: &'a [mediahash::MediaMatch],
+}
+
+/// The file the user picked by hand for `package`, out of the same
+/// `(slot id, path)` list `osinstall_slots` and `osinstall_chain` take.
+///
+/// The slot id for a package is `package:<id>`; an exact match and nothing
+/// else, which is `slots::Override::names`' own rule since the overlay slot
+/// kind went.
+fn override_for(overrides: &[(String, PathBuf)], package_id: &str) -> Option<PathBuf> {
+    let wanted = format!("package:{package_id}");
+    overrides
+        .iter()
+        .find(|(slot, _)| slot == &wanted)
+        .map(|(_, path)| path.clone())
+}
+
+/// What the scan cache already knows about the files in `folder`.
+///
+/// **Nothing is hashed here.** `remembered_media_in` reads the cache
+/// `osinstall_identify_media`'s job fills and answers for the files it
+/// already has an md5 for; a folder nobody has identified yet simply
+/// contributes no rank-2 evidence, and the resolution falls back to the
+/// ambiguity refusal it gave before — which is the honest answer, not a
+/// worse one.
+///
+/// An unreadable cache is an empty list rather than a failure, for the same
+/// reason: it can only ever *add* a way to resolve an ambiguity.
+fn remembered_hashes_in(folder: &Path) -> Vec<mediahash::MediaMatch> {
+    let Ok(root) = crate::scratch::root() else {
+        return Vec::new();
+    };
+    let cache = ScanCache::in_dir(root);
+    mediahash::remembered_media_in(folder, &cache).unwrap_or_default()
 }
 
 /// A plain-English sentence for a package ART cannot place from the host —
@@ -1622,10 +1627,31 @@ fn describe_package_refusal(reason: &RefusalReason) -> String {
             "more than one archive carries '{media}', the media '{package}' needs: {}",
             paths.join(", ")
         ),
-        // `resolve_package_archive` only ever produces the two variants
-        // above; kept total rather than narrowing the return type so a
-        // future caller passing some other `RefusalReason` in still gets a
-        // sentence instead of a panic.
+        // ART-282: `osinstall_collisions` now runs `detect_package_refusals`
+        // before it ever orders a selection (see
+        // `ordered_packages_for_collisions`), so these two — previously only
+        // reachable from the add path, which sends the typed `RefusalReason`
+        // itself across the wire instead of a string — can now arrive here.
+        // Mirrors `packageRequirementMissing`/`packageRequirementNeedsAmigaRun`
+        // in `src/i18n/en.json`, in English regardless of the chosen
+        // language (ART-060): both carry the packages' own names, never ids.
+        RefusalReason::PackageRequirementMissing { package, requires } => format!(
+            "'{package}' needs '{requires}' applied first — tick that one too, or untick \
+             '{package}' on its own"
+        ),
+        RefusalReason::PackageRequirementNeedsAmigaRun {
+            package,
+            requirement,
+        } => format!(
+            "'{package}' needs '{requirement}' installed first, and '{requirement}' is run \
+             on the Amiga from the Amiga-side step — it cannot be ticked on this list. Do \
+             that one there first, then add '{package}' here"
+        ),
+        // `resolve_package_archive` only ever produces the two archive
+        // variants above, and only they (plus the two matched explicitly)
+        // reach this function today; kept total rather than narrowing the
+        // return type so a future caller passing some other `RefusalReason`
+        // in still gets a sentence instead of a panic.
         other => format!("{other:?}"),
     }
 }
@@ -1669,6 +1695,7 @@ fn extract_package_items(
     let medium = PackageMedium {
         path: archive.path.clone(),
         member: package.member.clone(),
+        payload_password: package.payload_password.clone(),
     };
     let mut source = open_package(&medium)?;
 
@@ -1729,6 +1756,7 @@ fn extract_incoming_for_preview(
     package_folder: &Path,
     ordered: &[String],
     catalogue: &[Package],
+    evidence: ArchiveEvidence<'_>,
     scratch_root: &Path,
     progress: &dyn ProgressSink,
 ) -> CoreResult<Vec<ExtractedItem>> {
@@ -1748,7 +1776,7 @@ fn extract_incoming_for_preview(
             .iter()
             .find(|p| &p.id == id)
             .expect("order() only ever returns ids it read from this same catalogue");
-        let archive = resolve_package_archive(package, &found)
+        let archive = resolve_package_archive(package, &found, evidence)
             .map_err(|r| CoreError::InvalidInput(describe_package_refusal(&r)))?;
         incoming.extend(extract_package_items(
             package,
@@ -1777,6 +1805,7 @@ fn preview_collisions(
     package_folder: &Path,
     ordered: &[String],
     catalogue: &[Package],
+    evidence: ArchiveEvidence<'_>,
     scratch_root: &Path,
     progress: &dyn ProgressSink,
 ) -> CoreResult<Vec<CollisionReport>> {
@@ -1802,8 +1831,14 @@ fn preview_collisions(
         }
     }
     sweep_stale_preview_scratch_dirs(scratch_root);
-    let incoming =
-        extract_incoming_for_preview(package_folder, ordered, catalogue, scratch_root, progress)?;
+    let incoming = extract_incoming_for_preview(
+        package_folder,
+        ordered,
+        catalogue,
+        evidence,
+        scratch_root,
+        progress,
+    )?;
     let entries: Vec<Incoming> = incoming
         .iter()
         .map(|(to, component, bytes_at)| Incoming {
@@ -2267,6 +2302,45 @@ pub struct OsInstallCollisionsResult {
     pub reports: Vec<CollisionReport>,
 }
 
+/// [`osinstall_collisions`]'s own selection check, pulled out so it can be
+/// unit-tested without a live `AppHandle`/`State` — the same shape
+/// [`resolve_packages_for_add`] already is, and reusing that function's own
+/// [`detect_package_refusals`] call rather than a second copy of the
+/// requirement rule (ART-282).
+///
+/// `Ok(Ok(ordered))` is the happy path — `chosen`, reordered, ready for
+/// [`preview_collisions`]. `Ok(Err(refusals))` is every typed reason the
+/// selection cannot proceed, collected all at once the way `plan()` and
+/// `resolve_packages_for_add` both do — never just the first. The outer
+/// `AppResult` is reserved for what is not a user selection problem: an
+/// unreadable `distribution.json`.
+fn ordered_packages_for_collisions(
+    tree_root: &Path,
+    packages: &[String],
+    catalogue: &[Package],
+) -> AppResult<Result<Vec<String>, Vec<RefusalReason>>> {
+    let manifest = read_manifest(tree_root)?;
+    let components_on: Vec<String> = {
+        let mut set: BTreeSet<String> = BTreeSet::new();
+        for file in &manifest.files {
+            set.insert(file.component.clone());
+        }
+        set.into_iter().collect()
+    };
+    // The same tolerance the add path applies, and for the same reason: a
+    // preview against a tree that already carries the prerequisite must not
+    // refuse the selection the add would accept, or the two screens
+    // disagree about one selection.
+    let applied: Vec<String> = chain::applied_in(&manifest).into_iter().collect();
+
+    let refusals = detect_package_refusals(packages, catalogue, &components_on, &applied);
+    if !refusals.is_empty() {
+        return Ok(Err(refusals));
+    }
+
+    Ok(Ok(package::order_with_installed(packages, &applied)?))
+}
+
 /// What landing the chosen packages on `tree_root` would actually do to the
 /// files already there (spec §3's PREVIEW). Returns a job id (§54) — see
 /// [`preview_collisions`]'s own doc comment for why this now runs as a job
@@ -2278,20 +2352,43 @@ pub struct OsInstallCollisionsResult {
 /// screen through the ordinary `job-progress` failed state, the same as any
 /// other job.
 #[tauri::command]
+/// `overrides` is the user's own per-slot file choices, exactly as
+/// `osinstall_slots` and `osinstall_chain` take them (ART-288). Without them
+/// this path resolved a package's archive by identity alone, so the owner's
+/// folder — two BoingBag 3.9-1 builds under one top-level directory —
+/// refused here while the chain row above it named the file it would use.
+/// `None` is "the caller has none", not "ignore the ones there are".
 pub fn osinstall_collisions(
     tree_root: PathBuf,
     package_folder: PathBuf,
     packages: Vec<String>,
+    overrides: Option<Vec<(String, PathBuf)>>,
     app: AppHandle,
     registry: State<'_, Arc<JobRegistry>>,
 ) -> AppResult<u64> {
+    let overrides = overrides.unwrap_or_default();
+    let hashes = remembered_hashes_in(&package_folder);
     let catalogue = package::packages()?;
-    // The same tolerance the add path applies, and for the same reason: a
-    // preview against a tree that already carries the prerequisite must not
-    // refuse the selection the add would accept, or the two screens
-    // disagree about one selection.
-    let applied: Vec<String> = chain::applied(&tree_root)?.into_iter().collect();
-    let ordered = package::order_with_installed(&packages, &applied)?;
+    // ART-282: a preview used to go straight to `order_with_installed`,
+    // which refuses an unsatisfied `requires` with its own raw, id-only
+    // sentence — reached from this screen the moment the user ticked
+    // `locale-turkish` on a tree BoingBag 3.9-2 had not been run on, before
+    // any "Add" was even pressed. `detect_package_refusals` is the same
+    // typed check `resolve_packages_for_add` already runs before ordering
+    // (below), so it runs here first too, and a refusal is reported through
+    // it — by name, and with the Amiga-side advice when the requirement
+    // cannot be ticked from this list at all — never through `order`.
+    let ordered = match ordered_packages_for_collisions(&tree_root, &packages, &catalogue)? {
+        Ok(ordered) => ordered,
+        Err(refusals) => {
+            let message = refusals
+                .iter()
+                .map(describe_package_refusal)
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(CoreError::InvalidInput(message).into());
+        }
+    };
     let title = format!(
         "Previewing {} package(s) against {}",
         ordered.len(),
@@ -2316,6 +2413,10 @@ pub fn osinstall_collisions(
                 &package_folder,
                 &ordered,
                 &catalogue,
+                ArchiveEvidence {
+                    overrides: &overrides,
+                    hashes: &hashes,
+                },
                 &scratch_root,
                 progress,
             )?;
@@ -2374,6 +2475,7 @@ fn resolve_packages_for_add(
     tree_root: &Path,
     package_folder: &Path,
     packages: &[String],
+    evidence: ArchiveEvidence<'_>,
 ) -> AppResult<PackageResolution> {
     if packages.is_empty() {
         return Err(CoreError::InvalidInput("no packages were chosen".into()).into());
@@ -2407,7 +2509,7 @@ fn resolve_packages_for_add(
             // that names no shipped package would only repeat it.
             continue;
         };
-        if let Err(refusal) = resolve_package_archive(package, &found) {
+        if let Err(refusal) = resolve_package_archive(package, &found, evidence) {
             refusals.push(refusal);
         }
     }
@@ -2430,7 +2532,7 @@ fn resolve_packages_for_add(
             .find(|p| &p.id == id)
             .expect("order() only ever returns ids it read from this same catalogue")
             .clone();
-        let archive = resolve_package_archive(&package, &found)
+        let archive = resolve_package_archive(&package, &found, evidence)
             .expect("every id in `packages` was already resolved without refusal above")
             .path
             .clone();
@@ -2466,15 +2568,33 @@ pub struct OsInstallAddPackageResult {
 /// `add_package`'s own undeclared-overwrite check — is `core`'s, unchanged;
 /// this command adds nothing on top of it.
 #[tauri::command]
+/// `overrides` is the user's own per-slot file choices, exactly as
+/// `osinstall_slots` and `osinstall_chain` take them (ART-288). Without them
+/// this path resolved a package's archive by identity alone, so the owner's
+/// folder — two BoingBag 3.9-1 builds under one top-level directory —
+/// refused here while the chain row above it named the file it would use.
+/// `None` is "the caller has none", not "ignore the ones there are".
+#[allow(clippy::too_many_arguments)]
 pub fn osinstall_add_package(
     tree_root: PathBuf,
     package_folder: PathBuf,
     packages: Vec<String>,
+    overrides: Option<Vec<(String, PathBuf)>>,
     app: AppHandle,
     registry: State<'_, Arc<JobRegistry>>,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<AddPackageResult> {
-    let resolved = match resolve_packages_for_add(&tree_root, &package_folder, &packages)? {
+    let overrides = overrides.unwrap_or_default();
+    let hashes = remembered_hashes_in(&package_folder);
+    let resolved = match resolve_packages_for_add(
+        &tree_root,
+        &package_folder,
+        &packages,
+        ArchiveEvidence {
+            overrides: &overrides,
+            hashes: &hashes,
+        },
+    )? {
         Ok(resolved) => resolved,
         Err(refusals) => return Ok(AddPackageResult::Refused { refusals }),
     };
@@ -3202,8 +3322,8 @@ mod tests {
         assert!(
             summaries
                 .iter()
-                .any(|p| p.id == "boingbag-39-1" && p.amiga_installable),
-            "BoingBag 3.9-1 declares C/Updater"
+                .any(|p| p.id == "boingbags-39-3-4" && p.amiga_installable),
+            "BoingBags 3&4 declares its own Install script - the one shipped declaration              since the two BoingBags were moved to the host on 2026-09-08"
         );
         assert!(
             summaries
@@ -3273,6 +3393,7 @@ mod tests {
             &packages_dir,
             &ordered,
             &catalogue,
+            ArchiveEvidence::default(),
             &std::env::temp_dir(),
             &NoProgress,
         )
@@ -4214,6 +4335,7 @@ mod tests {
             &PathBuf::from(&packages),
             &ordered,
             &catalogue,
+            ArchiveEvidence::default(),
             scratch.path(),
             &NoProgress,
         )
@@ -4421,6 +4543,7 @@ mod tests {
             &packages_dir,
             &[],
             &catalogue,
+            ArchiveEvidence::default(),
             &std::env::temp_dir(),
             &NoProgress,
         )
@@ -4443,7 +4566,7 @@ mod tests {
         let catalogue = package::packages().unwrap();
         let package = catalogue.iter().find(|p| p.id == "locale-turkish").unwrap();
         let found = crate::core::osinstall::scan::find_packages(&packages_dir).unwrap();
-        let archive = resolve_package_archive(package, &found).unwrap();
+        let archive = resolve_package_archive(package, &found, ArchiveEvidence::default()).unwrap();
 
         let mut files = 0usize;
         let mut bytes = 0u64;
@@ -4480,6 +4603,7 @@ mod tests {
             open_package(&PackageMedium {
                 path: archive.path.clone(),
                 member: package.member.clone(),
+                payload_password: package.payload_password.clone(),
             })
             .is_err(),
             "the corrupted archive must not itself still open as a real one, \
@@ -4514,7 +4638,7 @@ mod tests {
         let catalogue = package::packages().unwrap();
         let package = catalogue.iter().find(|p| p.id == "locale-turkish").unwrap();
         let found = crate::core::osinstall::scan::find_packages(&packages_dir).unwrap();
-        let archive = resolve_package_archive(package, &found).unwrap();
+        let archive = resolve_package_archive(package, &found, ArchiveEvidence::default()).unwrap();
 
         let mut files = 0usize;
         let mut bytes = 0u64;
@@ -4547,6 +4671,7 @@ mod tests {
             &packages_dir,
             &["locale-turkish".to_string()],
             &catalogue,
+            ArchiveEvidence::default(),
             &std::env::temp_dir(),
             &cancel,
         )
@@ -4669,10 +4794,14 @@ mod tests {
         std::fs::create_dir_all(&packages_dir).unwrap();
         write_locale_turkish_archive(&packages_dir, "turkish.lha", b"catalog bytes");
 
-        let refusals =
-            resolve_packages_for_add(&tree, &packages_dir, &["locale-turkish".to_string()])
-                .unwrap()
-                .unwrap_err();
+        let refusals = resolve_packages_for_add(
+            &tree,
+            &packages_dir,
+            &["locale-turkish".to_string()],
+            ArchiveEvidence::default(),
+        )
+        .unwrap()
+        .unwrap_err();
         assert!(
             refusals.iter().any(|r| matches!(
                 r,
@@ -4680,6 +4809,109 @@ mod tests {
             )),
             "{refusals:?}"
         );
+    }
+
+    /// **ART-288, at the command level, with the owner's own shape.**
+    ///
+    /// `E:\amiga\Amigatolon\os39` holds two BoingBag 3.9-1 builds under one
+    /// top-level directory, and on 2026-09-09 this path refused with
+    /// *"more than one archive carries 'BoingBag3.9-1'"* — the headline
+    /// feature of 0.9.1, refusing on the material it was written for, while
+    /// the chain row above it named the file it would use.
+    ///
+    /// Three arms, because the fix has three ranks and the first two would
+    /// each pass a test written for the other:
+    ///
+    /// 1. **nothing known** — still the ambiguity refusal, naming both. Two
+    ///    builds ART can say nothing about are still two.
+    /// 2. **one of them in the hash table** — resolved to that one. The md5
+    ///    is the shipped table's own row for BoingBag 3.9-1, and it is
+    ///    supplied the way `osinstall_slots` supplies it: as an already-read
+    ///    cache answer, because this layer hashes nothing.
+    /// 3. **the user's override** — wins outright, even when it names the
+    ///    build the table does *not* know, which is the arm a "prefer the
+    ///    hash" rule written one rank too high would get wrong.
+    #[test]
+    fn resolve_packages_for_add_settles_two_builds_of_one_package_art_288() {
+        let dir = scratch("add-two-builds");
+        let tree = dir.join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        write_test_manifest(&tree, Vec::new());
+
+        let packages_dir = dir.join("packages");
+        std::fs::create_dir_all(&packages_dir).unwrap();
+        // Both carry `BoingBag3.9-1` at their top level, which is the whole
+        // of the ambiguity: `find_packages` reads that name out of each.
+        for name in ["BoingBag39-1.lha", "BoingBag39-1 (1).lha"] {
+            std::fs::write(
+                packages_dir.join(name),
+                crate::core::lha::tests::make_lha_with_raw_names(&[(
+                    b"BoingBag3.9-1\\AmigaOS-Update",
+                    b"payload",
+                )]),
+            )
+            .unwrap();
+        }
+        let known = packages_dir.join("BoingBag39-1 (1).lha");
+        let unknown = packages_dir.join("BoingBag39-1.lha");
+        let chosen = &["boingbag-39-1".to_string()];
+
+        // 1 — nothing known about either.
+        let refusals =
+            resolve_packages_for_add(&tree, &packages_dir, chosen, ArchiveEvidence::default())
+                .unwrap()
+                .unwrap_err();
+        let ambiguous = refusals
+            .iter()
+            .find_map(|r| match r {
+                crate::core::osinstall::RefusalReason::PackageArchiveAmbiguous {
+                    paths, ..
+                } => Some(paths),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("expected an ambiguity refusal, got {refusals:?}"));
+        assert_eq!(ambiguous.len(), 2, "and it names both: {ambiguous:?}");
+
+        // 2 — the table names one of them. This md5 is the shipped
+        // own-table row for this package's own artefact, quoted here as a
+        // literal so a row that moves or loses its artefact fails this test
+        // rather than being silently re-stated.
+        const BB1_45_15_MD5: &str = "ef67ce2f786044dae1bce8fafb439d5e";
+        let hashes = [mediahash::MediaMatch {
+            path: known.clone(),
+            volume_name: None,
+            row: mediahash::row_for(BB1_45_15_MD5).unwrap().cloned(),
+            md5: BB1_45_15_MD5.to_string(),
+            confirmed: mediahash::confirmation_for(BB1_45_15_MD5).unwrap().cloned(),
+        }];
+        let resolved = resolve_packages_for_add(
+            &tree,
+            &packages_dir,
+            chosen,
+            ArchiveEvidence {
+                overrides: &[],
+                hashes: &hashes,
+            },
+        )
+        .unwrap()
+        .expect("the hash-known build settles it");
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].1, known, "the build the table names");
+
+        // 3 — and the user outranks the table.
+        let overrides = [("package:boingbag-39-1".to_string(), unknown.clone())];
+        let resolved = resolve_packages_for_add(
+            &tree,
+            &packages_dir,
+            chosen,
+            ArchiveEvidence {
+                overrides: &overrides,
+                hashes: &hashes,
+            },
+        )
+        .unwrap()
+        .expect("an override is not an identification ART made");
+        assert_eq!(resolved[0].1, unknown, "the user said this one");
     }
 
     /// The positive case beside it: once `locale-base` really is on the
@@ -4700,10 +4932,14 @@ mod tests {
         std::fs::create_dir_all(&packages_dir).unwrap();
         write_locale_turkish_archive(&packages_dir, "turkish.lha", b"catalog bytes");
 
-        let resolved =
-            resolve_packages_for_add(&tree, &packages_dir, &["locale-turkish".to_string()])
-                .unwrap()
-                .unwrap();
+        let resolved = resolve_packages_for_add(
+            &tree,
+            &packages_dir,
+            &["locale-turkish".to_string()],
+            ArchiveEvidence::default(),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].0.id, "locale-turkish");
         assert_eq!(resolved[0].1, packages_dir.join("turkish.lha"));
@@ -4733,34 +4969,44 @@ mod tests {
             &without,
             vec![locale_base_file_record("Locale/Languages/turkish.language")],
         );
-        let refusals =
-            resolve_packages_for_add(&without, &packages_dir, &["locale-turkish".to_string()])
-                .unwrap()
-                .unwrap_err();
-        // **The Amiga-side arm, and by name** (fix round 1, M1). BoingBag
-        // 3.9-2 is `encrypted-payload` blocked and the Packages step
-        // disables its checkbox, so the ordinary requirement refusal's
-        // advice — "tick that one too" — is about a tick that is not
-        // available. Asserted as the whole value, so a fallback to the old
-        // variant fails here rather than slipping through a looser
-        // `matches!`.
+        let refusals = resolve_packages_for_add(
+            &without,
+            &packages_dir,
+            &["locale-turkish".to_string()],
+            ArchiveEvidence::default(),
+        )
+        .unwrap()
+        .unwrap_err();
+        // **The ordinary arm, and by name — and it used to be the
+        // Amiga-side one** (2026-09-08, ART-166's reversal). While BoingBag
+        // 3.9-2 was `encrypted-payload` blocked, the Packages step disabled
+        // its checkbox and "tick that one too" was about a tick that did not
+        // exist; the Amiga-side sentence was the true one. It is now
+        // host-placeable, its checkbox is on this very list, and *"tick
+        // BoingBag 3.9-2 too"* is what somebody can actually do — which is
+        // what the brief predicted this refusal would become.
+        //
+        // Asserted as the whole value, and with the other variant asserted
+        // **absent**, because this is exactly the pair that must not both be
+        // live: two sentences about one state is how a screen tells somebody
+        // to go to a step they do not need.
         assert!(
             refusals.contains(
-                &crate::core::osinstall::RefusalReason::PackageRequirementNeedsAmigaRun {
+                &crate::core::osinstall::RefusalReason::PackageRequirementMissing {
                     package: "T\u{FC}rk\u{E7}e catalogs (BoingBag 3.9-2)".to_string(),
-                    requirement: "BoingBag 3.9-2".to_string(),
+                    requires: "BoingBag 3.9-2".to_string(),
                 }
             ),
-            "the refusal must name both packages and send the user to the Amiga-side step, \
-             got {refusals:?}"
+            "the refusal must name both packages and send the user to the checkbox that is \
+             right there, got {refusals:?}"
         );
         assert!(
             !refusals.iter().any(|r| matches!(
                 r,
-                crate::core::osinstall::RefusalReason::PackageRequirementMissing { .. }
+                crate::core::osinstall::RefusalReason::PackageRequirementNeedsAmigaRun { .. }
             )),
-            "the 'tick that one too' sentence must not fire for a package that cannot be \
-             ticked: {refusals:?}"
+            "the Amiga-side sentence must not fire for a package that can be ticked: \
+             {refusals:?}"
         );
 
         // Arm 2 — the same folder, the same selection, a tree that records
@@ -4772,10 +5018,14 @@ mod tests {
             vec![locale_base_file_record("Locale/Languages/turkish.language")],
             vec![boingbag_two_ran()],
         );
-        let resolved =
-            resolve_packages_for_add(&with, &packages_dir, &["locale-turkish".to_string()])
-                .unwrap()
-                .unwrap();
+        let resolved = resolve_packages_for_add(
+            &with,
+            &packages_dir,
+            &["locale-turkish".to_string()],
+            ArchiveEvidence::default(),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             resolved
                 .iter()
@@ -4801,10 +5051,14 @@ mod tests {
         std::fs::create_dir_all(&packages_dir).unwrap();
         // No archive ever written here.
 
-        let refusals =
-            resolve_packages_for_add(&tree, &packages_dir, &["locale-turkish".to_string()])
-                .unwrap()
-                .unwrap_err();
+        let refusals = resolve_packages_for_add(
+            &tree,
+            &packages_dir,
+            &["locale-turkish".to_string()],
+            ArchiveEvidence::default(),
+        )
+        .unwrap()
+        .unwrap_err();
         assert!(
             refusals.iter().any(|r| matches!(
                 r,
@@ -4813,6 +5067,96 @@ mod tests {
             )),
             "{refusals:?}"
         );
+    }
+
+    // ---- ART-282 ----------------------------------------------------------
+    //
+    // The owner ticked `locale-turkish` on the Packages step, on a tree
+    // BoingBag 3.9-2 had never been run on, and saw
+    // `order_over_with_installed`'s own raw sentence —
+    // `'locale-turkish' requires 'boingbag-39-2', which was not chosen
+    // (ART-INPUT-INVALID)` — read out at them the moment the checkbox was
+    // ticked, before "Add" was ever pressed. That preview goes through
+    // `osinstall_collisions`, which used to call `order_with_installed`
+    // directly with no refusal check in front of it at all — unlike the add
+    // path (`resolve_packages_for_add`, tested above), which already ran
+    // `detect_package_refusals` first. `ordered_packages_for_collisions` is
+    // the same check, reused rather than copied, now sitting in front of
+    // `osinstall_collisions`'s own call to `order_with_installed`.
+
+    /// The exact tree the owner had: `locale-base` present, BoingBag 3.9-2
+    /// never run. The preview must answer the typed, named refusal — never
+    /// the raw `order_over_with_installed` sentence, and never bare ids.
+    #[test]
+    fn ordered_packages_for_collisions_refuses_locale_turkish_without_boingbag_by_name() {
+        let dir = scratch("collisions-requires-amiga-run");
+        let tree = dir.join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        write_test_manifest(
+            &tree,
+            vec![locale_base_file_record("Locale/Languages/turkish.language")],
+        );
+
+        let catalogue = package::packages().unwrap();
+        let outcome =
+            ordered_packages_for_collisions(&tree, &["locale-turkish".to_string()], &catalogue)
+                // The outer `AppResult` failing here would itself be the bug this
+                // guards against: `order_over_with_installed`'s raw
+                // `CoreError::InvalidInput` used to surface exactly this way. It
+                // must come back `Ok` — refused as data, not as an error — with
+                // `order` never reached.
+                .expect("a package selection refusal is data, not an AppError; order must not run");
+
+        let refusals = outcome.expect_err("boingbag-39-2 is not on this tree");
+        // The sentence became the *ordinary* one on 2026-09-08, when
+        // BoingBag 3.9-2 stopped being blocked from the host (ART-166) —
+        // "tick BoingBag 3.9-2 too" is now true, and it is the whole point
+        // of the reversal that it is. What ART-282 is about is unchanged and
+        // still asserted below: names, never ids, and never the raw
+        // `order_over_with_installed` sentence reaching the screen.
+        assert!(
+            refusals.contains(
+                &crate::core::osinstall::RefusalReason::PackageRequirementMissing {
+                    package: "T\u{FC}rk\u{E7}e catalogs (BoingBag 3.9-2)".to_string(),
+                    requires: "BoingBag 3.9-2".to_string(),
+                }
+            ),
+            "the refusal must name both packages, got {refusals:?}"
+        );
+        // Bare ids ('locale-turkish', 'boingbag-39-2') are exactly what the
+        // owner saw and exactly what this refusal must never repeat.
+        for refusal in &refusals {
+            let text = format!("{refusal:?}");
+            assert!(!text.contains("boingbag-39-2"), "got {text}");
+        }
+    }
+
+    /// [`describe_package_refusal`]'s own text for the two requirement
+    /// variants — what the screen actually reads once
+    /// `ordered_packages_for_collisions` has refused a selection, since
+    /// `osinstall_collisions` can only answer with a string, not the typed
+    /// `RefusalReason` the add path sends across the wire. Names, the
+    /// Amiga-side step named for the arm that needs it, and never an id.
+    #[test]
+    fn describe_package_refusal_names_the_amiga_side_step_and_never_an_id() {
+        let needs_amiga_run = RefusalReason::PackageRequirementNeedsAmigaRun {
+            package: "T\u{FC}rk\u{E7}e catalogs (BoingBag 3.9-2)".to_string(),
+            requirement: "BoingBag 3.9-2".to_string(),
+        };
+        let text = describe_package_refusal(&needs_amiga_run);
+        assert!(text.contains("Amiga-side step"), "got {text}");
+        assert!(text.contains("T\u{FC}rk\u{E7}e catalogs"), "got {text}");
+        assert!(text.contains("BoingBag 3.9-2"), "got {text}");
+        assert!(!text.contains("boingbag-39-2"), "got {text}");
+        assert!(!text.contains("locale-turkish"), "got {text}");
+
+        let missing = RefusalReason::PackageRequirementMissing {
+            package: "Some Package".to_string(),
+            requires: "Some Requirement".to_string(),
+        };
+        let text = describe_package_refusal(&missing);
+        assert!(text.contains("Some Package"), "got {text}");
+        assert!(text.contains("Some Requirement"), "got {text}");
     }
 
     /// The carried-forward review point: a media folder that does not exist
@@ -5137,7 +5481,6 @@ mod tests {
                 hashes: &[],
                 manifest: None,
                 rom: Some(slots::ChosenRom::OnDisk(&rom)),
-                program_versions: &[],
                 overrides: &[],
                 disc_roots: &[],
             };
@@ -5177,7 +5520,6 @@ mod tests {
                     "installed",
                     "chosenMissing",
                     "blockedBy",
-                    "notNeeded",
                     "incomplete",
                 ],
             );
@@ -5259,7 +5601,6 @@ mod tests {
                 hashes: &[],
                 manifest: None,
                 rom: Some(slots::ChosenRom::Absent(&gone)),
-                program_versions: &[],
                 overrides: &[],
                 disc_roots: &[],
             };
@@ -5523,8 +5864,77 @@ mod tests {
                     // tally).
                     "icons",
                     "iconMergeFailures",
+                    // 2026-09-08, the host BoingBag route: one verdict per
+                    // declared extra payload unit (including the ones that
+                    // did not run — "not needed" and "never considered" are
+                    // different things), and what the package's own
+                    // `post_place` steps did to the tree afterwards.
+                    "extraMembers",
+                    "postPlace",
                 ],
             );
+        }
+
+        /// **The nested tags inside those two lists, pinned on both sides**
+        /// (review F2, 2026-09-08).
+        ///
+        /// The test above builds a `Default` outcome, so both lists are empty
+        /// and the tags never appear — which is exactly how
+        /// `src/lib/osinstall.ts`'s `AppliedStep` came to declare `"protect"`
+        /// and `"replace-keeping-backup"`, `PostStep`'s spellings, for an
+        /// enum whose own variants serialise as `"protected"` and
+        /// `"replaced"`. Nothing consumes `postPlace` yet, so nothing failed;
+        /// the first screen to render it would have matched neither arm and
+        /// shown nothing at all.
+        ///
+        /// `ExtraMemberState` is beside it as the control: its `rename_all`
+        /// renames variants only, so `at_least` really does stay snake_case
+        /// inside `applied`, and the TS declares it that way.
+        #[test]
+        fn the_nested_tags_inside_an_apply_outcome_are_the_ones_the_frontend_matches_on() {
+            use crate::core::amigainstall::finish::AppliedStep;
+            use crate::core::osinstall::apply::{ExtraMemberState, ExtraMemberVerdict};
+
+            let outcome = ApplyOutcome {
+                post_place: vec![
+                    AppliedStep::Protected {
+                        path: "C/WBRun".into(),
+                        was: "----rwed".into(),
+                        now: "--p-rwed".into(),
+                    },
+                    AppliedStep::Replaced {
+                        target: "Devs/AmigaOS ROM Update".into(),
+                        replacement: "Devs/AmigaOS ROM Update.BB39-2".into(),
+                        backup: Some("AmigaOS ROM Update.old".into()),
+                    },
+                ],
+                extra_members: vec![ExtraMemberVerdict {
+                    member: "XAD-Update".to_string(),
+                    state: ExtraMemberState::Applied {
+                        path: "Libs/xadmaster.library".to_string(),
+                        stated: "9.1".to_string(),
+                        at_least: 10,
+                    },
+                    files: 36,
+                }],
+                ..Default::default()
+            };
+            let value = serde_json::to_value(&outcome).unwrap();
+
+            expect_keys(&value["postPlace"][0], &["step", "path", "was", "now"]);
+            assert_eq!(value["postPlace"][0]["step"], "protected");
+            expect_keys(
+                &value["postPlace"][1],
+                &["step", "target", "replacement", "backup"],
+            );
+            assert_eq!(value["postPlace"][1]["step"], "replaced");
+
+            expect_keys(&value["extraMembers"][0], &["member", "state", "files"]);
+            expect_keys(
+                &value["extraMembers"][0]["state"],
+                &["state", "path", "stated", "at_least"],
+            );
+            assert_eq!(value["extraMembers"][0]["state"]["state"], "applied");
         }
 
         /// The wire shape `src/lib/osinstall.ts`'s own `MediaMatch` and
@@ -6320,6 +6730,7 @@ mod tests {
             &tree,
             &packages_dir,
             &["boingbag-39-2-contribution".to_string()],
+            ArchiveEvidence::default(),
         )
         .unwrap()
         .unwrap();
@@ -6389,8 +6800,14 @@ mod tests {
         let dir = scratch("chain-command");
         write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
 
-        let report =
-            osinstall_chain("AmigaOS 3.9".to_string(), vec![dir.clone()], None, None).unwrap();
+        let report = osinstall_chain(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(report.summary.release, "AmigaOS 3.9");
         assert_eq!(report.summary.total, 9, "the CD plus eight packages");
@@ -6437,8 +6854,14 @@ mod tests {
     fn a_chain_report_serializes_with_the_keys_this_test_pins() {
         let dir = scratch("chain-wire");
         write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
-        let report =
-            osinstall_chain("AmigaOS 3.9".to_string(), vec![dir.clone()], None, None).unwrap();
+        let report = osinstall_chain(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.clone()],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         let json = serde_json::to_value(&report).unwrap();
 
         for key in ["rows", "summary", "unreadableFolders", "crowdedFolders"] {
@@ -6481,14 +6904,110 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **ART-284: the chain takes the user's own file choices, and without
+    /// them it contradicted the readout about one artefact.**
+    ///
+    /// The owner's package folder holds two BoingBag 3.9-1 builds. The source
+    /// step's readout, which is handed the overrides, showed the one they had
+    /// chosen as *the file you chose*; this command, called without them,
+    /// answered *"2 files here could be BoingBag 3.9-1, and ART will not
+    /// choose between them"* and blocked the row.
+    ///
+    /// Both arms, because the first alone would pass for a command that
+    /// ignored the argument and happened to be given one candidate: without
+    /// the override the row is `Refused { Ambiguous }`, with it the row names
+    /// the user's file.
+    #[test]
+    fn the_chain_takes_the_users_own_file_choices_art_284() {
+        // **`ScratchDir`, not this module's `scratch()`** (cleanup review, L2).
+        // The neighbours here end with a trailing `remove_dir_all`, which is
+        // skipped exactly when a test panics -- the pattern ART-281 is filed
+        // on (263 484 directories, 764 GB). A new test does not have to
+        // inherit it: `ScratchDir` removes itself on `Drop`, panic or not.
+        let dir = crate::core::ScratchDir::new("art-osinstall-cmd", "chain-overrides");
+        // Two archives, both carrying `BoingBag3.9-1` at their top level —
+        // the owner's own folder, in shape: `BoingBag39-1.lha` and
+        // `BoingBag39-1 (1).lha`.
+        for name in ["BoingBag39-1.lha", "BoingBag39-1 (1).lha"] {
+            std::fs::write(
+                dir.join(name),
+                crate::core::lha::tests::make_lha_with_raw_names(&[(
+                    format!("BoingBag3.9-1\\C\\{name}").as_bytes(),
+                    b"payload",
+                )]),
+            )
+            .unwrap();
+        }
+
+        let ambiguous = osinstall_chain(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.path().to_path_buf()],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let row = ambiguous
+            .rows
+            .iter()
+            .find(|row| row.package_id.as_deref() == Some("boingbag-39-1"))
+            .expect("BoingBag 3.9-1 is a chain row");
+        assert!(
+            matches!(
+                row.state,
+                chain::ChainState::Refused {
+                    reason: chain::RefusedBecause::Ambiguous { .. }
+                }
+            ),
+            "the premise: two files claim this identity and ART picks neither — got {:?}",
+            row.state
+        );
+
+        let chosen = dir.join("BoingBag39-1 (1).lha");
+        let decided = osinstall_chain(
+            "AmigaOS 3.9".to_string(),
+            vec![dir.path().to_path_buf()],
+            None,
+            None,
+            Some(vec![("package:boingbag-39-1".to_string(), chosen.clone())]),
+        )
+        .unwrap();
+        let row = decided
+            .rows
+            .iter()
+            .find(|row| row.package_id.as_deref() == Some("boingbag-39-1"))
+            .expect("BoingBag 3.9-1 is a chain row");
+        assert_eq!(
+            row.sentence_facts.file.as_deref(),
+            Some("BoingBag39-1 (1).lha"),
+            "the row names the file the user chose, exactly as the readout does"
+        );
+        assert!(
+            !matches!(
+                row.state,
+                chain::ChainState::Refused {
+                    reason: chain::RefusedBecause::Ambiguous { .. }
+                }
+            ),
+            "and it is no longer ambiguous: got {:?}",
+            row.state
+        );
+    }
+
     /// A tree with no `distribution.json` is a refusal, not an empty chain:
     /// every *installed* state on this screen comes from that file, and the
     /// user has just pointed at the folder.
     #[test]
     fn the_chain_refuses_a_folder_that_is_not_a_tree() {
         let dir = scratch("chain-not-a-tree");
-        let err = osinstall_chain("AmigaOS 3.9".to_string(), vec![], Some(dir.clone()), None)
-            .unwrap_err();
+        let err = osinstall_chain(
+            "AmigaOS 3.9".to_string(),
+            vec![],
+            Some(dir.clone()),
+            None,
+            None,
+        )
+        .unwrap_err();
         assert!(
             format!("{err}").contains(MANIFEST_FILE_NAME),
             "the refusal must name what is missing: {err}"

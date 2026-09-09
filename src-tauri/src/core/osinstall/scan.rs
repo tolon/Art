@@ -778,6 +778,25 @@ pub struct PackageMedium {
     /// The nested payload archive, from the package's own recipe. `None`
     /// when the package's files sit at the archive's own paths.
     pub member: Option<String>,
+    /// The key that opens that nested payload, from the same recipe — see
+    /// [`super::package::Package::payload_password`]. `None` for every
+    /// package whose payload is in clear, which is all but the two BoingBags.
+    ///
+    /// **Here rather than fetched at open time**, for the same reason
+    /// [`member`](Self::member) is: which archive a package's files come out
+    /// of and how that archive opens are both facts the *recipe* states and
+    /// no amount of looking at the file can answer. A resolved medium that
+    /// carried one and not the other would have to look the second one up by
+    /// `media` name, which two packages legitimately share (ART-167,
+    /// ART-276), and "which of these two recipes' keys did you mean" is not a
+    /// question this type should be able to ask.
+    ///
+    /// It is not a secret ART is keeping: the recipes that carry it are
+    /// compiled into the binary and readable in the repository, and the two
+    /// values are published in Emu68 Hatcher's and Emu68-Imager's own MIT
+    /// source.
+    #[serde(default)]
+    pub payload_password: Option<String>,
 }
 
 /// Open a package archive as a [`MediaSource`] — the package counterpart of
@@ -806,7 +825,13 @@ pub fn open_package_staging_in(
             &medium.path,
             member,
             scratch_root,
+            medium.payload_password.as_deref(),
         )?),
+        // A password with no member has nothing to open — `open` reads the
+        // wrapper, which is never the encrypted half. `package::validate`
+        // refuses that combination in the recipe, so this arm cannot be
+        // reached by shipped data; it drops the value rather than applying
+        // it to the wrong archive.
         None => Box::new(ArchiveSource::open(&medium.path)?),
     })
 }
@@ -1707,6 +1732,7 @@ mod tests {
         let mut wrapper = open_package(&PackageMedium {
             path: outer.clone(),
             member: None,
+            payload_password: None,
         })
         .unwrap();
         assert_eq!(
@@ -1718,6 +1744,7 @@ mod tests {
         let mut payload = open_package(&PackageMedium {
             path: outer,
             member: Some("Payload".to_string()),
+            payload_password: None,
         })
         .unwrap();
         assert_eq!(payload.volume_name(), "Wrapper");

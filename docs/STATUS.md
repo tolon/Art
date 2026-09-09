@@ -28,12 +28,12 @@ PASS forward on faith.
 | **Last updated** | 2026-09-07 — round 5 of the Emu68 Hatcher intake (first boot on the Amiga, phases 1–2) merged to `main` as `1cb5ce1` and pushed. The debt-clearing wave (13 defects closed, seven batches plus a whole-branch review and its fix wave) was **merged to `main` as `94c2bdc` the same evening**, and its three deferred leftovers as `bb91547` (`art-leftovers`, four commits: one extraction in `install_pack`, cancel sinks anchored on the copy phase's own message, the dead `winuae_path` field gone, an `expect` turned into a refusal), both the owner's decision; both branches are deleted and `main` is unpushed until the owner has built and tested it. Per-round detail is the [session log](session-log.md) |
 | **Version** | **0.9.0**, released 2026-09-04. The number lives in three files (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`) and `release.yml` refuses a tag that disagrees with them. Deliberately not 1.0: the bar is a card ART built, flashed and booting a real A500 — not a bigger feature count |
 | **`main` / `origin`** | Identical at `9ad177b`, pushed 2026-09-08 (`76eac3d..9ad177b`, 79 commits: the Windows 11 look `13e6707`, the intake research, the three intake rounds merged as `e0fb4aa`, the docs), and GitHub Actions run **34241592702** on `9ad177b` passed (`Build & Test (Windows x64): success`, 2026-09-08 15:16 UTC). Anything on `main` after `9ad177b` is docs-only and unpushed until the owner says so |
-| **Tests — Rust** | `cd src-tauri && cargo test --lib` — the **full** suite — on the merged `main` (`e0fb4aa`), 2026-09-08: `test result: ok. 3202 passed; 0 failed; 52 ignored` (run twice, ART-059) |
-| **Tests — frontend** | `pnpm test` on the merged `main` (`e0fb4aa`), 2026-09-08: `Test Files 91 passed (91)`, `Tests 1410 passed (1410)` |
+| **Tests — Rust** | `cd src-tauri && cargo test --lib` — the **full** suite — on `art-091-fixes`, 2026-09-09: `test result: ok. 3186 passed; 0 failed; 53 ignored` (run twice, ART-059). It was 3 227 the day before, on the same branch: the BoingBag cleanup removed the emulator route for the two BoingBags and every guard that only covered it, and added six of its own. On the merged `main` (`e0fb4aa`) on 2026-09-08 it was `3202 passed; 0 failed; 52 ignored` |
+| **Tests — frontend** | `pnpm test` on `art-091-fixes`, 2026-09-09: `Test Files 91 passed (91)`, `Tests 1389 passed (1389)` (1 386 before fix round 1's two ART-286 cases; 1 388 before fix round 2's ART-287 case) — 1 410 the day before, on the same branch. On the merged `main` (`e0fb4aa`), 2026-09-08: 91 / 1410 |
 | **Lint, format, clippy** | Clean on the merged `main`, 2026-09-07: `pnpm lint` (run unpiped — a pipe reports `tail`'s status, not `tsc`'s), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` |
 | **Sweeps** | Re-run 2026-09-07 on the merged `main` (control-byte) and on the branch head `e46062a` (the rest), all clean: `scripts/control-byte-sweep.py` — clean, and now also catches a stray mid-line TAB inside tracked text, not only one that swallows a line continuation ([ART-271](ISSUES.md#fixed)); `scripts/scratch-root-sweep.py` — clean, 8 named exceptions; `scripts/contrast-check.py --quiet` — **105/105** pairs, both themes, on the merged `main` (the Windows 11 round replaced the script's six `color-mix` badge pairs with nine flat-tint pairs it actually draws — 113 before). `scripts/scratch-counter-sweep.py`: `already had a counter: 25`, `needing a counter: 0` — the false positive on a pid hashed with the thread id is gone ([ART-235](ISSUES.md#fixed)) |
 | **Build** | `pnpm tauri build` on `art-win11-look` (`991c485`), 2026-09-07 22:53 — `Amiga Retro Toolkit_0.9.0_x64_en-US.msi` (7,782,400 B) and `_x64-setup.exe` (5,554,795 B), copied to `E:\amiga\ProjeART\build\` with a `_win11-look` suffix, **not code-signed**, which the README says rather than leaving to SmartScreen. The last build of `main` itself is the 0.9.0 bundle of 2026-09-04 |
-| **i18n** | `src/i18n/en.json` and `tr.json`: **2082** leaf keys each, counted 2026-09-07 on the branch head and unchanged by the merge. Parity — key sets, empty values, interpolation variables — is enforced by `pnpm test`, so count them rather than quoting this |
+| **i18n** | `src/i18n/en.json` and `tr.json`: **2170** leaf keys each, counted 2026-09-09 on `art-091-fixes` (2 082 on 2026-09-07; the intake rounds added, the BoingBag cleanup removed twenty-one). Parity — key sets, empty values, interpolation variables — is enforced by `pnpm test`, so count them rather than quoting this |
 | **Open defects** | **5** on `main`, counted 2026-09-07 evening with `awk '/^## Open/{f=1} /^## Fixed/{f=0} f' docs/ISSUES.md \| grep -c '^\*\*ART-'` — [ART-261](ISSUES.md#fixed) closed the same evening when the owner installed the antivirus exclusions and the full suite printed its summary twice. Thirteen closed across the debt-clearing wave (19 open before it, 6 after, 5 now): ART-271, ART-235, ART-260, ART-245, ART-247, ART-246, ART-274, ART-251, ART-248, ART-241, ART-243, ART-244, ART-242. Before the wave: 19 |
 | **Feature rows** | **216 marked rows** in [FEATURES.md](FEATURES.md) — **159 green, 26 amber, 21 not started, 6 stubs, 4 deferred to v2** — counted 2026-09-07, one marker per table row, taken from the first cell in that row that is exactly a State marker. **State the method with the number**: counting marker *cells* instead gives a different figure, and an earlier count of "233 rows" left behind no method and cannot now be reproduced |
 | **amitools oracle** | 53 checks, both directions (`scripts/oracle-check.py`, blocking in CI) — including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
@@ -196,6 +196,12 @@ block — do not stack another on top of it.**
 
 ### Start here (2026-09-08)
 
+00. **`art-091-fixes` is live and not merged.** ART-282 landed on it first, then **ART-166 closed**: the owner reversed the BoingBag ruling and ART places BoingBag 1 and 2 from Windows, checked against the tree two real emulator runs produced (4 030 files; 2 added, 1 missing, 2 differing, every one explained). The oracle is re-runnable — `the_host_placement_hashes_to_the_updaters_own_tree` in `core::osinstall::apply`, `#[ignore]`d and env-gated; its command line is in its own doc comment, and since 2026-09-09 it **asserts** its known difference set by path and pins the counts rather than printing three lists. Reports `.superpowers/sdd/2026-09-08-intake/bb-host-report.md` and `…/cleanup-report.md`.
+
+    **2026-09-09, on the same branch: the Amiga-side route for those two packages was removed**, the owner's instruction (*"Bu değişiklikle oluşan gereksiz kodları sil, kaldır projeden"*). Both recipes' `amiga_installer` blocks went, and with them the overlay machinery, `minimum_version`, `required_medium`, the same-boot follow-up, the panel's update-archive and disc fields, and twenty-one catalogue keys in both languages. **The engine stays** and nothing shipped drives it: `boingbags-39-3-4` is the only recipe still declaring an installer and it is `not_yet_runnable`, which `compose` refuses. `docs/FEATURES.md`'s "run a package's own installer on the Amiga" row is amber for exactly that reason now. ART-284 fixed in the same round (the chain takes the user's own file choices); ART-283 and ART-285 filed and unfixed. **Fix round 1 landed on 2026-09-09**: the review's eight follow-ups, the screen's own sentences rewritten in both catalogues (it still said the packages are locked and an emulator is started), and [ART-286](ISSUES.md#fixed) — the updates step showed *“Checking what this would replace…”* for ever on a row nothing had been asked about. **Fix round 2 followed the same day**, from the third capture: [ART-288](ISSUES.md#fixed) — the host placement refused on the owner's own folder, which holds two BoingBag 3.9-1 builds, while the chain row above it named the one it would use; the placement path now resolves an archive the way the chain does (the override, then a single candidate, then the hash-known build), which also closes ART-284's deferred second half. And [ART-287](ISSUES.md#fixed) — the “Checking…” heading stayed above that refusal. **Now possible for the first time and still owed:** ticking both BoingBags on the real Packages step over `E:\amiga\Amigatolon\os39` — ART-288 is what was stopping it.
+
+    **Still owed by a person:** ticking both BoingBags on the real Packages step over `E:\amiga\Amigatolon\os39` and booting the result — the oracle proves the bytes, not the screen.
+
 0. **The three intake rounds are merged to `main` as `e0fb4aa`** (`--no-ff`, branch `art-osbuilder-intake` deleted, 2026-09-08 afternoon, the owner's decision). Research `docs/superpowers/specs/2026-09-08-os-builder-intake-research.md`; designs `…-intake-design.md`, `…-chain-design.md` (both corrected in place where the tree diverged). Re-measured on the merged tree: `pnpm lint` clean, Vitest 91 / 1410, full `cargo test --lib` `3202 passed; 0 failed; 52 ignored` twice, fmt, clippy, control-byte / scratch-root / contrast / scratch-counter sweeps clean. The installer the owner tests: `E:\amiga\ProjeART\build\Amiga Retro Toolkit_0.9.0_x64-setup_intake-final.exe` (sources `3263f80`, the same as the merge apart from docs). **Open after this round**: ART-278 (a hung `Updater` writes unbounded output into the staged copy), ART-279 (the `TimedOut` next step is wrong for a corrupt archive), ART-281 (the unit suite's scratch never removes itself — 263 484 directories / 764 GB under `D:\tmp\art-tests`; cause measured, fix is a mechanical conversion round; cleanup awaits the owner). **Still owed by a person**: the chain driven on the real screen over `E:\amiga\Amigatolon\os39` — BoingBag 1 → 2 → a host-placed row, then `version full`; findings go to `D:\Projeler\Amiga\ART-test-bulgulari-2026-09-07.md`. Ledger and every brief/review under `.superpowers/sdd/2026-09-08-intake/` (local-only).
 1. **`origin/main` (`76eac3d`) is green on CI; `main` has moved past it (item 0).** The evening push was
    `32651c9..76eac3d` (the debt wave, its leftovers, the document prune and
@@ -253,11 +259,11 @@ block — do not stack another on top of it.**
    `final-review.md` and `final-fix-report.md` cover the review and its
    fixes).
 5. **What is left open on the debt-clearing wave's own list is not code, and
-   each is open for a different reason.** [ART-166](ISSUES.md) — a
-   BoingBag's payload is a password-encrypted ZIP whose password lives on an
-   Amiga; the way past it is external (run the package's own installer on an
-   Amiga), not a host-side bypass, which the owner has ruled out writing.
-   [ART-118](ISSUES.md) and [ART-062](ISSUES.md) both need a person driving a
+   each is open for a different reason.** [ART-166](ISSUES.md) was one of
+   them and is **closed as of 2026-09-08**: the owner reversed the ruling,
+   and ART places BoingBag 1 and 2 from Windows with the key Emu68 Hatcher
+   and Emu68-Imager publish, checked file for file against the tree two real
+   emulator runs produced. [ART-118](ISSUES.md) and [ART-062](ISSUES.md) both need a person driving a
    real screen — the OS Builder's install screen in a live window, and the
    Turkish catalogue read by someone who speaks it — not a design or a fix.
    [ART-117](ISSUES.md) is the owner's standing decision not to risk silently
@@ -357,11 +363,17 @@ what ART does — host-side placement plus a metadata sidecar (`.xdfmeta`, ART's
 `.uaem`) — so ART sits in the **tooling** family. That has a ceiling, and it
 is a live constraint rather than a defect:
 
-- **[ART-166](ISSUES.md)** (open) — a BoingBag's payload is a
-  password-encrypted ZIP and the password lives in an Amiga executable. A
-  host-side placer cannot read it. **The owner's decision, 2026-08-19, so it
-  is not re-litigated by accident: no bypass of the BoingBag password will be
-  written.** The way past it is to run the package's own installer on an Amiga.
+- **[ART-166](ISSUES.md)** (**fixed 2026-09-08**) — this paragraph used to
+  say a BoingBag's payload is a password-encrypted ZIP whose password lives in
+  an Amiga executable, so a host-side placer cannot read it, and that the
+  owner had ruled out writing a bypass. The owner reversed that ruling on
+  2026-09-08, and the ceiling was lower than it looked: **Emu68 Hatcher** and
+  **Emu68-Imager** (both MIT) publish the key, and the round-3 hashed
+  snapshots show the `Updater` simply copies its payload onto the tree — of
+  BoingBag 3.9-1's 210 payload files it wrote 166 and the other 44 were
+  already byte-identical. ART now places both BoingBags from Windows, and the
+  result hashes to the Updater's own tree (4 030 files; the only differences
+  are one step ART deliberately does more of, and ART's own manifest).
 - **The Amiga side is no longer hypothetical.** `core/amigainstall` runs a
   package's own installer under WinUAE, and `core/firstboot` runs a tree's own
   setup on the real machine at first boot. What that path can and cannot do

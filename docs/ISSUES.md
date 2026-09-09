@@ -26,6 +26,29 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-283** 🟡 **Opening the Files screen rewrites a remembered tab's location** —
+*found 2026-09-08 by the screenshot pass, reproduced twice from identical starting bytes*
+`src/pages/FileManager.tsx` · `src/lib/remembered.ts`
+
+With no click on any pane, opening `/files` changed `filesSession.left.tabs[1].location.path`
+in the settings store from `E:\amiga\Amigatolon\iso` to `E:\amiga\Amigatolon\adf` and wrote it.
+The store's hash moved on every open; restoring the file and opening again moved it the same
+way. This is ART-089's shape: a value the user did not touch was rewritten by a read. Suspect:
+the tab restore re-resolving a location it could not open (or a drop-target default) and
+persisting the result. Nothing changes unless the user changes it — a tab that cannot be
+restored keeps its remembered path and says so; it is not repointed.
+
+**ART-285** 🟡 **"23 install disks found" counts game and CD32 discs as install disks** —
+*found 2026-09-08 on `material.png`*
+`src/components/osbuilder/OsInstall.tsx` (the scan summary line) · `core/osinstall/scan.rs`
+
+The source step's summary listed every `.iso` whose volume name `find_media` could read —
+`CD32`, `CAVIAR_02` … — under *install disks found*. Reading the names is right (only the PVD is
+read; nothing is opened or hashed — owner rule 2 holds); the sentence is wrong. A disc whose volume
+name no shipped recipe names is not an install disk: say *"11 install media found; 12 other discs
+in these folders are not install media ART knows and were left closed"*, with the names behind a
+disclosure, not in the headline.
+
 **ART-281** 🔴 **The unit suite's scratch directories are never removed:
 `D:\tmp\art-tests` holds 263 484 directories and 764 GB** — *found 2026-09-08
 during round 3 task 3, on `art-osbuilder-intake`*
@@ -128,185 +151,6 @@ size is known before the run starts, so a multiple of it is a measurable
 bound), ending the run with an outcome that says *the installer was writing
 without stopping* rather than *nobody answered*. Report:
 `.superpowers/sdd/2026-09-08-intake/r3-task-3-report.md` § 2.1.
-
-**ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
-neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
-8's real run, on `content-layer`*
-`src-tauri/src/core/osinstall/recipes/packages/boingbag-39-1.json` ·
-`…/boingbag-39-2.json`
-
-Both recipes name `member: "AmigaOS-Update"` — the payload archive stored
-inside the wrapper LHA. That member is a ZIP, and every entry in it is
-**ZipCrypto-encrypted**: 233 of 233 entries in BoingBag 3.9-1's payload
-(210 files, 23 folders) and 147 of 147 in 3.9-2's (121 files, 26 folders).
-Confirmed three independent ways — ART's own reader
-(`entry 42 of this ZIP cannot be read: Password required to decrypt file`;
-entry 128 for 3.9-2), 7-Zip 26.02 (`Encrypted = +`, `Method = ZipCrypto
-Deflate`, and `ERROR: Wrong password` on extraction), and the raw local file
-header, whose general-purpose flag word reads `0x0003` with bit 0 set.
-
-The password belongs to the BoingBag's own `Updater`, which the wrapper LHA
-carries beside the payload (`BoingBag3.9-1/C/Updater`, `C/GetLocale`) — an
-Amiga executable that has to run *on* an Amiga. Nothing about this is a bug in
-`core/archive`: the reader is right and the recipes are asking for bytes that
-are not readable on the host.
-
-Task 4 measured these recipes from the payload's **listing**, which ZipCrypto
-leaves in clear, and every test since has been synthetic — so the first time
-anything asked for the bytes was this run. That is exactly the gap Task 8
-exists to close.
-
-Left open, and deliberately not "fixed": circumventing the encryption is not
-ART's business, and the honest options are all design decisions rather than
-code changes — place the wrapper's loose files and let the Amiga's own
-`Updater` run at first boot, or withdraw both BoingBag recipes until there is
-a path that works. Whichever is chosen, spec §10/§89 says ART must not offer a
-package it cannot apply, and today it offers two.
-
-**The owner's decision, taken 2026-08-19 after external research and recorded
-here so nobody re-opens it by accident: no bypass of the password will be
-written.** The research is what settled it rather than taste — every
-established distribution builder (HstWB Installer, AmiKit, AmigaSYS,
-ClassicWB) installs a BoingBag by running the package's **own `Updater` inside
-an emulator**, where the password already lives, rather than by decrypting
-anything; HstWB's own README says so outright (*"HstWB Installer uses WinUAE
-or FS-UAE emulator to run the installation process"*). So the supported path
-exists and it is an Amiga-side one. That becomes **its own round**, not a
-continuation of this one, and it is cheaper than it sounds because
-`core/winuae::launch_winuae` already exists — what is missing is running it
-unattended and reading the result back.
-
-**What the screen does today, checked in the code rather than assumed
-(corrected 2026-08-19 by the final whole-branch review's M3 — the sentence
-that stood here said "the screen says so" and the screen did not).** When
-this was first written, `osinstall_packages` set `available` from
-`found.iter().any(|f| f.media == p.media)` alone, so a user with the real
-`BoingBag39-1.lha` in the folder got a live checkbox, no warning, and — on
-confirming — the reader's own raw English sentence, `entry 42 of this ZIP
-cannot be read: Password required to decrypt file`, whatever language they
-had chosen. The entry was right in its body about §10/§89 and wrong in its
-last line.
-
-Both are now true instead:
-
-- Both BoingBag recipes declare `"host_placement_block": "encrypted-payload"`
-  in their own JSON — data, not code, so the day the Amiga-side round lands
-  the block is deleted rather than an `if` hunted down.
-- The checklist gives such a package its own badge and its own sentence,
-  in both catalogues, naming what it needs (*its own Amiga-side Updater*)
-  rather than reporting that ART failed — and the row is **untickable**.
-  "Archive not found" is deliberately not reused: the archive is right
-  there.
-- A pick remembered from an earlier run still arrives checked, so the
-  preview is suppressed for that selection and the Add button is disabled;
-  the row stays tickable *off*, which is F3's rule and is not weakened.
-- `plan()` refuses the selection by type
-  (`RefusalReason::PackageNotPlaceableOnHost`) before the package folder is
-  even scanned, and `osinstall_collisions` refuses before opening an
-  archive — so a caller reaching the commands directly gets the same
-  answer, not the ZIP reader's.
-
-So the shipped BoingBag recipes stay, unplaceable and **said to be** so.
-
-Also worth recording as *my own* mistake rather than the material's: the
-payload's 234 entries were listed with 7-Zip early in the round and read as
-plain files. **ZipCrypto does not encrypt names** — listing works, extraction
-does not — so the first fact was true and the second was inferred from it. The
-first thing that ever asked for bytes was Task 8's run.
-
-**The Amiga-side route works, and this entry is now the record of why the
-host-side one still cannot** — *2026-08-21*. [ART-193](#fixed) is fixed, and
-both BoingBags installed on the owner's own material through ART's own
-`compose` → `install` path: BoingBag 1 in 169.1 s (3 795 → 3 859 files),
-BoingBag 2 on that result in 138.1 s, and the tree booted and answered
-`Workbench 45.3 (07-Dec-01)` where it used to answer `Workbench 45.1`.
-
-**So the files reach a tree — and not one of them was placed by `apply`.**
-The Amiga's own `Updater` writes them, inside the emulator, after the
-package's own code decrypts its own payload. Nothing here decrypts anything
-and no password is bypassed; the payload is as encrypted as it ever was, and
-host-side placement is as impossible as it ever was. This entry therefore
-stays open as the reason a BoingBag's rows are refused on the host screen —
-`host_placement_block: "encrypted-payload"` is still correct and still
-shipped. What has changed is that the sentence ART tells the user now has an
-answer to give: the package installs, through the emulator, the way every
-established distribution builder installs one.
-
-**Re-researched 2026-08-25 at the owner's request, and the decision stands —
-with a better reason than the one recorded.** HstWB Installer's README says
-why it uses an emulator, and it is not the password: *"AmigaDOS scripts and
-uses binaries for 68000 CPU to support as many Amiga models as possible."*
-**The emulator is the installer's native environment, not a workaround for
-encryption.** Even an unencrypted BoingBag would still be 68k code that has to
-execute somewhere. That makes ART's host-side placement the unusual thing
-rather than the obvious thing — it works only because ART reads each release's
-own Installer script and reimplements the placement, which is possible for a
-release laid out as files and impossible for one delivered as a program.
-
-Three routes were checked and none is one:
-
-- **`jit06/emu68-bootstrap`** — the one comparable host-side, no-emulator card
-  builder — does not solve this. It supports **AmigaOS 3.2 only**; 3.9 and the
-  BoingBags are outside its scope entirely. Avoiding the problem is a
-  legitimate answer for that project and is not one for ART, which builds 3.9
-  trees today.
-- **The community Boing Bags 3 & 4** (James Jacobs, `amigansoftware`) are
-  *unencrypted* — and their own readme requires *"Boing Bags #1 and #2 first"*.
-  They sit on top of the problem rather than around it.
-- **`BoingBag39-2-Contribution.lha`**, which the owner also has, is genuinely
-  unencrypted — verified by **extracting** it rather than listing it (445
-  files, 2.8 MB, ClassAction · OpenURL · cddb-lib), which is this entry's own
-  lesson applied. It carries **no payload member at all**, so it is contributed
-  third-party extras beside the update rather than any part of it. Already
-  measured on 2026-08-20 by `scripts/lha-package-identity.py` and already named
-  in `boingbag-39-2.json`'s `_why_distinguished_by_repeats_the_member`; found
-  again here and recorded so a third pass does not repeat it.
-
-**And a decrypted payload would not be enough anyway — measured 2026-08-25,
-which settles a question that had only ever been reasoned about.** The owner
-asked whether an unencrypted copy, if somebody had uploaded one, would let ART
-place a BoingBag from the host. The package's own Installer script answers it.
-
-`BoingBag39-2.lha` carries one — `BoingBag3.9-2/Install`, 65 180 bytes,
-`$VER: Boing Bag 3.9-2 Install 45.13 (20.3.2002)`, plain text and readable
-without decrypting anything. **It does not place the payload's files.** Its own
-line is `(run (cat "C/Updater AmigaOS-Update ..." #target))`: it hands the
-whole payload to the 42 676-byte `C/Updater` binary with the target path, and
-that binary does both jobs — decrypts *and* decides where every file goes. The
-script's five `copyfiles` calls place none of the payload: two rename
-`Devs/AmigaOS ROM Update` inside the target, two put the `C/Installer` binary
-into `C` and `Utilities`, one handles an `Internet` drawer. Of roughly 121
-payload files, **zero** are placed by anything ART could read.
-
-`BoingBag39-1.lha` does not even have a script — `C/Updater` (25 588 bytes),
-its catalogs, the payload, and nothing that says where anything goes.
-
-So the placement logic lives in a 68k executable, which is HstWB's general
-sentence made specific. Holding every decrypted file, ART would still not know
-which goes where, which are conditional on the machine or the language, or
-which replace rather than skip — and **guessing where operating-system files
-go is this project's most expensive defect class.** ART reads Installer
-*scripts*; a BoingBag is delivered as a *program*.
-
-That is why the emulator route is not second best. It is the only route that
-knows the answer, it is built, and it works.
-
-No search was made for the password itself, and none for a decrypted
-re-upload. The owner's decision forbids a bypass; obtaining somebody else's is
-the same bypass with an extra step, and the measurement above says it would
-buy nothing.
-
-**The Amiga-side path now has two vehicles, added 2026-09-07 (round 5,
-first-boot phases 1–2, `art-firstboot`).** The 2026-08-21 paragraph above is
-`core/amigainstall` launching WinUAE unattended and running a package's own
-`Updater` inside it. Round 5 built the second: a `run` action for the
-first-boot mechanism (`core/firstboot`, `S/FirstBoot/50-pkg-<id>`), planned
-for phase 4 and not yet built — phases 1–2 land the dispatcher, the steps and
-the report only. This entry stays open as the host-placement entry it is:
-neither vehicle places a BoingBag's files from the host, and
-`host_placement_block: "encrypted-payload"` is unchanged. What has widened is
-where the Amiga-side alternative can run — WinUAE today, a real machine once
-phase 4 exists.
 
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
@@ -508,6 +352,513 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-288** 🔴 ✅ **The headline feature of 0.9.1 refused on the owner's
+own material: the host placement resolved a package's archive by identity
+alone, and their folder holds two builds of BoingBag 3.9-1** — *found
+2026-09-09 on the third real-screen capture (`docs/assets/chain.png`, the 11:2x
+build); fixed the same day*
+`src-tauri/src/core/osinstall/slots.rs` ·
+`src-tauri/src/commands/osinstall.rs` ·
+`src/components/osbuilder/{AmigaInstallPanel,HostPlacement}.tsx` ·
+`src/lib/osinstall.ts`
+
+`E:\amiga\Amigatolon\os39` holds `BoingBag39-1.lha` (`Updater` 45.13) and
+`BoingBag39-1 (1).lha` (45.15, the build ART's own hash table names). Both carry
+the top-level directory `BoingBag3.9-1`, so the preview refused:
+
+    invalid input: more than one archive carries 'BoingBag3.9-1', the media
+    'boingbag-39-1' needs: E:\amiga\Amigatolon\os39\BoingBag39-1 (1).lha,
+    E:\amiga\Amigatolon\os39\BoingBag39-1.lha (ART-INPUT-INVALID)
+
+**Two screens, two answers, and the one that refused was the one that does the
+work.** The chain row directly above it named `BoingBag39-1 (1).lha` — the
+owner's override, and rank 1 by hash — and the source step's readout said the
+same. The placement path (`osinstall_collisions` → `resolve_packages_for_add`
+→ `scan::package_for`) knew neither fact: it matched on `media` and
+`distinguished_by` and nothing else. So the feature this whole branch is about
+could not place a BoingBag on the folder it was written for.
+
+**Fixed by giving the placement path the chain's own rule**, not by teaching it
+a second one. `slots::package_archive_for` is that rule, in `core/osinstall`
+beside the rank rules it mirrors, and both callers go through it:
+
+0. the user's override — an override is not an identification ART made, so it
+   is not compared with one;
+1. a single candidate after `media` and `distinguished_by` — the ordinary
+   case, and all there was before;
+2. **the bytes**: of several archives claiming one identity, the one whose md5
+   row names this package's own artefact, when *exactly* one does.
+
+Anything else is the ambiguity refusal, unchanged and naming both — two
+builds ART can say nothing about are still two, and nothing here picks a winner
+between files it has no evidence about. **This closes ART-284's deferred second
+half** (*"a hash-known build outranks an unknown one at the same identity"*),
+which that entry declined in writing and said would need its own measurement;
+the owner's own folder is that measurement.
+
+The overrides reach Rust the way they already reach `osinstall_slots` and
+`osinstall_chain`: `osinstall_collisions` and `osinstall_add_package` take
+`overrides`, `useHostPlacement` forwards them, and the panel passes the same
+list it already builds with `slotOverrides`. Nothing hashes anything on this
+path — the hash answers are the scan cache's, read the way `gather_facts`
+reads them, so a folder nobody has identified simply falls back to the refusal
+it gave before.
+
+*Tests:* `core::osinstall::slots::a_hash_known_build_outranks_an_unknown_one_at_the_same_identity_art_288`,
+`…::two_unknown_builds_at_one_identity_are_still_ambiguous`,
+`…::an_override_outranks_the_hash_even_when_it_names_the_unknown_build`,
+`…::one_candidate_is_that_candidate_and_none_is_missing`, and
+`commands::osinstall::resolve_packages_for_add_settles_two_builds_of_one_package_art_288`
+— the owner's shape end to end, all three ranks. **Mutation: the hash rank
+made to never resolve, and both the core and the command test fell**:
+*"expected the hash-known build, got Ambiguous([… (1).lha, … .lha])"*.
+
+**ART-287** 🟡 ✅ **"Checking what this would replace…" stayed on
+screen above the preview's own refusal** — *found 2026-09-09 on the same
+capture; fixed the same day*
+`src/lib/osinstall.ts` · `src/components/osbuilder/{AmigaInstallPanel,PackagePanel}.tsx`
+
+The heading above a host-placement preview was a two-way ternary in both
+panels: the counts once the answer arrived, *"Checking what this would
+replace…"* otherwise. *Otherwise* covers a refusal — so with ART-288's
+refusal in the red box directly beneath it, the screen said it was still
+working over a finished failure. Checking, done and refused are three states
+and a person does three different things about them; collapsing two of them is
+the rule `docs/lessons.md` opens with.
+
+`previewHeadingPhrase` decides which of the three the heading is, in
+`@/lib/osinstall` where a test can reach it, and both panels only render it.
+`null` is a fourth state — nothing asked — and the caller renders no
+heading at all for it, which is ART-286's fix and not this one's to repeat.
+
+*Tests:* `stops saying it is checking once the preview has refused` — both
+halves, because asserting only that the refusal's heading appears would pass
+for a screen showing both at once, which is the frame this is about.
+**Mutation: the refused arm removed and it fell** — *"expected 'Checking what
+this would replace…inva…' to contain 'The check did not finish…'"*.
+
+**ART-286** 🟡 ✅ **"Checking what this would replace…" never resolves:
+the panel renders the host-placement preview for a row it never asks about** —
+*found 2026-09-09 by the owner on `docs/assets/chain.png` (the 10:21 build),
+polled 4 min 40 s with nothing clicked; fixed the same day*
+`src/components/osbuilder/AmigaInstallPanel.tsx`
+
+On `/os-builder/amiga-kurulum` with a tree chosen and the remembered selection
+sitting on row 4 (`locale-39`, *already in this tree*), the panel showed
+*"Checking what this would replace…"* and never stopped. Nothing was in
+flight: `useHostPlacement`'s own `enabled` gate had correctly declined to call
+`osinstall_collisions` for a non-ready row, so `collisions` and
+`collisionsError` were both `null` and would stay `null` for ever — no
+answer could arrive and no error could either.
+
+**A fetch gate and a render gate that disagreed.** `hostSideRow` asked only
+*is this row placed from Windows*; `enabled` asked that **and** *is it ready*.
+For a host-placed row that is already installed the first is true and the
+second is false, so the block rendered and the request was never sent. The
+heading's fallback is the loading sentence, and a loading sentence with no
+request behind it is CLAUDE.md's fixed-width progress bar wearing words: it
+looks like progress and carries no information.
+
+Two smaller things went with it, both visible on the same screenshot:
+
+1. **The button captioned an action on a package already in the tree.** The
+   remembered row was the Run target, so the one button read *"Add the chosen
+   packages"* directly above *"AmigaOS 3.9 Locale update — already in this
+   tree"*. A **remembered** selection is a default, not a decision: it is only
+   where somebody was last looking. It now falls back to the first ready row,
+   exactly as no selection at all does, and the screen says both facts —
+   `Next: BoingBag 3.9-2` for what Run will do, and the remembered row's own
+   sentence for why it is not that. A row the user **clicks** is still the
+   target whatever state it is in; that is round 3's own rule (selecting is
+   reading) and three tests pin it.
+2. The Rust side was checked and cleared rather than assumed:
+   `osinstall_collisions` resolves its refusals **before** minting a job id, so
+   an `Err` rejects the promise synchronously and a success always emits. There
+   is no path through it that neither emits nor errors — and for this repro
+   it never ran at all.
+
+*Tests:*
+`never leaves 'Checking what this would replace' on a row nothing was asked about`
+(both arms — the restored selection, and a host-placed row the user clicks,
+which is the arm the render gate itself is about) and
+`never captions the button with an action on a package already in the tree`.
+**Mutations: both gates put back, each fell on its own test** — the render
+gate on *"expected <div…> to be null"*, the target fallback on
+*"Unable to find an element by: [data-testid="amiga-chain-next"]"*.
+
+Investigation: `.superpowers/sdd/2026-09-08-intake/preview-hang-investigation.md`.
+
+**ART-166** 🟡 ✅ **Both BoingBag payload archives are password-encrypted ZIPs, so
+neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
+8's real run, on `content-layer`*
+`src-tauri/src/core/osinstall/recipes/packages/boingbag-39-1.json` ·
+`…/boingbag-39-2.json`
+
+Both recipes name `member: "AmigaOS-Update"` — the payload archive stored
+inside the wrapper LHA. That member is a ZIP, and every entry in it is
+**ZipCrypto-encrypted**: 233 of 233 entries in BoingBag 3.9-1's payload
+(210 files, 23 folders) and 147 of 147 in 3.9-2's (121 files, 26 folders).
+Confirmed three independent ways — ART's own reader
+(`entry 42 of this ZIP cannot be read: Password required to decrypt file`;
+entry 128 for 3.9-2), 7-Zip 26.02 (`Encrypted = +`, `Method = ZipCrypto
+Deflate`, and `ERROR: Wrong password` on extraction), and the raw local file
+header, whose general-purpose flag word reads `0x0003` with bit 0 set.
+
+The password belongs to the BoingBag's own `Updater`, which the wrapper LHA
+carries beside the payload (`BoingBag3.9-1/C/Updater`, `C/GetLocale`) — an
+Amiga executable that has to run *on* an Amiga. Nothing about this is a bug in
+`core/archive`: the reader is right and the recipes are asking for bytes that
+are not readable on the host.
+
+Task 4 measured these recipes from the payload's **listing**, which ZipCrypto
+leaves in clear, and every test since has been synthetic — so the first time
+anything asked for the bytes was this run. That is exactly the gap Task 8
+exists to close.
+
+Left open, and deliberately not "fixed": circumventing the encryption is not
+ART's business, and the honest options are all design decisions rather than
+code changes — place the wrapper's loose files and let the Amiga's own
+`Updater` run at first boot, or withdraw both BoingBag recipes until there is
+a path that works. Whichever is chosen, spec §10/§89 says ART must not offer a
+package it cannot apply, and today it offers two.
+
+**The owner's decision, taken 2026-08-19 after external research and recorded
+here so nobody re-opens it by accident: no bypass of the password will be
+written.** The research is what settled it rather than taste — every
+established distribution builder (HstWB Installer, AmiKit, AmigaSYS,
+ClassicWB) installs a BoingBag by running the package's **own `Updater` inside
+an emulator**, where the password already lives, rather than by decrypting
+anything; HstWB's own README says so outright (*"HstWB Installer uses WinUAE
+or FS-UAE emulator to run the installation process"*). So the supported path
+exists and it is an Amiga-side one. That becomes **its own round**, not a
+continuation of this one, and it is cheaper than it sounds because
+`core/winuae::launch_winuae` already exists — what is missing is running it
+unattended and reading the result back.
+
+**What the screen does today, checked in the code rather than assumed
+(corrected 2026-08-19 by the final whole-branch review's M3 — the sentence
+that stood here said "the screen says so" and the screen did not).** When
+this was first written, `osinstall_packages` set `available` from
+`found.iter().any(|f| f.media == p.media)` alone, so a user with the real
+`BoingBag39-1.lha` in the folder got a live checkbox, no warning, and — on
+confirming — the reader's own raw English sentence, `entry 42 of this ZIP
+cannot be read: Password required to decrypt file`, whatever language they
+had chosen. The entry was right in its body about §10/§89 and wrong in its
+last line.
+
+Both are now true instead:
+
+- Both BoingBag recipes declare `"host_placement_block": "encrypted-payload"`
+  in their own JSON — data, not code, so the day the Amiga-side round lands
+  the block is deleted rather than an `if` hunted down.
+- The checklist gives such a package its own badge and its own sentence,
+  in both catalogues, naming what it needs (*its own Amiga-side Updater*)
+  rather than reporting that ART failed — and the row is **untickable**.
+  "Archive not found" is deliberately not reused: the archive is right
+  there.
+- A pick remembered from an earlier run still arrives checked, so the
+  preview is suppressed for that selection and the Add button is disabled;
+  the row stays tickable *off*, which is F3's rule and is not weakened.
+- `plan()` refuses the selection by type
+  (`RefusalReason::PackageNotPlaceableOnHost`) before the package folder is
+  even scanned, and `osinstall_collisions` refuses before opening an
+  archive — so a caller reaching the commands directly gets the same
+  answer, not the ZIP reader's.
+
+So the shipped BoingBag recipes stay, unplaceable and **said to be** so.
+
+Also worth recording as *my own* mistake rather than the material's: the
+payload's 234 entries were listed with 7-Zip early in the round and read as
+plain files. **ZipCrypto does not encrypt names** — listing works, extraction
+does not — so the first fact was true and the second was inferred from it. The
+first thing that ever asked for bytes was Task 8's run.
+
+**The Amiga-side route works, and this entry is now the record of why the
+host-side one still cannot** — *2026-08-21*. [ART-193](#fixed) is fixed, and
+both BoingBags installed on the owner's own material through ART's own
+`compose` → `install` path: BoingBag 1 in 169.1 s (3 795 → 3 859 files),
+BoingBag 2 on that result in 138.1 s, and the tree booted and answered
+`Workbench 45.3 (07-Dec-01)` where it used to answer `Workbench 45.1`.
+
+**So the files reach a tree — and not one of them was placed by `apply`.**
+The Amiga's own `Updater` writes them, inside the emulator, after the
+package's own code decrypts its own payload. Nothing here decrypts anything
+and no password is bypassed; the payload is as encrypted as it ever was, and
+host-side placement is as impossible as it ever was. This entry therefore
+stays open as the reason a BoingBag's rows are refused on the host screen —
+`host_placement_block: "encrypted-payload"` is still correct and still
+shipped. What has changed is that the sentence ART tells the user now has an
+answer to give: the package installs, through the emulator, the way every
+established distribution builder installs one.
+
+**Re-researched 2026-08-25 at the owner's request, and the decision stands —
+with a better reason than the one recorded.** HstWB Installer's README says
+why it uses an emulator, and it is not the password: *"AmigaDOS scripts and
+uses binaries for 68000 CPU to support as many Amiga models as possible."*
+**The emulator is the installer's native environment, not a workaround for
+encryption.** Even an unencrypted BoingBag would still be 68k code that has to
+execute somewhere. That makes ART's host-side placement the unusual thing
+rather than the obvious thing — it works only because ART reads each release's
+own Installer script and reimplements the placement, which is possible for a
+release laid out as files and impossible for one delivered as a program.
+
+Three routes were checked and none is one:
+
+- **`jit06/emu68-bootstrap`** — the one comparable host-side, no-emulator card
+  builder — does not solve this. It supports **AmigaOS 3.2 only**; 3.9 and the
+  BoingBags are outside its scope entirely. Avoiding the problem is a
+  legitimate answer for that project and is not one for ART, which builds 3.9
+  trees today.
+- **The community Boing Bags 3 & 4** (James Jacobs, `amigansoftware`) are
+  *unencrypted* — and their own readme requires *"Boing Bags #1 and #2 first"*.
+  They sit on top of the problem rather than around it.
+- **`BoingBag39-2-Contribution.lha`**, which the owner also has, is genuinely
+  unencrypted — verified by **extracting** it rather than listing it (445
+  files, 2.8 MB, ClassAction · OpenURL · cddb-lib), which is this entry's own
+  lesson applied. It carries **no payload member at all**, so it is contributed
+  third-party extras beside the update rather than any part of it. Already
+  measured on 2026-08-20 by `scripts/lha-package-identity.py` and already named
+  in `boingbag-39-2.json`'s `_why_distinguished_by_repeats_the_member`; found
+  again here and recorded so a third pass does not repeat it.
+
+**And a decrypted payload would not be enough anyway — measured 2026-08-25,
+which settles a question that had only ever been reasoned about.** The owner
+asked whether an unencrypted copy, if somebody had uploaded one, would let ART
+place a BoingBag from the host. The package's own Installer script answers it.
+
+`BoingBag39-2.lha` carries one — `BoingBag3.9-2/Install`, 65 180 bytes,
+`$VER: Boing Bag 3.9-2 Install 45.13 (20.3.2002)`, plain text and readable
+without decrypting anything. **It does not place the payload's files.** Its own
+line is `(run (cat "C/Updater AmigaOS-Update ..." #target))`: it hands the
+whole payload to the 42 676-byte `C/Updater` binary with the target path, and
+that binary does both jobs — decrypts *and* decides where every file goes. The
+script's five `copyfiles` calls place none of the payload: two rename
+`Devs/AmigaOS ROM Update` inside the target, two put the `C/Installer` binary
+into `C` and `Utilities`, one handles an `Internet` drawer. Of roughly 121
+payload files, **zero** are placed by anything ART could read.
+
+`BoingBag39-1.lha` does not even have a script — `C/Updater` (25 588 bytes),
+its catalogs, the payload, and nothing that says where anything goes.
+
+So the placement logic lives in a 68k executable, which is HstWB's general
+sentence made specific. Holding every decrypted file, ART would still not know
+which goes where, which are conditional on the machine or the language, or
+which replace rather than skip — and **guessing where operating-system files
+go is this project's most expensive defect class.** ART reads Installer
+*scripts*; a BoingBag is delivered as a *program*.
+
+That is why the emulator route is not second best. It is the only route that
+knows the answer, it is built, and it works.
+
+No search was made for the password itself, and none for a decrypted
+re-upload. The owner's decision forbids a bypass; obtaining somebody else's is
+the same bypass with an extra step, and the measurement above says it would
+buy nothing.
+
+**The Amiga-side path now has two vehicles, added 2026-09-07 (round 5,
+first-boot phases 1–2, `art-firstboot`).** The 2026-08-21 paragraph above is
+`core/amigainstall` launching WinUAE unattended and running a package's own
+`Updater` inside it. Round 5 built the second: a `run` action for the
+first-boot mechanism (`core/firstboot`, `S/FirstBoot/50-pkg-<id>`), planned
+for phase 4 and not yet built — phases 1–2 land the dispatcher, the steps and
+the report only. This entry stays open as the host-placement entry it is:
+neither vehicle places a BoingBag's files from the host, and
+`host_placement_block: "encrypted-payload"` is unchanged. What has widened is
+where the Amiga-side alternative can run — WinUAE today, a real machine once
+phase 4 exists.
+
+---
+
+**Fixed 2026-09-08 — the owner reversed the decision, and ART now places
+BoingBag 1 and 2 from Windows.** Their words, recorded verbatim because the
+ruling above was theirs too: *"inatla BoingBag'i Windows uzerinden
+yerlestirmedin; diger proje yapiyor bu isi, bu yuzden is kilitlendi"* /
+*"avukatlik yapma, muhendisiz biz"*.
+
+**What was wrong in everything above, and it was one clause.** The measurement
+was right — 233 of 233 entries and 147 of 147 are ZipCrypto-encrypted, and the
+listing being in clear is exactly the trap this entry records. The *conclusion*
+rested on a survey of distribution builders that was true when it was made and
+had stopped being true: **Emu68 Hatcher** and **Emu68-Imager**, both MIT, both
+building AmigaOS 3.9 for the same hardware ART targets, open the payload with
+a password they publish in their own source and copy the files onto the tree
+(`src/main/python/emu68hatcher/builder/staging/boingbag.py`, read whole on
+2026-09-08). "Every established builder runs the Updater in an emulator" was
+one source, checked once, and it decayed.
+
+The other half of the argument — *"a decrypted payload would not be enough
+anyway; the placement logic lives in a 68k executable"* — was **wrong, and the
+oracle is what settles it** rather than an argument. The round-3 measurement
+had already hashed every file of a clean AmigaOS 3.9 tree, of that tree after
+a real BoingBag 3.9-1 emulator run, and of that after BoingBag 3.9-2 with its
+`XAD-Update` follow-up (`E:\amiga\ProjeART\r3-measure\logs`). Comparing the
+payloads against those snapshots on 2026-09-08:
+
+- Of BoingBag 3.9-1's 210 payload files the `Updater` wrote **166**, every one
+  byte-identical to the payload's own copy, and the other **44 were already
+  byte-identical in the tree** — nothing to write. Same for 3.9-2: 77 written,
+  46 already identical, 0 differing.
+- So the `Updater` copies its payload onto the tree and does not choose. The
+  "placement logic in a program" reading came from reading the `Install`
+  script, which indeed places nothing — and from never asking the two trees
+  what actually changed between them.
+
+**What shipped.** `payload_password` on a package (recipe data, attributed to
+Emu68 Hatcher in `THIRD_PARTY_LICENSES.md`), `host_placement_block` removed
+from both BoingBag recipes, ZipCrypto decryption through
+`core::archive::zip::ZipBackend::open_with_password` with the key **verified at
+open** and a wrong one refused as `ART-PAYLOAD-PASSWORD` — its own ending, not
+`ART-FORMAT-MALFORMED`. `post_place` runs each package's host-side after-steps
+(BoingBag 1's ten protection bits, BoingBag 2's `Devs/AmigaOS ROM Update`
+rotation and, following Hatcher, its `Devs/NSDPatch.cfg` rename), and
+`extra_members` places BoingBag 2's `XAD-Update` behind the gate HstWB states
+(`Libs/xadmaster.library` older than 10, read on the host).
+
+**The oracle, run on the owner's own material 2026-09-08.**
+`E:\amiga\ProjeART\art226-tree` copied to `E:\amiga\ProjeART\bb-host\tree`
+(never the original), BoingBag 1 then BoingBag 2 placed through `add_package`,
+the result hashed file for file against `run8-followup-xad-fixed.after.json` —
+the tree two real emulator runs produced:
+
+    oracle: 4030 files expected, 4031 produced - added 2, missing 1, differing 2
+      added:     devs/nsdpatch.cfg.old
+      added:     devs/nsdpatch.cfg.old.uaem
+      missing:   devs/nsdpatch.cfg.uaem
+      differing: devs/nsdpatch.cfg
+      differing: distribution.json
+
+**Every one of the five is explained and none is a defect.** Four are the one
+step ART deliberately does and the `Updater` does not — Hatcher's
+`NSDPatch.cfg` rename, which keeps the user's own file at
+`Devs/NSDPatch.cfg.old` (and takes its `.uaem` sidecar with it, so the old
+sidecar is removed rather than left describing bytes that are gone). The
+fifth is ART's own `distribution.json`, which records this run. **Every path
+the `Updater` wrote hashes identically**, including all five files it renamed
+by case (`C/exe2arc`, `C/WBInfo`, `Utilities/More`, `Utilities/MultiView`,
+`WBStartup/RAWBInfo` — checked by name on disk, not only by hash).
+
+Re-runnable: `the_host_placement_hashes_to_the_updaters_own_tree` in
+`core::osinstall::apply`, `#[ignore]`d and env-gated like the other
+real-material hooks. The command line is in its own doc comment.
+
+**One defect the oracle found on its first run**, which is what an oracle is
+for: both BoingBag recipes declared `overrides: ["workbench-base"]` on a
+measurement about the *media* (*"100%, not merely 'some'"*), and `overrides`
+is a claim about the **tree's manifest** — AmigaOS 3.9's recipe splits the
+Workbench between `workbench-base` and `workbench-39`. The first placement
+refused with *"would write over 122 file(s) it never declared it may
+replace"*. Both recipes now name `workbench-39` too, and each `_why_overrides`
+records the count and corrects the old claim in place.
+
+**The Amiga-side route is not withdrawn.** Both packages keep their
+`amiga_installer`, and everything this entry records about it stays true. What
+changed is which route a chain row takes: `chain::rows_for`'s `runs_on_amiga`
+now reads the **block** first and the installer only as a tie-break, so a
+package ART can place is placed.
+
+**ART-282** 🟡 ✅ **Ticking `locale-turkish` on the Packages step, on a tree
+BoingBag 3.9-2 had not been run on, read the engine's own bookkeeping out at
+the owner** — *found 2026-09-08 by the owner on the 0.9.1 candidate build*
+`src-tauri/src/commands/osinstall.rs` · `src-tauri/src/core/osinstall/package.rs`
+
+The screen showed:
+
+    invalid input: 'locale-turkish' requires 'boingbag-39-2', which was not chosen  (ART-INPUT-INVALID)
+
+Two things wrong in one sentence: ids nobody watching the Packages step can
+recognise, and advice that is simply false — `boingbag-39-2` is Amiga-side
+(ART-166) and can never be ticked from that list, so "which was not chosen"
+told the owner to do something the screen does not let him do.
+
+**Why:** round 3 had already added the typed, actionable refusal for exactly
+this case — `RefusalReason::PackageRequirementNeedsAmigaRun` — but only on the
+*add* path (`resolve_packages_for_add`, which calls
+`plan::detect_package_refusals` before ever ordering the selection). The
+*preview* path the Packages step actually calls the instant a checkbox is
+ticked — `osinstall_collisions`, §3's PREVIEW, which runs on every selection
+change and long before "Add" is pressed — went straight to
+`package::order_with_installed` with no refusal check in front of it at all.
+`order_over_with_installed`'s own ordering check fired first and reached the
+screen as a raw `CoreError::InvalidInput`, built from bare ids, with no idea
+that the requirement it named could never be chosen from this screen.
+
+**Fixed 2026-09-08.** `osinstall_collisions` now runs the same
+`detect_package_refusals` check the add path already ran, through a new
+`ordered_packages_for_collisions` helper that is refused as **data**
+(`Ok(Err(refusals))`), never as an error — `order_with_installed` is called
+only once the selection is already known-good, so it cannot be the thing the
+screen hears from. The refusal reaches the screen through
+`describe_package_refusal`, now extended to cover
+`PackageRequirementNeedsAmigaRun`/`PackageRequirementMissing` by the
+catalogue's own names, mirroring `packageRequirementNeedsAmigaRun`/
+`packageRequirementMissing` in `src/i18n/en.json` rather than repeating raw
+Rust debug text.
+
+**Belt and suspenders:** `order_over_with_installed`'s own sentence — the one
+that still runs if some future caller ever skips the refusal check — no
+longer reads out ids either. It now names the requirement through the
+catalogue (falling back to the id only when the catalogue has nothing for it)
+and appends "— install it first on the Amiga-side step" when the requirement
+is `amiga_installer`-declared, in place of "which was not chosen" — advice
+that is wrong for a requirement that was never choosable to begin with.
+
+*Tests:* `commands::osinstall::ordered_packages_for_collisions_refuses_locale_turkish_without_boingbag_by_name`
+(the owner's exact tree — `locale-base` present, BoingBag 3.9-2 never run —
+answers `PackageRequirementNeedsAmigaRun` by name, and the outer `AppResult`
+comes back `Ok`, proving `order` never ran),
+`…::describe_package_refusal_names_the_amiga_side_step_and_never_an_id` (the
+preview path's own string for both requirement variants, names only);
+`package::order_over_with_installeds_own_error_names_the_amiga_side_step`
+(the belt-and-suspenders sentence itself, Amiga-side arm),
+`…::order_over_with_installeds_own_error_keeps_the_ordinary_advice_for_a_host_package`
+(the plain arm beside it — an ordinary host requirement keeps "which was not
+chosen", because that one really could be ticked),
+`…::a_requirement_that_was_not_chosen_is_refused_by_name` (updated: BoingBag
+3.9-2 requiring BoingBag 3.9-1, both real shipped packages, now asserts the
+name and the Amiga-side advice, and that the bare id `boingbag-39-1` never
+leaks). Mutation: putting `order_with_installed` back ahead of the refusal
+check in `ordered_packages_for_collisions` failed
+`ordered_packages_for_collisions_refuses_locale_turkish_without_boingbag_by_name`
+with the raw `CoreError::InvalidInput` surfacing through the outer
+`AppResult`, exactly as the owner saw it.
+
+**ART-284** 🟡 ✅ **Two screens gave two answers about one file: the source
+step's readout resolved BoingBag 3.9-1 to the owner's chosen archive, the
+updates chain called it ambiguous and blocked the row** — *found 2026-09-08 on
+`material.png` / `chain.png` by the screenshot pass; fixed 2026-09-09*
+`src-tauri/src/commands/osinstall.rs` (`osinstall_chain`) ·
+`src/lib/osinstall.ts` · `src/components/osbuilder/AmigaInstallPanel.tsx`
+
+The owner's folder holds two BoingBag 1 builds (`BoingBag39-1.lha`, Updater
+45.13; `BoingBag39-1 (1).lha`, Updater 45.15). The readout showed the `(1)`
+file as *the file you chose for BoingBag 3.9-1* — an override — while the chain
+screen said *"2 files here could be BoingBag 3.9-1, and ART will not choose
+between them"* and blocked the row. One resolver, two callers, and only one of
+them was handed the user's own decision: `osinstall_slots` takes `overrides`
+(round 2's M5) and `osinstall_chain` was called with `None`.
+
+**Fixed by giving the second caller the same argument**, not by teaching the
+chain a second rule. `osinstall_chain` now takes `overrides: Option<Vec<(String,
+PathBuf)>>` and hands it to the same `gather_facts`; `AmigaInstallPanel` builds
+it once from the remembered bag with `slotOverrides` and passes it to both
+`osinstallChain` and `osinstallSlots`, keyed as a string so neither effect
+re-scans the folders on every render (the rule `OsInstall.tsx` and
+`MaterialReadout.tsx` already keep for this exact value).
+
+The second half of the draft — *when no override exists, a hash-known build
+outranks an unknown one at the same identity* — is **not** done here and is not
+owed by this entry: it is a change to `slots::resolve`'s own ranking, it would
+make ART pick between two files the user has said nothing about, and it needs
+its own measurement. Filed as part of ART-284's original text; if it is wanted
+it is a new entry.
+
+Tests: `commands::osinstall::the_chain_takes_the_users_own_file_choices_art_284`
+— both arms over two archives sharing one top level, because the "with the
+override" arm alone would pass for a command that ignored the argument and
+happened to be given one candidate: without it the row is `Refused {
+Ambiguous }`, with it the row names the user's file and is not refused.
+
 **ART-280** 🟡 ✅ **ART's BoingBag 3.9-2 run never applied `XAD-Update`, so
 `xadmaster.library` stayed at 9.1 where every other 3.9 builder leaves it at
 10+** — *found 2026-09-08 by round 3 task 3's Part A measurement, on
@@ -630,6 +981,19 @@ field) and `AmigaInstallPanel.test.tsx` (its own line on screen, and none when
 no follow-up was declared). **Mutations: both orderings put back, both fell** —
 the gate above the branch, and the block below the result word.
 
+**Appended 2026-09-09.** The same-boot mechanism above — `FollowUp`,
+`FollowUpOutcome`, `art-followup.txt`, its four words, `follow_up_lines` and
+`read_follow_up` — was **replaced by a host-side unit the same day it landed**
+and removed in the BoingBag cleanup. `boingbag-39-2.json`'s `extra_members`
+places `XAD-Update` from Windows, behind the identical gate read from HstWB's
+own script, and the two BoingBags no longer have an Amiga-side route for
+anything to follow up. This entry stays Fixed and the measurement stands
+unchanged: `Libs/xadmaster.library` reads 9.0 clean, 9.1 after BoingBag 1 and
+**9.1 still** after BoingBag 2, which is why the unit exists at all. What the
+removal changes is only *which* code applies it; the host route is checked
+against the emulator's own tree by the oracle, which reports the library at
+10.0 on both sides.
+
 **ART-277** 🟠 **A stale package selection carried the wrong archive into a
 request, and the refusal quoted an internal overlay path instead of naming
 either package:
@@ -726,6 +1090,28 @@ keys in `settings.json`. They are never read or written again once a
 package is selected (every read/write now goes through
 `amigaInstallArchiveKey`'s per-package name), so they cost nothing but the
 bytes they occupy — a one-time orphan, not a leak and not a wrong value.
+
+**Appended 2026-09-09:** `amigaInstall.overlayArchive.<pkg>` joined that
+residue outright — the panel's update-archive field went with the Amiga-side
+route for the two BoingBags, so ART stops *reading* the key. Whatever is stored
+under it stays exactly where it is: nothing changes unless the user changes it,
+and deleting somebody's remembered path to tidy up would be ART changing a
+setting they made. `amigaInstall.medium` is in the same position for the same
+reason.
+
+**And so did three of the tests named below**, which is worth saying here
+rather than leaving a reader to find their names gone:
+`the_packages_own_archive_in_the_second_field_gets_its_own_sentence_and_never_says_select_it`,
+`a_wrong_second_archive_is_refused_before_the_tree_is_copied` and
+`the_preview_asks_about_every_archive_not_just_the_first` were all about the
+second field and went with it. **The single-field half of this entry is still
+guarded**, by `a_wrong_archive_is_refused_before_the_tree_is_copied`,
+`the_packages_own_archive_is_still_accepted`,
+`a_missing_archive_is_not_refused_as_the_wrong_one`,
+`an_unrecognised_archive_still_lists_what_it_held` and
+`a_wrong_archive_in_the_package_field_names_its_real_owner_when_the_catalogue_knows_it`
+— and `src/lib/amigainstall.test.ts` now asserts the wire carries no
+`packageArchives` at all.
 
 Tests (fix round 1): `the_packages_own_archive_in_the_second_field_gets_its_own_sentence_and_never_says_select_it`,
 `the_sentence_keeps_an_unreadable_listing_apart_from_an_empty_one`,

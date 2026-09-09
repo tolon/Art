@@ -169,16 +169,9 @@ function preview(over: Partial<AmigaInstallPreview> = {}): AmigaInstallPreview {
     args: ["AmigaOS-Update", "DH0:"],
     workVolume: "ARTWork",
     packageVolume: "ARTPkg",
-    packageArchives: ["D:/pkg/BoingBag39-1.lha"],
-    packageArchivesPresent: true,
-    declaredOverlays: ["BoingBag3.9-1-UAE/BoingBag3.9-1"],
-    minimumInstallerVersion: "45.15",
+    packageArchive: "D:/pkg/BoingBag39-1.lha",
+    packageArchivePresent: true,
     packageDir: "BoingBag3.9-1",
-    // ART-193. The disc the package's own installer verifies, and the volume
-    // the image itself states — never its filename.
-    medium: "E:/amiga/os39/AmigaOS39.iso",
-    mediumVolume: "AmigaOS3.9",
-    requiredMedium: "the original AmigaOS 3.9 CD-ROM",
     resultFile: "art-result.txt",
     deadlineSeconds: 1800,
     kickstart: "D:/roms/kick31.rom",
@@ -251,7 +244,6 @@ function slotState(
     installed: { state: "no" },
     chosenMissing: null,
     blockedBy: [],
-    notNeeded: null,
     incomplete: null,
     ...rest,
   };
@@ -285,33 +277,6 @@ function slotReport(states: SlotState[]): SlotReport {
 function emptyReport(): SlotReport {
   return slotReport([]);
 }
-
-/** The disc BoingBag 3.9-1's own installer verifies, as `slots_for` builds it
- *  — the package slot names it through `requires`, which is why nothing on
- *  the screen has to know the volume is called `AmigaOS3.9`. */
-const MEDIUM_SLOT = {
-  id: "medium:AmigaOS3.9",
-  kind: "medium" as const,
-  name: "AmigaOS3.9",
-  identity: "AmigaOS3.9",
-  artefact: "amigaos-3-9-cd",
-  required: true,
-  filenames: ["AmigaOS39.iso", "amigaos3.9.iso"],
-  provenance: "Haage and Partners (3.9)",
-  position: 0,
-};
-
-const OVERLAY_SLOT = {
-  id: "overlay:boingbag-39-1:BoingBag3.9-1-UAE",
-  kind: "overlay" as const,
-  name: "BoingBag3.9-1-UAE",
-  identity: "BoingBag3.9-1-UAE",
-  artefact: "boingbag-39-1-uae",
-  required: false,
-  filenames: ["BoingBag39-1-UAE.lha"],
-  provenance: "the owner's copy, 2026-09-08",
-  position: 2,
-};
 
 /** The one live `onAmigaInstallResult` handler, so a test can deliver an
  *  ending the way the backend would. */
@@ -442,17 +407,14 @@ beforeEach(() => {
   slotsMock.mockResolvedValue(emptyReport());
   previewMock.mockResolvedValue(preview());
   runMock.mockResolvedValue(7);
-  // The ordinary answer: an archive named like the real UAE fix is the
-  // update archive, everything else is the package's own — path-aware
-  // rather than a single constant, so a fixture that puts the real
-  // `BoingBag39-1-UAE.lha` in the overlay field (as the shipped run does)
-  // classifies correctly regardless of which field asked. Individual tests
-  // override this to exercise ART-277's own blockers.
-  classifyMock.mockImplementation(async (path: string) => ({
-    kind: path.includes("UAE") ? "the-update-archive" : "the-package",
+  // The ordinary answer: whatever was picked is the package's own archive.
+  // One constant, because there is one field to ask about since 2026-09-09.
+  // Individual tests override this to exercise ART-277's own blockers.
+  classifyMock.mockImplementation(async () => ({
+    kind: "the-package",
     topLevel: [],
     expectedMedia: null,
-    expectedOverlays: [],
+    sharedBy: [],
   }));
   onJobProgressMock.mockImplementation(async (handler: (p: JobProgress) => void) => {
     report = handler;
@@ -708,66 +670,12 @@ describe("a refusal says which reason applies", () => {
     });
     expect(boxes[0].nextElementSibling?.contains(button)).toBe(true);
   });
-
-    it("shows a too-old installer refusal verbatim, naming the archive that fixes it", async () => {
-    previewMock.mockRejectedValue(
-      "'D:/pkg/BoingBag39-1.lha' carries Updater 45.13, and this package's installer has to be " +
-        "at least 45.15 to run inside an emulator. Supply the package's update archive as well " +
-        "— the one carrying BoingBag3.9-1-UAE/BoingBag3.9-1"
-    );
-    withChoices();
-    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
-
-    const refusal = await screen.findByTestId("amiga-install-refusal");
-    expect(refusal.textContent).toContain("45.15");
-    expect(refusal.textContent).toContain("BoingBag3.9-1-UAE/BoingBag3.9-1");
-  });
-});
-
-describe("the second archive, before the refusal rather than after it (ART-186)", () => {
-  it("names the version and the archive to go and find when only the wrapper is chosen", async () => {
-    withChoices();
-    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
-
-    const advice = await screen.findByTestId("amiga-install-overlay-advice");
-    expect(advice.textContent).toContain("45.15");
-    expect(advice.textContent).toContain("BoingBag3.9-1-UAE/BoingBag3.9-1");
-    expect(advice.textContent).toBe(
-      i18n.t("osinstall.amigaInstall.overlay.needed", {
-        version: "45.15",
-        overlays: "BoingBag3.9-1-UAE/BoingBag3.9-1",
-      })
-    );
-  });
-
-  it("says something else once that archive is supplied, and invents nothing for a package that declares no minimum", async () => {
-    previewMock.mockResolvedValue(
-      preview({ packageArchives: ["D:/pkg/a.lha", "D:/pkg/BoingBag39-1-UAE.lha"] })
-    );
-    withChoices();
-    const { unmount } = render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
-    let advice = await screen.findByTestId("amiga-install-overlay-advice");
-    expect(advice.textContent).toBe(
-      i18n.t("osinstall.amigaInstall.overlay.supplied", {
-        version: "45.15",
-        overlays: "BoingBag3.9-1-UAE/BoingBag3.9-1",
-      })
-    );
-    unmount();
-
-    previewMock.mockResolvedValue(
-      preview({ minimumInstallerVersion: null, declaredOverlays: [], packageName: "BoingBag 3.9-2" })
-    );
-    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
-    await screen.findByTestId("amiga-install-preview");
-    expect(screen.queryByTestId("amiga-install-overlay-advice")).toBeNull();
-  });
 });
 
 describe("what a previewed run still lacks", () => {
   it("names each missing thing and refuses the confirmation until they are there", async () => {
     previewMock.mockResolvedValue(
-      preview({ kickstartPresent: false, emulator: null, packageArchivesPresent: false })
+      preview({ kickstartPresent: false, emulator: null, packageArchivePresent: false })
     );
     withChoices();
     render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
@@ -813,7 +721,7 @@ describe("the four endings stay four sentences on screen", () => {
         ending.kind === "succeeded"
           ? ({ kind: "promoted", tree: "D:/amiga/os39", leftBehind: null } as const)
           : ({ kind: "kept", copy: "D:/amiga/os39.art-run", original: "D:/amiga/os39" } as const);
-      deliver!({ job_id: 7, outcome: ending, settlement, follow_up: null });
+      deliver!({ job_id: 7, outcome: ending, settlement });
 
       const outcome = await screen.findByTestId("amiga-install-outcome");
       expect(outcome.textContent).toBe(SAID[ending.kind]);
@@ -836,51 +744,12 @@ describe("the four endings stay four sentences on screen", () => {
     });
   }
 
-  // ART-280: the package's own second step, beside the ending and never
-  // instead of it.
-  it("says what the package's follow-up did, on its own line, without touching the ending", async () => {
-    const WORDS = ["ran", "not-needed", "failed", "not-checked"] as const;
-    const said = new Set<string>();
-    for (const word of WORDS) {
-      await runToConfirmation();
-      deliver!({
-        job_id: 7,
-        outcome: { kind: "succeeded" },
-        settlement: { kind: "promoted", tree: "D:/amiga/os39", leftBehind: null },
-        follow_up: word,
-      });
-      const line = await screen.findByTestId("amiga-install-follow-up");
-      said.add(line.textContent ?? "");
-      // The ending is the installer's own verdict and the follow-up is not
-      // part of it — including for `failed`, which is the row that would go
-      // wrong first.
-      expect(screen.getByTestId("amiga-install-outcome").textContent).toBe(SAID.succeeded);
-      cleanup();
-    }
-    expect(said.size).toBe(WORDS.length);
-    // And the one that must not read as a problem.
-    expect([...said]).toContain(i18n.t("osinstall.amigaInstall.followUp.notNeeded"));
-  });
-
-  it("says nothing at all about a follow-up when the package declares none", async () => {
-    await runToConfirmation();
-    deliver!({
-      job_id: 7,
-      outcome: { kind: "succeeded" },
-      settlement: { kind: "promoted", tree: "D:/amiga/os39", leftBehind: null },
-      follow_up: null,
-    });
-    await screen.findByTestId("amiga-install-outcome");
-    expect(screen.queryByTestId("amiga-install-follow-up")).toBeNull();
-  });
-
   it("gives the four endings four different next steps", async () => {
     const steps = new Set<string>();
     for (const ending of ENDINGS) {
       await runToConfirmation();
       deliver!({
         job_id: 7,
-        follow_up: null,
         outcome: ending,
         settlement: { kind: "kept", copy: "D:/c", original: "D:/o" },
       });
@@ -903,7 +772,6 @@ describe("where the copy is", () => {
       await runToConfirmation();
       deliver!({
         job_id: 7,
-        follow_up: null,
         outcome: ending,
         settlement: { kind: "kept", copy: "D:/amiga/os39.art-run", original: "D:/amiga/os39" },
       });
@@ -918,7 +786,6 @@ describe("where the copy is", () => {
     await runToConfirmation();
     deliver!({
       job_id: 7,
-      follow_up: null,
       outcome: { kind: "succeeded" },
       settlement: { kind: "promoted", tree: "D:/amiga/os39", leftBehind: "D:/amiga/os39.art-old" },
     });
@@ -959,7 +826,7 @@ describe("beginner mode hides and never disables", () => {
 });
 
 describe("the run itself", () => {
-  it("sends the tree, the package and both archives exactly as chosen", async () => {
+  it("sends the tree, the package and the archive exactly as chosen", async () => {
     useSettingsStore.setState((state) => ({
       settings: {
         ...state.settings,
@@ -967,7 +834,6 @@ describe("the run itself", () => {
         remembered: {
           "amigaInstall.package": "boingbag-39-1",
           "amigaInstall.archive.boingbag-39-1": "D:/pkg/BoingBag39-1.lha",
-          "amigaInstall.overlayArchive.boingbag-39-1": "D:/pkg/BoingBag39-1-UAE.lha",
           "amigaInstall.kickstart": "D:/roms/kick31.rom",
         },
       },
@@ -982,13 +848,8 @@ describe("the run itself", () => {
     expect(runMock.mock.calls[0][0]).toEqual({
       tree: "D:/amiga/os39",
       packageId: "boingbag-39-1",
-      // Wrapper first, overlay second — the order is the wire's own.
-      packageArchives: ["D:/pkg/BoingBag39-1.lha", "D:/pkg/BoingBag39-1-UAE.lha"],
+      packageArchive: "D:/pkg/BoingBag39-1.lha",
       kickstart: "D:/roms/kick31.rom",
-      // ART-193. Chosen by nobody in this test, and sent as `null` rather
-      // than omitted: whether the package needs a disc is the recipe's
-      // answer, and Rust refuses by name when one is required and missing.
-      medium: null,
     });
     expect(runMock.mock.calls[0][1]).toBe("C:/WinUAE/winuae64.exe");
   });
@@ -1217,9 +1078,8 @@ describe("ART-277: switching the selected package does not carry its archives", 
             kind: "another-package:boingbag-39-2",
             topLevel: ["BoingBag3.9-2", "BoingBag3.9-2.info"],
             expectedMedia: null,
-            expectedOverlays: [],
-          }
-        : { kind: "the-package", topLevel: [], expectedMedia: null, expectedOverlays: [] }
+                }
+        : { kind: "the-package", topLevel: [], expectedMedia: null, sharedBy: [] }
     );
     useSettingsStore.setState((state) => ({
       settings: {
@@ -1253,76 +1113,11 @@ describe("ART-277: switching the selected package does not carry its archives", 
     expect(runMock).not.toHaveBeenCalled();
   });
 
-  it("names another package's own update archive, and both packages sharing one identity, without ever saying 'select' a package this screen does not offer", async () => {
-    // ART-277 review, Major 2 and Medium 1, plus re-review L5:
-    // `shared-artefact` (two release packages read the same identity —
-    // `Locale3.9`'s own real shape) and `another-packages-update-archive`
-    // (a real match, but the *update* archive of a different package).
-    classifyMock.mockImplementation(async (path: string) => {
-      if (path === "D:/pkg/BoingBag39-1-UAE.lha") {
-        return {
-          kind: "another-packages-update-archive:boingbag-39-1",
-          topLevel: ["BoingBag3.9-1-UAE"],
-          expectedMedia: null,
-          expectedOverlays: [],
-          sharedBy: [],
-        };
-      }
-      if (path === "D:/pkg/Locale3.9.lha") {
-        return {
-          kind: "shared-artefact:Locale3.9",
-          topLevel: ["Locale3.9", "Locale3.9.info"],
-          expectedMedia: "BoingBag3.9-2",
-          expectedOverlays: [],
-          sharedBy: ["locale-39", "locale-39-turkish"],
-        };
-      }
-      return {
-        kind: "the-package",
-        topLevel: [],
-        expectedMedia: null,
-        expectedOverlays: [],
-        sharedBy: [],
-      };
-    });
-    useSettingsStore.setState((state) => ({
-      settings: {
-        ...state.settings,
-        winuaePath: "C:/Program Files/WinUAE/winuae64.exe",
-        remembered: {
-          "amigaInstall.package": "boingbag-39-2",
-          "amigaInstall.archive.boingbag-39-2": "D:/pkg/Locale3.9.lha",
-          "amigaInstall.overlayArchive.boingbag-39-2": "D:/pkg/BoingBag39-1-UAE.lha",
-          "amigaInstall.kickstart": "D:/roms/kick31.rom",
-        },
-      },
-    }));
-    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
-
-    const blockers = await screen.findByTestId("amiga-install-blockers");
-    // The shared archive names itself and *both* packages that read it —
-    // never one of the two picked arbitrarily (ART-276's own trap).
-    expect(blockers.textContent).toContain("Locale3.9");
-    expect(blockers.textContent).toContain("locale-39");
-    expect(blockers.textContent).toContain("locale-39-turkish");
-    // The other package's *update* archive is named as that, not folded
-    // into "select BoingBag 3.9-1" (which would be the wrong archive to ask
-    // for) nor into silence.
-    expect(blockers.textContent).toContain("BoingBag 3.9-1");
-    expect(screen.getByRole("checkbox").hasAttribute("disabled")).toBe(true);
-  });
-
-  // ART-277 re-review, L5: `other-artefact` (a single, unselectable match)
-  // must not claim "the Packages step places it from Windows" — that claim
-  // is only ever true of `shared-artefact`'s own cause, which the test
-  // above covers. `other-artefact`'s only safe claim is that *this* step
-  // does not run the file.
   it("says only that this step does not run an other-artefact archive, never which step does", async () => {
     classifyMock.mockImplementation(async () => ({
       kind: "other-artefact:LocaleUpdate",
       topLevel: ["LocaleUpdate", "LocaleUpdate.info"],
       expectedMedia: "BoingBag3.9-1",
-      expectedOverlays: [],
       sharedBy: [],
     }));
     withChoices();
@@ -1332,66 +1127,6 @@ describe("ART-277: switching the selected package does not carry its archives", 
     expect(blockers.textContent).toContain("LocaleUpdate");
     expect(blockers.textContent).not.toMatch(/Packages step/i);
     expect(blockers.textContent).not.toMatch(/Windows/i);
-    expect(screen.getByRole("checkbox").hasAttribute("disabled")).toBe(true);
-  });
-
-  // ART-277 re-review's own finding: these two sentences used to render as a
-  // badge directly beside the field they judged, and said "the second field
-  // below" / "the first field above" — true only at that old position. Moved
-  // into the `blockers` box below *both* fields, "below" became backwards
-  // for one of them and "above" was only right by coincidence for the
-  // other. Both now name the field by its own label instead, and these
-  // tests assert the rendered text — not only the phrase key — so a future
-  // move cannot regress the wording silently again.
-  it("names the update-archive field by its own label, not by direction, when that archive sits in the package field", async () => {
-    classifyMock.mockImplementation(async () => ({
-      kind: "the-update-archive",
-      topLevel: ["BoingBag3.9-1-UAE"],
-      expectedMedia: null,
-      expectedOverlays: [],
-    }));
-    withChoices();
-    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
-
-    const blockers = await screen.findByTestId("amiga-install-blockers");
-    expect(blockers.textContent).toContain(
-      i18n.t("osinstall.amigaInstall.overlayArchive.label")
-    );
-    expect(blockers.textContent).toContain(i18n.t("osinstall.amigaInstall.archive.label"));
-    // The old, position-dependent wording must be gone.
-    expect(blockers.textContent).not.toMatch(/second field below/i);
-    expect(screen.getByRole("checkbox").hasAttribute("disabled")).toBe(true);
-  });
-
-  it("names the package field by its own label, not by direction, when the package's own archive sits in the overlay field", async () => {
-    // Both fields hold the package's own archive — the overlay field is the
-    // wrong one, and this is the mistake `wrongFieldPackage` exists to name.
-    classifyMock.mockImplementation(async () => ({
-      kind: "the-package",
-      topLevel: ["BoingBag3.9-1"],
-      expectedMedia: null,
-      expectedOverlays: [],
-    }));
-    useSettingsStore.setState((state) => ({
-      settings: {
-        ...state.settings,
-        winuaePath: "C:/Program Files/WinUAE/winuae64.exe",
-        remembered: {
-          "amigaInstall.package": "boingbag-39-1",
-          "amigaInstall.archive.boingbag-39-1": "D:/pkg/BoingBag39-1.lha",
-          "amigaInstall.overlayArchive.boingbag-39-1": "D:/pkg/BoingBag39-1.lha",
-          "amigaInstall.kickstart": "D:/roms/kick31.rom",
-        },
-      },
-    }));
-    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
-
-    const blockers = await screen.findByTestId("amiga-install-blockers");
-    expect(blockers.textContent).toContain(i18n.t("osinstall.amigaInstall.archive.label"));
-    expect(blockers.textContent).toContain(
-      i18n.t("osinstall.amigaInstall.overlayArchive.label")
-    );
-    expect(blockers.textContent).not.toMatch(/first field above/i);
     expect(screen.getByRole("checkbox").hasAttribute("disabled")).toBe(true);
   });
 
@@ -1408,8 +1143,7 @@ describe("ART-277: switching the selected package does not carry its archives", 
           kind: "other-artefact:Locale3.9",
           topLevel: ["Locale3.9", "Locale3.9.info"],
           expectedMedia: "BoingBag3.9-1",
-          expectedOverlays: [],
-          sharedBy: [],
+              sharedBy: [],
         };
       }
       if (path === "D:/pkg/pending.lha") {
@@ -1422,8 +1156,7 @@ describe("ART-277: switching the selected package does not carry its archives", 
         kind: "the-package",
         topLevel: [],
         expectedMedia: null,
-        expectedOverlays: [],
-        sharedBy: [],
+          sharedBy: [],
       };
     });
     useSettingsStore.setState((state) => ({
@@ -1474,44 +1207,12 @@ describe("ART-277: switching the selected package does not carry its archives", 
       kind: "other-artefact:Locale3.9",
       topLevel: [],
       expectedMedia: "BoingBag3.9-1",
-      expectedOverlays: [],
       sharedBy: [],
     });
     blockers = await screen.findByTestId("amiga-install-blockers");
     expect(blockers.textContent).toContain("Locale3.9");
   });
 
-  // ART-277 round 1 whole-branch review, M2: two fields agreeing on one
-  // wrong archive have one thing to say, not two — no duplicate React key,
-  // no duplicate sentence in the box.
-  it("renders one sentence, not two, when both fields hold the same wrong archive", async () => {
-    classifyMock.mockImplementation(async () => ({
-      kind: "another-package:boingbag-39-2",
-      topLevel: ["BoingBag3.9-2", "BoingBag3.9-2.info"],
-      expectedMedia: null,
-      expectedOverlays: [],
-      sharedBy: [],
-    }));
-    useSettingsStore.setState((state) => ({
-      settings: {
-        ...state.settings,
-        winuaePath: "C:/Program Files/WinUAE/winuae64.exe",
-        remembered: {
-          "amigaInstall.package": "boingbag-39-1",
-          "amigaInstall.archive.boingbag-39-1": "D:/pkg/BoingBag39-2.lha",
-          "amigaInstall.overlayArchive.boingbag-39-1": "D:/pkg/BoingBag39-2.lha",
-          "amigaInstall.kickstart": "D:/roms/kick31.rom",
-        },
-      },
-    }));
-    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
-
-    const blockers = await screen.findByTestId("amiga-install-blockers");
-    const items = blockers.querySelectorAll("li");
-    const matching = Array.from(items).filter((li) => li.textContent?.includes("BoingBag 3.9-2"));
-    expect(matching).toHaveLength(1);
-    expect(screen.getByRole("checkbox").hasAttribute("disabled")).toBe(true);
-  });
 });
 
 describe("the fields are filled from the slots (design § 3.4)", () => {
@@ -1580,7 +1281,7 @@ describe("the fields are filled from the slots (design § 3.4)", () => {
     // And it is the file the run gets.
     await waitFor(() =>
       expect(previewMock).toHaveBeenCalledWith(
-        expect.objectContaining({ packageArchives: ["E:/material/BoingBag39-1.lha"] }),
+        expect.objectContaining({ packageArchive: "E:/material/BoingBag39-1.lha" }),
         expect.anything()
       )
     );
@@ -1618,69 +1319,6 @@ describe("the fields are filled from the slots (design § 3.4)", () => {
     expect(previewMock).not.toHaveBeenCalled();
   });
 
-  it("says the overlay is not needed in the slot's own words, and passes no second archive", async () => {
-    // ART-186's fact, on screen: the wrapper archive states its own `Updater`
-    // version, and when that is 45.15 there is nothing to obtain. Telling the
-    // owner a file is missing when ART has just proved nobody has to go and
-    // get it is this project's most expensive shape of defect.
-    withPackageChosen();
-    slotsMock.mockResolvedValue(
-      slotReport([
-        slotState({ found: foundByHash("E:/material/BoingBag39-1.lha") }),
-        slotState({ slot: OVERLAY_SLOT, notNeeded: "Updater 45.15" }),
-      ])
-    );
-    renderPanel();
-
-    expect(
-      await screen.findByText(
-        i18n.t("osinstall.slots.notNeeded", {
-          name: "BoingBag3.9-1-UAE",
-          carries: "Updater 45.15",
-        })
-      )
-    ).toBeTruthy();
-    expect(browseFor(i18n.t("osinstall.amigaInstall.overlayArchive.label"))).toBeNull();
-    // One archive, not two: an overlay ART measured as unnecessary is not
-    // passed to the run at all.
-    await waitFor(() =>
-      expect(previewMock).toHaveBeenCalledWith(
-        expect.objectContaining({ packageArchives: ["E:/material/BoingBag39-1.lha"] }),
-        expect.anything()
-      )
-    );
-  });
-
-  it("fills the disc field from the medium slot the package's own requires names", async () => {
-    // Never a `medium:AmigaOS3.9` written into this screen: `slots_for` turns
-    // a recipe's `required_medium` into a `requires` entry, so the link is
-    // data and a package for another release naming another disc works
-    // without touching this file.
-    withPackageChosen();
-    slotsMock.mockResolvedValue(
-      slotReport([
-        slotState({ slot: MEDIUM_SLOT, found: foundByHash("E:/material/AmigaOS39.iso") }),
-        slotState({
-          slot: { requires: ["medium:AmigaOS3.9"] },
-          found: foundByHash("E:/material/BoingBag39-1.lha"),
-        }),
-      ])
-    );
-    renderPanel();
-
-    expect(
-      await screen.findByText(
-        i18n.t("osinstall.slots.foundByHash", { file: "AmigaOS39.iso", name: "AmigaOS3.9" })
-      )
-    ).toBeTruthy();
-    await waitFor(() =>
-      expect(previewMock).toHaveBeenCalledWith(
-        expect.objectContaining({ medium: "E:/material/AmigaOS39.iso" }),
-        expect.anything()
-      )
-    );
-  });
-
   it("keeps the file the user chose over the one ART found, and a re-scan does not take it back", async () => {
     // CLAUDE.md, "nothing changes unless the user changes it": a found
     // artefact pre-fills a field, a chosen one overrides, and a re-scan never
@@ -1699,7 +1337,7 @@ describe("the fields are filled from the slots (design § 3.4)", () => {
     ).toBeTruthy();
     await waitFor(() =>
       expect(previewMock).toHaveBeenCalledWith(
-        expect.objectContaining({ packageArchives: ["D:/pkg/my-own-copy.lha"] }),
+        expect.objectContaining({ packageArchive: "D:/pkg/my-own-copy.lha" }),
         expect.anything()
       )
     );
@@ -1733,7 +1371,7 @@ describe("the fields are filled from the slots (design § 3.4)", () => {
       )
     ).toBeNull();
     for (const call of previewMock.mock.calls) {
-      expect(call[0].packageArchives).toEqual(["D:/pkg/my-own-copy.lha"]);
+      expect(call[0].packageArchive).toEqual("D:/pkg/my-own-copy.lha");
     }
   });
 
@@ -1773,8 +1411,8 @@ describe("the fields are filled from the slots (design § 3.4)", () => {
     );
     previewMock.mockResolvedValue(
       preview({
-        packageArchives: ["E:/material/BoingBag39-1.lha"],
-        packageArchivesPresent: false,
+        packageArchive: "E:/material/BoingBag39-1.lha",
+        packageArchivePresent: false,
       })
     );
     renderPanel();
@@ -1800,7 +1438,7 @@ describe("the fields are filled from the slots (design § 3.4)", () => {
       slotReport([slotState({ found: foundByHash("E:/material/BoingBag39-1.lha") })])
     );
     previewMock.mockResolvedValue(
-      preview({ packageArchives: ["D:/pkg/my-own-copy.lha"], packageArchivesPresent: false })
+      preview({ packageArchive: "D:/pkg/my-own-copy.lha", packageArchivePresent: false })
     );
     renderPanel();
 
@@ -2165,9 +1803,16 @@ describe("the chain", () => {
     await user.click(radioFor("AmigaOS 3.9 Locale update"));
 
     await waitFor(() =>
-      expect(collisionsMock).toHaveBeenCalledWith("D:/amiga/os39", "E:/material/locale", [
-        "locale-39",
-      ])
+      // The fourth argument is the user's own per-slot choices (ART-288):
+      // this path resolves a package's archive the way the chain row does,
+      // and an empty list here is "the user has chosen nothing by hand",
+      // not "ignore what they chose".
+      expect(collisionsMock).toHaveBeenCalledWith(
+        "D:/amiga/os39",
+        "E:/material/locale",
+        ["locale-39"],
+        []
+      )
     );
     // No emulator anywhere near this row: no window warning, no emulator
     // confirmation, and no `compose`.
@@ -2178,9 +1823,12 @@ describe("the chain", () => {
     await user.click(screen.getByLabelText(i18n.t("osinstall.packages.confirm", { count: 1 })));
     await user.click(runButton());
     await waitFor(() =>
-      expect(addPackageMock).toHaveBeenCalledWith("D:/amiga/os39", "E:/material/locale", [
-        "locale-39",
-      ])
+      expect(addPackageMock).toHaveBeenCalledWith(
+        "D:/amiga/os39",
+        "E:/material/locale",
+        ["locale-39"],
+        []
+      )
     );
 
     // Its ending is the `paketler` step's own, and it names the row.
@@ -2195,6 +1843,8 @@ describe("the chain", () => {
           removed: [],
           icons: [],
           iconMergeFailures: 0,
+          extraMembers: [],
+          postPlace: [],
         },
       });
       await Promise.resolve();
@@ -2205,6 +1855,38 @@ describe("the chain", () => {
     expect(screen.getByTestId("amiga-placement-report-row").textContent).toBe(
       i18n.t("osinstall.chain.reportRow", { name: "AmigaOS 3.9 Locale update" })
     );
+  });
+
+  /**
+   * **ART-287.** `docs/assets/chain.png`, the 11:2x build: the preview
+   * finished and **refused** — the owner's folder holds two BoingBag 3.9-1
+   * builds — and the heading above the red box still read *"Checking what
+   * this would replace…"*. The screen said it was working directly over a
+   * finished failure. Checking, done and refused are three states and a
+   * person does three different things about them, so the heading has three
+   * answers now.
+   *
+   * Both halves: the refusal's own heading appears, and the checking sentence
+   * is gone. Asserting only the first would pass for a screen showing both at
+   * once, which is exactly the frame this is about.
+   */
+  it("stops saying it is checking once the preview has refused", async () => {
+    collisionsMock.mockRejectedValue(
+      "invalid input: more than one archive carries 'BoingBag3.9-1', the media " +
+        "'boingbag-39-1' needs: E:/os39/BoingBag39-1 (1).lha, E:/os39/BoingBag39-1.lha " +
+        "(ART-INPUT-INVALID)"
+    );
+    renderChain();
+    await screen.findAllByTestId("amiga-chain-row");
+    await userEvent.setup().click(radioFor("AmigaOS 3.9 Locale update"));
+
+    // The refusal itself, verbatim from Rust (ART-060).
+    const box = await screen.findByTestId("host-placement-preview-error");
+    expect(box.textContent).toContain("more than one archive carries");
+
+    const block = screen.getByTestId("amiga-chain-placement");
+    expect(block.textContent).toContain(i18n.t("osinstall.packages.preview.refused"));
+    expect(block.textContent).not.toContain(i18n.t("osinstall.packages.preview.loading"));
   });
 
   it("asks the chain again after a run, and offers the next ready row", async () => {
@@ -2227,7 +1909,6 @@ describe("the chain", () => {
     await act(async () => {
       deliver!({
         job_id: 7,
-        follow_up: null,
         outcome: { kind: "succeeded" },
         settlement: { kind: "promoted", tree: "D:/amiga/os39", leftBehind: null },
       });
@@ -2246,6 +1927,107 @@ describe("the chain", () => {
     // on is the screen saying nothing about work it did.
     expect(screen.getByTestId("amiga-install-report-row").textContent).toBe(
       i18n.t("osinstall.chain.reportRow", { name: "BoingBag 3.9-2" })
+    );
+  });
+
+  /**
+   * **ART-286, both halves.** `docs/assets/chain.png`, the 10:21 build: the
+   * panel opened on a remembered selection sitting on an *already-installed*
+   * host-placed row and showed *"Checking what this would replace…"* — polled
+   * 4 min 40 s, nothing clicked, nothing in flight. `useHostPlacement`'s own
+   * `enabled` gate had correctly declined to call `osinstall_collisions` for a
+   * non-ready row; the panel's `hostSideRow` render gate had not, so the block
+   * rendered a progress sentence for a request nobody made and
+   * `placement.collisions` stayed `null` for ever.
+   *
+   * Two arms, because the fix is two changes and each needs its own:
+   *
+   * 1. the **restored** selection is no longer the Run target when it cannot
+   *    run, so the block is about the first ready row (or about nothing);
+   * 2. and a row the user **clicks** is still the target — round 3's rule —
+   *    so the render gate itself has to carry `targetReady`. This is the arm
+   *    that fails on the old `hostSideRow`.
+   */
+  function chainWithInstalledLocale(): ChainRow[] {
+    const rows = THE_CHAIN();
+    // `locale-39` is the host-placed row of this fixture (`runsOnAmiga:
+    // false`); make it already in the tree, which is the screenshot's state.
+    rows[3] = { ...rows[3], state: { state: "installed", when: null } };
+    return rows;
+  }
+
+  function withRememberedRow(id: string) {
+    useSettingsStore.setState((state) => ({
+      settings: {
+        ...state.settings,
+        remembered: {
+          ...(state.settings.remembered as Record<string, unknown>),
+          "amigaInstall.package": id,
+        },
+      },
+    }));
+  }
+
+  it("never leaves 'Checking what this would replace' on a row nothing was asked about", async () => {
+    withRememberedRow("locale-39");
+    renderChain(chainWithInstalledLocale());
+    await screen.findAllByTestId("amiga-chain-row");
+
+    // Arm 1 — the remembered row is installed, so it is not the target.
+    expect(screen.queryByTestId("amiga-chain-placement")).toBeNull();
+    expect(
+      screen.queryByText(i18n.t("osinstall.packages.preview.loading"))
+    ).toBeNull();
+    expect(
+      screen.queryByLabelText(i18n.t("osinstall.packages.confirm", { count: 1 }))
+    ).toBeNull();
+
+    // Arm 2 — a host-placed row the user **clicks**, which round 3 allows:
+    // selecting is reading, and a clicked row *is* the target whatever state
+    // it is in. Türkçe catalogs is blocked and host-placed, so `enabled` is
+    // false and nothing is asked — the render gate has to agree.
+    //
+    // A different row from arm 1's on purpose: clicking the row that is
+    // already selected fires no change event, so it would prove nothing.
+    await userEvent.setup().click(radioFor("Türkçe catalogs"));
+    await waitFor(() => expect(radioFor("Türkçe catalogs").checked).toBe(true));
+    expect(screen.queryByTestId("amiga-chain-placement")).toBeNull();
+    expect(
+      screen.queryByText(i18n.t("osinstall.packages.preview.loading"))
+    ).toBeNull();
+    // The fetch gate and the render gate now say the same thing: nothing was
+    // requested, so nothing claims to be waiting for an answer.
+    expect(collisionsMock).not.toHaveBeenCalled();
+    // …and the row's own sentence is still what says why, beside the button.
+    expect(screen.getByTestId("amiga-chain-cannot-run").textContent).toBe(
+      i18n.t("osinstall.chain.blocked", {
+        name: "Türkçe catalogs (BoingBag 3.9-2)",
+        needs: "BoingBag 3.9-2",
+      })
+    );
+  });
+
+  it("never captions the button with an action on a package already in the tree", async () => {
+    // **ART-286's other half.** With the remembered row targeted, the one Run
+    // button read *"Add the chosen packages"* directly over *"…already in this
+    // tree"* — a caption naming work on a package that needs none. A restored
+    // selection is a default, not a decision: the target falls back to the
+    // first ready row, exactly as no selection at all does.
+    withRememberedRow("locale-39");
+    renderChain(chainWithInstalledLocale());
+    await screen.findAllByTestId("amiga-chain-row");
+
+    expect(runButton().textContent).not.toBe(i18n.t("osinstall.packages.apply.run"));
+    // And it says which row it *is* about, which is round 3's own rule for a
+    // button whose row is not the one selected on screen.
+    expect(screen.getByTestId("amiga-chain-next").textContent).toBe(
+      i18n.t("osinstall.chain.next", { name: "BoingBag 3.9-2" })
+    );
+    // The remembered row keeps its selection and its own sentence — nothing
+    // changes unless the user changes it; only the *button* moved.
+    expect(radioFor("AmigaOS 3.9 Locale update").checked).toBe(true);
+    expect(screen.getByTestId("amiga-chain-cannot-run").textContent).toBe(
+      i18n.t("osinstall.chain.installed", { name: "AmigaOS 3.9 Locale update" })
     );
   });
 
@@ -2481,7 +2263,6 @@ describe("the chain", () => {
     await act(async () => {
       deliver!({
         job_id: 7,
-        follow_up: null,
         outcome: { kind: "succeeded" },
         settlement: { kind: "promoted", tree: "D:/amiga/os39", leftBehind: null },
       });
@@ -2558,7 +2339,6 @@ describe("the chain", () => {
     await act(async () => {
       deliver!({
         job_id: 7,
-        follow_up: null,
         outcome: { kind: "failed" },
         settlement: { kind: "kept", copy: "D:/amiga/os39.art-run", original: "D:/amiga/os39" },
       });

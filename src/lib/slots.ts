@@ -59,7 +59,6 @@ export type SlotLineKind =
   | "guessed-by-filename"
   | "ambiguous"
   | "not-found"
-  | "not-needed"
   /**
    * Matched, and missing something the artefact is supposed to carry (design
    * § 3.6; round 2 review, L6). Its own ending because the next step is
@@ -223,22 +222,6 @@ export function slotLines(states: SlotState[]): SlotLine[] {
               }
             : null,
       };
-
-      // Measured as unnecessary, and that outranks everything below: telling
-      // somebody a file is missing when ART has just proved nobody has to
-      // obtain it is the confident-wrong sentence this project is most
-      // expensive at.
-      if (state.notNeeded) {
-        return {
-          ...line,
-          kind: "not-needed" as const,
-          file: null,
-          phrase: {
-            key: "osinstall.slots.notNeeded",
-            params: { name, carries: state.notNeeded },
-          },
-        };
-      }
 
       // A file the user named that is not on disk. Not *chosen*, which would
       // describe a file that is not there, and not *not found*, which would
@@ -468,44 +451,29 @@ export function candidateLines(state: SlotState): CandidateLine[] {
  * required slot is missing, which is the only thing the colour is allowed to
  * mean.
  *
- * **The not-needed count is on the line for a reason.** A slot ART has
- * measured as unnecessary leaves *both* totals (`slots::summarize`), so the
- * denominator legitimately shrinks as ART learns more — "5 of 6" becomes
- * "5 of 5" between two calls, and with nothing else on the line that reads as
- * material vanishing. Saying "1 not needed" beside the counts is what makes
- * the smaller denominator an answer rather than a disappearance. It is said
- * only when there is one: "0 not needed" is noise about nothing.
+ * **No "not needed" count any more** (2026-09-08). It existed for one slot
+ * kind — the overlay, whose package's own archive could already carry a new
+ * enough `Updater` — and both the kind and the measurement behind it went
+ * with the emulator route for the two BoingBags. Every slot now counts, so
+ * the denominator no longer shrinks between two calls and there is nothing
+ * for that clause to explain.
  *
- * **And the same rule, finally applied to the other number** (round 2 review,
- * L8). A complete set read `AmigaOS 3.9 · 8 of 8 found · 0 required missing`
- * in a green badge — this function's own doc rejecting "0 not needed" while
- * printing "0 required missing" one clause along. Four keys now, one per
- * combination, so a ready set says it is ready and counts nothing that is not
- * there.
+ * **The same rule still applies to the other number** (round 2 review, L8). A
+ * complete set read `AmigaOS 3.9 · 8 of 8 found · 0 required missing` in a
+ * green badge, which is a count of nothing; a ready set says it is ready
+ * instead.
  */
-export function setLine(
-  summary: SetSummary,
-  states: SlotState[]
-): { phrase: Phrase; ready: boolean } {
+export function setLine(summary: SetSummary): { phrase: Phrase; ready: boolean } {
   const found = summary.requiredFound + summary.optionalFound;
   const total = summary.requiredTotal + summary.optionalTotal;
   const missingRequired = summary.requiredTotal - summary.requiredFound;
-  const notNeeded = states.filter((state) => state.notNeeded !== null).length;
   const params = {
     release: summary.release,
     found,
     total,
     missingRequired,
-    notNeeded,
   };
-  const key =
-    missingRequired > 0
-      ? notNeeded > 0
-        ? "osinstall.slots.setLineNotNeeded"
-        : "osinstall.slots.setLine"
-      : notNeeded > 0
-        ? "osinstall.slots.setLineReadyNotNeeded"
-        : "osinstall.slots.setLineReady";
+  const key = missingRequired > 0 ? "osinstall.slots.setLine" : "osinstall.slots.setLineReady";
   return { ready: missingRequired === 0, phrase: { key, params } };
 }
 

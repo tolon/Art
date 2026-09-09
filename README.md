@@ -15,9 +15,9 @@ drag-and-drop-driven application.
 
 > **DROP IT INTO ART.**
 
-**0.9.0 is out, and it is asking for testers.**
+**0.9.1 is out, and it is asking for testers.**
 [Download it](https://github.com/tolon/Art/releases/latest), try it on your own
-Amiga files, and tell it what it got wrong — the ten things that still need
+Amiga files, and tell it what it got wrong — the thirteen things that still need
 someone other than the author are listed under
 [What still needs testing](#what-still-needs-testing), each with what to run
 and what a good or a bad result looks like. **A result that went well is worth
@@ -25,14 +25,37 @@ reporting too.** ART is written for real Amigas rather than for emulation, and
 the one thing nobody has done yet is flash a card it built and start an A500
 with it.
 
-![A real Workbench 1.3 Extras disk open beside a Windows drive](docs/assets/files.png)
+![The two-pane file manager: a folder of ADF images on the left, a Windows drive on the right](docs/assets/files.png)
 
-*An Amiga disk from 1988 on the left — OFS, its own `----rwed` protection bits,
-its own dates — and a Windows drive on the right. Copy either way. Everything
-starts by dropping something on ART: it works out what a file is from its bytes,
-not its name, and offers what can be done with it.*
+*A Windows folder of 29 `.adf` images on the left, the root of a Windows drive on
+the right — either side could just as easily be an Amiga volume, a disc or an
+archive. Name, extension, size, date and attributes in both panes, the F3–F9
+function bar and a command line under them. Everything starts by dropping
+something on ART: it works out what a file is from its bytes, not its name, and
+offers what can be done with it.*
+
+**It looks like a Windows 11 application now, in both themes.** The colours are
+the Fluent tokens Windows itself draws with — the Mica background, the layer and
+card fills, the system accent — controls carry Fluent's darker bottom edge, text
+boxes show focus with an accent underline, and the sidebar is a WinUI navigation
+pane with drawn icons instead of emoji. The Files screen keeps its Total
+Commander look on purpose, because that is what that screen is. Application Size
+is unchanged and so is everything you had set. Where a Fluent value did not meet
+the contrast rule it was moved one step along Fluent's own ramp and the measured
+ratio recorded beside it: every colour pair in both themes is still checked
+against WCAG in CI, **105 of them**, counted 2026-09-09.
 
 ## What it looks like
+
+**Both panes, and anything can be a pane.** A Total Commander-style dual pane in
+which Amiga volumes, CD images and archives open beside your Windows drives, and
+you copy either way — the picture at the top of this page is that screen.
+
+**The cursor keys work now.** Up/Down, Home/End and Page Up/Page Down move the
+pane's cursor, holding Shift while moving marks every row it passes over, and
+Ctrl+Space focuses the command line ([ART-275](docs/ISSUES.md#fixed)). No
+version of ART before 0.9.1 handled any of them, so a mouse-free session was
+Insert and letters only.
 
 **Your library, with covers.** Point ART at the folders your games live in. It
 reads each title from whatever *states* it — a WHDLoad slave's own header, an
@@ -40,12 +63,12 @@ reads each title from whatever *states* it — a WHDLoad slave's own header, an
 art is fetched from sources you choose, and nothing reaches the network until
 you ask it to.
 
-![The Collection: 2787 titles across two folders, with cover art](docs/assets/collection.png)
+![The Collection: 2815 titles across three folders, shown as a grid with cover art](docs/assets/collection.png)
 
-*The two `1869` cards in the top row are the point, and they are a real pair
+*The two `1869` AGA cards in the top row are the point, and they are a real pair
 rather than a staged one. Both are AGA, both ask for Kickstart `40068.a1200`,
-and both say so because the WHDLoad slave inside them says so. But the third
-card's **name** was taken off its filename — somebody had renamed the file —
+and both say so because the WHDLoad slave inside them says so. But one of the
+two had its **name** taken off its filename — somebody had renamed the file —
 so ART marks it `~guessed` while its neighbour, named by the slave itself,
 carries no mark. A guess and a statement look identical once they are on a
 screen, and ART's answer is to never let them.*
@@ -91,19 +114,31 @@ control writes a documented Emu68 option or a Raspberry Pi firmware setting —
 and tells you which one. Both files are merged into what is already on the card,
 never rewritten over the top.
 
-![The PiStorm screen: hardware, card, Kickstart and ready-made settings](docs/assets/pistorm.png)
+![The PiStorm screen: hardware, an empty card folder, Kickstart and ready-made settings](docs/assets/pistorm.png)
+
+*An A500 with a PiStorm and a Pi 3A, which is what fixes the Emu68 build
+(`Emu68-pistorm.zip`), the storage driver (`brcm-sdhc.device`) and the Pi's
+memory. No card folder has been chosen here, so this is the screen as you meet
+it. Each ready-made profile lists the Emu68 options it would write, in full.*
 
 **A Gotek, including what its little screen will say.** The OLED preview is
 live: it renders the same text the hardware will, before you write anything to
 the stick.
 
-![The Gotek screen with an OLED simulator and FlashFloppy settings](docs/assets/gotek.png)
+![The Gotek screen: an OLED simulator showing DF0: with no disk loaded, beside the FlashFloppy settings](docs/assets/gotek.png)
+
+*The simulated OLED reads `DF0:` and `(No disk loaded)`, because nothing has
+been assigned yet — the quickslot rack under it is empty and says so. The
+`FF.CFG` settings on the right are the ones this preview is drawn from.*
 
 **And when you need to see the actual bytes.** A hex and sector inspector that
 knows where a volume's boot block, root block and bitmap are, and will jump to
 any of them.
 
-![The hex inspector, showing a ROM's first sector](docs/assets/tools.png)
+![The hex inspector before a file has been chosen](docs/assets/tools.png)
+
+*Nothing opens until you choose one, so this is the whole screen on arrival: one
+button, and the sentence saying what it will take.*
 
 ## Which machines
 
@@ -125,9 +160,10 @@ directory in it.
 
 ## Status
 
-**0.9.0**, measured on `main` on **2026-09-07**: **2948** Rust tests and **1178** frontend
-tests passing, **2078** interface strings in each language, **19** open defects. Every one of
-those numbers, and the command that produced it, is in
+**0.9.1**, measured on the release branch on **2026-09-09**: **3181** Rust tests and
+**1386** frontend tests passing (the Rust suite run twice), **2169** interface strings in
+each language, **9** open defects — ART-062, 117, 118, 250, 278, 279, 281, 283 and 285.
+Every one of those numbers, and the command that produced it, is in
 [docs/STATUS.md](docs/STATUS.md) — count them there rather than trusting this paragraph.
 
 The application builds and runs on Windows 10/11 x64. Working today: DD/HD
@@ -142,9 +178,9 @@ opened as panes of the same manager, walked into and copied out of — to a
 folder or straight into an Amiga volume; LHA WHDLoad detection with several
 archives installed to a disk at once; Kickstart ROM identification; machine
 profiles for the whole classic line; Gotek/FlashFloppy; PiStorm/Emu68; WinUAE
-launching; **AmigaOS installed from your own media**, host-side into a
-distribution tree and Amiga-side by running an update package's own installer
-inside the emulator; **Aminet browsed, downloaded and installed** from a
+launching; **AmigaOS installed from your own media** into a distribution tree,
+with the AmigaOS 3.9 update chain — BoingBag 1 and BoingBag 2 included — placed
+from Windows; **Aminet browsed, downloaded and installed** from a
 catalogue held locally; a background job queue with progress/cancel;
 an operation log; Beginner/Power User modes; and the drag-and-drop Workflow
 Engine behind "what can I do with this?".
@@ -162,8 +198,8 @@ fetched from sources listed in Settings, which you can switch off or point
 elsewhere; **nothing reaches the network until you ask it to.** Where a name
 could only be taken off a filename, ART proposes a tidier one and you accept it
 — it will not rename anything by itself, and where the evidence runs out it
-says nothing and leaves you the edit box. Measured against a real 2787-title
-library across two folders.
+says nothing and leaves you the edit box. Measured against a real 2815-title
+library across three folders.
 
 **Software from Aminet, without a browser.** ART syncs Aminet's own index —
 **85 472 packages**, measured 2026-08-24 — and keeps it locally, so search and
@@ -215,42 +251,120 @@ Both have been run against the owner's own media — the 36-disk 3.2 set and a
 with a licensed ROM. The 3.2 tree also boots off a PFS3 volume ART formatted
 and filled itself.
 
-**And it installs the BoingBags — by running their own installer, not by
-opening them.** An AmigaOS 3.9 update package is a job ART cannot do from
-Windows at all: the payload is a password-encrypted archive and the password
-lives inside the package's own Amiga-side `Updater`. **ART decrypts nothing and
-bypasses no protection.** Instead it does what every established distribution
-builder does — it runs the installer the way the package intends. ART mounts
-three volumes under WinUAE (a **copy** of your tree as data, the package as
-data, and its own one-file boot volume at the highest boot priority), boots a
-generated `Startup-Sequence`, runs the `Updater`, reads the one word the Amiga
-writes back, closes the emulator it started, and promotes the copy over your
-tree **only** when the installer reported success. Your original is never the
-thing being written to.
+**You say where your files are once.** One list of folders, however many you
+keep your material in. ART then resolves every artefact the release needs into a
+named slot and tells you, artefact by artefact, whether it is there and **how it
+knows** — identified by its bytes against a table that now carries the 3.9 CD
+and every update archive; identified by the medium's own name; or only taken
+from a filename you pointed at, which is said in those words and is never
+counted as a match. Where the file came from, and whether that piece is already
+in your tree, sit on the same row. Required and optional are counted apart, so a
+set short of nothing but an optional file still reads as ready to build.
 
-Measured end to end on the owner's own material, 2026-08-21: **BoingBag 1 in
-169.1 s** (3 795 → 3 859 files), then **BoingBag 2 on that result in 138.1 s**
-(3 868 files). The result was then booted and **asked** rather than inferred —
-`version full` answered **`Workbench 45.3 (07-Dec-01)`**, where the same tree
-had answered `45.1 (13-Nov-00)` before.
+![The OS Builder's install-media step: three material folders and a ten-row readout](docs/assets/material.png)
 
-Three refusals come with it, and each names what to do next:
+*AmigaOS 3.9 over three material folders, with the set line above the rows —
+"10 of 10 found · everything required is here". `Locale3_9.lha` is "identified
+by its bytes: they are the ones ART's table records for AmigaOS 3.9 Locale
+update", while `BoingBag39-1 (1).lha` is "the file you chose for BoingBag 3.9-1.
+ART has not checked that it is one" — two sentences because they are two
+different amounts of evidence, and only one of them is a match. Three rows are
+already in this tree and say so; `Kickstart 40` is required and is not a file
+for these folders at all, so its row names the one chosen in ART instead. The
+buttons at the bottom write a plain-text guide to what belongs in each folder,
+into that folder, when you ask for one.*
 
-- **The chain is enforced.** Clean 3.9, then BoingBag 1, then BoingBag 2. A run
-  whose prerequisite is missing is refused **before anything is copied** — a
-  BoingBag 2 applied to a tree BoingBag 1 never touched boots, and is quietly
-  wrong, which is the worst outcome available.
-- **An installer too old to run under an emulator is refused by its own
-  version.** `BoingBag39-1.lha` ships `Updater` 45.13, which cannot install a
-  BoingBag on UAE; ART reads the program's `$VER:` marker and names the archive
-  that fixes it (`BoingBag39-1-UAE.lha`, `Updater` 45.15) rather than launching
-  it to fail.
-- **The disc the installer verifies has to be there.** The `Updater` checks for
-  your AmigaOS 3.9 CD, so ART asks for an image of it up front instead of
-  letting the Amiga stop on a requester nobody is there to answer.
+**The AmigaOS 3.9 updates are one screen, in the order the material goes on.**
+Nine links — the CD, BoingBag 1, BoingBag 2, the Locale 3.9 update and its
+Turkish slice, the Turkish catalogs from BoingBag 2, the Contribution drawer,
+Euro-Update, and the community BoingBags 3&4 — each carrying the one sentence
+that is true of it: it is already in this tree; it is ready, and here is the
+file; it is waiting for a named row; its file is not in the folders you named;
+you do not need it because something else already contains it; or ART will not
+run it, and here is why. Those never collapse into "not done", because they need
+different next steps.
 
-One boundary, said plainly: the panel for this screen has never been driven by
-a person. Every run above went through the engine's own test hook.
+![The AmigaOS 3.9 update chain: nine rows, each with its own sentence and its own badge](docs/assets/chain.png)
+
+*"AmigaOS 3.9 updates — 3 of 9 applied", over a real tree. Row 2 reads "ready:
+BoingBag39-1 (1).lha"; row 3 reads "BoingBag 3.9-2 — BoingBag 3.9-1 has to go on
+first", which is the chain refusal saying itself before anything is copied.
+Three rows are "already in this tree", which is where the 3 comes from. Row 7,
+Euro-Update, says in the row why ART will not place it — its own installer
+rebuilds the `.font` index afterwards and ART cannot, so placing it would quietly
+drop any font size the package does not itself ship — and row 8, BoingBags 3&4,
+says nobody has measured whether its Installer script finishes without somebody
+at the window. Six rows carry a "placed from Windows" badge and one "runs on the
+Amiga". The two rows numbered 4 are two links at the same depth of the chain,
+not a numbering slip.*
+
+**BoingBag 1 and BoingBag 2 are placed from Windows, in seconds.** An AmigaOS
+3.9 update package carries its files in a password-encrypted archive, and the
+password is published in the MIT source of the two projects that already do this
+job — Emu68 Hatcher and Emu68-Imager. ART uses it: it opens the payload, copies
+the same set of paths those installers copy, and then does the fix-ups the
+package's own `Updater` leaves undone — ten protection bits, the
+`AmigaOS ROM Update.BB39-2` promotion without which BoingBag 2's ROM update is
+silently inert, and the `.BB39-2` renames — plus BoingBag 2's XAD update when
+your tree's `xadmaster.library` is older than 10, measured 9.1 → 10.0 on the
+owner's own material. No emulator, no Kickstart for that step, nothing to watch.
+
+**How that was checked.** The tree ART places was compared file for file against
+the tree two real emulator `Updater` runs produced on the owner's own material:
+**4 030 files expected, 4 031 produced — 2 added, 1 missing, 2 differing**, and
+**every path the `Updater` wrote hashes identically**, including the five it
+renames by case, which were checked by name on disk and not only by hash. All
+five differences are accounted for, and four of them are one deliberate step:
+ART renames BoingBag 2's own `Devs/NSDPatch.cfg.BB39-2` into place — which
+Emu68 Hatcher does and the `Updater` does not — keeping your file beside it as
+`NSDPatch.cfg.old`, with its `.uaem` sidecar travelling along. The fifth is
+ART's own `distribution.json`, the record of the build. That comparison is a
+test rather than a story about one afternoon, and it is what found the round's
+one real defect: both recipes claimed to override only half of the Workbench the
+tree's manifest records, so the placement was **refused** rather than writing
+over 122 files it had not declared it may replace.
+
+**The Amiga-side route is still there, and nothing ART ships drives it today.**
+The engine that boots a copy of your tree under WinUAE and lets a package
+install itself — three volumes, one generated `Startup-Sequence`, a deadline,
+four distinct endings, and the copy promoted over your tree only on success — is
+unchanged, and it is what installed both BoingBags before this. But those two no
+longer need it, and the only recipe that still declares an Amiga-side installer,
+BoingBags 3&4, is marked as never having been run: ART refuses it before it
+composes anything rather than starting an emulator on a script nobody has
+watched finish. The engine is present, tested and idle, and
+[docs/FEATURES.md](docs/FEATURES.md) marks that row amber rather than green.
+
+**The chain refusal stays, and it is the whole protection.** Clean 3.9, then
+BoingBag 1, then BoingBag 2. A run whose prerequisite is missing is refused
+**before anything is copied**: measured at 17.6 ms on the emulator route's own
+control run, with nothing copied and no emulator started.
+
+**What the measurements said.** Two arms of one controlled experiment, run on
+the owner's own material, and they are worth more of a reader's trust than any
+feature sentence above them.
+
+A BoingBag with **one byte flipped** in its payload does not fail. The `Updater`
+hangs on it: two runs, both stopped on the same payload entry, both ended by
+ART's own 30-minute deadline, and each had written around 170 MB of garbage into
+the staged copy by then. The copy was discarded and the original tree was never
+touched, which is what the copy is for — but ART cannot tell "hung on a damaged
+archive" from "waiting for an answer nobody gave it", so the ending it shows
+names one cause for a state that has two. Both halves of that are filed rather
+than papered over: [ART-278](docs/ISSUES.md#open), because nothing bounds what a
+hung installer writes into the copy, and [ART-279](docs/ISSUES.md#open), because
+the timeout's next step is the wrong advice for a corrupt archive.
+
+BoingBag 2 applied to a tree BoingBag 1 never touched **reports success** — and
+moves the version string to `45.3`, the right answer — while **57 files are
+missing** and 51 more hold the wrong bytes. So neither the installer's own word
+nor the version string is evidence, and ART treats neither as evidence. The
+chain refusal above is what actually protects you, and that is now a measurement
+rather than a piece of reasoning about what the package would presumably do.
+
+One boundary, said plainly: **the panel for these screens has never been driven
+by a person.** Every run quoted here — the emulator installs and the host
+placement's oracle alike — went through a test hook rather than the screen.
 
 **And the Amiga can finish its own setup, the first time it starts.** Turn the
 first-boot step on and the tree ART builds carries a small AmigaDOS program that
@@ -338,8 +452,8 @@ title on the A1200 profile is the claim** — not every OCS title in a
 collection. And a **Turkish** sentence has finally
 been read on a running screen by someone who speaks it: the new WHDLoad
 Kickstart refusal, judged clear, and the launch then worked
-([ART-062](docs/ISSUES.md#open)). That is one sentence out of 2078 (counted
-2026-09-07), so the language as a whole is still unseen — but it is no longer
+([ART-062](docs/ISSUES.md#open)). That is one sentence out of 2169 (counted
+2026-09-09), so the language as a whole is still unseen — but it is no longer
 zero.
 
 ### How to report what you find
@@ -424,15 +538,17 @@ see"** — what to run, and what a good or bad result looks like:
    there. **Bad:** still nothing after a clean exit, which would mean the
    switch does not do what it claims.
 
-6. **The Amiga-side install screen, driven by a person.** The engine installs
-   both BoingBags (above) and every one of those runs went through its own
-   test hook, never the panel. On the OS Builder's Install screen, find
-   **"Run a package's own installer on the Amiga"**, choose your tree, the
-   package, its own archive and your Kickstart, and run one. **Good:** the confirmation names the machine
-   and the volumes, the progress stream moves, and the ending is one of four
-   distinct sentences with a next step. **Bad:** a sentence that is confidently
-   wrong about what happened — this round's signature defect — or an emulator
-   window that opens with no warning first.
+6. **The Amiga-side install engine, driven by a person.** This item has gone
+   backwards on purpose, and the honest state is the point of writing it down.
+   The engine that runs a package's own installer on the Amiga installed both
+   BoingBags, and every one of those runs went through its own test hook rather
+   than the panel. Those two packages are now placed from Windows and their
+   Amiga-side declarations went with the route, so **no package ART ships today
+   reaches that engine at all.** The one recipe that still declares an installer
+   is BoingBags 3&4, which says nobody has measured whether its Installer script
+   finishes unattended, and which ART refuses before composing anything rather
+   than starting an emulator on it. There is nothing here to run yet: the item
+   stays open and un-ticked until BoingBags 3&4 is measured.
 7. **The Aminet studio, driven by a person.** The whole chain has been run
    against the real Aminet and it works — each shipped mirror asked
    separately, the index synced and reloaded, and a real package downloaded,
@@ -468,6 +584,31 @@ see"** — what to run, and what a good or bad result looks like:
     gone from the tree. **Bad:** a step that refuses on real hardware where it
     passed under emulation, a report ART cannot read back off FFS or PFS3, or a
     first boot that leaves its own machinery behind on the volume.
+11. **The material readout, over your own folders.** Open the OS Builder, choose
+    AmigaOS 3.9 or 3.2, and add the folders your install media actually lives
+    in. **Good:** everything you own is found; each row says *how* — by its
+    bytes, by the medium's own name, or as a file you chose and ART has not
+    checked; and the set line counts required and optional apart, so a missing
+    optional does not read as a broken build. **Bad:** a file you know is there
+    reported as missing; a row claiming *identified by its bytes* for something
+    ART only matched by name; or one unreadable folder costing you the readout
+    for the folders beside it, which should be named on their own.
+12. **BoingBag 1 and then BoingBag 2, placed from Windows.** The oracle proves
+    the bytes against a real `Updater`'s own tree; what nobody has done is tick
+    the two BoingBags on the packages step and boot the result. Build a 3.9
+    tree, add BoingBag 1, then BoingBag 2, then boot it and **ask** it —
+    `version full`. **Good:** `Workbench 45.3`, seconds rather than minutes per
+    package, and your own `Devs/NSDPatch.cfg` still beside the new one as
+    `NSDPatch.cfg.old`. **Bad:** a run reported as done over a tree that will
+    not boot — or BoingBag 2 accepted on a tree BoingBag 1 never touched, which
+    is the one refusal that has to fire every time.
+13. **The guide text, written into your own folder.** Under the readout there is
+    a button for each folder that writes a plain-text list of what that folder
+    can hold. Press one. **Good:** the file appears in that folder, in the
+    language ART is showing, naming each piece, whether it is required, what it
+    depends on, and carrying no links. **Bad:** a guide written over one that
+    was already there — ART must leave an existing note exactly as it is, byte
+    for byte, and tell you to delete it yourself.
 
 Found something? File it the way every other defect in this project is
 filed — see [docs/ISSUES.md](docs/ISSUES.md) for the format, and
@@ -591,8 +732,8 @@ Build output:
 
 ```
 src-tauri/target/release/bundle/
-├── msi/   Amiga Retro Toolkit_0.9.0_x64_en-US.msi
-└── nsis/  Amiga Retro Toolkit_0.9.0_x64-setup.exe
+├── msi/   Amiga Retro Toolkit_0.9.1_x64_en-US.msi
+└── nsis/  Amiga Retro Toolkit_0.9.1_x64-setup.exe
 ```
 
 ## Architecture
@@ -621,9 +762,10 @@ Platform Services → Windows
 
 The Amiga core is **platform-independent Rust** — no Tauri types, no Windows
 APIs, and no network. Where it needs something platform-specific it declares a
-trait and the implementation lives outside — three of them: `MirrorClient` (the
-network), `VolumeFormatter` (launching an external imager) and `HostRecycler`
-(the Windows Recycle Bin). `src-tauri/src/net/` is the only place in ART that
+trait and the implementation lives outside — `MirrorClient` (the network),
+`VolumeFormatter` (launching an external imager), `HostRecycler` (the Windows
+Recycle Bin), `EmulatorLauncher` (starting WinUAE) and `VolumeSession` (the
+command layer's own volume sessions). `src-tauri/src/net/` is the only place in ART that
 opens a connection. This keeps the core unit-testable and leaves a future CLI shell
 open.
 

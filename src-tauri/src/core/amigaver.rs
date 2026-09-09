@@ -122,6 +122,88 @@ fn is_plausible_name(name: &str) -> bool {
     !name.chars().any(|c| c.is_control())
 }
 
+/// Read the version a **library** states about itself in its resident tag's
+/// id string, anchored on the library's own file name.
+///
+/// ## Why this exists beside [`read`], and how it was measured
+///
+/// `read` looks for `$VER:`, and 31% of a real AmigaOS 3.9 tree carries one.
+/// `Libs/xadmaster.library` is in the other 69%: searched byte by byte on
+/// 2026-09-08, the owner's own copies carry **no `$VER:` marker at all** —
+/// not the 105 332-byte 9.0 off the AmigaOS 3.9 CD, not the 105 368-byte 9.1
+/// BoingBag 3.9-1 leaves, not the 110 100-byte 10.0 the `XAD-Update` payload
+/// carries. What each one does carry, at offset ~384, is the `struct
+/// Resident` its own `rt_Name`/`rt_IdString` pair:
+///
+/// ```text
+/// …\x02\xfc  xadmaster.library\0  xadmaster 9.0 (25.11.2000) AmigaOS…
+/// …\x02\xfe  xadmaster.library\0  xadmaster 10.0 (31.03.2001) AmigaOS…
+/// ```
+///
+/// That id string is what AmigaDOS's own `Version <file> <n> FILE` reports
+/// for a library, and it is the string BoingBag 3.9-2's `XAD-Update` gate is
+/// written against (`Version "SYS:Libs/xadmaster.library" 10 FILE` — HstWB
+/// Installer's `Install-Boing-Bag-2`, lines 32-36, MIT). So a host-side
+/// reader that only knew `$VER:` would answer *nothing* for the one file the
+/// gate is about, and a gate that cannot read its own file has to either
+/// refuse everything or open for everything — both of them wrong, and both
+/// quietly.
+///
+/// ## Anchored on the file's own name, never on the first thing that parses
+///
+/// `name` is the file's own stem (`xadmaster` for `xadmaster.library`), and
+/// only an occurrence of *that word* followed by `version.revision` counts.
+/// This is [`crate::core::osinstall::collide`]'s own rule, applied to a
+/// second kind of marker: a version label taken from a string that names
+/// some *other* program is how a file gets labelled with another program's
+/// numbers. A bare "first `N.N` in the file" search would find the compiler's
+/// own build number as readily as the library's.
+///
+/// Matching is case-insensitive (AmigaDOS names are, ART-012) and the match
+/// must begin at a word boundary, so `unxadmaster 3.0` never answers for
+/// `xadmaster`.
+///
+/// Returns `None` when nothing in `bytes` states a version for `name` — the
+/// same answer, deliberately, as a name whose numbers ART cannot parse. Half
+/// a version is worse than none.
+pub fn read_id_string(bytes: &[u8], name: &str) -> Option<AmigaVersion> {
+    if name.is_empty() {
+        return None;
+    }
+    let needle = name.as_bytes();
+    let mut at = 0usize;
+    while at + needle.len() <= bytes.len() {
+        // `eq_ignore_ascii_case` rather than `window.to_ascii_lowercase() ==
+        // needle` (review F8, 2026-09-08): the second allocates a `Vec` per
+        // window, so a 1 MiB bounded read of a file that does not carry the
+        // name at all cost roughly a million small allocations. Same
+        // comparison, none of them.
+        let found = bytes[at..]
+            .windows(needle.len())
+            .position(|window| window.eq_ignore_ascii_case(needle))?;
+        let start = at + found;
+        // A word boundary before it: `unxadmaster 3.0` is not a statement
+        // about `xadmaster`.
+        let boundary = start == 0 || !bytes[start - 1].is_ascii_alphanumeric();
+        if boundary {
+            let end = bytes.len().min(
+                start
+                    .saturating_add(needle.len())
+                    .saturating_add(MAX_MARKER_TEXT),
+            );
+            // `parse` reads ` name version.revision`, which is exactly the
+            // shape of the id string from `start` — the name is the first
+            // word, so the same parser serves both markers rather than a
+            // second one that could drift from it.
+            if let Some(version) = parse(&decode_latin1(&bytes[start..end])) {
+                return Some(version);
+            }
+        }
+        at = start + 1;
+    }
+    None
+}
+
 /// The text after the marker: ` name version.revision (date)`.
 fn parse(text: &str) -> Option<AmigaVersion> {
     let mut words = text.split_whitespace();
@@ -344,5 +426,87 @@ mod tests {
         for example in &examples {
             println!("  {example}");
         }
+    }
+
+    // ---- read_id_string (2026-09-08) -------------------------------------
+
+    /// **The real bytes, transcribed from the owner's own copies** rather
+    /// than invented: `Libs/xadmaster.library` at 9.0 off the AmigaOS 3.9
+    /// CD, 9.1 after BoingBag 3.9-1 and 10.0 after `XAD-Update`. Each one's
+    /// resident tag reads `rt_Name` then `rt_IdString`, so the id string is
+    /// preceded by the library's own filename and a NUL — which is what a
+    /// naive scan would trip over and this reader must not.
+    #[test]
+    fn reads_the_id_string_a_library_with_no_ver_marker_carries() {
+        for (id, version, revision) in [
+            ("xadmaster 9.0 (25.11.2000) AmigaOS", 9, 0),
+            ("xadmaster 9.1 (05.01.2001) AmigaOS", 9, 1),
+            ("xadmaster 10.0 (31.03.2001) AmigaOS", 10, 0),
+        ] {
+            let mut bytes: Vec<u8> = vec![0x90, 0x16, 0x00, 0x00, 0x80, 0x18];
+            bytes.extend_from_slice(b"xadmaster.library\x00");
+            bytes.extend_from_slice(id.as_bytes());
+            bytes.push(0);
+
+            // The premise: there is no `$VER:` here at all, so `read` — the
+            // only reader ART had — answers nothing.
+            assert_eq!(read(&bytes), None, "{id}");
+
+            let got = read_id_string(&bytes, "xadmaster")
+                .unwrap_or_else(|| panic!("no id string found in {id}"));
+            assert_eq!((got.version, got.revision), (version, revision), "{id}");
+            assert_eq!(got.name, "xadmaster");
+        }
+    }
+
+    /// **Anchored on the file's own name.** A version label taken from a
+    /// string naming some other program is how a file gets labelled with
+    /// another program's numbers — `core::osinstall::collide`'s own rule,
+    /// and the reason this is not "the first N.N in the file".
+    #[test]
+    fn a_version_belonging_to_another_program_is_not_this_files() {
+        let bytes = b"gcc 2.95 (19.7.1999)\x00some other noise\x00";
+        assert_eq!(read_id_string(bytes, "xadmaster"), None);
+    }
+
+    /// A word boundary, so a longer name that merely ends in the one asked
+    /// for never answers for it.
+    #[test]
+    fn a_longer_name_ending_in_the_one_asked_for_does_not_answer() {
+        let bytes = b"unxadmaster 3.0 (1.1.2000)\x00";
+        assert_eq!(read_id_string(bytes, "xadmaster"), None);
+
+        // The control: the same bytes with the boundary present do answer,
+        // so the test above is failing on the boundary and not on the shape.
+        let ok = b"un xadmaster 3.0 (1.1.2000)\x00";
+        assert_eq!(read_id_string(ok, "xadmaster").unwrap().version, 3);
+    }
+
+    /// The name occurs before the id string does — `rt_Name` is literally
+    /// `xadmaster.library`, and the first match is followed by `.library`,
+    /// not by a version. The scan must go on to the next occurrence rather
+    /// than giving up at the first one that does not parse.
+    #[test]
+    fn the_first_occurrence_that_states_no_version_does_not_end_the_search() {
+        let mut bytes: Vec<u8> = b"xadmaster.library".to_vec();
+        bytes.push(0);
+        bytes.extend_from_slice(b"xadmaster 10.0 (31.03.2001)");
+        assert_eq!(read_id_string(&bytes, "xadmaster").unwrap().version, 10);
+    }
+
+    /// AmigaDOS names are case-insensitive (ART-012), and a library's own
+    /// file name and its id string need not agree on case.
+    #[test]
+    fn the_name_is_matched_case_insensitively() {
+        let bytes = b"XADMaster 10.0 (31.03.2001)";
+        assert_eq!(read_id_string(bytes, "xadmaster").unwrap().version, 10);
+    }
+
+    /// An empty name would match at every position; refused rather than
+    /// answering whatever the first parseable thing in the file happens to
+    /// be.
+    #[test]
+    fn an_empty_name_answers_nothing() {
+        assert_eq!(read_id_string(b"anything 1.2 (x)", ""), None);
     }
 }

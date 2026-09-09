@@ -9,6 +9,21 @@ and the Amiga-side step of the wizard *is* this screen, also reachable from the 
 
 ---
 
+> **Corrected in place, 2026-09-09.** Section 1's arrow diagram and section 2's
+> route table describe BoingBag 1 and BoingBag 2 as **Amiga-side**, with a "UAE
+> fix only if Updater < 45.15" branch on the first. That was true on the day it
+> was written and is not true now: the owner's 2026-09-08 reversal (ART-166) made
+> both packages host-placed, and the following day their `amiga_installer` blocks
+> — and the UAE overlay with them — were removed. Read those two sections as
+> the chain's **order**, which is unchanged and is the material's own, not as a
+> claim about which route each row takes.
+>
+> Every row of the shipped chain is host-placed today except `boingbags-39-3-4`,
+> which is `not_yet_runnable` and says so on its own row. The `required_medium`
+> the design turns into a `requires` entry is gone with it: the AmigaOS 3.9 CD is
+> still required, by the *tree*, on the medium slot's own `required` — which is
+> where a requirement about the tree belongs.
+
 ## 1. What the material says the chain is
 
 From `material.md` (the owner's archives, read at both levels, corrected once) — each arrow
