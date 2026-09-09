@@ -10,12 +10,14 @@
 // **The keymap joined in round 4** (task 4). Its option list is the plan's
 // own items — `keymapsIn(effectivePlan)` — so a layout offered here cannot
 // then be refused for not being there, which means this tab computes a plan.
-// That makes it the fourth consumer of `useInstallPlan` (tabs 1, 2 and 4 are
-// the others) and so the fourth `osinstall_plan` per path; the tabs of the
-// lane are mounted **one at a time**, so at most one of them is asking at
-// once, and the alternative — a second, cheaper source for the keymap list —
-// is a second answer to what this build will place, which is the defect this
-// whole round exists to remove.
+// That makes it one of the **three** consumers of `useInstallPlan` — tabs 2
+// and 4 are the others, and **tab 1 is not one of them**: it stopped planning
+// in round 4 task 5's fix round and reads `useLayers` and `foldersForPlan`
+// instead (review M6, correcting the sentence this paragraph used to carry).
+// The tabs of the lane are mounted **one at a time**, so at most one of them
+// is asking at once, and the alternative — a second, cheaper source for the
+// keymap list — is a second answer to what this build will place, which is
+// the defect this whole round exists to remove.
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";

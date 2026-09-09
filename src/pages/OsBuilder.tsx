@@ -24,7 +24,7 @@
 // ROMs. And ART's output is an **image file**, never a physical card
 // (`docs/owner-checklist.md` § 4).
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -53,6 +53,7 @@ import { kindLabelKey, stepLabelKey, stepPath, stepsFor } from "@/lib/buildSteps
 import type { BuildKind } from "@/lib/buildSession";
 import { errorText } from "@/lib/errorText";
 import { BuildBar } from "@/pages/osbuilder/BuildBar";
+import { RunLockContext } from "@/pages/osbuilder/runLock";
 
 /** Card sizes people actually buy. Typed sizes are allowed too. */
 const CARD_SIZES_GB = [16, 32, 64, 128, 256];
@@ -72,6 +73,16 @@ export function OsBuilder() {
   const navigate = useNavigate();
 
   const steps = stepsFor(session.kind);
+
+  /**
+   * **The lane's run lock** (round 4 whole-branch review, I2) — see
+   * `runLock.tsx` for the defect. The state is here rather than in a provider
+   * component of its own because this is what has to *draw* differently: a
+   * strip whose links keep working while a run is in flight is a set of four
+   * ways to abandon a build without being told.
+   */
+  const [running, setRunning] = useState(false);
+  const runLock = useMemo(() => ({ running, setRunning }), [running]);
 
   // A disc dropped on the drop panel routes here (`os.install-from-disc`)
   // carrying the file in router state. Under sub-routes the shell has to
@@ -102,45 +113,92 @@ export function OsBuilder() {
         {t("osBuilder.intro")}
       </p>
 
-      <nav
-        aria-label={t("nav.osBuilder")}
-        style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}
-      >
-        {/* `hedef` is the entry, not a numbered step (four-tab design § 2):
-            the chip names the kind and links back to the picker. */}
-        <NavLink
-          to={stepPath("hedef")}
-          className="btn"
-          data-testid="strip-hedef"
-          style={({ isActive }) => ({
-            fontSize: 12,
-            textDecoration: "none",
-            border: isActive ? "1px solid var(--accent)" : "1px solid var(--border)",
-            background: isActive ? "var(--bg-hover)" : "var(--bg)",
-          })}
+      <RunLockContext.Provider value={runLock}>
+        <nav
+          aria-label={t("nav.osBuilder")}
+          style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}
         >
-          {t(kindLabelKey(session.kind))}
-        </NavLink>
-        {steps.slice(1).map((step, at) => (
-          <NavLink
-            key={step}
-            to={stepPath(step)}
-            className="btn"
-            style={({ isActive }) => ({
-              fontSize: 12,
-              textDecoration: "none",
-              border: isActive ? "1px solid var(--accent)" : "1px solid var(--border)",
-              background: isActive ? "var(--bg-hover)" : "var(--bg)",
-            })}
-          >
-            {at + 1}. {t(stepLabelKey(step))}
-          </NavLink>
-        ))}
-      </nav>
+          {/* `hedef` is the entry, not a numbered step (four-tab design § 2):
+              the chip names the kind and links back to the picker. */}
+          <StripChip locked={running} to={stepPath("hedef")} testId="strip-hedef">
+            {t(kindLabelKey(session.kind))}
+          </StripChip>
+          {steps.slice(1).map((step, at) => (
+            <StripChip key={step} locked={running} to={stepPath(step)}>
+              {at + 1}. {t(stepLabelKey(step))}
+            </StripChip>
+          ))}
+          {/* **Why the chips have gone dead, beside the chips** (I2). A
+              disabled control with no sentence next to it is a screen that has
+              refused and not said so, and the refusal names the control that
+              lifts it — Stop, which is two inches below on the tab the person
+              is already looking at. */}
+          {running && (
+            <span
+              className="badge badge-warn"
+              data-testid="strip-locked"
+              style={{ fontSize: 11 }}
+            >
+              {t("osBuilder.build.navigationLocked")}
+            </span>
+          )}
+        </nav>
 
-      <Outlet />
-      <BuildBar />
+        <Outlet />
+        <BuildBar />
+      </RunLockContext.Provider>
     </div>
+  );
+}
+
+/**
+ * One chip of the strip — a link, or a dead span while a build is running.
+ *
+ * **A `NavLink` with `pointer-events: none` would look the same and behave
+ * differently**: it stays in the tab order, it stays an `<a href>` a keyboard
+ * or a screen reader still activates, and middle-click still opens it. What a
+ * lock has to remove is the navigation, so the element that navigates is the
+ * element that goes. `aria-disabled` rather than a `<button disabled>` because
+ * this is not a control that is temporarily broken — it is a destination that
+ * is temporarily closed, and the name still has to be readable.
+ */
+function StripChip({
+  locked,
+  to,
+  testId,
+  children,
+}: {
+  locked: boolean;
+  to: string;
+  testId?: string;
+  children: ReactNode;
+}) {
+  const style = {
+    fontSize: 12,
+    textDecoration: "none",
+    border: "1px solid var(--border)",
+    background: "var(--bg)",
+  };
+  if (locked) {
+    return (
+      <span className="btn" data-testid={testId} aria-disabled="true" style={{ ...style, opacity: 0.5 }}>
+        {children}
+      </span>
+    );
+  }
+  return (
+    <NavLink
+      to={to}
+      className="btn"
+      data-testid={testId}
+      style={({ isActive }) => ({
+        ...style,
+        border: isActive ? "1px solid var(--accent)" : "1px solid var(--border)",
+        background: isActive ? "var(--bg-hover)" : "var(--bg)",
+      })}
+    >
+      {children}
+    </NavLink>
   );
 }
 

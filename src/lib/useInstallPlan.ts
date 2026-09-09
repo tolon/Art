@@ -157,9 +157,9 @@ export function useInstallPlan(inputs: InstallPlanInputs): InstallPlanState {
    * itself, only on whether this array is empty.
    *
    * **`useLayers`, not a copy of its effect** (round 4 task 5's fix round).
-   * (round 4 task 5's fix round). `FilesTab` needs the layers and nothing
-   * else of this hook — the folder column is drawn from them — so the effect
-   * moved to `src/lib/useLayers.ts` and this hook calls it. Two
+   * `FilesTab` needs the layers and nothing else of this hook — the folder
+   * column is drawn from them — so the effect moved to
+   * `src/lib/useLayers.ts` and this hook calls it. Two
    * implementations of *which release is this the answer for* would be two
    * answers to that question, and `layersKnown` (ART-256) is that answer.
    *

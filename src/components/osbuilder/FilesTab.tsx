@@ -17,10 +17,12 @@
 // the run on a real or emulated Amiga, which stays here until round 5 moves
 // it to the WinUAE studio.
 //
-// It still computes the **whole** plan (`useInstallPlan`), because the folder
-// column is drawn from it: which layers this release declares, and which
-// folders the request will actually read (`plannedFolders.unusedForPlan`). It
-// draws none of the plan itself.
+// **It does not plan** (round 4 task 5's fix round). The folder column needs
+// two things of a plan and no more — which layers this release declares
+// (`useLayers`) and which folders the request will actually read
+// (`foldersForPlan`, pure) — so it asks for those two and never for
+// `osinstall_plan`, which opens and walks every ADF and ISO in the list. The
+// tabs that draw the plan are 2, 3 and 4.
 //
 // **What left, and where it went.** Nothing was rewritten in any of the
 // moves — the rows are the same rows, drawn from the same catalogues:
@@ -47,10 +49,11 @@
 //   - **`src/lib/useInstallPlan.ts`** — the plan computation itself
 //     (`layersFor` → `osinstall_components` → `osinstall_plan` once or twice
 //     → `osinstall_component_collisions`, with the sanitize and prune writes
-//     and the cancellation). Both tabs go through the one hook, so they
-//     cannot disagree about what is being planned, and the
-//     `basePlan`/`effectivePlan` pair lives there — the third rule below is
-//     why there are two.
+//     and the cancellation). Tabs 2, 3 and 4 go through the one hook, so no
+//     two of them can disagree about what is being planned, and the
+//     `basePlan`/`effectivePlan` pair lives there. **This tab is not among
+//     them**: it reads `useLayers` and `foldersForPlan` and asks for no plan
+//     at all — see the note on `layers` below for what that cost when it did.
 //   - **`src/lib/useChainTree.ts`** — the chain's tree, asked once with the
 //     readout's own overrides, so tab 1 and tab 2 say the same thing about
 //     one file.
@@ -126,7 +129,7 @@
 // lives inside the component." This screen is now the thin rendering layer
 // that diagnosis asked for.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
@@ -153,9 +156,9 @@ import {
   type MediaScanResult,
   type SlotOverride,
 } from "@/lib/osinstall";
-import { slotOverrides } from "@/lib/amigainstall";
+import { slotArchiveKey, slotOverrides } from "@/lib/amigainstall";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { isFlag, isTextOrNothing } from "@/lib/remembered";
+import { isFlag, isTextOrNothing, remember } from "@/lib/remembered";
 import { useChainTree } from "@/lib/useChainTree";
 import { useDestinationCheck } from "@/lib/useDestinationCheck";
 import { useRemembered } from "@/lib/useRemembered";
@@ -804,6 +807,37 @@ export function FilesTab({ droppedMedia = null }: { droppedMedia?: DroppedMedia 
     [overridesKey]
   );
 
+  /**
+   * **The other half of the same pair: the user answering an ambiguous row**
+   * (round 4 whole-branch review, C1).
+   *
+   * The readout draws the question, this screen stores the answer, and it is
+   * stored under the key `slotOverrides` above reads back — `slotArchiveKey`
+   * is that function written backwards, so the writer and the reader cannot
+   * spell one prefix two ways. The row then re-resolves as `chosen`, the
+   * chain stops answering `Refused{Ambiguous}` for it, and tab 4's
+   * *unresolved* warning goes with it.
+   *
+   * **On the click alone** (CLAUDE.md: nothing changes unless the user
+   * changes it). No effect, no render-time write, and nothing at all for a
+   * slot that is not a package's — `slotArchiveKey` answers `null` there and
+   * this stores nothing rather than inventing an unscoped key.
+   *
+   * The store is read through `getState()` rather than the rendered bag, for
+   * `useRemembered`'s own reason: two writers in one tick must not overwrite
+   * each other with a stale copy.
+   */
+  const updateSettings = useSettingsStore((s) => s.update);
+  const chooseSlotFile = useCallback(
+    (slotId: string, path: string) => {
+      const key = slotArchiveKey(slotId);
+      if (!key) return;
+      const latest = useSettingsStore.getState().settings.remembered;
+      void updateSettings({ remembered: remember(latest, key, path) });
+    },
+    [updateSettings]
+  );
+
   // **Asked here for the tree below, not for a blocker.** Whether the
   // destination is occupied is `BuildTab`'s question since round 4 task 5 —
   // it owns the button that refusal blocks. What this tab needs of the same
@@ -1042,6 +1076,7 @@ export function FilesTab({ droppedMedia = null }: { droppedMedia?: DroppedMedia 
               rom={romPath}
               identifiedPass={identifiedPass}
               overrides={materialOverrides}
+              onChoose={chooseSlotFile}
             />
           </div>
           <div data-testid="source-secondary" style={{ flex: "1 1 18em", minWidth: 0 }}>

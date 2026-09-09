@@ -2839,3 +2839,113 @@ describe("resetIfEmpty (ART-260)", () => {
     expect(reset).not.toBe(populated);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Answering an ambiguous row (round 4 whole-branch review, C1)
+// ---------------------------------------------------------------------------
+//
+// The owner has two copies of BoingBag 3.9-1, so `chain.rs` answers
+// `Refused{Ambiguous}` and tab 4 tells the person to choose its file *here*.
+// Until this round nothing here chose: the readout listed the two paths and
+// offered no control. What the tab owns is the **writing** — the key is the
+// Amiga-side panel's own (`amigaInstall.archive.<packageId>`, ART-277) and
+// this screen is the one that can see both sides of it.
+describe("choosing between two copies of one archive", () => {
+  const ONE = "D:\disks\BoingBag39-1.lha";
+  const TWO = "E:\archives\BoingBag39-1.lha";
+
+  /** A slot report with one ambiguous package row and nothing else. */
+  function ambiguous() {
+    slotsMock.mockResolvedValue({
+      states: [
+        {
+          slot: {
+            id: "package:boingbag-39-1",
+            kind: "package",
+            name: "BoingBag 3.9-1",
+            identity: "BoingBag3.9-1",
+            artefact: "boingbag-39-1",
+            required: false,
+            filenames: ["BoingBag39-1.lha"],
+            provenance: "Haage and Partners (3.9)",
+            position: 1,
+            requires: [],
+            supersededBy: [],
+            expectsDirectories: [],
+          },
+          found: null,
+          candidates: [
+            { path: ONE, bytesRead: { state: "read-no-row" } },
+            { path: TWO, bytesRead: { state: "read-no-row" } },
+          ],
+          installed: { state: "no" },
+          chosenMissing: null,
+          blockedBy: [],
+          incomplete: null,
+        },
+      ],
+      summary: {
+        release: "AmigaOS 3.2",
+        requiredTotal: 0,
+        requiredFound: 0,
+        optionalTotal: 1,
+        optionalFound: 0,
+      },
+      unreadableFolders: [],
+      crowdedFolders: [],
+    });
+  }
+
+  /** Every remembered key this screen could have written an override under. */
+  function archiveKeys(): string[] {
+    return Object.keys(rememberedBag()).filter((key) =>
+      key.startsWith("amigaInstall.archive")
+    );
+  }
+
+  it("writes the chosen path under that package's own key, and nothing else", async () => {
+    ambiguous();
+    await renderFull();
+
+    const buttons = await screen.findAllByTestId("material-choose");
+    expect(buttons).toHaveLength(2);
+    // **Rendering writes nothing** (CLAUDE.md: nothing changes unless the user
+    // changes it). Asserted before the click, so the write below is provably
+    // the click's and not an effect's.
+    expect(archiveKeys()).toEqual([]);
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: i18n.t("osinstall.material.chooseThis", { file: TWO }),
+      })
+    );
+
+    // The exact key `slotOverrides` reads back — the whole point of the
+    // round trip. A wrong prefix here is a choice the readout never sees.
+    await waitFor(() =>
+      expect(rememberedBag()["amigaInstall.archive.boingbag-39-1"]).toBe(TWO)
+    );
+    // …and *only* that one: no second key for the same slot, and nothing
+    // written for the candidate the user did not pick.
+    expect(archiveKeys()).toEqual(["amigaInstall.archive.boingbag-39-1"]);
+  });
+
+  it("asks the readout again with the choice, so the row can re-resolve", async () => {
+    // The choice is only worth writing if the screen re-reads it: the row is
+    // `chosen` on the next pass, which is what takes tab 2's dead tick and
+    // tab 4's *unresolved* warning away.
+    ambiguous();
+    await renderFull();
+    await screen.findAllByTestId("material-choose");
+    const before = slotsMock.mock.calls.length;
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: i18n.t("osinstall.material.chooseThis", { file: ONE }),
+      })
+    );
+
+    await waitFor(() => expect(slotsMock.mock.calls.length).toBeGreaterThan(before));
+    expect(slotsMock.mock.calls.at(-1)![4]).toEqual([["package:boingbag-39-1", ONE]]);
+  });
+});

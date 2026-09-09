@@ -6,10 +6,19 @@
 // package, each overlay, the ROM — and resolves every one of them against the
 // material folders, the chosen tree and the chosen ROM in a single answer.
 // `src/lib/slots.ts` turns each resolved slot into exactly one `Phrase`. This
-// component draws them, and does nothing else: there is no decision here, and
-// deliberately no *choice* either — an ambiguous row lists its candidates and
-// leaves the picking to the user (the override is the caller's, see
-// `overrides`).
+// component draws them, and there is no *decision* here: which sentence a row
+// gets is `slots.ts`'s, from what Rust measured.
+//
+// **The one thing it does offer is the choice an ambiguous row is asking
+// for** (round 4 whole-branch review, C1). Two copies of BoingBag 3.9-1 in
+// two folders make `chain.rs` answer `Refused{Ambiguous}`: the row was
+// tickable on tab 2, `runnablePath` trusted neither file, and tab 4 said
+// *"choose its file on the Amiga files tab"* — this tab, where nothing chose
+// anything. So an ambiguous row now renders one button per candidate and
+// hands the click up (`onChoose`); the *writing* stays the caller's, because
+// the key is the Amiga-side panel's own and the caller is the one screen that
+// can see both. Every other row kind offers nothing: there is no question to
+// answer.
 //
 // Three rules from CLAUDE.md shape it and are worth naming here, because each
 // one is a sentence somebody could have written instead:
@@ -148,6 +157,17 @@ export interface MaterialReadoutProps {
    * screen that can see both.
    */
   overrides?: SlotOverride[];
+  /**
+   * The user picked one of an ambiguous row's candidates (review C1).
+   *
+   * `(slot id, full path)` — the same pair `overrides` above is a list of, so
+   * a caller that stores what it is handed here reads it straight back on the
+   * next pass and the row re-resolves as `chosen`. Optional, and absent means
+   * **no buttons at all**: a readout mounted somewhere that cannot store a
+   * choice must not draw a control that does nothing, which is this project's
+   * own named defect one more time.
+   */
+  onChoose?: (slotId: string, path: string) => void;
 }
 
 export function MaterialReadout({
@@ -157,6 +177,7 @@ export function MaterialReadout({
   rom,
   identifiedPass,
   overrides = [],
+  onChoose,
 }: MaterialReadoutProps) {
   const { t } = useTranslation();
   const [report, setReport] = useState<SlotReport | null>(null);
@@ -295,6 +316,34 @@ export function MaterialReadout({
               {t(row.blocked.key, row.blocked.params)}
             </p>
           )}
+          {/*
+            **The answer to the question the row just asked** (review C1). One
+            button per candidate, on the ambiguous row alone — every other
+            kind has a single file or none, so there is nothing to pick
+            between and a button would be a control with no question behind
+            it.
+
+            The **full path** is both the label and the accessible name, and
+            not the file name: the commonest ambiguity here is two copies
+            under the *same* name (`slots.ts`, F3), so "Use BoingBag39-1.lha"
+            twice is two identical controls a screen-reader user cannot tell
+            apart — ART-240's rule about several controls in several rows.
+          */}
+          {row.kind === "ambiguous" &&
+            onChoose &&
+            row.candidates.map((candidate) => (
+              <button
+                key={candidate}
+                type="button"
+                className="btn btn-sm"
+                data-testid="material-choose"
+                aria-label={t("osinstall.material.chooseThis", { file: candidate })}
+                style={{ fontSize: 10, margin: "2px 0 0 18px", wordBreak: "break-all" }}
+                onClick={() => onChoose(row.id, candidate)}
+              >
+                {t("osinstall.material.chooseThis", { file: candidate })}
+              </button>
+            ))}
         </div>
       ))}
 

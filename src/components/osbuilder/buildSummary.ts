@@ -60,7 +60,9 @@ export interface BuildSummary {
  * @param revision anything whose change means the destination folder may have
  *   changed under ART — tab 4 passes its run's completion, because a run that
  *   just succeeded has filled the folder it was told to fill and the next
- *   answer about it is a different one (fix round 1, I2).
+ *   answer about it is a different one (fix round 1, I2). It reaches **both**
+ *   questions about that folder: the destination check here, and the chain and
+ *   slot report through `useTickedUpdates` (round 4 whole-branch review, I1).
  */
 export function useBuildSummary({
   revision = null,
@@ -115,7 +117,12 @@ export function useBuildSummary({
     previewCollisions: destinationChecked && !destinationIsTree,
   });
 
-  const ticked = useTickedUpdates();
+  // **The same `revision`, and for the same reason** (round 4 whole-branch
+  // review, I1). In update mode nothing the chain is keyed on changes when a
+  // run finishes — same folders, same release, same tree — so without this the
+  // list went on offering rows the run had just added, and the second summary
+  // line went on counting them.
+  const ticked = useTickedUpdates(revision);
   const firstBootWanted = session.firstboot.wanted ?? true;
 
   // **Every ticked row, always.** There was a `previewReplacements: false`

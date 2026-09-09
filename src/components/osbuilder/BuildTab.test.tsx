@@ -19,6 +19,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useMemo, useState } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import i18n from "i18next";
 
@@ -109,6 +110,7 @@ vi.mock("@/lib/settings", async (importOriginal) => ({
 }));
 
 const { BuildTab } = await import("@/components/osbuilder/BuildTab");
+const { RunLockContext } = await import("@/pages/osbuilder/runLock");
 const { DEFAULT_SETTINGS } = await import("@/lib/settings");
 const { OSINSTALL_EVENT, refusalPhrase } = await import("@/lib/osinstall");
 
@@ -555,6 +557,13 @@ describe("tab 4's four summary lines", () => {
     renderTab();
 
     const named = await screen.findByTestId("build-unresolved");
+    // **The whole sentence** (round 4 whole-branch review, C1). It used to
+    // say *"choose its file on the Amiga files tab"* about a tab that chose
+    // nothing; it now names the control that answers — one per candidate on
+    // the readout's own row — and says what happens until they do.
+    expect(named.textContent).toBe(
+      i18n.t("osBuilder.build.unresolved", { name: "BoingBag 3.9-1" })
+    );
     expect(named.textContent).toContain("BoingBag 3.9-1");
     // …and the run's own line names only the one that can run.
     await waitFor(() => expect(summaryLines()[1]).toContain("BoingBag 3.9-2"));
@@ -849,6 +858,15 @@ describe("pressing Build", () => {
       )
     );
     expect(screen.queryByTestId("build-progress-bar")).toBeNull();
+
+    // **And the phase is named once, not twice** (round 4 whole-branch
+    // review, M1). A copy of *"Running: AmigaOS 3.9"* stood beside the Build
+    // button as well as in the phase's own row — ART-202's "aynı uyarı tek
+    // ekranda 2 tane", and the copy beside the button was a lookup over the
+    // reports rather than the report's own ending, so the two could drift.
+    expect(
+      screen.getAllByText(i18n.t("osBuilder.build.phase.running", { name: "AmigaOS 3.9" }))
+    ).toHaveLength(1);
 
     // …and a total that *is* known gets the percentage and the bar.
     act(() => {
@@ -1623,5 +1641,153 @@ describe("in Turkish", () => {
     expect(tab.textContent).not.toContain("osBuilder.");
     expect(tab.textContent).not.toContain("osinstall.");
     expect(tab.textContent).not.toContain("{{");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// What a finished run changes, and what a run in flight forbids
+// ---------------------------------------------------------------------------
+
+describe("after a run, the tab re-asks the questions a run answers (I1)", () => {
+  it("asks the chain again once a run has finished", async () => {
+    // **The defect.** `useChoiceInputs`' effects are keyed on `treeRoot`, the
+    // folders, the release and the ROM. In update mode a finished run changes
+    // none of them — same tree, same folders — so the chain was never
+    // re-asked: the rows the run had just added stayed ticked-enabled, the
+    // second summary line went on saying "2 updates", and Build was offered
+    // again for work that was already done.
+    describeTreeMock.mockResolvedValue(IS_A_TREE);
+    destinationTakenMock.mockResolvedValue(true);
+    bothTicked();
+    renderTab();
+
+    await screen.findByTestId("build-run");
+    await waitFor(() => expect(chainMock).toHaveBeenCalled());
+    const before = chainMock.mock.calls.length;
+
+    await userEvent.click(screen.getByTestId("build-confirm"));
+    await userEvent.click(screen.getByTestId("build-run"));
+    await screen.findByTestId("build-handoff");
+
+    await waitFor(() => expect(chainMock.mock.calls.length).toBeGreaterThan(before));
+    // The slot report is asked with it, not left behind: a new chain paired
+    // with the previous pass's slots is one answer about two moments.
+    expect(slotsMock.mock.calls.length).toBeGreaterThan(1);
+  });
+});
+
+describe("the lane's strip while a build runs (I2)", () => {
+  /**
+   * The tab inside a real run lock, with the lock's own state on screen.
+   *
+   * `mounted` is a control the *test* owns, so the tab can be taken away
+   * while the lock is still on — which is the one thing a `setRunning(false)`
+   * on unmount is for, and a plain `view.unmount()` cannot show, because it
+   * takes the probe away with it.
+   */
+  function renderLocked() {
+    function Harness() {
+      const [running, setRunning] = useState(false);
+      const [mounted, setMounted] = useState(true);
+      const value = useMemo(() => ({ running, setRunning }), [running]);
+      return (
+        <RunLockContext.Provider value={value}>
+          {mounted && <BuildTab />}
+          <div data-testid="lock">{running ? "locked" : "free"}</div>
+          <button data-testid="drop-tab" onClick={() => setMounted(false)}>
+            leave
+          </button>
+        </RunLockContext.Provider>
+      );
+    }
+    return render(
+      <MemoryRouter initialEntries={["/os-builder/derle"]}>
+        <Routes>
+          <Route path="/os-builder/*" element={<Harness />} />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  it("holds the lock while the run is in flight and gives it back when it ends", async () => {
+    // Leaving tab 4 unmounts the sequencer, so the rest of the phases and the
+    // ART-197 hand-off simply stop. The lock is what makes the strip refuse
+    // that navigation and say why; a lock that is never set is a strip that
+    // never refuses, and a lock never cleared is a lane nobody can leave.
+    const job = pending();
+    seed({ ...FIELDS, "buildSession.firstboot": { written: false, wanted: false } });
+    renderLocked();
+    await screen.findByTestId("build-run");
+    expect(screen.getByTestId("lock").textContent).toBe("free");
+
+    await userEvent.click(screen.getByTestId("build-confirm"));
+    await userEvent.click(screen.getByTestId("build-run"));
+    await waitFor(() => expect(screen.getByTestId("lock").textContent).toBe("locked"));
+
+    act(() => job.resolve(treeResult()));
+    await waitFor(() => expect(screen.getByTestId("lock").textContent).toBe("free"));
+  });
+
+  it("gives the lock back if the tab goes away with the run still on", async () => {
+    // The lane must not be lockable for ever. Nothing in the application
+    // should reach this — the strip is what stops a person leaving — but a
+    // lock whose only release is a run that no longer exists would be a
+    // wizard nobody can navigate, with no control anywhere that lifts it.
+    const job = pending();
+    seed({ ...FIELDS, "buildSession.firstboot": { written: false, wanted: false } });
+    renderLocked();
+    await screen.findByTestId("build-run");
+    await userEvent.click(screen.getByTestId("build-confirm"));
+    await userEvent.click(screen.getByTestId("build-run"));
+    await waitFor(() => expect(screen.getByTestId("lock").textContent).toBe("locked"));
+
+    await userEvent.click(screen.getByTestId("drop-tab"));
+    await waitFor(() => expect(screen.getByTestId("lock").textContent).toBe("free"));
+
+    act(() => job.reject(new Error("gone")));
+    await flush();
+  });
+});
+
+describe("while the plan is still being computed (I5)", () => {
+  it("says the plan is being computed, not 'preview it first'", async () => {
+    // Tab 4 has no Preview control and never had one — it plans on its own —
+    // so `osinstall.blocked.notPlanned` told the person to press something
+    // that is not on the screen, for a state that clears itself in a second.
+    planMock.mockReset().mockImplementation(() => new Promise<PlanResult>(() => {}));
+    seed(FIELDS);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("build-blocker").textContent).toBe(
+        i18n.t("osinstall.blocked.planning")
+      )
+    );
+    // Both endings stay distinct: this is not the sentence a plan that has
+    // been asked for and refused to answer gets.
+    expect(screen.getByTestId("build-blocker").textContent).not.toBe(
+      i18n.t("osinstall.blocked.notPlanned")
+    );
+    expect(screen.queryByTestId("build-run")).toBeNull();
+  });
+
+  it("still says 'preview it first' when there is no folder to plan from", async () => {
+    // The control, measured rather than assumed. `notPlanned` is not dead:
+    // with nothing to plan from, no plan is coming, and "still being
+    // computed" would be a promise nothing is going to keep. (`noFolder`
+    // outranks it, so this is the shape that reaches it: a folder in the
+    // list that the request does not read.)
+    const { osinstallBlocker } = await import("@/lib/osinstall");
+    expect(
+      osinstallBlocker({
+        mediaFolder: MEDIA,
+        destination: DEST,
+        destinationTaken: false,
+        plan: null,
+        found: [],
+        releaseHolding: null,
+        mediaFacts: null,
+      })?.key
+    ).toBe("osinstall.blocked.notPlanned");
   });
 });

@@ -13,6 +13,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import i18n from "i18next";
 
 // Side-effecting import: initialises the real i18next instance synchronously,
@@ -113,7 +114,7 @@ function report(over: Partial<SlotReport> = {}): SlotReport {
   };
 }
 
-function renderReadout() {
+function renderReadout(onChoose?: (slotId: string, path: string) => void) {
   return render(
     <MaterialReadout
       release="AmigaOS 3.9"
@@ -121,6 +122,7 @@ function renderReadout() {
       treeRoot={null}
       rom={null}
       identifiedPass={0}
+      onChoose={onChoose}
     />
   );
 }
@@ -654,5 +656,116 @@ describe("a folder ART stopped reading (design § 6, review L7)", () => {
     renderReadout();
     await screen.findByTestId("material-set-line");
     expect(screen.queryByTestId("material-readout-crowded")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The choice an ambiguous row is asking for (round 4 whole-branch review, C1)
+// ---------------------------------------------------------------------------
+//
+// The owner has two copies of BoingBag 3.9-1. `chain.rs` answers
+// `Refused{Ambiguous}`, the row stays tickable on tab 2 because the ambiguity
+// is a question the *user* settles — and until this round nothing on this
+// screen settled it. Tab 4 told them to "choose its file on the Amiga files
+// tab", which is this tab, where the row listed two paths and offered no
+// control at all. Three screens agreeing on a next step that did not exist.
+
+describe("an ambiguous row offers its candidates", () => {
+  const CANDIDATES: SlotCandidate[] = [
+    { path: "D:\disks\BoingBag39-1.lha", bytesRead: NO_ROW },
+    { path: "E:\archives\BoingBag39-1.lha", bytesRead: NO_ROW },
+  ];
+
+  it("draws one button per candidate and hands the slot and that path up", async () => {
+    const chose = vi.fn();
+    slotsMock.mockResolvedValue(report({ states: [state({ candidates: CANDIDATES })] }));
+    renderReadout(chose);
+
+    const buttons = await screen.findAllByTestId("material-choose");
+    expect(buttons).toHaveLength(2);
+    // The **full path** is the accessible name, not the file name: both
+    // copies are called `BoingBag39-1.lha`, so two names would be two
+    // controls nobody using a screen reader could tell apart (ART-240).
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(
+      CANDIDATES.map((c) => i18n.t("osinstall.material.chooseThis", { file: c.path }))
+    );
+
+    await userEvent.click(buttons[1]);
+    // Asserted as the exact pair, not "was called": handing the wrong slot's
+    // id, or the other candidate, is the defect this exists against and both
+    // would pass a bare `toHaveBeenCalled`.
+    expect(chose.mock.calls).toEqual([
+      ["package:boingbag-39-1", "E:\archives\BoingBag39-1.lha"],
+    ]);
+  });
+
+  it("renders in Turkish as a sentence, not a key", async () => {
+    await changeLanguage("tr");
+    slotsMock.mockResolvedValue(report({ states: [state({ candidates: CANDIDATES })] }));
+    renderReadout(vi.fn());
+
+    const [first] = await screen.findAllByTestId("material-choose");
+    expect(first.getAttribute("aria-label")).toBe(
+      i18n.t("osinstall.material.chooseThis", { file: CANDIDATES[0].path })
+    );
+    expect(first.getAttribute("aria-label")).not.toContain("osinstall.");
+  });
+
+  it("offers nothing on a row that has already resolved", async () => {
+    // The control, measured rather than assumed. A row ART settled by its
+    // bytes is not asking anything, and a *Use this* button over it would
+    // invite the user to override a find with the very file it found.
+    slotsMock.mockResolvedValue(
+      report({
+        states: [
+          state({
+            found: {
+              path: "D:\disks\BoingBag39-1.lha",
+              matchedBy: "hash",
+              row: null,
+              confirmed: null,
+              bytesRead: NO_ROW,
+            },
+          }),
+        ],
+      })
+    );
+    renderReadout(vi.fn());
+
+    await screen.findByTestId("material-row-found-by-hash");
+    expect(screen.queryByTestId("material-choose")).toBeNull();
+  });
+
+  it("offers nothing on a single-candidate guess, which is not a question", async () => {
+    // **The control that has candidates.** A resolved row alone cannot show
+    // the rule, because `resolve_one` hands a found slot an empty candidate
+    // list — so the mutation "draw a button on every row" survives it,
+    // measured. One candidate is a real state with a real list, and it is
+    // still not a choice: there is nothing to pick *between*, and the row
+    // already says what ART thinks the file is.
+    slotsMock.mockResolvedValue(
+      report({
+        states: [
+          state({ candidates: [{ path: "D:\disks\BoingBag39-1.lha", bytesRead: NOT_READ }] }),
+        ],
+      })
+    );
+    renderReadout(vi.fn());
+
+    const row = await screen.findByTestId("material-row-guessed-by-filename");
+    expect(row.textContent).toContain("BoingBag39-1.lha");
+    expect(screen.queryByTestId("material-choose")).toBeNull();
+  });
+
+  it("draws no button at all when the caller cannot store a choice", async () => {
+    // A readout with no `onChoose` is one mounted where nothing can remember
+    // the answer. A control that changes nothing is this project's own named
+    // defect, so the row goes back to listing its candidates and no more.
+    slotsMock.mockResolvedValue(report({ states: [state({ candidates: CANDIDATES })] }));
+    renderReadout();
+
+    const row = await screen.findByTestId("material-row-ambiguous");
+    expect(row.textContent).toContain("E:\archives\BoingBag39-1.lha");
+    expect(screen.queryByTestId("material-choose")).toBeNull();
   });
 });

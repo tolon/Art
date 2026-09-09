@@ -128,7 +128,21 @@ interface ChoiceInputs {
   chainSettled: boolean;
 }
 
-function useChoiceInputs(): ChoiceInputs {
+/**
+ * @param revision anything whose change means the answers below may have gone
+ *   stale under ART — tab 4 passes its run's completion (round 4 whole-branch
+ *   review, I1).
+ *
+ *   **The defect it exists for.** In update mode the destination is already a
+ *   tree, so `treeRoot` does not change when a run finishes: the folders are
+ *   the same folders and the release is the same release, and every dependency
+ *   below is value-equal to what it was. So the chain was never re-asked. The
+ *   rows a run had just added went on drawing as tickable, the summary went on
+ *   saying *"2 updates"*, and Build went on being offered for work that had
+ *   already been done — the screen out-claiming the core in the direction that
+ *   repeats it. Nothing here decides *what* moves it; the caller does.
+ */
+function useChoiceInputs(revision: unknown = null): ChoiceInputs {
   const { session } = useBuildSession();
   const release = session.release;
   const [destination] = useRemembered<string | null>(
@@ -160,6 +174,15 @@ function useChoiceInputs(): ChoiceInputs {
    * round trip, so asking before it lands would put *ready* on a row the
    * tree already carries and then swap it for *installed* under the reader.
    */
+  // **`revision` is deliberately not passed on to `useChainTree`**, and the
+  // mutation pass is why (round 4 whole-branch review, I1). Threading it
+  // there re-asks `osinstall_describe_tree` after a run and killed no test:
+  // in update mode the answer is the same answer — the destination was a tree
+  // before the run and is a tree after it — so `treeRoot` does not move and
+  // nothing downstream reads the round trip. Putting `revision` in the two
+  // dependency lists below *does* fall to a mutation, and it is the guard
+  // that actually re-asks the chain. A second guard no test can move reads as
+  // though it were holding a line it is not.
   const { treeRoot, settled: treeSettled } = useChainTree(destination);
   /** A primitive dependency rather than the array, for the reason above. */
   const materialKey = session.material.folders.map((folder) => folder.path).join("\n");
@@ -192,7 +215,9 @@ function useChoiceInputs(): ChoiceInputs {
     return () => {
       cancelled = true;
     };
-  }, [release, materialKey, treeRoot, treeSettled, romPath, overridesKey]);
+    // `revision` is in the list and reads nowhere in the body: it is the
+    // caller saying *the world moved* about inputs that did not (I1).
+  }, [release, materialKey, treeRoot, treeSettled, romPath, overridesKey, revision]);
 
   return {
     release,
@@ -271,8 +296,8 @@ export interface TickedUpdates {
  * drawn from, decided by the same function, so a row the list draws dead can
  * never be a row the button runs.
  */
-export function useTickedUpdates(): TickedUpdates {
-  const inputs = useChoiceInputs();
+export function useTickedUpdates(revision: unknown = null): TickedUpdates {
+  const inputs = useChoiceInputs(revision);
   const { session } = useBuildSession();
   const { release, materialKey, treeRoot, treeSettled, romPath, overridesKey } = inputs;
 
@@ -306,7 +331,10 @@ export function useTickedUpdates(): TickedUpdates {
     return () => {
       cancelled = true;
     };
-  }, [release, materialKey, treeRoot, treeSettled, romPath, overridesKey]);
+    // `revision` for the chain's own reason above (I1): the slots and the
+    // chain are answered from one set of inputs, and re-asking one of them
+    // alone would leave tab 4 pairing a new chain with an old slot report.
+  }, [release, materialKey, treeRoot, treeSettled, romPath, overridesKey, revision]);
 
   const loading = !inputs.chainSettled || !slotsSettled;
   const rows: SequenceInputs["updates"] = [];

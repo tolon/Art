@@ -749,7 +749,8 @@
         "replacesPending": "Not previewed yet",
         "checking": "Checking the destination…"
       },
-      "unresolved": "{{name}}: choose its file on the Amiga files tab — it will not be written.",
+      "unresolved": "{{name}}: more than one file carries it. Use one of them on the Amiga files tab (the readout's row offers each); it will not be written until you do.",
+      "navigationLocked": "A build is running — Stop it before leaving this tab.",
       "blocked": {
         "nothingToRun": "Nothing is ticked to run. Tick an update, or turn first boot on, on the What to install tab."
       },
@@ -791,7 +792,7 @@
       },
       "next": {
         "refused": "Fix what the refusal names, then press Build again.",
-        "failed": "The tree is at {{root}}; the work stopped at item {{done}} of {{total}}. Nothing was undone.",
+        "failed": "The tree is at {{root}}; {{done}} of {{total}} items were placed before this. Nothing was undone.",
         "failedUnknown": "The tree is at {{root}}; ART did not get far enough to say how much of the work was done. Nothing was undone.",
         "cancelled": "The tree is at {{root}}; {{files}} files were written before you stopped it. Nothing was undone."
       }
@@ -2256,6 +2257,7 @@
       "noFolder": "Choose the media folder first.",
       "noDestination": "Choose where to build the distribution tree on the Kickstart and destination tab first.",
       "notPlanned": "Preview it first — nothing is built before you have seen what would be.",
+      "planning": "The plan is still being computed…",
       "folderUnreadable": "ART could not read that folder — check the path.",
       "refusals": "Resolve the refusal(s) first — nothing is built while the plan cannot proceed.",
       "wrongFolder": "None of the disks in this folder are ones this release asks for. It holds: {{found}}. Choose the folder your install disks are in, or change the release above.",
@@ -2332,6 +2334,7 @@
       "readoutFailed": "ART could not work out what these folders hold: {{detail}}. That is a fault in ART, not a statement about your files.",
       "required": "required",
       "optional": "optional",
+      "chooseThis": "Use {{file}}",
       "guide": {
         "intro": "ART can write this list into a folder as a text file, so you have it where the files are. Nothing is written until you ask for it.",
         "button": "Write a guide into {{folder}}",
@@ -2510,7 +2513,7 @@
       "confirm": "I have reviewed the summary above.",
       "progress": {
         "starting": "Starting…",
-        "percent": "{{percent}}% — {{done}} of {{total}} files"
+        "percent": "{{percent}}% — {{done}} of {{total}} items"
       }
     },
     "result": {

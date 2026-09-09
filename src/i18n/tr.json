@@ -749,7 +749,8 @@
         "replacesPending": "Henüz önizlenmedi",
         "checking": "Hedef denetleniyor…"
       },
-      "unresolved": "{{name}}: dosyasını Amiga dosyaları sekmesinde seçin — yazılmayacak.",
+      "unresolved": "{{name}}: birden fazla dosya taşıyor. Amiga dosyaları sekmesinde birini kullanın (okuma satırı her birini sunar); seçene kadar yazılmaz.",
+      "navigationLocked": "Derleme sürüyor — sekmeden ayrılmadan önce Durdur'a basın.",
       "blocked": {
         "nothingToRun": "Koşulacak hiçbir şey işaretlenmedi. Ne kurulacak sekmesinden bir güncelleme işaretleyin ya da ilk açılışı açın."
       },
@@ -791,7 +792,7 @@
       },
       "next": {
         "refused": "Reddin işaret ettiğini düzeltin, sonra yeniden Derle'ye basın.",
-        "failed": "Ağaç {{root}} yolunda; iş {{total}} öğeden {{done}}. öğede durdu. Hiçbir şey geri alınmadı.",
+        "failed": "Ağaç {{root}} yolunda; {{total}} öğeden {{done}} tanesi yerleşmişti. Hiçbir şey geri alınmadı.",
         "failedUnknown": "Ağaç {{root}} yolunda; ART işin ne kadarının yapıldığını söyleyecek kadar ilerleyemedi. Hiçbir şey geri alınmadı.",
         "cancelled": "Ağaç şurada: {{root}} — siz durdurmadan önce {{files}} dosya yazılmıştı. Hiçbir şey geri alınmadı."
       }
@@ -2256,6 +2257,7 @@
       "noFolder": "Önce medya klasörünü seç.",
       "noDestination": "Önce Kickstart ve hedef sekmesinde ağacın nereye yazılacağını seçin.",
       "notPlanned": "Önce önizle — ne olacağını görmeden hiçbir şey kurulmaz.",
+      "planning": "Plan hâlâ hesaplanıyor…",
       "folderUnreadable": "ART bu klasörü okuyamadı — yolu kontrol et.",
       "refusals": "Önce reddedilen(ler)i çöz — plan ilerleyemezken hiçbir şey kurulmaz.",
       "wrongFolder": "Bu klasördeki disklerin hiçbiri bu sürümün istediklerinden değil. Klasörde bulunan: {{found}}. Kurulum disklerinin bulunduğu klasörü seç, ya da yukarıdan sürümü değiştir.",
@@ -2332,6 +2334,7 @@
       "readoutFailed": "ART bu klasörlerde ne olduğunu çıkaramadı: {{detail}}. Bu ART'ın kusuru, dosyalarınız hakkında bir yargı değil.",
       "required": "zorunlu",
       "optional": "isteğe bağlı",
+      "chooseThis": "{{file}} kullan",
       "guide": {
         "intro": "ART bu listeyi bir klasöre metin dosyası olarak yazabilir; böylece dosyaların yanında durur. Siz istemeden hiçbir şey yazılmaz.",
         "button": "{{folder}} klasörüne bir kılavuz yaz",
@@ -2510,7 +2513,7 @@
       "confirm": "Yukarıdaki özeti gözden geçirdim.",
       "progress": {
         "starting": "Başlıyor…",
-        "percent": "%{{percent}} — {{total}} dosyadan {{done}} tanesi"
+        "percent": "%{{percent}} — {{total}} öğeden {{done}} tanesi"
       }
     },
     "result": {

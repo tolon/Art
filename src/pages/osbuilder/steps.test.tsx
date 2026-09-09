@@ -64,9 +64,27 @@ vi.mock("@/components/osbuilder/MachineTab", () => ({
 // Round 4, task 4: `derle` mounts the real tab. Mocked like every other
 // panel — `BuildTab.test.tsx` owns what it renders; what this file is about
 // is which step renders it.
-vi.mock("@/components/osbuilder/BuildTab", () => ({
-  BuildTab: () => <div data-testid="build-tab" />,
-}));
+//
+// **It takes the run lock, because that is a thing the shell draws** (round 4
+// whole-branch review, I2). The real tab sets the lock while `useBuildRun` is
+// running; the marker sets it when a case asks for a run in flight, so what
+// is under test here stays the shell's own strip rather than the tab's
+// sequencer.
+const lockedRun = vi.hoisted(() => ({ value: false }));
+vi.mock("@/components/osbuilder/BuildTab", async () => {
+  const { useEffect } = await import("react");
+  const { useRunLock } = await import("@/pages/osbuilder/runLock");
+  return {
+    BuildTab: () => {
+      const { setRunning } = useRunLock();
+      useEffect(() => {
+        setRunning(lockedRun.value);
+        return () => setRunning(false);
+      }, [setRunning]);
+      return <div data-testid="build-tab" />;
+    },
+  };
+});
 // The bar the shell mounts on every tab of this lane needs no mock of its
 // own: since round 4 task 5 it reads the session and asks nothing, so
 // mounting it here reaches no `invoke`. (It used to compute a plan, a
@@ -108,6 +126,10 @@ function renderAt(path: string, state?: unknown) {
 }
 
 beforeEach(() => {
+  // Nothing is running unless a case says so: a lock that were on by default
+  // would make every other case in this file assert about a locked strip
+  // without meaning to.
+  lockedRun.value = false;
   // Answers "yes, a tree" unless a test says otherwise, so the cases that are
   // not about ART-199 are unaffected by it.
   destinationTakenMock.mockReset().mockResolvedValue(false);
@@ -490,5 +512,51 @@ describe("every tab of the install lane holds its own fields", () => {
       expect(screen.queryByTestId("tab-derle")).toBeNull();
       view.unmount();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The strip while a build is running (round 4 whole-branch review, I2)
+// ---------------------------------------------------------------------------
+//
+// The sequencer is `BuildTab`'s own state, so leaving tab 4 mid-run unmounts
+// it and the rest of the phases — and the ART-197 hand-off of the finished
+// tree — simply stop. Nothing said so, before or after: the run was there and
+// then it was not. The shell refuses the navigation instead, and says why.
+describe("the strip is locked while a build runs", () => {
+  it("draws the tabs as dead chips, not links, and says why", async () => {
+    lockedRun.value = true;
+    seed({ "buildSession.kind": "install" });
+    renderAt("/os-builder/derle");
+    await screen.findByTestId("build-tab");
+
+    // **Not links at all.** A `NavLink` styled to look disabled still
+    // navigates on Enter, on a middle click and through a screen reader —
+    // what has to go is the element that navigates.
+    await waitFor(() => expect(screen.queryAllByRole("link")).toHaveLength(0));
+    const chip = screen.getByTestId("strip-hedef");
+    expect(chip.tagName).toBe("SPAN");
+    expect(chip.getAttribute("aria-disabled")).toBe("true");
+    // …and the chip still says what it is: a closed destination, not a
+    // control that has vanished.
+    expect(chip.textContent).toBe(i18n.t("osBuilder.what.install"));
+
+    // A refusal must be actionable, and this one names the control that
+    // lifts it — Stop, on the tab the person is already looking at.
+    expect(screen.getByTestId("strip-locked").textContent).toBe(
+      i18n.t("osBuilder.build.navigationLocked")
+    );
+  });
+
+  it("leaves the strip alone when nothing is running", async () => {
+    // The control, measured rather than assumed: a strip that were always
+    // dead would pass the case above and prove nothing.
+    seed({ "buildSession.kind": "install" });
+    renderAt("/os-builder/derle");
+    await screen.findByTestId("build-tab");
+
+    expect(screen.getAllByRole("link").length).toBeGreaterThan(1);
+    expect(screen.getByTestId("strip-hedef").tagName).toBe("A");
+    expect(screen.queryByTestId("strip-locked")).toBeNull();
   });
 });

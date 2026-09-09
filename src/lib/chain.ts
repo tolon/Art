@@ -368,7 +368,17 @@ export function choiceRowState(line: ChainLine, row: ChainRow): ChoiceRowState {
 
   // A refusal has two answers and they are not the same offer. *Unplaceable*
   // is ART saying it will not do this at all; *ambiguous* is a question the
-  // user answers on tab 1 by naming a file, so that row stays theirs.
+  // user answers on tab 1, so that row stays theirs.
+  //
+  // **And tab 1 really does ask it now** (round 4 whole-branch review, C1).
+  // This sentence was written before there was any such control: the material
+  // readout listed an ambiguous row's candidates and offered nothing to pick
+  // one with, so a ticked-enabled row here reached `runnablePath`, matched
+  // nothing it trusts, and became tab 4's *unresolved* warning pointing at a
+  // tab that chose nothing — three screens agreeing on a next step that did
+  // not exist. `MaterialReadout` renders one *Use this* button per candidate
+  // and `FilesTab` writes the override, which is what makes leaving the row
+  // enabled the right answer rather than a dead tick.
   if (
     line.kind === "refused" &&
     row.state.state === "refused" &&

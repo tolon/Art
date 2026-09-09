@@ -73,6 +73,7 @@ import {
 import type { Phrase } from "@/lib/phrase";
 import { useBuildRun } from "@/lib/useBuildRun";
 import { useBuildSession } from "@/lib/useBuildSession";
+import { useRunLock } from "@/pages/osbuilder/runLock";
 
 /**
  * What the media folders actually hold, and what ART makes of it.
@@ -425,7 +426,13 @@ export function BuildTab() {
     : null;
 
   const blocker = osinstallBlocker({
-    mediaFolder: plannedFolderPaths.length > 0 ? (plannedFolderPaths[0] ?? summary.release) : null,
+    // **No fallback** (review M2). This was `plannedFolderPaths[0] ??
+    // summary.release`, which handed a *release name* to a field the blocker
+    // reads as a folder path — an expression that can only ever fire when the
+    // array is non-empty and its first entry is missing, which the line above
+    // it has already excluded. A fallback nothing can reach is a claim the
+    // next reader takes for a case somebody thought about.
+    mediaFolder: plannedFolderPaths.length > 0 ? plannedFolderPaths[0] : null,
     destination,
     destinationTaken: taken,
     plan: effectivePlanResult,
@@ -435,6 +442,31 @@ export function BuildTab() {
   });
 
   const treePhaseNeeded = phases.some((phase) => phase.kind === "tree");
+
+  /**
+   * **A plan that is still being computed is not a plan nobody asked for**
+   * (review I5).
+   *
+   * `osinstallBlocker` answers `notPlanned` — *"Preview it first — nothing is
+   * built before you have seen what would be"* — for `plan === null`, which
+   * was written for a screen with a Preview button. Tab 4 has no such control
+   * and never had one: it plans on its own, and the only reason `plan` is null
+   * with a folder in hand and no error is that the round trip has not landed.
+   * So the person was told to press something that is not there, for a state
+   * that clears itself in a second.
+   *
+   * The three conditions are the whole of *would plan*: no answer yet, no
+   * error to explain the absence, and at least one folder for the request to
+   * read. A plan that **failed** keeps `notPlanned` out of the way too — the
+   * error badge above says what Rust said.
+   */
+  const planning =
+    effectivePlanResult === null && plan.planError === null && plannedFolderPaths.length > 0;
+  const planBlocker: Phrase | null =
+    blocker?.key === "osinstall.blocked.notPlanned" && planning
+      ? { key: "osinstall.blocked.planning" }
+      : blocker;
+
   /**
    * What stands in the Build button's place, or `null` when the button stands.
    *
@@ -463,7 +495,7 @@ export function BuildTab() {
       // before it lands runs the wrong one.
       { key: "osBuilder.build.summary.checking" }
     : treePhaseNeeded
-      ? blocker
+      ? planBlocker
       : phases.length === 0
         ? { key: "osBuilder.build.blocked.nothingToRun" }
         : null;
@@ -487,7 +519,23 @@ export function BuildTab() {
     if (run.finished) setRunStamp((stamp) => stamp + 1);
   }, [run.finished]);
 
-  const running = run.reports.find((r) => r.ending.state === "running") ?? null;
+  /**
+   * **The lane's strip goes dead while this runs** (round 4 whole-branch
+   * review, I2; the defect is in `runLock.tsx`). The sequencer lives in this
+   * component, so leaving tab 4 mid-run drops the rest of the phases and the
+   * hand-off with no sentence anywhere.
+   *
+   * Two effects rather than one with a cleanup: a cleanup that also cleared on
+   * every change would write `false` and then `true` for a run that is simply
+   * carrying on. The second clears on **unmount alone** — a tab that goes away
+   * for any other reason must not leave the lane locked with nothing left to
+   * unlock it.
+   */
+  const { setRunning } = useRunLock();
+  useEffect(() => {
+    setRunning(run.running);
+  }, [run.running, setRunning]);
+  useEffect(() => () => setRunning(false), [setRunning]);
 
   return (
     <section className="card" data-testid="build-tab" style={{ marginBottom: 16 }}>
@@ -614,11 +662,12 @@ export function BuildTab() {
                 {t("osBuilder.build.confirmHint")}
               </span>
             )}
-            {running && (
-              <span className="faint" style={{ fontSize: 11 }}>
-                {t("osBuilder.build.phase.running", { name: running.phase.name })}
-              </span>
-            )}
+            {/* **The running phase is named once, in its own row** (round 4
+                whole-branch review, M1). A second *"Running: BoingBag 3.9-1"*
+                beside the button repeated a sentence the phase list below
+                already carries — ART-202's "aynı uyarı tek ekranda 2 tane",
+                and the copy that could go stale, since the row's is the
+                report's own ending and this was a lookup beside it. */}
           </div>
         </>
       )}
