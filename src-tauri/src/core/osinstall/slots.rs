@@ -885,6 +885,115 @@ fn requirement_met(required: SlotKind, installed: bool, found: bool) -> bool {
     required == SlotKind::Medium && found
 }
 
+/// Which archive is `package`'s, resolved **the way a chain row resolves it**
+/// rather than by identity alone (ART-288).
+///
+/// ## The defect this exists for
+///
+/// The owner's own package folder holds two BoingBag 3.9-1 builds —
+/// `BoingBag39-1.lha` (`Updater` 45.13) and `BoingBag39-1 (1).lha` (45.15, the
+/// build ART's own hash table names). Both carry the top-level directory
+/// `BoingBag3.9-1`, so [`super::scan::package_for`] — identity and nothing
+/// else — answers `Ambiguous`, and the host placement refused:
+///
+/// ```text
+/// more than one archive carries 'BoingBag3.9-1', the media 'boingbag-39-1' needs:
+///   …\BoingBag39-1 (1).lha, …\BoingBag39-1.lha (ART-INPUT-INVALID)
+/// ```
+///
+/// Meanwhile the chain row above it and the source step's readout both showed
+/// the `(1)` file, by name, as the one the run would use. **Two screens, two
+/// answers, about one file** — and the one that refused was the one that
+/// does the work. That is the same defect ART-284 closed for the chain,
+/// arriving through the placement path instead.
+///
+/// ## The three ranks, and they are [`resolve_one`]'s own
+///
+/// 0. **The user said so.** An override outranks every identification ART
+///    made, because it is not an identification: the user named a file. Only
+///    a path that is among `found` can be returned — this function hands
+///    back a [`FoundPackage`] the caller opens — and in the product that is
+///    not a restriction, because the caller derives the folder it scans from
+///    the override itself. A path from somewhere else falls through to the
+///    ranks below rather than being invented.
+/// 1. **A single candidate**, after `media` and `distinguished_by`. The
+///    ordinary case, and the only one before 2026-09-09.
+/// 2. **The bytes**, when the candidates disagree: of several archives
+///    claiming one identity, the one whose md5 row names **this package's own
+///    artefact**, when exactly one does. A hash-known build outranks an
+///    unknown one, which is [`resolve_one`]'s rank 1 exactly — and it is
+///    what makes the owner's folder resolve instead of refusing.
+///
+/// Everything else is still [`super::scan::MediaMatch::Ambiguous`] over the
+/// candidates. **Two unknown builds are still two unknown builds**: nothing
+/// here picks a winner between files ART can say nothing about, which is the
+/// rule this module keeps everywhere else and the reason rank 2 requires
+/// *exactly* one hash-known candidate rather than a first match.
+///
+/// `hashes` is what the caller already read out of the scan cache
+/// ([`mediahash::remembered_media_in`]) — nothing here hashes a file, opens
+/// one, or touches a disk.
+pub fn package_archive_for<'a>(
+    found: &'a [FoundPackage],
+    package: &Package,
+    hashes: &[mediahash::MediaMatch],
+    chosen: Option<&Path>,
+) -> super::scan::MediaMatch<'a, FoundPackage> {
+    use super::scan::MediaMatch;
+
+    // --- rank 0: the user said so ------------------------------------------
+    if let Some(chosen) = chosen {
+        if let Some(entry) = found.iter().find(|f| f.path == chosen) {
+            return MediaMatch::Found(entry);
+        }
+    }
+
+    let candidates: Vec<&FoundPackage> = found
+        .iter()
+        .filter(|f| amiga_names_equal(&f.media, &package.media))
+        .filter(|f| match package.distinguished_by.as_deref() {
+            Some(inner) => super::scan::archive_carries(&f.path, inner),
+            None => true,
+        })
+        .collect();
+
+    match candidates.len() {
+        0 => return MediaMatch::Missing,
+        1 => return MediaMatch::Found(candidates[0]),
+        _ => {}
+    }
+
+    // --- rank 2: the bytes, and only when they name exactly one -------------
+    let rows = match mediahash::rows() {
+        Ok(rows) => rows,
+        // An unreadable table takes nothing away: the answer is the
+        // ambiguity it already was, never a guess made in its absence.
+        Err(_) => return MediaMatch::Ambiguous(candidates),
+    };
+    let Some(artefact) = artefact_for_package(rows, package) else {
+        return MediaMatch::Ambiguous(candidates);
+    };
+    let known: Vec<&FoundPackage> = candidates
+        .iter()
+        .copied()
+        .filter(|f| {
+            hashes.iter().any(|entry| {
+                entry.path == f.path
+                    && entry
+                        .row
+                        .as_ref()
+                        .and_then(artefact_of)
+                        .as_deref()
+                        .is_some_and(|id| id == artefact)
+            })
+        })
+        .collect();
+    match known.len() {
+        1 => MediaMatch::Found(known[0]),
+        _ => MediaMatch::Ambiguous(candidates),
+    }
+}
+
 fn resolve_one(slot: &Slot, facts: &Facts<'_>) -> SlotState {
     let installed = installed_state(slot, facts.manifest);
     let state = |found: Option<Found>, candidates: Vec<PathBuf>, chosen_missing| SlotState {
@@ -2573,6 +2682,110 @@ mod tests {
             "{:?}",
             state_of(&states, "package:boingbag-39-2").blocked_by
         );
+    }
+
+    // -----------------------------------------------------------------
+    // ART-288: which archive is a package's, when two claim one identity
+    // -----------------------------------------------------------------
+
+    /// **The owner's own folder, and the refusal it produced.**
+    /// `E:\amiga\Amigatolon\os39` holds two BoingBag 3.9-1 builds —
+    /// `BoingBag39-1.lha` (`Updater` 45.13) and `BoingBag39-1 (1).lha` (45.15,
+    /// the build ART's own table names) — and both carry the top-level
+    /// directory `BoingBag3.9-1`. Identity alone therefore answered
+    /// `Ambiguous`, and the host placement of the headline 0.9.1 feature
+    /// refused on the material it was written for, while the chain row
+    /// directly above it named the file it would use.
+    ///
+    /// The bytes settle it: exactly one of the two is in the table under this
+    /// package's own artefact.
+    #[test]
+    fn a_hash_known_build_outranks_an_unknown_one_at_the_same_identity_art_288() {
+        let package = package::by_id("boingbag-39-1").unwrap();
+        let both = [
+            archive("E:/os39/BoingBag39-1 (1).lha", "BoingBag3.9-1"),
+            archive("E:/os39/BoingBag39-1.lha", "BoingBag3.9-1"),
+        ];
+        let hashes = [hashed("E:/os39/BoingBag39-1 (1).lha", BB1_45_15_MD5)];
+
+        match package_archive_for(&both, &package, &hashes, None) {
+            crate::core::osinstall::scan::MediaMatch::Found(found) => assert_eq!(
+                found.path,
+                PathBuf::from("E:/os39/BoingBag39-1 (1).lha"),
+                "the build the table names, not the first by path"
+            ),
+            other => panic!("expected the hash-known build, got {other:?}"),
+        }
+    }
+
+    /// **And two builds ART can say nothing about are still two.** The rank
+    /// requires *exactly one* hash-known candidate, not a first match: this
+    /// module never picks a winner between files it has no evidence about,
+    /// and the refusal naming both is the honest answer.
+    #[test]
+    fn two_unknown_builds_at_one_identity_are_still_ambiguous() {
+        let package = package::by_id("boingbag-39-1").unwrap();
+        let both = [
+            archive("E:/os39/BoingBag39-1 (1).lha", "BoingBag3.9-1"),
+            archive("E:/os39/BoingBag39-1.lha", "BoingBag3.9-1"),
+        ];
+
+        match package_archive_for(&both, &package, &[], None) {
+            crate::core::osinstall::scan::MediaMatch::Ambiguous(paths) => {
+                let named: Vec<&str> = paths
+                    .iter()
+                    .map(|f| f.path.to_str().unwrap_or_default())
+                    .collect();
+                assert_eq!(
+                    named,
+                    vec!["E:/os39/BoingBag39-1 (1).lha", "E:/os39/BoingBag39-1.lha"],
+                    "both, so the refusal can name both"
+                );
+            }
+            other => panic!("nothing may be chosen here, got {other:?}"),
+        }
+    }
+
+    /// **The user outranks the table.** An override is not an identification
+    /// ART made, so it is not compared with one — rank 0, exactly as
+    /// `resolve_one` treats it. Asserted against the *unknown* build, because
+    /// that is the arm a "prefer the hash" rule written one rank too high
+    /// would get wrong.
+    #[test]
+    fn an_override_outranks_the_hash_even_when_it_names_the_unknown_build() {
+        let package = package::by_id("boingbag-39-1").unwrap();
+        let both = [
+            archive("E:/os39/BoingBag39-1 (1).lha", "BoingBag3.9-1"),
+            archive("E:/os39/BoingBag39-1.lha", "BoingBag3.9-1"),
+        ];
+        let hashes = [hashed("E:/os39/BoingBag39-1 (1).lha", BB1_45_15_MD5)];
+        let chosen = PathBuf::from("E:/os39/BoingBag39-1.lha");
+
+        match package_archive_for(&both, &package, &hashes, Some(&chosen)) {
+            crate::core::osinstall::scan::MediaMatch::Found(found) => {
+                assert_eq!(found.path, chosen, "the user said this one")
+            }
+            other => panic!("expected the chosen file, got {other:?}"),
+        }
+    }
+
+    /// The two ordinary answers are unchanged: one candidate is that
+    /// candidate, and none is `Missing`. Without this a rule that only ever
+    /// returned `Ambiguous` would pass the three tests above.
+    #[test]
+    fn one_candidate_is_that_candidate_and_none_is_missing() {
+        let package = package::by_id("boingbag-39-1").unwrap();
+        let one = [archive("E:/os39/BoingBag39-1.lha", "BoingBag3.9-1")];
+        assert!(matches!(
+            package_archive_for(&one, &package, &[], None),
+            crate::core::osinstall::scan::MediaMatch::Found(_)
+        ));
+
+        let other = [archive("E:/os39/Euro-Update.lha", "Euro-Update")];
+        assert!(matches!(
+            package_archive_for(&other, &package, &[], None),
+            crate::core::osinstall::scan::MediaMatch::Missing
+        ));
     }
 
     #[test]

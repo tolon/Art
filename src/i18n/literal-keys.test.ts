@@ -610,6 +610,11 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // the emulator route for the two BoingBags: `followUpPhrase` (the
     // version-gated second invocation the host-side `extra_members` unit
     // replaced) and `overlayAdvicePhrase` (the UAE fix's own advice line).
-    expect(dynamicCalls).toBe(176);
+    // 176 -> 178 (2026-09-09, ART-287). Two, and the same rule once more:
+    // the host-placement preview's heading has **three** states, not two —
+    // checking, the counts, and refused — so `previewHeadingPhrase` in
+    // `@/lib/osinstall` decides which key and the two panels only render it.
+    // Both panels count, because both render that heading.
+    expect(dynamicCalls).toBe(178);
   });
 });

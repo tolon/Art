@@ -2540,6 +2540,7 @@
       "requiresComponents": "{{list}} bileşeninin açık olmasına ihtiyaç duyuyor.",
       "preview": {
         "loading": "Bunun neyin yerini alacağı kontrol ediliyor…",
+        "refused": "Denetim tamamlanmadı — söylediği aşağıda.",
         "heading": "{{downgrades}} eski sürüm, {{upgrades}} yeni sürüm, {{sameVersion}} aynı sürüm, {{unversioned}} sürümsüz",
         "nothing": "Ağaçta hiçbir şeyin yerine geçilmeyecek.",
         "group": {

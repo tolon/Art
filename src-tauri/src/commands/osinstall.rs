@@ -1486,8 +1486,10 @@ fn preview_cache() -> &'static Mutex<PreviewCache> {
 fn resolve_package_archive<'a>(
     package: &Package,
     found: &'a [FoundPackage],
+    evidence: ArchiveEvidence<'_>,
 ) -> Result<&'a FoundPackage, RefusalReason> {
-    match package_for(found, &package.media, package.distinguished_by.as_deref()) {
+    let chosen = override_for(evidence.overrides, &package.id);
+    match slots::package_archive_for(found, package, evidence.hashes, chosen.as_deref()) {
         MediaMatch::Found(archive) => Ok(archive),
         MediaMatch::Missing => Err(RefusalReason::PackageArchiveMissing {
             package: package.id.clone(),
@@ -1502,6 +1504,59 @@ fn resolve_package_archive<'a>(
                 .collect(),
         }),
     }
+}
+
+/// What the caller already knows about the files in the package folder, and
+/// the two things this layer must not work out for itself.
+///
+/// **A record rather than two more parameters**, and the shape is
+/// `slots::Facts`': the resolution rule reads the user's own picks and the
+/// scan cache's own hash answers, and neither is something the placement path
+/// may go and compute — one belongs to a screen, the other to
+/// `osinstall_identify_media`'s job. Naming them together also stops the two
+/// being swapped: they are both borrowed slices of pairs at a call site.
+#[derive(Clone, Copy, Default)]
+struct ArchiveEvidence<'a> {
+    /// Per-slot file choices, as `osinstall_slots` and `osinstall_chain` take
+    /// them. Empty is "the user chose nothing by hand".
+    overrides: &'a [(String, PathBuf)],
+    /// What the scan cache already answered for these files. Empty is
+    /// "nobody has identified this folder yet", which costs the hash rank and
+    /// nothing else.
+    hashes: &'a [mediahash::MediaMatch],
+}
+
+/// The file the user picked by hand for `package`, out of the same
+/// `(slot id, path)` list `osinstall_slots` and `osinstall_chain` take.
+///
+/// The slot id for a package is `package:<id>`; an exact match and nothing
+/// else, which is `slots::Override::names`' own rule since the overlay slot
+/// kind went.
+fn override_for(overrides: &[(String, PathBuf)], package_id: &str) -> Option<PathBuf> {
+    let wanted = format!("package:{package_id}");
+    overrides
+        .iter()
+        .find(|(slot, _)| slot == &wanted)
+        .map(|(_, path)| path.clone())
+}
+
+/// What the scan cache already knows about the files in `folder`.
+///
+/// **Nothing is hashed here.** `remembered_media_in` reads the cache
+/// `osinstall_identify_media`'s job fills and answers for the files it
+/// already has an md5 for; a folder nobody has identified yet simply
+/// contributes no rank-2 evidence, and the resolution falls back to the
+/// ambiguity refusal it gave before — which is the honest answer, not a
+/// worse one.
+///
+/// An unreadable cache is an empty list rather than a failure, for the same
+/// reason: it can only ever *add* a way to resolve an ambiguity.
+fn remembered_hashes_in(folder: &Path) -> Vec<mediahash::MediaMatch> {
+    let Ok(root) = crate::scratch::root() else {
+        return Vec::new();
+    };
+    let cache = ScanCache::in_dir(root);
+    mediahash::remembered_media_in(folder, &cache).unwrap_or_default()
 }
 
 /// A plain-English sentence for a package ART cannot place from the host —
@@ -1701,6 +1756,7 @@ fn extract_incoming_for_preview(
     package_folder: &Path,
     ordered: &[String],
     catalogue: &[Package],
+    evidence: ArchiveEvidence<'_>,
     scratch_root: &Path,
     progress: &dyn ProgressSink,
 ) -> CoreResult<Vec<ExtractedItem>> {
@@ -1720,7 +1776,7 @@ fn extract_incoming_for_preview(
             .iter()
             .find(|p| &p.id == id)
             .expect("order() only ever returns ids it read from this same catalogue");
-        let archive = resolve_package_archive(package, &found)
+        let archive = resolve_package_archive(package, &found, evidence)
             .map_err(|r| CoreError::InvalidInput(describe_package_refusal(&r)))?;
         incoming.extend(extract_package_items(
             package,
@@ -1749,6 +1805,7 @@ fn preview_collisions(
     package_folder: &Path,
     ordered: &[String],
     catalogue: &[Package],
+    evidence: ArchiveEvidence<'_>,
     scratch_root: &Path,
     progress: &dyn ProgressSink,
 ) -> CoreResult<Vec<CollisionReport>> {
@@ -1774,8 +1831,14 @@ fn preview_collisions(
         }
     }
     sweep_stale_preview_scratch_dirs(scratch_root);
-    let incoming =
-        extract_incoming_for_preview(package_folder, ordered, catalogue, scratch_root, progress)?;
+    let incoming = extract_incoming_for_preview(
+        package_folder,
+        ordered,
+        catalogue,
+        evidence,
+        scratch_root,
+        progress,
+    )?;
     let entries: Vec<Incoming> = incoming
         .iter()
         .map(|(to, component, bytes_at)| Incoming {
@@ -2289,13 +2352,22 @@ fn ordered_packages_for_collisions(
 /// screen through the ordinary `job-progress` failed state, the same as any
 /// other job.
 #[tauri::command]
+/// `overrides` is the user's own per-slot file choices, exactly as
+/// `osinstall_slots` and `osinstall_chain` take them (ART-288). Without them
+/// this path resolved a package's archive by identity alone, so the owner's
+/// folder — two BoingBag 3.9-1 builds under one top-level directory —
+/// refused here while the chain row above it named the file it would use.
+/// `None` is "the caller has none", not "ignore the ones there are".
 pub fn osinstall_collisions(
     tree_root: PathBuf,
     package_folder: PathBuf,
     packages: Vec<String>,
+    overrides: Option<Vec<(String, PathBuf)>>,
     app: AppHandle,
     registry: State<'_, Arc<JobRegistry>>,
 ) -> AppResult<u64> {
+    let overrides = overrides.unwrap_or_default();
+    let hashes = remembered_hashes_in(&package_folder);
     let catalogue = package::packages()?;
     // ART-282: a preview used to go straight to `order_with_installed`,
     // which refuses an unsatisfied `requires` with its own raw, id-only
@@ -2341,6 +2413,10 @@ pub fn osinstall_collisions(
                 &package_folder,
                 &ordered,
                 &catalogue,
+                ArchiveEvidence {
+                    overrides: &overrides,
+                    hashes: &hashes,
+                },
                 &scratch_root,
                 progress,
             )?;
@@ -2399,6 +2475,7 @@ fn resolve_packages_for_add(
     tree_root: &Path,
     package_folder: &Path,
     packages: &[String],
+    evidence: ArchiveEvidence<'_>,
 ) -> AppResult<PackageResolution> {
     if packages.is_empty() {
         return Err(CoreError::InvalidInput("no packages were chosen".into()).into());
@@ -2432,7 +2509,7 @@ fn resolve_packages_for_add(
             // that names no shipped package would only repeat it.
             continue;
         };
-        if let Err(refusal) = resolve_package_archive(package, &found) {
+        if let Err(refusal) = resolve_package_archive(package, &found, evidence) {
             refusals.push(refusal);
         }
     }
@@ -2455,7 +2532,7 @@ fn resolve_packages_for_add(
             .find(|p| &p.id == id)
             .expect("order() only ever returns ids it read from this same catalogue")
             .clone();
-        let archive = resolve_package_archive(&package, &found)
+        let archive = resolve_package_archive(&package, &found, evidence)
             .expect("every id in `packages` was already resolved without refusal above")
             .path
             .clone();
@@ -2491,15 +2568,33 @@ pub struct OsInstallAddPackageResult {
 /// `add_package`'s own undeclared-overwrite check — is `core`'s, unchanged;
 /// this command adds nothing on top of it.
 #[tauri::command]
+/// `overrides` is the user's own per-slot file choices, exactly as
+/// `osinstall_slots` and `osinstall_chain` take them (ART-288). Without them
+/// this path resolved a package's archive by identity alone, so the owner's
+/// folder — two BoingBag 3.9-1 builds under one top-level directory —
+/// refused here while the chain row above it named the file it would use.
+/// `None` is "the caller has none", not "ignore the ones there are".
+#[allow(clippy::too_many_arguments)]
 pub fn osinstall_add_package(
     tree_root: PathBuf,
     package_folder: PathBuf,
     packages: Vec<String>,
+    overrides: Option<Vec<(String, PathBuf)>>,
     app: AppHandle,
     registry: State<'_, Arc<JobRegistry>>,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<AddPackageResult> {
-    let resolved = match resolve_packages_for_add(&tree_root, &package_folder, &packages)? {
+    let overrides = overrides.unwrap_or_default();
+    let hashes = remembered_hashes_in(&package_folder);
+    let resolved = match resolve_packages_for_add(
+        &tree_root,
+        &package_folder,
+        &packages,
+        ArchiveEvidence {
+            overrides: &overrides,
+            hashes: &hashes,
+        },
+    )? {
         Ok(resolved) => resolved,
         Err(refusals) => return Ok(AddPackageResult::Refused { refusals }),
     };
@@ -3298,6 +3393,7 @@ mod tests {
             &packages_dir,
             &ordered,
             &catalogue,
+            ArchiveEvidence::default(),
             &std::env::temp_dir(),
             &NoProgress,
         )
@@ -4239,6 +4335,7 @@ mod tests {
             &PathBuf::from(&packages),
             &ordered,
             &catalogue,
+            ArchiveEvidence::default(),
             scratch.path(),
             &NoProgress,
         )
@@ -4446,6 +4543,7 @@ mod tests {
             &packages_dir,
             &[],
             &catalogue,
+            ArchiveEvidence::default(),
             &std::env::temp_dir(),
             &NoProgress,
         )
@@ -4468,7 +4566,7 @@ mod tests {
         let catalogue = package::packages().unwrap();
         let package = catalogue.iter().find(|p| p.id == "locale-turkish").unwrap();
         let found = crate::core::osinstall::scan::find_packages(&packages_dir).unwrap();
-        let archive = resolve_package_archive(package, &found).unwrap();
+        let archive = resolve_package_archive(package, &found, ArchiveEvidence::default()).unwrap();
 
         let mut files = 0usize;
         let mut bytes = 0u64;
@@ -4540,7 +4638,7 @@ mod tests {
         let catalogue = package::packages().unwrap();
         let package = catalogue.iter().find(|p| p.id == "locale-turkish").unwrap();
         let found = crate::core::osinstall::scan::find_packages(&packages_dir).unwrap();
-        let archive = resolve_package_archive(package, &found).unwrap();
+        let archive = resolve_package_archive(package, &found, ArchiveEvidence::default()).unwrap();
 
         let mut files = 0usize;
         let mut bytes = 0u64;
@@ -4573,6 +4671,7 @@ mod tests {
             &packages_dir,
             &["locale-turkish".to_string()],
             &catalogue,
+            ArchiveEvidence::default(),
             &std::env::temp_dir(),
             &cancel,
         )
@@ -4695,10 +4794,14 @@ mod tests {
         std::fs::create_dir_all(&packages_dir).unwrap();
         write_locale_turkish_archive(&packages_dir, "turkish.lha", b"catalog bytes");
 
-        let refusals =
-            resolve_packages_for_add(&tree, &packages_dir, &["locale-turkish".to_string()])
-                .unwrap()
-                .unwrap_err();
+        let refusals = resolve_packages_for_add(
+            &tree,
+            &packages_dir,
+            &["locale-turkish".to_string()],
+            ArchiveEvidence::default(),
+        )
+        .unwrap()
+        .unwrap_err();
         assert!(
             refusals.iter().any(|r| matches!(
                 r,
@@ -4706,6 +4809,109 @@ mod tests {
             )),
             "{refusals:?}"
         );
+    }
+
+    /// **ART-288, at the command level, with the owner's own shape.**
+    ///
+    /// `E:\amiga\Amigatolon\os39` holds two BoingBag 3.9-1 builds under one
+    /// top-level directory, and on 2026-09-09 this path refused with
+    /// *"more than one archive carries 'BoingBag3.9-1'"* — the headline
+    /// feature of 0.9.1, refusing on the material it was written for, while
+    /// the chain row above it named the file it would use.
+    ///
+    /// Three arms, because the fix has three ranks and the first two would
+    /// each pass a test written for the other:
+    ///
+    /// 1. **nothing known** — still the ambiguity refusal, naming both. Two
+    ///    builds ART can say nothing about are still two.
+    /// 2. **one of them in the hash table** — resolved to that one. The md5
+    ///    is the shipped table's own row for BoingBag 3.9-1, and it is
+    ///    supplied the way `osinstall_slots` supplies it: as an already-read
+    ///    cache answer, because this layer hashes nothing.
+    /// 3. **the user's override** — wins outright, even when it names the
+    ///    build the table does *not* know, which is the arm a "prefer the
+    ///    hash" rule written one rank too high would get wrong.
+    #[test]
+    fn resolve_packages_for_add_settles_two_builds_of_one_package_art_288() {
+        let dir = scratch("add-two-builds");
+        let tree = dir.join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        write_test_manifest(&tree, Vec::new());
+
+        let packages_dir = dir.join("packages");
+        std::fs::create_dir_all(&packages_dir).unwrap();
+        // Both carry `BoingBag3.9-1` at their top level, which is the whole
+        // of the ambiguity: `find_packages` reads that name out of each.
+        for name in ["BoingBag39-1.lha", "BoingBag39-1 (1).lha"] {
+            std::fs::write(
+                packages_dir.join(name),
+                crate::core::lha::tests::make_lha_with_raw_names(&[(
+                    b"BoingBag3.9-1\\AmigaOS-Update",
+                    b"payload",
+                )]),
+            )
+            .unwrap();
+        }
+        let known = packages_dir.join("BoingBag39-1 (1).lha");
+        let unknown = packages_dir.join("BoingBag39-1.lha");
+        let chosen = &["boingbag-39-1".to_string()];
+
+        // 1 — nothing known about either.
+        let refusals =
+            resolve_packages_for_add(&tree, &packages_dir, chosen, ArchiveEvidence::default())
+                .unwrap()
+                .unwrap_err();
+        let ambiguous = refusals
+            .iter()
+            .find_map(|r| match r {
+                crate::core::osinstall::RefusalReason::PackageArchiveAmbiguous {
+                    paths, ..
+                } => Some(paths),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("expected an ambiguity refusal, got {refusals:?}"));
+        assert_eq!(ambiguous.len(), 2, "and it names both: {ambiguous:?}");
+
+        // 2 — the table names one of them. This md5 is the shipped
+        // own-table row for this package's own artefact, quoted here as a
+        // literal so a row that moves or loses its artefact fails this test
+        // rather than being silently re-stated.
+        const BB1_45_15_MD5: &str = "ef67ce2f786044dae1bce8fafb439d5e";
+        let hashes = [mediahash::MediaMatch {
+            path: known.clone(),
+            volume_name: None,
+            row: mediahash::row_for(BB1_45_15_MD5).unwrap().cloned(),
+            md5: BB1_45_15_MD5.to_string(),
+            confirmed: mediahash::confirmation_for(BB1_45_15_MD5).unwrap().cloned(),
+        }];
+        let resolved = resolve_packages_for_add(
+            &tree,
+            &packages_dir,
+            chosen,
+            ArchiveEvidence {
+                overrides: &[],
+                hashes: &hashes,
+            },
+        )
+        .unwrap()
+        .expect("the hash-known build settles it");
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].1, known, "the build the table names");
+
+        // 3 — and the user outranks the table.
+        let overrides = [("package:boingbag-39-1".to_string(), unknown.clone())];
+        let resolved = resolve_packages_for_add(
+            &tree,
+            &packages_dir,
+            chosen,
+            ArchiveEvidence {
+                overrides: &overrides,
+                hashes: &hashes,
+            },
+        )
+        .unwrap()
+        .expect("an override is not an identification ART made");
+        assert_eq!(resolved[0].1, unknown, "the user said this one");
     }
 
     /// The positive case beside it: once `locale-base` really is on the
@@ -4726,10 +4932,14 @@ mod tests {
         std::fs::create_dir_all(&packages_dir).unwrap();
         write_locale_turkish_archive(&packages_dir, "turkish.lha", b"catalog bytes");
 
-        let resolved =
-            resolve_packages_for_add(&tree, &packages_dir, &["locale-turkish".to_string()])
-                .unwrap()
-                .unwrap();
+        let resolved = resolve_packages_for_add(
+            &tree,
+            &packages_dir,
+            &["locale-turkish".to_string()],
+            ArchiveEvidence::default(),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].0.id, "locale-turkish");
         assert_eq!(resolved[0].1, packages_dir.join("turkish.lha"));
@@ -4759,10 +4969,14 @@ mod tests {
             &without,
             vec![locale_base_file_record("Locale/Languages/turkish.language")],
         );
-        let refusals =
-            resolve_packages_for_add(&without, &packages_dir, &["locale-turkish".to_string()])
-                .unwrap()
-                .unwrap_err();
+        let refusals = resolve_packages_for_add(
+            &without,
+            &packages_dir,
+            &["locale-turkish".to_string()],
+            ArchiveEvidence::default(),
+        )
+        .unwrap()
+        .unwrap_err();
         // **The ordinary arm, and by name — and it used to be the
         // Amiga-side one** (2026-09-08, ART-166's reversal). While BoingBag
         // 3.9-2 was `encrypted-payload` blocked, the Packages step disabled
@@ -4804,10 +5018,14 @@ mod tests {
             vec![locale_base_file_record("Locale/Languages/turkish.language")],
             vec![boingbag_two_ran()],
         );
-        let resolved =
-            resolve_packages_for_add(&with, &packages_dir, &["locale-turkish".to_string()])
-                .unwrap()
-                .unwrap();
+        let resolved = resolve_packages_for_add(
+            &with,
+            &packages_dir,
+            &["locale-turkish".to_string()],
+            ArchiveEvidence::default(),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             resolved
                 .iter()
@@ -4833,10 +5051,14 @@ mod tests {
         std::fs::create_dir_all(&packages_dir).unwrap();
         // No archive ever written here.
 
-        let refusals =
-            resolve_packages_for_add(&tree, &packages_dir, &["locale-turkish".to_string()])
-                .unwrap()
-                .unwrap_err();
+        let refusals = resolve_packages_for_add(
+            &tree,
+            &packages_dir,
+            &["locale-turkish".to_string()],
+            ArchiveEvidence::default(),
+        )
+        .unwrap()
+        .unwrap_err();
         assert!(
             refusals.iter().any(|r| matches!(
                 r,
@@ -6508,6 +6730,7 @@ mod tests {
             &tree,
             &packages_dir,
             &["boingbag-39-2-contribution".to_string()],
+            ArchiveEvidence::default(),
         )
         .unwrap()
         .unwrap();

@@ -126,7 +126,7 @@ import {
   slotOverrides,
 } from "@/lib/amigainstall";
 import {
-  collisionCounts,
+  previewHeadingPhrase,
   fileName,
   notYetRunnablePanelKey,
   osinstallChain,
@@ -137,6 +137,7 @@ import {
   type ChainRow,
   type InstallRelease,
   type PackageSummary,
+  type SlotOverride,
   type SlotReport,
   type SlotState,
 } from "@/lib/osinstall";
@@ -999,6 +1000,9 @@ export function AmigaInstallPanel({
     treeRoot,
     packageFolder: hostFolder,
     chosen: activePackageId && targetRunsOnAmiga === false ? [activePackageId] : [],
+    // ART-288: the placement path resolves this package's archive the way the
+    // chain row above it does — the user's own choice first.
+    overrides: JSON.parse(overridesKey) as SlotOverride[],
     enabled: targetRunsOnAmiga === false && targetReady,
   });
 
@@ -1491,7 +1495,7 @@ export function AmigaInstallPanel({
    * sentence. They are one expression now.
    */
   const hostSideRow = hasChain && targetRunsOnAmiga === false && targetReady;
-  const placementCounts = placement.collisions ? collisionCounts(placement.collisions) : null;
+  const placementHeading = previewHeadingPhrase(placement.collisions, placement.collisionsError);
   /** The one Run button's own two questions: is it busy, and how far. */
   const running = hostSideRow ? placement.busy : busy;
   const runProgress = hostSideRow ? placement.progress : progress;
@@ -1822,9 +1826,7 @@ export function AmigaInstallPanel({
       {hostSideRow && (
         <div data-testid="amiga-chain-placement" style={{ marginBottom: 12 }}>
           <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>
-            {placementCounts
-              ? t("osinstall.packages.preview.heading", { ...placementCounts })
-              : t("osinstall.packages.preview.loading")}
+            {placementHeading && t(placementHeading.key, placementHeading.params)}
           </h3>
           {!hostFolder && (
             <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>

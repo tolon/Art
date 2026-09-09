@@ -2540,6 +2540,7 @@
       "requiresComponents": "Needs the {{list}} component switched on.",
       "preview": {
         "loading": "Checking what this would replace…",
+        "refused": "The check did not finish — what it said is below.",
         "heading": "{{downgrades}} downgrades, {{upgrades}} upgrades, {{sameVersion}} same version, {{unversioned}} unversioned",
         "nothing": "Nothing on the tree would be replaced.",
         "group": {

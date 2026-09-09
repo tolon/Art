@@ -104,7 +104,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import {
-  collisionCounts,
+  previewHeadingPhrase,
   hostPlacementBlockKey,
   isInstallRelease,
   osinstallChain,
@@ -319,7 +319,7 @@ export function PackagePanel({
     onChosenChange?.(next);
   }
 
-  const counts = placement.collisions ? collisionCounts(placement.collisions) : null;
+  const heading = previewHeadingPhrase(placement.collisions, placement.collisionsError);
   const pct = placement.progress ? fraction(placement.progress) : null;
   const shippedCount = catalogue?.length ?? 3;
   const previewNeedsFolder = treeRoot !== null && chosen.length > 0 && !packageFolder;
@@ -580,9 +580,7 @@ export function PackagePanel({
               is never going to run (M3). The reason sits below instead. */}
           {blockedChosen.length === 0 && (
             <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>
-              {counts
-                ? t("osinstall.packages.preview.heading", { ...counts })
-                : t("osinstall.packages.preview.loading")}
+              {heading && t(heading.key, heading.params)}
             </h3>
           )}
 

@@ -1887,11 +1887,20 @@ interface OsInstallCollisionsResult {
  * thread); this wrapper hides that behind the same
  * `Promise<CollisionReport[]>` shape it always had, by starting the job and
  * awaiting its own result event.
+ *
+ * `overrides` is the user's own per-slot file choices, in the same shape
+ * `osinstallSlots` and `osinstallChain` take them (`slotOverrides` in
+ * `@/lib/amigainstall`). **ART-288**: without them this path resolved a
+ * package's archive by identity alone, so a folder holding two builds of one
+ * BoingBag refused here while the chain row above it named the file it would
+ * use — two screens, two answers, and the one that refused was the one that
+ * does the work.
  */
 export async function osinstallCollisions(
   treeRoot: string,
   packageFolder: string,
-  packages: string[]
+  packages: string[],
+  overrides?: SlotOverride[]
 ): Promise<CollisionReport[]> {
   if (!treeRoot || !packageFolder || packages.length === 0) return [];
   // `awaitJobResult` itself subscribes before calling `start` (the `invoke`
@@ -1901,7 +1910,13 @@ export async function osinstallCollisions(
   // event outright.
   return awaitJobResult<OsInstallCollisionsResult, CollisionReport[]>(
     OSINSTALL_COLLISIONS_EVENT,
-    () => invoke<number>("osinstall_collisions", { treeRoot, packageFolder, packages }),
+    () =>
+      invoke<number>("osinstall_collisions", {
+        treeRoot,
+        packageFolder,
+        packages,
+        overrides: overrides && overrides.length > 0 ? overrides : null,
+      }),
     (payload) => payload.reports
   );
 }
@@ -2004,12 +2019,14 @@ export type AddPackageResult =
 export async function osinstallAddPackage(
   treeRoot: string,
   packageFolder: string,
-  packages: string[]
+  packages: string[],
+  overrides?: SlotOverride[]
 ): Promise<AddPackageResult> {
   return invoke<AddPackageResult>("osinstall_add_package", {
     treeRoot,
     packageFolder,
     packages,
+    overrides: overrides && overrides.length > 0 ? overrides : null,
   });
 }
 
@@ -2085,6 +2102,37 @@ export interface CollisionCounts {
   upgrades: number;
   sameVersion: number;
   unversioned: number;
+}
+
+/**
+ * The one heading above a host-placement preview — **three states, and they
+ * stay three** (ART-287).
+ *
+ * It was a two-way ternary in both panels: counts when the answer had
+ * arrived, *"Checking what this would replace…"* otherwise. *Otherwise*
+ * covers a refusal, so a preview that finished and **failed** kept the
+ * checking sentence over the top of its own red refusal box — which
+ * `docs/assets/chain.png` caught: the screen saying it was still working
+ * directly above a finished failure. Checking, done and refused are three
+ * things a person does three different things about, and CLAUDE.md's rule is
+ * that endings stay distinct.
+ *
+ * `null` for a preview that has neither started nor been asked for; the
+ * caller renders no heading at all then, which is its own fourth state and
+ * not this function's to invent.
+ */
+export function previewHeadingPhrase(
+  collisions: CollisionReport[] | null,
+  collisionsError: string | null
+): Phrase | null {
+  if (collisionsError !== null) return { key: "osinstall.packages.preview.refused" };
+  if (collisions !== null) {
+    return {
+      key: "osinstall.packages.preview.heading",
+      params: { ...collisionCounts(collisions) },
+    };
+  }
+  return { key: "osinstall.packages.preview.loading" };
 }
 
 export function collisionCounts(reports: CollisionReport[]): CollisionCounts {

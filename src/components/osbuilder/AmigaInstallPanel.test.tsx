@@ -1803,9 +1803,16 @@ describe("the chain", () => {
     await user.click(radioFor("AmigaOS 3.9 Locale update"));
 
     await waitFor(() =>
-      expect(collisionsMock).toHaveBeenCalledWith("D:/amiga/os39", "E:/material/locale", [
-        "locale-39",
-      ])
+      // The fourth argument is the user's own per-slot choices (ART-288):
+      // this path resolves a package's archive the way the chain row does,
+      // and an empty list here is "the user has chosen nothing by hand",
+      // not "ignore what they chose".
+      expect(collisionsMock).toHaveBeenCalledWith(
+        "D:/amiga/os39",
+        "E:/material/locale",
+        ["locale-39"],
+        []
+      )
     );
     // No emulator anywhere near this row: no window warning, no emulator
     // confirmation, and no `compose`.
@@ -1816,9 +1823,12 @@ describe("the chain", () => {
     await user.click(screen.getByLabelText(i18n.t("osinstall.packages.confirm", { count: 1 })));
     await user.click(runButton());
     await waitFor(() =>
-      expect(addPackageMock).toHaveBeenCalledWith("D:/amiga/os39", "E:/material/locale", [
-        "locale-39",
-      ])
+      expect(addPackageMock).toHaveBeenCalledWith(
+        "D:/amiga/os39",
+        "E:/material/locale",
+        ["locale-39"],
+        []
+      )
     );
 
     // Its ending is the `paketler` step's own, and it names the row.
@@ -1845,6 +1855,38 @@ describe("the chain", () => {
     expect(screen.getByTestId("amiga-placement-report-row").textContent).toBe(
       i18n.t("osinstall.chain.reportRow", { name: "AmigaOS 3.9 Locale update" })
     );
+  });
+
+  /**
+   * **ART-287.** `docs/assets/chain.png`, the 11:2x build: the preview
+   * finished and **refused** — the owner's folder holds two BoingBag 3.9-1
+   * builds — and the heading above the red box still read *"Checking what
+   * this would replace…"*. The screen said it was working directly over a
+   * finished failure. Checking, done and refused are three states and a
+   * person does three different things about them, so the heading has three
+   * answers now.
+   *
+   * Both halves: the refusal's own heading appears, and the checking sentence
+   * is gone. Asserting only the first would pass for a screen showing both at
+   * once, which is exactly the frame this is about.
+   */
+  it("stops saying it is checking once the preview has refused", async () => {
+    collisionsMock.mockRejectedValue(
+      "invalid input: more than one archive carries 'BoingBag3.9-1', the media " +
+        "'boingbag-39-1' needs: E:/os39/BoingBag39-1 (1).lha, E:/os39/BoingBag39-1.lha " +
+        "(ART-INPUT-INVALID)"
+    );
+    renderChain();
+    await screen.findAllByTestId("amiga-chain-row");
+    await userEvent.setup().click(radioFor("AmigaOS 3.9 Locale update"));
+
+    // The refusal itself, verbatim from Rust (ART-060).
+    const box = await screen.findByTestId("host-placement-preview-error");
+    expect(box.textContent).toContain("more than one archive carries");
+
+    const block = screen.getByTestId("amiga-chain-placement");
+    expect(block.textContent).toContain(i18n.t("osinstall.packages.preview.refused"));
+    expect(block.textContent).not.toContain(i18n.t("osinstall.packages.preview.loading"));
   });
 
   it("asks the chain again after a run, and offers the next ready row", async () => {

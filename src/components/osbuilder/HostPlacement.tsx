@@ -35,6 +35,7 @@ import {
   refusalPhrase,
   type ApplyOutcome,
   type CollisionReport,
+  type SlotOverride,
   type RefusalReason,
 } from "@/lib/osinstall";
 import { onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
@@ -79,6 +80,7 @@ export function useHostPlacement({
   treeRoot,
   packageFolder,
   chosen,
+  overrides,
   enabled,
 }: {
   treeRoot: string | null;
@@ -88,6 +90,11 @@ export function useHostPlacement({
    *  slots', and the caller resolves it before it gets here. */
   packageFolder: string | null;
   chosen: string[];
+  /** The user's own per-slot file choices, forwarded to both commands
+   *  (ART-288). A package's archive is resolved the way the chain resolves
+   *  it — the override first — so this screen and that one cannot answer
+   *  differently about one file. Optional: a caller with none passes none. */
+  overrides?: SlotOverride[];
   enabled: boolean;
 }): HostPlacement {
   const { t } = useTranslation();
@@ -110,6 +117,13 @@ export function useHostPlacement({
   // arrays are not. A package id never holds a newline.
   const chosenKey = chosen.join("\n");
   const ids = useMemo(() => (chosenKey ? chosenKey.split("\n") : []), [chosenKey]);
+  // The same rule for the same reason: a fresh array per render is a fresh
+  // identity and an endless re-preview. Serialised once, parsed where used.
+  const overridesKey = JSON.stringify(overrides ?? []);
+  const chosenFiles = useMemo(
+    () => JSON.parse(overridesKey) as SlotOverride[],
+    [overridesKey]
+  );
 
   // §3's PREVIEW: read-only, recomputed whenever the request changes, and
   // only once at least one package is chosen — an empty selection previews
@@ -126,7 +140,7 @@ export function useHostPlacement({
       return;
     }
     let cancelled = false;
-    osinstallCollisions(treeRoot, packageFolder, ids)
+    osinstallCollisions(treeRoot, packageFolder, ids, chosenFiles)
       .then((reports) => {
         if (!cancelled) {
           setCollisions(reports);
@@ -190,7 +204,7 @@ export function useHostPlacement({
     setOutcome(null);
     setRefusals(null);
     try {
-      const result = await osinstallAddPackage(treeRoot, packageFolder, ids);
+      const result = await osinstallAddPackage(treeRoot, packageFolder, ids, chosenFiles);
       if (result.outcome === "refused") {
         // F2: typed, not a job that could only have failed later with
         // Rust's own debug text — nothing was written.
