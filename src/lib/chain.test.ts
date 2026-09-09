@@ -12,7 +12,13 @@ import { describe, expect, it } from "vitest";
 
 import en from "@/i18n/en.json";
 import tr from "@/i18n/tr.json";
-import { chainLines, chainSummaryLine, type ChainLineKind } from "@/lib/chain";
+import {
+  chainLines,
+  chainSummaryLine,
+  choiceRowState,
+  type ChainLineKind,
+  type ChoiceRowState,
+} from "@/lib/chain";
 import type { ChainReport, ChainRow, ChainState } from "@/lib/osinstall";
 
 /** Whether `dotted` names a string leaf in `catalogue`. */
@@ -349,5 +355,148 @@ describe("chainSummaryLine", () => {
       expect(isLeafKey(en, line.key)).toBe(true);
       expect(isLeafKey(tr, line.key)).toBe(true);
     }
+  });
+});
+
+describe("choiceRowState", () => {
+  // How the choice tab (four-tab design § 3.2) draws one chain row: which of
+  // three tick states it is in, and — when it is not the user's to decide —
+  // which single reason it is not.
+  //
+  // **The tick never carries the sentence.** Every one of these rows already
+  // says what it is in `line.phrase`; this decides only whether the box is
+  // on, off, or the user's, so a row can never be drawn tickable while its
+  // own sentence says it cannot run.
+  //
+  // One case per `ChainLineKind`, plus the two refusals apart (they are the
+  // one kind with two answers) and the `runsOnAmiga` arm, which cuts across
+  // the kinds rather than being one of them.
+
+  /** The state of the one line `chainLines` makes from `state`. */
+  function stateOf(over: Partial<ChainRow> & { state: ChainState }): ChoiceRowState {
+    const built = row(over);
+    return choiceRowState(chainLines([built])[0], built);
+  }
+
+  it("ticks an installed row and takes it out of the user's hands", () => {
+    // On, because it *is* on: the tree records it. Disabled, because
+    // unticking it would offer to un-install something ART cannot un-install.
+    expect(stateOf({ state: { state: "installed", when: null } })).toEqual({
+      tick: "on",
+      enabled: false,
+      reason: "installed",
+    });
+  });
+
+  it("leaves a ready row to the user", () => {
+    expect(
+      stateOf({ state: { state: "ready" }, sentenceFacts: { file: "BB1.lha", runsOnAmiga: false } })
+    ).toEqual({ tick: "user", enabled: true });
+  });
+
+  it("leaves a blocked row tickable — the run orders it and refuses by name", () => {
+    // Spec § 3.2: *a `BlockedBy` row can be ticked; the run orders it after
+    // what it needs and refuses if that is unticked, naming both.* Drawing
+    // it disabled would make the list say the row is impossible when it is
+    // merely later.
+    expect(
+      stateOf({
+        state: { state: "blocked-by", names: ["BoingBag 3.9-1"] },
+        sentenceFacts: { file: "BB2.lha", runsOnAmiga: false },
+      })
+    ).toEqual({ tick: "user", enabled: true });
+  });
+
+  it("leaves a row blocked on a component tickable, for the same reason", () => {
+    expect(
+      stateOf({
+        state: {
+          state: "blocked-by-component",
+          components: [{ id: "locale-base", labelKey: "osinstall.components.name.os39.locale" }],
+        },
+        sentenceFacts: { file: "Locale3_9.lha", runsOnAmiga: false },
+      })
+    ).toEqual({ tick: "user", enabled: true });
+  });
+
+  it("leaves a row refused as ambiguous tickable, so the refusal is the run's", () => {
+    // Two candidate files is a question the user answers on tab 1 by naming
+    // one. The row stays in the list, ticked or not as they left it, and the
+    // run refuses with the row's own sentence rather than the list quietly
+    // dropping it.
+    expect(
+      stateOf({
+        state: {
+          state: "refused",
+          reason: { because: "ambiguous", candidates: ["D:/a/x.lha", "D:/b/x.lha"] },
+        },
+        sentenceFacts: { file: null, runsOnAmiga: false },
+      })
+    ).toEqual({ tick: "user", enabled: true });
+  });
+
+  it("refuses the tick for a row ART cannot place at all", () => {
+    expect(
+      stateOf({
+        state: { state: "refused", reason: { because: "not-placeable", block: "needs-fixfonts" } },
+        sentenceFacts: { file: "Euro.lha", runsOnAmiga: null },
+      })
+    ).toEqual({ tick: "off", enabled: false, reason: "not-placeable" });
+  });
+
+  it("refuses the tick for a row nobody has measured", () => {
+    expect(
+      stateOf({
+        state: { state: "not-yet-runnable", reason: "installer-not-measured" },
+        sentenceFacts: { file: "BB34.lha", runsOnAmiga: true },
+      })
+    ).toEqual({ tick: "off", enabled: false, reason: "not-yet-runnable" });
+    // And **not** `runs-on-amiga`, which is also true of it: the more
+    // specific reason is the one that says what is actually unknown.
+  });
+
+  it("never offers a row that runs on the Amiga — the wizard has one route", () => {
+    // The precedence rule of the 2026-08 design § 3.2 with the Amiga route
+    // removed: there is no route control on this tab, so a row whose only
+    // route is the emulator is off and disabled whatever else it is —
+    // including `ready`, which is the state that would otherwise draw a tick
+    // the wizard cannot honour.
+    expect(
+      stateOf({
+        state: { state: "ready" },
+        sentenceFacts: { file: "BB34.lha", runsOnAmiga: true },
+      })
+    ).toEqual({ tick: "off", enabled: false, reason: "runs-on-amiga" });
+  });
+
+  it("refuses the tick for a row whose file is not here", () => {
+    expect(
+      stateOf({
+        state: { state: "missing", expected: ["Locale3_9.lha"] },
+        sentenceFacts: { file: null, runsOnAmiga: false },
+      })
+    ).toEqual({ tick: "off", enabled: false, reason: "missing" });
+  });
+
+  it("refuses the tick for a row the material itself makes redundant", () => {
+    expect(
+      stateOf({
+        state: { state: "not-needed", supersededBy: "BoingBags 3&4" },
+        sentenceFacts: { file: null, runsOnAmiga: null },
+      })
+    ).toEqual({ tick: "off", enabled: false, reason: "not-needed" });
+  });
+
+  it("keeps an installed row ticked even when it runs on the Amiga", () => {
+    // The order of the two arms, pinned: *installed* is a fact about the
+    // tree and *runs on the Amiga* is a fact about the route. Reading the
+    // route first would untick a row the tree already carries — the screen
+    // out-claiming the core in the direction that loses work.
+    expect(
+      stateOf({
+        state: { state: "installed", when: null },
+        sentenceFacts: { file: null, runsOnAmiga: true },
+      })
+    ).toEqual({ tick: "on", enabled: false, reason: "installed" });
   });
 });

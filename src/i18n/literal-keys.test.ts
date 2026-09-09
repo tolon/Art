@@ -633,6 +633,22 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // drawing one catalogue, not a new pattern: `recipe-component-keys.test.ts`
     // checks every `labelKey` a shipped recipe names against both catalogues,
     // which is the check this scan cannot make.
+    // 181 -> 178 -> 181 (2026-09-09, four tabs round 3, task 3). **Net
+    // zero, and the two halves are not the same three.** `PackagePanel.tsx`
+    // is deleted and took three with it — `hostPlacementBlockKey`, the
+    // preview heading's `Phrase`, and the run button's ternary over two
+    // literal keys. `ChoiceTab.tsx`'s updates group adds three, all of them
+    // the rule this count exists for: the row's own state sentence
+    // (`t(said.key, said.params)`, eight endings that must never collapse
+    // into "not done"), the row's `where` — *runs on the Amiga* / *placed
+    // from Windows*, its own field because it is true of the row whatever
+    // state the row is in — and `t(component.labelKey)`, which fills the one
+    // parameter `@/lib/chain` cannot: a row blocked on a component names it
+    // by the key the parts group above labels it with, because that module
+    // never renders. `chain.test.ts` enumerates every variant of the first
+    // two; the third is a recipe's own `labelKey`, covered the way "130 ->
+    // 131" covers it (`recipe-component-keys.test.ts`, and `dead-keys.test.
+    // ts` reading the recipe files themselves).
     expect(dynamicCalls).toBe(181);
   });
 });

@@ -111,12 +111,13 @@ export interface ComponentChoice {
 
 export interface PackageChoice {
   /**
-   * The folder the two package panels read archives out of.
+   * The folder the Amiga-side install panel reads archives out of. It was
+   * two panels' until round 3 task 3 deleted `PackagePanel`.
    *
    * **Still stored, and that is a decision rather than an oversight** (fix
    * round 1, F1). It is *also* in {@link MaterialChoice.folders} — adding a
    * folder here adds it there — but it keeps its own value while
-   * `PackagePanel` and `AmigaInstallPanel` still take one folder each. Making
+   * `AmigaInstallPanel` still takes one folder. Making
    * it a pure view onto the list's first untagged entry broke two things at
    * once for a user whose archives live apart from their disks: on upgrade
    * the panels were handed the *disks* folder and their own already-chosen
@@ -164,6 +165,24 @@ export interface CardChoice {
  */
 export interface FirstBootChoice {
   written: boolean;
+  /**
+   * Whether the build should write a first-boot block at all — the choice
+   * tab's third group (four-tab design § 3.2), and a different question from
+   * `written`, which is a fact about a folder.
+   *
+   * **Absent means ticked, and absent is the shipped default.** The
+   * first-boot block is what makes a PiStorm tree boot its own hardware
+   * (first-boot design § 3), so the wanted state is on — but writing `true`
+   * into everybody's `settings.json` on first render would be ART's own
+   * "nothing changes unless the user changes it" broken by the screen that
+   * merely displays the default. `recallInto` is what makes the optional
+   * field expressible: it starts from the fallback and overwrites a field
+   * only where the guard accepts a **stored** value, so a
+   * `buildSession.firstboot` written by today's ART — `{ written: true }` —
+   * comes back with `wanted` still absent, and only a user who touches the
+   * tick puts a boolean there. A stored `false` is a boolean and survives.
+   */
+  wanted?: boolean;
 }
 
 /**
@@ -336,6 +355,11 @@ export const CARD_SPEC: { [K in keyof CardChoice]: Guard<CardChoice[K]> } = {
 
 export const FIRSTBOOT_SPEC: { [K in keyof FirstBootChoice]: Guard<FirstBootChoice[K]> } = {
   written: isFlag,
+  // Guarded like every other field, and **not** in `DEFAULT_FIRSTBOOT`: the
+  // guard is what lets a stored `false` through, and the absence from the
+  // default is what keeps an untouched tick out of `settings.json`. See
+  // `FirstBootChoice.wanted`.
+  wanted: isFlag,
 };
 
 export const DEFAULT_MATERIAL: MaterialChoice = { folders: [] };

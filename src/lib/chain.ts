@@ -312,3 +312,90 @@ export function chainSummaryLine(report: ChainReport): Phrase {
       }
     : { key: "osinstall.chain.setLine", params: { release, installed, total } };
 }
+
+/**
+ * How one chain row is drawn on the choice tab (four-tab design § 3.2).
+ *
+ * **Three tick states, and the third is the only one the user owns.**
+ * `on` is a row the tree already carries; `off` is a row that cannot go on
+ * this build whatever the user wants; `user` is a row whose box means what a
+ * box means. The reason travels with the two decided states so a screen can
+ * say *why* a box is dead — and it never carries the sentence, which is
+ * `line.phrase`'s job and only ever `chain.rs`'s decision.
+ *
+ * **Why a function and not four `&&`s in the JSX.** The 2026-08 design's own
+ * precedence rule — installed, then unmeasured, then unplaceable, then the
+ * Amiga route, then the rest — is exactly the kind of ordered decision this
+ * project has twice found spread across a component as independent guards,
+ * where a fifth state falls through every one of them and renders a tick
+ * nobody decided. Here a fifth `ChainLineKind` reaches the last line and
+ * comes back `user`, which is a decision, and the arms above it are ordered
+ * once, in one place, with a test each.
+ */
+export type ChoiceRowState =
+  | { tick: "on"; enabled: false; reason: "installed" }
+  | {
+      tick: "off";
+      enabled: false;
+      reason: "not-yet-runnable" | "not-placeable" | "runs-on-amiga" | "missing" | "not-needed";
+    }
+  | { tick: "user"; enabled: true };
+
+/**
+ * {@link ChoiceRowState} for one row.
+ *
+ * Both halves are needed and neither is derivable from the other: `line`
+ * carries the ending, `row` carries the two facts the ending does not —
+ * which refusal it is (`RefusedBecause`), and where the row would run.
+ */
+export function choiceRowState(line: ChainLine, row: ChainRow): ChoiceRowState {
+  // **Installed first, above everything.** It is a fact about the tree, read
+  // out of `distribution.json`, and every arm below it is a fact about the
+  // route or the material. A row the tree carries is ticked whatever else is
+  // true of it — reading the route first would untick a BoingBag that is
+  // already in, which is the screen out-claiming the core in the direction
+  // that loses work.
+  if (line.kind === "installed") {
+    return { tick: "on", enabled: false, reason: "installed" };
+  }
+
+  // Above `runs-on-amiga`, which is also true of these rows: "nobody has
+  // measured this installer" is the more specific fact and the one with a
+  // next step in it.
+  if (line.kind === "not-yet-runnable") {
+    return { tick: "off", enabled: false, reason: "not-yet-runnable" };
+  }
+
+  // A refusal has two answers and they are not the same offer. *Unplaceable*
+  // is ART saying it will not do this at all; *ambiguous* is a question the
+  // user answers on tab 1 by naming a file, so that row stays theirs.
+  if (
+    line.kind === "refused" &&
+    row.state.state === "refused" &&
+    row.state.reason.because === "not-placeable"
+  ) {
+    return { tick: "off", enabled: false, reason: "not-placeable" };
+  }
+
+  // **The wizard has one route** (spec § 3.2): there is no route control on
+  // this tab, so a row whose only route is an emulator run cannot be offered
+  // here — including a `ready` one, which is precisely the state that would
+  // otherwise draw a tick the wizard cannot honour. `null` — neither route —
+  // is *not* this arm: such a row is already refused above.
+  if (row.sentenceFacts.runsOnAmiga === true) {
+    return { tick: "off", enabled: false, reason: "runs-on-amiga" };
+  }
+
+  if (line.kind === "missing") {
+    return { tick: "off", enabled: false, reason: "missing" };
+  }
+  if (line.kind === "not-needed") {
+    return { tick: "off", enabled: false, reason: "not-needed" };
+  }
+
+  // `ready`, `blocked` and `blocked-component` — and the ambiguous refusal.
+  // A blocked row is **later**, not impossible: the run orders it after what
+  // it needs and refuses by name if that is unticked (ART-282's typed
+  // refusal). Drawing it disabled would say the row cannot happen at all.
+  return { tick: "user", enabled: true };
+}

@@ -38,16 +38,6 @@ vi.mock("@/lib/settings", async (importOriginal) => ({
 vi.mock("@/components/osbuilder/ChoiceTab", () => ({
   ChoiceTab: () => <div data-testid="choice-tab" />,
 }));
-vi.mock("@/components/osbuilder/PackagePanel", () => ({
-  PackagePanel: ({ treeRoot }: { treeRoot: string | null }) => (
-    <div data-testid="packages">{treeRoot ?? "(no tree)"}</div>
-  ),
-}));
-vi.mock("@/components/osbuilder/FirstBootPanel", () => ({
-  FirstBootPanel: ({ treeRoot }: { treeRoot: string | null }) => (
-    <div data-testid="firstboot">{treeRoot ?? "(no tree)"}</div>
-  ),
-}));
 vi.mock("@/components/osbuilder/CardBuilder", () => ({
   CardBuilder: () => <div data-testid="card" />,
 }));
@@ -118,13 +108,17 @@ afterEach(() => {
 });
 
 describe("a step opened on its own", () => {
-  it("acts on the session's tree when there is one", () => {
+  it("renders its own list rather than asking, when there is a tree", () => {
+    // The tab reads the destination itself since round 3 task 3, so what
+    // this step still owns is the banner — and what it has to prove is that
+    // a step with a tree draws the list and says nothing over it.
     seed({
       "buildSession.kind": "install",
       "buildSession.tree": { root: "E:\\dist", builtHere: true },
     });
     renderAt("/os-builder/secim");
-    expect(screen.getByTestId("packages").textContent).toBe("E:\\dist");
+    expect(screen.getByTestId("choice-tab")).toBeTruthy();
+    expect(screen.queryByText(/AmigaOS folder/i)).toBeNull();
   });
 
   it("asks rather than rendering empty when there is no tree", () => {
@@ -133,7 +127,7 @@ describe("a step opened on its own", () => {
     seed({ "buildSession.kind": "install" });
     renderAt("/os-builder/secim");
 
-    expect(screen.getByTestId("packages").textContent).toBe("(no tree)");
+    expect(screen.getByTestId("choice-tab")).toBeTruthy();
     // A rendered sentence, not the raw key — asserting on the key would pass
     // on the very failure this catches, a missing catalogue entry.
     expect(screen.getByText(/AmigaOS folder/i)).toBeTruthy();
@@ -147,7 +141,7 @@ describe("a step opened on its own", () => {
     renderAt("/os-builder/secim");
 
     expect(screen.getByText(/AmigaOS folder/i)).toBeTruthy();
-    expect(screen.getByTestId("packages")).toBeTruthy();
+    expect(screen.getByTestId("choice-tab")).toBeTruthy();
   });
 
   it("does not ask on a step that never reads a tree", () => {
@@ -251,7 +245,7 @@ describe("a folder that is not a tree (ART-199)", () => {
       "buildSession.tree": { root: "E:\dist", builtHere: true },
     });
     renderAt("/os-builder/secim");
-    await screen.findByTestId("packages");
+    await screen.findByTestId("choice-tab");
     expect(screen.queryByTestId("step-wrong-folder")).toBeNull();
   });
 
@@ -263,7 +257,7 @@ describe("a folder that is not a tree (ART-199)", () => {
       "buildSession.tree": { root: "E:\dist", builtHere: true },
     });
     renderAt("/os-builder/secim");
-    await screen.findByTestId("packages");
+    await screen.findByTestId("choice-tab");
     expect(screen.queryByTestId("step-wrong-folder")).toBeNull();
   });
 });
@@ -329,8 +323,7 @@ describe("the retired routes still resolve (four-tab design § 2)", () => {
   it("sends paketler, amiga-kurulum and ilk-acilis to the choice tab", () => {
     for (const old of ["paketler", "amiga-kurulum", "ilk-acilis"]) {
       const view = renderAt(`/os-builder/${old}`);
-      expect(screen.getByTestId("packages")).toBeTruthy();
-      expect(screen.getByTestId("firstboot")).toBeTruthy();
+      expect(screen.getByTestId("choice-tab")).toBeTruthy();
       expect(
         screen.getByRole("link", { name: /^2\. What to install/ }).getAttribute("aria-current")
       ).toBe("page");
@@ -350,10 +343,12 @@ describe("every step id in the lane has a route", () => {
     });
     const expected: Record<string, string> = {
       dosyalar: "install",
-      // The tab's **own** list, not one of the panels it still carries: from
-      // round 3 task 2 `secim` renders `ChoiceTab`, and task 3 takes the two
-      // panels away. Asserting on `packages` here would have gone on passing
-      // through that removal while the tab rendered nothing of its own.
+      // The tab's **own** list. Written this way in round 3 task 2, while
+      // `secim` still carried two panels below `ChoiceTab`, precisely so
+      // that task 3 removing them could not go on passing here over a tab
+      // that rendered nothing of its own — which is what asserting on
+      // `packages` would have done. Task 3 removed them; this row did not
+      // have to change.
       secim: "choice-tab",
       makine: "machine-tab",
       derle: "tab-derle",

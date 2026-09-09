@@ -16,36 +16,19 @@ import { describe, expect, it } from "vitest";
 import en from "./en.json";
 import tr from "./tr.json";
 
-describe("osinstall.packages.intro (ART-198)", () => {
-  it("does not offer an unofficial pack as an example of an official update", () => {
-    const english = en.osinstall.packages.intro.toLowerCase();
-    // The defect was both words in one sentence: "an official update — … an
-    // unofficial pack …", where the em-dash pair reads as an appositive. So
-    // the sentence offered an unofficial pack as an example of an official
-    // one. Either word alone is fine; the pair is the bug.
-    const promisesOfficial = english.includes("official update");
-    const offersUnofficial = english.includes("unofficial");
-    expect(promisesOfficial && offersUnofficial).toBe(false);
-  });
-
-  it("does not carry the same contradiction in Turkish", () => {
-    const turkish = tr.osinstall.packages.intro.toLowerCase();
-    const promisesOfficial = turkish.includes("resmi bir güncelleme");
-    const offersUnofficial = turkish.includes("resmi olmayan");
-    expect(promisesOfficial && offersUnofficial).toBe(false);
-  });
-
-  it("names a BoingBag without explaining what one is", () => {
-    // The owner's ruling: the name is known across the Amiga community —
-    // "BoingBag'ı bütün Amiga camiası bilir, onu çevirmene gerek yok." It is
-    // used, not glossed, so the sentence must not introduce it with a
-    // "like …" example list.
-    expect(en.osinstall.packages.intro).toContain("BoingBag");
-    expect(tr.osinstall.packages.intro).toContain("BoingBag");
-    expect(en.osinstall.packages.intro.toLowerCase()).not.toContain("like the turkish");
-    expect(tr.osinstall.packages.intro.toLowerCase()).not.toContain("türkçe katalog paketi gibi");
-  });
-});
+// **`osinstall.packages.intro` (ART-198) is gone, and its three cases with
+// it** (four tabs round 3, task 3). The sentence was `PackagePanel`'s lead
+// paragraph; that panel is deleted, the key had no renderer left, and
+// `dead-keys.test.ts` is what says so. A copy test over a key nothing can put
+// on screen guards nothing — it would go on passing about a sentence no user
+// can read, which is the same shape as the defect this file exists for.
+//
+// The ruling it recorded is not lost and is not this file's to keep alive:
+// *an official update is not introduced by an unofficial example*, and
+// *BoingBag is used, never glossed* ("BoingBag'ı bütün Amiga camiası bilir").
+// Tab 2 names a package by the name the manifest states (ART-060) and adds no
+// lead paragraph of its own, so there is nothing here to assert against yet.
+// A screen that writes one writes its guard with it.
 
 /**
  * **A refusal that names a tab must name the tab the user will see** (four

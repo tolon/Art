@@ -25,14 +25,20 @@ import userEvent from "@testing-library/user-event";
 import i18n from "i18next";
 
 import { changeLanguage } from "@/i18n";
+import { chainLines } from "@/lib/chain";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type {
+  ChainReport,
+  ChainRow,
+  ChainState,
   ComponentDef,
   InstallPlan,
   InstallRelease,
   InstallRequest,
   PlanResult,
+  TreeSummary,
 } from "@/lib/osinstall";
+import type { FirstBootPlan } from "@/lib/firstboot";
 import type { RomInfo } from "@/lib/pistorm";
 
 const componentsMock = vi.hoisted(() => vi.fn());
@@ -42,6 +48,9 @@ const componentCollisionsMock = vi.hoisted(() => vi.fn());
 const chainMock = vi.hoisted(() => vi.fn());
 const slotsMock = vi.hoisted(() => vi.fn());
 const identifyRomMock = vi.hoisted(() => vi.fn());
+const describeTreeMock = vi.hoisted(() => vi.fn());
+const destinationTakenMock = vi.hoisted(() => vi.fn());
+const firstbootPreviewMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
@@ -49,11 +58,18 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   layersFor: layersForMock,
   osinstallPlan: planMock,
   osinstallComponentCollisions: componentCollisionsMock,
-  // Not read by this tab in round 3 — the updates group is task 3 — but
-  // mocked at the same boundary as everything else so adding it cannot
-  // start a real round trip in jsdom.
   osinstallChain: chainMock,
   osinstallSlots: slotsMock,
+  // The destination's own two questions (`useDestinationCheck`): whether it
+  // is an ART tree decides what the chain is asked about, and the tick is
+  // never asked at all about a folder that is not one.
+  osinstallDescribeTree: describeTreeMock,
+  osinstallDestinationTaken: destinationTakenMock,
+}));
+
+vi.mock("@/lib/firstboot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/firstboot")>()),
+  firstbootPreview: firstbootPreviewMock,
 }));
 
 vi.mock("@/lib/pistorm", async (importOriginal) => ({
@@ -306,8 +322,168 @@ beforeEach(() => {
     crowdedFolders: [],
   });
   identifyRomMock.mockReset().mockResolvedValue(ROM);
+  // The destination is **not** a tree by default: a fresh build is the
+  // ordinary case, and it is the state in which the chain is asked with no
+  // manifest and the first-boot row has nothing to say about what is
+  // already there.
+  describeTreeMock.mockReset().mockResolvedValue({
+    isTree: false,
+    release: null,
+    files: 0,
+    components: [],
+    amigaInstalled: [],
+    problem: "holds no distribution.json",
+  } satisfies TreeSummary);
+  destinationTakenMock.mockReset().mockResolvedValue(false);
+  firstbootPreviewMock.mockReset().mockResolvedValue({
+    tree: "E:\\dist39",
+    steps: [],
+    fatMount: { kind: "available" },
+    userStartupExists: false,
+    alreadyWritten: false,
+    bytesAdded: 4096,
+  } satisfies FirstBootPlan);
   useSettingsStore.setState({ loaded: false, settings: DEFAULT_SETTINGS });
 });
+
+/** The destination *is* an ART tree — an update run rather than a fresh
+ *  build, which is the state the chain reads a manifest in and the only
+ *  state in which the first-boot row can say the tree already carries a
+ *  block. */
+function destinationIsATree() {
+  describeTreeMock.mockResolvedValue({
+    isTree: true,
+    release: "AmigaOS 3.9",
+    files: 4212,
+    components: ["workbench-base", "workbench-39"],
+    amigaInstalled: [],
+    problem: null,
+  } satisfies TreeSummary);
+}
+
+/** What `osinstallChain` answers, with `rows` in it. */
+function chainOf(rows: ChainRow[]): ChainReport {
+  return {
+    rows,
+    summary: {
+      release: "AmigaOS 3.9",
+      total: rows.length,
+      installed: rows.filter((r) => r.state.state === "installed").length,
+      notNeeded: rows.filter((r) => r.state.state === "not-needed").length,
+    },
+    unreadableFolders: [],
+    crowdedFolders: [],
+  };
+}
+
+/** One chain row, defaulted the way `src/lib/chain.test.ts`'s own builder
+ *  defaults it — the same fixture shape, so the unit tests and these render
+ *  tests cannot describe two different chains. */
+function row(over: Partial<ChainRow> & { state: ChainState }): ChainRow {
+  return {
+    position: 2,
+    packageId: "boingbag-39-1",
+    slotId: "package:boingbag-39-1",
+    name: "BoingBag 3.9-1",
+    sentenceFacts: { file: null, runsOnAmiga: false },
+    ...over,
+  };
+}
+
+/**
+ * The AmigaOS 3.9 chain as the material actually produces it: nine rows, the
+ * disc first, **rank 4 twice** (`locale-39` and `locale-39-turkish` — the
+ * material states no order between them, which is why `position` cannot be a
+ * React key), and one row of every ending the tick has to answer for.
+ */
+const NINE_ROWS: ChainRow[] = [
+  row({
+    position: 1,
+    packageId: null,
+    slotId: "medium:AmigaOS3.9",
+    name: "AmigaOS3.9",
+    sentenceFacts: { file: "AmigaOS39.iso", runsOnAmiga: null },
+    state: { state: "installed", when: null },
+  }),
+  row({ position: 2, state: { state: "installed", when: null } }),
+  row({
+    position: 3,
+    packageId: "boingbag-39-2",
+    slotId: "package:boingbag-39-2",
+    name: "BoingBag 3.9-2",
+    sentenceFacts: { file: "BoingBag39-2.lha", runsOnAmiga: false },
+    state: { state: "ready" },
+  }),
+  row({
+    position: 4,
+    packageId: "locale-39",
+    slotId: "package:locale-39",
+    name: "Locale 3.9",
+    sentenceFacts: { file: "Locale3_9.lha", runsOnAmiga: false },
+    state: { state: "ready" },
+  }),
+  row({
+    position: 4,
+    packageId: "locale-39-turkish",
+    slotId: "package:locale-39-turkish",
+    name: "Türkçe catalogs",
+    sentenceFacts: { file: null, runsOnAmiga: false },
+    state: { state: "missing", expected: ["LocaleTR.lha"] },
+  }),
+  row({
+    position: 5,
+    packageId: "boingbags-39-3-4",
+    slotId: "package:boingbags-39-3-4",
+    name: "BoingBags 3&4",
+    sentenceFacts: { file: "BoingBags34.lha", runsOnAmiga: true },
+    state: { state: "not-yet-runnable", reason: "installer-not-measured" },
+  }),
+  row({
+    position: 6,
+    packageId: "euro-update",
+    slotId: "package:euro-update",
+    name: "Euro-Update",
+    sentenceFacts: { file: null, runsOnAmiga: null },
+    state: { state: "not-needed", supersededBy: "BoingBags 3&4" },
+  }),
+  row({
+    position: 7,
+    packageId: "fonts-39",
+    slotId: "package:fonts-39",
+    name: "Fonts 3.9",
+    sentenceFacts: { file: "Fonts39.lha", runsOnAmiga: null },
+    state: { state: "refused", reason: { because: "not-placeable", block: "needs-fixfonts" } },
+  }),
+  row({
+    position: 8,
+    packageId: "extras-39",
+    slotId: "package:extras-39",
+    name: "Extras 3.9",
+    sentenceFacts: { file: "Extras39.lha", runsOnAmiga: false },
+    state: {
+      state: "blocked-by-component",
+      components: [{ id: "locale-base", labelKey: "osinstall.components.name.os39.locale" }],
+    },
+  }),
+];
+
+/** One row of the updates group, by the package id it carries. */
+function updateRow(id: string): HTMLElement {
+  const found = screen
+    .getAllByTestId("choice-update-row")
+    .find((el) => el.getAttribute("data-package") === id);
+  if (!found) throw new Error(`no update row for ${id}`);
+  return found;
+}
+
+/** Rendered on AmigaOS 3.9 with `rows` coming back from the chain, waiting
+ *  for the rows to be on screen. */
+async function renderUpdates(rows: ChainRow[] = NINE_ROWS) {
+  chainMock.mockResolvedValue(chainOf(rows));
+  const view = await renderChoice("AmigaOS 3.9");
+  await screen.findAllByTestId("choice-update-row");
+  return view;
+}
 
 /** Rendered with every field set, on the given release, with the loaded
  *  catalogue on screen — the checklist arrives on its own round trip, so
@@ -643,5 +819,323 @@ describe("what a layering component would replace (ART-175)", () => {
       i18n.t("osinstall.replaces.failed", { error: "the disc could not be read" })
     );
     expect(document.querySelectorAll('[data-testid="component-collision-row"]').length).toBe(0);
+  });
+});
+
+describe("the updates group", () => {
+  // Group 2 of the one list (four-tab design § 3.2): `chain::rows_for`'s rows
+  // in the material's own order, one tick each, and **not one sentence
+  // composed here** — every word under a row is `@/lib/chain`'s, which is
+  // `core::osinstall::chain`'s.
+  //
+  // These are the cases `PackagePanel.test.tsx` used to make about a flat
+  // catalogue that never joined the chain at all (the two screens could say
+  // different things about one file, ART-289's own shape). The tick is the
+  // same tick — `session.packages.chosen` — and the list is now the chain's.
+
+  it("draws the chain's rows in the material's order, rank 4 twice, with each row's own sentence", async () => {
+    await renderUpdates();
+
+    const rows = screen.getAllByTestId("choice-update-row");
+    expect(rows.length).toBe(NINE_ROWS.length);
+    // The order is the material's, arriving already sorted by `(position,
+    // id)` in Rust and **not re-sorted here**: the order is information.
+    // Both rank-4 rows are drawn, which is why `position` cannot be the key.
+    expect(rows.map((el) => el.getAttribute("data-package"))).toEqual([
+      "medium:AmigaOS3.9",
+      "boingbag-39-1",
+      "boingbag-39-2",
+      "locale-39",
+      "locale-39-turkish",
+      "boingbags-39-3-4",
+      "euro-update",
+      "fonts-39",
+      "extras-39",
+    ]);
+
+    // Every row carries its own ending's sentence — nine rows, and no two of
+    // the eight endings collapsed into "not done".
+    for (const line of chainLines(NINE_ROWS)) {
+      const el = updateRow(line.id);
+      const said =
+        line.kind === "blocked-component"
+          ? i18n.t(line.phrase.key, {
+              ...line.phrase.params,
+              components: i18n.t("osinstall.components.name.os39.locale"),
+            })
+          : i18n.t(line.phrase.key, line.phrase.params);
+      expect(el.textContent, line.id).toContain(said);
+    }
+
+    // …and no raw key, and no interpolation left unfilled — the two ways a
+    // sentence reaches the screen looking like a bug report.
+    const group = screen.getByTestId("choice-updates");
+    expect(group.textContent).not.toMatch(/osinstall\.chain\./);
+    expect(group.textContent).not.toContain("{{");
+  });
+
+  it("ticks an installed row and disables it; leaves a not-yet-runnable row unticked and disabled with its sentence", async () => {
+    await renderUpdates();
+
+    // Installed: on, and not the user's to turn off — ART cannot un-install
+    // it, and a tickable box would offer exactly that.
+    const installed = within(updateRow("boingbag-39-1")).getByRole("checkbox") as HTMLInputElement;
+    expect(installed.checked).toBe(true);
+    expect(installed.disabled).toBe(true);
+
+    // Not yet runnable: off, disabled, and **saying why** rather than a dead
+    // box with nothing beside it.
+    const unmeasured = within(updateRow("boingbags-39-3-4")).getByRole(
+      "checkbox"
+    ) as HTMLInputElement;
+    expect(unmeasured.checked).toBe(false);
+    expect(unmeasured.disabled).toBe(true);
+    expect(updateRow("boingbags-39-3-4").textContent).toContain(
+      i18n.t("osinstall.chain.notYetRunnable.installerNotMeasured", { name: "BoingBags 3&4" })
+    );
+
+    // And the three the run would refuse for a reason of its own are off and
+    // disabled too, each with its own sentence — never one shared "cannot".
+    for (const [id, key, name] of [
+      ["fonts-39", "osinstall.chain.refusedNotPlaceable.needsFixfonts", "Fonts 3.9"],
+      ["euro-update", "osinstall.chain.notNeeded", "Euro-Update"],
+    ] as const) {
+      const box = within(updateRow(id)).getByRole("checkbox") as HTMLInputElement;
+      expect(box.checked, id).toBe(false);
+      expect(box.disabled, id).toBe(true);
+      expect(updateRow(id).textContent, id).toContain(
+        i18n.t(key, { name, supersededBy: "BoingBags 3&4" })
+      );
+    }
+    const gone = within(updateRow("locale-39-turkish")).getByRole("checkbox") as HTMLInputElement;
+    expect(gone.checked).toBe(false);
+    expect(gone.disabled).toBe(true);
+    expect(updateRow("locale-39-turkish").textContent).toContain(
+      i18n.t("osinstall.chain.missing", { name: "Türkçe catalogs", filenames: "LocaleTR.lha" })
+    );
+  });
+
+  it("never offers a row that runs on the Amiga — one route in the wizard", async () => {
+    // A `ready` row whose only route is the emulator. It is the state that
+    // would otherwise draw a tick this wizard cannot honour: there is no
+    // route control on this tab, and pressing Build would have to either run
+    // an emulator nobody asked for or silently skip the row.
+    await renderUpdates([
+      row({
+        position: 3,
+        packageId: "boingbags-39-3-4",
+        slotId: "package:boingbags-39-3-4",
+        name: "BoingBags 3&4",
+        sentenceFacts: { file: "BoingBags34.lha", runsOnAmiga: true },
+        state: { state: "ready" },
+      }),
+    ]);
+
+    const box = within(updateRow("boingbags-39-3-4")).getByRole("checkbox") as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    expect(box.disabled).toBe(true);
+    // The row still says where it would happen, which is the fact that makes
+    // the dead box make sense.
+    expect(updateRow("boingbags-39-3-4").textContent).toContain(i18n.t("osinstall.chain.onAmiga"));
+  });
+
+  it("ticks through session.packages.chosen and reads a remembered tick back", async () => {
+    await renderUpdates();
+    expect(rememberedBag()["buildSession.packages.AmigaOS 3.9"]).toBeUndefined();
+
+    const ready = within(updateRow("boingbag-39-2")).getByRole("checkbox") as HTMLInputElement;
+    expect(ready.disabled).toBe(false);
+    await userEvent.click(ready);
+
+    // The session's own key, and the components' key untouched by it: two
+    // groups on one tab writing one key would be ART-290 again.
+    await waitFor(() =>
+      expect(rememberedBag()["buildSession.packages.AmigaOS 3.9"]).toMatchObject({
+        chosen: ["boingbag-39-2"],
+      })
+    );
+    expect(rememberedBag()["buildSession.components.AmigaOS 3.9"]).toBeUndefined();
+    cleanup();
+
+    // Remembered, and read back on the next mount rather than reset.
+    chainMock.mockResolvedValue(chainOf(NINE_ROWS));
+    render(<ChoiceTab />);
+    await screen.findAllByTestId("choice-update-row");
+    const again = within(updateRow("boingbag-39-2")).getByRole("checkbox") as HTMLInputElement;
+    expect(again.checked).toBe(true);
+
+    // And unticking takes it out again — a remembered pick that cannot be
+    // dropped is `PackagePanel`'s own F3.
+    await userEvent.click(again);
+    await waitFor(() =>
+      expect(rememberedBag()["buildSession.packages.AmigaOS 3.9"]).toMatchObject({ chosen: [] })
+    );
+  });
+
+  it("shows a remembered id that is not a row, untickable, and lets it be unticked", async () => {
+    // `PackagePanel`'s N4, kept: an id from an older ART, or a package since
+    // removed from the release, used to render no row at all — invisible,
+    // and so impossible to clear, since there was no box to click.
+    seedRemembered({
+      ...FULL_FIELDS,
+      "buildSession.release": "AmigaOS 3.9",
+      "buildSession.packages.AmigaOS 3.9": { folder: null, chosen: ["a-package-nobody-ships"] },
+    });
+    chainMock.mockResolvedValue(chainOf(NINE_ROWS));
+    render(<ChoiceTab />);
+    await screen.findAllByTestId("choice-update-row");
+
+    const stale = await screen.findByTestId("choice-update-unknown");
+    expect(stale.textContent).toContain(
+      i18n.t("osBuilder.choice.notInList", { id: "a-package-nobody-ships" })
+    );
+
+    await userEvent.click(
+      within(stale).getByRole("button", { name: i18n.t("osBuilder.choice.untick") })
+    );
+    await waitFor(() =>
+      expect(rememberedBag()["buildSession.packages.AmigaOS 3.9"]).toMatchObject({ chosen: [] })
+    );
+    expect(screen.queryByTestId("choice-update-unknown")).toBeNull();
+  });
+
+  it("draws no updates group for a release without a chain", async () => {
+    // AmigaOS 3.2 has none (spec § 1.5). An empty heading over an empty list
+    // would say a release has updates and none of them apply.
+    await renderChoice();
+    await waitFor(() => expect(chainMock).toHaveBeenCalled());
+
+    expect(screen.queryByTestId("choice-updates")).toBeNull();
+    expect(screen.queryAllByTestId("choice-update-row")).toHaveLength(0);
+  });
+
+  it("asks the chain with the readout's overrides, so both say the same about one file", async () => {
+    // **ART-284/ART-289.** The user names the file for a slot on tab 1
+    // (`amigaInstall.archive.<pkg>`); `slotOverrides` is what turns those
+    // keys into the `(slot, path)` pairs `osinstall_chain` takes. Without
+    // them this list called the owner's own BoingBag 1 build ambiguous while
+    // the readout one tab over said *the file you chose* — one resolver, two
+    // callers, one of them not handed the decision.
+    seedRemembered({
+      ...FULL_FIELDS,
+      "buildSession.release": "AmigaOS 3.9",
+      "amigaInstall.archive.boingbag-39-1": "E:\\archives\\BoingBag39-1.lha",
+      "amigaInstall.archive.locale-39": "E:\\archives\\Locale3_9.lha",
+    });
+    chainMock.mockResolvedValue(chainOf(NINE_ROWS));
+    destinationIsATree();
+    render(<ChoiceTab />);
+    await screen.findAllByTestId("choice-update-row");
+
+    await waitFor(() =>
+      expect(chainMock).toHaveBeenCalledWith(
+        "AmigaOS 3.9",
+        expect.arrayContaining(["E:\\media39"]),
+        // The destination is an ART tree, so the chain is asked *against it*
+        // — which is what makes an installed row installed.
+        "E:\\dist39",
+        "E:\\roms\\kick.rom",
+        [
+          ["package:boingbag-39-1", "E:\\archives\\BoingBag39-1.lha"],
+          ["package:locale-39", "E:\\archives\\Locale3_9.lha"],
+        ]
+      )
+    );
+  });
+
+  it("asks the chain about no tree when the destination is not one", async () => {
+    // A fresh build. Handing a folder that is not a tree to the chain would
+    // be refused — every *installed* state comes from `distribution.json`
+    // alone — and the whole list would go missing rather than reading as the
+    // fresh build it is.
+    await renderUpdates();
+    await waitFor(() => expect(chainMock).toHaveBeenCalled());
+    for (const call of chainMock.mock.calls as [string, string[], string | null][]) {
+      expect(call[2]).toBeNull();
+    }
+  });
+});
+
+describe("the first-boot tick", () => {
+  it("is ticked when nothing is remembered, and rendering writes nothing", async () => {
+    // **Absent means ticked** (design § 3.2): the first-boot block is what
+    // makes a PiStorm tree boot its own hardware. And the default is not
+    // *written*: a screen that stores its own default the moment it is drawn
+    // makes "the user chose this" and "ART chose this" the same value.
+    await renderChoice("AmigaOS 3.9");
+
+    const box = within(screen.getByTestId("choice-firstboot")).getByRole(
+      "checkbox"
+    ) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    expect(screen.getByTestId("choice-firstboot").textContent).toContain(
+      i18n.t("osBuilder.choice.firstbootRow")
+    );
+    expect(rememberedBag()["buildSession.firstboot"]).toBeUndefined();
+  });
+
+  it("unticking writes wanted=false and it survives a reload", async () => {
+    await renderChoice("AmigaOS 3.9");
+    await userEvent.click(within(screen.getByTestId("choice-firstboot")).getByRole("checkbox"));
+
+    await waitFor(() =>
+      expect(rememberedBag()["buildSession.firstboot"]).toMatchObject({ wanted: false })
+    );
+    cleanup();
+
+    render(<ChoiceTab />);
+    await screen.findAllByTestId("choice-part-row");
+    const again = within(screen.getByTestId("choice-firstboot")).getByRole(
+      "checkbox"
+    ) as HTMLInputElement;
+    expect(again.checked).toBe(false);
+  });
+
+  it("says the tree already carries a block when it does", async () => {
+    // A fact about the folder, not about the tick: `written` and `wanted`
+    // are different questions, and the row says the first one where it is
+    // true so a second write is a decision rather than a surprise.
+    destinationIsATree();
+    firstbootPreviewMock.mockResolvedValue({
+      tree: "E:\\dist39",
+      steps: [],
+      fatMount: { kind: "available" },
+      userStartupExists: true,
+      alreadyWritten: true,
+      bytesAdded: 4096,
+    } satisfies FirstBootPlan);
+
+    await renderChoice("AmigaOS 3.9");
+
+    const said = await screen.findByTestId("choice-firstboot-already-written");
+    expect(said.textContent).toBe(i18n.t("firstboot.panel.alreadyWritten"));
+  });
+
+  it("asks nothing about a destination that is not an ART tree", async () => {
+    // `firstboot_preview` reads a tree. Asking it about a folder that is not
+    // one produces a refusal ART would then have to explain on a row whose
+    // whole content is a tick.
+    await renderChoice("AmigaOS 3.9");
+    await waitFor(() => expect(chainMock).toHaveBeenCalled());
+
+    expect(firstbootPreviewMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("choice-firstboot-already-written")).toBeNull();
+  });
+});
+
+describe("in Turkish", () => {
+  it("renders no raw key and no unfilled interpolation anywhere on the tab", async () => {
+    // ART-062's standing gap, asked of the whole tab at once: a key present
+    // in `en.json` and missing from `tr.json` renders the dotted key, and a
+    // parameter the Turkish sentence does not name renders `{{…}}`. Neither
+    // fails to compile and neither is visible to `parity.test.ts`, which
+    // compares the catalogues to each other rather than to a screen.
+    await changeLanguage("tr");
+    destinationIsATree();
+    await renderUpdates();
+
+    const tab = screen.getByTestId("choice-tab");
+    expect(tab.textContent).not.toMatch(/osinstall\.|osBuilder\./);
+    expect(tab.textContent).not.toContain("{{");
   });
 });

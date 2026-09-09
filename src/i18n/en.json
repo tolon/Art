@@ -713,10 +713,16 @@
       "notATree": "This folder is not an AmigaOS folder ART built: it holds no distribution.json, so ART cannot say what is in it or what a package would replace. Pick another folder below, or build one here:"
     },
     "choice": {
+      "firstboot": "At first boot on the Amiga",
+      "firstbootHint": "Runs once, then removes itself. You read the report on the card lane.",
+      "firstbootRow": "At first boot on the Amiga: detect the hardware, mount the extra disks and datatypes, write the report to S:FirstBoot.log",
       "lead": "One list, in the material's own order. Ticked rows are written; a row that cannot be written says why and stays closed.",
+      "notInList": "{{id}} is not in this release's list",
       "parts": "The release's parts",
       "replaces_one": "Would replace {{count}} file already in the tree (open to see which)",
-      "replaces_other": "Would replace {{count}} files already in the tree (open to see which)"
+      "replaces_other": "Would replace {{count}} files already in the tree (open to see which)",
+      "untick": "Untick",
+      "updates": "The updates, in order"
     },
     "tab": {
       "makineKeymapNote": "The keyboard layout is still chosen on the files tab, under the plan:",
@@ -2324,7 +2330,6 @@
       "cdLink": "Choose the disc at the top of this tab",
       "next": "Next: {{name}}",
       "reportRow": "This report is about {{name}}.",
-      "updatesLink": "{{release}} updates",
       "noneReady": "Nothing here can run yet.",
       "allApplied": "Every link of this chain is accounted for — there is nothing left to run.",
       "noFolders": "ART has nowhere to look for these files: add the folders your archives are in at the top of this tab.",
@@ -2522,27 +2527,15 @@
       "error": "ART could not verify: {{message}}"
     },
     "packages": {
-      "heading": "Update packages",
-      "intro": "Add a BoingBag or another update pack onto a distribution tree ART, or you, already built.",
-      "scopeNote": "ART ships a recipe for {{count}} update packages — each one a hand-written list of files and their own destinations — and will touch no other archive. A package with no such recipe, or one whose own installer is an Amiga Installer script deciding what to do at run time on real hardware, cannot be placed here: there is nothing for ART to reproduce that decision with.",
-      "scopeBlocked": "{{count}} of them cannot be placed from Windows at all, however many copies of the archive you have — each says why on its own row below.",
       "treeRoot": {
         "label": "Distribution tree",
         "none": "No distribution tree chosen.",
         "chooseTitle": "Choose the distribution tree's own root — where distribution.json was written",
         "hint": "The folder holding distribution.json — the same tree the Verify section below checks."
       },
-      "packageFolder": {
-        "label": "Update packages folder",
-        "none": "No folder chosen.",
-        "chooseTitle": "Choose the folder holding your update package archives",
-        "hint": "A different folder from your install disks — where your BoingBags and other update archives live."
-      },
       "catalogue": {
-        "unavailable": "ART could not read the shipped package list.",
         "needsFolder": "Choose the update packages folder to see which archives are actually here."
       },
-      "archiveMissing": "Archive not found",
       "blocked": {
         "badge": "Cannot be placed from Windows",
         "encryptedPayload": "The files inside this package are locked, and only the package's own Amiga-side Updater has the key. That Updater is an Amiga program: it has to run on the Amiga itself, which is how every other distribution builder installs this package too. ART will not break the lock, so it cannot place a single file from here — put the archive on your Amiga and run its own Updater there instead.",
@@ -2550,13 +2543,7 @@
         "needsInstallerScript": "This package is plain files with an Installer script that decides which of them you get: it picks the build that matches your processor, asks which languages to install, asks which machine's SCSI driver you need, copies into whatever AmiTCP: and AWeb happen to be, and edits your startup-sequence. ART places a fixed set of paths and cannot answer any of that for you — a half-placed tree would boot and quietly be short of what it thinks it has. Run its Install script on the Amiga instead.",
         "chosen": "{{names}} cannot be placed from Windows, so nothing can be previewed or added for this selection. Untick it, or add it on the Amiga with the package's own Updater."
       },
-      "refusedNames": "This archive carries {{count}} entry name(s) ART refuses to use, because they point outside the folder they belong in: {{names}}. Nothing will ever be placed from them — the rest of the archive is unaffected.",
-      "archiveGone": "This package stays ticked because you chose it, but its archive is no longer in the update packages folder — nothing will be added for it. Untick it, or put the archive back and it will be offered again.",
-      "unknown": "Not offered here",
-      "unknownHint": "This id was remembered from an earlier choice, but it is not one of the packages ART ships today — a stale pick, most likely from an older version. Untick it; nothing will be added for it either way.",
-      "needsFolderToPreview": "Choose the update packages folder above to preview what these {{count}} package(s) would replace.",
       "requiresPackages": "Needs {{list}} applied first.",
-      "requiresComponents": "Needs the {{list}} component switched on.",
       "preview": {
         "loading": "Checking what this would replace…",
         "refused": "The check did not finish — what it said is below.",
@@ -2588,11 +2575,6 @@
         "cancelled": "Cancelled partway through.",
         "progressStarting": "Starting…",
         "progressPercent": "{{percent}}% — {{done}} of {{total}} files"
-      },
-      "treePicker": {
-        "heading": "{{count}} build(s) in that folder — pick one:",
-        "row": "{{release}} · {{files}} files · {{components}} components",
-        "alreadyInstalled": "· already installed on the Amiga: {{packages}}"
       }
     },
     "amigaInstall": {

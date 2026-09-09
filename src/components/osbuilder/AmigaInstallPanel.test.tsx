@@ -30,7 +30,7 @@ import { MemoryRouter } from "react-router-dom";
 import i18n from "i18next";
 
 // Side-effecting: gives `useTranslation` a real, synchronously-initialised
-// instance, the way `OsInstall.test.tsx` and `PackagePanel.test.tsx` do.
+// instance, the way `OsInstall.test.tsx` does.
 import "@/i18n";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type {

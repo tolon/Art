@@ -127,7 +127,6 @@ import {
 } from "@/lib/jobs";
 import { MaterialFolders } from "@/components/osbuilder/MaterialFolders";
 import { MaterialReadout } from "@/components/osbuilder/MaterialReadout";
-import { PackagePanel } from "@/components/osbuilder/PackagePanel";
 import { AmigaInstallPanel } from "@/components/osbuilder/AmigaInstallPanel";
 
 const GIB = 1024 * 1024 * 1024;
@@ -264,7 +263,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const {
     session,
     setTree,
-    setPackages,
     setRelease,
     setMaterial,
     setComponents,
@@ -633,7 +631,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
 
   const packagesTreeRoot = session.tree.root;
   const packagesFolder = session.packages.folder;
-  const packagesChosen = session.packages.chosen;
 
   // --- what the screen is doing --------------------------------------------
   /**
@@ -1796,28 +1793,21 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         </section>
       )}
 
-      <PackagePanel
-        treeRoot={packagesTreeRoot}
-        onTreeRootChange={(root) => setTree({ root, builtHere: false })}
-        packageFolder={packagesFolder}
-        onPackageFolderChange={(folder) => setPackages({ folder })}
-        chosen={packagesChosen}
-        onChosenChange={(chosen) => setPackages({ chosen })}
-        release={release}
-      />
+      {/* **The update checklist is gone from this screen** (four-tabs round
+          3, task 3). `PackagePanel` was a flat catalogue that never joined
+          the chain: two independent lists of one release's packages, on one
+          lane, able to say different things about one file. Tab 2 draws the
+          chain's own rows now — one tick each, one sentence each, the
+          material's order — and this panel's remaining job is the *other*
+          route, the one that cannot be placed from Windows at all (ART-166)
+          and runs a package's own installer on the Amiga. It stays until
+          round 5 moves it to the WinUAE studio.
 
-      {/* The other half of the same question, and deliberately a second
-          panel rather than a mode of the first: `PackagePanel` places a
-          package's files from Windows, and this runs a package's own
-          installer on the Amiga because its files cannot be placed from
-          Windows at all (ART-166). They share the tree and the archive
-          folder — it is one tree and one folder of downloads — and nothing
-          else. */}
-      {/* The material list, whole (design § 3.4). `packageFolder` is still
-          the one folder its dialogs open on and its catalogue is loaded from;
-          the list is what its *slots* are resolved against, which is the
-          question "which of these files is BoingBag 3.9-1" — and that has to
-          be asked of everything the user has, not of one folder. */}
+          `packageFolder` is still what its dialogs open on and what its
+          catalogue is loaded from; the list is what its *slots* are resolved
+          against, which is the question "which of these files is BoingBag
+          3.9-1" — and that has to be asked of everything the user has, not
+          of one folder (design § 3.4). */}
       <AmigaInstallPanel
         treeRoot={packagesTreeRoot}
         onTreeRootChange={(root) => setTree({ root, builtHere: false })}

@@ -713,10 +713,16 @@
       "notATree": "Bu klasör ART'ın kurduğu bir AmigaOS klasörü değil: içinde distribution.json yok, bu yüzden ART içinde ne olduğunu ve bir paketin neyin yerine geçeceğini söyleyemez. Aşağıdan başka bir klasör seç ya da burada bir tane kur:"
     },
     "choice": {
+      "firstboot": "Amiga'da ilk açılışta",
+      "firstbootHint": "Bir kez koşar, sonra kendini siler. Raporu kart hattında okursunuz.",
+      "firstbootRow": "Amiga'da ilk açılışta: donanımı tanı, ek diskleri ve datatype'ları kur, raporu S:FirstBoot.log'a yaz",
       "lead": "Tek liste, malzemenin kendi sırasıyla. İşaretli satırlar yazılır; yazılamayan satır nedenini söyler ve kapalı durur.",
+      "notInList": "{{id}} bu sürümün listesinde yok",
       "parts": "Sistemin parçaları",
       "replaces_one": "Ağaçtaki {{count}} dosyanın yerine geçer (hangileri, açın)",
-      "replaces_other": "Ağaçtaki {{count}} dosyanın yerine geçer (hangileri, açın)"
+      "replaces_other": "Ağaçtaki {{count}} dosyanın yerine geçer (hangileri, açın)",
+      "untick": "İşareti kaldır",
+      "updates": "Güncellemeler, sırasıyla"
     },
     "tab": {
       "makineKeymapNote": "Klavye düzeni şimdilik Amiga dosyaları sekmesinde, planın altında seçiliyor:",
@@ -2324,7 +2330,6 @@
       "cdLink": "Diski bu sekmenin üstünde seçin",
       "next": "Sıradaki: {{name}}",
       "reportRow": "Bu rapor {{name}} hakkında.",
-      "updatesLink": "{{release}} güncellemeleri",
       "noneReady": "Burada henüz çalıştırılabilecek bir şey yok.",
       "allApplied": "Bu zincirin her halkası hesaba katıldı — çalıştırılacak bir şey kalmadı.",
       "noFolders": "ART bu dosyaları arayacak bir yer bilmiyor: arşivlerinizin bulunduğu klasörleri bu sekmenin üstünde ekleyin.",
@@ -2522,27 +2527,15 @@
       "error": "ART doğrulayamadı: {{message}}"
     },
     "packages": {
-      "heading": "Güncelleme paketleri",
-      "intro": "ART'ın ya da senin zaten kurduğun bir dağıtım ağacına bir BoingBag ya da başka bir güncelleme paketi ekle.",
-      "scopeNote": "ART {{count}} güncelleme paketi için tarif gönderiyor — her biri dosyaların ve kendi hedeflerinin elle yazılmış bir listesidir — ve başka hiçbir arşive dokunmaz. Böyle bir tarifi olmayan bir paket, ya da kurulumu gerçek donanımda çalışma anında karar veren bir Amiga Installer betiği olan bir paket burada yerleştirilemez: ART'ın o kararı yeniden üretecek hiçbir şeyi yok.",
-      "scopeBlocked": "Bunlardan {{count}} tanesi, arşivin kaç kopyası elinde olursa olsun, Windows üzerinden hiç yerleştirilemez — her biri nedenini aşağıda kendi satırında söylüyor.",
       "treeRoot": {
         "label": "Dağıtım ağacı",
         "none": "Dağıtım ağacı seçilmedi.",
         "chooseTitle": "Dağıtım ağacının kendi kökünü seç — distribution.json'ın yazıldığı yer",
         "hint": "distribution.json'ı tutan klasör — aşağıdaki Doğrula bölümünün baktığı aynı ağaç."
       },
-      "packageFolder": {
-        "label": "Güncelleme paketleri klasörü",
-        "none": "Klasör seçilmedi.",
-        "chooseTitle": "Güncelleme paketi arşivlerinin bulunduğu klasörü seç",
-        "hint": "Kurulum disklerinden farklı bir klasör — BoingBag'lerinin ve diğer güncelleme arşivlerinin bulunduğu yer."
-      },
       "catalogue": {
-        "unavailable": "ART gönderilen paket listesini okuyamadı.",
         "needsFolder": "Hangi arşivlerin gerçekten burada olduğunu görmek için güncelleme paketleri klasörünü seç."
       },
-      "archiveMissing": "Arşiv bulunamadı",
       "blocked": {
         "badge": "Windows üzerinden yerleştirilemez",
         "encryptedPayload": "Bu paketin içindeki dosyalar kilitli ve anahtar yalnızca paketin kendi Amiga tarafındaki Updater'ında. O Updater bir Amiga programı: Amiga'nın kendisinde çalışmak zorunda — diğer bütün dağıtım kurucuları da bu paketi böyle kuruyor. ART kilidi kırmaz, dolayısıyla buradan tek bir dosya bile yerleştiremez — arşivi Amiga'na koy ve kendi Updater'ını orada çalıştır.",
@@ -2550,13 +2543,7 @@
         "needsInstallerScript": "Bu paket düz dosyalardan oluşuyor, ama hangilerini alacağını bir Installer betiği kararlaştırıyor: işlemcine uyan yapıyı seçiyor, hangi dilleri kuracağını soruyor, hangi makinenin SCSI sürücüsünü istediğini soruyor, AmiTCP: ve AWeb neredeyse oraya kopyalıyor ve startup-sequence'ını düzenliyor. ART sabit bir yol kümesi yerleştirir ve bunların hiçbirini senin yerine yanıtlayamaz — yarım yerleştirilmiş bir ağaç açılır ve sessizce eksik olur. Bunun yerine Install betiğini Amiga'da çalıştır.",
         "chosen": "{{names}} Windows üzerinden yerleştirilemez, bu yüzden bu seçim için hiçbir şey önizlenemez ve eklenemez. Tikini kaldır, ya da paketin kendi Updater'ı ile Amiga'da ekle."
       },
-      "refusedNames": "Bu arşiv, ART'ın kullanmayı reddettiği {{count}} giriş adı taşıyor; çünkü ait oldukları klasörün dışını gösteriyorlar: {{names}}. Onlardan hiçbir şey yerleştirilmeyecek — arşivin geri kalanı bundan etkilenmez.",
-      "archiveGone": "Bu paket, sen seçtiğin için tikli kalıyor, ama arşivi artık güncelleme paketleri klasöründe değil — onun için hiçbir şey eklenmeyecek. Tikini kaldır, ya da arşivi geri koy; o zaman yeniden sunulur.",
-      "unknown": "Burada sunulmuyor",
-      "unknownHint": "Bu kimlik daha önceki bir seçimden hatırlandı, ama ART'ın bugün gönderdiği paketlerden biri değil — büyük olasılıkla eski bir sürümden kalma bir seçim. Tikini kaldır; ne olursa olsun onun için hiçbir şey eklenmeyecek.",
-      "needsFolderToPreview": "Bu {{count}} paketin neyin yerine geçeceğini önizlemek için yukarıdan güncelleme paketleri klasörünü seç.",
       "requiresPackages": "Önce {{list}} uygulanmasına ihtiyaç duyuyor.",
-      "requiresComponents": "{{list}} bileşeninin açık olmasına ihtiyaç duyuyor.",
       "preview": {
         "loading": "Bunun neyin yerini alacağı kontrol ediliyor…",
         "refused": "Denetim tamamlanmadı — söylediği aşağıda.",
@@ -2588,11 +2575,6 @@
         "cancelled": "Yarıda iptal edildi.",
         "progressStarting": "Başlıyor…",
         "progressPercent": "%{{percent}} — {{total}} dosyadan {{done}} tanesi"
-      },
-      "treePicker": {
-        "heading": "O klasörde {{count}} yapı var — birini seçin:",
-        "row": "{{release}} · {{files}} dosya · {{components}} bileşen",
-        "alreadyInstalled": "· Amiga'da zaten kurulu: {{packages}}"
       }
     },
     "amigaInstall": {

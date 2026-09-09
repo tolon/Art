@@ -194,7 +194,7 @@ export function useBuildSession(): BuildSessionApi {
    * longer holds it** (round 2, task 3's F10).
    *
    * `packages.folder` keeps a value of its own as well as being a list entry
-   * (see `PackageChoice.folder`: `PackagePanel` hands a single folder to
+   * (see `PackageChoice.folder`: `AmigaInstallPanel` hands a single folder to
    * `osinstallCollisions` and `osinstallAddPackage`, and neither has a
    * list-shaped form). So a user who removed that folder from the list used
    * to leave the stored copy behind, and the step then said two things at

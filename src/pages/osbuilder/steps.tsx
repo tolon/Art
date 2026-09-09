@@ -9,8 +9,8 @@
 // **The install lane is four numbered tabs** since the owner's 2026-09-09
 // verdict on the five-step lane (four-tab design § 2): `dosyalar` · `secim` ·
 // `makine` · `derle`. Round 1 only moves the panels; rounds 2-4 move the
-// fields. So `dosyalar` mounts today's install step whole, `secim` mounts the
-// two panels that read the tree, `makine` holds the Kickstart and the
+// fields. So `dosyalar` mounts today's install step whole, `secim` is the one
+// tick list since round 3, `makine` holds the Kickstart and the
 // destination since round 2, and `derle` still says in one sentence where its
 // fields are today rather than rendering an empty card — a tab that showed
 // nothing would hide features that work (CLAUDE.md: register unready, never
@@ -33,10 +33,8 @@ import { useBuildSession } from "@/lib/useBuildSession";
 import { AppearancePanel } from "@/components/osbuilder/AppearancePanel";
 import { CardBuilder } from "@/components/osbuilder/CardBuilder";
 import { ChoiceTab } from "@/components/osbuilder/ChoiceTab";
-import { FirstBootPanel } from "@/components/osbuilder/FirstBootPanel";
 import { MachineTab } from "@/components/osbuilder/MachineTab";
 import { OsInstall } from "@/components/osbuilder/OsInstall";
-import { PackagePanel } from "@/components/osbuilder/PackagePanel";
 import { NetworkPanel } from "@/components/osbuilder/NetworkPanel";
 import { VerifyAgainstCard } from "@/components/osbuilder/VerifyAgainstCard";
 import { VolumePreload } from "@/components/osbuilder/VolumePreload";
@@ -118,37 +116,31 @@ export function StepDosyalar() {
 }
 
 /**
- * Tab 2 — what to install. In round 1 it holds the two panels round 3 turns
- * into ticks: the package checklist and the first-boot block. Both read the
- * tree, so one readiness banner covers both.
+ * Tab 2 — what to install: **one list and nothing else** (four-tab design
+ * § 3.2), since round 3 task 3.
+ *
+ * The two panels that used to sit under it are gone from the wizard.
+ * `PackagePanel` is deleted — its flat catalogue never joined the chain, so
+ * one lane held two lists of one release's packages that could say different
+ * things about one file — and `FirstBootPanel` leaves the lane with its own
+ * card: the tick is here, and the *write* is round 4's run. The panel's file
+ * stays in the tree until then.
+ *
+ * The readiness banner stays, and it still reads the tree rather than the
+ * tab: the list's second group is answered *against* a tree when the
+ * destination is one, so "you have not pointed this anywhere yet" is still
+ * the sentence a cold step owes. Asking is a state, not a gate — the tab is
+ * mounted and usable underneath it.
  */
 export function StepSecim() {
-  const { session, setTree, setPackages } = useBuildSession();
+  const { session } = useBuildSession();
   const isTree = useTreeCheck(session.tree.root);
   const state = readiness(session, "secim", isTree);
   return (
     <>
       {state === "asks" && <Asks />}
       {state === "wrong-folder" && <WrongFolder />}
-      {/* The tab's own list (four-tab design § 3.2), first: the release's
-          parts and what turning them on would replace. The two panels below
-          it are the update and first-boot halves of the same question, still
-          in their own cards — round 3 task 3 folds them into this list and
-          removes them from here. */}
       <ChoiceTab />
-      <PackagePanel
-        treeRoot={session.tree.root}
-        onTreeRootChange={(root) => setTree({ root, builtHere: false })}
-        packageFolder={session.packages.folder}
-        onPackageFolderChange={(folder) => setPackages({ folder })}
-        chosen={session.packages.chosen}
-        onChosenChange={(chosen) => setPackages({ chosen })}
-        release={session.release}
-      />
-      <FirstBootPanel
-        treeRoot={session.tree.root}
-        onTreeRootChange={(root) => setTree({ root, builtHere: false })}
-      />
     </>
   );
 }

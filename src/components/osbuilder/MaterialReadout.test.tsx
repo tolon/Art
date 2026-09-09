@@ -16,7 +16,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import i18n from "i18next";
 
 // Side-effecting import: initialises the real i18next instance synchronously,
-// the same way `PackagePanel.test.tsx` gets one — without it `useTranslation`
+// the same way `OsInstall.test.tsx` gets one — without it `useTranslation`
 // has nothing to read and every string renders as its own raw key.
 import "@/i18n";
 import { changeLanguage } from "@/i18n";

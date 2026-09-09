@@ -110,8 +110,8 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   onOsInstallResult: onResultMock,
 }));
 
-// `PackagePanel` (Task 7) is now mounted inside this screen, and both it and
-// this screen's own install job subscribe to `onJobProgress` on mount — real
+// `AmigaInstallPanel` is mounted inside this screen, and both it and this
+// screen's own install job subscribe to `onJobProgress` on mount — real
 // `listen()` has no Tauri IPC bridge to reach in jsdom and rejects, which
 // Vitest counts as an unhandled rejection at teardown (ART-163's own shape).
 // Mocked here for the same reason `osinstallPlan`/`osinstallApply` above are.
@@ -605,8 +605,9 @@ describe("OsInstall renders past its headings", () => {
     // asserted as a number here rather than left unsaid, because a checklist
     // rendered on *both* tabs is the state this move must not leave behind.
     //
-    // `PackagePanel`'s confirmation is not among them — it renders only once
-    // a package has been ticked, and nothing here ticks one.
+    // (`PackagePanel`'s confirmation used to be excluded here for the same
+    // kind of reason; the panel is deleted in round 3 task 3 and there is
+    // nothing left of it to exclude.)
     //
     // **`AmigaInstallPanel`'s own is not among them either, and that changed
     // in round 3.** This fixture is AmigaOS 3.2, whose catalogue answers with
@@ -2033,12 +2034,14 @@ describe("the release the user picks is the release the whole screen is on (ART-
     await waitFor(() => expect(packagesMock).toHaveBeenCalled());
 
     // **Every** call, never "some call" — and that is not pedantry, it is
-    // what a mutation caught. `PackagePanel` and `AmigaInstallPanel` both ask
-    // this same question, so `toHaveBeenCalledWith(...)` is satisfied by
-    // either one of them alone: hardcoding the release inside one panel left
-    // the first version of this test green, because the other panel still
-    // passed the right one. An assertion that one caller is correct says
-    // nothing at all about the other.
+    // what a mutation caught. Two panels used to ask this same question, so
+    // `toHaveBeenCalledWith(...)` was satisfied by either one of them alone:
+    // hardcoding the release inside one panel left the first version of this
+    // test green, because the other panel still passed the right one. Only
+    // `AmigaInstallPanel` asks it on this screen now, and the assertion stays
+    // in its stronger form because a second caller is one round away — tab 2
+    // asks `osinstall_chain` the same way. An assertion that one caller is
+    // correct says nothing at all about the other.
     const releasesAsked = () => packagesMock.mock.calls.map((call) => call[1]);
     expect(releasesAsked().length).toBeGreaterThan(0);
     for (const asked of releasesAsked()) expect(asked).toBe("AmigaOS 3.2");
@@ -2060,9 +2063,9 @@ describe("the release the user picks is the release the whole screen is on (ART-
   // **This one deliberately asserts on storage**, which the test above says
   // it will not do — because for ART-211 storage is not an implementation
   // detail, it *is* the channel. The OS Builder's step routes
-  // (`pages/osbuilder/steps.tsx`) mount `PackagePanel` and
-  // `AmigaInstallPanel` themselves and read `useBuildSession`, so the only
-  // thing connecting the picker on this screen to what those steps offer is
+  // (`pages/osbuilder/steps.tsx`) mount `ChoiceTab` and the panels themselves
+  // and read `useBuildSession`, so the only thing connecting the picker on
+  // this screen to what those steps offer is
   // the session's own remembered key. While this screen owned
   // `osinstall.release` instead, the picker moved one variable and the steps
   // read the other, and nothing in a test of this component alone could see
@@ -2336,18 +2339,18 @@ describe("the tree it builds is the tree the next steps get (ART-197)", () => {
     });
     render(<OsInstall />);
 
-    // `PackagePanel` and `AmigaInstallPanel` each render the tree root through
-    // `Field`, as plain text beside their Browse button - so the path appears
-    // **twice**, once per panel, and that is the point: both are reading the
-    // one session value. `findAllByText`, because `findByText` refuses a
-    // multiple match.
+    // `AmigaInstallPanel` renders the tree root through `Field`, as plain
+    // text beside its Browse button, and reads it from the session rather
+    // than from a key of its own — which is the whole of the migration.
     //
-    // It was briefly three, while `VerifyAgainstCard` still lived on this
-    // screen. Wave 3 moved that section to the volumes step, where the card it
-    // compares against actually is, and it reads the same session value there
-    // - which is what makes the move cost nothing.
+    // **Once, and it has been three and two before.** `VerifyAgainstCard`
+    // moved to the volumes step in wave 3 and `PackagePanel` is deleted in
+    // round 3 task 3; each move cost nothing precisely because every panel
+    // reads the one session value. The count is asserted rather than "at
+    // least one" so a panel that started reading a key of its own again
+    // would be caught here, which is the defect this case is named for.
     const shown = await screen.findAllByText("E:\\amiga\\picked-by-hand");
-    expect(shown.length).toBe(2);
+    expect(shown.length).toBe(1);
   });
 });
 
@@ -2695,9 +2698,10 @@ describe("archives in one folder, disks in another (fix round 1, F1)", () => {
     render(<OsInstall />);
 
     await waitFor(() => expect(packagesMock).toHaveBeenCalled());
-    // **Every** call, never "some call": `PackagePanel` and
-    // `AmigaInstallPanel` both ask, and one of them being right says nothing
-    // about the other.
+    // **Every** call, never "some call": two panels used to ask, and one of
+    // them being right said nothing about the other. Kept in that form now
+    // that one asks, because the weaker assertion is what let the defect
+    // through the first time.
     for (const call of packagesMock.mock.calls) expect(call[0]).toBe("E:\\archives");
 
     // And both folders really are in the one list, which is what makes the
@@ -2709,37 +2713,17 @@ describe("archives in one folder, disks in another (fix round 1, F1)", () => {
     ]);
   });
 
-  /// **The half the report missed.** `PackagePanel`'s own picker calls
-  /// `onPackageFolderChange` → `setPackages({ folder })`. While that only
-  /// appended to the material list, the derived value stayed the list's
-  /// *first* entry: the user browsed to a folder, the field went on showing
-  /// another, and nothing they could do on that step fixed it. "Nothing
-  /// changes unless the user changes it" running backwards.
-  it("follows the packages panel's own Browse", async () => {
-    await renderFull();
-    await waitFor(() => expect(packagesMock).toHaveBeenCalled());
-    packagesMock.mockClear();
-
-    dialogOpenMock.mockResolvedValueOnce("E:\\archives");
-    await userEvent.click(
-      within(await screen.findByTestId("package-folder-field")).getByRole("button")
-    );
-
-    await waitFor(() => expect(packagesMock).toHaveBeenCalledWith("E:\\archives", "AmigaOS 3.2"));
-    // The pick is stored as the packages step's own value, **under this
-    // release's own key** (round 2 review, M3): the archives folder is a
-    // folder for a build, and a build is per release.
-    expect(rememberedBag()["buildSession.packages.AmigaOS 3.2"]).toMatchObject({
-      folder: "E:\\archives",
-    });
-    // … and the folder is in the one list too, so the readout and the
-    // planner see it.
-    const rows = await screen.findAllByTestId("material-folder");
-    expect(rows.map((row) => row.textContent)).toEqual([
-      expect.stringContaining("E:\\media"),
-      expect.stringContaining("E:\\archives"),
-    ]);
-  });
+  /// **`it("follows the packages panel's own Browse")` was here, and its
+  /// control is gone** (round 3 task 3). The case drove `PackagePanel`'s
+  /// package-folder field, which is deleted with the panel; the rule it
+  /// guarded is not this screen's and did not go with it. `setPackages({
+  /// folder })` writing **both** the stored value and the material list —
+  /// the half a report once missed, where Browse appended to the list while
+  /// the field went on showing the list's head — is asserted at the hook, in
+  /// `useBuildSession.test.tsx` ("drops the stored archives folder when the
+  /// list stops holding it", which clicks *choose archives* and reads both
+  /// back). `AmigaInstallPanel` still takes `packageFolder` from the session
+  /// and has no picker of its own.
 
   /// A user who never kept a separate archives folder gets the one list's
   /// answer for free — which is the whole point of deriving at all.

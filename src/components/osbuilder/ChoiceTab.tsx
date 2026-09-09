@@ -1,6 +1,14 @@
-// Tab 2 — *Ne kurulacak* (four-tab design § 3.2), round 3 task 2.
+// Tab 2 — *Ne kurulacak* (four-tab design § 3.2), round 3 tasks 2 and 3.
 //
-// One tick list. Its first group is **the release's own parts** — the
+// **One tick list, three groups, one order.** The release's parts, the
+// updates in the material's own order, and one first-boot tick — the whole
+// of what this build will put on the Amiga, on one screen, with one tick
+// column. It replaces two panels that each drew their own list of one
+// release's packages from two unrelated sources: `PackagePanel`'s flat
+// catalogue never joined the chain, so one lane could say two different
+// things about one file (ART-289's own shape). That panel is deleted.
+//
+// Its first group is **the release's own parts** — the
 // component catalogue `osinstall_components` answers for whatever release
 // the session carries, drawn exactly as the install screen drew it: required
 // rows ticked and disabled with their sentence, a conditional row stating
@@ -12,6 +20,15 @@
 // (the checklist is the release's own recipe · every conditional tick states
 // its reason · turning a condition-satisfied component off is a
 // confirmation) are unchanged by the move.
+//
+// Its second group is **the updates, in the material's own order** —
+// `osinstall_chain`'s rows through `chainLines`, one tick each, each row's
+// own sentence beneath it and **no sentence composed here**: the eight
+// endings are `core::osinstall::chain`'s. Whether a tick is the user's at all
+// is `choiceRowState`, one ordered decision in `@/lib/chain` rather than four
+// guards in this file's JSX. Its third is **one first-boot tick**, absent
+// meaning ticked, because the first-boot block is what makes a PiStorm tree
+// boot its own hardware.
 //
 // Below the list, **one folded line** saying what the switched-on layering
 // components would replace in the tree — the informed-consent half of §92's
@@ -30,9 +47,13 @@
 // own remembered key: `session.components` is what every other screen reads,
 // and a panel writing its own copy is what made the session's go stale.
 
-import { useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { slotOverrides } from "@/lib/amigainstall";
+import { chainLines, choiceRowState, type ChainLine } from "@/lib/chain";
+import { firstbootPreview } from "@/lib/firstboot";
+import type { Phrase } from "@/lib/phrase";
 import {
   collisionGroupHeadingKey,
   collisionPhrase,
@@ -45,20 +66,25 @@ import {
   groupCollisionsForPreview,
   hasRomUnknownRefusal,
   isForcedOnByCondition,
+  osinstallChain,
   rememberedComponentKey,
   toggleChosen,
   withoutExcluded,
+  type ChainReport,
   type ComponentDef,
+  type SlotOverride,
 } from "@/lib/osinstall";
 import { isFlag, isText, isTextOrNothing } from "@/lib/remembered";
 import { useBuildSession } from "@/lib/useBuildSession";
+import { useDestinationCheck } from "@/lib/useDestinationCheck";
 import { useInstallPlan } from "@/lib/useInstallPlan";
 import { useRemembered } from "@/lib/useRemembered";
 import { useRomIdentity } from "@/lib/useRomIdentity";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 export function ChoiceTab() {
   const { t } = useTranslation();
-  const { session, setComponents } = useBuildSession();
+  const { session, setComponents, setPackages, setFirstBoot } = useBuildSession();
   const release = session.release;
 
   // --- the plan's inputs, read exactly as tab 1 reads them -----------------
@@ -112,6 +138,136 @@ export function ChoiceTab() {
   const setChosen = (next: string[]) => setComponents({ chosen: next });
   const setExcludedConditional = (next: string[]) =>
     setComponents({ excludedConditional: next });
+
+  // --- group 2: the updates, in the material's own order -------------------
+  //
+  // `osinstall_chain` answers the whole AmigaOS 3.9 chain against the same
+  // folders, tree and ROM the material readout is answered against, so the
+  // two screens cannot say different things about one file. The rows arrive
+  // already sorted by `(position, id)` in Rust and are **not** re-sorted
+  // here: the order is the order the material goes on, which is information.
+
+  /**
+   * The user's own per-slot file choices, as `osinstall_chain` takes them
+   * (ART-284/ART-289).
+   *
+   * **A string, deposited into the dependency array**, exactly as
+   * `AmigaInstallPanel` and `MaterialReadout` already do it: `slotOverrides`
+   * builds a fresh array on every render, and the effect below starts disk
+   * work — an array identity there is ART-178's loop.
+   */
+  const rememberedBag = useSettingsStore((s) => s.settings.remembered);
+  const overridesKey = JSON.stringify(slotOverrides(rememberedBag));
+
+  /**
+   * The tree the chain is asked against — the destination, and only when ART
+   * has looked at it and found a build.
+   *
+   * A chosen `tree` with no `distribution.json` is a **refusal**, not an
+   * empty chain: every *installed* state comes from that file alone. So a
+   * fresh build asks with `null` and gets a chain of outstanding rows, rather
+   * than a rejected promise and a tab with no list on it at all.
+   */
+  const { tree } = useDestinationCheck(destination);
+  const treeRoot = tree?.isTree ? destination : null;
+  /** A primitive dependency rather than the array, for the reason above. */
+  const materialKey = session.material.folders.map((folder) => folder.path).join("\n");
+
+  /** `null` means *not answered yet*, never *no chain*. A release ART knows
+   *  no chain for answers with **no rows**, which is a different fact and
+   *  draws no group at all (spec § 1.5: AmigaOS 3.2 has none). */
+  const [chain, setChain] = useState<ChainReport | null>(null);
+  useEffect(() => {
+    const folders = materialKey ? materialKey.split("\n") : [];
+    let cancelled = false;
+    osinstallChain(release, folders, treeRoot, romPath, JSON.parse(overridesKey) as SlotOverride[])
+      .then((answer) => {
+        if (!cancelled) setChain(answer);
+      })
+      .catch(() => {
+        // Silent, and for the readout's own reason: a red box here would
+        // report a fault in ART as though it were a statement about the
+        // user's files.
+        if (!cancelled) setChain(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [release, materialKey, treeRoot, romPath, overridesKey]);
+
+  const updateRows = chain?.rows ?? [];
+  // Paired **by index**: `chainLines` maps one line per row, in order, and a
+  // row's `position` is a rank the material may give twice (`locale-39` and
+  // `locale-39-turkish` are both 4), which makes it useless as a key.
+  const updateLines = chainLines(updateRows);
+  const packagesChosen = session.packages.chosen;
+
+  /**
+   * Remembered ids no row in this release's chain accounts for — a stale
+   * choice from an older ART, or a package since removed (`PackagePanel`'s
+   * N4, kept).
+   *
+   * **Only once the chain has actually answered.** While `chain` is `null`
+   * every chosen id looks unknown, for a moment that says nothing true.
+   */
+  const strayChosen = chain
+    ? packagesChosen.filter((id) => !updateLines.some((line) => line.id === id))
+    : [];
+
+  function toggleUpdate(id: string) {
+    setPackages({
+      chosen: packagesChosen.includes(id)
+        ? packagesChosen.filter((held) => held !== id)
+        : [...packagesChosen, id],
+    });
+  }
+
+  /**
+   * A row's sentence, with the one parameter `@/lib/chain` cannot fill.
+   *
+   * A row blocked on a component names that component by the **key** the
+   * parts group above labels it with, because `@/lib/chain` never renders
+   * (CLAUDE.md). A component with no `labelKey` shows its id — which is what
+   * the parts group shows for it too, so the two cannot disagree.
+   */
+  function sentenceFor(line: ChainLine): Phrase {
+    if (line.kind !== "blocked-component") return line.phrase;
+    return {
+      ...line.phrase,
+      params: {
+        ...line.phrase.params,
+        components: line.components
+          .map((component) => (component.labelKey ? t(component.labelKey) : component.id))
+          .join(", "),
+      },
+    };
+  }
+
+  // --- group 3: the first-boot tick ---------------------------------------
+  //
+  // `alreadyWritten` is a fact about the **folder**, and a different question
+  // from the tick: one says what is there, the other says what this build
+  // should do. Asked only of a real tree — `firstboot_preview` reads one, and
+  // a refusal is not something a row whose whole content is a tick can
+  // explain.
+  const [firstbootWritten, setFirstbootWritten] = useState(false);
+  useEffect(() => {
+    if (!treeRoot) {
+      setFirstbootWritten(false);
+      return;
+    }
+    let cancelled = false;
+    firstbootPreview(treeRoot)
+      .then((preview) => {
+        if (!cancelled) setFirstbootWritten(preview.alreadyWritten);
+      })
+      .catch(() => {
+        if (!cancelled) setFirstbootWritten(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [treeRoot]);
 
   /** The one component id currently showing the "this will not boot"
    *  confirmation, or `null`. Only one at a time — a second click elsewhere
@@ -338,17 +494,168 @@ export function ChoiceTab() {
         </div>
       </div>
 
+
+      {/* **Group 2 — the updates, in the material's own order** (design
+          § 3.2). One tick per chain row, each row's own sentence under it,
+          and nothing composed here: the eight endings are `chain.rs`'s and
+          `@/lib/chain` only chooses which of them says so.
+
+          Drawn only when there are rows. A release ART knows no chain for —
+          AmigaOS 3.2 (spec § 1.5) — gets no heading, because a heading over
+          an empty list says a release has updates and none of them apply.
+          The stray remembered ids below are their own reason to draw it:
+          without the group there is nowhere to untick one from. */}
+      {(updateLines.length > 0 || strayChosen.length > 0) && (
+        <div data-testid="choice-updates" style={{ marginTop: 16 }}>
+          <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>{t("osBuilder.choice.updates")}</h3>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {updateLines.map((line, at) => {
+              // By index — see `updateLines`' own comment for why `position`
+              // cannot be the pairing key.
+              const state = choiceRowState(line, updateRows[at]);
+              const checked = state.tick === "user" ? packagesChosen.includes(line.id) : state.tick === "on";
+              const said = sentenceFor(line);
+              return (
+                <div
+                  key={line.id}
+                  data-testid="choice-update-row"
+                  data-package={line.id}
+                  style={{
+                    border: "1px solid var(--border)",
+                    borderRadius: 4,
+                    padding: "6px 10px",
+                    background: checked ? "var(--bg-hover)" : "var(--bg)",
+                  }}
+                >
+                  <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={!state.enabled}
+                      onChange={() => toggleUpdate(line.id)}
+                    />
+                    <span className="faint" style={{ minWidth: 14 }}>
+                      {line.position}
+                    </span>
+                    <strong>{line.name}</strong>
+                  </label>
+                  {/* The row's own state sentence, always — a disabled box
+                      with nothing beside it is a refusal nobody can act on.
+                      `where` is its own fact, true of the row whatever state
+                      the row is in, and it is what makes the dead box on a
+                      row that runs on the Amiga make sense. */}
+                  <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+                    {t(said.key, said.params)}
+                    {line.where && (
+                      <span style={{ marginLeft: 6 }}>{t(line.where.key, line.where.params)}</span>
+                    )}
+                  </p>
+                </div>
+              );
+            })}
+
+            {/* N4, kept from `PackagePanel`: a remembered id this release's
+                chain has no row for used to render nothing at all —
+                invisible, and so impossible to clear, since there was no box
+                to click. It is not a tick (there is nothing to tick), so it
+                is a sentence and a button that does the one thing available. */}
+            {strayChosen.map((id) => (
+              <div
+                key={id}
+                data-testid="choice-update-unknown"
+                style={{
+                  border: "1px solid var(--border)",
+                  borderRadius: 4,
+                  padding: "6px 10px",
+                  background: "var(--bg-hover)",
+                  display: "flex",
+                  gap: 8,
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  fontSize: 12,
+                }}
+              >
+                <span style={{ wordBreak: "break-all" }}>
+                  {t("osBuilder.choice.notInList", { id })}
+                </span>
+                <button className="btn" onClick={() => toggleUpdate(id)}>
+                  {t("osBuilder.choice.untick")}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* **Group 3 — the first-boot tick** (design § 3.2). One tick, and the
+          only one on this tab that is not per release: the block belongs to
+          the tree this build produces.
+
+          `wanted ?? true` — **absent means ticked**, because the first-boot
+          block is what makes a PiStorm tree boot its own hardware
+          (first-boot design § 3). Rendering it writes nothing: only
+          `onChange` reaches `setFirstBoot`, so a user who never touches this
+          row leaves no `wanted` in `settings.json` and ART cannot later
+          mistake its own default for their decision. */}
+      <div style={{ marginTop: 16 }}>
+        <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>{t("osBuilder.choice.firstboot")}</h3>
+        <div
+          style={{
+            border: "1px solid var(--border)",
+            borderRadius: 4,
+            padding: "6px 10px",
+            background: (session.firstboot.wanted ?? true) ? "var(--bg-hover)" : "var(--bg)",
+          }}
+        >
+          <label
+            data-testid="choice-firstboot"
+            style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 13 }}
+          >
+            <input
+              type="checkbox"
+              checked={session.firstboot.wanted ?? true}
+              onChange={(e) => setFirstBoot({ wanted: e.target.checked })}
+            />
+            <span>{t("osBuilder.choice.firstbootRow")}</span>
+          </label>
+          <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+            {t("osBuilder.choice.firstbootHint")}
+          </p>
+          {/* A fact about the folder, not about the tick — `written` and
+              `wanted` are different questions, and saying the first where it
+              is true makes a second write a decision rather than a surprise.
+              The sentence is `FirstBootPanel`'s own, so the two screens
+              cannot word one fact differently. */}
+          {firstbootWritten && (
+            <p
+              data-testid="choice-firstboot-already-written"
+              className="badge badge-warn"
+              style={{ display: "block", padding: "4px 8px", fontSize: 11, margin: "6px 0 0" }}
+            >
+              {t("firstboot.panel.alreadyWritten")}
+            </p>
+          )}
+        </div>
+      </div>
       {/* ART-175, folded (design § 3.2). What the switched-on layering
           components would replace, before the build runs. The summary line
           **counts** — a fold labelled only "what this would replace" says
-          nothing about whether opening it is worth the click, and "0" and
+          nothing about whether opening it is worth the click, and "3" and
           "41" are different decisions.
 
-          Drawn only when there is something to replace: a fold over an empty
-          table opens onto nothing. What was *placed* rather than replaced is
-          the summary sentence inside, which states all three counts in full
-          because an empty report means "nothing is in the way", never
-          "nothing happens" (§89). */}
+          **What the guard does** (round 3 task 2's review, carried into task
+          3). `reports.length > 0` means an empty report draws no fold at all:
+          the fold's whole subject is files that would be *replaced*, and one
+          labelled "would replace 0 files (open to see which)" is a control
+          that opens onto an empty table. Nothing is claimed by its absence —
+          how much this build places is the plan's own line on tab 1, which
+          is where a user reads what will happen rather than what will be
+          overwritten. The sentence **inside** the fold is the one that must
+          not collapse (§89): once there is something to state, it states all
+          three counts, because "landed on nothing", "landed on identical
+          bytes" and "replaced something" are three different facts and a
+          reader who is shown one of them infers the other two wrongly. */}
       {componentPreview && componentPreview.reports.length > 0 && (
         <details data-testid="choice-replaces-fold" style={{ margin: "12px 0 0" }}>
           <summary
