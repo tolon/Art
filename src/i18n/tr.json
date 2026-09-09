@@ -734,6 +734,49 @@
       "noDestination": "Hedef klasör henüz seçilmedi — Kickstart ve hedef sekmesinde seçin.",
       "goToBuild": "Derle'ye git"
     },
+    "build": {
+      "summary": {
+        "tree": "{{files}} dosya, {{bytes}} — {{components}}",
+        "treeExisting": "Var olan ağaç: {{release}}, {{count}} dosya — güncellenecek",
+        "updates_one": "{{count}} güncelleme, şu sırayla: {{names}}",
+        "updates_other": "{{count}} güncelleme, şu sırayla: {{names}}",
+        "updatesNone": "Hiçbir güncelleme işaretlenmedi",
+        "firstboot": "İlk açılış: ART'ın Amiga'da bir kez çalışacak hazırlığı",
+        "firstbootOff": "İlk açılış: kapalı",
+        "replaces": "{{replaced}} dosyanın yerine geçer, {{fresh}} yeni, {{unchanged}} birebir aynı",
+        "replacesPending": "Henüz önizlenmedi"
+      },
+      "phase": {
+        "pending": "Sırasını bekliyor",
+        "running": "Çalışıyor: {{name}}",
+        "tree": {
+          "succeeded": "Ağaç yazıldı: {{files}} dosya, {{bytes}}.",
+          "refused": "ART ağacı yazmayı reddetti — nedeni aşağıda.",
+          "failed": "Ağaç yazılamadı: {{message}}",
+          "cancelled": "Ağacın yazılması durduruldu.",
+          "notAttempted": "Ağaç denenmedi."
+        },
+        "package": {
+          "succeeded": "{{name}} eklendi: {{files}} dosya, {{bytes}}.",
+          "refused": "ART {{name}} paketini eklemeyi reddetti — nedeni aşağıda.",
+          "failed": "{{name}} eklenemedi: {{message}}",
+          "cancelled": "{{name}} eklemesi durduruldu.",
+          "notAttempted": "{{name}} denenmedi."
+        },
+        "firstboot": {
+          "succeeded": "İlk açılış hazırlandı: ağaca {{files}} dosya yazıldı.",
+          "refused": "ART ilk açılışı hazırlamayı reddetti — nedeni aşağıda.",
+          "failed": "İlk açılış hazırlanamadı: {{message}}",
+          "cancelled": "İlk açılış hazırlığı durduruldu.",
+          "notAttempted": "İlk açılış denenmedi."
+        }
+      },
+      "next": {
+        "refused": "Reddin işaret ettiğini düzeltin, sonra yeniden Derle'ye basın.",
+        "failed": "Ağaç şurada: {{root}} — bundan önce {{files}} dosya yazılmıştı. Hiçbir şey geri alınmadı.",
+        "cancelled": "Ağaç şurada: {{root}} — siz durdurmadan önce {{files}} dosya yazılmıştı. Hiçbir şey geri alınmadı."
+      }
+    },
     "intro": "PiStorm üzerinde çalışan AmigaOS dağıtımları, her birinin sizden ne istediği ve elinizdekinin uyup uymadığı. ART hiçbir dağıtımı indirmez — siz indirir, ART'a dosyayı gösterirsiniz.",
     "notBuiltYet": "ART henüz dağıtım kartı yazamıyor. Bu ekran bir dağıtımın neye ihtiyaç duyduğunu söyler ve elinizdeki ROM ile kartı buna göre denetler.",
     "what": {

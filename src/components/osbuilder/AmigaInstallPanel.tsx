@@ -142,6 +142,9 @@ import {
   type SlotState,
 } from "@/lib/osinstall";
 import { chainLines, chainSummaryLine, type ChainLine } from "@/lib/chain";
+// Moved to `src/lib/buildRun.ts` in round 4 task 1 — tab 4's run needs the
+// same answer for the same reason (which folder the archive was found in).
+import { folderOf } from "@/lib/buildRun";
 import {
   candidateLines,
   crowdedFolderLines,
@@ -428,22 +431,6 @@ function SlotField({
       choose={t("common.browse")}
     />
   );
-}
-
-/**
- * The folder a file sits in, by name alone.
- *
- * Used for one thing: handing `osinstall_add_package` the folder a
- * host-placed row's archive was actually **found** in, rather than assuming
- * it is the archives folder. This build's material is a list of folders and
- * the file may be in any of them; the slot already knows which.
- *
- * No path building happens here — the answer is a prefix of a path Rust
- * itself produced, and Rust validates it again on the way back in.
- */
-function folderOf(path: string): string | null {
-  const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
-  return cut > 0 ? path.slice(0, cut) : null;
 }
 
 export function AmigaInstallPanel({
