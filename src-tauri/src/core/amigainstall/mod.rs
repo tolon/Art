@@ -52,6 +52,29 @@
 //!
 //! The install runs against a **copy** of the tree, and the copy replaces the
 //! original only when the result says it succeeded (§92).
+//!
+//! ## An Amiga-side run declares no after-steps today, and where one would go
+//!
+//! [`finish`] is this round's vocabulary for *what the tree still needs once
+//! the files are down* — the protection bits `Resident` wants, the ROM-update
+//! rotation `SetPatch` reads by name (ART-227). It has **one live caller**, and
+//! it is not here: `core::osinstall::apply` runs it for a package's
+//! `post_place` after a host placement.
+//!
+//! Until 2026-09-09 `AmigaInstaller` carried a `post_install` list and
+//! `commands::amigainstall`'s `perform` called [`finish::apply`] on the staged
+//! copy after a successful run, before deciding whether to promote. Both went
+//! with the emulator route for the two BoingBags, because those were the only
+//! recipes that declared one — `AmigaInstaller` is now exactly `{ program,
+//! args, not_yet_runnable }`.
+//!
+//! **So the plumbing is absent rather than merely unused**, and whoever makes
+//! `boingbags-39-3-4` runnable should know where it went: the call belongs
+//! between the run's `Ok(outcome)` and `settle`, on `staged.copy_path()`, and
+//! only for [`RunOutcome::Succeeded`] — a tree the installer refused is not one
+//! to go on editing, and a failure there must return before `settle` so the
+//! copy is kept and the original is untouched. The types it needs
+//! ([`finish::PostStep`], [`finish::AppliedStep`]) are all still here.
 
 pub mod finish;
 pub mod packagevol;

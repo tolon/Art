@@ -277,9 +277,9 @@ export function chainLines(rows: ChainRow[]): ChainLine[] {
  *
  *   - **no `hostPlacementBlock`** → `false`, ART places the files from
  *     Windows, and `AmigaInstallPanel`'s Run goes through
- *     `useHostPlacement`. Both BoingBags are here since 2026-09-08, and they
- *     still declare an `amigaInstaller` — the emulator route is not
- *     withdrawn, it is simply not what this row's one Run button does.
+ *     `useHostPlacement`. Both BoingBags are here since 2026-09-08, and
+ *     neither declares an `amigaInstaller` any more (2026-09-09): the
+ *     emulator route for them was removed, not merely bypassed.
  *   - **a block and an `amigaInstaller`** → `true`, an emulator run through
  *     `compose` (BoingBags 3&4).
  *   - **a block and no installer** → `null`, neither route (Euro-Update).

@@ -325,12 +325,10 @@ pub struct Layout<'a> {
     /// one production caller, `commands::amigainstall::compose`, builds this
     /// from every shipped package that shares a release with the one
     /// selected, with the selected package's own id already removed. Nothing
-    /// here enforces either property — the drawer check in
-    /// [`overlay_mismatch_sentence`] finds the selected package unconditionally
-    /// regardless of whether it is in this list, and the catalogue scan
-    /// refuses to guess when more than one entry matches — so a caller that
-    /// does not keep this discipline gets a less specific sentence, never a
-    /// wrong one.
+    /// here enforces either property — [`wrong_archive_sentence`] never
+    /// resolves an ambiguous match by picking one — so a caller that does not
+    /// keep this discipline gets a less specific sentence, never a wrong
+    /// one.
     pub catalogue: &'a [KnownPackage],
 }
 
@@ -522,17 +520,22 @@ fn extract_whole(
 /// own bytes.
 ///
 /// The one place that decides how much of a program is read and what counts
-/// as a statement of version, so the two callers that ask the same question
-/// of the same file cannot drift apart: [`unpack`], which has the program on
-/// disk after an archive was extracted, and
-/// `commands::osinstall::osinstall_slots`, which has the same program's
-/// bytes straight out of the wrapper archive and never writes them anywhere.
-/// A second `amigaver::read` with a second bound is how one of them would
-/// start answering `None` where the other answers `Updater 45.15`.
+/// as a statement of version.
 ///
-/// **Never a size, never a date** — see
-/// [`crate::core::osinstall::package::AmigaInstaller::minimum_version`] for
-/// why the `$VER:` marker is the only acceptable evidence here.
+/// **It had two callers until 2026-09-09** — [`unpack`], which has the program
+/// on disk after an archive was extracted, and
+/// `commands::osinstall::osinstall_slots`, which read the same program's bytes
+/// straight out of the wrapper archive to decide whether BoingBag 3.9-1's UAE
+/// overlay was needed. The second went with the overlay machinery, so today
+/// the only caller is [`read_installer_version`] in this file. The bound and
+/// the marker rule stay in one place anyway: a second `amigaver::read` with a
+/// second bound is how two readers of one file start answering different
+/// things about it.
+///
+/// **Never a size, never a date.** A size is consistent with any build that
+/// happens to be that long, and reading a coincidence as proof is the mistake
+/// that shipped an AmigaOS 3.5 tree under the name 3.9; the `$VER:` marker is
+/// the file's own statement about itself.
 pub fn stated_version(bytes: &[u8]) -> Option<AmigaVersion> {
     let bound = VERSION_SEARCH_BOUND as usize;
     amigaver::read(&bytes[..bytes.len().min(bound)])

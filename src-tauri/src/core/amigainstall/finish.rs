@@ -52,9 +52,10 @@
 //! each becomes a variant here on the day a measurement asks for one.
 //!
 //! **Four of five, since 2026-09-08.** `XAD-Update` was measured and it *was*
-//! needed — and it is still not here, because it is not a host file operation.
-//! It ships as [`super::FollowUp`]: recipe data, and four more lines in the one
-//! boot script [`super::workvol::startup_sequence`] already writes
+//! needed — and it is still not here, because it is not a host file operation
+//! of the kind this module performs: it is a whole second payload, placed from
+//! its own archive. It ships as `boingbag-39-2.json`'s `extra_members`, read by
+//! [`crate::core::osinstall::apply`]
 //! ([ART-280](../../../../docs/ISSUES.md)). See the bullet below.
 //!
 //! ### Three of them were measured on 2026-09-08, and none became a variant
@@ -113,14 +114,23 @@
 //!     (`amiga/amiga-os-3.9/S/Amiga-OS-3.9/Install-Boing-Bag-2`, lines 32-36,
 //!     MIT), and so does ART.
 //!
-//!   What shipped: [`super::FollowUp`] in `boingbag-39-2.json`'s
-//!   `amiga_installer.follow_ups`, emitted by
-//!   [`super::workvol::startup_sequence`] as
-//!   `If EXISTS <sys>:C/Version` / `Version >NIL: … 10 FILE` / `If Warn` / the
-//!   second invocation, reporting separately in
-//!   [`super::FOLLOW_UP_FILE`]. Proved on the owner's own material: `9.1` →
-//!   **`xadmaster 10.0 (31.03.2001)`**, 105 368 → 110 100 bytes,
+//!   What shipped for one day, and what ships now. The first answer was a
+//!   version-gated **second invocation in the same boot** — `super::FollowUp`,
+//!   emitted by `workvol::startup_sequence` as `If EXISTS <sys>:C/Version` /
+//!   `Version >NIL: … 10 FILE` / `If Warn` / the second invocation, reporting
+//!   separately in its own marker file. Proved on the owner's own material:
+//!   `9.1` → **`xadmaster 10.0 (31.03.2001)`**, 105 368 → 110 100 bytes,
 //!   `follow-up: Some(Ran)`, 156.6 s.
+//!
+//!   **That mechanism was removed on 2026-09-09** with the whole emulator
+//!   route for BoingBag 3.9-1 and 3.9-2, which are placed from Windows now.
+//!   The measurement above stands and is the reason the work is still done;
+//!   what does it is `boingbag-39-2.json`'s `extra_members` — the same second
+//!   payload behind the same gate, read on the host by
+//!   [`crate::core::osinstall::apply`] instead of by the package's own program.
+//!   The `Version … FILE` ordering trap the script version bought is kept in
+//!   `docs/architecture.md`, because it is a fact about AmigaDOS rather than
+//!   about the code that is gone.
 //!
 //!   The round-3 design's *"`finish.rs` gains `run-again-with`"* is still the
 //!   one instruction the measurement contradicts — the mechanism is real, and

@@ -96,7 +96,6 @@ use tauri::{AppHandle, Emitter, State};
 
 use super::jobs::{spawn_job, JobRegistry};
 use super::oplog::{user_operation, write_to_path};
-use crate::core::amigainstall::finish;
 use crate::core::amigainstall::run::{run_with, RealClock, RunLimits, RunRequest};
 use crate::core::amigainstall::stage::{settle, stage_with, Settlement};
 use crate::core::amigainstall::{
@@ -842,29 +841,6 @@ fn refuse_wrong_package_archive(
     Err(CoreError::InvalidInput(packagevol::wrong_archive_sentence(
         archive, media, &holds, catalogue,
     )))
-}
-
-/// One finished post-install step, as a sentence.
-///
-/// English, like every other `ProgressSink` line in this module — ART-060's
-/// mechanism covers `CoreError`, not progress text, and inventing a second
-/// half-translated surface here would be worse than one honest one.
-fn describe_applied(step: &finish::AppliedStep) -> String {
-    match step {
-        finish::AppliedStep::Protected { path, was, now } => {
-            format!("Protection bits on '{path}': {was} -> {now}")
-        }
-        finish::AppliedStep::Replaced {
-            target,
-            replacement,
-            backup: Some(backup),
-        } => format!("'{replacement}' is now '{target}'; the previous one is at '{backup}'"),
-        finish::AppliedStep::Replaced {
-            target,
-            replacement,
-            backup: None,
-        } => format!("'{replacement}' placed as '{target}'; there was nothing to replace"),
-    }
 }
 
 /// The machine the installer runs on.

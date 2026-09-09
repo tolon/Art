@@ -303,11 +303,16 @@ pub struct RunRequest<'a> {
     ///
     /// It is a path and nothing more here, on purpose. Whether the image is
     /// really the disc the package asked for is decided where the file can be
-    /// opened and its own volume name read — `commands/amigainstall.rs`, from
-    /// the recipe's
-    /// [`RequiredMedium`](crate::core::osinstall::package::RequiredMedium) —
-    /// and travels here already vouched for, the same shape as
+    /// opened and its own volume name read, and it travels here already
+    /// vouched for — the same shape as
     /// [`crate::core::winuae::LaunchMedia::hardfile_shapes`].
+    ///
+    /// **No shipped recipe asks for one since 2026-09-09.** The `Updater`
+    /// whose check this exists for is not a program ART runs any more, so
+    /// every caller passes `None` and the recipes' `required_medium` field is
+    /// gone. Kept because the field is about a *run*, not about a package: an
+    /// Installer script that verifies its own disc is a thing this engine
+    /// would need again, and there is nothing here to re-derive.
     pub cd_image: Option<&'a Path>,
     pub limits: RunLimits,
 }

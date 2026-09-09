@@ -6696,7 +6696,12 @@ mod tests {
     /// the user's file.
     #[test]
     fn the_chain_takes_the_users_own_file_choices_art_284() {
-        let dir = scratch("chain-overrides");
+        // **`ScratchDir`, not this module's `scratch()`** (cleanup review, L2).
+        // The neighbours here end with a trailing `remove_dir_all`, which is
+        // skipped exactly when a test panics -- the pattern ART-281 is filed
+        // on (263 484 directories, 764 GB). A new test does not have to
+        // inherit it: `ScratchDir` removes itself on `Drop`, panic or not.
+        let dir = crate::core::ScratchDir::new("art-osinstall-cmd", "chain-overrides");
         // Two archives, both carrying `BoingBag3.9-1` at their top level —
         // the owner's own folder, in shape: `BoingBag39-1.lha` and
         // `BoingBag39-1 (1).lha`.
@@ -6713,7 +6718,7 @@ mod tests {
 
         let ambiguous = osinstall_chain(
             "AmigaOS 3.9".to_string(),
-            vec![dir.clone()],
+            vec![dir.path().to_path_buf()],
             None,
             None,
             None,
@@ -6738,7 +6743,7 @@ mod tests {
         let chosen = dir.join("BoingBag39-1 (1).lha");
         let decided = osinstall_chain(
             "AmigaOS 3.9".to_string(),
-            vec![dir.clone()],
+            vec![dir.path().to_path_buf()],
             None,
             None,
             Some(vec![("package:boingbag-39-1".to_string(), chosen.clone())]),
@@ -6764,8 +6769,6 @@ mod tests {
             "and it is no longer ambiguous: got {:?}",
             row.state
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A tree with no `distribution.json` is a refusal, not an empty chain:
