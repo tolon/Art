@@ -13,8 +13,10 @@ an opinion are not a reproduction. This prints numbers.
 
 What it reports, per language and per build kind:
 
-    steps     how many links the strip offers — must match `stepsFor(kind)`
-    labels    the rendered text of each, so a raw `osBuilder.step.*` key or an
+    steps     how many links the strip offers — must match `stepsFor(kind)`.
+              The strip's first link is the hedef chip (`osBuilder.what.*`),
+              so steps= counts the chip plus the numbered tabs
+    labels    the rendered text of each, so a raw `osBuilder.*` key or an
               unrendered `{{…}}` is visible rather than inferred
     strip     the strip's own client/scroll width. `over` above zero is a strip
               wider than its box
@@ -109,7 +111,7 @@ MEASURE_JS = r"""
     }
     const links = [...strip.querySelectorAll("a")];
     const labels = links.map((a) => a.textContent.trim()).join(" | ");
-    const raw = /osBuilder\.step\./.test(labels) || /\{\{/.test(labels);
+    const raw = /osBuilder\./.test(labels) || /\{\{/.test(labels);
     const doc = document.documentElement;
     out.push(
       [

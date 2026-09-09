@@ -11,7 +11,14 @@ import {
   DEFAULT_PACKAGES,
   type BuildSession,
 } from "./buildSession";
-import { kindLabelKey, readiness, stepLabelKey, stepsFor, STEP_IDS } from "./buildSteps";
+import {
+  kindLabelKey,
+  readiness,
+  stepLabelKey,
+  stepPath,
+  stepsFor,
+  STEP_IDS,
+} from "./buildSteps";
 
 function sessionWith(over: Partial<BuildSession> = {}): BuildSession {
   return {
@@ -109,6 +116,15 @@ describe("stepLabelKey", () => {
       expect(en.osBuilder.step[step]).toEqual(expect.any(String));
       expect(tr.osBuilder.step[step]).toEqual(expect.any(String));
     }
+  });
+});
+
+describe("stepPath", () => {
+  it("answers the route the build tab is actually mounted at", () => {
+    // The literal, because the bar's button and the route table are two
+    // files that have to agree on it: a test that only compared them to each
+    // other would pass on both being wrong together.
+    expect(stepPath("derle")).toBe("/os-builder/derle");
   });
 });
 

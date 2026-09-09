@@ -8,6 +8,9 @@
 //
 // It reads the remembered destination through the same key and guard the
 // files tab writes it with, and writes nothing: `remembered.ts`'s rule.
+//
+// It is the bar under the **tabs**, so it is absent on `hedef`, which is the
+// entry chip rather than a tab of the lane.
 
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -16,6 +19,7 @@ import { isTextOrNothing } from "@/lib/remembered";
 import { rememberedComponentKey } from "@/lib/osinstall";
 import { useRemembered } from "@/lib/useRemembered";
 import { useBuildSession } from "@/lib/useBuildSession";
+import { stepPath } from "@/lib/buildSteps";
 
 export function BuildBar() {
   const { t } = useTranslation();
@@ -29,7 +33,12 @@ export function BuildBar() {
   );
 
   if (session.kind !== "install") return null;
-  const onBuildTab = location.pathname === "/os-builder/derle";
+  // **Not on the entry chip.** `hedef` is where the kind is chosen, not a tab
+  // of the lane (four-tab design § 2): a bar naming a destination and
+  // offering "go to Build" under the *picker* claims a build is already under
+  // way when the person may be about to choose a different kind entirely.
+  if (location.pathname === stepPath("hedef") || location.pathname === "/os-builder") return null;
+  const onBuildTab = location.pathname === stepPath("derle");
 
   return (
     <div
@@ -52,7 +61,7 @@ export function BuildBar() {
         {destination ? t("osBuilder.bar.destination", { path: destination }) : t("osBuilder.bar.noDestination")}
       </span>
       {!onBuildTab && (
-        <button className="btn" data-testid="build-bar-go" onClick={() => navigate("/os-builder/derle")}>
+        <button className="btn" data-testid="build-bar-go" onClick={() => navigate(stepPath("derle"))}>
           {t("osBuilder.bar.goToBuild")}
         </button>
       )}

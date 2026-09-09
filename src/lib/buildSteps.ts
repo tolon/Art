@@ -123,6 +123,18 @@ function hasTree(session: BuildSession): boolean {
   return typeof session.tree.root === "string" && session.tree.root.length > 0;
 }
 
+/**
+ * The route for a step — a path, not display text.
+ *
+ * One place, so a link and a route cannot drift apart: the shell's strip, the
+ * drop carry and the build bar's button all build their target from this.
+ * Not an i18n key and never rendered as one — the segments are deliberately
+ * untranslated, as `STEP_IDS` says.
+ */
+export function stepPath(step: StepId): string {
+  return `/os-builder/${step}`;
+}
+
 /** The i18n key for a step's name in the progress strip. */
 export function stepLabelKey(step: StepId): string {
   return `osBuilder.step.${step}`;

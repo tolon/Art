@@ -86,6 +86,11 @@ describe("the build bar", () => {
     expect(screen.queryByTestId("build-bar-go")).toBeNull();
   });
 
+  it("is not drawn on the entry chip, which is not a tab of the lane", () => {
+    renderAt("/os-builder/hedef");
+    expect(screen.queryByTestId("build-bar")).toBeNull();
+  });
+
   it("is not drawn for the other lanes", () => {
     seed({ "buildSession.kind": "boot-card" });
     renderAt("/os-builder/kart");

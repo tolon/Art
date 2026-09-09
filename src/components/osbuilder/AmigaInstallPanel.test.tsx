@@ -2070,12 +2070,12 @@ describe("the chain", () => {
     expect(radioAt(7).checked).toBe(true);
   });
 
-  it("sends the CD row to the step where a disc is chosen, and never runs it", async () => {
+  it("sends the CD row to the top of this tab, where a disc is chosen, and never runs it", async () => {
     renderChain();
     await screen.findAllByTestId("amiga-chain-row");
 
     const link = screen.getByTestId("amiga-chain-cd-link");
-    expect(link.getAttribute("href")).toBe("/os-builder/kaynak");
+    expect(link.getAttribute("href")).toBe("/os-builder/dosyalar");
     expect(link.textContent).toBe(i18n.t("osinstall.chain.cdLink"));
 
     await userEvent.setup().click(radioFor("AmigaOS3.9"));
@@ -2098,7 +2098,7 @@ describe("the chain", () => {
     expect(row.textContent).not.toContain(i18n.t("osinstall.chain.missingUnnamed", { name: "AmigaOS3.9" }));
     // And the link is still there, because it is the row's only action.
     expect(screen.getByTestId("amiga-chain-cd-link").getAttribute("href")).toBe(
-      "/os-builder/kaynak"
+      "/os-builder/dosyalar"
     );
   });
 
@@ -2375,10 +2375,11 @@ describe("the chain", () => {
     );
     const rows = await screen.findAllByTestId("amiga-chain-row");
 
-    // Once, above the rows, with the next step and where to take it.
+    // Once, above the rows, naming where the folders are added.
     const banner = screen.getByTestId("amiga-chain-no-folders");
     expect(banner.textContent).toContain(i18n.t("osinstall.chain.noFolders"));
-    expect(banner.querySelector("a")?.getAttribute("href")).toBe("/os-builder/kaynak");
+    expect(banner.querySelector("a")?.getAttribute("href")).toBe("/os-builder/dosyalar");
+    expect(banner.querySelector("a")?.textContent).toBe(i18n.t("osBuilder.step.dosyalar"));
 
     // And the missing row says the short form of it rather than the sentence
     // about folders nobody named.

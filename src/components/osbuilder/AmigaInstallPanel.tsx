@@ -1603,12 +1603,15 @@ export function AmigaInstallPanel({
               : t("osinstall.chain.treeNone")}
           </p>
           {/* **Where ART was told to look, when it was told nowhere**
-              (fix round 1, F6). Once, above the rows, carrying the next
-              step; each row says the short form of it for itself. */}
+              (fix round 1, F6). Once, above the rows, carrying where the
+              folders are added; each row says the short form of it for
+              itself. Since the four-tab rewrite this panel's only mount is
+              the foot of the `dosyalar` tab, so the place to act is the top
+              of this same tab — not another step. */}
           {noFolders && (
             <p className="badge badge-warn" data-testid="amiga-chain-no-folders" style={{ display: "block", padding: "6px 12px", fontSize: 12, margin: "0 0 8px" }}>
               {t("osinstall.chain.noFolders")}{" "}
-              <Link to="/os-builder/kaynak">{t("osBuilder.step.kaynak")}</Link>
+              <Link to="/os-builder/dosyalar">{t("osBuilder.step.dosyalar")}</Link>
             </p>
           )}
           {/* **What was not looked at** (fix round 1, F5). A remembered
@@ -1670,12 +1673,13 @@ export function AmigaInstallPanel({
                       {t(line.where.key, line.where.params)}
                     </span>
                   )}
-                  {/* The first link is a disc, and it is not obtained here.
-                      The link says where it is chosen instead of leaving a
-                      row nobody can act on. */}
+                  {/* The first link is a disc, and it is not chosen down
+                      here. The link says where it is chosen — the top of
+                      this same tab — instead of leaving a row nobody can
+                      act on. */}
                   {row.packageId === null && (
                     <span style={{ marginLeft: 6 }}>
-                      <Link data-testid="amiga-chain-cd-link" to="/os-builder/kaynak">
+                      <Link data-testid="amiga-chain-cd-link" to="/os-builder/dosyalar">
                         {t("osinstall.chain.cdLink")}
                       </Link>
                     </span>

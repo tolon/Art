@@ -49,18 +49,13 @@ import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
 import { isTextOrNothing, isWholeNumberBetween } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useBuildSession } from "@/lib/useBuildSession";
-import { kindLabelKey, stepLabelKey, stepsFor, type StepId } from "@/lib/buildSteps";
+import { kindLabelKey, stepLabelKey, stepPath, stepsFor } from "@/lib/buildSteps";
 import type { BuildKind } from "@/lib/buildSession";
 import { errorText } from "@/lib/errorText";
 import { BuildBar } from "@/pages/osbuilder/BuildBar";
 
 /** Card sizes people actually buy. Typed sizes are allowed too. */
 const CARD_SIZES_GB = [16, 32, 64, 128, 256];
-
-/** Where a step lives. One place, so a link and a route cannot drift apart. */
-function stepPath(step: StepId): string {
-  return `/os-builder/${step}`;
-}
 
 /**
  * The shell: what is being built, how far along it is, and the step itself.

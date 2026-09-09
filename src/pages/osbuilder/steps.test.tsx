@@ -176,6 +176,27 @@ describe("the progress strip", () => {
     expect(screen.getAllByRole("link").length).toBe(2);
     expect(screen.getByRole("link", { name: /card image/i })).toBeTruthy();
   });
+
+  it("draws the chip alone for the distro kind, which has no numbered tab", () => {
+    seed({ "buildSession.kind": "distro" });
+    renderAt("/os-builder/hedef");
+    const links = screen.getAllByRole("link");
+    expect(links).toHaveLength(1);
+    expect(links[0].getAttribute("data-testid")).toBe("strip-hedef");
+  });
+});
+
+describe("the build bar is mounted by the shell", () => {
+  it("is under the install lane's tabs and not under the card lane", () => {
+    seed({ "buildSession.kind": "install", "buildSession.tree": { root: "E:\\dist", builtHere: true } });
+    const install = renderAt("/os-builder/secim");
+    expect(screen.getByTestId("build-bar")).toBeTruthy();
+    install.unmount();
+
+    seed({ "buildSession.kind": "boot-card" });
+    renderAt("/os-builder/kart");
+    expect(screen.queryByTestId("build-bar")).toBeNull();
+  });
 });
 
 describe("a disc dropped on the panel", () => {
