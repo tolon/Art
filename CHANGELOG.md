@@ -44,6 +44,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The updates step no longer sits on “Checking what this would
+  replace…” for ever.** If ART reopened on a row that is already in
+  your tree, that line appeared and stayed — nothing was being checked, and
+  nothing ever would be. It is gone, and the button beside it no longer offers
+  to add a package your tree already has: it moves to the next row that really
+  is ready and says which one, while the row you were reading keeps its own
+  sentence.
+
+- **The updates step says what it actually does.** It was headed *“Run a
+  package's own installer on the Amiga”* and explained that some packages
+  are locked and need an emulator — which stopped being true when BoingBag
+  1 and 2 moved to Windows. It is *“AmigaOS 3.9 updates”* now: the
+  whole chain in the order the packages themselves require, most of it placed
+  from Windows, with the one package that still needs an emulator saying so on
+  its own row.
+
 - **The updates chain and the source step no longer disagree about which file
   you chose.** With two builds of the same BoingBag in your folder, the source
   step showed the one you had picked while the chain screen said it could not

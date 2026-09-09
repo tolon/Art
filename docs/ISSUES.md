@@ -353,6 +353,57 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-286** 🟡 ✅ **"Checking what this would replace…" never resolves:
+the panel renders the host-placement preview for a row it never asks about** —
+*found 2026-09-09 by the owner on `docs/assets/chain.png` (the 10:21 build),
+polled 4 min 40 s with nothing clicked; fixed the same day*
+`src/components/osbuilder/AmigaInstallPanel.tsx`
+
+On `/os-builder/amiga-kurulum` with a tree chosen and the remembered selection
+sitting on row 4 (`locale-39`, *already in this tree*), the panel showed
+*"Checking what this would replace…"* and never stopped. Nothing was in
+flight: `useHostPlacement`'s own `enabled` gate had correctly declined to call
+`osinstall_collisions` for a non-ready row, so `collisions` and
+`collisionsError` were both `null` and would stay `null` for ever — no
+answer could arrive and no error could either.
+
+**A fetch gate and a render gate that disagreed.** `hostSideRow` asked only
+*is this row placed from Windows*; `enabled` asked that **and** *is it ready*.
+For a host-placed row that is already installed the first is true and the
+second is false, so the block rendered and the request was never sent. The
+heading's fallback is the loading sentence, and a loading sentence with no
+request behind it is CLAUDE.md's fixed-width progress bar wearing words: it
+looks like progress and carries no information.
+
+Two smaller things went with it, both visible on the same screenshot:
+
+1. **The button captioned an action on a package already in the tree.** The
+   remembered row was the Run target, so the one button read *"Add the chosen
+   packages"* directly above *"AmigaOS 3.9 Locale update — already in this
+   tree"*. A **remembered** selection is a default, not a decision: it is only
+   where somebody was last looking. It now falls back to the first ready row,
+   exactly as no selection at all does, and the screen says both facts —
+   `Next: BoingBag 3.9-2` for what Run will do, and the remembered row's own
+   sentence for why it is not that. A row the user **clicks** is still the
+   target whatever state it is in; that is round 3's own rule (selecting is
+   reading) and three tests pin it.
+2. The Rust side was checked and cleared rather than assumed:
+   `osinstall_collisions` resolves its refusals **before** minting a job id, so
+   an `Err` rejects the promise synchronously and a success always emits. There
+   is no path through it that neither emits nor errors — and for this repro
+   it never ran at all.
+
+*Tests:*
+`never leaves 'Checking what this would replace' on a row nothing was asked about`
+(both arms — the restored selection, and a host-placed row the user clicks,
+which is the arm the render gate itself is about) and
+`never captions the button with an action on a package already in the tree`.
+**Mutations: both gates put back, each fell on its own test** — the render
+gate on *"expected <div…> to be null"*, the target fallback on
+*"Unable to find an element by: [data-testid="amiga-chain-next"]"*.
+
+Investigation: `.superpowers/sdd/2026-09-08-intake/preview-hang-investigation.md`.
+
 **ART-166** 🟡 ✅ **Both BoingBag payload archives are password-encrypted ZIPs, so
 neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
 8's real run, on `content-layer`*
@@ -962,6 +1013,20 @@ under it stays exactly where it is: nothing changes unless the user changes it,
 and deleting somebody's remembered path to tidy up would be ART changing a
 setting they made. `amigaInstall.medium` is in the same position for the same
 reason.
+
+**And so did three of the tests named below**, which is worth saying here
+rather than leaving a reader to find their names gone:
+`the_packages_own_archive_in_the_second_field_gets_its_own_sentence_and_never_says_select_it`,
+`a_wrong_second_archive_is_refused_before_the_tree_is_copied` and
+`the_preview_asks_about_every_archive_not_just_the_first` were all about the
+second field and went with it. **The single-field half of this entry is still
+guarded**, by `a_wrong_archive_is_refused_before_the_tree_is_copied`,
+`the_packages_own_archive_is_still_accepted`,
+`a_missing_archive_is_not_refused_as_the_wrong_one`,
+`an_unrecognised_archive_still_lists_what_it_held` and
+`a_wrong_archive_in_the_package_field_names_its_real_owner_when_the_catalogue_knows_it`
+— and `src/lib/amigainstall.test.ts` now asserts the wire carries no
+`packageArchives` at all.
 
 Tests (fix round 1): `the_packages_own_archive_in_the_second_field_gets_its_own_sentence_and_never_says_select_it`,
 `the_sentence_keeps_an_unreadable_listing_apart_from_an_empty_one`,
