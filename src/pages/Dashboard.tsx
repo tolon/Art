@@ -7,6 +7,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useRecentFilesStore } from "@/stores/recentFilesStore";
 import { runWorkflow } from "@/lib/api";
 import { usePowerMode } from "@/lib/uxmode";
+import { useRunLock } from "@/pages/osbuilder/runLock";
 import type { DroppedAnalysis, WorkflowInfo, WorkflowOutcome } from "@/types";
 import { errorText } from "@/lib/errorText";
 import { QuickIcon, type QuickIconName } from "@/components/layout/QuickIcon";
@@ -66,6 +67,10 @@ export function Dashboard() {
   const theme = useSettingsStore((s) => s.settings.theme);
   const recent = useRecentFilesStore((s) => s.files);
   const loadRecent = useRecentFilesStore((s) => s.load);
+  // The shell's run lock (`@/pages/osbuilder/runLock`, round 5): a drop card's
+  // route action navigates, and a navigation out of the lane mid-build is the
+  // thing the strip and the sidebar already refuse.
+  const { running } = useRunLock();
 
   useEffect(() => {
     void loadRecent().catch(() => {});
@@ -95,6 +100,20 @@ export function Dashboard() {
               <InteractiveDropResultCard key={`${a.path}-${i}`} analysis={a} />
             ))}
           </div>
+
+          {/* **Why those buttons have gone dead, under the cards** — once,
+              not once per card. The same sentence the sidebar and the OS
+              Builder's strip carry, because it is the same refusal, and it
+              names the control that lifts it. */}
+          {running && (
+            <p
+              className="badge badge-warn"
+              data-testid="dashboard-locked"
+              style={{ fontSize: 11, marginTop: 12, display: "inline-block" }}
+            >
+              {t("osBuilder.build.navigationLocked")}
+            </p>
+          )}
         </section>
       )}
 
@@ -173,6 +192,7 @@ function InteractiveDropResultCard({ analysis }: { analysis: DroppedAnalysis }) 
   const { t } = useTranslation();
   const navigate = useNavigate();
   const powerMode = usePowerMode();
+  const { running } = useRunLock();
   const [outcome, setOutcome] = useState<WorkflowOutcome | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -193,8 +213,16 @@ function InteractiveDropResultCard({ analysis }: { analysis: DroppedAnalysis }) 
   const secondary = candidates.filter((c) => c.category === "standard");
   const advanced = candidates.filter((c) => c.category === "advanced");
 
+  /** A route action, while a build is running: refused, not merely greyed. */
+  function lockedOut(action: WorkflowInfo): boolean {
+    return running && action.kind.kind === "navigate";
+  }
+
   async function activate(action: WorkflowInfo) {
     if (!action.available) return;
+    // The guard is here as well as on the button, because `disabled` is a
+    // property of one element and this is the only path that navigates.
+    if (lockedOut(action)) return;
 
     if (action.kind.kind === "navigate") {
       navigate(action.kind.route, { state: { path: analysis.path } });
@@ -218,13 +246,16 @@ function InteractiveDropResultCard({ analysis }: { analysis: DroppedAnalysis }) 
   }
 
   function ActionButton({ action, primary }: { action: WorkflowInfo; primary?: boolean }) {
+    const locked = lockedOut(action);
     return (
       <button
         className={`btn btn-sm ${primary ? "btn-primary" : ""}`}
         onClick={() => activate(action)}
-        disabled={busy || !action.available}
+        disabled={busy || !action.available || locked}
         title={
-          action.available
+          locked
+            ? t("osBuilder.build.navigationLocked")
+            : action.available
             ? action.description
             : t("dashboard.plan.comingLaterTitle", { description: action.description })
         }

@@ -24,7 +24,7 @@
 // ROMs. And ART's output is an **image file**, never a physical card
 // (`docs/owner-checklist.md` § 4).
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -53,7 +53,7 @@ import { kindLabelKey, stepLabelKey, stepPath, stepsFor } from "@/lib/buildSteps
 import type { BuildKind } from "@/lib/buildSession";
 import { errorText } from "@/lib/errorText";
 import { BuildBar } from "@/pages/osbuilder/BuildBar";
-import { RunLockContext } from "@/pages/osbuilder/runLock";
+import { useRunLock } from "@/pages/osbuilder/runLock";
 
 /** Card sizes people actually buy. Typed sizes are allowed too. */
 const CARD_SIZES_GB = [16, 32, 64, 128, 256];
@@ -75,14 +75,14 @@ export function OsBuilder() {
   const steps = stepsFor(session.kind);
 
   /**
-   * **The lane's run lock** (round 4 whole-branch review, I2) — see
-   * `runLock.tsx` for the defect. The state is here rather than in a provider
-   * component of its own because this is what has to *draw* differently: a
-   * strip whose links keep working while a run is in flight is a set of four
-   * ways to abandon a build without being told.
+   * **The shell's run lock, read** (round 4 whole-branch review I2; the
+   * provider moved to `Layout` in round 5) — see `runLock.tsx` for the
+   * defect. This screen only draws it: a strip whose links keep working while
+   * a run is in flight is four ways to abandon a build without being told,
+   * and the sidebar beside it is fifteen more. `BuildTab` is the only thing
+   * that sets it.
    */
-  const [running, setRunning] = useState(false);
-  const runLock = useMemo(() => ({ running, setRunning }), [running]);
+  const { running } = useRunLock();
 
   // A disc dropped on the drop panel routes here (`os.install-from-disc`)
   // carrying the file in router state. Under sub-routes the shell has to
@@ -113,40 +113,38 @@ export function OsBuilder() {
         {t("osBuilder.intro")}
       </p>
 
-      <RunLockContext.Provider value={runLock}>
-        <nav
-          aria-label={t("nav.osBuilder")}
-          style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}
-        >
-          {/* `hedef` is the entry, not a numbered step (four-tab design § 2):
-              the chip names the kind and links back to the picker. */}
-          <StripChip locked={running} to={stepPath("hedef")} testId="strip-hedef">
-            {t(kindLabelKey(session.kind))}
+      <nav
+        aria-label={t("nav.osBuilder")}
+        style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}
+      >
+        {/* `hedef` is the entry, not a numbered step (four-tab design § 2):
+            the chip names the kind and links back to the picker. */}
+        <StripChip locked={running} to={stepPath("hedef")} testId="strip-hedef">
+          {t(kindLabelKey(session.kind))}
+        </StripChip>
+        {steps.slice(1).map((step, at) => (
+          <StripChip key={step} locked={running} to={stepPath(step)}>
+            {at + 1}. {t(stepLabelKey(step))}
           </StripChip>
-          {steps.slice(1).map((step, at) => (
-            <StripChip key={step} locked={running} to={stepPath(step)}>
-              {at + 1}. {t(stepLabelKey(step))}
-            </StripChip>
-          ))}
-          {/* **Why the chips have gone dead, beside the chips** (I2). A
-              disabled control with no sentence next to it is a screen that has
-              refused and not said so, and the refusal names the control that
-              lifts it — Stop, which is two inches below on the tab the person
-              is already looking at. */}
-          {running && (
-            <span
-              className="badge badge-warn"
-              data-testid="strip-locked"
-              style={{ fontSize: 11 }}
-            >
-              {t("osBuilder.build.navigationLocked")}
-            </span>
-          )}
-        </nav>
+        ))}
+        {/* **Why the chips have gone dead, beside the chips** (I2). A
+            disabled control with no sentence next to it is a screen that has
+            refused and not said so, and the refusal names the control that
+            lifts it — Stop, which is two inches below on the tab the person
+            is already looking at. */}
+        {running && (
+          <span
+            className="badge badge-warn"
+            data-testid="strip-locked"
+            style={{ fontSize: 11 }}
+          >
+            {t("osBuilder.build.navigationLocked")}
+          </span>
+        )}
+      </nav>
 
-        <Outlet />
-        <BuildBar />
-      </RunLockContext.Provider>
+      <Outlet />
+      <BuildBar />
     </div>
   );
 }

@@ -12,6 +12,7 @@
 // file is about routing and what a step hands its panel — `FilesTab.test.tsx`
 // and the two panel test files cover the real components.
 
+import { useMemo, useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -105,6 +106,7 @@ const { OsBuilder } = await import("@/pages/OsBuilder");
 // the home screen through the `*` catch-all.
 const { osBuilderRoutes } = await import("@/pages/osbuilder/routes");
 const { STEP_IDS } = await import("@/lib/buildSteps");
+const { RunLockContext } = await import("@/pages/osbuilder/runLock");
 
 function seed(remembered: Record<string, unknown>) {
   useSettingsStore.setState({
@@ -113,14 +115,32 @@ function seed(remembered: Record<string, unknown>) {
   });
 }
 
+/**
+ * The shell's half of the run lock (round 5, task 3).
+ *
+ * The provider used to be `OsBuilder`'s own, so rendering the lane rendered
+ * the lock with it. It lives in `Layout` now — the sidebar has to go dead
+ * too, and the sidebar is not inside this screen — which means a test that
+ * mounts `OsBuilder` under a bare router is mounting it under the *default*
+ * lock: off, and un-settable. This harness is the piece of `Layout` that
+ * matters here, and nothing more: one settable `running`.
+ */
+function RunLockHarness({ children }: { children: ReactNode }) {
+  const [running, setRunning] = useState(false);
+  const value = useMemo(() => ({ running, setRunning }), [running]);
+  return <RunLockContext.Provider value={value}>{children}</RunLockContext.Provider>;
+}
+
 function renderAt(path: string, state?: unknown) {
   return render(
     <MemoryRouter initialEntries={[{ pathname: path, state }]}>
-      <Routes>
-        <Route path="/os-builder" element={<OsBuilder />}>
-          {osBuilderRoutes()}
-        </Route>
-      </Routes>
+      <RunLockHarness>
+        <Routes>
+          <Route path="/os-builder" element={<OsBuilder />}>
+            {osBuilderRoutes()}
+          </Route>
+        </Routes>
+      </RunLockHarness>
     </MemoryRouter>
   );
 }

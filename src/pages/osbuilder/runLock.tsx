@@ -17,13 +17,17 @@
 // flight, and say why: *Stop it first*. Stop is a real, offered control — the
 // refusal is actionable, which is the other half of CLAUDE.md's rule.
 //
-// **Where the state lives.** `OsBuilder` holds it, because `OsBuilder` is what
-// draws the strip that has to go dead; `BuildTab` sets it while its run is
-// running and clears it on unmount, so a tab that goes away for any other
-// reason cannot leave the lane locked for ever. Anything mounted outside a
-// provider — every panel test, every screen that is not this lane — reads the
-// default, which is *not running*: a lock has to be switched on by a run, and
-// never by an absent one.
+// **Where the state lives.** `Layout` holds it — the application shell —
+// because the strip inside the OS Builder was never the only way out of the
+// lane. Fifteen sidebar entries and the dashboard's drop cards navigate away
+// just as effectively, and a lock that covers four chips out of twenty is a
+// screen that has refused where it was watched and allowed it everywhere
+// else. `OsBuilder` only *reads* the flag now; `BuildTab` sets it while its
+// run is running and clears it on unmount, so a tab that goes away for any
+// other reason cannot leave the shell locked for ever. Anything mounted
+// outside a provider — every panel test, every screen rendered without the
+// shell — reads the default, which is *not running*: a lock has to be
+// switched on by a run, and never by an absent one.
 
 import { createContext, useContext } from "react";
 
