@@ -10,6 +10,25 @@ measured its ceiling three times in one day
 
 ---
 
+> **Corrected in place, 2026-09-09.** *A spec describes the tree on the day it
+> was written; this one still does, and two of its premises stopped being true
+> on 2026-09-08.* **BoingBag 1 and BoingBag 2 are placed from Windows**, with
+> the key their own recipes carry (ART-166, the owner's reversal), and their
+> `amiga_installer` blocks were removed the day after. So the two packages this
+> design opens by naming are not ones ART runs on the Amiga any more, and with
+> them went the three mechanisms only they used: the UAE overlay and the second
+> archive slot (ART-186), the `minimum_version` refusal, the `required_medium`
+> and its disc field (ART-193), and the same-boot version-gated follow-up
+> (ART-280) — whose work `boingbag-39-2.json`'s host-side `extra_members` unit
+> now does.
+>
+> **Everything else in this document still describes the shipped engine**: three
+> volumes, the generated `Startup-Sequence` and its ordering rules, the re-run
+> guard, the four endings, the deadline, and copy-then-promote. Its one
+> remaining customer is `boingbags-39-3-4`, whose declaration is
+> `not_yet_runnable` — so nothing shipped drives the engine today, and that is
+> recorded in `docs/FEATURES.md`'s own row rather than hidden here.
+
 ## Why this exists
 
 ART places files from the host. That works for everything it can read, and the

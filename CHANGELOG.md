@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **The emulator route for BoingBag 1 and BoingBag 2 is gone.** ART installs
+  both from Windows in seconds, and the tree it makes that way was checked file
+  by file against a tree two real emulator runs produced — every path the
+  package's own installer wrote comes out identical. Keeping a second way of
+  doing the same job would have meant ART offering a route it no longer takes,
+  and every screen would have had to keep explaining which one it meant.
+
+  So the Amiga-side step no longer offers either BoingBag, and three things
+  that only existed for them went with it:
+
+  - **The second archive field** — *"the package's update archive"*. It was
+    there for one file, `BoingBag39-1-UAE.lha`, which supplied an `Updater` new
+    enough to run inside an emulator. Nothing runs inside an emulator here any
+    more, so there is nothing for that file to fix and no field to put it in.
+  - **The CD-ROM field on that step.** BoingBag 1's and BoingBag 2's own
+    installers checked for the original AmigaOS 3.9 disc before they would do
+    anything; ART is not running them, and it does not need the disc to copy
+    files. You still choose the disc where you always did, on the source step,
+    because that is where your tree is built from.
+  - **The "second update" line in the run report.** BoingBag 2's XAD update is
+    still applied, exactly as before — ART reads what your tree's
+    `xadmaster.library` says about itself and applies the extra update only if
+    it is older — and it is reported as part of the package being added, on the
+    packages step, rather than as a separate thing an emulator did afterwards.
+
+  **Nothing you have chosen is forgotten.** If you had picked an update archive
+  or a disc for the Amiga-side step, those choices are still in your settings
+  file, untouched; ART simply stops reading them.
+
+  The Amiga-side step itself stays, for BoingBags 3&4 and for any future package
+  that installs through its own Installer script — and it still says plainly
+  that nobody has driven that one yet.
+
+### Fixed
+
+- **The updates chain and the source step no longer disagree about which file
+  you chose.** With two builds of the same BoingBag in your folder, the source
+  step showed the one you had picked while the chain screen said it could not
+  tell them apart and refused the row. Both screens ask the same question now,
+  and both are handed your answer.
+
 ## [0.9.1] - 2026-09-08
 
 ### Added

@@ -26,6 +26,29 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-283** 🟡 **Opening the Files screen rewrites a remembered tab's location** —
+*found 2026-09-08 by the screenshot pass, reproduced twice from identical starting bytes*
+`src/pages/FileManager.tsx` · `src/lib/remembered.ts`
+
+With no click on any pane, opening `/files` changed `filesSession.left.tabs[1].location.path`
+in the settings store from `E:\amiga\Amigatolon\iso` to `E:\amiga\Amigatolon\adf` and wrote it.
+The store's hash moved on every open; restoring the file and opening again moved it the same
+way. This is ART-089's shape: a value the user did not touch was rewritten by a read. Suspect:
+the tab restore re-resolving a location it could not open (or a drop-target default) and
+persisting the result. Nothing changes unless the user changes it — a tab that cannot be
+restored keeps its remembered path and says so; it is not repointed.
+
+**ART-285** 🟡 **"23 install disks found" counts game and CD32 discs as install disks** —
+*found 2026-09-08 on `material.png`*
+`src/components/osbuilder/OsInstall.tsx` (the scan summary line) · `core/osinstall/scan.rs`
+
+The source step's summary listed every `.iso` whose volume name `find_media` could read —
+`CD32`, `CAVIAR_02` … — under *install disks found*. Reading the names is right (only the PVD is
+read; nothing is opened or hashed — owner rule 2 holds); the sentence is wrong. A disc whose volume
+name no shipped recipe names is not an install disk: say *"11 install media found; 12 other discs
+in these folders are not install media ART knows and were left closed"*, with the names behind a
+disclosure, not in the headline.
+
 **ART-281** 🔴 **The unit suite's scratch directories are never removed:
 `D:\tmp\art-tests` holds 263 484 directories and 764 GB** — *found 2026-09-08
 during round 3 task 3, on `art-osbuilder-intake`*
@@ -664,6 +687,42 @@ check in `ordered_packages_for_collisions` failed
 with the raw `CoreError::InvalidInput` surfacing through the outer
 `AppResult`, exactly as the owner saw it.
 
+**ART-284** 🟡 ✅ **Two screens gave two answers about one file: the source
+step's readout resolved BoingBag 3.9-1 to the owner's chosen archive, the
+updates chain called it ambiguous and blocked the row** — *found 2026-09-08 on
+`material.png` / `chain.png` by the screenshot pass; fixed 2026-09-09*
+`src-tauri/src/commands/osinstall.rs` (`osinstall_chain`) ·
+`src/lib/osinstall.ts` · `src/components/osbuilder/AmigaInstallPanel.tsx`
+
+The owner's folder holds two BoingBag 1 builds (`BoingBag39-1.lha`, Updater
+45.13; `BoingBag39-1 (1).lha`, Updater 45.15). The readout showed the `(1)`
+file as *the file you chose for BoingBag 3.9-1* — an override — while the chain
+screen said *"2 files here could be BoingBag 3.9-1, and ART will not choose
+between them"* and blocked the row. One resolver, two callers, and only one of
+them was handed the user's own decision: `osinstall_slots` takes `overrides`
+(round 2's M5) and `osinstall_chain` was called with `None`.
+
+**Fixed by giving the second caller the same argument**, not by teaching the
+chain a second rule. `osinstall_chain` now takes `overrides: Option<Vec<(String,
+PathBuf)>>` and hands it to the same `gather_facts`; `AmigaInstallPanel` builds
+it once from the remembered bag with `slotOverrides` and passes it to both
+`osinstallChain` and `osinstallSlots`, keyed as a string so neither effect
+re-scans the folders on every render (the rule `OsInstall.tsx` and
+`MaterialReadout.tsx` already keep for this exact value).
+
+The second half of the draft — *when no override exists, a hash-known build
+outranks an unknown one at the same identity* — is **not** done here and is not
+owed by this entry: it is a change to `slots::resolve`'s own ranking, it would
+make ART pick between two files the user has said nothing about, and it needs
+its own measurement. Filed as part of ART-284's original text; if it is wanted
+it is a new entry.
+
+Tests: `commands::osinstall::the_chain_takes_the_users_own_file_choices_art_284`
+— both arms over two archives sharing one top level, because the "with the
+override" arm alone would pass for a command that ignored the argument and
+happened to be given one candidate: without it the row is `Refused {
+Ambiguous }`, with it the row names the user's file and is not refused.
+
 **ART-280** 🟡 ✅ **ART's BoingBag 3.9-2 run never applied `XAD-Update`, so
 `xadmaster.library` stayed at 9.1 where every other 3.9 builder leaves it at
 10+** — *found 2026-09-08 by round 3 task 3's Part A measurement, on
@@ -786,6 +845,19 @@ field) and `AmigaInstallPanel.test.tsx` (its own line on screen, and none when
 no follow-up was declared). **Mutations: both orderings put back, both fell** —
 the gate above the branch, and the block below the result word.
 
+**Appended 2026-09-09.** The same-boot mechanism above — `FollowUp`,
+`FollowUpOutcome`, `art-followup.txt`, its four words, `follow_up_lines` and
+`read_follow_up` — was **replaced by a host-side unit the same day it landed**
+and removed in the BoingBag cleanup. `boingbag-39-2.json`'s `extra_members`
+places `XAD-Update` from Windows, behind the identical gate read from HstWB's
+own script, and the two BoingBags no longer have an Amiga-side route for
+anything to follow up. This entry stays Fixed and the measurement stands
+unchanged: `Libs/xadmaster.library` reads 9.0 clean, 9.1 after BoingBag 1 and
+**9.1 still** after BoingBag 2, which is why the unit exists at all. What the
+removal changes is only *which* code applies it; the host route is checked
+against the emulator's own tree by the oracle, which reports the library at
+10.0 on both sides.
+
 **ART-277** 🟠 **A stale package selection carried the wrong archive into a
 request, and the refusal quoted an internal overlay path instead of naming
 either package:
@@ -882,6 +954,14 @@ keys in `settings.json`. They are never read or written again once a
 package is selected (every read/write now goes through
 `amigaInstallArchiveKey`'s per-package name), so they cost nothing but the
 bytes they occupy — a one-time orphan, not a leak and not a wrong value.
+
+**Appended 2026-09-09:** `amigaInstall.overlayArchive.<pkg>` joined that
+residue outright — the panel's update-archive field went with the Amiga-side
+route for the two BoingBags, so ART stops *reading* the key. Whatever is stored
+under it stays exactly where it is: nothing changes unless the user changes it,
+and deleting somebody's remembered path to tidy up would be ART changing a
+setting they made. `amigaInstall.medium` is in the same position for the same
+reason.
 
 Tests (fix round 1): `the_packages_own_archive_in_the_second_field_gets_its_own_sentence_and_never_says_select_it`,
 `the_sentence_keeps_an_unreadable_listing_apart_from_an_empty_one`,
