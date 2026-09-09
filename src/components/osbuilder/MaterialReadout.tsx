@@ -38,8 +38,6 @@ import { useTranslation } from "react-i18next";
 import { errorText } from "@/lib/errorText";
 import {
   osinstallSlots,
-  osinstallWriteMaterialGuide,
-  type GuideOutcome,
   type InstallRelease,
   type SlotOverride,
   type SlotReport,
@@ -159,40 +157,10 @@ export function MaterialReadout({
   identifiedPass,
   overrides = [],
 }: MaterialReadoutProps) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const [report, setReport] = useState<SlotReport | null>(null);
   const [running, setRunning] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
-  /**
-   * What the guide button last answered, per folder.
-   *
-   * Per folder rather than one value for the panel: two folders are two
-   * files, and a *written* line under the folder that is still empty would be
-   * the screen claiming something about a folder ART did not touch. A missing
-   * entry is the ordinary state and renders nothing — never "not written
-   * yet", which is a sentence about a thing nobody asked for.
-   */
-  const [guides, setGuides] = useState<Record<string, GuideOutcome | { state: "failed"; detail: string }>>(
-    {}
-  );
-
-  /**
-   * Write the guide into one folder. **Only from this click** (design § 3.7):
-   * ART does not write into somebody's folder because they pointed at it.
-   *
-   * Nothing is overwritten — the Rust side opens the file with `create_new`,
-   * so a guide already there keeps every byte — and *there already* is its
-   * own answer rather than an error, because "delete it and ask again" is a
-   * different next step from "ART could not write it".
-   */
-  async function writeGuide(folder: string) {
-    try {
-      const outcome = await osinstallWriteMaterialGuide(folder, release, i18n.language.split("-")[0]);
-      setGuides((held) => ({ ...held, [folder]: outcome }));
-    } catch (e) {
-      setGuides((held) => ({ ...held, [folder]: { state: "failed", detail: errorText(t, e) } }));
-    }
-  }
 
   // A primitive dependency rather than the array: two equal strings are the
   // same value to React's own comparison, two equal arrays are not, and this
@@ -366,69 +334,6 @@ export function MaterialReadout({
           {t(line.phrase.key, line.phrase.params)}
         </p>
       ))}
-
-      {/*
-        **The list, in the folder** (design § 3.7). The readout is on screen
-        while ART is open; a person filling a folder over a weekend is at
-        their file manager. The same slots compose a text file saying what
-        goes there — REQUIRED or OPTIONAL, the names ART expects, where each
-        came from, what has to come first and what happens without it — so it
-        cannot drift from what the code accepts.
-
-        **Only on the click.** ART does not write into a folder because
-        somebody pointed at it; that is `remembered.ts`'s rule about the
-        user's own settings, applied to the user's own disk.
-      */}
-      {/* **The intro belongs to the buttons** (fix round 1, L8): it is a
-          sentence about pressing them, so it is inside the same guard rather
-          than beside it. The early return above already covers today's only
-          empty case; this makes it true of the block itself. */}
-      {folders.length > 0 && (
-      <div data-testid="material-guide" style={{ margin: "8px 0 0" }}>
-        <p className="faint" style={{ fontSize: 10, margin: "0 0 4px" }}>
-          {t("osinstall.material.guide.intro")}
-        </p>
-        {folders.map((folder) => {
-          const answer = guides[folder];
-          return (
-            <div key={folder} style={{ margin: "0 0 4px" }}>
-              {/* ART-240: the folder is **in** the button rather than beside
-                  it. One button per folder with the same three words on each
-                  is the identical-accessible-name defect ART-240 is about,
-                  and a path repeated next to the button is the same path this
-                  step already lists a few lines up. */}
-              <button
-                className="btn"
-                style={{ fontSize: 11, textAlign: "left", wordBreak: "break-all" }}
-                data-testid="material-guide-write"
-                onClick={() => void writeGuide(folder)}
-              >
-                {t("osinstall.material.guide.button", { folder })}
-              </button>
-              {answer && (
-                <p
-                  className={
-                    answer.state === "written"
-                      ? "badge badge-ok"
-                      : answer.state === "alreadyThere"
-                        ? "badge badge-warn"
-                        : "badge badge-err"
-                  }
-                  data-testid={`material-guide-${answer.state}`}
-                  style={{ fontSize: 10, margin: "2px 0 0", display: "inline-block", wordBreak: "break-all" }}
-                >
-                  {answer.state === "written"
-                    ? t("osinstall.material.guide.written", { path: answer.path })
-                    : answer.state === "alreadyThere"
-                      ? t("osinstall.material.guide.alreadyThere", { path: answer.path })
-                      : t("osinstall.material.guide.failed", { detail: answer.detail })}
-                </p>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      )}
     </div>
   );
 }
