@@ -1762,8 +1762,19 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         */}
         {mediaIdentity.kind !== "not-asked" && (
           <details data-testid="media-identity-fold" style={{ margin: "0 0 12px" }}>
+            {/*
+              While the pass is still running there are no lines yet, and a
+              summary counting them would read "what 0 files … are" — a
+              confident, wrong sentence over a folder ART is at that moment
+              reading (§89). Running and finished are two states, so the
+              closed line says the pass's own running sentence — the same
+              `identitySummary` the block shows inside — and only counts once
+              there is something to count.
+            */}
             <summary className="muted" style={{ fontSize: 12, cursor: "pointer" }}>
-              {t("osinstall.mediaId.foldSummary", { count: identityLines.length })}
+              {mediaIdentity.kind === "identifying" && identitySummary
+                ? t(identitySummary.key, identitySummary.params)
+                : t("osinstall.mediaId.foldSummary", { count: identityLines.length })}
             </summary>
           <div data-testid="media-identity" style={{ margin: "0 0 12px" }}>
             {identityLines.length > 0 && (

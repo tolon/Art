@@ -619,6 +619,12 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // chip in `OsBuilder.tsx`'s strip renders `t(kindLabelKey(session.kind))`
     // — the same pattern the numbered tabs already use for `stepLabelKey`,
     // now covering the kind's own name too.
-    expect(dynamicCalls).toBe(179);
+    // 179 -> 180 (2026-09-09, four tabs round 2, task 4). One: the folded
+    // identity line's `<summary>` renders the pass's own running sentence
+    // while the pass is running — `mediaIdentitySummary` in `@/lib/osinstall`
+    // decides that key, and the summary only renders it. Counting lines that
+    // do not exist yet would say "what 0 files … are" over folders ART is at
+    // that moment reading.
+    expect(dynamicCalls).toBe(180);
   });
 });

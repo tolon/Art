@@ -3822,6 +3822,30 @@ describe("the identity wall is folded (four-tab design § 3.1)", () => {
     await waitFor(() => expect(rescanMock).toHaveBeenCalled());
   });
 
+  /**
+   * **Running is not "0 files".** The count in the closed line is the number
+   * of *lines the pass has produced*, and while the pass is still reading
+   * there are none — so a summary built from that count reads "what 0 files
+   * in these folders are", which is a confident, wrong sentence over folders
+   * ART is at that moment hashing (§89: the failure that does not crash).
+   * The pass's own running sentence is the one the block already shows
+   * inside, so the closed line says that instead until there is something to
+   * count.
+   *
+   * The assertion is the sentence, not merely "does not contain 0": both are
+   * asserted, because "no zero" alone would pass on a blank summary and the
+   * equality alone would pass if the running phrase itself ever gained a
+   * count.
+   */
+  it("says the pass is running, not 'what 0 files are', while it is still reading", async () => {
+    identifyMediaMock.mockReset().mockImplementation(() => new Promise(() => {}));
+    await renderFull();
+    const fold = await screen.findByTestId("media-identity-fold");
+    const summary = fold.querySelector("summary")!.textContent!;
+    expect(summary).not.toContain("0");
+    expect(summary).toBe(i18n.t("osinstall.mediaId.identifying"));
+  });
+
   it("still runs the identification pass while the fold is closed", async () => {
     await renderFull();
     await screen.findByTestId("media-identity-fold");
