@@ -7,65 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Removed
-
-- **The emulator route for BoingBag 1 and BoingBag 2 is gone.** ART installs
-  both from Windows in seconds, and the tree it makes that way was checked file
-  by file against a tree two real emulator runs produced — every path the
-  package's own installer wrote comes out identical. Keeping a second way of
-  doing the same job would have meant ART offering a route it no longer takes,
-  and every screen would have had to keep explaining which one it meant.
-
-  So the Amiga-side step no longer offers either BoingBag, and three things
-  that only existed for them went with it:
-
-  - **The second archive field** — *"the package's update archive"*. It was
-    there for one file, `BoingBag39-1-UAE.lha`, which supplied an `Updater` new
-    enough to run inside an emulator. Nothing runs inside an emulator here any
-    more, so there is nothing for that file to fix and no field to put it in.
-  - **The CD-ROM field on that step.** BoingBag 1's and BoingBag 2's own
-    installers checked for the original AmigaOS 3.9 disc before they would do
-    anything; ART is not running them, and it does not need the disc to copy
-    files. You still choose the disc where you always did, on the source step,
-    because that is where your tree is built from.
-  - **The "second update" line in the run report.** BoingBag 2's XAD update is
-    still applied, exactly as before — ART reads what your tree's
-    `xadmaster.library` says about itself and applies the extra update only if
-    it is older — and it is reported as part of the package being added, on the
-    packages step, rather than as a separate thing an emulator did afterwards.
-
-  **Nothing you have chosen is forgotten.** If you had picked an update archive
-  or a disc for the Amiga-side step, those choices are still in your settings
-  file, untouched; ART simply stops reading them.
-
-  The Amiga-side step itself stays, for BoingBags 3&4 and for any future package
-  that installs through its own Installer script — and it still says plainly
-  that nobody has driven that one yet.
-
-### Fixed
-
-- **The updates step no longer sits on “Checking what this would
-  replace…” for ever.** If ART reopened on a row that is already in
-  your tree, that line appeared and stayed — nothing was being checked, and
-  nothing ever would be. It is gone, and the button beside it no longer offers
-  to add a package your tree already has: it moves to the next row that really
-  is ready and says which one, while the row you were reading keeps its own
-  sentence.
-
-- **The updates step says what it actually does.** It was headed *“Run a
-  package's own installer on the Amiga”* and explained that some packages
-  are locked and need an emulator — which stopped being true when BoingBag
-  1 and 2 moved to Windows. It is *“AmigaOS 3.9 updates”* now: the
-  whole chain in the order the packages themselves require, most of it placed
-  from Windows, with the one package that still needs an emulator saying so on
-  its own row.
-
-- **The updates chain and the source step no longer disagree about which file
-  you chose.** With two builds of the same BoingBag in your folder, the source
-  step showed the one you had picked while the chain screen said it could not
-  tell them apart and refused the row. Both screens ask the same question now,
-  and both are handed your answer.
-
 ## [0.9.1] - 2026-09-08
 
 ### Added
@@ -75,8 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anything else, press Add, and the files are on your tree — no Kickstart ROM
   for that step, no WinUAE window to watch, no waiting two and a half minutes
   per BoingBag, and nothing to do on a machine that has no ROM at all. The
-  emulator route is still there and still works if you would rather the
-  package's own installer did the job; it is simply no longer the only way.
+  emulator route for these two packages is gone with it — see *Removed*
+  below.
 
   ART checks its work against the real thing rather than against itself. The
   tree it builds this way was compared file by file with a tree two genuine
@@ -93,24 +34,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the one ART knows, it says so in one sentence and stops — nothing is
   half-written.
 
-- **A BoingBag 3.9-2 run now applies the XAD update too, in the same sitting.**
-  BoingBag 3.9-2 carries a second update inside itself — a newer
-  `xadmaster.library` and the two dozen little readers that go with it, for
-  `.lzx`, `.rar`, `.cab`, `.zoom` and the rest — and ART used to leave it
-  behind: the tree came out saying it was fully BoingBag'd while its archive
-  handling was a version older than the disc you had just installed from. ART
-  now checks what your tree's `xadmaster.library` says about itself and, if it
-  is older than 10, lets the package apply its own update straight after the
-  first one, in the same emulator session. Nothing extra to choose, and about
-  fifteen seconds longer.
-
-  The report afterwards says which of four things happened, and they are four
-  because they need four different reactions: **it ran** (your tree got the
-  update), **it was not needed** (your tree already had that version — not a
-  problem), **it ran and said no** (the install itself still worked; only that
-  extra part did not), or **ART could not check** (this tree has no
-  `C/Version`, so nothing was run rather than something being run blind). None
-  of them changes what the install itself reported.
+- **BoingBag 3.9-2's XAD update is applied with it.** BoingBag 3.9-2 carries a
+  second update inside itself — a newer `xadmaster.library` and the two dozen
+  little readers that go with it, for `.lzx`, `.rar`, `.cab`, `.zoom` and the
+  rest — and ART used to leave it behind: the tree came out saying it was fully
+  BoingBag'd while its archive handling was a version older than the disc you
+  had just installed from. ART now reads what your tree's `xadmaster.library`
+  says about itself and, if it is older than 10, places the second update in the
+  same Add. Nothing extra to choose. The report says which of two things
+  happened — **it was applied** (your tree got the update) or **it was not
+  needed** (your tree already had that version) — and neither changes what the
+  package itself reported. Measured on the owner's own tree: `xadmaster.library`
+  9.1 before, 10.0 after.
 
 - **A folder of games is no longer read from end to end when you ask ART to
   identify your install media.** ART asks each disc image for its own name
@@ -353,7 +288,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is recorded beside it; the contrast check now measures the badge and
   message-strip tints ART actually draws (105 pairs, both themes).
 
+### Removed
+
+- **The emulator route for BoingBag 1 and BoingBag 2 is gone.** ART installs
+  both from Windows in seconds, and the tree it makes that way was checked file
+  by file against a tree two real emulator runs produced — every path the
+  package's own installer wrote comes out identical. Keeping a second way of
+  doing the same job would have meant ART offering a route it no longer takes,
+  and every screen would have had to keep explaining which one it meant.
+
+  So the Amiga-side step no longer offers either BoingBag, and three things
+  that only existed for them went with it:
+
+  - **The second archive field** — *"the package's update archive"*. It was
+    there for one file, `BoingBag39-1-UAE.lha`, which supplied an `Updater` new
+    enough to run inside an emulator. Nothing runs inside an emulator here any
+    more, so there is nothing for that file to fix and no field to put it in.
+  - **The CD-ROM field on that step.** BoingBag 1's and BoingBag 2's own
+    installers checked for the original AmigaOS 3.9 disc before they would do
+    anything; ART is not running them, and it does not need the disc to copy
+    files. You still choose the disc where you always did, on the source step,
+    because that is where your tree is built from.
+  - **The "second update" line in the run report.** BoingBag 2's XAD update is
+    still applied, exactly as before — ART reads what your tree's
+    `xadmaster.library` says about itself and applies the extra update only if
+    it is older — and it is reported as part of the package being added, on the
+    packages step, rather than as a separate thing an emulator did afterwards.
+
+  **Nothing you have chosen is forgotten.** If you had picked an update archive
+  or a disc for the Amiga-side step, those choices are still in your settings
+  file, untouched; ART simply stops reading them.
+
+  The Amiga-side step itself stays, for BoingBags 3&4 and for any future package
+  that installs through its own Installer script — and it still says plainly
+  that nobody has driven that one yet.
+
 ### Fixed
+
+- **The updates step no longer sits on “Checking what this would
+  replace…” for ever.** If ART reopened on a row that is already in
+  your tree, that line appeared and stayed — nothing was being checked, and
+  nothing ever would be. It is gone, and the button beside it no longer offers
+  to add a package your tree already has: it moves to the next row that really
+  is ready and says which one, while the row you were reading keeps its own
+  sentence.
+
+- **The updates step says what it actually does.** It was headed *“Run a
+  package's own installer on the Amiga”* and explained that some packages
+  are locked and need an emulator — which stopped being true when BoingBag
+  1 and 2 moved to Windows. It is *“AmigaOS 3.9 updates”* now: the
+  whole chain in the order the packages themselves require, most of it placed
+  from Windows, with the one package that still needs an emulator saying so on
+  its own row.
+
+- **The updates chain and the source step no longer disagree about which file
+  you chose.** With two builds of the same BoingBag in your folder, the source
+  step showed the one you had picked while the chain screen said it could not
+  tell them apart and refused the row. Both screens ask the same question now,
+  and both are handed your answer.
 
 - **Ticking a Turkish locale update on a tree that hasn't had BoingBag 3.9-2
   run on it no longer shows a raw internal error the moment you tick the
@@ -544,8 +536,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scripts/icon-oracle-check.py` — every `.info` on a folder of real install
   media, round-tripped against ART's own reader. Not run in CI; it needs
   media ART does not ship.
-
-### Fixed
 
 - A 3.2 + 3.2.2 media pair is no longer refused outright. The refusal was
   correct and useless: one shared floppy name, out of sixty.
