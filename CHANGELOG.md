@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OS Builder: what to install is one list — the release's parts, the AmigaOS
   3.9 updates in order, first boot — with the parts' ticks now kept with the
   rest of the build's choices.
-- **OS Builder: the install lane is finished, and building is one press.**
+- **OS Builder: the install lane is complete, and building is one press.**
   Four tabs — the Amiga files, what to install, Kickstart and destination,
   and Build. The Build tab tells you in four lines what it is about to do,
   then does it in order: the system tree, then each update you ticked in the
