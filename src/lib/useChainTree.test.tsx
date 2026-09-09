@@ -1,0 +1,148 @@
+// @vitest-environment jsdom
+//
+// One tree for both tabs (round 3 task 3, fix round 1, Important 2).
+//
+// The rule is four lines long and it decides which folder every *installed*
+// sentence in the wizard is about, so it is asserted here rather than through
+// either of the two screens that read it: a rule tested at one of its two
+// call sites is a rule the other one can quietly stop obeying.
+//
+// Mocked at the usual boundary — the `@/lib/osinstall` wrappers around
+// `invoke`, never `@tauri-apps/api` — and `@/lib/settings`, because the
+// settings store's own writer rejects in jsdom with nothing to catch it.
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, renderHook, waitFor } from "@testing-library/react";
+
+import type { TreeSummary } from "@/lib/osinstall";
+import { useSettingsStore } from "@/stores/settingsStore";
+
+const describeTreeMock = vi.hoisted(() => vi.fn());
+const destinationTakenMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/osinstall", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/osinstall")>()),
+  osinstallDescribeTree: describeTreeMock,
+  osinstallDestinationTaken: destinationTakenMock,
+}));
+
+vi.mock("@/lib/settings", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/settings")>()),
+  getSettings: vi.fn(),
+  saveSettings: vi.fn().mockResolvedValue(undefined),
+}));
+
+const { useChainTree } = await import("@/lib/useChainTree");
+const { DEFAULT_SETTINGS } = await import("@/lib/settings");
+
+const A_TREE: TreeSummary = {
+  isTree: true,
+  release: "AmigaOS 3.9",
+  files: 4212,
+  components: ["workbench-base"],
+  amigaInstalled: [],
+  problem: null,
+};
+
+const NOT_A_TREE: TreeSummary = {
+  isTree: false,
+  release: null,
+  files: 0,
+  components: [],
+  amigaInstalled: [],
+  problem: "holds no distribution.json",
+};
+
+/** The session's own tree, as every screen had it before this hook. */
+function seedSessionTree(root: string | null) {
+  useSettingsStore.setState({
+    loaded: true,
+    settings: {
+      ...DEFAULT_SETTINGS,
+      remembered: root ? { "buildSession.tree": { root, builtHere: false } } : {},
+    },
+  });
+}
+
+beforeEach(() => {
+  describeTreeMock.mockReset().mockResolvedValue(NOT_A_TREE);
+  destinationTakenMock.mockReset().mockResolvedValue(false);
+  useSettingsStore.setState({ loaded: false, settings: DEFAULT_SETTINGS });
+});
+
+afterEach(cleanup);
+
+describe("useChainTree", () => {
+  it("takes the destination when ART has looked at it and found a build", async () => {
+    // The update run's own case: the user is building into a folder that
+    // already holds a distribution, so *this* is the tree every row's
+    // installed/outstanding state is about — not whatever the session was
+    // last pointed at.
+    describeTreeMock.mockResolvedValue(A_TREE);
+    seedSessionTree("E:\\some\\other\\tree");
+
+    const { result } = renderHook(() => useChainTree("E:\\dist39"));
+
+    await waitFor(() => expect(result.current.settled).toBe(true));
+    expect(result.current.treeRoot).toBe("E:\\dist39");
+  });
+
+  it("takes the session's own tree when the destination is not a build", async () => {
+    // A fresh build into an empty folder. The session's tree is what tab 1's
+    // readout and the Amiga-side panel have always been handed, and both tabs
+    // now say the same thing about it.
+    seedSessionTree("E:\\amiga\\os39");
+
+    const { result } = renderHook(() => useChainTree("E:\\empty"));
+
+    await waitFor(() => expect(result.current.settled).toBe(true));
+    expect(result.current.treeRoot).toBe("E:\\amiga\\os39");
+  });
+
+  it("is not settled while ART is still looking at the destination", async () => {
+    // The flicker this field exists to stop: a destination that *is* a build
+    // looks like one that is not until the round trip lands, which is long
+    // enough to ask the chain about the wrong tree and put *ready* on a row
+    // the tree already carries.
+    let answer: (summary: TreeSummary) => void = () => {};
+    describeTreeMock.mockReturnValue(
+      new Promise<TreeSummary>((resolve) => {
+        answer = resolve;
+      })
+    );
+    seedSessionTree("E:\\amiga\\os39");
+
+    const { result } = renderHook(() => useChainTree("E:\\dist39"));
+
+    expect(result.current.settled).toBe(false);
+    // …and the value it is carrying meanwhile is the *old* answer, never a
+    // guess at the new one.
+    expect(result.current.treeRoot).toBe("E:\\amiga\\os39");
+
+    answer(A_TREE);
+    await waitFor(() => expect(result.current.settled).toBe(true));
+    expect(result.current.treeRoot).toBe("E:\\dist39");
+  });
+
+  it("is settled from the first render when there is no destination to look at", async () => {
+    // Nothing to wait for. A caller that waited anyway would never ask the
+    // chain at all for a user who has not chosen a destination yet — and the
+    // chain has plenty to say about material with no tree in sight.
+    seedSessionTree("E:\\amiga\\os39");
+
+    const { result } = renderHook(() => useChainTree(null));
+
+    expect(result.current.settled).toBe(true);
+    expect(result.current.treeRoot).toBe("E:\\amiga\\os39");
+    expect(describeTreeMock).not.toHaveBeenCalled();
+  });
+
+  it("answers no tree at all rather than a path, when neither is set", async () => {
+    seedSessionTree(null);
+
+    const { result } = renderHook(() => useChainTree(null));
+
+    expect(result.current.settled).toBe(true);
+    expect(result.current.treeRoot).toBeNull();
+  });
+});

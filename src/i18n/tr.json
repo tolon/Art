@@ -721,6 +721,7 @@
       "parts": "Sistemin parçaları",
       "replaces_one": "Ağaçtaki {{count}} dosyanın yerine geçer (hangileri, açın)",
       "replaces_other": "Ağaçtaki {{count}} dosyanın yerine geçer (hangileri, açın)",
+      "tickedButClosed": "Daha önce işaretlenmiş — şimdi yazılamaz; işareti kaldırın ya da yukarıdaki satırı düzeltin.",
       "untick": "İşareti kaldır",
       "updates": "Güncellemeler, sırasıyla"
     },

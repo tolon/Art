@@ -182,9 +182,10 @@ export type RuleKind = "file" | "subtree" | "icon-tooltypes";
  * `core::osinstall::HostPlacementBlock`.
  *
  * A union of string literals rather than a `string`, so every place that
- * has to say something about a block (`refusalPhrase` below, the checklist
- * row in `PackagePanel`) fails to compile rather than silently rendering
- * "unavailable, no reason given" when a second kind arrives.
+ * has to say something about a block (`refusalPhrase` below, the update row
+ * on `ChoiceTab` through `choiceRowState`) fails to compile rather than
+ * silently rendering "unavailable, no reason given" when a second kind
+ * arrives.
  *
  * `"encrypted-payload"` is ART-166: both shipped BoingBag recipes name a
  * payload archive whose every entry is password-encrypted, and the password
@@ -285,7 +286,9 @@ export type RefusalReason =
   | { refusal: "package-requirement-missing"; package: string; requires: string }
   /**
    * The required package is one that **runs on the Amiga**, so *"tick that
-   * one too"* is advice about a checkbox `PackagePanel` disables.
+   * one too"* is advice about a checkbox tab 2 disables (`choiceRowState`'s
+   * `runs-on-amiga` arm; the retired packages panel disabled it too, for the
+   * same reason).
    *
    * Correcting `locale-turkish`'s `requires` to what the material states
    * made it need BoingBag 3.9-2 — `encrypted-payload` blocked, and

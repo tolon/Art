@@ -112,6 +112,7 @@ import {
 import { slotOverrides } from "@/lib/amigainstall";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { isFlag, isText, isTextOrNothing } from "@/lib/remembered";
+import { useChainTree } from "@/lib/useChainTree";
 import { useDestinationCheck } from "@/lib/useDestinationCheck";
 import { useRemembered } from "@/lib/useRemembered";
 import { type MaterialFolder } from "@/lib/buildSession";
@@ -629,7 +630,16 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    * the picker never goes away.
    */
 
-  const packagesTreeRoot = session.tree.root;
+  /**
+   * **The same tree tab 2 asks about** (`useChainTree`, round 3 task 3's fix
+   * round). This was `session.tree.root` alone while the choice tab asked the
+   * chain about the *destination* when that turned out to be a build — two
+   * lanes, two trees, and two `installed` answers about one file. The rule
+   * now lives in one hook and both read it: the destination when ART has
+   * looked at it and found a build, the session's own tree otherwise, which
+   * is exactly what this screen had before in every other case.
+   */
+  const { treeRoot: packagesTreeRoot } = useChainTree(destination);
   const packagesFolder = session.packages.folder;
 
   // --- what the screen is doing --------------------------------------------

@@ -71,6 +71,7 @@ const layersForMock = vi.hoisted(() => vi.fn());
 const layerForMediaMock = vi.hoisted(() => vi.fn());
 const planMock = vi.hoisted(() => vi.fn());
 const componentCollisionsMock = vi.hoisted(() => vi.fn());
+const describeTreeMock = vi.hoisted(() => vi.fn());
 const applyMock = vi.hoisted(() => vi.fn());
 const verifyMock = vi.hoisted(() => vi.fn());
 const onResultMock = vi.hoisted(() => vi.fn());
@@ -105,6 +106,11 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   osinstallChain: chainMock,
   osinstallPackages: packagesMock,
   osinstallComponentCollisions: componentCollisionsMock,
+  // `useChainTree` asks this about the destination (round 3 task 3, fix
+  // round 1). Mocked at the same boundary as the rest, and defaulting to
+  // *not a build* — which is what the unmocked, rejecting call already meant
+  // for every case in this file.
+  osinstallDescribeTree: describeTreeMock,
   osinstallApply: applyMock,
   osinstallVerify: verifyMock,
   onOsInstallResult: onResultMock,
@@ -446,6 +452,14 @@ beforeEach(() => {
   // in most tests; an empty preview is the honest default for the ones where
   // it is.
   componentCollisionsMock.mockReset().mockResolvedValue({ reports: [], placed: 0 });
+  describeTreeMock.mockReset().mockResolvedValue({
+    isTree: false,
+    release: null,
+    files: 0,
+    components: [],
+    amigaInstalled: [],
+    problem: "holds no distribution.json",
+  });
   applyMock.mockReset().mockResolvedValue(1);
   verifyMock.mockReset();
   onResultMock.mockReset().mockResolvedValue(() => {});
@@ -2351,6 +2365,33 @@ describe("the tree it builds is the tree the next steps get (ART-197)", () => {
     // would be caught here, which is the defect this case is named for.
     const shown = await screen.findAllByText("E:\\amiga\\picked-by-hand");
     expect(shown.length).toBe(1);
+  });
+
+  it("hands the panels the destination once ART finds a build in it", async () => {
+    // **One tree for both tabs** (fix round 1, Important 2). Tab 2 asks the
+    // chain about the destination when `osinstall_describe_tree` calls it a
+    // build; this screen used `session.tree.root` regardless, so the two
+    // lanes could give two `installed` answers about one file. Both read
+    // `useChainTree` now, and this is the case that says so from the screen's
+    // side: the session's own tree is *not* what the panel is handed.
+    describeTreeMock.mockResolvedValue({
+      isTree: true,
+      release: "AmigaOS 3.2",
+      files: 1915,
+      components: ["workbench-base"],
+      amigaInstalled: [],
+      problem: null,
+    });
+    seedRemembered({
+      ...FULL_FIELDS,
+      "buildSession.tree": { root: "E:\\amiga\\somewhere-else", builtHere: false },
+    });
+    render(<OsInstall />);
+
+    expect((await screen.findAllByText("E:\\dist")).length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(screen.queryByText("E:\\amiga\\somewhere-else")).toBeNull()
+    );
   });
 });
 

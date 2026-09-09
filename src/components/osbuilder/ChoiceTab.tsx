@@ -76,7 +76,7 @@ import {
 } from "@/lib/osinstall";
 import { isFlag, isText, isTextOrNothing } from "@/lib/remembered";
 import { useBuildSession } from "@/lib/useBuildSession";
-import { useDestinationCheck } from "@/lib/useDestinationCheck";
+import { useChainTree } from "@/lib/useChainTree";
 import { useInstallPlan } from "@/lib/useInstallPlan";
 import { useRemembered } from "@/lib/useRemembered";
 import { useRomIdentity } from "@/lib/useRomIdentity";
@@ -160,16 +160,16 @@ export function ChoiceTab() {
   const overridesKey = JSON.stringify(slotOverrides(rememberedBag));
 
   /**
-   * The tree the chain is asked against — the destination, and only when ART
-   * has looked at it and found a build.
+   * The tree the chain is asked about — **the same one tab 1 asks about**
+   * (`useChainTree`, fix round 1's Important 2). The rule is that hook's, in
+   * one place, because two lanes with two trees is two `installed` answers
+   * about one file.
    *
-   * A chosen `tree` with no `distribution.json` is a **refusal**, not an
-   * empty chain: every *installed* state comes from that file alone. So a
-   * fresh build asks with `null` and gets a chain of outstanding rows, rather
-   * than a rejected promise and a tab with no list on it at all.
+   * `settled` gates the ask rather than merely the render: `isTree` is a
+   * round trip, so asking before it lands would put *ready* on a row the
+   * tree already carries and then swap it for *installed* under the reader.
    */
-  const { tree } = useDestinationCheck(destination);
-  const treeRoot = tree?.isTree ? destination : null;
+  const { treeRoot, settled: treeSettled } = useChainTree(destination);
   /** A primitive dependency rather than the array, for the reason above. */
   const materialKey = session.material.folders.map((folder) => folder.path).join("\n");
 
@@ -178,6 +178,9 @@ export function ChoiceTab() {
    *  draws no group at all (spec § 1.5: AmigaOS 3.2 has none). */
   const [chain, setChain] = useState<ChainReport | null>(null);
   useEffect(() => {
+    // Not until the tree is settled — see `treeRoot` above. One ask, about
+    // the right folder, rather than two about two.
+    if (!treeSettled) return;
     const folders = materialKey ? materialKey.split("\n") : [];
     let cancelled = false;
     osinstallChain(release, folders, treeRoot, romPath, JSON.parse(overridesKey) as SlotOverride[])
@@ -193,7 +196,7 @@ export function ChoiceTab() {
     return () => {
       cancelled = true;
     };
-  }, [release, materialKey, treeRoot, romPath, overridesKey]);
+  }, [release, materialKey, treeRoot, treeSettled, romPath, overridesKey]);
 
   const updateRows = chain?.rows ?? [];
   // Paired **by index**: `chainLines` maps one line per row, in order, and a
@@ -252,6 +255,9 @@ export function ChoiceTab() {
   // explain.
   const [firstbootWritten, setFirstbootWritten] = useState(false);
   useEffect(() => {
+    // Same gate as the chain's: a folder the destination check has not
+    // answered for is not a folder to read a first-boot block out of.
+    if (!treeSettled) return;
     if (!treeRoot) {
       setFirstbootWritten(false);
       return;
@@ -267,7 +273,7 @@ export function ChoiceTab() {
     return () => {
       cancelled = true;
     };
-  }, [treeRoot]);
+  }, [treeRoot, treeSettled]);
 
   /** The one component id currently showing the "this will not boot"
    *  confirmation, or `null`. Only one at a time — a second click elsewhere
@@ -516,6 +522,18 @@ export function ChoiceTab() {
               const state = choiceRowState(line, updateRows[at]);
               const checked = state.tick === "user" ? packagesChosen.includes(line.id) : state.tick === "on";
               const said = sentenceFor(line);
+              // **A tick the row can no longer honour is still the user's to
+              // take back** (fix round 1, Important 1 — the rule
+              // `PackagePanel`'s F3 and M3 encoded: only *checking* is ever
+              // refused, unticking a stale pick is always allowed). The
+              // archive a ticked row was ticked for can leave the folder
+              // between two runs, and the row then draws unticked and
+              // disabled while its id sits on in `packages.chosen`, invisible
+              // and unremovable: `strayChosen` below catches only an id with
+              // no row at all. The box stays honest — the row cannot be
+              // written, so it is not drawn as though it will be — and the
+              // way out is a control of its own beside it.
+              const closedButTicked = state.tick === "off" && packagesChosen.includes(line.id);
               return (
                 <div
                   key={line.id}
@@ -551,6 +569,31 @@ export function ChoiceTab() {
                       <span style={{ marginLeft: 6 }}>{t(line.where.key, line.where.params)}</span>
                     )}
                   </p>
+                  {closedButTicked && (
+                    <div
+                      data-testid="choice-update-closed-tick"
+                      className="badge badge-warn"
+                      style={{
+                        display: "flex",
+                        gap: 8,
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        padding: "4px 8px",
+                        margin: "6px 0 0",
+                        fontSize: 11,
+                      }}
+                    >
+                      {/* Two ways out, and the sentence names both: drop the
+                          tick, or fix what the row above says is wrong. It
+                          does not repeat *why* — the row's own sentence is
+                          directly above it and is the one place that decides
+                          the wording. */}
+                      <span>{t("osBuilder.choice.tickedButClosed")}</span>
+                      <button className="btn" onClick={() => toggleUpdate(line.id)}>
+                        {t("osBuilder.choice.untick")}
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })}

@@ -284,12 +284,14 @@ describe("one card for the build (ART-197's remaining duplicate)", () => {
 
 describe("a folder taken out of the material list is out of the build (F10)", () => {
   /// **The defect.** `packages.folder` keeps a stored value of its own as
-  /// well as being a list entry, because `PackagePanel` hands one folder to
-  /// `osinstallCollisions` and `osinstallAddPackage`. So removing that folder
-  /// from the list left the stored copy behind, and the step said two things
-  /// at once: the Amiga Forever offer — drawn only while the list is empty,
-  /// so ART is claiming to have nothing — directly above two package panels
-  /// still reading archives out of the folder just removed.
+  /// well as being a list entry, because `AmigaInstallPanel` hands one folder
+  /// to `osinstallCollisions` and `osinstallAddPackage`. So removing that
+  /// folder from the list left the stored copy behind, and the step said two
+  /// things at once: the Amiga Forever offer — drawn only while the list is
+  /// empty, so ART is claiming to have nothing — directly above the package
+  /// panels (two of them then; the retired one went in round 3 of the
+  /// four-tab rewrite) still reading archives out of the folder just
+  /// removed.
   it("drops the stored archives folder when the list stops holding it", async () => {
     seed({ "buildSession.material.AmigaOS 3.2": { folders: [{ path: "E:\\disks", layer: null }] } });
     render(<MaterialProbe />);

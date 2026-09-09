@@ -164,8 +164,9 @@ import { Field } from "@/components/osbuilder/Field";
 
 export interface AmigaInstallPanelProps {
   /** The distribution tree the installer runs against — controlled by the
-   *  caller, which is what lets this and `PackagePanel` speak about the same
-   *  tree without either owning it. */
+   *  caller, which is what lets this and the rest of the lane speak about the
+   *  same tree without any of them owning it. The caller resolves it through
+   *  `useChainTree`, so this panel and `ChoiceTab` cannot be handed two. */
   treeRoot: string | null;
   onTreeRootChange?: (path: string | null) => void;
   /** Where the user keeps their update archives. Used for the catalogue —
@@ -178,8 +179,8 @@ export interface AmigaInstallPanelProps {
    * order — what the slots are resolved against.
    *
    * Separate from `packageFolder` above, which is one folder and stays one:
-   * `PackagePanel`'s own `osinstallCollisions`/`osinstallAddPackage` take a
-   * single folder and this panel's dialogs need a place to open. What this
+   * `osinstallCollisions`/`osinstallAddPackage` take a single folder and this
+   * panel's dialogs need a place to open. What this
    * carries is the *question* — "given everything the user has, which file is
    * BoingBag 3.9-1?" — and it is a list because that is what the answer has
    * to be resolved over. A folder the user removed from the list therefore
@@ -1281,7 +1282,8 @@ export function AmigaInstallPanel({
       onAmigaInstallResult((answer) => {
         // The run's answer is emitted from inside the job closure, so it
         // always arrives before the runner's own terminal progress event
-        // clears `job.current` — the same ordering `PackagePanel` relies on.
+        // clears `job.current` — the ordering every job-backed panel here
+        // relies on.
         if (answer.job_id !== job.current) return;
         setResult(answer);
         setConfirmed(false);

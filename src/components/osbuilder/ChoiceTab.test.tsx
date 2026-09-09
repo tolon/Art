@@ -1043,16 +1043,100 @@ describe("the updates group", () => {
     );
   });
 
-  it("asks the chain about no tree when the destination is not one", async () => {
-    // A fresh build. Handing a folder that is not a tree to the chain would
-    // be refused — every *installed* state comes from `distribution.json`
-    // alone — and the whole list would go missing rather than reading as the
-    // fresh build it is.
-    await renderUpdates();
+  it("asks about the session's own tree when the destination is not one, as tab 1 does", async () => {
+    // **One tree for both tabs** (fix round 1, Important 2). This used to ask
+    // with `null` whenever the destination was not a build, while tab 1's
+    // readout and the Amiga-side panel were handed `session.tree.root` — two
+    // lanes of one wizard giving two `installed` answers about one file. The
+    // rule is `useChainTree`'s now, and it is the session's tree here.
+    seedRemembered({
+      ...FULL_FIELDS,
+      "buildSession.release": "AmigaOS 3.9",
+      "buildSession.tree": { root: "E:\\amiga\\os39", builtHere: false },
+    });
+    chainMock.mockResolvedValue(chainOf(NINE_ROWS));
+    render(<ChoiceTab />);
+    await screen.findAllByTestId("choice-update-row");
+
     await waitFor(() => expect(chainMock).toHaveBeenCalled());
     for (const call of chainMock.mock.calls as [string, string[], string | null][]) {
-      expect(call[2]).toBeNull();
+      expect(call[2]).toBe("E:\\amiga\\os39");
     }
+  });
+
+  it("asks once, and not before ART has finished looking at the destination", async () => {
+    // The flicker `settled` exists to stop: asked while `isTree` is still in
+    // flight, the first answer is about the wrong folder, and a row the tree
+    // already carries reads *ready* until the second lands and swaps it for
+    // *installed*. One ask, about the right tree.
+    let answer: (summary: TreeSummary) => void = () => {};
+    describeTreeMock.mockReturnValue(
+      new Promise<TreeSummary>((resolve) => {
+        answer = resolve;
+      })
+    );
+    seedRemembered({ ...FULL_FIELDS, "buildSession.release": "AmigaOS 3.9" });
+    chainMock.mockResolvedValue(chainOf(NINE_ROWS));
+    render(<ChoiceTab />);
+    await screen.findAllByTestId("choice-part-row");
+
+    expect(chainMock).not.toHaveBeenCalled();
+
+    answer({
+      isTree: true,
+      release: "AmigaOS 3.9",
+      files: 4212,
+      components: [],
+      amigaInstalled: [],
+      problem: null,
+    });
+    await screen.findAllByTestId("choice-update-row");
+    expect(chainMock).toHaveBeenCalledTimes(1);
+    expect((chainMock.mock.calls[0] as [string, string[], string | null])[2]).toBe("E:\\dist39");
+  });
+
+  it("lets a tick be removed from a row that has since become closed", async () => {
+    // **The rule `PackagePanel`'s F3 and M3 encoded, kept**: only *checking*
+    // is ever refused; unticking a pick the user already made is always
+    // allowed. The archive a ticked row was ticked for can leave the folder
+    // between two runs — the row then draws unticked and disabled, and
+    // without this control its id would sit on in `packages.chosen`,
+    // invisible (it *has* a row, so the stray-id list does not catch it) and
+    // impossible to remove.
+    seedRemembered({
+      ...FULL_FIELDS,
+      "buildSession.release": "AmigaOS 3.9",
+      "buildSession.packages.AmigaOS 3.9": { folder: null, chosen: ["locale-39-turkish"] },
+    });
+    chainMock.mockResolvedValue(chainOf(NINE_ROWS));
+    render(<ChoiceTab />);
+    await screen.findAllByTestId("choice-update-row");
+
+    // The box is honest — the row cannot be written, so it is not drawn as
+    // though it will be — and the way out sits beside it.
+    const row = updateRow("locale-39-turkish");
+    const box = within(row).getByRole("checkbox") as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    expect(box.disabled).toBe(true);
+    const said = within(row).getByTestId("choice-update-closed-tick");
+    expect(said.textContent).toContain(i18n.t("osBuilder.choice.tickedButClosed"));
+
+    await userEvent.click(
+      within(said).getByRole("button", { name: i18n.t("osBuilder.choice.untick") })
+    );
+
+    await waitFor(() =>
+      expect(rememberedBag()["buildSession.packages.AmigaOS 3.9"]).toMatchObject({ chosen: [] })
+    );
+    expect(screen.queryByTestId("choice-update-closed-tick")).toBeNull();
+  });
+
+  it("says nothing of the kind about a closed row nobody ticked", async () => {
+    // The other half: the control is about a tick that exists. Drawing it on
+    // every closed row would tell eight users out of ten to untick something
+    // they never ticked.
+    await renderUpdates();
+    expect(screen.queryByTestId("choice-update-closed-tick")).toBeNull();
   });
 });
 
@@ -1111,15 +1195,27 @@ describe("the first-boot tick", () => {
     expect(said.textContent).toBe(i18n.t("firstboot.panel.alreadyWritten"));
   });
 
-  it("asks nothing about a destination that is not an ART tree", async () => {
-    // `firstboot_preview` reads a tree. Asking it about a folder that is not
-    // one produces a refusal ART would then have to explain on a row whose
-    // whole content is a tick.
-    await renderChoice("AmigaOS 3.9");
+  it("asks nothing at all when this build has no tree yet", async () => {
+    // `firstboot_preview` reads a tree, and it reads **the** tree — the same
+    // one the chain is asked about (`useChainTree`). With no destination and
+    // nothing in the session there is no folder to ask about, and a refusal
+    // is not something a row whose whole content is a tick could explain.
+    seedRemembered({
+      "osinstall.mediaFolder.AmigaOS 3.9": "E:\\media39",
+      "buildSession.release": "AmigaOS 3.9",
+    });
+    render(<ChoiceTab />);
+    await screen.findAllByTestId("choice-part-row");
     await waitFor(() => expect(chainMock).toHaveBeenCalled());
 
     expect(firstbootPreviewMock).not.toHaveBeenCalled();
     expect(screen.queryByTestId("choice-firstboot-already-written")).toBeNull();
+    // The tick itself is still there and still ticked: whether a block is
+    // *wanted* is not a question about a folder.
+    const box = within(screen.getByTestId("choice-firstboot")).getByRole(
+      "checkbox"
+    ) as HTMLInputElement;
+    expect(box.checked).toBe(true);
   });
 });
 
@@ -1132,7 +1228,24 @@ describe("in Turkish", () => {
     // compares the catalogues to each other rather than to a screen.
     await changeLanguage("tr");
     destinationIsATree();
-    await renderUpdates();
+    // Seeded so that **every** sentence this tab can draw is on screen at
+    // once, including the two that only a remembered id produces: an id with
+    // no row (`notInList` and its untick control) and a tick on a row that
+    // has since closed (`tickedButClosed`). A pass over a screen missing half
+    // its sentences proves half a catalogue.
+    seedRemembered({
+      ...FULL_FIELDS,
+      "buildSession.release": "AmigaOS 3.9",
+      "buildSession.packages.AmigaOS 3.9": {
+        folder: null,
+        chosen: ["a-package-nobody-ships", "locale-39-turkish"],
+      },
+    });
+    chainMock.mockResolvedValue(chainOf(NINE_ROWS));
+    render(<ChoiceTab />);
+    await screen.findAllByTestId("choice-update-row");
+    await screen.findByTestId("choice-update-unknown");
+    await screen.findByTestId("choice-update-closed-tick");
 
     const tab = screen.getByTestId("choice-tab");
     expect(tab.textContent).not.toMatch(/osinstall\.|osBuilder\./);
