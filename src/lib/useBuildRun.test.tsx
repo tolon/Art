@@ -363,7 +363,10 @@ describe("the build run's sequence", () => {
       state: "failed",
       message: "the disk is full",
       errorCode: "ART-042",
-      filesLanded: 340,
+      // The job's own progress counter, under its own name — items placed,
+      // not files (round 4 task 4).
+      done: 340,
+      total: 1980,
     });
     expect(result.current.reports[1].ending).toEqual({ state: "not-attempted" });
     expect(firstbootWriteMock).not.toHaveBeenCalled();

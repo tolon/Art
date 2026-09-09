@@ -11,15 +11,48 @@
 //
 // It is the bar under the **tabs**, so it is absent on `hedef`, which is the
 // entry chip rather than a tab of the lane.
+//
+// **The size line** (round 4, task 4) is tab 4's own first two summary lines —
+// what will be written, and what will be updated — computed by the one hook
+// tab 4 computes them with (`useBuildSummary`), so the bar and the Build
+// button can never state two different builds. It is drawn on tabs 1-3 and
+// **not** on `derle`, for the same reason the button is not: tab 4 renders
+// all four lines two inches above this bar, and the same sentence twice on
+// one screen is ART-202 ("aynı uyarı tek ekranda 2 tane"). Mounting the hook
+// in a child rather than here is what keeps that a real saving — on tab 4
+// nothing here asks anything at all.
 
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 
+import { useBuildSummary } from "@/components/osbuilder/buildSummary";
 import { isTextOrNothing } from "@/lib/remembered";
 import { rememberedComponentKey } from "@/lib/osinstall";
 import { useRemembered } from "@/lib/useRemembered";
 import { useBuildSession } from "@/lib/useBuildSession";
 import { stepPath } from "@/lib/buildSteps";
+
+/**
+ * How big this build is, in the bar.
+ *
+ * `previewReplacements: false` because the fourth summary line — *what this
+ * would replace* — costs an `osinstall_collisions` per ticked update, which
+ * opens an archive each. The bar does not draw that line, so it must not pay
+ * for it on every tab.
+ */
+function BuildBarSize() {
+  const { t } = useTranslation();
+  const { sizeLines } = useBuildSummary({ previewReplacements: false });
+  return (
+    <span
+      className="faint"
+      data-testid="build-bar-size"
+      style={{ flex: 1, minWidth: "12em", wordBreak: "break-word" }}
+    >
+      {sizeLines.map((line) => t(line.key, line.params)).join(" · ")}
+    </span>
+  );
+}
 
 export function BuildBar() {
   const { t } = useTranslation();
@@ -60,6 +93,7 @@ export function BuildBar() {
       <span className="muted" data-testid="build-bar-destination" style={{ flex: 1, minWidth: "12em", wordBreak: "break-all" }}>
         {destination ? t("osBuilder.bar.destination", { path: destination }) : t("osBuilder.bar.noDestination")}
       </span>
+      {!onBuildTab && <BuildBarSize />}
       {!onBuildTab && (
         <button className="btn" data-testid="build-bar-go" onClick={() => navigate(stepPath("derle"))}>
           {t("osBuilder.bar.goToBuild")}

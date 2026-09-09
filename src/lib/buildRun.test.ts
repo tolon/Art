@@ -150,7 +150,8 @@ function everyEnding(kind: Phase["kind"]): PhaseEnding[] {
       state: "failed",
       message: "the disc changed since the preview",
       errorCode: "ART-101",
-      filesLanded: 17,
+      done: 17,
+      total: 1980,
     },
     { state: "cancelled", filesLanded: 33 },
     { state: "not-attempted" },
@@ -279,7 +280,8 @@ describe("phaseOutcomePhrase", () => {
         state: "failed",
         message: "the disc changed since the preview",
         errorCode: "ART-101",
-        filesLanded: 17,
+        done: 17,
+        total: 1980,
       })
     );
     expect(phrase.key).toBe("osBuilder.build.phase.tree.failed");
@@ -313,34 +315,59 @@ describe("phaseNextStepPhrase", () => {
     expectRenderable(phrase!);
   });
 
-  it("names the tree and the count a failed phase left behind", () => {
+  it("names the tree and how far the work got when a phase failed", () => {
+    // **Items, not files** (round 4 task 4). A failed `JobState` carries an
+    // error code and a message and no count at all; the only number ART holds
+    // is the progress stream's own `done` of `total`, which counts whole plan
+    // items — directories included. So the sentence says what was measured.
     const phrase = phaseNextStepPhrase(
       report("tree", {
         state: "failed",
         message: "no",
         errorCode: null,
-        filesLanded: 17,
+        done: 17,
+        total: 1980,
       }),
       "E:\\amiga\\dist"
     );
     expect(phrase?.key).toBe("osBuilder.build.next.failed");
-    expect(phrase?.params).toEqual({ root: "E:\\amiga\\dist", files: 17 });
+    expect(phrase?.params).toEqual({ root: "E:\\amiga\\dist", done: 17, total: 1980 });
     expectRenderable(phrase!);
-    // Both languages have to *say* both of them — a next step that drops the
+    // Both languages have to *say* all three — a next step that drops the
     // root tells somebody their files are somewhere.
     for (const catalogue of [en, tr]) {
-      expect(varsOf(leafText(catalogue, "osBuilder.build.next.failed"))).toEqual(["files", "root"]);
+      expect(varsOf(leafText(catalogue, "osBuilder.build.next.failed"))).toEqual([
+        "done",
+        "root",
+        "total",
+      ]);
     }
   });
 
-  it("says nothing landed when the job says nothing landed", () => {
-    // `JobState.cancelled.files_landed` is null when nothing was written and
-    // left in place (jobs.ts, ART-058) — so zero is the truth, not a guess.
+  it("claims no count at all when the job never reported one", () => {
+    // The command threw before a job existed, so nothing was measured. The
+    // old sentence printed `0` here — a confident claim that nothing was
+    // written, which is the defect this project is named for.
     const phrase = phaseNextStepPhrase(
-      report("tree", { state: "failed", message: "no", errorCode: null, filesLanded: null }),
+      report("tree", { state: "failed", message: "no", errorCode: null, done: null, total: null }),
       "E:\\amiga\\dist"
     );
-    expect(phrase?.params).toEqual({ root: "E:\\amiga\\dist", files: 0 });
+    expect(phrase?.key).toBe("osBuilder.build.next.failedUnknown");
+    expect(phrase?.params).toEqual({ root: "E:\\amiga\\dist" });
+    expectRenderable(phrase!);
+    for (const catalogue of [en, tr]) {
+      expect(varsOf(leafText(catalogue, "osBuilder.build.next.failedUnknown"))).toEqual(["root"]);
+    }
+  });
+
+  it("claims no count when the job counted but named no total", () => {
+    // `JobProgress.total` is nullable, and "item 17 of null" is not a
+    // sentence. One arm rather than a third key.
+    const phrase = phaseNextStepPhrase(
+      report("tree", { state: "failed", message: "no", errorCode: null, done: 17, total: null }),
+      "E:\\amiga\\dist"
+    );
+    expect(phrase?.key).toBe("osBuilder.build.next.failedUnknown");
   });
 
   it("names the tree and the count a cancelled phase left behind", () => {
@@ -385,7 +412,7 @@ describe("phaseTone", () => {
     expect(phaseTone(report("tree", { state: "cancelled", filesLanded: 0 }))).toBe("warn");
     expect(
       phaseTone(
-        report("tree", { state: "failed", message: "no", errorCode: null, filesLanded: null })
+        report("tree", { state: "failed", message: "no", errorCode: null, done: null, total: null })
       )
     ).toBe("err");
   });

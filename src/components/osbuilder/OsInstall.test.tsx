@@ -3013,95 +3013,13 @@ describe("the readout first (simplification design § 4)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// ART-226's other half: choosing the keyboard, having placed it
-// ---------------------------------------------------------------------------
-//
-// The owner built a Turkish tree, watched its menus render ç ü ş Ğ, and then
-// could not type them: every keymap was placed and none was selected. The
-// picker's options are read off the plan's own items, so a layout it offers
-// cannot then be refused for not being there.
-
-describe("choosing the keyboard the system boots with", () => {
-  it("says nothing when the install places no keymaps", async () => {
-    await renderFull();
-    expect(screen.queryByTestId("keymap-section")).toBeNull();
-  });
-
-  it("offers what the plan will really place, and not the icons", async () => {
-    seedRemembered({ ...FULL_FIELDS, "osinstall.chosen": ["keymaps"] });
-    render(<OsInstall />);
-    await screen.findByTestId("keymap-section");
-
-    const picker = screen.getByRole("combobox", { name: /keyboard layout/i });
-    const options = [...picker.querySelectorAll("option")].map((o) => o.getAttribute("value"));
-    // The empty one is "leave it to Kickstart".
-    expect(options).toContain("");
-    expect(options).toContain("türkçe");
-    expect(options).toContain("usa");
-    expect(options).not.toContain("türkçe.info");
-  });
-
-  it("sends the chosen layout to the planner", async () => {
-    seedRemembered({ ...FULL_FIELDS, "osinstall.chosen": ["keymaps"] });
-    render(<OsInstall />);
-    await screen.findByTestId("keymap-section");
-
-    await userEvent.selectOptions(
-      screen.getByRole("combobox", { name: /keyboard layout/i }),
-      "türkçe"
-    );
-
-    // Does the control itself move?
-    expect(
-      (screen.getByRole("combobox", { name: /keyboard layout/i }) as HTMLSelectElement).value
-    ).toBe("türkçe");
-    // The last plan the screen asked for is the one it is showing, and it has
-    // to carry the choice - otherwise the picker moves and nothing follows it.
-    await waitFor(() => {
-      const sent = planMock.mock.calls.at(-1)![0] as InstallRequest;
-      expect(sent.keymap).toBe("türkçe");
-    });
-  });
-
-  /// **No default.** Every ART tree until now booted on the ROM's `usa`, and
-  /// choosing somebody's keyboard for them is not ART's to do.
-  it("sends null when nothing is chosen, leaving it to Kickstart", async () => {
-    seedRemembered({ ...FULL_FIELDS, "osinstall.chosen": ["keymaps"] });
-    render(<OsInstall />);
-    await screen.findByTestId("keymap-section");
-
-    const sent = planMock.mock.calls.at(-1)![0] as InstallRequest;
-    expect(sent.keymap).toBeNull();
-  });
-
-  /// Per release, like the media folder (ART-207): a layout is a name in
-  /// *that* release's `Devs/Keymaps`.
-  it("remembers the choice per release", async () => {
-    seedRemembered({
-      ...FULL_FIELDS,
-      "osinstall.chosen": ["keymaps"],
-      "osinstall.keymap": "türkçe",
-      "osinstall.chosen.AmigaOS 3.9": ["keymaps"],
-      "osinstall.keymap.AmigaOS 3.9": "",
-    });
-    render(<OsInstall />);
-    await screen.findByTestId("keymap-section");
-    expect(
-      (screen.getByRole("combobox", { name: /keyboard layout/i }) as HTMLSelectElement).value
-    ).toBe("türkçe");
-
-    await userEvent.selectOptions(
-      screen.getByRole("combobox", { name: i18n.t("osinstall.release.label") }),
-      "AmigaOS 3.9"
-    );
-    await waitFor(() =>
-      expect(
-        (screen.getByRole("combobox", { name: /keyboard layout/i }) as HTMLSelectElement).value
-      ).toBe("")
-    );
-  });
-});
+// **The five keyboard cases moved to `MachineTab.test.tsx` by name** (round
+// 4 task 4, four-tab design § 3.3): "says nothing when the install places no
+// keymaps", "offers what the plan will really place, and not the icons",
+// "sends the chosen layout to the planner", "sends null when nothing is
+// chosen, leaving it to Kickstart" and "remembers the choice per release".
+// The select is on tab 3 now, beside the Kickstart; this screen still plans
+// with the value and no longer draws it.
 
 // ART-207's own rule taken one level finer: instead of one media folder plus
 // a bag of extra ones, a layered recipe (AmigaOS 3.2.2's own `base` and

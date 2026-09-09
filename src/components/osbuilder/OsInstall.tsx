@@ -135,7 +135,6 @@ import {
   osinstallIdentifyMedia,
   osinstallRescanMedia,
   osinstallReleaseForMedia,
-  keymapsIn,
   mediaIdentityFolderLines,
   mediaIdentityLines,
   mediaIdentitySummary,
@@ -361,8 +360,13 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    *
    * Empty means the ROM's `usa`, exactly as before. **No default**: choosing
    * somebody's keyboard for them is not ART's to do.
+   *
+   * **Read-only here since round 4 task 4.** The select moved to `MachineTab`
+   * (four-tab design § 3.3); this screen still *plans* with the value, so it
+   * still reads it — through the same key, which is what makes the two tabs
+   * one choice rather than two.
    */
-  const [keymap, setKeymap] = useRemembered<string>(
+  const [keymap] = useRemembered<string>(
     rememberedComponentKey("osinstall.keymap", release),
     isText,
     ""
@@ -1198,25 +1202,6 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       })
     : null;
 
-  /**
-   * What the plan would really put in `Devs/Keymaps` — the picker's options,
-   * so nothing offered can be refused for not being there.
-   *
-   * **Held across a re-plan**, and that is not a nicety. `effectivePlan` goes
-   * `null` while a new plan is in the air, and reading the list straight off it
-   * made the whole section vanish and come back on every keystroke elsewhere
-   * on the screen — including on the user's own choice of keyboard, which
-   * unmounted the control they had just used. A control that disappears under
-   * somebody's hand is the same defect as one that answers wrongly.
-   *
-   * A plan that **has** arrived always supersedes, empty included: turning the
-   * `keymaps` component off has to empty the list, not leave a stale one.
-   */
-  const [availableKeymaps, setAvailableKeymaps] = useState<string[]>([]);
-  useEffect(() => {
-    if (effectivePlan) setAvailableKeymaps(keymapsIn(effectivePlan));
-  }, [effectivePlan]);
-
   // `osinstallBlocker` asks one question of `mediaFolder`: has *any* material
   // been pointed at yet. Answered from the folders the request actually
   // carries, so a layered release with two tagged folders is not told "no
@@ -1673,41 +1658,11 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         </section>
       )}
 
-      {/* **ART-226's other half: choose the keyboard, having placed it.**
-          The options are read off the plan's own items, so the list is exactly
-          what will really be in `Devs/Keymaps` — a layout offered here cannot
-          then be refused for not being there. Nothing selected leaves the
-          system on the ROM's `usa`, which is what every ART tree did until
-          now; a default would be ART choosing somebody's keyboard. */}
-      {availableKeymaps.length > 0 && (
-        <section className="card" style={{ marginBottom: 16 }} data-testid="keymap-section">
-          <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osinstall.keymap.heading")}</h2>
-          <p className="muted" style={{ fontSize: 12, margin: "4px 0 12px" }}>
-            {t("osinstall.keymap.intro", { count: availableKeymaps.length })}
-          </p>
-          <label style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: "24em" }}>
-            <span className="muted" style={{ fontSize: 12 }}>
-              {t("osinstall.keymap.label")}
-            </span>
-            <select
-              className="input"
-              value={keymap}
-              onChange={(e) => setKeymap(e.target.value)}
-              aria-label={t("osinstall.keymap.label")}
-            >
-              <option value="">{t("osinstall.keymap.rom")}</option>
-              {availableKeymaps.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-            <span className="faint" style={{ fontSize: 10 }}>
-              {t("osinstall.keymap.hint")}
-            </span>
-          </label>
-        </section>
-      )}
+      {/* **The keyboard select is gone from this screen** (four-tab round 4,
+          task 4). It is ART-226's other half — choose the keyboard, having
+          placed it — and it belongs beside the Kickstart, on tab 3, which is
+          where the machine is described. This screen still plans *with* the
+          value, through the same remembered key. */}
 
       <section className="card" style={{ marginBottom: 16 }}>
         <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osinstall.run.heading")}</h2>

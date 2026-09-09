@@ -8,14 +8,12 @@
 //
 // **The install lane is four numbered tabs** since the owner's 2026-09-09
 // verdict on the five-step lane (four-tab design § 2): `dosyalar` · `secim` ·
-// `makine` · `derle`. Round 1 only moves the panels; rounds 2-4 move the
-// fields. So `dosyalar` mounts today's install step whole, `secim` is the one
-// tick list since round 3, `makine` holds the Kickstart and the
-// destination since round 2, and `derle` still says in one sentence where its
-// fields are today rather than rendering an empty card — a tab that showed
-// nothing would hide features that work (CLAUDE.md: register unready, never
-// hide). The retired `kaynak` · `paketler` · `amiga-kurulum` ·
-// `ilk-acilis` are redirects in `routes.tsx`, not steps.
+// `makine` · `derle`. Round 1 only moved the panels; rounds 2-4 moved the
+// fields, and since round 4 every one of them holds its own: `dosyalar` is
+// the material, `secim` the one tick list, `makine` the Kickstart, the
+// keyboard and the destination, and `derle` the summary, the Build button,
+// the run's report and the hand-off. The retired `kaynak` · `paketler` ·
+// `amiga-kurulum` · `ilk-acilis` are redirects in `routes.tsx`, not steps.
 //
 // A step opened on its own **asks** rather than rendering empty, and asking is
 // a state rather than a refusal — the panel stays mounted and stays usable, so
@@ -34,6 +32,7 @@ import { useBuildSession } from "@/lib/useBuildSession";
 import { useChainTree } from "@/lib/useChainTree";
 import { useRemembered } from "@/lib/useRemembered";
 import { AppearancePanel } from "@/components/osbuilder/AppearancePanel";
+import { BuildTab } from "@/components/osbuilder/BuildTab";
 import { CardBuilder } from "@/components/osbuilder/CardBuilder";
 import { ChoiceTab } from "@/components/osbuilder/ChoiceTab";
 import { MachineTab } from "@/components/osbuilder/MachineTab";
@@ -184,71 +183,20 @@ export function StepSecim() {
 }
 
 /**
- * A tab whose fields still live on the files tab — says so, links there.
+ * Tab 3 — Kickstart, keyboard layout and destination.
  *
- * The sentence arrives **already rendered**, from a literal key at the call
- * site rather than one composed here from `id`: `literal-keys.test.ts`
- * checks that every literal key resolves in both catalogues, and a composed
- * key would buy a dynamic call site for nothing — nothing decides the key,
- * it is simply that tab's own.
- *
- * `derle` is the only tab left with nothing of its own since round 2 gave
- * `makine` its two fields; the `id` type says so rather than leaving a
- * second caller nobody would notice had gone.
- */
-function NotYet({
-  id,
-  heading,
-  sentence,
-}: {
-  id: "derle";
-  heading: string;
-  sentence: string;
-}) {
-  const { t } = useTranslation();
-  return (
-    <section className="card" data-testid={`tab-${id}`} style={{ marginBottom: 16 }}>
-      <h2 style={{ fontSize: 16, marginTop: 0 }}>{heading}</h2>
-      <p className="muted" style={{ fontSize: 12, margin: 0 }}>
-        {sentence} <Link to="/os-builder/dosyalar">{t("osBuilder.step.dosyalar")}</Link>
-      </p>
-    </section>
-  );
-}
-
-/**
- * Tab 3 — Kickstart and destination. The keymap joins in round 4 with the
- * plan: its option list is `keymapsIn(effectivePlan)`, and the plan is
- * round 4's hook — moving the select alone would mean computing a second
- * plan here. The sentence says so rather than leaving a user hunting.
+ * **The keymap note is gone** (round 4 task 4): the select itself is on this
+ * tab now, and a line pointing somewhere else for a field that is right there
+ * is a sentence that has become false. Every tab of the install lane holds
+ * its own fields since this round; `NotYet` went with it.
  */
 export function StepMakine() {
-  const { t } = useTranslation();
-  return (
-    <>
-      <MachineTab />
-      <p
-        className="faint"
-        style={{ fontSize: 11, margin: "0 0 16px" }}
-        data-testid="tab-makine-keymap-note"
-      >
-        {t("osBuilder.tab.makineKeymapNote")}{" "}
-        <Link to="/os-builder/dosyalar">{t("osBuilder.step.dosyalar")}</Link>
-      </p>
-    </>
-  );
+  return <MachineTab />;
 }
 
-/** Tab 4 — build. Round 4 moves the plan, the button and the run here. */
+/** Tab 4 — build: the summary, the button, the run and the hand-off. */
 export function StepDerle() {
-  const { t } = useTranslation();
-  return (
-    <NotYet
-      id="derle"
-      heading={t("osBuilder.step.derle")}
-      sentence={t("osBuilder.tab.derleNotYet")}
-    />
-  );
+  return <BuildTab />;
 }
 
 export function StepKart() {

@@ -61,6 +61,20 @@ vi.mock("@/components/osbuilder/VerifyAgainstCard", () => ({
 vi.mock("@/components/osbuilder/MachineTab", () => ({
   MachineTab: () => <div data-testid="machine-tab" />,
 }));
+// Round 4, task 4: `derle` mounts the real tab. Mocked like every other
+// panel — `BuildTab.test.tsx` owns what it renders; what this file is about
+// is which step renders it.
+vi.mock("@/components/osbuilder/BuildTab", () => ({
+  BuildTab: () => <div data-testid="build-tab" />,
+}));
+// …and the summary the **bar** states, which the shell mounts on every tab of
+// this lane. Its real hook computes a plan, a destination check and the chain,
+// none of which this file is about — and all of which would reach `invoke`
+// for real. What is under test here is that the bar is mounted at all, and by
+// which route.
+vi.mock("@/components/osbuilder/buildSummary", () => ({
+  useBuildSummary: () => ({ sizeLines: [] }),
+}));
 vi.mock("@/components/osbuilder/OsInstall", () => ({
   OsInstall: ({ droppedMedia }: { droppedMedia?: { path: string } | null }) => (
     <div data-testid="install">{droppedMedia?.path ?? "(no drop)"}</div>
@@ -447,7 +461,7 @@ describe("every step id in the lane has a route", () => {
       // have to change.
       secim: "choice-tab",
       makine: "machine-tab",
-      derle: "tab-derle",
+      derle: "build-tab",
       kart: "card",
       birimler: "volumes",
     };
@@ -460,25 +474,23 @@ describe("every step id in the lane has a route", () => {
   });
 });
 
-describe("a tab still says where a field of its own is", () => {
+// **Both "a field of mine is elsewhere" cases are gone** (round 4, task 4).
+// `makine names the files tab for the keymap it does not hold yet` and
+// `derle names the files tab` described a lane in which two tabs pointed at a
+// third; the keymap select is on `makine` now and the Build button is on
+// `derle`, so both sentences and both keys were deleted rather than left to
+// say something that had become false. What replaces them is the row in the
+// completeness map above: `derle` renders `build-tab`, and `makine` renders
+// `machine-tab`, whose own file proves the select is there.
+describe("every tab of the install lane holds its own fields", () => {
   beforeEach(() => seed({ "buildSession.kind": "install" }));
 
-  /// Round 2 gave `makine` its two fields; the keymap select stayed on the
-  /// files tab because its option list is derived from the plan, and the
-  /// plan is round 4's. A user who opens this tab looking for the keyboard
-  /// layout is told where it is — the alternative is a tab that silently
-  /// lacks a field the design says it has.
-  it("makine names the files tab for the keymap it does not hold yet", () => {
-    renderAt("/os-builder/makine");
-    const note = screen.getByTestId("tab-makine-keymap-note");
-    expect(note.textContent).toContain(i18n.t("osBuilder.tab.makineKeymapNote"));
-    expect(within(note).getByRole("link").getAttribute("href")).toBe("/os-builder/dosyalar");
-  });
-
-  it("derle names the files tab", () => {
-    renderAt("/os-builder/derle");
-    const tab = screen.getByTestId("tab-derle");
-    expect(tab.textContent).toContain(i18n.t("osBuilder.tab.derleNotYet"));
-    expect(within(tab).getByRole("link").getAttribute("href")).toBe("/os-builder/dosyalar");
+  it("points nowhere else for a field of its own", () => {
+    for (const id of ["makine", "derle"]) {
+      const view = renderAt(`/os-builder/${id}`);
+      expect(screen.queryByTestId("tab-makine-keymap-note")).toBeNull();
+      expect(screen.queryByTestId("tab-derle")).toBeNull();
+      view.unmount();
+    }
   });
 });

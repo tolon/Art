@@ -649,6 +649,25 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // two; the third is a recipe's own `labelKey`, covered the way "130 ->
     // 131" covers it (`recipe-component-keys.test.ts`, and `dead-keys.test.
     // ts` reading the recipe files themselves).
-    expect(dynamicCalls).toBe(181);
+    // 181 -> 191 (2026-09-09, four tabs round 4, task 4). **Ten, and every
+    // one of them is a `Phrase` from `src/lib` reaching the screen** — the
+    // pattern this count exists to keep deliberate rather than to discourage.
+    // `BuildTab.tsx` adds eight: the four summary lines
+    // (`runSummaryLines`), the refusals card's own list (`refusalPhrase`) and
+    // the evidence line above it (`mediaEvidence`), the blocker sentence that
+    // stands in the Build button's place (`osinstallBlocker`), and — per
+    // phase of the run — its outcome (`phaseOutcomePhrase`, fifteen keys that
+    // must never collapse into "it did not work"), the refusals that phase
+    // earned, and its next step (`phaseNextStepPhrase`). The eighth is the
+    // Build button's own label over two literal keys, Build and Building.
+    // `buildSummary.ts` adds the ninth, `t(def.labelKey)`, the same component
+    // label `ChoiceTab` and `OsInstall` already resolve — the one parameter
+    // `src/lib` cannot fill, because it holds no catalogue. `BuildBar.tsx`
+    // adds the tenth: the bar draws the first two of those same summary
+    // lines. `buildRun.test.ts` asserts every one of the phase keys is a leaf
+    // in **both** catalogues and that the params each phrase supplies are
+    // exactly the ones both sentences name, which is the check this scan
+    // cannot make.
+    expect(dynamicCalls).toBe(191);
   });
 });

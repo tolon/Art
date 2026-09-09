@@ -725,10 +725,6 @@
       "untick": "İşareti kaldır",
       "updates": "Güncellemeler, sırasıyla"
     },
-    "tab": {
-      "makineKeymapNote": "Klavye düzeni şimdilik Amiga dosyaları sekmesinde, planın altında seçiliyor:",
-      "derleNotYet": "Plan ve Derle düğmesi şimdilik Amiga dosyaları sekmesinde:"
-    },
     "bar": {
       "destination": "Ağaç: {{path}}",
       "noDestination": "Hedef klasör henüz seçilmedi — Kickstart ve hedef sekmesinde seçin.",
@@ -743,13 +739,27 @@
         "updatesNone": "Hiçbir güncelleme işaretlenmedi",
         "firstboot": "İlk açılış: ART'ın Amiga'da bir kez çalışacak hazırlığı",
         "firstbootOff": "İlk açılış: kapalı",
-        "replaces": "{{replaced}} dosyanın yerine geçer, {{fresh}} yeni, {{unchanged}} birebir aynı",
+        "replaces": "{{replaced}} dosyanın yerine geçer (sistemin parçalarında {{fresh}} yeni, {{unchanged}} aynı)",
         "replacesPending": "Henüz önizlenmedi"
       },
+      "unresolved": "{{name}}: dosyasını Amiga dosyaları sekmesinde seçin — yazılmayacak.",
+      "blocked": {
+        "nothingToRun": "Koşulacak hiçbir şey işaretlenmedi. Ne kurulacak sekmesinden bir güncelleme işaretleyin ya da ilk açılışı açın."
+      },
+      "confirmHint": "Derle'ye basmadan hiçbir şey yazılmaz.",
+      "run": "Derle",
+      "running": "Derleniyor…",
+      "stop": "Durdur",
+      "progress": {
+        "soFar": "şimdiye kadar {{done}}"
+      },
+      "handoff": "Ağaç hazır: {{root}}",
+      "handoffLink": "Karta yaz",
       "previewNoFolder": "ART {{file}} dosyasının hangi klasörde olduğunu belirleyemedi, bu yüzden bu güncelleme önizlenmedi.",
       "phase": {
         "pending": "Sırasını bekliyor",
         "running": "Çalışıyor: {{name}}",
+        "elapsed": "{{seconds}} sn",
         "tree": {
           "succeeded": "Ağaç yazıldı: {{files}} dosya, {{bytes}}.",
           "refused": "ART ağacı yazmayı reddetti — nedeni aşağıda.",
@@ -774,7 +784,8 @@
       },
       "next": {
         "refused": "Reddin işaret ettiğini düzeltin, sonra yeniden Derle'ye basın.",
-        "failed": "Ağaç şurada: {{root}} — bundan önce {{files}} dosya yazılmıştı. Hiçbir şey geri alınmadı.",
+        "failed": "Ağaç {{root}} yolunda; iş {{total}} öğeden {{done}}. öğede durdu.",
+        "failedUnknown": "Ağaç {{root}} yolunda; ART işin ne kadarının yapıldığını söyleyecek kadar ilerleyemedi. Hiçbir şey geri alınmadı.",
         "cancelled": "Ağaç şurada: {{root}} — siz durdurmadan önce {{files}} dosya yazılmıştı. Hiçbir şey geri alınmadı."
       }
     },

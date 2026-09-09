@@ -26,7 +26,8 @@
 //   cancelled  `files_landed` from the job's terminal state. Authoritative:
 //              Rust sends `Some(files)` for `CancelledPartway` and `None`
 //              when nothing durable was written, so `None` is honestly zero.
-//   failed     **`done` from the last progress seen**, because a failed
+//   failed     **`done` and `total` from the last progress seen**, carried
+//              under those names rather than as a file count, because a failed
 //              `JobState` carries `error_code` and `message` and *no count
 //              at all* (`commands/jobs.rs`, `core/jobs/mod.rs`) — the plan
 //              for this round assumed a `files_landed` that does not exist
@@ -292,7 +293,12 @@ export function useBuildRun(args: BuildRunArgs): BuildRun {
           state: "failed",
           message: failure ? failure.message : messageOf(err),
           errorCode: failure ? failure.error_code : null,
-          filesLanded: last ? last.done : null,
+          // The job's own counter, under its own name: `done` of `total` is
+          // whole plan *items* placed, and calling it a file count was the
+          // one thing task 2 flagged about this arm. `null` for both when
+          // no progress was ever seen — nothing measured, nothing claimed.
+          done: last ? last.done : null,
+          total: last ? last.total : null,
         };
       }
     },
@@ -301,25 +307,34 @@ export function useBuildRun(args: BuildRunArgs): BuildRun {
 
   const runSequence = useCallback(
     async (phases: Phase[], plan: InstallPlan | null, destination: string) => {
-      for (let index = 0; index < phases.length; index++) {
-        // Between whole phases, never inside one — the same rule the core
-        // itself follows for `is_cancelled()`.
-        if (stopRequested.current || !mounted.current) {
-          markNotAttempted(index);
-          break;
+      // **`finally`, not a line at the end** (round 4 task 4, carried from
+      // task 2's review). `runPhase` catches its own failures, but anything
+      // this loop does outside it — a `setReports` that throws during a
+      // render — would leave `runningRef` true for the life of the screen,
+      // and the Build button would then do nothing at all with no sentence
+      // saying why. The flag is released whatever happens.
+      try {
+        for (let index = 0; index < phases.length; index++) {
+          // Between whole phases, never inside one — the same rule the core
+          // itself follows for `is_cancelled()`.
+          if (stopRequested.current || !mounted.current) {
+            markNotAttempted(index);
+            break;
+          }
+          setEnding(index, { state: "running", progress: null });
+          const ending = await runPhase(phases[index], plan, destination);
+          currentJobId.current = null;
+          if (!mounted.current) break;
+          setEnding(index, ending);
+          if (ending.state !== "succeeded") {
+            markNotAttempted(index + 1);
+            break;
+          }
         }
-        setEnding(index, { state: "running", progress: null });
-        const ending = await runPhase(phases[index], plan, destination);
-        currentJobId.current = null;
-        if (!mounted.current) break;
-        setEnding(index, ending);
-        if (ending.state !== "succeeded") {
-          markNotAttempted(index + 1);
-          break;
-        }
+      } finally {
+        runningRef.current = false;
+        if (mounted.current) setRunning(false);
       }
-      runningRef.current = false;
-      if (mounted.current) setRunning(false);
     },
     [markNotAttempted, runPhase, setEnding]
   );

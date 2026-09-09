@@ -725,10 +725,6 @@
       "untick": "Untick",
       "updates": "The updates, in order"
     },
-    "tab": {
-      "makineKeymapNote": "The keyboard layout is still chosen on the files tab, under the plan:",
-      "derleNotYet": "The plan and the Build button are on the files tab for now:"
-    },
     "bar": {
       "destination": "Tree: {{path}}",
       "noDestination": "No destination folder chosen yet — choose it on the Kickstart and destination tab.",
@@ -743,13 +739,27 @@
         "updatesNone": "No update ticked",
         "firstboot": "First boot: ART's one-time setup on the Amiga",
         "firstbootOff": "First boot: off",
-        "replaces": "Would replace {{replaced}} files, {{fresh}} new, {{unchanged}} identical",
+        "replaces": "Would replace {{replaced}} files ({{fresh}} new and {{unchanged}} identical among the release's parts)",
         "replacesPending": "Not previewed yet"
       },
+      "unresolved": "{{name}}: choose its file on the Amiga files tab — it will not be written.",
+      "blocked": {
+        "nothingToRun": "Nothing is ticked to run. Tick an update, or turn first boot on, on the What to install tab."
+      },
+      "confirmHint": "Nothing is written until you press Build.",
+      "run": "Build",
+      "running": "Building…",
+      "stop": "Stop",
+      "progress": {
+        "soFar": "{{done}} so far"
+      },
+      "handoff": "The tree is ready at {{root}}.",
+      "handoffLink": "Write it to a card",
       "previewNoFolder": "ART could not tell which folder {{file}} is in, so this update was not previewed.",
       "phase": {
         "pending": "Waiting its turn",
         "running": "Running: {{name}}",
+        "elapsed": "{{seconds}} s",
         "tree": {
           "succeeded": "The tree was written: {{files}} files, {{bytes}}.",
           "refused": "ART would not write the tree — the reason is below.",
@@ -774,7 +784,8 @@
       },
       "next": {
         "refused": "Fix what the refusal names, then press Build again.",
-        "failed": "The tree is at {{root}}; {{files}} files were written before this. Nothing was undone.",
+        "failed": "The tree is at {{root}}; the work stopped at item {{done}} of {{total}}.",
+        "failedUnknown": "The tree is at {{root}}; ART did not get far enough to say how much of the work was done. Nothing was undone.",
         "cancelled": "The tree is at {{root}}; {{files}} files were written before you stopped it. Nothing was undone."
       }
     },

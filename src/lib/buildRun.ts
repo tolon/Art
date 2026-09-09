@@ -70,10 +70,20 @@ export interface Phase {
 /**
  * How one phase ended, or where it is.
  *
- * `failed.filesLanded` and `cancelled.filesLanded` are the job's own
- * `files_landed` (`jobs.ts`, ART-058): how many files were written and left
- * in place when it stopped. A job reports `null` when nothing was, which is
- * why {@link phaseNextStepPhrase} may honestly say zero for it.
+ * `cancelled.filesLanded` is the job's own `files_landed` (`jobs.ts`,
+ * ART-058): how many files were written and left in place when it stopped. A
+ * job reports `null` when nothing was, which is why
+ * {@link phaseNextStepPhrase} may honestly say zero for it.
+ *
+ * **A failed phase carries no such count, and does not pretend to** (round 4
+ * task 4, carried from task 2's review). `JobState::Failed` has an
+ * `error_code` and a `message` and nothing else — the only number ART holds
+ * for a broken job is the progress stream's own `done` of `total`, which
+ * counts whole plan **items** (directories included) rather than files. So
+ * the failed arm carries those two under their own names and the sentence
+ * says *"the work stopped at item N of M"*: reporting them as a file count
+ * would be a confident wrong number, and reporting nothing would tell
+ * somebody whose thousand files are on disk that nothing was written.
  */
 export type PhaseEnding =
   | { state: "pending" }
@@ -86,7 +96,18 @@ export type PhaseEnding =
       elapsedMs: number;
     }
   | { state: "refused"; refusals: RefusalReason[] }
-  | { state: "failed"; message: string; errorCode: string | null; filesLanded: number | null }
+  | {
+      state: "failed";
+      message: string;
+      errorCode: string | null;
+      /** The job's own progress counter when it stopped — whole plan items
+       *  placed, not files. `null` when no progress was ever seen, which is
+       *  the case where the command itself threw and no job existed. */
+      done: number | null;
+      /** How many items that job had to do, when it said. `null` for a job
+       *  that reported no total (`JobProgress.total` is nullable). */
+      total: number | null;
+    }
   | { state: "cancelled"; filesLanded: number }
   | { state: "not-attempted" };
 
@@ -157,8 +178,12 @@ export function sequenceFor(inputs: SequenceInputs): Phase[] {
 
 /** An `ApplyOutcome` counts files as a number; `FirstBootWritten` lists them.
  *  Discriminated on the shape rather than on the phase's kind, so a wrongly
- *  paired outcome cannot be read as the other one's fields. */
-function isFirstBootWritten(
+ *  paired outcome cannot be read as the other one's fields.
+ *
+ *  Exported for the tree phase's report row, which renders `ApplyOutcome`'s
+ *  own `removed` and `icons` verdicts and has to narrow the union to get at
+ *  them — a cast there would be the screen asserting what this guard checks. */
+export function isFirstBootWritten(
   outcome: ApplyOutcome | FirstBootWritten
 ): outcome is FirstBootWritten {
   return Array.isArray(outcome.files);
@@ -290,12 +315,20 @@ export function phaseNextStepPhrase(report: PhaseReport, destination: string): P
     case "refused":
       return { key: "osBuilder.build.next.refused" };
     case "failed":
-      return {
-        key: "osBuilder.build.next.failed",
-        // `null` means nothing landed and was left in place (jobs.ts), so
-        // zero is the job's own answer rather than a stand-in for one.
-        params: { root: destination, files: report.ending.filesLanded ?? 0 },
-      };
+      // **Only when the job actually counted.** `done`/`total` are the job's
+      // own progress, and a job that never reported any has told ART nothing
+      // about how far it got — so the sentence says where the tree is and
+      // stops, rather than printing a zero it did not measure.
+      return report.ending.done !== null && report.ending.total !== null
+        ? {
+            key: "osBuilder.build.next.failed",
+            params: {
+              root: destination,
+              done: report.ending.done,
+              total: report.ending.total,
+            },
+          }
+        : { key: "osBuilder.build.next.failedUnknown", params: { root: destination } };
     case "cancelled":
       return {
         key: "osBuilder.build.next.cancelled",
