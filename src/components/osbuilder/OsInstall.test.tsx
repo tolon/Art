@@ -3667,7 +3667,11 @@ describe("identifying install media by content hash (design §4.3)", () => {
     identifyMediaMock.mockReset().mockRejectedValue(new Error("no"));
     await renderFull();
 
-    const summary = await screen.findByTestId("media-identity-summary");
+    // Read off the fold's closed line, not the `media-identity-summary`
+    // paragraph inside it: after fix wave 2 (#4) the paragraph renders only
+    // for the identified state, and the three other endings carry their
+    // sentence on the `<summary>` — one place, so the two cannot disagree.
+    const summary = (await screen.findByTestId("media-identity-fold")).querySelector("summary")!;
     expect(summary.textContent).toBe(
       i18n.t("osinstall.mediaId.failed", { folder: "E:\\media", identified: 0, total: 1 })
     );
@@ -3695,7 +3699,8 @@ describe("identifying install media by content hash (design §4.3)", () => {
     identifyMediaMock.mockReset().mockRejectedValue(new Error("cancelled"));
     await renderFull();
 
-    const summary = await screen.findByTestId("media-identity-summary");
+    // The fold's closed line — see the failed case above for why.
+    const summary = (await screen.findByTestId("media-identity-fold")).querySelector("summary")!;
     expect(summary.textContent).toBe(
       i18n.t("osinstall.mediaId.cancelled", { identified: 0, total: 1 })
     );
@@ -3755,7 +3760,7 @@ describe("identifying install media by content hash (design §4.3)", () => {
     // And the report says which folder failed and how many finished — a
     // count with no name would leave the user to guess which of their two
     // folders ART never got through.
-    const summary = await screen.findByTestId("media-identity-summary");
+    const summary = (await screen.findByTestId("media-identity-fold")).querySelector("summary")!;
     expect(summary.textContent).toBe(
       i18n.t("osinstall.mediaId.failed", { folder: EXTRA, identified: 1, total: 2 })
     );
@@ -3844,6 +3849,51 @@ describe("the identity wall is folded (four-tab design § 3.1)", () => {
     const summary = fold.querySelector("summary")!.textContent!;
     expect(summary).not.toContain("0");
     expect(summary).toBe(i18n.t("osinstall.mediaId.identifying"));
+    // Once, not twice (fix wave 2, #4): the paragraph inside the fold
+    // rendered the identical phrase, so the closed line and the first line
+    // inside it were the same sentence.
+    expect(within(fold).queryByTestId("media-identity-summary")).toBeNull();
+  });
+
+  /**
+   * **A pass that died on its first folder is not a pass that found nothing**
+   * (fix wave 2, #1). The count branch used to catch `failed` as well as
+   * `identified`, so a pass that never produced a line read "what 0 files in
+   * these folders are" — the §89 collapse, and the ending wearing another
+   * ending's sentence.
+   *
+   * Both halves are asserted: equal to the failed phrase *and* not equal to
+   * the count line, because equality alone would still pass on the day the
+   * two sentences coincide, and inequality alone would pass on a blank.
+   */
+  it("says the pass failed on the closed line, not 'what 0 files are'", async () => {
+    identifyMediaMock.mockReset().mockRejectedValue(new Error("no"));
+    await renderFull();
+    const fold = await screen.findByTestId("media-identity-fold");
+    const summary = fold.querySelector("summary")!.textContent!;
+    expect(summary).toBe(
+      i18n.t("osinstall.mediaId.failed", { folder: "E:\\media", identified: 0, total: 1 })
+    );
+    expect(summary).not.toBe(i18n.t("osinstall.mediaId.foldSummary", { count: 0 }));
+    // And said once (fix wave 2, #4): the paragraph inside the fold used to
+    // render the same phrase, so opening the fold showed the screen
+    // answering one question twice.
+    expect(within(fold).queryByTestId("media-identity-summary")).toBeNull();
+  });
+
+  /** **And a pass the user stopped at N of M reads as stopped**, not as a
+   *  finished one counting the lines it happened to have (fix wave 2, #1).
+   *  Asserted against the failed phrase too: the cancelled line must not
+   *  arrive wearing the failure's accusation. */
+  it("says the pass was stopped on the closed line, not the finished count", async () => {
+    identifyMediaMock.mockReset().mockRejectedValue(new Error("cancelled"));
+    await renderFull();
+    const fold = await screen.findByTestId("media-identity-fold");
+    const summary = fold.querySelector("summary")!.textContent!;
+    expect(summary).toBe(i18n.t("osinstall.mediaId.cancelled", { identified: 0, total: 1 }));
+    expect(summary).not.toBe(i18n.t("osinstall.mediaId.foldSummary", { count: 0 }));
+    expect(summary).not.toContain("could not read");
+    expect(within(fold).queryByTestId("media-identity-summary")).toBeNull();
   });
 
   it("still runs the identification pass while the fold is closed", async () => {

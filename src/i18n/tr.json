@@ -718,7 +718,7 @@
     },
     "bar": {
       "destination": "Ağaç: {{path}}",
-      "noDestination": "Hedef klasör henüz seçilmedi.",
+      "noDestination": "Hedef klasör henüz seçilmedi — Kickstart ve hedef sekmesinde seçin.",
       "goToBuild": "Derle'ye git"
     },
     "intro": "PiStorm üzerinde çalışan AmigaOS dağıtımları, her birinin sizden ne istediği ve elinizdekinin uyup uymadığı. ART hiçbir dağıtımı indirmez — siz indirir, ART'a dosyayı gösterirsiniz.",
@@ -2187,7 +2187,7 @@
       "wrongFolderIsRelease": "Bu klasördeki diskler bu sürüme ait değil — {{release}} medyası ({{found}}). Sürümü {{release}} yap, ya da kurulum disklerinin bulunduğu klasörü seç.",
       "switchRelease": "Sürümü {{release}} yap",
       "nothingToInstall": "Hiçbir şey kurulmayacak — en az bir bileşen seç.",
-      "destinationExists": "{{path}} yolunda zaten bir şey var. ART, var olanın üzerine dağıtım ağacı kurmaz — henüz var olmayan bir ad seçin ya da eskisini kenara alın."
+      "destinationExists": "{{path}} yolunda zaten bir şey var. ART, var olanın üzerine dağıtım ağacı kurmaz — henüz var olmayan bir ad seçin ya da eskisini kenara alın — Kickstart ve hedef sekmesinde."
     },
     "evidence": {
       "sameRelease": "Bu klasörde şunlar var: {{found}}; bunların arasında bu sürümün kendi ortamı da var. Eksik kalanlar: {{missing}}.",
@@ -2198,7 +2198,7 @@
       "mediaMissing": "{{component}}, {{volume}} istiyor ve medya klasöründe bu birim adını taşıyan bir dosya yok.",
       "mediaPathMissing": "{{component}}'in kendi {{path}} yolu {{media}}'da eksik — bu diskin farklı bir sürümü gibi görünüyor.",
       "mediaUnreadable": "{{component}} için {{volume}} {{path}} konumunda bulundu, ancak ART onu okuyamadı: {{reason}}",
-      "romUnknown": "Kickstart tanımlanamadı, bu yüzden ART sürümüne bağlı şeylere karar veremiyor.",
+      "romUnknown": "Kickstart tanımlanamadı, bu yüzden ART sürümüne bağlı şeylere karar veremiyor. Kickstart ve hedef sekmesinde başka bir Kickstart seçin.",
       "residentTableUnreadable": "\"{{component}}\", eşleştirilen Kickstart'ın kendi {{resident}} modülünün yeterince eski olup olmadığını bilmek zorunda, ama ART bunu kontrol etmek için bu ROM'un modül tablosunu okuyamadı. Makinenizin buna ihtiyacı olduğunu biliyorsanız bileşen listesinden \"{{component}}\"'i kendiniz işaretleyin.",
       "destinationCollision": "{{path}} birden fazla bileşen tarafından isteniyor ({{components}}) ve hiçbiri diğerinin üzerine yazabileceğini belirtmiyor.",
       "mediaAmbiguous": "Medya klasöründe {{component}}'in ihtiyaç duyduğu {{volume}} birim adını taşıyan birden fazla dosya var: {{paths}}.",
@@ -2364,9 +2364,9 @@
       "none": "Hedef seçilmedi.",
       "chooseTitle": "Dağıtım ağacının nereye kurulacağını seç",
       "hint": "Yeni ya da boş bir klasör. Seçme penceresinde Yeni klasör ile oluşturup seçebilirsin — ART yalnızca içinde bir şey olan klasörü reddeder.",
-      "taken": "Bu klasörde zaten bir şey var. ART yalnızca yeni ya da boş bir klasöre yazar — başka bir klasör seçin ya da bunu boşaltın.",
+      "taken": "ART buraya yazmaz: bu yol yeni ya da boş bir klasör değil. Başka bir klasör seçin.",
       "tree": "Bu klasörde ART'ın kurduğu bir ağaç var: {{release}}, {{count}} dosya.",
-      "fresh": "Boş klasör: buraya yeni bir ağaç yazılır."
+      "fresh": "ART buraya yazabilir: yeni bir ağaç oluşturulur."
     },
     "layer": {
       "base32": "AmigaOS 3.2 temel ortamı",

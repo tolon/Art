@@ -718,7 +718,7 @@
     },
     "bar": {
       "destination": "Tree: {{path}}",
-      "noDestination": "No destination folder chosen yet.",
+      "noDestination": "No destination folder chosen yet — choose it on the Kickstart and destination tab.",
       "goToBuild": "Go to Build"
     },
     "intro": "The AmigaOS distributions that run on a PiStorm, what each one needs from you, and whether what you have suits it. ART never downloads a distribution — you fetch it yourself and point ART at the file.",
@@ -2187,7 +2187,7 @@
       "wrongFolderIsRelease": "The disks in this folder are not this release's — they are {{release}} media ({{found}}). Switch to {{release}}, or choose the folder your install disks are in.",
       "switchRelease": "Switch to {{release}}",
       "nothingToInstall": "Nothing would be installed — choose at least one component.",
-      "destinationExists": "Something already exists at {{path}}. ART never builds a distribution tree over what is already there — choose a name that does not exist yet, or move the old one aside."
+      "destinationExists": "Something already exists at {{path}}. ART never builds a distribution tree over what is already there — choose a name that does not exist yet, or move the old one aside — on the Kickstart and destination tab."
     },
     "evidence": {
       "sameRelease": "This folder holds {{found}}, and this release's own media is among them. Still missing: {{missing}}.",
@@ -2198,7 +2198,7 @@
       "mediaMissing": "{{component}} needs {{volume}}, and no file in the media folder carries that volume name.",
       "mediaPathMissing": "{{component}}'s own {{path}} is missing from {{media}} — this looks like a different revision of that disk.",
       "mediaUnreadable": "{{volume}} was found for {{component}} at {{path}}, but ART could not read it: {{reason}}",
-      "romUnknown": "The Kickstart could not be identified, so ART cannot decide what depends on its version.",
+      "romUnknown": "The Kickstart could not be identified, so ART cannot decide what depends on its version. Choose another on the Kickstart and destination tab.",
       "residentTableUnreadable": "\"{{component}}\" needs to know whether the paired Kickstart's own {{resident}} module is old enough, but ART could not read this ROM's module table to check. Tick \"{{component}}\" in the component list yourself if you know your machine needs it.",
       "destinationCollision": "{{path}} is wanted by more than one component ({{components}}), and neither declares it may override the other.",
       "mediaAmbiguous": "More than one file in the media folder carries the volume name {{volume}} that {{component}} needs: {{paths}}.",
@@ -2364,9 +2364,9 @@
       "none": "No destination chosen.",
       "chooseTitle": "Choose where to build the distribution tree",
       "hint": "A new or empty folder. In the picker you can make one with New folder and choose it — ART refuses only a folder that already has something in it.",
-      "taken": "This folder already has something in it. ART writes only into a new or empty folder — choose another, or empty this one.",
+      "taken": "ART will not write here: this is not a new or empty folder. Choose another.",
       "tree": "This folder holds a tree ART built: {{release}}, {{count}} files.",
-      "fresh": "Empty folder: a new tree will be written here."
+      "fresh": "ART can write here: a new tree will be created."
     },
     "layer": {
       "base32": "AmigaOS 3.2 base media",

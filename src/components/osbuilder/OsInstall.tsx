@@ -1763,16 +1763,17 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         {mediaIdentity.kind !== "not-asked" && (
           <details data-testid="media-identity-fold" style={{ margin: "0 0 12px" }}>
             {/*
-              While the pass is still running there are no lines yet, and a
-              summary counting them would read "what 0 files … are" — a
-              confident, wrong sentence over a folder ART is at that moment
-              reading (§89). Running and finished are two states, so the
-              closed line says the pass's own running sentence — the same
-              `identitySummary` the block shows inside — and only counts once
-              there is something to count.
+              **Only a finished pass may be counted.** A summary counting the
+              lines reads "what 0 files … are" over a folder ART is at that
+              moment reading, and — worse — a pass that died on its first
+              folder or one the user cancelled at 12 of 45 would read like a
+              finished one (§89: endings stay distinct). Running, failed and
+              cancelled each have their own sentence with their own counts in
+              `mediaIdentitySummary`, so the closed line says that sentence;
+              only `identified` counts the lines behind it.
             */}
             <summary className="muted" style={{ fontSize: 12, cursor: "pointer" }}>
-              {mediaIdentity.kind === "identifying" && identitySummary
+              {mediaIdentity.kind !== "identified" && identitySummary
                 ? t(identitySummary.key, identitySummary.params)
                 : t("osinstall.mediaId.foldSummary", { count: identityLines.length })}
             </summary>
@@ -1797,7 +1798,14 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
                 {t(line.phrase.key, line.phrase.params)}
               </p>
             ))}
-            {identitySummary && (
+            {/*
+              The other three states have their sentence on the `<summary>`
+              line above, and this paragraph would repeat it word for word
+              inside the fold — the screen answering the same question twice.
+              Only the identified state's provenance line is unsaid up there
+              (the summary counts the lines instead), so only it renders here.
+            */}
+            {mediaIdentity.kind === "identified" && identitySummary && (
               <p
                 className="faint"
                 data-testid="media-identity-summary"
