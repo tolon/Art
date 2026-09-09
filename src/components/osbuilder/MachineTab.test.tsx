@@ -263,6 +263,32 @@ describe("the destination (four-tab design § 3.3)", () => {
     expect(screen.queryByTestId("osinstall-destination-fresh")).toBeNull();
   });
 
+  /**
+   * **An occupied folder that is nobody's tree is still occupied.** The case
+   * above pairs `taken` with a tree ART built, and `!tree.isTree` alone is
+   * enough to keep the fresh line off the screen there — so it never
+   * exercised the `!taken` half of that guard (found by mutation M3,
+   * 2026-09-09). The ordinary occupied folder is somebody's own files: not a
+   * tree, and refused. Told "this folder gets a fresh tree" beside "ART
+   * refuses this folder", the screen would be contradicting the core it just
+   * asked, which is the §89 defect and not a cosmetic one — the fresh line
+   * is the sentence that says the run will go ahead.
+   */
+  it("does not promise a fresh tree in the folder it has just refused", async () => {
+    takenMock.mockResolvedValue(true);
+    describeTreeMock.mockResolvedValue(NOT_TREE);
+    seedRemembered({
+      "buildSession.release": "AmigaOS 3.9",
+      "osinstall.destination.AmigaOS 3.9": "E:\\out\\mine",
+    });
+    render(<MachineTab />);
+    expect((await screen.findByTestId("osinstall-destination-taken")).textContent).toBe(
+      i18n.t("osinstall.destination.taken")
+    );
+    expect(screen.queryByTestId("osinstall-destination-fresh")).toBeNull();
+    expect(screen.queryByTestId("osinstall-destination-tree")).toBeNull();
+  });
+
   it("picks a folder through the dialog and remembers it for this release only", async () => {
     seedRemembered({ "buildSession.release": "AmigaOS 3.9" });
     render(<MachineTab />);

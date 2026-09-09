@@ -8,7 +8,7 @@
 // would have allowed.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 
 const takenMock = vi.hoisted(() => vi.fn());
 const describeMock = vi.hoisted(() => vi.fn());
@@ -50,7 +50,17 @@ describe("useDestinationCheck", () => {
     takenMock.mockRejectedValue(new Error("access is denied"));
     describeMock.mockResolvedValue(NOT_TREE);
     const { result } = renderHook(() => useDestinationCheck("E:\\dist"));
-    await waitFor(() => expect(describeMock).toHaveBeenCalled());
+    // **Wait for the refusal to have been handled, not for the call to have
+    // gone out.** `describeMock` is called synchronously inside the effect,
+    // so waiting on it only proved the effect had started: an inverted
+    // `.catch` (M2, 2026-09-09) had not run yet and the assertion read the
+    // initial `false`, which is the same value for "never asked" and "asked
+    // and refused". The other answer landing proves a render after both
+    // promises settled, and the flush after it leaves no catch in flight.
+    await waitFor(() => expect(result.current.tree).not.toBeNull());
+    await act(async () => {
+      await Promise.resolve();
+    });
     expect(result.current.taken).toBe(false);
   });
 
