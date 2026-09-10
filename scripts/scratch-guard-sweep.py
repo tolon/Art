@@ -125,7 +125,7 @@ declaration is gated the whole file counts as test code. Five rules:
      root under the product's names, and nothing in a test run ever sweeps
      it. Each such test binds one `ScratchDir` and passes `&root` instead.
 
-     Exempt: **one** thing only — an occurrence inside the parentheses of
+     Exempt: **two** things. The first is an occurrence inside the parentheses of
      `scratch_root_for(` or `sweep_stale_preview_scratch_dirs(`, where the
      platform root **is** the subject of the test (a namespace derived from
      it, or the sweeper that cleans it) and substituting a scratch would
@@ -134,6 +134,18 @@ declaration is gated the whole file counts as test code. Five rules:
      temp_dir(), …).is_ok())` hands the platform root to product code exactly
      like the un-asserted call does, and the first version of this rule let
      that whole shape through (fix round 1, review I2).
+
+     The second is the body of a **test-only wrapper** in
+     `TEST_ONLY_WRAPPERS` — `apply`, `add_package`, `plan_with_cache`,
+     `plan_over` and `open_package` (ART-295). Each is `#[cfg(test)]`, so the
+     compiler refuses a production call to one, and each exists so a test can
+     stage without naming a root; three whole-suite runs measured the staging
+     beneath them clean. They are listed by file and by the wrapper's **own**
+     name, never by the callee: exempting `apply_staging_in(` would excuse any
+     test handing the platform root to it directly, which is the shape this
+     rule was written for. They were invisible to this rule while they were
+     production code, and one of their siblings hid a production call that
+     staged BoingBag payloads on the system drive (ART-296).
 
 ## Which lines count as test code
 
@@ -308,6 +320,23 @@ CREATES = ("create_dir", "File::create", "fs::write(", "write(&", "copy(")
 # namespace derived from it, or the sweeper that cleans it. Anchored the same
 # way: the match must sit inside that call's parentheses.
 ROOT_IS_THE_SUBJECT = ("scratch_root_for(", "sweep_stale_preview_scratch_dirs(")
+# Rule 5's second exemption (ART-295): the test-only wrappers themselves, by
+# file and by the wrapper's own name — never by the callee, which would excuse
+# a test handing the platform root to the `_in` function directly. The header
+# names every one, and `--self-test` fails if the two stop agreeing.
+TEST_ONLY_WRAPPERS = {
+    "src-tauri/src/core/osinstall/apply.rs": {
+        "apply": "test-only wrapper over apply_staging_in",
+        "add_package": "test-only wrapper over add_package_staging_in",
+    },
+    "src-tauri/src/core/osinstall/plan.rs": {
+        "plan_with_cache": "test-only wrapper over plan_with_cache_in",
+        "plan_over": "test-only wrapper over plan_over_with_cache",
+    },
+    "src-tauri/src/core/osinstall/scan.rs": {
+        "open_package": "test-only wrapper over open_package_staging_in",
+    },
+}
 # Rule 4's exemptions, by file and by the literal that identifies the site
 # rather than by a line number that drifts. Each names a path the test never
 # creates. `--self-test` checks this table against the header paragraph that
@@ -1101,6 +1130,8 @@ def temp_dir_rules(
             root_args += 1
             if inside_call(line, m.start(), ROOT_IS_THE_SUBJECT):
                 exempted += 1
+            elif enclosing_fn(lines, i)[0] in TEST_ONLY_WRAPPERS.get(rel, {}):
+                exempted += 1
             else:
                 offenders.append((rel, i + 1, "hands the platform root to product code"))
 
@@ -1112,6 +1143,47 @@ def temp_dir_rules(
 # Each case is source this sweep has been wrong about, with the answer written
 # down beside it. `expected` is the set of 1-based line numbers that must be
 # reported; anything else — an extra accusation or a missing one — fails.
+
+# Rule 5's wrapper exemption, keyed by file — so these cases carry their own
+# `rel` rather than the shared probe name the others use.
+WRAPPER_CASES: list[tuple[str, str, str, set[int]]] = [
+    (
+        "a test-only wrapper named in TEST_ONLY_WRAPPERS may hand the platform "
+        "root to its `_in` sibling (ART-295)",
+        "src-tauri/src/core/osinstall/scan.rs",
+        """#[cfg(test)]
+pub fn open_package(medium: &PackageMedium) -> CoreResult<Box<dyn MediaSource>> {
+    open_package_staging_in(medium, &std::env::temp_dir())
+}
+""",
+        set(),
+    ),
+    (
+        "the same call in any other test function of that file is still an "
+        "offender (ART-295)",
+        "src-tauri/src/core/osinstall/scan.rs",
+        """#[cfg(test)]
+mod tests {
+    #[test]
+    fn stages_somewhere() {
+        let _ = open_package_staging_in(&medium, &std::env::temp_dir());
+    }
+}
+""",
+        {5},
+    ),
+    (
+        "a wrapper's name exempts nothing in a file the table does not list "
+        "(ART-295)",
+        "src-tauri/src/probe.rs",
+        """#[cfg(test)]
+pub fn open_package(medium: &PackageMedium) -> CoreResult<Box<dyn MediaSource>> {
+    open_package_staging_in(medium, &std::env::temp_dir())
+}
+""",
+        {3},
+    ),
+]
 
 SELF_TEST_CASES: list[tuple[str, str, set[int]]] = [
     (
@@ -1381,7 +1453,8 @@ def self_test() -> int:
     """Run rules 4 and 5 over the synthetic cases above, plus the header's
     agreement with `ALLOWED_HAND_BUILT`. No repository file is touched."""
     failures = 0
-    total = len(SELF_TEST_CASES) + len(GUARD_TEST_CASES) + len(IMPORT_CASES) + 2
+    total = (len(SELF_TEST_CASES) + len(WRAPPER_CASES) + len(GUARD_TEST_CASES)
+             + len(IMPORT_CASES) + 3)
 
     def check(name, found, expected):
         nonlocal failures
@@ -1398,6 +1471,12 @@ def self_test() -> int:
         lines = src.splitlines()
         mask = test_region_mask(lines, whole_file=False)
         found, _ = temp_dir_rules("src-tauri/src/probe.rs", lines, mask)
+        check(name, found, expected)
+
+    for name, rel, src, expected in WRAPPER_CASES:
+        lines = src.splitlines()
+        mask = test_region_mask(lines, whole_file=False)
+        found, _ = temp_dir_rules(rel, lines, mask)
         check(name, found, expected)
 
     for name, src, expected in GUARD_TEST_CASES:
@@ -1465,6 +1544,18 @@ def self_test() -> int:
     failures += 0 if prose_ok else 1
     print(f"  {'PASS' if prose_ok else 'FAIL'}  the header's exemption "
           f"paragraph matches ALLOWED_HAND_BUILT ({n} site(s))")
+
+    # And the wrapper table against the header, the same agreement (ART-295).
+    wrappers_ok = True
+    for wrappers in TEST_ONLY_WRAPPERS.values():
+        for fn_name in wrappers:
+            if f"`{fn_name}`" not in doc:
+                wrappers_ok = False
+                print(f"        {fn_name} is exempt but the header never names it")
+    failures += 0 if wrappers_ok else 1
+    n_wrappers = sum(len(v) for v in TEST_ONLY_WRAPPERS.values())
+    print(f"  {'PASS' if wrappers_ok else 'FAIL'}  the header names every "
+          f"TEST_ONLY_WRAPPERS entry ({n_wrappers} wrapper(s))")
 
     print(f"scratch-guard self-test: {total - failures}/{total} passed")
     return 1 if failures else 0

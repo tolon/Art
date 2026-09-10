@@ -26,9 +26,17 @@ it is compiled into is a strange thing, and this is a lint.
 
 from __future__ import annotations
 
+import importlib.util
 import re
 import sys
 from pathlib import Path
+
+# The guard sweep's item-by-item test-region mask, imported rather than copied:
+# two readings of "which lines are test code" is how one of them went blind.
+_GUARD = Path(__file__).resolve().parent / "scratch-guard-sweep.py"
+_SPEC = importlib.util.spec_from_file_location("scratch_guard_sweep", _GUARD)
+guard = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(guard)
 
 ROOT = Path(__file__).resolve().parent.parent / "src-tauri" / "src"
 
@@ -50,17 +58,13 @@ ALLOWED = {
     "lib.rs": "app_log_dir / app_data_dir / app_cache_dir fallback, not scratch",
     "commands/artwork.rs": "app_data_dir fallback for the artwork library",
     "commands/gameindex.rs": "app_data_dir fallback for the catalogue",
-    # The thin wrappers. Each has an explicit `*_staging_in` counterpart that
-    # the product calls; the bare name exists for tests and for a future CLI
-    # shell that has not chosen a directory. Same split as
-    # `plan` / `plan_with_cache`.
-    "core/osinstall/apply.rs": "thin wrapper over apply_staging_in / add_package_staging_in",
-    "core/osinstall/plan.rs": "thin wrapper over plan_with_cache_in",
-    "core/osinstall/scan.rs": "thin wrapper over open_package_staging_in",
+    # The osinstall thin wrappers used to be listed here, whole file each.
+    # Since ART-295 they are `#[cfg(test)]` and live in test regions, where
+    # `scratch-guard-sweep.py`'s rule 5 names them one by one — and the three
+    # files are read line by line like any other.
 }
 
 CALL = re.compile(r"(?<![\w:])std::env::temp_dir\s*\(")
-TEST_REGION = re.compile(r"^#\[cfg\(test\)\]", re.M)
 # A line that only talks about it.
 COMMENT = re.compile(r"^\s*(//|/\*|\*)")
 
@@ -71,12 +75,17 @@ def offenders() -> list[tuple[str, int, str]]:
         rel = path.relative_to(ROOT).as_posix()
         if rel in ALLOWED:
             continue
-        text = path.read_text(encoding="utf-8")
-        first_test = TEST_REGION.search(text)
-        cut = text[: first_test.start()].count("\n") if first_test else None
-        for i, line in enumerate(text.split("\n")):
-            if cut is not None and i >= cut:
-                break
+        lines = path.read_text(encoding="utf-8").split("\n")
+        # Test code item by item, not "everything after the first
+        # `#[cfg(test)]`": that reading went blind the moment one function in
+        # the middle of a file was gated (ART-295) — every production line
+        # below it stopped being read.
+        in_test = guard.test_region_mask(
+            lines, whole_file=guard.gated_at_its_declaration(path)
+        )
+        for i, line in enumerate(lines):
+            if in_test[i]:
+                continue
             if COMMENT.match(line):
                 continue
             if CALL.search(line):
