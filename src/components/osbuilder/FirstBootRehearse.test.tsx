@@ -122,16 +122,23 @@ async function runRehearsal() {
   await waitFor(() => expect(rehearseMock).toHaveBeenCalled());
 }
 
-describe("the four rehearsal endings stay four sentences on screen", () => {
+describe("the five rehearsal endings stay five sentences on screen", () => {
   const OUTCOMES: RehearsalOutcome[] = [
     { kind: "finished", report: REPORT },
     { kind: "step-refused", report: REPORT },
     { kind: "timed-out", waited: { secs: 900, nanos: 0 }, report: REPORT },
     { kind: "emulator-closed", waited: { secs: 30, nanos: 0 }, report: REPORT },
+    {
+      kind: "wrote-without-stopping",
+      waited: { secs: 40, nanos: 0 },
+      written: 170_328_064,
+      ceiling: 67_108_864,
+      report: REPORT,
+    },
   ];
 
   for (const outcome of OUTCOMES) {
-    it(`says its own sentence for '${outcome.kind}' and none of the other three`, async () => {
+    it(`says its own sentence for '${outcome.kind}' and none of the other four`, async () => {
       await runRehearsal();
       resolveRehearsal!({
         job_id: 42,
