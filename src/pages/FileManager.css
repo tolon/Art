@@ -404,7 +404,10 @@
    reference's column order). */
 .tc-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 4.3em 10.7em 9.8em 5.3em 4.8em;
+  /* `--tc-columns` is the user's own set (`@/lib/columns`, `files.columns`),
+     set inline on `.tc-commander` only when one is stored; without it this
+     literal is the screen, unchanged. */
+  grid-template-columns: var(--tc-columns, minmax(0, 1fr) 4.3em 10.7em 9.8em 5.3em 4.8em);
   align-items: center;
   gap: 4px;
   padding: 0.17em 6px;
@@ -431,6 +434,74 @@
 }
 .tc-header-btn:hover {
   text-decoration: underline;
+}
+
+/* The header cells carry the column grips (`ColumnGrip`): a 5 px strip at
+   each sized cell's right edge, drawn in the chrome's own border colour so it
+   reads as the divider it already looks like. */
+.tc-header-row,
+.tc-header-row .tc-cell {
+  position: relative;
+}
+.tc-header-grip {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 5px;
+  height: 100%;
+  cursor: col-resize;
+  border-right: 1px solid var(--tc-chrome-border);
+  touch-action: none;
+  z-index: 1;
+}
+.tc-header-row:focus-visible {
+  outline: 1px dotted var(--tc-chrome-text);
+  outline-offset: -2px;
+}
+
+/* The header's right-click menu (`ColumnMenu`), in the chrome colours. */
+.tc-column-menu {
+  position: absolute;
+  z-index: 50;
+  min-width: 12em;
+  padding: 4px 0;
+  background: var(--tc-chrome-bg);
+  color: var(--tc-chrome-text);
+  border: 1px solid var(--tc-chrome-border);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+}
+.tc-column-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 12px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tc-column-menu-item:hover,
+.tc-column-menu-item:focus-visible {
+  background: var(--tc-cursor-bg);
+  color: var(--tc-cursor-text);
+  outline: none;
+}
+.tc-column-menu-item[role="menuitemcheckbox"]::before {
+  content: "";
+  display: inline-block;
+  width: 1em;
+}
+.tc-column-menu-item[aria-checked="true"]::before {
+  content: "¹3";
+}
+.tc-column-menu-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--tc-chrome-border);
 }
 
 .tc-row-list {
@@ -550,7 +621,11 @@
    pane its measured `offsetWidth` in `em` of its own text instead; the
    threshold and where it was measured are in that function's own comment. */
 .tc-commander-narrow .tc-row {
-  grid-template-columns: minmax(0, 1fr) 3.3em 8em 4.8em;
+  /* The same variable: when the user has a set of their own, `FileManager`
+     computes it for the pane's width already (`visibleColumns` drops Date
+     and Attr and keeps their widths), and a fixed literal here would draw
+     four tracks under a row that has hidden one of them. */
+  grid-template-columns: var(--tc-columns, minmax(0, 1fr) 3.3em 8em 4.8em);
 }
 .tc-commander-narrow .tc-cell-date,
 .tc-commander-narrow .tc-cell-attr {

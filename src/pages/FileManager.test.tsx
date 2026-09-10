@@ -40,7 +40,7 @@
 // measures whether a Turkish label overflows its button.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 
@@ -394,5 +394,135 @@ describe("a path handed over by navigation (ART-283)", () => {
     );
     await waitFor(() => expect(screen.getByTestId("location-state").textContent).toBe("null"));
     expect(leftPaths()).toEqual(["D:\\test", "E:\\iso"]);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// The commander's columns — design § 5 of the 2026-09-08 simplification spec,
+// asked for by the owner on 2026-09-10: *"ad uzantı boyut tarih vb aralıkları
+// manuel ayarlanamıyor. Ayarlanabilmeli ve yapılan ayarı unutmamalı."*
+
+/** jsdom has no `PointerEvent`; a `MouseEvent` carrying a `pointerId` is what
+ *  the grip reads. */
+if (!("PointerEvent" in window)) {
+  class TestPointerEvent extends MouseEvent {
+    pointerId: number;
+    constructor(type: string, init: PointerEventInit = {}) {
+      super(type, init);
+      this.pointerId = init.pointerId ?? 0;
+    }
+  }
+  (window as unknown as { PointerEvent: typeof TestPointerEvent }).PointerEvent = TestPointerEvent;
+}
+
+function storedColumns(): unknown {
+  // `remembered` is `null` until the first remembered value is written.
+  const remembered = useSettingsStore.getState().settings.remembered as Record<
+    string,
+    unknown
+  > | null;
+  return remembered?.["files.columns"];
+}
+
+function seedColumns(value: unknown) {
+  const settings = useSettingsStore.getState().settings;
+  useSettingsStore.setState({
+    settings: {
+      ...settings,
+      remembered: { ...(settings.remembered as Record<string, unknown>), "files.columns": value },
+    },
+  });
+}
+
+function headerRows(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(".tc-header-row"));
+}
+
+function columnsVar(container: HTMLElement): string {
+  return container
+    .querySelector<HTMLElement>(".tc-commander")!
+    .style.getPropertyValue("--tc-columns");
+}
+
+describe("the commander's columns", () => {
+  it("leaves the screen exactly as it was while nothing is stored", async () => {
+    const { container } = await renderScreen();
+    expect(columnsVar(container)).toBe("");
+    expect(headerRows(container)[0].querySelectorAll(".tc-cell").length).toBe(5);
+  });
+
+  it("hides a column from the header's menu, in both panes, and remembers it", async () => {
+    const { container } = await renderScreen();
+    fireEvent.contextMenu(headerRows(container)[0]);
+    await userEvent.click(screen.getByRole("menuitemcheckbox", { name: "Ext" }));
+
+    expect((storedColumns() as { shown: string[] }).shown).toEqual(["name", "size", "date", "attr"]);
+    for (const row of headerRows(container)) expect(row.querySelector(".tc-cell-ext")).toBeNull();
+    expect(container.querySelectorAll(".tc-row-list .tc-cell-ext").length).toBe(0);
+    expect(columnsVar(container)).toBe("minmax(0, 1fr) 10.7em 9.8em 5.3em 4.8em");
+  });
+
+  it("forgets the set on Reset rather than storing the defaults", async () => {
+    seedColumns({
+      shown: ["name", "ext", "size", "attr"],
+      widthsEm: { ext: 4.3, size: 10.7, date: 9.8, attr: 5.3 },
+    });
+    const { container } = await renderScreen();
+    expect(headerRows(container)[0].querySelector(".tc-cell-date")).toBeNull();
+
+    fireEvent.contextMenu(headerRows(container)[0]);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Reset columns" }));
+
+    expect(storedColumns()).toBeUndefined();
+    expect(headerRows(container)[0].querySelector(".tc-cell-date")).not.toBeNull();
+    expect(columnsVar(container)).toBe("");
+  });
+
+  it("resizes a column by its grip, live, and writes it once, in em", async () => {
+    const { container } = await renderScreen();
+    const grip = within(headerRows(container)[0]).getByRole("separator", { name: /Ext/ });
+
+    fireEvent.pointerDown(grip, { clientX: 100, pointerId: 1 });
+    fireEvent.pointerMove(grip, { clientX: 130, pointerId: 1 });
+    fireEvent.pointerMove(grip, { clientX: 160, pointerId: 1 });
+    // Drawn as it moves — 4.3 em plus 60 px of 12 px text — and not yet stored.
+    expect(columnsVar(container)).toBe("minmax(0, 1fr) 9.3em 10.7em 9.8em 5.3em 4.8em");
+    expect(storedColumns()).toBeUndefined();
+
+    fireEvent.pointerUp(grip, { clientX: 160, pointerId: 1 });
+    expect((storedColumns() as { widthsEm: Record<string, number> }).widthsEm.ext).toBe(9.3);
+  });
+
+  it("narrows by hiding, and never writes the narrow set back", async () => {
+    const chosen = {
+      shown: ["name", "ext", "size", "date", "attr"],
+      widthsEm: { ext: 4.3, size: 10.7, date: 14, attr: 5.3 },
+    };
+    seedColumns(chosen);
+    // 200 px of 12 px text is 16.7 em, well under the 29.6 em threshold.
+    const width = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(200);
+    try {
+      const { container } = await renderScreen();
+      await waitFor(() =>
+        expect(headerRows(container)[0].querySelector(".tc-cell-date")).toBeNull()
+      );
+      expect(headerRows(container)[0].querySelector(".tc-cell-attr")).toBeNull();
+      expect(columnsVar(container)).toBe("minmax(0, 1fr) 4.3em 10.7em 4.8em");
+      expect(storedColumns()).toEqual(chosen);
+    } finally {
+      width.mockRestore();
+    }
+  });
+
+  it("opens from the keyboard and gives the focus back to the header", async () => {
+    const { container } = await renderScreen();
+    const header = headerRows(container)[0];
+    header.focus();
+    await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+    expect(screen.getByRole("menu", { name: "Columns" })).toBeTruthy();
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Columns" })).toBeNull();
+    expect(document.activeElement).toBe(header);
   });
 });

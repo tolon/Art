@@ -99,6 +99,22 @@ import {
   paneWidthClasses,
   stepPaneFontSize,
 } from "@/lib/dockLayout";
+import { ColumnGrip } from "@/components/files/ColumnGrip";
+import { ColumnMenu } from "@/components/files/ColumnMenu";
+import {
+  COLUMN_SPEC,
+  COLUMNS_KEY,
+  DEFAULT_COLUMNS,
+  gridTemplate,
+  toggleColumn,
+  visibleColumns,
+  withWidth,
+  type ColumnId,
+  type ColumnLayout,
+  type SizedColumnId,
+} from "@/lib/columns";
+import { forget } from "@/lib/remembered";
+import { useRememberedShape } from "@/lib/useRemembered";
 import { planDelete, planDeleteSelection } from "@/lib/deletePlan";
 import { describeHostDelete, panelDeleteMany } from "@/lib/panel";
 import { deleteProtectedNames, isDeleteProtected } from "@/lib/protection";
@@ -782,6 +798,49 @@ export function FileManager() {
   }, [appZoom, measurePane]);
 
   const commanderWidthClasses = paneWidthClasses(paneWidth, paneFontSize);
+
+  /**
+   * The commander's columns (design § 5 of the 2026-09-08 simplification
+   * spec; the owner, 2026-09-10: *"ayarlanabilmeli ve yapılan ayarı
+   * unutmamalı"*). One set for both panes, remembered as `files.columns`,
+   * whose **absence** is the screen as it always was: `--tc-columns` is set
+   * only while a set is stored or a drag is live.
+   *
+   * `columnPreview` is the width being dragged, drawn and not stored — one
+   * write when the pointer is released, never one per move (ART-178).
+   * What a narrow pane hides is a view of the stored set and is never
+   * written back (ART-089).
+   */
+  const [columns, setColumns] = useRememberedShape<ColumnLayout>(
+    COLUMNS_KEY,
+    COLUMN_SPEC,
+    DEFAULT_COLUMNS
+  );
+  const columnsStored = useSettingsStore((s) =>
+    Object.prototype.hasOwnProperty.call(s.settings.remembered ?? {}, COLUMNS_KEY)
+  );
+  const [columnPreview, setColumnPreview] = useState<ColumnLayout | null>(null);
+  const liveColumns = columnPreview ?? columns;
+  const shownColumns = visibleColumns(liveColumns, paneWidth, paneFontSize);
+  const columnsTemplate =
+    columnsStored || columnPreview ? gridTemplate(shownColumns, liveColumns) : null;
+  const columnHandlers = {
+    onColumnPreview: (id: SizedColumnId, em: number) =>
+      setColumnPreview(withWidth(columns, id, em)),
+    onColumnCommit: (id: SizedColumnId, em: number) => {
+      setColumnPreview(null);
+      setColumns({ widthsEm: withWidth(columns, id, em).widthsEm });
+    },
+    onColumnToggle: (id: ColumnId) => setColumns({ shown: toggleColumn(columns, id).shown }),
+    // Forget, not "store the defaults": a stored copy of the defaults is a
+    // decision of its own and would outlive a change to what they are.
+    onColumnsReset: () => {
+      setColumnPreview(null);
+      void updateSettings({
+        remembered: forget(useSettingsStore.getState().settings.remembered, COLUMNS_KEY),
+      });
+    },
+  };
   const colourRules: ColourRule[] = isUsableRuleList(storedColourRules)
     ? storedColourRules
     : DEFAULT_COLOUR_RULES;
@@ -3556,6 +3615,10 @@ export function FileManager() {
       // downstream (ART-068).
       maskHidEverything: filterEntriesReporting(state.entries, filter[side]).hidEverything,
       sort: sort[side],
+      columns: shownColumns,
+      columnLayout: columns,
+      paneFontPx: paneFontSize,
+      ...columnHandlers,
       onSortChange: (column: SortColumn) =>
         setSort((s) => ({ ...s, [side]: clickColumn(s[side], column) })),
       filter: filter[side],
@@ -4112,7 +4175,12 @@ export function FileManager() {
       <div
         ref={commanderRef}
         className={`tc-commander${commanderWidthClasses ? ` ${commanderWidthClasses}` : ""}`}
-        style={{ ["--tc-font-size" as string]: `${paneFontSize}px` } as React.CSSProperties}
+        style={
+          {
+            ["--tc-font-size" as string]: `${paneFontSize}px`,
+            ...(columnsTemplate ? { ["--tc-columns" as string]: columnsTemplate } : {}),
+          } as React.CSSProperties
+        }
         // Ctrl+wheel over the commander resizes its text — the gesture every
         // browser, editor and map application already taught everyone. Without
         // Ctrl the wheel scrolls the listing, which is the far commoner thing.
@@ -4473,8 +4541,24 @@ function Pane({
   onDragOut,
   onDropped,
   dirSizes,
+  columns,
+  columnLayout,
+  paneFontPx,
+  onColumnPreview,
+  onColumnCommit,
+  onColumnToggle,
+  onColumnsReset,
 }: {
   side: Side;
+  /** The columns this pane draws, in the row's order (`@/lib/columns`). */
+  columns: ColumnId[];
+  /** The stored set — the widths a drag starts from and the menu's ticks. */
+  columnLayout: ColumnLayout;
+  paneFontPx: number;
+  onColumnPreview: (id: SizedColumnId, em: number) => void;
+  onColumnCommit: (id: SizedColumnId, em: number) => void;
+  onColumnToggle: (id: ColumnId) => void;
+  onColumnsReset: () => void;
   state: PaneState;
   /** `state.entries`, sorted for display — see `paneEntries` in
    * `FileManager` for why this and not `state.entries` is what the row list
@@ -4812,7 +4896,17 @@ function Pane({
       )}
 
       {showingFiles && (sortedEntries.length > 0 || canGoUp) && (
-        <TcHeaderRow sort={sort} onSortChange={onSortChange} />
+        <TcHeaderRow
+          sort={sort}
+          onSortChange={onSortChange}
+          columns={columns}
+          layout={columnLayout}
+          fontPx={paneFontPx}
+          onColumnPreview={onColumnPreview}
+          onColumnCommit={onColumnCommit}
+          onColumnToggle={onColumnToggle}
+          onColumnsReset={onColumnsReset}
+        />
       )}
 
       {showingFiles && (
@@ -4827,10 +4921,10 @@ function Pane({
                 <UpDirIcon />
                 <span className="tc-name-text">[..]</span>
               </span>
-              <span className="tc-cell tc-cell-ext" />
-              <span className="tc-cell tc-cell-size" />
-              <span className="tc-cell tc-cell-date" />
-              <span className="tc-cell tc-cell-attr" />
+              {columns.includes("ext") && <span className="tc-cell tc-cell-ext" />}
+              {columns.includes("size") && <span className="tc-cell tc-cell-size" />}
+              {columns.includes("date") && <span className="tc-cell tc-cell-date" />}
+              {columns.includes("attr") && <span className="tc-cell tc-cell-attr" />}
             </li>
           )}
 
@@ -4903,16 +4997,22 @@ function Pane({
                     </span>
                   )}
                 </span>
-                <span className="tc-cell tc-cell-ext">{ext}</span>
-                <span className="tc-cell tc-cell-size">
-                  {entry.is_dir ? (
-                    <TcDirSize side={side} entry={entry} dirSizes={dirSizes} />
-                  ) : (
-                    formatGroupedSize(entry.bytes, i18n.language)
-                  )}
-                </span>
-                <span className="tc-cell tc-cell-date">{formattedDate ?? "—"}</span>
-                <span className="tc-cell tc-cell-attr">{entry.attrs ?? "—"}</span>
+                {columns.includes("ext") && <span className="tc-cell tc-cell-ext">{ext}</span>}
+                {columns.includes("size") && (
+                  <span className="tc-cell tc-cell-size">
+                    {entry.is_dir ? (
+                      <TcDirSize side={side} entry={entry} dirSizes={dirSizes} />
+                    ) : (
+                      formatGroupedSize(entry.bytes, i18n.language)
+                    )}
+                  </span>
+                )}
+                {columns.includes("date") && (
+                  <span className="tc-cell tc-cell-date">{formattedDate ?? "—"}</span>
+                )}
+                {columns.includes("attr") && (
+                  <span className="tc-cell tc-cell-attr">{entry.attrs ?? "—"}</span>
+                )}
               </li>
             );
           })}
@@ -5004,24 +5104,130 @@ function TcDirSize({
 function TcHeaderRow({
   sort,
   onSortChange,
+  columns,
+  layout,
+  fontPx,
+  onColumnPreview,
+  onColumnCommit,
+  onColumnToggle,
+  onColumnsReset,
 }: {
   sort: SortState;
   onSortChange: (column: SortColumn) => void;
+  columns: ColumnId[];
+  layout: ColumnLayout;
+  fontPx: number;
+  onColumnPreview: (id: SizedColumnId, em: number) => void;
+  onColumnCommit: (id: SizedColumnId, em: number) => void;
+  onColumnToggle: (id: ColumnId) => void;
+  onColumnsReset: () => void;
 }) {
   const { t } = useTranslation();
+  const rowRef = useRef<HTMLDivElement>(null);
+  // Where the column menu is open, from the header row's own top-left
+  // corner, or `null` while it is closed.
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+
+  /**
+   * Open the menu under the header, at the pointer if there is one.
+   *
+   * `offsetWidth / rect.width` converts the viewport's pixels into the row's
+   * own: the shell carries `zoom`, and a menu placed in unscaled pixels would
+   * open away from the pointer at any Application Size but 100 %.
+   */
+  const openMenu = (clientX: number | null) => {
+    const row = rowRef.current;
+    if (!row) return;
+    const rect = row.getBoundingClientRect();
+    const scale = rect.width > 0 ? row.offsetWidth / rect.width : 1;
+    const x = clientX === null ? 0 : Math.max(0, (clientX - rect.left) * scale);
+    setMenuAt({ x, y: row.offsetHeight });
+  };
+  const closeMenu = useCallback(() => {
+    setMenuAt(null);
+    rowRef.current?.focus();
+  }, []);
+
+  // Literal keys, so `literal-keys.test.ts` can see each one.
+  const label = (id: SizedColumnId) =>
+    id === "ext"
+      ? t("files.sort.ext")
+      : id === "size"
+        ? t("files.sort.size")
+        : id === "date"
+          ? t("files.sort.date")
+          : t("files.sort.attrs");
+  const grip = (id: SizedColumnId) => (
+    <ColumnGrip
+      label={t("files.columns.grip", { column: label(id) })}
+      startEm={layout.widthsEm[id]}
+      fontPx={fontPx}
+      onPreview={(em) => onColumnPreview(id, em)}
+      onCommit={(em) => onColumnCommit(id, em)}
+    />
+  );
+
   return (
-    <div className="tc-row tc-header-row">
+    <div
+      ref={rowRef}
+      className="tc-row tc-header-row"
+      // Focusable, so Shift+F10 and the Menu key reach the menu without a
+      // mouse (design § 5.7).
+      tabIndex={0}
+      title={t("files.columns.headerHint")}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openMenu(event.clientX);
+      }}
+      onKeyDown={(event) => {
+        if ((event.key === "F10" && event.shiftKey) || event.key === "ContextMenu") {
+          event.preventDefault();
+          event.stopPropagation();
+          openMenu(null);
+        }
+      }}
+    >
       <span className="tc-cell tc-cell-name">
         <SortHeaderButton column="name" sort={sort} onSortChange={onSortChange} />
       </span>
-      <span className="tc-cell tc-cell-ext">{t("files.sort.ext")}</span>
-      <span className="tc-cell tc-cell-size">
-        <SortHeaderButton column="size" sort={sort} onSortChange={onSortChange} />
-      </span>
-      <span className="tc-cell tc-cell-date">
-        <SortHeaderButton column="date" sort={sort} onSortChange={onSortChange} />
-      </span>
-      <span className="tc-cell tc-cell-attr">{t("files.sort.attrs")}</span>
+      {columns.includes("ext") && (
+        <span className="tc-cell tc-cell-ext">
+          {t("files.sort.ext")}
+          {grip("ext")}
+        </span>
+      )}
+      {columns.includes("size") && (
+        <span className="tc-cell tc-cell-size">
+          <SortHeaderButton column="size" sort={sort} onSortChange={onSortChange} />
+          {grip("size")}
+        </span>
+      )}
+      {columns.includes("date") && (
+        <span className="tc-cell tc-cell-date">
+          <SortHeaderButton column="date" sort={sort} onSortChange={onSortChange} />
+          {grip("date")}
+        </span>
+      )}
+      {columns.includes("attr") && (
+        <span className="tc-cell tc-cell-attr">
+          {t("files.sort.attrs")}
+          {grip("attr")}
+        </span>
+      )}
+      {menuAt && (
+        <ColumnMenu
+          x={menuAt.x}
+          y={menuAt.y}
+          layout={layout}
+          onToggle={onColumnToggle}
+          onReset={() => {
+            onColumnsReset();
+            closeMenu();
+          }}
+          onClose={closeMenu}
+        />
+      )}
     </div>
   );
 }

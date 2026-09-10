@@ -1414,6 +1414,12 @@
       "descending": "descending",
       "title": "Sorted by {{column}}, {{direction}} — click to change"
     },
+    "columns": {
+      "menuTitle": "Columns",
+      "reset": "Reset columns",
+      "grip": "Resize the {{column}} column",
+      "headerHint": "Right-click for columns"
+    },
     "tc": {
       "dirSize": "<DIR>",
       "counting": "counting…",
