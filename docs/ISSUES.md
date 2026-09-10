@@ -54,17 +54,6 @@ not close). Nothing in ART blocks history today, which is why the round ruled it
 rather than adding a `beforeunload`-shaped guard for one screen. The operation log is still the
 record of what the Rust job did.
 
-**ART-285** 🟡 **"23 install disks found" counts game and CD32 discs as install disks** —
-*found 2026-09-08 on `material.png`*
-`src/components/osbuilder/OsInstall.tsx` (the scan summary line) · `core/osinstall/scan.rs`
-
-The source step's summary listed every `.iso` whose volume name `find_media` could read —
-`CD32`, `CAVIAR_02` … — under *install disks found*. Reading the names is right (only the PVD is
-read; nothing is opened or hashed — owner rule 2 holds); the sentence is wrong. A disc whose volume
-name no shipped recipe names is not an install disk: say *"11 install media found; 12 other discs
-in these folders are not install media ART knows and were left closed"*, with the names behind a
-disclosure, not in the headline.
-
 **ART-293** 🔵 **A whole suite run still leaves one 794-byte scan-cache file
 under the scratch root** — *found 2026-09-10 while measuring
 [ART-281](#fixed)'s fixed arm*
@@ -335,6 +324,58 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-285** 🟡 ✅ **"23 install disks found" counts game and CD32 discs as install disks** —
+*found 2026-09-08 on `material.png`; fixed 2026-09-10 on `art-285-install-media`*
+`src-tauri/src/core/osinstall/identify.rs::install_media` ·
+`src-tauri/src/commands/osinstall.rs::osinstall_install_media` · `src/lib/osinstall.ts` ·
+`src/components/osbuilder/FilesTab.tsx` · `src/components/osbuilder/MaterialFolders.tsx` ·
+`src/i18n/en.json` · `src/i18n/tr.json`
+
+The source step's summary listed every `.iso` whose volume name `find_media` could read —
+`CD32`, `CAVIAR_02` … — under *install disks found*. Reading the names is right (only the PVD is
+read; nothing is opened or hashed — owner rule 2 holds); the sentence is wrong. A disc whose volume
+name no shipped recipe names is not an install disk.
+
+**Where it lived when it was fixed.** The entry named `OsInstall.tsx`, which the four-tab rewrite
+deleted; ART-256 had already moved the line into the folder column (`MaterialFolders.tsx`), where
+it counted `foundVolumeNames` — every name every folder's scan returned. Nothing on the way asked
+whether a recipe names any of them.
+
+**The fix.** `core::osinstall::identify::install_media(found)` returns the names a component of at
+least one shipped recipe asks for, in the order given and in the **medium's** spelling, compared
+with `amiga_names_equal` — the fold `evidence_of` uses. It is deliberately not identification:
+`Fonts` counts, because every release asks for it, even though it cannot tell one from another. A
+thin command, `osinstall_install_media`, takes names rather than a folder, like
+`osinstall_release_for_media`. `FilesTab` asks it once per change of the found set and holds `null`
+while the question is out or after it failed; `MaterialFolders` counts only install media in the
+headline and names every other disc in a **closed disclosure** under it (`osinstall.media.otherDiscs`,
+both catalogues), and with the answer still out it draws **neither** line rather than the old count
+of everything. The entry's suggested wording *"… were left closed"* is not used: `find_media` does
+read every disc's volume name, so "left closed" would be a claim ART cannot back. The sentence says
+only that those discs are not install media for any release ART knows.
+
+*Tests:* `core::osinstall::identify` — `install_media_keeps_only_names_a_shipped_recipe_asks_for`
+(`CD32`/`CAVIAR_02` dropped; `Workbench3.2`, `AmigaOS3.9` and the shared `Fonts` kept),
+`install_media_reports_the_mediums_own_spelling_and_folds_case`,
+`install_media_of_other_discs_is_nothing`. `MaterialFolders.test.tsx`, *install media apart from
+every other disc (ART-285)*: the headline counts one of three and the other two are in a closed
+`<details>`; every disc something else gives the empty line plus the disclosure; no disclosure when
+every disc is install media; nothing claimed while the answer is out. `FilesTab.test.tsx`: *counts
+what the core calls install media, not every disc the scan named* — the core answers `[]` for the
+fixture's `Workbench3.2`, so only a column that used the answer draws the empty line. That case was
+added **after** a mutation survived: every other `FilesTab` case answers with the names it was asked,
+so a step that skipped the question and passed every name through read the same.
+
+**Mutations**, each put back and restored by copyfile: every name counting as install media — killed
+by three; a case-sensitive compare — one; only the first shipped release read — two; the headline
+counting every disc — one; the step bypassing the question — **survived**, then killed by the wiring
+case above; every disc sorted into *other* — two; the empty line drawn while the answer is out —
+one; the disclosure open by default — one. Eight of eight after the wiring case.
+
+**Not claimed.** Not driven on the owner's own folder of 23 discs since the fix. The empty line
+still reads *"No install disks found in that folder"* over a list of several folders — the wording
+predates this entry and was left alone.
 
 **ART-283** 🟡 ✅ **Opening the Files screen rewrites a remembered tab's location** —
 *found 2026-09-08 by the screenshot pass, reproduced twice from identical starting bytes;

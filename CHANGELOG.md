@@ -56,6 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The OS Builder's folder list counts install disks, not every disc.** A
+  folder holding CD32 or other game discs used to be reported as "23 install
+  disks found". The line now counts only the disks an AmigaOS release ART
+  knows actually asks for, and names the other discs underneath, folded away.
 - **Dropping a folder or an image onto the dashboard no longer rewrites one of
   the Files screen's remembered tabs.** The dropped object opens in a new tab
   on the left pane, your remembered tabs keep their places, and coming back to
