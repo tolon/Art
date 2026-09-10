@@ -225,10 +225,14 @@ fn sevenz_archive(tag: &str) -> (crate::core::ScratchDir, Box<dyn MediaSource>) 
 /// implementation of the trait, but three different readers underneath it,
 /// and the contract's whole premise is that a caller written against the
 /// trait cannot tell its backings apart.
-fn sources(tag: &str) -> Vec<(&'static str, Box<dyn MediaSource>, crate::core::ScratchDir)> {
+fn sources(tag: &str) -> Vec<(crate::core::ScratchDir, &'static str, Box<dyn MediaSource>)> {
     // Each entry carries the guard over the scratch directory its medium was
-    // written into (ART-281): the file has to outlive the source reading it,
-    // and the guard dropping with the loop's own iteration is exactly that.
+    // written into (ART-281), and it is **first** in the tuple on purpose.
+    // `AdfSource` holds an open `FileRegion` on the ADF and `CdSource` an
+    // `IsoImage`, so the directory must outlive the source reading it — and
+    // the bindings one pattern introduces drop in reverse declaration order,
+    // right to left. Guard last would drop it *before* the source; guard
+    // first drops it after, which is the order this needs.
     let (adf, adf_source) = floppy(tag);
     let (iso, iso_source) = disc(tag);
     let (zip, zip_source) = zip_archive(tag);
@@ -237,11 +241,11 @@ fn sources(tag: &str) -> Vec<(&'static str, Box<dyn MediaSource>, crate::core::S
     let (cached_adf, cached_adf_source) = floppy(tag);
     let (cached_iso, cached_iso_source) = disc(tag);
     vec![
-        ("AdfSource", adf_source, adf),
-        ("CdSource", iso_source, iso),
-        ("ArchiveSource/zip", zip_source, zip),
-        ("ArchiveSource/lha", lha_source, lha),
-        ("ArchiveSource/7z", sevenz_source, sevenz),
+        (adf, "AdfSource", adf_source),
+        (iso, "CdSource", iso_source),
+        (zip, "ArchiveSource/zip", zip_source),
+        (lha, "ArchiveSource/lha", lha_source),
+        (sevenz, "ArchiveSource/7z", sevenz_source),
         // ART-194. `CachedSource` answers `entry` and `walk` out of a stored
         // listing rather than off the medium, which makes it a **sixth**
         // implementation of these three answers — and the most dangerous one
@@ -250,14 +254,14 @@ fn sources(tag: &str) -> Vec<(&'static str, Box<dyn MediaSource>, crate::core::S
         // them, over the two backings whose listings differ most: a real
         // AmigaDOS volume and a Joliet-pressed ISO.
         (
+            cached_adf,
             "CachedSource/adf",
             cached(cached_adf_source, MediaKind::Floppy),
-            cached_adf,
         ),
         (
+            cached_iso,
             "CachedSource/disc",
             cached(cached_iso_source, MediaKind::Disc),
-            cached_iso,
         ),
     ]
 }
@@ -282,7 +286,7 @@ fn cached(mut source: Box<dyn MediaSource>, kind: MediaKind) -> Box<dyn MediaSou
 
 #[test]
 fn every_source_answers_an_empty_path_with_its_own_root() {
-    for (name, mut source, _guard) in sources("root-entry") {
+    for (_guard, name, mut source) in sources("root-entry") {
         let entry = source
             .entry("")
             .unwrap_or_else(|e| panic!("{name}: {e}"))
@@ -294,7 +298,7 @@ fn every_source_answers_an_empty_path_with_its_own_root() {
 
 #[test]
 fn every_source_answers_a_drawer_with_a_directory_entry() {
-    for (name, mut source, _guard) in sources("dir-entry") {
+    for (_guard, name, mut source) in sources("dir-entry") {
         let entry = source
             .entry(DIR_PATH)
             .unwrap_or_else(|e| panic!("{name}: {e}"))
@@ -306,7 +310,7 @@ fn every_source_answers_a_drawer_with_a_directory_entry() {
 
 #[test]
 fn every_source_walks_a_drawer_as_what_is_under_it() {
-    for (name, mut source, _guard) in sources("dir-walk") {
+    for (_guard, name, mut source) in sources("dir-walk") {
         let walked = source
             .walk(DIR_PATH)
             .unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -317,7 +321,7 @@ fn every_source_walks_a_drawer_as_what_is_under_it() {
 
 #[test]
 fn every_source_answers_a_missing_path_with_none_rather_than_an_error() {
-    for (name, mut source, _guard) in sources("missing-entry") {
+    for (_guard, name, mut source) in sources("missing-entry") {
         assert!(
             source
                 .entry(MISSING)
@@ -333,7 +337,7 @@ fn every_source_answers_a_missing_path_with_none_rather_than_an_error() {
 /// second divergence: `CdSource` matched only the exact byte case.
 #[test]
 fn every_source_resolves_a_path_case_insensitively() {
-    for (name, mut source, _guard) in sources("case") {
+    for (_guard, name, mut source) in sources("case") {
         assert!(
             source
                 .entry("c/loadmodule")
@@ -365,7 +369,7 @@ fn every_source_resolves_a_path_case_insensitively() {
 /// answer.
 #[test]
 fn every_source_answers_with_the_medias_own_casing_never_the_callers() {
-    for (name, mut source, _guard) in sources("case-answer") {
+    for (_guard, name, mut source) in sources("case-answer") {
         let entry = source
             .entry("c/loadmodule")
             .unwrap_or_else(|e| panic!("{name}: {e}"))
@@ -400,7 +404,7 @@ fn every_source_answers_with_the_medias_own_casing_never_the_callers() {
 /// answers every question.
 #[test]
 fn every_source_walks_a_drawer_the_same_whatever_case_it_is_asked_in() {
-    for (name, mut source, _guard) in sources("case-walk") {
+    for (_guard, name, mut source) in sources("case-walk") {
         let asked = source.walk("c").unwrap_or_else(|e| panic!("{name}: {e}"));
         let paths: Vec<&str> = asked.iter().map(|e| e.path.as_str()).collect();
         assert_eq!(paths, vec![FILE_PATH], "{name}");
@@ -409,7 +413,7 @@ fn every_source_walks_a_drawer_the_same_whatever_case_it_is_asked_in() {
 
 #[test]
 fn every_source_walks_the_whole_media_for_an_empty_path() {
-    for (name, mut source, _guard) in sources("root-walk") {
+    for (_guard, name, mut source) in sources("root-walk") {
         let walked = source.walk("").unwrap_or_else(|e| panic!("{name}: {e}"));
         let paths: Vec<&str> = walked.iter().map(|e| e.path.as_str()).collect();
         assert!(paths.contains(&FILE_PATH), "{name}: {paths:?}");
@@ -419,7 +423,7 @@ fn every_source_walks_the_whole_media_for_an_empty_path() {
 
 #[test]
 fn every_source_walks_a_missing_path_as_empty_rather_than_an_error() {
-    for (name, mut source, _guard) in sources("missing-walk") {
+    for (_guard, name, mut source) in sources("missing-walk") {
         assert!(
             source
                 .walk(MISSING)
@@ -435,7 +439,7 @@ fn every_source_walks_a_missing_path_as_empty_rather_than_an_error() {
 /// stated in the trait doc rather than left to be discovered.
 #[test]
 fn every_source_walks_an_empty_drawer_as_empty_rather_than_an_error() {
-    for (name, mut source, _guard) in sources("empty-walk") {
+    for (_guard, name, mut source) in sources("empty-walk") {
         let walked = source
             .walk(EMPTY_DIR)
             .unwrap_or_else(|e| panic!("{name}: an empty drawer is not an error: {e}"));
@@ -448,7 +452,7 @@ fn every_source_walks_an_empty_drawer_as_empty_rather_than_an_error() {
 /// never an empty answer indistinguishable from an empty drawer.
 #[test]
 fn every_source_refuses_to_walk_a_path_that_names_a_file() {
-    for (name, mut source, _guard) in sources("file-walk") {
+    for (_guard, name, mut source) in sources("file-walk") {
         let err = source
             .walk(FILE_PATH)
             .expect_err(&format!("{name}: walking a file must be refused"));
@@ -466,7 +470,7 @@ fn every_source_refuses_to_walk_a_path_that_names_a_file() {
 
 #[test]
 fn every_source_refuses_to_read_the_root() {
-    for (name, mut source, _guard) in sources("root-read") {
+    for (_guard, name, mut source) in sources("root-read") {
         let err = source
             .read("")
             .expect_err(&format!("{name}: the root is not a file"));
@@ -484,7 +488,7 @@ fn every_source_refuses_to_read_the_root() {
 
 #[test]
 fn every_source_refuses_to_read_a_missing_path() {
-    for (name, mut source, _guard) in sources("missing-read") {
+    for (_guard, name, mut source) in sources("missing-read") {
         let err = source
             .read(MISSING)
             .expect_err(&format!("{name}: a missing file is not readable"));
@@ -495,7 +499,7 @@ fn every_source_refuses_to_read_a_missing_path() {
 
 #[test]
 fn every_source_reads_a_files_bytes() {
-    for (name, mut source, _guard) in sources("read") {
+    for (_guard, name, mut source) in sources("read") {
         assert_eq!(
             source
                 .read(FILE_PATH)
