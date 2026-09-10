@@ -26,38 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-291** 🔵 **A `packages.folder` seeded from an older ART steers the archive dialogs even
-after the folder leaves the material list** — *found 2026-09-10 during four-tabs round 5, task 2;
-a fix built from this entry's own proposal was measured wrong and reverted the same day*
-`src/lib/useBuildSession.ts` (the `packagesShape.folder ?? derivedFolder` read)
-
-Spec § 5 is met — nothing writes `buildSession.packages.<release>.folder` any more, and the F10
-clear went with the write it undid. What is left is the *read*: `stored ?? derived` prefers the
-stored side, so a settings file written by an older ART keeps its folder even after the user takes
-that folder out of the material list, and it is then the folder `AmigaInstallPanel`'s dialogs open
-on and the folder its catalogue is asked about. No file resolves through it — every slot resolves
-against the material list, the catalogue answers the same list whichever folder it is given, and
-`add_package` is told the folder its file was found in — so this is a starting folder, not a
-result. Pinned by `keeps a folder seeded from an older ART even after the list stops holding it`
-(`useBuildSession.test.tsx`) rather than passed over.
-
-**The fix this entry used to propose is wrong, and was reverted.** It said to gate the read —
-`stored` only while the material list still holds it. Built on `art-291-292-295` (`5c41d2b`), it
-broke the population fix round 1 (F1) exists for: a user whose archives folder is **not** their
-disks folder, carried in from an older ART's settings file and never in the material list, because
-round 5 did not migrate it there. The read alone cannot tell "this folder was never in the list"
-(keep steering) from "the user took it out of the list" (this entry). Measured with one variable,
-2026-09-10: with only `useBuildSession.ts` put back to before the gate, `AmigaInstallPanel.test.tsx`
-passes **77 of 77**; with the gate, **7 fail** — the catalogue asked about the disks folder, the
-package rows never drawn, names falling back to ids. Reverted as `bcf1cce`.
-
-**What is left is a decision, not a fix.** The one signal that tells the two cases apart is the
-user's own removal of that folder from the list. Acting on it means clearing the stored seed at that
-moment — a write to `buildSession.packages.<release>.folder`, which spec § 5 rules out ("never
-written again"). The write would be caused by the user's own action, which *nothing changes unless
-the user changes it* allows and spec § 5 does not. The owner's call. Until then the seed is only a
-starting folder: no file resolves through it.
-
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
 the crash itself is still unresolved** — *found 2026-08-15/16, Task 13's
@@ -258,6 +226,56 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-291** 🔵 ✅ **A `packages.folder` seeded from an older ART steers the archive dialogs even
+after the folder leaves the material list** — *found 2026-09-10 during four-tabs round 5, task 2;
+a fix built from this entry's own proposal was measured wrong and reverted the same day; fixed
+2026-09-10 on `art-291-clear-on-removal` by the owner's ruling*
+`src/lib/useBuildSession.ts` (the `packagesShape.folder ?? derivedFolder` read)
+
+Spec § 5 is met — nothing writes `buildSession.packages.<release>.folder` any more, and the F10
+clear went with the write it undid. What is left is the *read*: `stored ?? derived` prefers the
+stored side, so a settings file written by an older ART keeps its folder even after the user takes
+that folder out of the material list, and it is then the folder `AmigaInstallPanel`'s dialogs open
+on and the folder its catalogue is asked about. No file resolves through it — every slot resolves
+against the material list, the catalogue answers the same list whichever folder it is given, and
+`add_package` is told the folder its file was found in — so this is a starting folder, not a
+result. Pinned by `keeps a folder seeded from an older ART even after the list stops holding it`
+(`useBuildSession.test.tsx`) rather than passed over.
+
+**The fix this entry used to propose is wrong, and was reverted.** It said to gate the read —
+`stored` only while the material list still holds it. Built on `art-291-292-295` (`5c41d2b`), it
+broke the population fix round 1 (F1) exists for: a user whose archives folder is **not** their
+disks folder, carried in from an older ART's settings file and never in the material list, because
+round 5 did not migrate it there. The read alone cannot tell "this folder was never in the list"
+(keep steering) from "the user took it out of the list" (this entry). Measured with one variable,
+2026-09-10: with only `useBuildSession.ts` put back to before the gate, `AmigaInstallPanel.test.tsx`
+passes **77 of 77**; with the gate, **7 fail** — the catalogue asked about the disks folder, the
+package rows never drawn, names falling back to ids. Reverted as `bcf1cce`.
+
+**The owner's ruling, 2026-09-10:** *"klasörü listeden çıkardıysa kullanıcı hatırlanmasın
+istiyordur. Kuralı değiştirelim sorun yok. Boşuna dosya kirliliği, kayıt kirliliği oluşturup
+program sistemi şişirmesin."* Spec § 5's "never written again" is reversed for this one case.
+
+**The fix.** `setMaterial` clears the stored folder when the user **removes** it — the seed was in the
+list before the call and is not after, compared through `canonicalFolder` — and never merely because
+the list does not hold it, so F1's folder, never in the list, is untouched by any edit. That is the
+difference from round 2's F10 clear, which fired whenever the list stopped holding the folder and
+would have dropped F1's seed on the first unrelated edit. **No record is left for nothing:** with no
+updates ticked and no older key that would hand the folder back, the per-release record is forgotten
+outright; otherwise the folder is written as `null` — the ticked updates stay, and a `null` is the one
+record that stops `seedPackagesFolder` resurrecting it from an older ART's global key, which is left
+alone for a rollback. The read is unchanged: `packagesShape.folder ?? derivedFolder`.
+
+*Tests* (`useBuildSession.test.tsx`): *forgets a seeded archives folder when the user removes it from
+the list* — the record is gone; *keeps the ticked updates when it clears the folder* —
+`{ folder: null, chosen: [...] }`; *writes the clear down when an older ART's key would bring the
+folder back* — and a remount does not resurrect it, the older key untouched; *keeps a seeded folder
+the list never held when another folder is removed* — F1; *forgets the seed when the list spells the
+removed folder differently*; and the per-release case back to its pre-round-5 assertion, 3.2.2's
+record cleared and 3.9's untouched. The F1 case passed before the fix, as a control; the other five
+failed on the defect. `AmigaInstallPanel.test.tsx` passes 77 of 77 with the fix — the population
+the reverted gate broke. Mutations, each restored by copyfile: clearing whenever the list lacks the folder rather than only when it was removed (killed by the F1 case and by the three-gesture pin), exact spelling instead of `canonicalFolder` (the spelling case), always writing `null` (three cases), forgetting even when an older key would bring the folder back (the older-key case), never clearing (five cases). Five of five.
 
 **ART-296** 🟠 ✅ **The BoingBag preview staged its payload on the system drive, not under the
 chosen scratch root** — *found 2026-09-10 by ART-295's measurement; fixed 2026-09-10 on

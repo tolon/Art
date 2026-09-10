@@ -56,6 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Removing a folder from the OS Builder's list also forgets it as your
+  archives folder.** A folder an older ART remembered as the place your
+  update archives live kept steering the archive dialogs after you took it
+  out of the list. Now it is forgotten with it, and ART leaves no empty
+  setting behind when nothing else needs one.
 - **Pressing Back while a build runs no longer abandons it.** The browser's
   Back and Forward — Alt+Left, a mouse's back button — now stay on the Build
   tab while a build is running, the same way the sidebar and the tabs already
