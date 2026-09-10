@@ -32,6 +32,7 @@ import {
   ROM_SPEC,
   SESSION_KEYS,
   TREE_SPEC,
+  canonicalFolder,
   firstUntaggedFolder,
   isBuildKind,
   seedCardImage,
@@ -54,7 +55,7 @@ import {
   type TreeChoice,
 } from "@/lib/buildSession";
 import { isInstallRelease, type InstallRelease } from "@/lib/osinstall";
-import { isFlag, recall, recallInto } from "@/lib/remembered";
+import { forget, isFlag, recall, recallInto } from "@/lib/remembered";
 import { useRemembered, useRememberedShape } from "@/lib/useRemembered";
 import { useSettingsStore } from "@/stores/settingsStore";
 
@@ -85,8 +86,10 @@ export interface BuildSessionApi {
    * The updates ticked for this release — **and nothing else**.
    *
    * `folder` is not a parameter any more (round 5, task 2; spec § 5).
-   * `packages.folder` is seeded from an older settings file and read; no
-   * caller writes it. A screen that has just been handed an archives folder
+   * `packages.folder` is seeded from an older settings file and read; the
+   * one write left is `setMaterial` forgetting it when the user removes that
+   * folder from the list (ART-291). A screen that has just been handed an
+   * archives folder
    * calls {@link BuildSessionApi.addMaterialFolder}, which is where every
    * other folder in the build goes and what the slots resolve against.
    */
@@ -198,26 +201,72 @@ export function useBuildSession(): BuildSessionApi {
   );
 
   /**
-   * Replace the list — and **write nothing else** (round 5, task 2).
+   * Replace the list — and **forget the stored archives folder when the user
+   * has just taken it out** (ART-291, the owner's ruling of 2026-09-10).
    *
-   * This used to drop the stored `packages.folder` when the list stopped
-   * holding it (round 2, task 3's F10): the archives folder was written by
-   * `PackagePanel`'s own Browse as well as being a list entry, so removing
-   * the folder from the list left the stored copy behind and the step said
-   * two things at once — the Amiga Forever offer, drawn only while the list
-   * is empty, directly above a panel still reading archives out of the folder
-   * just removed.
+   * Round 5 made this write nothing (spec § 5), which left a folder an older
+   * ART seeded steering the archive dialogs after the user removed it from
+   * the list. The owner reversed that rule: a folder taken out of the list is
+   * one the user no longer wants remembered, and ART leaves no record behind
+   * that nobody needs.
    *
-   * **The write it undid is gone** (spec § 5), and a clear is itself a write:
-   * with nothing storing a folder, the only stored value left is the seed
-   * from an older settings file, and clearing that would change a setting the
-   * user did not change. What is left of F10 is the rule that replaced it —
-   * an archives folder goes into *this* list, and `packages.folder` is the
-   * seed with the list's first untagged folder behind it.
+   * **Only a folder the user removed.** The clear fires when the seed was in
+   * the list before this call and is not in it after — never merely because
+   * the list does not hold it. An archives folder carried in from an older
+   * ART and never in the list (fix round 1's F1 population) is not touched by
+   * an edit that did not remove it; the gate first proposed for ART-291
+   * dropped exactly those, and seven panel tests said so.
+   *
+   * **Cleared so that nothing is left for nothing.** With no updates ticked
+   * and no older key that would hand the folder back on the next start, the
+   * per-release record is forgotten outright. Otherwise the folder is written
+   * down as `null`: the ticked updates stay, and a `null` is the one record
+   * that stops `seedPackagesFolder` resurrecting the folder from an older
+   * ART's key — which is itself left alone, for a rollback.
+   *
+   * Read from the store rather than the render closure, the rule
+   * `addMaterialFolder` keeps for the same reason (F10's fix round 1, L10),
+   * and compared through `canonicalFolder`, the lane's one rule for "the
+   * same folder".
    */
   const setMaterial = useCallback(
-    (folders: MaterialFolder[]) => setMaterialShape({ folders }),
-    [setMaterialShape]
+    (folders: MaterialFolder[]) => {
+      const latest = useSettingsStore.getState().settings.remembered;
+      const before = recallInto<MaterialChoice>(
+        latest,
+        SESSION_KEYS.material(release),
+        MATERIAL_SPEC,
+        seededMaterial(latest, release)
+      ).folders;
+      const stored = recallInto<PackageChoice>(
+        latest,
+        SESSION_KEYS.packages(release),
+        PACKAGE_SPEC,
+        {
+          folder: seedPackagesFolder(latest, release),
+          chosen: seedPackagesChosen(latest, release),
+        }
+      );
+      setMaterialShape({ folders });
+
+      const seed = stored.folder;
+      if (!seed) return;
+      const wanted = canonicalFolder(seed);
+      const holds = (list: MaterialFolder[]) =>
+        list.some((entry) => canonicalFolder(entry.path) === wanted);
+      if (!holds(before) || holds(folders)) return;
+
+      const olderKeyWouldReturnIt = seedPackagesFolder(latest) !== null;
+      if (!olderKeyWouldReturnIt && stored.chosen.length === 0) {
+        const now = useSettingsStore.getState().settings.remembered;
+        void useSettingsStore
+          .getState()
+          .update({ remembered: forget(now, SESSION_KEYS.packages(release)) });
+      } else {
+        setPackagesShape({ folder: null });
+      }
+    },
+    [release, setMaterialShape, setPackagesShape]
   );
 
   // Reads the store rather than the rendered `material`, exactly as
@@ -297,7 +346,9 @@ export function useBuildSession(): BuildSessionApi {
   // did keeps theirs.
   //
   // Since round 5 the stored side can only be a **seed** — a folder an older
-  // ART wrote here — because nothing writes this key any more (spec § 5). It
+  // ART wrote here — because nothing writes a folder into this key any more;
+  // since ART-291 the one write is `setMaterial` clearing it when the user
+  // removes that folder from the list. It
   // is kept ahead of the derived folder for the population F1 was written
   // for: their archives folder is not their disks folder, and repointing it
   // at one is the defect, not the fix. What it still decides is which folder

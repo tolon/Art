@@ -1005,7 +1005,7 @@ export function AmigaInstallPanel() {
    *
    * **`pickedFolder` is ahead of both, and it is a `useState`** (round 5,
    * task 2). The archive Browse below adds the folder it was handed to the
-   * material list — `packages.folder` is read only now (spec § 5) — and
+   * material list — a dialog never sets `packages.folder` now — and
    * `addMaterialFolder` *appends*, so the folder the person just pointed at
    * is the list's last entry while this reads its first. Without this line
    * the one folder the catalogue would not be asked about is the one they
@@ -1372,8 +1372,8 @@ export function AmigaInstallPanel() {
    * `osinstall_add_package` is told to look in: a folder known only to this
    * dialog is a folder the next row cannot see, and the panel would go on
    * saying "not in the folders you named" about a file the user has just
-   * pointed at. It is not written to `packages.folder`, which nothing writes
-   * any more.
+   * pointed at. It is not written to `packages.folder`: that key is only ever
+   * cleared now, when the user removes the folder from the list (ART-291).
    *
    * `pickedFolder` is the same folder held for this session's own dialogs and
    * catalogue — see `catalogueFolder`.

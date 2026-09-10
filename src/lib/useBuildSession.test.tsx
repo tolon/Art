@@ -92,6 +92,15 @@ function MaterialProbe() {
       >
         remove disks
       </button>
+      <button
+        onClick={() =>
+          setMaterial(
+            session.material.folders.filter((entry) => entry.path !== "E:\\Archives\\")
+          )
+        }
+      >
+        remove Archives
+      </button>
     </div>
   );
 }
@@ -319,18 +328,18 @@ describe("one card for the build (ART-197's remaining duplicate)", () => {
 });
 
 describe("a folder taken out of the material list is out of the build (F10)", () => {
-  /// **The guard spec § 5 names**, and the reason the case that used to open
-  /// this describe is gone (round 5, task 2). `packages.folder` was written
-  /// by exactly one control — the retired `PackagePanel`'s archives Browse,
-  /// through `setPackages({ folder })` — and F10's clear existed to undo that
-  /// write when the list stopped holding the folder. With the write gone the
-  /// clear is a write of its own, so both go: **the key is seeded and read,
-  /// never written.**
+  /// **The guard spec § 5 named, narrowed by ART-291.** `packages.folder` was
+  /// written by exactly one control — the retired `PackagePanel`'s archives
+  /// Browse — and round 5 removed that write and F10's clear together. The
+  /// owner's ruling of 2026-09-10 brought one write back: the clear, when the
+  /// user removes the stored folder itself from the list. Nothing else writes
+  /// it, and this pins the rest — ticking an update, adding a folder and
+  /// removing a folder the seed is **not** leave the seeded value as it was.
   ///
   /// Asserted on the store, over all three setters that touch these two
   /// keys, because the view alone would answer `E:\disks` whether the folder
   /// had been written or not.
-  it("packages.folder is never written again", async () => {
+  it("packages.folder is written by nothing but the removal of that folder", async () => {
     seed({
       "buildSession.material.AmigaOS 3.2": { folders: [{ path: "E:\\disks", layer: null }] },
       // An older ART's own key, so there **is** a seeded folder to be
@@ -353,8 +362,8 @@ describe("a folder taken out of the material list is out of the build (F10)", ()
     // The tick was stored, and beside it the folder is **exactly the seeded
     // value**: `useRememberedShape` writes `{...current, ...change}`, so the
     // seed travels with the tick. Never `E:\archives` (a write of the folder
-    // just added), never `null` (F10's clear, which is the write this task
-    // removes).
+    // just added), never `null` — the ART-291 clear fires only when the user
+    // removes the seed's own folder, and the legacy one was never in the list.
     expect(stored.chosen).toEqual(["boingbag-39-1"]);
     expect(stored.folder).toBe("E:\\legacy");
     expect(bag["osinstall.packages.folder"]).toBe("E:\\legacy");
@@ -377,19 +386,14 @@ describe("a folder taken out of the material list is out of the build (F10)", ()
     expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\disks");
   });
 
-  /// **What F10's clear used to cover, and what is left of it.** A settings
-  /// file written by an older ART still holds a folder here — the seed reads
-  /// it once (`seedPackagesFolder`) — and with nothing writing the key any
-  /// more, a user who removes that folder from their list keeps the stored
-  /// copy. It is pinned rather than passed over: the consequence is now the
-  /// whole of what `packages.folder` still decides, which is **which folder a
-  /// dialog opens on** in `AmigaInstallPanel` (its catalogue answers the same
-  /// list whichever folder it is given, and every slot resolves against the
-  /// material list). F10's own defect — the panel *reading archives* out of a
-  /// removed folder — cannot come back through this, because the run takes a
-  /// whole file path and `add_package` takes the folder the file was found
-  /// in.
-  it("keeps a folder seeded from an older ART even after the list stops holding it", async () => {
+  /// **ART-291, the owner's ruling of 2026-09-10.** A folder the user takes
+  /// out of the list is a folder they no longer want remembered, so the stored
+  /// archives folder goes with it — and with nothing else in the record, the
+  /// record goes too: no `folder: null` left behind for a key nobody needs.
+  /// This reverses round 5's "never written again" (spec § 5). The owner:
+  /// *"klasörü listeden çıkardıysa kullanıcı hatırlanmasın istiyordur …
+  /// boşuna kayıt kirliliği oluşturmasın"*.
+  it("forgets a seeded archives folder when the user removes it from the list", async () => {
     seed({
       "buildSession.material.AmigaOS 3.2": {
         folders: [
@@ -405,12 +409,115 @@ describe("a folder taken out of the material list is out of the build (F10)", ()
     await userEvent.click(screen.getByText("remove archives"));
 
     expect(screen.getByTestId("material").textContent).toBe("E:\\disks");
+    expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\disks");
+    const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
+    expect(bag["buildSession.packages.AmigaOS 3.2"]).toBeUndefined();
+  });
+
+  /// The record stays when it still carries something the user chose — the
+  /// ticked updates — and only the folder is cleared.
+  it("keeps the ticked updates when it clears the folder", async () => {
+    seed({
+      "buildSession.material.AmigaOS 3.2": {
+        folders: [
+          { path: "E:\\disks", layer: null },
+          { path: "E:\\archives", layer: null },
+        ],
+      },
+      "buildSession.packages.AmigaOS 3.2": { folder: "E:\\archives", chosen: ["boingbag-39-1"] },
+    });
+    render(<MaterialProbe />);
+
+    await userEvent.click(screen.getByText("remove archives"));
+
+    expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\disks");
+    expect(screen.getByTestId("packagesChosen").textContent).toBe("boingbag-39-1");
+    const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
+    expect(bag["buildSession.packages.AmigaOS 3.2"]).toEqual({
+      folder: null,
+      chosen: ["boingbag-39-1"],
+    });
+  });
+
+  /// An older ART's global key would hand the folder straight back on the
+  /// next start if the per-release record simply vanished. There the clear is
+  /// written down as `null` — the one record that makes the removal stick —
+  /// and the older key itself is left alone for a rollback.
+  it("writes the clear down when an older ART's key would bring the folder back", async () => {
+    seed({
+      "buildSession.material.AmigaOS 3.2": {
+        folders: [
+          { path: "E:\\disks", layer: null },
+          { path: "E:\\archives", layer: null },
+        ],
+      },
+      "buildSession.packages": { folder: "E:\\archives", chosen: [] },
+    });
+    const { unmount } = render(<MaterialProbe />);
+    expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\archives");
+
+    await userEvent.click(screen.getByText("remove archives"));
+
+    expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\disks");
+    const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
+    expect(bag["buildSession.packages.AmigaOS 3.2"]).toEqual({ folder: null, chosen: [] });
+    expect(bag["buildSession.packages"]).toEqual({ folder: "E:\\archives", chosen: [] });
+
+    // The next start reads the same store and does not resurrect it.
+    unmount();
+    render(<MaterialProbe />);
+    expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\disks");
+  });
+
+  /// Fix round 1's F1 population — an archives folder that was never in the
+  /// list — is not touched by an edit that did not remove it. The gate this
+  /// entry first proposed failed exactly here (seven panel tests, measured,
+  /// reverted as `bcf1cce`).
+  it("keeps a seeded folder the list never held when another folder is removed", async () => {
+    seed({
+      "buildSession.material.AmigaOS 3.2": {
+        folders: [
+          { path: "E:\\disks", layer: null },
+          { path: "E:\\second", layer: null },
+        ],
+      },
+      "buildSession.packages.AmigaOS 3.2": { folder: "E:\\archives", chosen: [] },
+    });
+    render(<MaterialProbe />);
+    expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\archives");
+
+    await userEvent.click(screen.getByText("remove disks"));
+
+    expect(screen.getByTestId("material").textContent).toBe("E:\\second");
     expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\archives");
     const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
     expect(bag["buildSession.packages.AmigaOS 3.2"]).toEqual({
       folder: "E:\\archives",
       chosen: [],
     });
+  });
+
+  /// "The same folder" is the lane's one rule, `canonicalFolder`: the list's
+  /// `E:\Archives\` and a seed written `e:/archives` are one folder, so
+  /// removing the one forgets the other.
+  it("forgets the seed when the list spells the removed folder differently", async () => {
+    seed({
+      "buildSession.material.AmigaOS 3.2": {
+        folders: [
+          { path: "E:\\disks", layer: null },
+          { path: "E:\\Archives\\", layer: null },
+        ],
+      },
+      "buildSession.packages.AmigaOS 3.2": { folder: "e:/archives", chosen: [] },
+    });
+    render(<MaterialProbe />);
+    expect(screen.getByTestId("packagesFolder").textContent).toBe("e:/archives");
+
+    await userEvent.click(screen.getByText("remove Archives"));
+
+    expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\disks");
+    const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
+    expect(bag["buildSession.packages.AmigaOS 3.2"]).toBeUndefined();
   });
 
   /// The other half, and the one that decides *where* the fix goes. When
@@ -478,13 +585,11 @@ describe("a folder taken out of the material list is out of the build (F10)", ()
     await userEvent.click(screen.getByText("remove archives"));
 
     const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
-    // **Round 5, task 2 changed this assertion**: it read `toBeNull()` while
-    // a removal cleared the folder of the release being edited. Nothing
-    // writes this key now, so 3.2.2's stored folder is exactly what its
-    // settings file held — the seeded value, unchanged.
-    expect((bag["buildSession.packages.AmigaOS 3.2.2"] as { folder?: string }).folder).toBe(
-      "E:\\archives"
-    );
+    // **ART-291 (2026-09-10) changed this assertion back.** Round 5 had it
+    // read "unchanged" while nothing wrote this key; the owner's ruling
+    // restores the clear for the release being edited — and with nothing
+    // ticked, 3.2.2's record goes entirely rather than holding a `null`.
+    expect(bag["buildSession.packages.AmigaOS 3.2.2"]).toBeUndefined();
     // **3.9's is untouched**, and the user changed nothing about 3.9.
     expect((bag["buildSession.packages.AmigaOS 3.9"] as { folder?: string }).folder).toBe(
       "E:\\archives"
