@@ -619,14 +619,8 @@ mod tests {
     use super::*;
     use crate::core::volume::device::FileRegionMut;
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-journal-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-journal", name)
     }
 
     /// An image whose every block is filled with its own number, so a block
@@ -650,7 +644,7 @@ mod tests {
 
     #[test]
     fn a_committed_operation_leaves_the_new_data_and_no_journal() {
-        let dir = scratch("commit");
+        let (_guard, dir) = scratch("commit");
         let image = dir.join("disk.hdf");
         image_at(&image, 8);
 
@@ -673,7 +667,7 @@ mod tests {
 
     #[test]
     fn a_rolled_back_operation_restores_every_byte() {
-        let dir = scratch("rollback");
+        let (_guard, dir) = scratch("rollback");
         let image = dir.join("disk.hdf");
         let before = image_at(&image, 8);
 
@@ -699,7 +693,7 @@ mod tests {
     /// block ART will not touch.
     #[test]
     fn writing_a_block_that_was_not_journalled_is_refused() {
-        let dir = scratch("ungated");
+        let (_guard, dir) = scratch("ungated");
         let image = dir.join("disk.hdf");
         let before = image_at(&image, 8);
 
@@ -722,7 +716,7 @@ mod tests {
     /// the journal and undoes the half-finished write.
     #[test]
     fn a_crash_between_writes_is_undone_at_the_next_mount() {
-        let dir = scratch("crash");
+        let (_guard, dir) = scratch("crash");
         let image = dir.join("disk.hdf");
         let before = image_at(&image, 8);
 
@@ -756,7 +750,7 @@ mod tests {
     /// corrupting a file entirely on its own initiative.
     #[test]
     fn a_journal_for_a_different_image_is_refused_not_applied() {
-        let dir = scratch("mismatch");
+        let (_guard, dir) = scratch("mismatch");
         let image = dir.join("disk.hdf");
         image_at(&image, 8);
 
@@ -792,7 +786,7 @@ mod tests {
     /// one is ignored.
     #[test]
     fn a_journal_cut_off_mid_entry_replays_only_its_whole_entries() {
-        let dir = scratch("truncated");
+        let (_guard, dir) = scratch("truncated");
         let image = dir.join("disk.hdf");
         let before = image_at(&image, 8);
 
@@ -819,7 +813,7 @@ mod tests {
 
     #[test]
     fn a_corrupted_entry_stops_the_replay_there() {
-        let dir = scratch("corrupt-entry");
+        let (_guard, dir) = scratch("corrupt-entry");
         let image = dir.join("disk.hdf");
         image_at(&image, 8);
 
@@ -846,7 +840,7 @@ mod tests {
 
     #[test]
     fn a_file_that_is_not_a_journal_is_an_error_not_a_deletion() {
-        let dir = scratch("not-a-journal");
+        let (_guard, dir) = scratch("not-a-journal");
         let image = dir.join("disk.hdf");
         image_at(&image, 4);
 
@@ -865,7 +859,7 @@ mod tests {
 
     #[test]
     fn discarding_leaves_the_image_alone() {
-        let dir = scratch("discard");
+        let (_guard, dir) = scratch("discard");
         let image = dir.join("disk.hdf");
 
         image_at(&image, 8);
@@ -891,7 +885,7 @@ mod tests {
 
     #[test]
     fn no_journal_is_the_normal_answer() {
-        let dir = scratch("none");
+        let (_guard, dir) = scratch("none");
         let image = dir.join("disk.hdf");
         image_at(&image, 4);
         assert!(find_journal(&image).unwrap().is_none());
@@ -908,7 +902,7 @@ mod tests {
 
     #[test]
     fn an_operation_that_touches_nothing_is_refused() {
-        let dir = scratch("empty");
+        let (_guard, dir) = scratch("empty");
         let image = dir.join("disk.hdf");
         image_at(&image, 4);
         let mut device = open(&image, 4);
@@ -926,7 +920,7 @@ mod tests {
     /// the normal case, not a caller error.
     #[test]
     fn a_block_named_twice_is_journalled_once() {
-        let dir = scratch("dedup");
+        let (_guard, dir) = scratch("dedup");
         let image = dir.join("disk.hdf");
         let before = image_at(&image, 8);
 
@@ -945,7 +939,7 @@ mod tests {
     /// file, and recovery has to put the bytes back where they came from.
     #[test]
     fn recovery_respects_where_the_volume_starts_in_the_file() {
-        let dir = scratch("offset");
+        let (_guard, dir) = scratch("offset");
         let image = dir.join("disk.hdf");
         let before = image_at(&image, 16);
         let offset = 4 * 512u64;

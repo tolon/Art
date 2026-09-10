@@ -364,14 +364,8 @@ mod tests {
 
     const GIB: u64 = 1024 * 1024 * 1024;
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-health-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-health", name)
     }
 
     fn build(dest: &Path, fs: AmigaHardDiskFs) {
@@ -485,7 +479,7 @@ mod tests {
     /// A card ART built, with its manifest, passes everything.
     #[test]
     fn a_card_art_built_passes_every_check() {
-        let dir = scratch("good");
+        let (_guard, dir) = scratch("good");
         let image = dir.join("card.img");
         build(&image, AmigaHardDiskFs::FfsStandard);
         let manifest = manifest_for(&image, true);
@@ -511,7 +505,7 @@ mod tests {
     /// through at the machine.
     #[test]
     fn the_steps_only_a_human_can_take_are_always_listed() {
-        let dir = scratch("manual");
+        let (_guard, dir) = scratch("manual");
         let image = dir.join("card.img");
         build(&image, AmigaHardDiskFs::FfsStandard);
 
@@ -532,7 +526,7 @@ mod tests {
     /// No manifest is not a failure, and it is not a pass either.
     #[test]
     fn a_card_with_no_manifest_reports_those_checks_as_unanswered() {
-        let dir = scratch("no-manifest");
+        let (_guard, dir) = scratch("no-manifest");
         let image = dir.join("card.img");
         build(&image, AmigaHardDiskFs::FfsStandard);
 
@@ -568,7 +562,7 @@ mod tests {
     /// so before the file is handed over.
     #[test]
     fn a_partition_naming_a_filesystem_the_card_lacks_fails() {
-        let dir = scratch("unmountable");
+        let (_guard, dir) = scratch("unmountable");
         let image = dir.join("card.img");
         build(&image, AmigaHardDiskFs::Pfs3Standard);
 
@@ -594,7 +588,7 @@ mod tests {
     fn an_amiga_area_before_the_boot_partition_fails() {
         use std::io::{Seek, SeekFrom, Write};
 
-        let dir = scratch("unit0");
+        let (_guard, dir) = scratch("unit0");
         let image = dir.join("card.img");
         build(&image, AmigaHardDiskFs::FfsStandard);
 
@@ -648,7 +642,7 @@ mod tests {
     /// the manifest check on its own.
     #[test]
     fn a_manifest_that_disagrees_fails_the_report() {
-        let dir = scratch("stale");
+        let (_guard, dir) = scratch("stale");
         let image = dir.join("card.img");
         build(&image, AmigaHardDiskFs::FfsStandard);
 
@@ -676,7 +670,7 @@ mod tests {
     /// warning that it will not boot is the build's to make.
     #[test]
     fn a_card_with_no_rom_leaves_the_kickstart_check_unanswered() {
-        let dir = scratch("no-rom");
+        let (_guard, dir) = scratch("no-rom");
         let image = dir.join("card.img");
         build(&image, AmigaHardDiskFs::FfsStandard);
         let manifest = manifest_for(&image, false);

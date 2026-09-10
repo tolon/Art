@@ -231,11 +231,8 @@ mod tests {
     use super::*;
     use crate::core::rdb::{create_rdb_layout, AmigaHardDiskFs, PartitionSpec};
 
-    fn scratch(tag: &str) -> std::path::PathBuf {
-        let stamp = crate::core::test_scratch_id();
-        let dir = std::env::temp_dir().join(format!("art-card-{tag}-{stamp}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-card", tag)
     }
 
     fn partition(name: &str, fs: AmigaHardDiskFs) -> PartitionSpec {
@@ -251,8 +248,8 @@ mod tests {
 
     /// A card built the way both real ones are: MBR, a FAT32 partition, then
     /// one or two Amiga areas each holding a real RDB.
-    fn card(tag: &str, areas: &[(u64, Vec<u8>)]) -> std::path::PathBuf {
-        let dir = scratch(tag);
+    fn card(tag: &str, areas: &[(u64, Vec<u8>)]) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        let (guard, dir) = scratch(tag);
         let path = dir.join("card.img");
 
         let end = areas
@@ -287,7 +284,7 @@ mod tests {
         }
 
         std::fs::write(&path, &image).unwrap();
-        path
+        (guard, path)
     }
 
     #[test]
@@ -301,7 +298,7 @@ mod tests {
         )
         .unwrap();
         let base = 1_048_576 + 1024 * 1024; // past the FAT32 partition
-        let path = card("one-area", &[(base, layout.blocks)]);
+        let (_guard, path) = card("one-area", &[(base, layout.blocks)]);
 
         let found = read_card(&path).unwrap();
         assert!(found.mbr.is_some(), "a card has a partition table");
@@ -323,7 +320,7 @@ mod tests {
             &[],
         )
         .unwrap();
-        let dir = scratch("plain");
+        let (_guard, dir) = scratch("plain");
         let path = dir.join("plain.hdf");
         std::fs::write(&path, &layout.blocks).unwrap();
 
@@ -353,7 +350,7 @@ mod tests {
 
         let base_a = 1_048_576;
         let base_b = base_a + 4 * 1024 * 1024;
-        let path = card(
+        let (_guard, path) = card(
             "two-areas",
             &[(base_a, first.blocks), (base_b, second.blocks)],
         );
@@ -394,7 +391,7 @@ mod tests {
 
         let base_a = 1_048_576;
         let base_b = base_a + 4 * 1024 * 1024;
-        let path = card(
+        let (_guard, path) = card(
             "union",
             &[
                 (base_a, with_driver.blocks),
@@ -425,7 +422,7 @@ mod tests {
             &[],
         )
         .unwrap();
-        let path = card("missing", &[(1_048_576, layout.blocks)]);
+        let (_guard, path) = card("missing", &[(1_048_576, layout.blocks)]);
 
         let found = read_card(&path).unwrap();
         let missing = found.partitions_missing_driver();
@@ -444,7 +441,7 @@ mod tests {
             &[],
         )
         .unwrap();
-        let path = card("ffs", &[(1_048_576, layout.blocks)]);
+        let (_guard, path) = card("ffs", &[(1_048_576, layout.blocks)]);
 
         let found = read_card(&path).unwrap();
         assert!(found.partitions_missing_driver().is_empty());
@@ -463,7 +460,7 @@ mod tests {
         )
         .unwrap();
         let base = 1_048_576;
-        let path = card("truncated", &[(base, layout.blocks)]);
+        let (_guard, path) = card("truncated", &[(base, layout.blocks)]);
 
         // Claim a second area far past the end.
         let mut image = std::fs::read(&path).unwrap();
@@ -481,7 +478,7 @@ mod tests {
 
     #[test]
     fn a_file_too_small_to_hold_a_table_is_refused_by_name() {
-        let dir = scratch("tiny");
+        let (_guard, dir) = scratch("tiny");
         let path = dir.join("tiny.img");
         std::fs::write(&path, b"nope").unwrap();
         assert!(read_card(&path).is_err());

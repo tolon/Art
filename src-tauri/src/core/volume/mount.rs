@@ -402,14 +402,8 @@ mod tests {
     use crate::core::adf::create::create_blank_adf;
     use crate::core::volume::BlockDevice;
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-mount-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-mount", name)
     }
 
     // ---- where a bare volume actually ends (ART-131) ----
@@ -431,7 +425,7 @@ mod tests {
         const VOLUME_BLOCKS: u32 = 1824; // 57 cylinders of 32
         const FILE_BLOCKS: u32 = 1843; // what the real images measure
 
-        let dir = scratch("short-volume");
+        let (_guard, dir) = scratch("short-volume");
         let path = dir.join("Game.hdf");
 
         let mut bytes = make_ffs_volume(VOLUME_BLOCKS, "Game", &[]);
@@ -463,7 +457,7 @@ mod tests {
     fn a_volume_that_fills_its_file_is_left_alone() {
         use crate::core::volume::fixture::make_ffs_volume;
 
-        let dir = scratch("full-volume");
+        let (_guard, dir) = scratch("full-volume");
         let path = dir.join("Game.hdf");
         std::fs::write(&path, make_ffs_volume(1843, "Game", &[])).unwrap();
 
@@ -481,7 +475,7 @@ mod tests {
     /// message from the probe.
     #[test]
     fn an_image_with_no_root_block_anywhere_keeps_its_own_count() {
-        let dir = scratch("no-root");
+        let (_guard, dir) = scratch("no-root");
         let path = dir.join("Rubbish.hdf");
 
         let mut bytes = vec![0u8; 1843 * SECTOR_BYTES];
@@ -500,7 +494,7 @@ mod tests {
     /// The WHDLoad-world case: no RDB, the file *is* the filesystem.
     #[test]
     fn a_bare_hardfile_mounts_as_one_volume() {
-        let dir = scratch("bare");
+        let (_guard, dir) = scratch("bare");
         let path = dir.join("Games.hdf");
         // A blank ADF is a bare DOS volume; the layout is identical, only the
         // size differs, which is exactly the point of the abstraction.
@@ -524,7 +518,7 @@ mod tests {
 
     #[test]
     fn a_bare_volume_can_be_opened_and_read() {
-        let dir = scratch("bareopen");
+        let (_guard, dir) = scratch("bareopen");
         let path = dir.join("Games.hdf");
         std::fs::write(
             &path,
@@ -549,7 +543,7 @@ mod tests {
     /// file it did not recognise; guessing is what this replaces.
     #[test]
     fn a_file_that_is_neither_is_reported_as_unknown_not_guessed() {
-        let dir = scratch("unknown");
+        let (_guard, dir) = scratch("unknown");
         let path = dir.join("mystery.hdf");
         std::fs::write(&path, vec![0x42u8; 4096]).unwrap();
 
@@ -564,7 +558,7 @@ mod tests {
 
     #[test]
     fn a_file_too_small_to_hold_a_block_is_refused() {
-        let dir = scratch("tiny");
+        let (_guard, dir) = scratch("tiny");
         let path = dir.join("tiny.hdf");
         std::fs::write(&path, vec![0u8; 10]).unwrap();
 
@@ -577,7 +571,7 @@ mod tests {
 
     #[test]
     fn an_unsupported_filesystem_is_listed_with_its_reason() {
-        let dir = scratch("pfs");
+        let (_guard, dir) = scratch("pfs");
         let path = dir.join("pfs.hdf");
         let mut image = vec![0u8; 4096];
         image[..4].copy_from_slice(b"PFS\x03");
@@ -600,7 +594,7 @@ mod tests {
 
     #[test]
     fn opening_an_unsupported_volume_says_why_rather_than_failing_obscurely() {
-        let dir = scratch("pfsopen");
+        let (_guard, dir) = scratch("pfsopen");
         let path = dir.join("pfs.hdf");
         let mut image = vec![0u8; 4096];
         image[..4].copy_from_slice(b"SFS\x00");
@@ -617,7 +611,7 @@ mod tests {
 
     #[test]
     fn a_long_filename_volume_is_listed_but_refused() {
-        let dir = scratch("lnfs");
+        let (_guard, dir) = scratch("lnfs");
         let path = dir.join("lnfs.hdf");
         let mut image = vec![0u8; 4096];
         image[..4].copy_from_slice(b"DOS\x07");
@@ -639,7 +633,7 @@ mod tests {
     /// Stage W's decision, not this one's.
     #[test]
     fn a_dircache_volume_is_browsable() {
-        let dir = scratch("dircache");
+        let (_guard, dir) = scratch("dircache");
         let path = dir.join("dc.hdf");
         let mut image = vec![0u8; 4096];
         image[..4].copy_from_slice(b"DOS\x05");
@@ -655,7 +649,7 @@ mod tests {
 
     #[test]
     fn a_volume_that_claims_more_than_the_file_holds_is_clamped_and_flagged() {
-        let dir = scratch("clamped");
+        let (_guard, dir) = scratch("clamped");
         let path = dir.join("short.hdf");
         let mut image = create_blank_adf("Short", FileSystemType::Ffs, false).unwrap();
         image.truncate(900 * 512); // half a floppy
@@ -674,7 +668,7 @@ mod tests {
 
     #[test]
     fn mounting_never_panics_on_absurd_entries() {
-        let dir = scratch("absurd");
+        let (_guard, dir) = scratch("absurd");
         let path = dir.join("d.hdf");
         std::fs::write(&path, vec![0u8; 4096]).unwrap();
 
@@ -721,12 +715,8 @@ mod rdb_tests {
     /// Cylinders the RDB itself reserves at the front.
     const RESERVED_CYLINDERS: u64 = 2;
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("art-rdb-{name}-{}", crate::core::test_scratch_id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-rdb", name)
     }
 
     /// Write an ART-made image to `dest`, for the amitools oracle (§4.3).
@@ -779,7 +769,7 @@ mod rdb_tests {
     /// living at a non-zero offset inside a bigger file.
     #[test]
     fn a_partition_is_found_at_the_offset_the_geometry_implies() {
-        let dir = scratch("offset");
+        let (_guard, dir) = scratch("offset");
         let path = dir.join("disk.hdf");
         let (expected_offset, blocks) = rdb_image_with(&path, &[]);
 
@@ -803,7 +793,7 @@ mod rdb_tests {
     /// old floppy-shaped code could never have read.
     #[test]
     fn a_partition_mounts_with_its_own_geometry() {
-        let dir = scratch("geometry");
+        let (_guard, dir) = scratch("geometry");
         let path = dir.join("disk.hdf");
         let (_, blocks) = rdb_image_with(&path, &[]);
 
@@ -820,7 +810,7 @@ mod rdb_tests {
 
     #[test]
     fn files_inside_a_partition_are_listed() {
-        let dir = scratch("list");
+        let (_guard, dir) = scratch("list");
         let path = dir.join("disk.hdf");
         rdb_image_with(
             &path,
@@ -850,7 +840,7 @@ mod rdb_tests {
 
     #[test]
     fn a_file_inside_a_partition_extracts_byte_for_byte() {
-        let dir = scratch("extract");
+        let (_guard, dir) = scratch("extract");
         let path = dir.join("disk.hdf");
         let payload: &[u8] = b"The quick brown fox jumps over the lazy dog. 0123456789";
         rdb_image_with(
@@ -884,7 +874,7 @@ mod rdb_tests {
     /// this, which is why it went unnoticed for so long.
     #[test]
     fn a_partition_large_enough_needs_several_bitmap_blocks() {
-        let dir = scratch("bitmapchain");
+        let (_guard, dir) = scratch("bitmapchain");
         let path = dir.join("disk.hdf");
         let (_, blocks) = rdb_image_with(&path, &[]);
 
@@ -913,7 +903,7 @@ mod rdb_tests {
     /// partition damaged.
     #[test]
     fn a_healthy_partition_validates_clean() {
-        let dir = scratch("validate");
+        let (_guard, dir) = scratch("validate");
         let path = dir.join("disk.hdf");
         rdb_image_with(&path, &[]);
 
