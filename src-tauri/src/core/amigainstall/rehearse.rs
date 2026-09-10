@@ -275,6 +275,7 @@ mod tests {
             limits: RunLimits {
                 deadline: Duration::from_secs(10),
                 poll_interval: Duration::from_millis(1),
+                ..RunLimits::default()
             },
         }
     }
@@ -388,6 +389,7 @@ mod tests {
         req.limits = RunLimits {
             deadline: Duration::from_secs(1),
             poll_interval: Duration::from_secs(1),
+            ..RunLimits::default()
         };
 
         let outcome = rehearse_with(

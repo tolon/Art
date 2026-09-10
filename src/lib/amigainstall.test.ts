@@ -61,7 +61,13 @@ describe("the four endings reach the frontend", () => {
     const rust = variants(enumBody(CORE, "RunOutcome")).map(kebab);
     const ts = kindsBetween("export type RunOutcome", "export type SettlementReport");
 
-    expect(rust).toEqual(["succeeded", "failed", "timed-out", "emulator-closed"]);
+    expect(rust).toEqual([
+      "succeeded",
+      "failed",
+      "timed-out",
+      "emulator-closed",
+      "wrote-without-stopping",
+    ]);
     expect([...ts].sort()).toEqual([...rust].sort());
   });
 
@@ -140,12 +146,18 @@ import {
   type SettlementReport,
 } from "@/lib/amigainstall";
 
-/** The four endings, each exactly as the Rust writes it on the wire. */
+/** The five endings, each exactly as the Rust writes it on the wire. */
 const ENDINGS: RunOutcome[] = [
   { kind: "succeeded" },
   { kind: "failed" },
   { kind: "timed-out", waited: { secs: 1800, nanos: 0 } },
   { kind: "emulator-closed", waited: { secs: 42, nanos: 0 } },
+  {
+    kind: "wrote-without-stopping",
+    waited: { secs: 40, nanos: 0 },
+    written: 170_328_064,
+    ceiling: 67_108_864,
+  },
 ];
 
 /** A preview of the shipped BoingBag 3.9-1 run, everything present. */
@@ -174,7 +186,7 @@ function preview(over: Partial<AmigaInstallPreview> = {}): AmigaInstallPreview {
   };
 }
 
-describe("the four endings stay four sentences", () => {
+describe("the five endings stay five sentences", () => {
   // The defect this whole round kept producing is a confidently wrong
   // sentence, and the cheapest way to produce one here is to map two
   // endings onto one key: "nobody answered — watch the window next time" is
@@ -196,6 +208,20 @@ describe("the four endings stay four sentences", () => {
     expect(outcomeTone({ kind: "failed" })).toBe("err");
     expect(outcomeTone({ kind: "timed-out", waited: { secs: 1, nanos: 0 } })).toBe("warn");
     expect(outcomeTone({ kind: "succeeded" })).toBe("ok");
+  });
+
+  // ART-278: the runaway is the one ending with a measurement behind it,
+  // and the sentence carries the measurement — in whole mebibytes, the unit
+  // the copy's size is read in, so 170 328 064 bytes reads as 162, not 170.
+  it("says how much a runaway wrote, against what it was allowed", () => {
+    const runaway = ENDINGS[4];
+    expect(outcomePhrase(runaway).params).toEqual({ seconds: 40, written: 162, ceiling: 64 });
+    expect(outcomeTone(runaway)).toBe("err");
+    // And it is not the timeout's advice: nobody is told to watch a window
+    // for an installer that was not waiting on anything.
+    expect(outcomeNextStepPhrase(runaway).key).not.toBe(
+      outcomeNextStepPhrase({ kind: "timed-out", waited: { secs: 1, nanos: 0 } }).key
+    );
   });
 
   it("says how long a timeout or a closed window waited", () => {

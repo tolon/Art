@@ -15,11 +15,13 @@
 //!
 //! ## What each ending does
 //!
-//! [`RunOutcome`] has four variants and only one of them promotes anything.
-//! The other three are not one thing called "not succeeded": a failure means
-//! the installer said no, a timeout means nobody answered a requester, and a
-//! closed emulator means the person watching shut the window. All three leave
-//! the original **untouched** — and all three leave the copy **in place**,
+//! [`RunOutcome`] has five variants and only one of them promotes anything.
+//! The other four are not one thing called "not succeeded": a failure means
+//! the installer said no, a timeout means nobody answered a requester, a
+//! closed emulator means the person watching shut the window, and a runaway
+//! means the installer was still writing when the copy had grown past what a
+//! run may add (ART-278). All four leave
+//! the original **untouched** — and all four leave the copy **in place**,
 //! because a user told "it failed" and not told where the evidence went has
 //! been given nothing (design §4). [`Settlement::Kept`] carries that path —
 //! and the original's, so the report can say both halves of what happened:
@@ -169,21 +171,100 @@ pub fn stage_with(tree: &Path, sink: &dyn ProgressSink) -> CoreResult<Staged> {
 
 /// Promote the copy, or keep it — whichever the run's ending says.
 ///
-/// **Only [`RunOutcome::Succeeded`] promotes.** The other three arms are
-/// listed by name rather than swept up by `_`, so a fifth ending would fail
+/// **Only [`RunOutcome::Succeeded`] promotes.** The other four arms are
+/// listed by name rather than swept up by `_`, so a sixth ending would fail
 /// to compile here instead of quietly inheriting whatever this one does.
+///
+/// The runaway keeps its copy like the rest, however large the installer
+/// made it. Deleting a hundred megabytes beside the user's tree unasked
+/// would be the one thing this module never does; the report names the
+/// copy and says it is safe to delete, and the deleting is the user's.
 pub fn settle(staged: Staged, outcome: &RunOutcome) -> CoreResult<Settlement> {
     match outcome {
         RunOutcome::Succeeded => staged.commit().map(Settlement::Promoted),
-        // Three different things to tell the user, one thing to do with the
+        // Four different things to tell the user, one thing to do with the
         // filesystem: nothing.
-        RunOutcome::Failed | RunOutcome::TimedOut { .. } | RunOutcome::EmulatorClosed { .. } => {
-            Ok(Settlement::Kept {
-                copy: staged.copy,
-                original: staged.original,
-            })
+        RunOutcome::Failed
+        | RunOutcome::TimedOut { .. }
+        | RunOutcome::EmulatorClosed { .. }
+        | RunOutcome::WroteWithoutStopping { .. } => Ok(Settlement::Kept {
+            copy: staged.copy,
+            original: staged.original,
+        }),
+    }
+}
+
+/// Every file's bytes under `root` — the measure ART-278's growth ceiling is
+/// taken against, once before the launch and once per poll.
+///
+/// Nothing is followed: a directory entry's own metadata is read, so a link
+/// counts as its own few bytes and cannot lead the count out of the copy.
+/// (The copy was refused if it held one — [`action_for`] — but an installer
+/// may make one inside it.) An entry that vanishes between the directory
+/// listing and its metadata is a running installer renaming its staging
+/// file, which is exactly the moment this is polled at, and it counts as
+/// nothing rather than failing the run. A `root` that is not there is an
+/// error, not zero: a run whose copy has gone must not be told it is empty.
+///
+/// Measured on the owner's own material, 2026-09-10: 6 763 files summed in
+/// 26 ms once the metadata was warm, 557 ms cold — a fraction of a
+/// two-second poll, which is why it is asked every poll rather than every
+/// few.
+pub fn tree_bytes(root: &Path) -> CoreResult<u64> {
+    tree_bytes_with(root, &|_| {})
+}
+
+/// [`tree_bytes`] with a seam: `before_entry` runs after an entry has been
+/// listed and before it is read. It exists so a test can *be* the installer
+/// that removes a directory between the two — the race this function is
+/// polled into, which nothing but a test can time. Production passes a
+/// no-op.
+fn tree_bytes_with(root: &Path, before_entry: &dyn Fn(&Path)) -> CoreResult<u64> {
+    let mut total = 0u64;
+    sum_into(root, 0, &mut total, before_entry)?;
+    Ok(total)
+}
+
+fn sum_into(
+    dir: &Path,
+    depth: usize,
+    total: &mut u64,
+    before_entry: &dyn Fn(&Path),
+) -> CoreResult<()> {
+    if depth >= MAX_TREE_DEPTH {
+        return Err(CoreError::InvalidInput(format!(
+            "'{}' is nested deeper than ART will measure (limit {MAX_TREE_DEPTH})",
+            dir.display()
+        )));
+    }
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        // A directory the installer removed since it was listed — below the
+        // root only; the root itself missing is the error the caller needs.
+        Err(err) if depth > 0 && err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+
+    for entry in entries {
+        let entry = entry?;
+        before_entry(&entry.path());
+        // `DirEntry::metadata` does not follow a link, by contract. On
+        // Windows it answers from the listing itself, so this arm cannot be
+        // reached there and is for the other platforms; the directory arm
+        // above is the one Windows takes.
+        let meta = match entry.metadata() {
+            Ok(meta) => meta,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err.into()),
+        };
+        if meta.is_dir() {
+            sum_into(&entry.path(), depth + 1, total, before_entry)?;
+        } else {
+            *total = total.saturating_add(meta.len());
         }
     }
+    Ok(())
 }
 
 impl Staged {
@@ -678,16 +759,23 @@ mod tests {
         }
     }
 
-    /// The same for the two endings that are not failures. They differ in what
-    /// the user is told, never in what happens to the tree.
+    /// The same for the three endings that are not failures. They differ in
+    /// what the user is told, never in what happens to the tree — and the
+    /// runaway (ART-278) keeps its copy too, however large the installer
+    /// made it: the report names it, and deleting it is the user's.
     #[test]
-    fn a_timeout_and_a_closed_emulator_leave_the_original_too() {
+    fn a_timeout_a_closed_emulator_and_a_runaway_leave_the_original_too() {
         for outcome in [
             RunOutcome::TimedOut {
                 waited: Duration::from_secs(1200),
             },
             RunOutcome::EmulatorClosed {
                 waited: Duration::from_secs(31),
+            },
+            RunOutcome::WroteWithoutStopping {
+                waited: Duration::from_secs(40),
+                written: 170_328_064,
+                ceiling: 64 * 1024 * 1024,
             },
         ] {
             let scratch = Scratch::new("not-success");
@@ -885,6 +973,75 @@ mod tests {
             staging_siblings(scratch.path()).is_empty(),
             "and the partial copy went with it"
         );
+    }
+
+    /// ART-278's measure: every file's bytes under the root, nothing else —
+    /// a directory's own size is not counted, and a file beside the root is
+    /// not under it.
+    #[test]
+    fn tree_bytes_is_the_sum_of_every_file_under_the_root() {
+        let scratch = Scratch::new("bytes");
+        let tree = distribution_tree(scratch.path());
+        fs::write(scratch.path().join("beside"), vec![0u8; 9000]).unwrap();
+
+        let expected: u64 = fingerprint(&tree)
+            .values()
+            .map(|bytes| bytes.len() as u64)
+            .sum();
+        assert!(
+            expected > 4096,
+            "the fixture has the 4 KiB library and more"
+        );
+        assert_eq!(tree_bytes(&tree).unwrap(), expected);
+    }
+
+    /// A directory the installer removes between the listing and the descent
+    /// — the race this is polled into — counts as nothing and fails nothing.
+    /// The seam plays the installer, because no test can otherwise land a
+    /// deletion inside that gap on purpose.
+    #[test]
+    fn a_directory_that_vanishes_mid_walk_counts_as_nothing_rather_than_failing() {
+        let scratch = Scratch::new("vanish");
+        let tree = distribution_tree(scratch.path());
+        let without_storage: u64 = fingerprint(&tree)
+            .iter()
+            .filter(|(path, _)| !path.starts_with("Storage/"))
+            .map(|(_, bytes)| bytes.len() as u64)
+            .sum();
+
+        let total = tree_bytes_with(&tree, &|listed| {
+            if listed.file_name().is_some_and(|name| name == "Storage") {
+                fs::remove_dir_all(listed).unwrap();
+            }
+        })
+        .expect("a vanished directory is the installer at work, not an error");
+
+        assert_eq!(total, without_storage, "everything but the vanished drawer");
+    }
+
+    /// A root that is not there is an error, not zero: a run whose copy has
+    /// vanished must not be told its copy is empty.
+    #[test]
+    fn tree_bytes_of_a_missing_root_is_an_error() {
+        let scratch = Scratch::new("no-root");
+        let err = tree_bytes(&scratch.path().join("gone")).expect_err("nothing to measure");
+        assert!(matches!(err, CoreError::Io(_)), "{err:?}");
+    }
+
+    /// The same cap as the copy, for the same reason: `panic = "abort"`.
+    #[test]
+    fn tree_bytes_refuses_a_tree_deeper_than_the_cap() {
+        let scratch = Scratch::new("deep-bytes");
+        let tree = scratch.path().join("Deep");
+        let mut here = tree.clone();
+        for _ in 0..=MAX_TREE_DEPTH {
+            here = here.join("d");
+        }
+        fs::create_dir_all(&here).unwrap();
+        fs::write(here.join("bottom"), b"still mine").unwrap();
+
+        let err = tree_bytes(&tree).expect_err("too deep to measure");
+        assert!(matches!(err, CoreError::InvalidInput(_)), "{err:?}");
     }
 
     #[test]

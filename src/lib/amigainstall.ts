@@ -20,13 +20,15 @@
 // the two things ART cannot supply (the user's own Kickstart, an emulator)
 // are there. `amigaInstallRun` is the data-changing half and returns a job id.
 //
-// **Four endings, not two.** `RunOutcome` is a tagged union and each tag is a
+// **Five endings, not two.** `RunOutcome` is a tagged union and each tag is a
 // different sentence to the user: `failed` means the installer said no,
 // `timed-out` means nobody answered a requester it put up, `emulator-closed`
-// means the window was shut. Only `succeeded` promotes the copy over the
-// user's tree; the other three leave the original untouched and the copy in
-// place, and `SettlementReport` names both paths so a report can say both
-// halves. Never collapse the three into "it did not work".
+// means the window was shut, `wrote-without-stopping` means the copy grew
+// past what a run may add and the installer was still writing (ART-278).
+// Only `succeeded` promotes the copy over the user's tree; the other four
+// leave the original untouched and the copy in place, and `SettlementReport`
+// names both paths so a report can say both halves. Never collapse the four
+// into "it did not work".
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -49,14 +51,17 @@ export interface WireDuration {
  * are kebab-case — and whose struct-variant fields are **not** renamed with
  * it, because `#[serde(rename_all)]` on an enum renames variants and not their
  * fields. `every_run_outcome_has_the_shape_the_frontend_reads` pins the JSON
- * on the Rust side and `amigainstall.test.ts` checks these four names against
+ * on the Rust side and `amigainstall.test.ts` checks these five names against
  * the Rust source.
  */
 export type RunOutcome =
   | { kind: "succeeded" }
   | { kind: "failed" }
   | { kind: "timed-out"; waited: WireDuration }
-  | { kind: "emulator-closed"; waited: WireDuration };
+  | { kind: "emulator-closed"; waited: WireDuration }
+  /** ART-278: the copy grew by `written` bytes, past the `ceiling` bytes a
+   *  run may add to it, and the installer was still writing. */
+  | { kind: "wrote-without-stopping"; waited: WireDuration; written: number; ceiling: number };
 
 /** What happened to the copy the install ran against. */
 export type SettlementReport =
@@ -331,7 +336,7 @@ export async function onAmigaInstallResult(
 // component for the reason `OsInstall.tsx`'s own review gave: "no test can
 // reach [it], because it lives inside the component."
 //
-// **The four endings are four, and the refusals name their reason.** That is
+// **The five endings are five, and the refusals name their reason.** That is
 // the whole point of this section. Three separate defects in this round were
 // the same shape — ART telling the user a confidently wrong sentence — so a
 // mapper here that returned one key for two endings, or a component that
@@ -343,6 +348,12 @@ export async function onAmigaInstallResult(
  *  dropping it entirely would print `0` for a run that took 900 ms. */
 export function waitedSeconds(waited: WireDuration): number {
   return Math.round(waited.secs + waited.nanos / 1_000_000_000);
+}
+
+/** Whole mebibytes out of a byte count — the unit the copy's size is read
+ *  in, so the ceiling's 64 MiB prints as 64 and not as 67. */
+export function mebibytes(bytes: number): number {
+  return Math.round(bytes / 1_048_576);
 }
 
 /**
@@ -370,6 +381,15 @@ export function outcomePhrase(outcome: RunOutcome): Phrase {
         key: "osinstall.amigaInstall.outcome.emulatorClosed",
         params: { seconds: waitedSeconds(outcome.waited) },
       };
+    case "wrote-without-stopping":
+      return {
+        key: "osinstall.amigaInstall.outcome.wroteWithoutStopping",
+        params: {
+          seconds: waitedSeconds(outcome.waited),
+          written: mebibytes(outcome.written),
+          ceiling: mebibytes(outcome.ceiling),
+        },
+      };
   }
 }
 
@@ -385,6 +405,8 @@ export function outcomeNextStepPhrase(outcome: RunOutcome): Phrase {
       return { key: "osinstall.amigaInstall.next.timedOut" };
     case "emulator-closed":
       return { key: "osinstall.amigaInstall.next.emulatorClosed" };
+    case "wrote-without-stopping":
+      return { key: "osinstall.amigaInstall.next.wroteWithoutStopping" };
   }
 }
 
@@ -400,6 +422,9 @@ export function outcomeTone(outcome: RunOutcome): "ok" | "warn" | "err" {
     case "timed-out":
     case "emulator-closed":
       return "warn";
+    // A refusal's colour, not a timeout's: the package is the problem.
+    case "wrote-without-stopping":
+      return "err";
   }
 }
 

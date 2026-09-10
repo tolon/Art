@@ -14,7 +14,7 @@
 //! quit it. That single measurement is why this module is a loop around
 //! [`super::RESULT_FILE`] rather than a `wait()`.
 //!
-//! ## Three rules, and they are the whole module
+//! ## Four rules, and they are the whole module
 //!
 //! 1. **Poll, do not busy-wait.** A sleep between reads, and
 //!    `is_cancelled()` checked *between* polls — never inside one.
@@ -29,6 +29,14 @@
 //!    returned, never by name and never by a bare number: the owner may have
 //!    their own WinUAE open, and ending it would be ART destroying something
 //!    it does not own.
+//! 4. **The copy may not grow without limit** (ART-278). The wall clock is
+//!    not the only bound: the copy's bytes are read before the launch and on
+//!    every poll, and a run that has added more than [`GrowthCeiling`]
+//!    allows ends as [`RunOutcome::WroteWithoutStopping`] — checked before
+//!    the deadline, because it is the more specific observation. Measured on
+//!    the owner's material: a package with one damaged byte wrote 170 MB in
+//!    thirty minutes and was still writing at the deadline, and the ending it
+//!    was given said "nobody answered".
 //!
 //! ## Why there are two seams
 //!
@@ -54,6 +62,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use super::stage::tree_bytes;
 use super::{
     claims_package_volume, claims_work_volume, PlannedRun, RunOutcome, MARK_FAILED, MARK_OK,
     MARK_STARTED, PACKAGE_VOLUME, WORK_VOLUME,
@@ -135,6 +144,68 @@ pub const PROVISIONAL_DEADLINE: Duration = Duration::from_secs(30 * 60);
 /// the loop costs nothing: an install measured in minutes is not made faster
 /// by reading a file more often.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+/// How much a run may add to the copy before ART ends it as one that was
+/// writing without stopping ([`RunOutcome::WroteWithoutStopping`], ART-278).
+///
+/// ## What was measured
+///
+/// Two things, on the owner's own material and through this exact code path:
+///
+/// | What | Growth of the copy |
+/// |---|---|
+/// | BoingBag 3.9-2 installing, 2026-08-21 (`Succeeded`, 138.1 s) | **397 437 bytes** — 20 135 997 → 20 533 434 |
+/// | BoingBag 3.9-2 with **one byte** of its payload flipped, 2026-09-08, twice | **170 328 064** and **173 408 256 bytes** in one 30-minute deadline, one file, still growing when the emulator was ended |
+///
+/// A real install grows the tree by a fraction of a megabyte; a damaged one
+/// grows it by about 95 MB a minute and never stops. The floor below sits
+/// two orders of magnitude above the first and is crossed by the second in
+/// well under a minute — so a runaway is caught while the deadline still has
+/// twenty-nine minutes to run, and no measured install comes near it.
+///
+/// ## Why two rules
+///
+/// The floor alone would let a large tree's proportionate install through
+/// only by luck; the multiple alone would trip a small tree on a modest
+/// install. The copy may grow by the **larger** of the two
+/// ([`GrowthCeiling::allowed`]). Data, like the deadline: every run takes
+/// its ceiling from [`RunLimits`], and a package known to write more can be
+/// given more.
+///
+/// The ceiling is on **growth**, never on size — the copy's bytes as staged
+/// are read before the launch and subtracted, so a 500 MB tree with a
+/// 64 MiB floor is not a runaway until it has grown by 64 MiB.
+pub const GROWTH_CEILING: GrowthCeiling = GrowthCeiling {
+    multiple: 2,
+    floor: 64 * 1024 * 1024,
+};
+
+/// What a run may add to the copy: see [`GROWTH_CEILING`] for the numbers
+/// and what they were measured against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GrowthCeiling {
+    /// The copy may grow by this many times its own size as staged.
+    pub multiple: u64,
+    /// And by at least this many bytes, whatever its size.
+    pub floor: u64,
+}
+
+impl GrowthCeiling {
+    /// How many bytes a copy of `baseline` bytes may grow by.
+    ///
+    /// Saturating rather than wrapping: a multiple that overflows must mean
+    /// "no limit from this rule", never a ceiling of a few bytes that ends
+    /// every run on its first poll.
+    pub fn allowed(&self, baseline: u64) -> u64 {
+        baseline.saturating_mul(self.multiple).max(self.floor)
+    }
+}
+
+impl Default for GrowthCeiling {
+    fn default() -> Self {
+        GROWTH_CEILING
+    }
+}
 
 /// The Amiga device name ART's own work volume is mounted under.
 ///
@@ -233,14 +304,19 @@ pub trait EmulatorLauncher {
     fn launch(&self, config_text: &str) -> CoreResult<Box<dyn EmulatorSession>>;
 }
 
-/// How long a run may take, and how often it is asked.
+/// How long a run may take, how often it is asked, and how much it may
+/// write.
 ///
 /// Data, not constants baked into the loop, so the deadline Task 8 measures
-/// arrives here without touching [`run_with`].
+/// and the ceiling ART-278 measured both arrive here without touching
+/// [`run_with`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunLimits {
     pub deadline: Duration,
     pub poll_interval: Duration,
+    /// How much the copy may grow before the run is ended as a runaway
+    /// ([`GROWTH_CEILING`]).
+    pub growth: GrowthCeiling,
 }
 
 impl Default for RunLimits {
@@ -248,6 +324,7 @@ impl Default for RunLimits {
         Self {
             deadline: PROVISIONAL_DEADLINE,
             poll_interval: POLL_INTERVAL,
+            growth: GROWTH_CEILING,
         }
     }
 }
@@ -468,6 +545,11 @@ pub fn run_with(
     let config = generate_uae_config(request.profile, &media)?;
     let result_file = super::workvol::result_path(request.work_volume_dir);
 
+    // The copy's size as staged: what the growth ceiling is measured from
+    // (ART-278). Read **before** the launch, so nothing the installer writes
+    // can be mistaken for something the tree already held.
+    let baseline = tree_bytes(request.tree_dir)?;
+
     // Before the launch is the cheapest place to stop: nothing has started, so
     // there is nothing to terminate and nothing to leave behind.
     if sink.is_cancelled() {
@@ -491,7 +573,14 @@ pub fn run_with(
     // round, and one that cannot be closed is worse. Keeping the `Child`
     // rather than a pid stops ART ending a process it did not start; this is
     // the same care in the other direction, so ART always ends the one it did.
-    let ending = poll_until_ending(request, session.as_mut(), clock, sink, &result_file);
+    let ending = poll_until_ending(
+        request,
+        session.as_mut(),
+        clock,
+        sink,
+        &result_file,
+        baseline,
+    );
     end_session(session.as_mut(), sink);
     ending
 }
@@ -505,8 +594,10 @@ fn poll_until_ending(
     clock: &dyn Clock,
     sink: &dyn ProgressSink,
     result_file: &Path,
+    baseline: u64,
 ) -> CoreResult<RunOutcome> {
     let deadline = request.limits.deadline;
+    let ceiling = request.limits.growth.allowed(baseline);
     loop {
         // The result is read first, every time round. An answer that landed
         // during the last sleep outranks both the deadline below it and a
@@ -536,6 +627,21 @@ fn poll_until_ending(
             }
             return Ok(RunOutcome::EmulatorClosed {
                 waited: clock.elapsed(),
+            });
+        }
+
+        // What the run has added to the copy so far, against what a run may
+        // (ART-278). Asked **before** the deadline because it is the more
+        // specific of the two observations: a run that crossed both was
+        // writing without stopping, and "nobody answered" would send the user
+        // to watch a window that was never going to ask anything. Growth,
+        // not size — a copy the installer shrank counts as nothing.
+        let written = tree_bytes(request.tree_dir)?.saturating_sub(baseline);
+        if written > ceiling {
+            return Ok(RunOutcome::WroteWithoutStopping {
+                waited: clock.elapsed(),
+                written,
+                ceiling,
             });
         }
 
@@ -936,6 +1042,12 @@ mod tests {
                 limits: RunLimits {
                     deadline: Duration::from_secs(60),
                     poll_interval: Duration::from_secs(2),
+                    // Roomy enough that no test here trips it by accident;
+                    // the ceiling tests set their own.
+                    growth: GrowthCeiling {
+                        multiple: 2,
+                        floor: 1024 * 1024,
+                    },
                 },
             }
         }
@@ -1174,6 +1286,7 @@ mod tests {
         request.limits = RunLimits {
             deadline: Duration::from_secs(4),
             poll_interval: Duration::from_secs(2),
+            ..request.limits
         };
 
         let result_file = fx.result_file();
@@ -1217,6 +1330,214 @@ mod tests {
             &NoProgress,
         );
         assert!(matches!(outcome, Ok(RunOutcome::TimedOut { .. })));
+    }
+
+    /// ART-278: a run that writes without stopping is its own ending, and it
+    /// is found **before** the deadline. The fake Amiga writes 4 KiB into the
+    /// copy during the second sleep; the ceiling allows 1 KiB of growth, so
+    /// the very next poll must end the run — and terminate the emulator —
+    /// with most of the deadline unspent. Measured on the owner's material,
+    /// the real thing was 170 MB in thirty minutes, still growing.
+    #[test]
+    fn a_copy_that_grows_past_the_ceiling_ends_the_run_before_the_deadline() {
+        let fx = Fixture::new("runaway");
+        let (work, tree, pkg, kick) = request!(fx);
+        let mut request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
+        request.limits.growth = GrowthCeiling {
+            multiple: 2,
+            floor: 1024,
+        };
+
+        let runaway = tree.join("PlayCD.BB1");
+        let clock = TestClock::new(move |n| {
+            if n == 2 {
+                std::fs::write(&runaway, vec![0u8; 4096]).unwrap();
+            }
+        });
+        let launcher = FakeLauncher::new();
+
+        let outcome = run_with(&request, &launcher, &clock, &NoProgress).unwrap();
+
+        match outcome {
+            RunOutcome::WroteWithoutStopping {
+                waited,
+                written,
+                ceiling,
+            } => {
+                assert!(
+                    waited < request.limits.deadline,
+                    "the ceiling must end the run, not the deadline; waited {waited:?}"
+                );
+                assert_eq!(
+                    written, 4096,
+                    "what the run wrote beyond the copy as staged"
+                );
+                assert_eq!(
+                    ceiling, 1024,
+                    "the floor, since twice an empty tree is nothing"
+                );
+            }
+            other => panic!("a runaway installer is its own ending, got {other:?}"),
+        }
+        assert_eq!(
+            launcher.log.terminated.lock().unwrap().as_slice(),
+            &[4242],
+            "the emulator ART started is ended, once"
+        );
+        assert_eq!(
+            clock.sleeps(),
+            2,
+            "found on the first poll after the write, not some later one"
+        );
+    }
+
+    /// Growth under the ceiling is not a runaway: a real BoingBag grows the
+    /// tree by a few hundred kilobytes, and a run that did that and then
+    /// waited on a requester is still a timeout.
+    #[test]
+    fn growth_under_the_ceiling_is_still_a_timeout() {
+        let fx = Fixture::new("modest-growth");
+        let (work, tree, pkg, kick) = request!(fx);
+        let mut request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
+        request.limits.growth = GrowthCeiling {
+            multiple: 2,
+            floor: 1024,
+        };
+
+        let written = tree.join("Libs").join("version.library");
+        let clock = TestClock::new(move |n| {
+            if n == 2 {
+                std::fs::create_dir_all(written.parent().unwrap()).unwrap();
+                std::fs::write(&written, vec![0u8; 512]).unwrap();
+            }
+        });
+
+        let outcome = run_with(&request, &FakeLauncher::new(), &clock, &NoProgress).unwrap();
+
+        assert!(
+            matches!(outcome, RunOutcome::TimedOut { waited } if waited >= request.limits.deadline),
+            "512 bytes under a 1 KiB ceiling is not a runaway, got {outcome:?}"
+        );
+    }
+
+    /// The ceiling is on **growth**, measured from the copy as it was when the
+    /// emulator was launched — not on the copy's size. A 5 KiB tree under a
+    /// 1 KiB floor is not a runaway until it has grown by more than 1 KiB, and
+    /// when it does, `written` is the growth alone.
+    #[test]
+    fn the_tree_as_staged_is_the_baseline_and_only_growth_counts() {
+        let fx = Fixture::new("baseline");
+        let (work, tree, pkg, kick) = request!(fx);
+        let mut request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
+        // `multiple: 0` leaves the floor as the whole ceiling, so the 5 KiB
+        // below cannot lift it.
+        request.limits.growth = GrowthCeiling {
+            multiple: 0,
+            floor: 1024,
+        };
+        std::fs::write(tree.join("already-here"), vec![0xa5u8; 5120]).unwrap();
+
+        let outcome = run_with(
+            &request,
+            &FakeLauncher::new(),
+            &TestClock::idle(),
+            &NoProgress,
+        )
+        .unwrap();
+        assert!(
+            matches!(outcome, RunOutcome::TimedOut { .. }),
+            "a tree that did not grow is not a runaway however large it is, got {outcome:?}"
+        );
+
+        let grown = tree.join("grown");
+        let clock = TestClock::new(move |n| {
+            if n == 1 {
+                std::fs::write(&grown, vec![0u8; 2048]).unwrap();
+            }
+        });
+        let outcome = run_with(&request, &FakeLauncher::new(), &clock, &NoProgress).unwrap();
+        match outcome {
+            RunOutcome::WroteWithoutStopping { written, .. } => {
+                assert_eq!(
+                    written, 2048,
+                    "the growth, not the 7 KiB the copy now holds"
+                );
+            }
+            other => panic!("expected the runaway ending, got {other:?}"),
+        }
+    }
+
+    /// When the ceiling and the deadline fall on the same poll, the ceiling
+    /// wins: it is the more specific of the two things ART observed. The
+    /// deadline here is one poll long, and the write lands during that poll's
+    /// sleep, so the second iteration meets both at once.
+    #[test]
+    fn a_ceiling_reached_on_the_deadline_poll_is_reported_as_the_ceiling() {
+        let fx = Fixture::new("both");
+        let (work, tree, pkg, kick) = request!(fx);
+        let mut request = with_paths(fx.request(), &work, &tree, &pkg, &kick);
+        request.limits = RunLimits {
+            deadline: Duration::from_secs(2),
+            poll_interval: Duration::from_secs(2),
+            growth: GrowthCeiling {
+                multiple: 2,
+                floor: 1024,
+            },
+        };
+
+        let runaway = tree.join("runaway");
+        let clock = TestClock::new(move |n| {
+            if n == 1 {
+                std::fs::write(&runaway, vec![0u8; 4096]).unwrap();
+            }
+        });
+
+        let outcome = run_with(&request, &FakeLauncher::new(), &clock, &NoProgress).unwrap();
+
+        assert!(
+            matches!(outcome, RunOutcome::WroteWithoutStopping { .. }),
+            "the ceiling is checked before the deadline, got {outcome:?}"
+        );
+    }
+
+    /// What the copy may grow by: the larger of `multiple` times the copy and
+    /// the `floor`. Two rules because either alone is wrong somewhere — a bare
+    /// multiple trips a small tree on a modest install, and a bare floor lets
+    /// a large tree's proportionate install through only by luck.
+    #[test]
+    fn the_ceiling_is_the_larger_of_the_multiple_and_the_floor() {
+        let ceiling = GrowthCeiling {
+            multiple: 2,
+            floor: 64 * 1024 * 1024,
+        };
+        assert_eq!(
+            ceiling.allowed(20_000_000),
+            64 * 1024 * 1024,
+            "a 20 MB tree: the floor"
+        );
+        assert_eq!(
+            ceiling.allowed(100 * 1024 * 1024),
+            200 * 1024 * 1024,
+            "a 100 MiB tree: twice it"
+        );
+        assert_eq!(
+            GrowthCeiling {
+                multiple: 0,
+                floor: 1024
+            }
+            .allowed(u64::MAX),
+            1024,
+            "a multiple of zero is the floor alone, and never overflows"
+        );
+        assert_eq!(
+            GrowthCeiling {
+                multiple: 2,
+                floor: 0
+            }
+            .allowed(u64::MAX),
+            u64::MAX,
+            "an overflowing multiple saturates rather than wrapping to nothing"
+        );
     }
 
     /// The owner closing the emulator window is its own ending: not a
@@ -1655,6 +1976,29 @@ mod tests {
         let limits = RunLimits::default();
         assert_eq!(limits.deadline, PROVISIONAL_DEADLINE);
         assert_eq!(limits.poll_interval, POLL_INTERVAL);
+
+        // ART-278's ceiling, against what was measured: BoingBag 3.9-2 grew
+        // the owner's tree by 397 437 bytes (20 135 997 → 20 533 434, the
+        // module doc), and the corrupt-payload run wrote 170 328 064 bytes in
+        // one default deadline. The floor must stand well clear of the first
+        // and well under the second, or it is a false alarm or no alarm.
+        const OBSERVED_INSTALL_GROWTH: u64 = 20_533_434 - 20_135_997;
+        const OBSERVED_RUNAWAY_IN_ONE_DEADLINE: u64 = 170_328_064;
+        assert_eq!(
+            limits.growth,
+            GrowthCeiling {
+                multiple: 2,
+                floor: 64 * 1024 * 1024,
+            }
+        );
+        assert!(
+            limits.growth.floor > OBSERVED_INSTALL_GROWTH * 20,
+            "a real install grew the tree by {OBSERVED_INSTALL_GROWTH} bytes; the floor must not be near it"
+        );
+        assert!(
+            limits.growth.floor * 2 < OBSERVED_RUNAWAY_IN_ONE_DEADLINE,
+            "the measured runaway must cross the floor well inside one deadline"
+        );
         assert!(
             limits.deadline > OBSERVED_UNFINISHED_RUN * 4,
             "a real package was still running at {OBSERVED_UNFINISHED_RUN:?}; a deadline of \

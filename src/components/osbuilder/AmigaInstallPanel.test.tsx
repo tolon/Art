@@ -687,13 +687,18 @@ describe("what a previewed run still lacks", () => {
   });
 });
 
-describe("the four endings stay four sentences on screen", () => {
+describe("the five endings stay five sentences on screen", () => {
   /** Every ending's own sentence, as the user reads it. */
   const SAID: Record<string, string> = {
     succeeded: i18n.t("osinstall.amigaInstall.outcome.succeeded"),
     failed: i18n.t("osinstall.amigaInstall.outcome.failed"),
     "timed-out": i18n.t("osinstall.amigaInstall.outcome.timedOut", { seconds: 1800 }),
     "emulator-closed": i18n.t("osinstall.amigaInstall.outcome.emulatorClosed", { seconds: 12 }),
+    "wrote-without-stopping": i18n.t("osinstall.amigaInstall.outcome.wroteWithoutStopping", {
+      seconds: 40,
+      written: 162,
+      ceiling: 64,
+    }),
   };
 
   /** And the next step each one must carry. A defect that swaps two of
@@ -705,6 +710,7 @@ describe("the four endings stay four sentences on screen", () => {
     failed: i18n.t("osinstall.amigaInstall.next.failed"),
     "timed-out": i18n.t("osinstall.amigaInstall.next.timedOut"),
     "emulator-closed": i18n.t("osinstall.amigaInstall.next.emulatorClosed"),
+    "wrote-without-stopping": i18n.t("osinstall.amigaInstall.next.wroteWithoutStopping"),
   };
 
   const ENDINGS: RunOutcome[] = [
@@ -712,10 +718,16 @@ describe("the four endings stay four sentences on screen", () => {
     { kind: "failed" },
     { kind: "timed-out", waited: { secs: 1800, nanos: 0 } },
     { kind: "emulator-closed", waited: { secs: 12, nanos: 0 } },
+    {
+      kind: "wrote-without-stopping",
+      waited: { secs: 40, nanos: 0 },
+      written: 170_328_064,
+      ceiling: 67_108_864,
+    },
   ];
 
   for (const ending of ENDINGS) {
-    it(`says its own sentence for '${ending.kind}' and none of the other three`, async () => {
+    it(`says its own sentence for '${ending.kind}' and none of the other four`, async () => {
       await runToConfirmation();
       const settlement =
         ending.kind === "succeeded"
@@ -744,7 +756,7 @@ describe("the four endings stay four sentences on screen", () => {
     });
   }
 
-  it("gives the four endings four different next steps", async () => {
+  it("gives the five endings five different next steps", async () => {
     const steps = new Set<string>();
     for (const ending of ENDINGS) {
       await runToConfirmation();
@@ -756,7 +768,7 @@ describe("the four endings stay four sentences on screen", () => {
       steps.add((await screen.findByTestId("amiga-install-next")).textContent ?? "");
       cleanup();
     }
-    expect(steps.size).toBe(4);
+    expect(steps.size).toBe(5);
   });
 });
 
@@ -768,6 +780,12 @@ describe("where the copy is", () => {
       { kind: "failed" } as const,
       { kind: "timed-out", waited: { secs: 1800, nanos: 0 } } as const,
       { kind: "emulator-closed", waited: { secs: 12, nanos: 0 } } as const,
+      {
+        kind: "wrote-without-stopping",
+        waited: { secs: 40, nanos: 0 },
+        written: 170_328_064,
+        ceiling: 67_108_864,
+      } as const,
     ]) {
       await runToConfirmation();
       deliver!({
