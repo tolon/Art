@@ -42,7 +42,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 
 import { changeLanguage } from "@/i18n";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -292,3 +292,107 @@ function selectedNames(pane: HTMLElement): string[] {
     .map((row) => row.querySelector(".tc-name-text")?.textContent ?? "")
     .map((name) => name.replace(/^\[(.*)\]$/, "$1"));
 }
+
+// -----------------------------------------------------------------------------
+// ART-283 — a path handed over by navigation must not repoint a remembered tab
+// -----------------------------------------------------------------------------
+
+/** What the router's current entry carries, so a test can see the handover
+ *  being consumed rather than replayed on the next mount. */
+function LocationProbe() {
+  const location = useLocation();
+  return <span data-testid="location-state">{JSON.stringify(location.state)}</span>;
+}
+
+describe("a path handed over by navigation (ART-283)", () => {
+  const sort = { column: "name", direction: "asc" };
+  /** Two remembered tabs on the left, the second one active; one on the right. */
+  const SAVED_SESSION = {
+    left: {
+      active: 1,
+      tabs: [
+        { id: "tab-1", location: { kind: "local", path: "D:\\test" }, sort, filter: "" },
+        { id: "tab-2", location: { kind: "local", path: "E:\\iso" }, sort, filter: "" },
+      ],
+    },
+    right: {
+      active: 0,
+      tabs: [{ id: "tab-3", location: { kind: "local", path: "F:\\" }, sort, filter: "" }],
+    },
+    focused: "left",
+    commandHistory: [],
+  };
+
+  function leftPaths(): string[] {
+    const session = useSettingsStore.getState().settings.filesSession as typeof SAVED_SESSION;
+    return session.left.tabs.map((tab) => tab.location.path);
+  }
+
+  beforeEach(() => {
+    // Every folder lists as itself, so the pane's location is the path asked for.
+    listLocalMock.mockImplementation(async (path: string) => ({ ...LISTING, path }));
+    // The dashboard hands a folder over as `directory`.
+    analyzePathsMock.mockImplementation(async (paths: string[]) =>
+      paths.map((path) => ({ path, plan: { detection: { category: "directory" } } }))
+    );
+    useSettingsStore.setState({
+      loaded: true,
+      settings: {
+        ...DEFAULT_SETTINGS,
+        filesSession: SAVED_SESSION,
+        defaultLeftPath: null,
+        defaultRightPath: null,
+        alwaysUseDefaultFolders: false,
+      },
+    });
+  });
+
+  // The defect as measured on the owner's settings file: opening /files with a
+  // folder in `location.state` rewrote `left.tabs[1].location.path` from the
+  // remembered `iso` to the dropped `adf` and saved it. The user asked to see
+  // a folder; they did not ask for a remembered tab to point somewhere else.
+  it("opens the folder in a new tab and leaves every remembered tab where it was", async () => {
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/files", state: { path: "E:\\adf" } }]}>
+        <FileManager />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(leftPaths()).toContain("E:\\adf"));
+    // Settle: the restore's own opens and the handover have all landed.
+    await waitFor(() => expect(screen.getByTestId("location-state").textContent).toBe("null"));
+
+    expect(leftPaths()).toEqual(["D:\\test", "E:\\iso", "E:\\adf"]);
+    const session = useSettingsStore.getState().settings.filesSession as typeof SAVED_SESSION;
+    expect(session.left.tabs[session.left.active].location.path).toBe("E:\\adf");
+    expect(session.right.tabs.map((tab) => tab.location.path)).toEqual(["F:\\"]);
+  });
+
+  // The handover is one-shot. Left in the history entry it replays on every
+  // mount of this screen — which is how "opening /files" moved the settings
+  // file's hash every time — and, with the fix above, would spawn a tab per
+  // visit.
+  it("consumes the handover so a later mount of the same entry does not replay it", async () => {
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/files", state: { path: "E:\\adf" } }]}>
+        <FileManager />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(leftPaths()).toContain("E:\\adf"));
+    await waitFor(() => expect(screen.getByTestId("location-state").textContent).toBe("null"));
+    expect(leftPaths().filter((path) => path === "E:\\adf")).toHaveLength(1);
+  });
+
+  it("does not open a second tab when the active tab already shows that folder", async () => {
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/files", state: { path: "E:\\iso" } }]}>
+        <FileManager />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(screen.getByTestId("location-state").textContent).toBe("null"));
+    expect(leftPaths()).toEqual(["D:\\test", "E:\\iso"]);
+  });
+});
