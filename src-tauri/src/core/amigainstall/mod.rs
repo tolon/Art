@@ -250,8 +250,8 @@ pub struct PlannedRun {
     pub working_directory: Option<String>,
 }
 
-/// What a run ended as. **Four endings, not two** — and they are four values
-/// rather than four wordings of one, because each tells the user to do a
+/// What a run ended as. **Five endings, not two** — and they are five values
+/// rather than five wordings of one, because each tells the user to do a
 /// different thing.
 ///
 /// An Amiga Installer is interactive by nature, so a run that stops on a
@@ -267,10 +267,20 @@ pub struct PlannedRun {
 ///   entitled to do. Telling them to watch the window next time — which is
 ///   what a timeout says — is advice pointing the wrong way, and §3 of the
 ///   design is explicit that these endings exist *because* they carry
-///   different advice. Reporting any of the four as another would be claiming
+///   different advice. Reporting any of the five as another would be claiming
 ///   something that was not observed (§89).
+/// - [`WroteWithoutStopping`] — the installer was still writing into the copy
+///   when the copy had grown past what a run is allowed to add to it
+///   ([`run::GrowthCeiling`]). Measured on the owner's own material
+///   (ART-278): a BoingBag whose payload has one damaged byte does not warn,
+///   it decompresses the broken stream for ever — 170 MB in thirty minutes,
+///   still growing at the deadline, into a directory beside the user's own
+///   tree. That is not "nobody answered": nothing was ever going to be
+///   asked, and the advice is to check the package, not to watch a window.
+///   It is the one ending with a measurement behind it, and it carries the
+///   measurement.
 ///
-/// The original tree is untouched in all four cases; only [`Succeeded`] lets
+/// The original tree is untouched in all five cases; only [`Succeeded`] lets
 /// the copy replace it.
 ///
 /// ## Why the two that "just happened" carry no message
@@ -280,7 +290,7 @@ pub struct PlannedRun {
 /// ever hold that word echoed back, and a screen rendering it would show the
 /// user "failed" under a heading that already says the run failed. The
 /// sentence a person reads is the UI's, in their own language (§68); the
-/// engine's job is to say *which* of the four this was, exactly and no more.
+/// engine's job is to say *which* of the five this was, exactly and no more.
 /// If the generated script is ever extended to write a reason, this is where
 /// it lands — and it will be a reason, not a marker.
 ///
@@ -288,6 +298,7 @@ pub struct PlannedRun {
 /// [`Failed`]: Self::Failed
 /// [`TimedOut`]: Self::TimedOut
 /// [`EmulatorClosed`]: Self::EmulatorClosed
+/// [`WroteWithoutStopping`]: Self::WroteWithoutStopping
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum RunOutcome {
@@ -302,6 +313,16 @@ pub enum RunOutcome {
     /// closed, or it quit on its own. Not a timeout: the deadline was never
     /// reached, and `waited` is the time that actually passed.
     EmulatorClosed { waited: Duration },
+    /// The copy grew by more than a run may add to it, and the installer was
+    /// still writing (ART-278). Not a timeout: the deadline was never
+    /// reached, `written` is what the run had added to the copy beyond its
+    /// size as staged, and `ceiling` is what it was allowed. Both in bytes,
+    /// both as measured on the poll that ended the run.
+    WroteWithoutStopping {
+        waited: Duration,
+        written: u64,
+        ceiling: u64,
+    },
 }
 
 /// Whether `value` names ART's own work volume ([`WORK_VOLUME`]), with or

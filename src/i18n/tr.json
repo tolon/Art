@@ -2655,13 +2655,15 @@
         "succeeded": "Paketin kendi kurucusu başarı bildirdi.",
         "failed": "Kurucu çalıştı ve hayır dedi — kendi başarısızlığını bildirdi.",
         "timedOut": "Kimse yanıt vermedi. Kurucu {{seconds}} saniye sonra hâlâ bekliyordu, bu yüzden ART başlattığı emülatörü sonlandırdı.",
-        "emulatorClosed": "Emülatör penceresi {{seconds}} saniye sonra, kurucu daha hiçbir şey bildirmeden kapatıldı."
+        "emulatorClosed": "Emülatör penceresi {{seconds}} saniye sonra, kurucu daha hiçbir şey bildirmeden kapatıldı.",
+        "wroteWithoutStopping": "Kurucu durmadan yazıyordu: {{seconds}} saniye sonra kopya {{written}} MB büyümüştü ve bir koşunun ekleyebileceği {{ceiling}} MB'ı aşmıştı; bu yüzden ART başlattığı emülatörü sonlandırdı."
       },
       "next": {
         "succeeded": "Ağacı açın ve çalışan sisteme ne olduğunu sorun — ekrandaki bir telif satırını değil, sistemin kendisi hakkında söylediği sürümü.",
         "failed": "Kopyanın içine bakın: kurucunun yazdığı her şey orada ve neden reddettiğini söyleyen şey onun kendi iletileri.",
-        "timedOut": "Yeniden çalıştırın ve bu kez emülatör penceresini izleyin. Amiga kurucuları soru sorar; bu da kimsenin vermediği bir yanıtı bekliyordu.",
-        "emulatorClosed": "Yeniden çalıştırın ve pencerenin işini bitirmesine izin verin. ART kurucunun ne yapacağını söyleyemez, bu yüzden hiçbir yönde bir karar oluşmadı."
+        "timedOut": "Yeniden çalıştırın ve bu kez emülatör penceresini izleyin. ART koşunun ne yazdığını izledi ve kopya kaçmıyordu; kurucu büyük olasılıkla kimsenin vermediği bir yanıtı bekliyordu.",
+        "emulatorClosed": "Yeniden çalıştırın ve pencerenin işini bitirmesine izin verin. ART kurucunun ne yapacağını söyleyemez, bu yüzden hiçbir yönde bir karar oluşmadı.",
+        "wroteWithoutStopping": "Yalnızca yeniden çalıştırmayın. Bozuk bir paket yükü tam böyle davranır: kurucu kırık bir akışı sonsuza dek açar. Arşivi bilinen sağlam bir kopyayla karşılaştırın ya da yeniden indirin. Aşağıda adı geçen kopyayı silmek güvenlidir."
       },
       "settlement": {
         "promoted": "{{tree}} konumundaki ağacınız artık kurulmuş olan ağaç.",

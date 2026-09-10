@@ -2655,13 +2655,15 @@
         "succeeded": "The package's own installer reported success.",
         "failed": "The installer ran and said no — it reported a failure of its own.",
         "timedOut": "Nobody answered. The installer was still waiting {{seconds}} seconds in, so ART ended the emulator it had started.",
-        "emulatorClosed": "The emulator window was closed {{seconds}} seconds in, before the installer had reported anything."
+        "emulatorClosed": "The emulator window was closed {{seconds}} seconds in, before the installer had reported anything.",
+        "wroteWithoutStopping": "The installer was writing without stopping: {{seconds}} seconds in, the copy had grown by {{written}} MB, past the {{ceiling}} MB a run may add to it, so ART ended the emulator it had started."
       },
       "next": {
         "succeeded": "Boot the tree and ask the running system what it is — the version it states about itself, not a copyright line on a screen.",
         "failed": "Look inside the copy: whatever the installer wrote is there, and its own messages are what say why it refused.",
-        "timedOut": "Run it again and watch the emulator window this time. An Amiga installer asks questions, and this one was waiting for an answer nobody gave it.",
-        "emulatorClosed": "Run it again and let the window finish. ART cannot say what the installer would have done, so nothing was decided either way."
+        "timedOut": "Run it again and watch the emulator window this time. ART watched what the run wrote and the copy was not running away, so the installer was most likely waiting for an answer nobody gave it.",
+        "emulatorClosed": "Run it again and let the window finish. ART cannot say what the installer would have done, so nothing was decided either way.",
+        "wroteWithoutStopping": "Do not simply run it again. This is what a damaged package payload does — the installer unpacks a broken stream for ever — so check the archive against a known-good copy or download it afresh. The copy named below is safe to delete."
       },
       "settlement": {
         "promoted": "Your tree at {{tree}} is the installed one now.",

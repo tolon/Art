@@ -74,10 +74,10 @@
 //! means something else. AmigaDOS names legitimately contain spaces, which is
 //! why this is a refusal with a sentence and not a silent rewrite.
 //!
-//! ## The four endings, and what happens to the copy
+//! ## The five endings, and what happens to the copy
 //!
-//! [`RunOutcome`] has four variants and only `Succeeded` promotes the copy
-//! over the user's tree. The other three leave the original untouched **and
+//! [`RunOutcome`] has five variants and only `Succeeded` promotes the copy
+//! over the user's tree. The other four leave the original untouched **and
 //! the copy in place**, and [`SettlementReport`] carries both paths so the
 //! report can say both halves: your system at *X* is exactly as it was, what
 //! the installer did is at *Y*.
@@ -282,7 +282,7 @@ pub const AMIGA_INSTALL_EVENT: &str = "amiga-install-result";
 #[derive(Debug, Clone, Serialize)]
 pub struct AmigaInstallResult {
     pub job_id: u64,
-    /// Which of the four endings it was. Mirrored exactly in TypeScript.
+    /// Which of the five endings it was. Mirrored exactly in TypeScript.
     pub outcome: RunOutcome,
     pub settlement: SettlementReport,
 }
@@ -866,7 +866,7 @@ pub(crate) fn profile_for(id: Option<&str>) -> CoreResult<AmigaProfile> {
 ///
 /// `run` is a parameter for the same reason `run_with` takes a launcher and a
 /// clock: **no test in this file may open an emulator window on the owner's
-/// desktop**, and every ending — the four outcomes, a cancellation, and an
+/// desktop**, and every ending — the five outcomes, a cancellation, and an
 /// error part way — has to be reachable without one.
 ///
 /// Cancellation is checked once here, *before* the copy is made, which is the
@@ -925,7 +925,7 @@ fn perform(
             }
             Err(CoreError::Cancelled)
         }
-        // Not one of the four endings and not a cancellation: something went
+        // Not one of the five endings and not a cancellation: something went
         // wrong while the run was under way. The copy stays — the emulator
         // may have changed it, and that is evidence — and the original was
         // never opened for writing at all. The error keeps its own code; what
@@ -1042,7 +1042,7 @@ fn install(
 /// `install` cannot be driven to a successful outcome in a test without
 /// opening an emulator window on the owner's desktop, and a test that
 /// re-wrote this condition in its own closure would be testing its own copy
-/// of it. This is the real one, and the tests call it for all four endings.
+/// of it. This is the real one, and the tests call it for all five endings.
 fn record_if_succeeded(copy: &Path, plan: &PlannedRun, outcome: &RunOutcome) -> CoreResult<()> {
     if matches!(outcome, RunOutcome::Succeeded) {
         chain::record_amiga_install(copy, &plan.package_id, &command_line_of(plan))?;
@@ -1068,6 +1068,7 @@ fn ending_of(outcome: &RunOutcome) -> &'static str {
         RunOutcome::Failed => "failed",
         RunOutcome::TimedOut { .. } => "timed out",
         RunOutcome::EmulatorClosed { .. } => "the emulator was closed",
+        RunOutcome::WroteWithoutStopping { .. } => "wrote without stopping",
     }
 }
 
@@ -1785,6 +1786,11 @@ mod tests {
             RunOutcome::EmulatorClosed {
                 waited: Duration::from_secs(31),
             },
+            RunOutcome::WroteWithoutStopping {
+                waited: Duration::from_secs(40),
+                written: 170_328_064,
+                ceiling: 64 * 1024 * 1024,
+            },
         ] {
             let scratch = ScratchDir::new("art-amigainstall-cmd", "kept");
             let tree = tree_in(&scratch);
@@ -1852,7 +1858,7 @@ mod tests {
         );
     }
 
-    /// An error part way through is not one of the four endings and not a
+    /// An error part way through is not one of the five endings and not a
     /// cancellation. The copy stays — the emulator may have changed it — and
     /// the user is told where it is and that their own tree was not touched.
     #[test]
@@ -2040,9 +2046,9 @@ mod tests {
 
     // -- the wire --------------------------------------------------------
 
-    /// The four endings, exactly as the frontend will receive them.
+    /// The five endings, exactly as the frontend will receive them.
     ///
-    /// `src/lib/amigainstall.ts` declares the same four `kind`s and
+    /// `src/lib/amigainstall.ts` declares the same five `kind`s and
     /// `src/lib/amigainstall.test.ts` checks the two lists against each
     /// other; this pins the JSON itself, including that a struct variant's
     /// own field does **not** inherit the enum's `rename_all`.
@@ -2062,6 +2068,14 @@ mod tests {
                     waited: Duration::from_secs(31),
                 },
                 r#"{"kind":"emulator-closed","waited":{"secs":31,"nanos":0}}"#,
+            ),
+            (
+                RunOutcome::WroteWithoutStopping {
+                    waited: Duration::from_secs(40),
+                    written: 170_328_064,
+                    ceiling: 64 * 1024 * 1024,
+                },
+                r#"{"kind":"wrote-without-stopping","waited":{"secs":40,"nanos":0},"written":170328064,"ceiling":67108864}"#,
             ),
         ];
         for (outcome, expected) in cases {
@@ -2369,6 +2383,11 @@ mod tests {
             },
             RunOutcome::EmulatorClosed {
                 waited: std::time::Duration::from_secs(3),
+            },
+            RunOutcome::WroteWithoutStopping {
+                waited: std::time::Duration::from_secs(40),
+                written: 170_328_064,
+                ceiling: 64 * 1024 * 1024,
             },
         ] {
             record_if_succeeded(&tree, plan, &ending).unwrap();

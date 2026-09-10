@@ -102,75 +102,23 @@ the wrappers' own doc comments say "kept for tests", which is exactly the
 population the sweep exists to watch; a rule that lists such wrappers and
 refuses an unexempted test call to one would close it.
 
-**ART-279** 🟡 **The `TimedOut` next step tells the user to watch the emulator
-window, which is wrong advice for an installer that is hung rather than
-waiting** — *found 2026-09-08 by round 3 task 3's corrupt-payload experiment,
-on `art-osbuilder-intake`*
-`src/i18n/en.json` · `src/i18n/tr.json` ·
-`src/lib/amigainstall.ts::outcomeNextStepPhrase`
+**ART-294** 🔵 **The first-boot rehearsal has no growth ceiling** — *found
+2026-09-10 while fixing ART-278, on `art-278-runaway`*
+`src-tauri/src/core/amigainstall/rehearse.rs`
 
-`osinstall.amigaInstall.next.timedOut` reads *"Run it again and watch the
-emulator window this time. An Amiga installer asks questions, and this one was
-waiting for an answer nobody gave it."* That sentence names one cause for a
-state that has two, and the second was measured on 2026-09-08: a package whose
-payload is damaged does not ask anything — the `Updater` spins on the corrupt
-data (both runs stopped on the same payload entry, `Utilities/PlayCD`, its
-progress window unchanged for 28 minutes) and no amount of watching the window
-will produce an answer to give it.
-
-How it hurts someone: the user re-runs a 30-minute job, watches a window that
-never asks them anything, and ends up in the same place — with a sentence that
-told them the problem was their attention.
-[lessons.md § The failure that does not crash](lessons.md#the-failure-that-does-not-crash)
-calls this out directly: endings stay distinct, and a refusal must be
-actionable.
-
-The round deliberately did **not** change it, and that reasoning stands and
-should be read before anyone does: ART genuinely cannot tell "waiting on a
-requester" from "spinning on a corrupt payload" — both are *no word by the
-deadline* — and inventing a distinction ART cannot make is §89 from the other
-side. So this row is not "change the sentence": it is either (a) reword the
-next step to cover both causes honestly without pretending to know which, or
-(b) give ART a way to tell them apart first — [ART-278](#open)'s size ceiling
-is exactly such a signal, and if that lands, this ending can split on a
-measurement.
-
-**ART-278** 🔴 **A hung Amiga-side installer writes unbounded output into the
-staged copy, and nothing in ART bounds it or notices it** — *found 2026-09-08
-by round 3 task 3's corrupt-payload experiment, on `art-osbuilder-intake`*
-`src-tauri/src/core/amigainstall/run.rs` ·
-`src-tauri/src/core/amigainstall/stage.rs`
-
-An Amiga-side run works on a copy of the user's tree, staged as
-`<tree>.art-staged-<pid>-<n>` **beside the tree itself** — so on the disk the
-user keeps their Amiga material on. ART's only limit on that run is the wall
-clock: `run.rs` polls for the result word, and at `RunLimits::deadline` it
-terminates the emulator. Nothing looks at what the run is writing.
-
-Measured, twice, on the owner's own material: a `BoingBag39-2.lha` with **one
-byte** of its encrypted payload changed makes the `Updater` spin instead of
-warn, decompressing a corrupt deflate stream into its staging name without ever
-stopping. In 30 minutes each run wrote a single file — `Utilities/PlayCD.BB1`,
-**170 328 064 bytes** in run 3 and **173 408 256 bytes** in run 4, both
-beginning with a valid `HUNK_HEADER` and then running to zeros — and both were
-still growing when the deadline terminated the emulator. That is ~95 MB/minute
-into a directory beside the user's own tree, and ART reported `TimedOut`
-without a word about it.
-
-How it hurts someone: the default deadline is 30 minutes and a run may be given
-a longer one; a user with a small or nearly full disk gets it filled by a
-package that is merely damaged, and the ending they are shown says only that
-nobody answered. ART's data safety otherwise held perfectly here — the copy was
-kept, the tree was untouched, nothing was promoted — which is exactly why this
-is the one gap worth naming.
-
-Not fixed in that round because the round was a measurement and built nothing.
-The shape of a fix is a ceiling on what a staged copy may grow to (the copy's
-size is known before the run starts, so a multiple of it is a measurable
-bound), ending the run with an outcome that says *the installer was writing
-without stopping* rather than *nobody answered*. Report:
-`.superpowers/sdd/2026-09-08-intake/r3-task-3-report.md` § 2.1.
-
+[ART-278](#fixed) gave an Amiga-side *install* a ceiling on what it may write
+into the staged copy, and a fifth ending when it is crossed. The rehearsal
+(`rehearse_with`) boots the same kind of copy under the same `RunLimits` and
+reads `limits.growth` nowhere: its poll loop has the deadline and the
+emulator-gone check and nothing about size. The exposure is smaller, not
+absent — a rehearsal runs ART's own first-boot block, not a third-party
+payload, so what could loop is a step ART wrote, and the copy sits beside the
+user's tree exactly as an install's does. Fix shape: the same baseline before
+the launch, the same per-poll `tree_bytes`, a fifth `RehearsalOutcome`
+carrying the measurement, and the frontend's `firstboot.ts` mappers grown by
+one case in both catalogues. Not done in ART-278's round because that round
+was scoped to the install and the rehearsal's endings carry a `report` the
+install's do not.
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
 the crash itself is still unresolved** — *found 2026-08-15/16, Task 13's
@@ -371,6 +319,110 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-278** 🔴 ✅ **A hung Amiga-side installer writes unbounded output into the
+staged copy, and nothing in ART bounds it or notices it** — *found 2026-09-08
+by round 3 task 3's corrupt-payload experiment, on `art-osbuilder-intake`;
+fixed 2026-09-10 on `art-278-runaway`*
+`src-tauri/src/core/amigainstall/run.rs` ·
+`src-tauri/src/core/amigainstall/stage.rs` ·
+`src-tauri/src/core/amigainstall/mod.rs` · `src/lib/amigainstall.ts` ·
+`src/i18n/en.json` · `src/i18n/tr.json`
+
+An Amiga-side run works on a copy of the user's tree, staged as
+`<tree>.art-staged-<pid>-<n>` **beside the tree itself** — so on the disk the
+user keeps their Amiga material on. ART's only limit on that run was the wall
+clock: `run.rs` polled for the result word, and at `RunLimits::deadline` it
+terminated the emulator. Nothing looked at what the run was writing.
+
+Measured, twice, on the owner's own material: a `BoingBag39-2.lha` with **one
+byte** of its encrypted payload changed makes the `Updater` spin instead of
+warn, decompressing a corrupt deflate stream into its staging name without ever
+stopping. In 30 minutes each run wrote a single file — `Utilities/PlayCD.BB1`,
+**170 328 064 bytes** in run 3 and **173 408 256 bytes** in run 4, both
+beginning with a valid `HUNK_HEADER` and then running to zeros — and both were
+still growing when the deadline terminated the emulator. That is ~95 MB/minute
+into a directory beside the user's own tree, and ART reported `TimedOut`
+without a word about it. Report:
+`.superpowers/sdd/2026-09-08-intake/r3-task-3-report.md` § 2.1.
+
+**The fix is a ceiling on growth, as data, and a fifth ending.**
+`RunLimits` gained `growth: GrowthCeiling { multiple: 2, floor: 64 MiB }`
+(`run::GROWTH_CEILING`, travelling like the deadline). `run_with` reads the
+copy's bytes **before the launch** (`stage::tree_bytes` — every file's
+metadata, nothing followed, a vanished entry counts as nothing, a missing root
+is an error) and the poll loop reads them again every poll; when the growth
+beyond that baseline exceeds `max(2 × baseline, 64 MiB)` the run ends as
+`RunOutcome::WroteWithoutStopping { waited, written, ceiling }`, checked
+**before** the deadline because it is the more specific of the two
+observations. The emulator is ended through the same `end_session` as every
+ending; `settle` keeps the copy like every non-success, and the screen's
+sentence names the measurement in MiB and says the copy is safe to delete.
+Against what was measured: the runaway crosses 64 MiB about 40 s into a
+30-minute deadline; BoingBag 3.9-2's real install grew the tree by 397 437
+bytes, 170× under the floor, and `the_deadline_comes_from_data_and_defaults_to_the_provisional_value`
+now pins the floor against both numbers. The per-poll cost was measured before
+the design was chosen: 6 763 files, 26 ms warm / 557 ms cold on the owner's
+`os39` folder, 2026-09-10 — a fraction of a two-second poll.
+
+Tests — `core::amigainstall::run`:
+`a_copy_that_grows_past_the_ceiling_ends_the_run_before_the_deadline`,
+`growth_under_the_ceiling_is_still_a_timeout`,
+`the_tree_as_staged_is_the_baseline_and_only_growth_counts`,
+`a_ceiling_reached_on_the_deadline_poll_is_reported_as_the_ceiling`,
+`the_ceiling_is_the_larger_of_the_multiple_and_the_floor`;
+`core::amigainstall::stage`: `tree_bytes_is_the_sum_of_every_file_under_the_root`,
+`tree_bytes_of_a_missing_root_is_an_error`,
+`tree_bytes_refuses_a_tree_deeper_than_the_cap`,
+`a_timeout_a_closed_emulator_and_a_runaway_leave_the_original_too`;
+`commands::amigainstall`: `every_run_outcome_has_the_shape_the_frontend_reads`,
+`a_run_that_did_not_succeed_keeps_the_copy_and_names_both_paths`,
+`only_a_successful_run_records_anything`; `src/lib/amigainstall.test.ts`
+*says how much a runaway wrote, against what it was allowed* and the
+Rust-vs-TypeScript tag list; `AmigaInstallPanel.test.tsx`'s five-endings block.
+Mutations put back and seen to fail, 2026-09-10 (`cargo test --lib amigainstall::`, restored by copyfile after each): the ceiling check removed — killed by three tests; the baseline not subtracted — one; `allowed()` adding the floor instead of taking the larger — one; the ceiling checked after the deadline — one; the default floor lowered to 1 MiB — the defaults test; `tree_bytes` not descending — two; a runaway promoting the copy — two, in `stage` and `commands`; a vanished directory failing the walk — one, `a_directory_that_vanishes_mid_walk_counts_as_nothing_rather_than_failing`, written after the first form of that mutation survived and a test-only seam was added to reach the race. **One survivor, disclosed:** a vanished entry's *metadata* failing the walk survives on Windows, because `DirEntry::metadata` answers from the directory listing there and the arm cannot be reached; it is live on the other platforms and has no test.
+
+**Not claimed.** The ceiling has not been seen to fire on the real damaged
+archive — the numbers above are the 2026-09-08 measurement read against the
+new rule, not a re-run of the experiment through it. The rehearsal has no
+ceiling ([ART-294](#open)). `AmigaInstallPanel.tsx`'s own comments still say
+"four endings" in places; the component renders through the three mappers in
+`src/lib/amigainstall.ts` and needed no change, and its comments were left
+alone so as not to collide with the four-tabs branch that rewrites it.
+
+**ART-279** 🟡 ✅ **The `TimedOut` next step tells the user to watch the emulator
+window, which is wrong advice for an installer that is hung rather than
+waiting** — *found 2026-09-08 by round 3 task 3's corrupt-payload experiment,
+on `art-osbuilder-intake`; fixed 2026-09-10 on `art-278-runaway`*
+`src/i18n/en.json` · `src/i18n/tr.json` ·
+`src/lib/amigainstall.ts::outcomeNextStepPhrase`
+
+`osinstall.amigaInstall.next.timedOut` read *"Run it again and watch the
+emulator window this time. An Amiga installer asks questions, and this one was
+waiting for an answer nobody gave it."* That sentence named one cause for a
+state that had two, and the second was measured on 2026-09-08: a package whose
+payload is damaged does not ask anything — the `Updater` spins on the corrupt
+data and no amount of watching the window will produce an answer to give it.
+The entry recorded why the round left it alone: ART genuinely could not tell
+"waiting on a requester" from "spinning on a corrupt payload", and inventing a
+distinction ART cannot make is §89 from the other side. It offered two ways
+out — reword honestly, or give ART a signal first and split the ending on it.
+
+**Taken the second way.** [ART-278](#fixed)'s ceiling is the signal: a run
+that was spinning on a damaged payload now ends as `wrote-without-stopping`
+with its own sentence and its own next step (*do not simply run it again;
+check the archive*), and `TimedOut` is left meaning what it says. Its next
+step is reworded to carry its basis rather than assert it: *"ART watched what
+the run wrote and the copy was not running away, so the installer was most
+likely waiting for an answer nobody gave it."* Both catalogues. Pinned by
+*says how much a runaway wrote, against what it was allowed*
+(`src/lib/amigainstall.test.ts`), which requires the runaway's next step to be
+a different key from the timeout's, and by the five-endings block in
+`AmigaInstallPanel.test.tsx`, which puts each next step on screen and asserts
+none of the other four is. The wording itself is pinned by no test — a test
+quoting the sentence would be a copy of the catalogue — so a later edit that
+drops the basis clause would pass; the parity tests guard only that both
+languages carry the key.
 
 **ART-281** 🔴 ✅ **The unit suite's scratch directories were never removed:
 `D:\tmp\art-tests` held 263 484 directories and 764 GB** — *found 2026-09-08
@@ -4621,8 +4673,8 @@ each arm twice, the control measured.
   into the copy before ART ended the emulator at the deadline. ART's data
   safety held perfectly — the copy was kept, the tree was untouched — but the
   ending a user is shown is *"nobody answered"*, and watching the window next
-  time will not help. Both halves are now filed: [ART-278](#open) for the
-  unbounded write, [ART-279](#open) for the next step.
+  time will not help. Both halves are now filed: [ART-278](#fixed) for the
+  unbounded write, [ART-279](#fixed) for the next step (both fixed 2026-09-10).
 - **The `Updater` says `ok` on a wrong target.** ART does not run BoingBag 2's
   `Install` script (which checks `version.library`); it runs `C/Updater`
   directly, and the program itself checks nothing. Reaching that arm required
