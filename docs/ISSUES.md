@@ -515,20 +515,35 @@ its own measurement.
 - **[ART-293](#open)** — that file, and the five production thin wrappers that
   hand `temp_dir()` onward from ~121 test calls (measured clean; a blind spot
   of the guard, not a leak).
-- **286 trailing `let _ = std::fs::remove_dir_all(&…)` lines still stand beside
-  a guard** that now does the same job (`grep -rn "let _ =
-  std::fs::remove_dir_all" src-tauri/src` finds 312 in all, production
-  included). They are harmless — `Drop` is silent on a directory that is
+- **303 trailing `let _ = std::fs::remove_dir_all(…)` lines still stand in test
+  regions beside a guard** that now does the same job. `grep -rn "let _ =
+  std::fs::remove_dir_all" src-tauri/src` finds **312**; the sweep's own
+  region mask puts **303** of them inside a test region and **9** in
+  production (`commands/archives.rs`, `commands/osinstall.rs`,
+  `core/amigainstall/stage.rs`, `core/layout/apply.rs`,
+  `core/sources/install.rs`, `core/volume/write/copy.rs`), which are real
+  cleanup and stay. An earlier count of 286 was a narrower regex —
+  `…remove_dir_all\(&(dir|d|scratch|root)\)`, which filters on the binding's
+  *name*, not on production — and is kept here only so the two numbers can be
+  told apart. They are harmless — `Drop` is silent on a directory that is
   already gone — and deleting them across sixty files is churn with no
   measurement behind it, so [testing.md](testing.md#test-corpus) says they go
   when a file is next touched. The risk they carry is a reader crediting the
   wrong line for the cleanup.
-- **The sweep does not see everything, and its header says which.** Undisclosed
-  at the time of this entry: a guard dropped as a temporary
-  (`ScratchDir::pair(..).1`), a helper not named `scratch` that returns a bare
-  path, a 3-tuple helper whose first element is `_`, and `temp_dir()` reached
-  through an intermediate variable or a `use std::env::temp_dir` import. Each
-  is a shape somebody could write tomorrow; none exists in the tree today.
+- **The sweep does not see everything, and its own header lists what it
+  misses.** Three shapes an earlier draft of this entry named — a guard dropped
+  as a temporary (`pair(..).1`), a helper not named `scratch` that returns a
+  bare path, and a 3-tuple helper whose first element is `_` — are **caught**
+  since the sweep began finding its guard sources by return type rather than
+  by name. What remains, all of it under-reporting: **a helper reached by a
+  `use` import and then called bare** (`use crate::core::x::tests::helper;`),
+  which resolves to nothing — two files do exactly that, and the next script
+  commit closes it; **a guard that leaves a helper inside a type the sweep
+  cannot read**, an `InstallPlan` or a `Box<dyn MediaSource>` holding a scratch
+  path, since rule 3 judges the *shape* of a return type; and **a binding
+  spread over two statements** (`let p = helper(); let dir = p.1;`), each read
+  alone. The enclosing-`fn` walk is indentation-based, which is sound only
+  because `cargo fmt --check` is blocking in the same CI run.
 - **The fifth `temp_dir()` test** named above (the stale-preview sweeper's).
 
 **ART-288** 🔴 ✅ **The headline feature of 0.9.1 refused on the owner's
