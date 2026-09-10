@@ -54,58 +54,20 @@ not close). Nothing in ART blocks history today, which is why the round ruled it
 rather than adding a `beforeunload`-shaped guard for one screen. The operation log is still the
 record of what the Rust job did.
 
-**ART-293** 🔵 **A whole suite run still leaves one 794-byte scan-cache file
-under the scratch root** — *found 2026-09-10 while measuring
-[ART-281](#fixed)'s fixed arm*
-`src-tauri/src/commands/osinstall.rs::osinstall_plan` ·
-`src-tauri/src/core/osinstall/scan_cache.rs` · `src-tauri/src/scratch.rs`
+**ART-295** 🔵 **Five production wrappers exist so tests need not name a root, and
+`scratch-guard-sweep.py` cannot see a test call to one** — *split out of [ART-293](#fixed)
+on 2026-09-10, when that entry's first half was fixed*
+`src-tauri/src/core/osinstall/apply.rs` · `plan.rs` · `scan.rs` · `scripts/scratch-guard-sweep.py`
 
-`commands::osinstall::tests::planning_against_a_real_folder_returns_the_plan`
-calls `osinstall_plan`, a `#[tauri::command]` whose `InstallRequest` carries
-**no scratch root**: it resolves its own with `crate::scratch::root()`, which
-returns `std::env::temp_dir()` while nothing has been chosen
-(`src/scratch.rs`), and `ScanCache::in_dir` then writes
-`art-osinstall-scan-<hash>.json` there. No test argument reaches that
-decision, so ART-281's rewrite could not reach it either — this is a third
-shape beside the two that round converted: **the product picks the root
-itself**. The same default reaches `gather_facts`, `remembered_hashes_in` and
-`osinstall_rescan_media`.
-
-**It accumulates rather than being overwritten.** Two whole-suite runs on
-2026-09-10 left two *different* names — `art-osinstall-scan-24d0d20618102d7e.json`
-and `art-osinstall-scan-b2937e2874e0432f.json`, 794 bytes each. The hash keys
-on the **media folder path** (`scan_cache.rs`, `media_path.hash`), and in this
-test that folder is a scratch directory carrying the run's own id, so every
-run is a new name. **21** such files stood under `D:\tmp\art-tests` when this
-was filed — the entry first said thirty-five, which was a name filter that
-never asked `is_file()`: the other 14 are directories,
-`art-osinstall-scan-across-*`, residue of a defective arm measured before
-Task 2 landed and nothing to do with this. It is 🔵 and not 🟡 because the
-pile is **bounded**: `ScanCache::sweep`
-removes cache files older than 30 days and runs on this very path, so the
-steady state is a month of suite runs — about 25 KB — not the 764 GB ART-281
-measured.
-
-**Why the test cannot simply hand it a root.** The only way to choose one is
-`crate::scratch`'s crate-wide `CHOSEN` lock, and writing it from one test
-while cargo runs the rest of the suite in parallel threads of the same process
-is the flake class [ART-182](#fixed) was filed for. The fix is to give
-`osinstall_plan` an explicit root — a `plan_in`-shaped variant, which is the
-shape the other commands already grew in ART-281's Task 7b — and let the test
-pass it a `ScratchDir` path.
-
-**The same shape has a second population, and it is a blind spot rather than a
-leak.** Five production thin wrappers exist only so tests need not name a root
-— `apply`, `add_package`, `open_package`, `plan_with_cache` and `plan_over`
-(`core/osinstall/apply.rs`, `plan.rs`, `scan.rs`) — and each hands
-`&std::env::temp_dir()` straight to its `_in(` sibling. About **121** calls in
-test regions reach them, and `scratch-guard-sweep.py`'s rule 5 cannot see any
-of them: the `temp_dir()` is in production code, not at the call site. Three
-whole-suite runs measured them **clean** — the staging beneath them guards
-itself — so this is not the leak ART-281 was about. It is named here because
-the wrappers' own doc comments say "kept for tests", which is exactly the
-population the sweep exists to watch; a rule that lists such wrappers and
-refuses an unexempted test call to one would close it.
+`apply`, `add_package`, `open_package`, `plan_with_cache` and `plan_over` each hand
+`&std::env::temp_dir()` straight to their `_in(` sibling, and about **121** calls in test regions
+reach them (ART-293's count, 2026-09-10). The sweep's rule 5 cannot see any of them: the
+`temp_dir()` is in production code, not at the call site. Three whole-suite runs measured them
+**clean** — the staging beneath them guards itself — so this is a blind spot, not a leak. It is
+named because the wrappers' own doc comments say "kept for tests", which is exactly the population
+the sweep exists to watch. Two ways to close it: a sweep rule that lists such wrappers and refuses
+an unexempted test call to one, or retiring the wrappers the way ART-293 retired
+`osinstall_plan`'s implicit root — the body takes its root, and tests pass their own.
 
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
@@ -307,6 +269,43 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-293** 🔵 ✅ **A whole suite run still leaves one 794-byte scan-cache file
+under the scratch root** — *found 2026-09-10 while measuring [ART-281](#fixed)'s fixed arm;
+fixed 2026-09-10 on `art-293-plan-root`*
+`src-tauri/src/commands/osinstall.rs::osinstall_plan`
+
+`commands::osinstall::tests::planning_against_a_real_folder_returns_the_plan` called
+`osinstall_plan`, whose `InstallRequest` carries no scratch root: it resolved its own with
+`crate::scratch::root()` — `std::env::temp_dir()` while nothing is chosen — and `ScanCache::in_dir`
+wrote `art-osinstall-scan-<hash>.json` there. The hash keys on the media folder's path, a scratch
+directory carrying the run's own id, so every run left a new name. A test could not choose a root
+without writing `crate::scratch`'s crate-wide lock while the rest of the suite read it
+([ART-182](#fixed)).
+
+**Both arms, measured the same day.** The defective arm needed no extra run: the scratch root held
+30 such files dated 2026-09-10, and the four newest sat in two pairs about forty seconds apart —
+15:21:48 and 15:22:26, then 15:39:03 and 15:39:40 — which are this session's four whole-suite
+runs, ART-285's two and ART-294's two, all on the unfixed code. The fixed arm: 32 such files before two whole-suite runs of the fixed code and 32 after each, with the scratch root at 719 entries before and 719 after. The count stood at 32 rather than the listing's 30 because the mutation run below planned twice through the defective body, which is the defect's own signature, so the baseline was counted after it.
+
+**The fix.** The command's body is now `plan_with_root(request, root)`, where `root` is a
+**resolver** rather than a path, so the order of the refusals is exactly what it was: an
+unreadable media folder first, then a release with no recipe, and only then a chosen root that has
+gone away. Resolving the root up front would have let a missing root outrank a missing folder, a
+different sentence for the same state. The command passes `crate::scratch::root`; the leaking test
+and a new guard pass a closure over their own `ScratchDir` path through `plan_in`, a helper that
+lives in the test module. No production wrapper exists "for tests" — that shape is the entry's
+second half, filed as [ART-295](#open).
+
+*Tests:* `the_plan_writes_its_scan_cache_under_the_root_it_is_given` — one scan-cache file under the
+root the plan was handed; red first as a compile error, since `plan_with_root` did not exist.
+`planning_against_a_real_folder_returns_the_plan` now plans through its own scratch.
+**Mutation:** the body resolving `crate::scratch::root()` itself instead of the root it was handed — killed by the guard alone (`commands::osinstall::tests::`: 92 passed, 1 failed), and that run left two files under the temp root, which is why the fixed arm's baseline was counted after it.
+
+**Not claimed.** Six other commands in the same file still resolve their own root
+(`osinstall_rescan_media`, `osinstall_identify_media`, `osinstall_component_collisions`,
+`osinstall_collisions`, `osinstall_add_package`, `osinstall_apply`). No test calls any of them
+(counted 2026-09-10), so none leaks today; a future test that calls one directly would.
 
 **ART-294** 🔵 ✅ **The first-boot rehearsal has no growth ceiling** — *found
 2026-09-10 while fixing ART-278, on `art-278-runaway`; fixed 2026-09-10 on
@@ -691,12 +690,12 @@ round's control.
 
 **What survives is one 794-byte *file* per suite run, not a directory** —
 `art-osinstall-scan-<hash>.json`, written by `osinstall_plan`, which resolves
-its own root because no argument gives it one. Filed as [ART-293](#open) with
+its own root because no argument gives it one. Filed as [ART-293](#fixed) with
 its own measurement.
 
 **What the round knowingly left, so nobody has to rediscover it:**
 
-- **[ART-293](#open)** — that file, and the five production thin wrappers that
+- **[ART-293](#fixed)** — that file, and the five production thin wrappers that
   hand `temp_dir()` onward from ~121 test calls (measured clean; a blind spot
   of the guard, not a leak).
 - **303 trailing `let _ = std::fs::remove_dir_all(…)` lines still stand in test
