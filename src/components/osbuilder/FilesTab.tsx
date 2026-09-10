@@ -159,6 +159,7 @@ import {
   type MediaIdentityState,
   type MediaScanResult,
   type SlotOverride,
+  osinstallInstallMedia,
 } from "@/lib/osinstall";
 import { slotArchiveKey, slotOverrides } from "@/lib/amigainstall";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -922,6 +923,39 @@ export function FilesTab({ droppedMedia = null }: { droppedMedia?: DroppedMedia 
     for (const folder of plannedFolderPaths) take(folderScans[folder]);
     return names;
   }, [layersKnown, plannedFolderPaths, folderScans]);
+
+  /**
+   * Which of `foundVolumeNames` are install media at all (ART-285) — the
+   * core's answer, read off every shipped recipe. The folder column used to
+   * count every disc it could read a name from, and said *"23 install disks
+   * found"* over a folder of CD32 games.
+   *
+   * `null` while the question is out and after it failed: the column claims
+   * nothing then, rather than falling back to the count this replaced. Keyed
+   * on a joined string rather than the array, the ART-178 habit.
+   */
+  const [installVolumeNames, setInstallVolumeNames] = useState<string[] | null>(null);
+  const foundNamesKey = foundVolumeNames.join("\u0000");
+  useEffect(() => {
+    if (foundVolumeNames.length === 0) {
+      setInstallVolumeNames([]);
+      return;
+    }
+    let cancelled = false;
+    setInstallVolumeNames(null);
+    osinstallInstallMedia(foundVolumeNames).then(
+      (names) => {
+        if (!cancelled) setInstallVolumeNames(names);
+      },
+      () => {
+        if (!cancelled) setInstallVolumeNames(null);
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [foundNamesKey]);
   /**
    * The one folder picker (design § 3.1). Adding the same folder twice is
    * not an error and not a second folder: the core reads it once either way,
@@ -1091,6 +1125,7 @@ export function FilesTab({ droppedMedia = null }: { droppedMedia?: DroppedMedia 
               unusedForPlan={plannedFolders.unusedForPlan}
               amigaForeverOffer={amigaForeverOffer}
               foundVolumeNames={foundVolumeNames}
+              installVolumeNames={installVolumeNames}
               onAdd={() => void addFolder()}
               onRemove={removeFolder}
               onTag={tagFolder}

@@ -2313,6 +2313,8 @@
       "empty": "No install disks found in that folder.",
       "found_one": "{{count}} install disk found: {{names}}.",
       "found_other": "{{count}} install disks found: {{names}}.",
+      "otherDiscs_one": "{{count}} other disk in these folders is not install media for any release ART knows.",
+      "otherDiscs_other": "{{count}} other disks in these folders are not install media for any release ART knows.",
       "reuseScan": "Reuse the last scan of unchanged discs",
       "reuseScanHelp": "ART recognises a disc by its path, size and date. A disc restored from a backup can keep all three and still be a different disc — use Scan again if what you see does not match what you put in.",
       "rescan": "Scan again",

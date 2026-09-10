@@ -2313,6 +2313,8 @@
       "empty": "Bu klasörde kurulum diski bulunamadı.",
       "found_one": "{{count}} kurulum diski bulundu: {{names}}.",
       "found_other": "{{count}} kurulum diski bulundu: {{names}}.",
+      "otherDiscs_one": "Bu klasörlerdeki {{count}} disk daha, ART'ın bildiği hiçbir sürümün kurulum ortamı değil.",
+      "otherDiscs_other": "Bu klasörlerdeki {{count}} disk daha, ART'ın bildiği hiçbir sürümün kurulum ortamı değil.",
       "reuseScan": "Değişmemiş disklerin son taramasını yeniden kullan",
       "reuseScanHelp": "ART bir diski yolu, boyutu ve tarihiyle tanır. Yedekten geri alınan bir disk üçünü de koruyabilir ve yine de başka bir disk olabilir — gördüğünüz, taktığınızla uyuşmuyorsa Yeniden tara deyin.",
       "rescan": "Yeniden tara",
