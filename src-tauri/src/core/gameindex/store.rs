@@ -962,13 +962,8 @@ mod tests {
     use super::*;
     use crate::core::gameindex::record::{Fact, Provenance, SourceRef, GAMEINDEX_SCHEMA};
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-catalogue-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-catalogue", tag)
     }
 
     fn a_record(title: &str) -> GameRecord {
@@ -1029,7 +1024,7 @@ mod tests {
     /// trickery is needed to prove it.
     #[test]
     fn an_unchanged_file_is_not_read_again() {
-        let dir = scratch("cache-hit");
+        let (_guard, dir) = scratch("cache-hit");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
         let file = a_real_file(&root, "Zool (1992)(Gremlin).adf");
@@ -1062,7 +1057,7 @@ mod tests {
     /// user knowing to ask for it.
     #[test]
     fn a_record_from_an_older_reader_is_read_again() {
-        let dir = scratch("stale-schema");
+        let (_guard, dir) = scratch("stale-schema");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
         let file = a_real_file(&root, "Zool (1992)(Gremlin).adf");
@@ -1097,7 +1092,7 @@ mod tests {
     /// error, which is what `read_root`'s old strict behaviour did.
     #[test]
     fn refresh_self_heals_a_root_file_this_build_cannot_parse() {
-        let dir = scratch("self-heal");
+        let (_guard, dir) = scratch("self-heal");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
         a_real_file(&root, "Zool (1992)(Gremlin).adf");
@@ -1120,7 +1115,7 @@ mod tests {
     /// A file whose size changed is read again.
     #[test]
     fn a_changed_file_is_read_again() {
-        let dir = scratch("changed");
+        let (_guard, dir) = scratch("changed");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
         let file = a_real_file(&root, "Zool (1992)(Gremlin).adf");
@@ -1160,7 +1155,7 @@ mod tests {
     fn an_unchanged_archive_is_not_reopened_on_update() {
         use crate::core::gameindex::readers::slave::tests_support::build_slave;
 
-        let dir = scratch("archive-cache-hit");
+        let (_guard, dir) = scratch("archive-cache-hit");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
         let archive = root.join("Demos.lha");
@@ -1211,7 +1206,7 @@ mod tests {
     fn a_touched_archive_is_reopened_on_update() {
         use crate::core::gameindex::readers::slave::tests_support::build_slave;
 
-        let dir = scratch("archive-cache-miss");
+        let (_guard, dir) = scratch("archive-cache-miss");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
         let archive = root.join("Demos.lha");
@@ -1257,7 +1252,7 @@ mod tests {
     /// must be gone.
     #[test]
     fn a_rescan_reads_everything_present() {
-        let dir = scratch("rescan");
+        let (_guard, dir) = scratch("rescan");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
         let file = a_real_file(&root, "Zool (1992)(Gremlin).adf");
@@ -1299,7 +1294,7 @@ mod tests {
     fn refresh_root_stores_drawer_and_archive_titles_not_just_loose_files() {
         use crate::core::gameindex::readers::slave::tests_support::build_slave;
 
-        let dir = scratch("refresh-all-shapes");
+        let (_guard, dir) = scratch("refresh-all-shapes");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
 
@@ -1377,7 +1372,7 @@ mod tests {
     fn one_bad_drawer_in_an_archive_is_kept_not_deleted_when_its_sibling_still_reads() {
         use crate::core::gameindex::readers::slave::tests_support::build_slave;
 
-        let dir = scratch("archive-sibling-failure");
+        let (_guard, dir) = scratch("archive-sibling-failure");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
         let archive = root.join("Demos.lha");
@@ -1448,7 +1443,7 @@ mod tests {
     fn a_title_removed_from_a_rewritten_archive_is_cleared_by_rescan() {
         use crate::core::gameindex::readers::slave::tests_support::build_slave;
 
-        let dir = scratch("archive-ghost");
+        let (_guard, dir) = scratch("archive-ghost");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
         let archive = root.join("Demos.lha");
@@ -1519,7 +1514,7 @@ mod tests {
     /// getting cleared along with it.
     #[test]
     fn an_archive_this_run_cannot_open_keeps_its_records_as_missing() {
-        let dir = scratch("archive-unreachable");
+        let (_guard, dir) = scratch("archive-unreachable");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
 
@@ -1566,7 +1561,7 @@ mod tests {
     fn a_drawer_and_its_archived_twin_store_one_record_and_it_is_the_drawer() {
         use crate::core::gameindex::readers::slave::tests_support::build_slave;
 
-        let dir = scratch("drawer-and-archive-twin");
+        let (_guard, dir) = scratch("drawer-and-archive-twin");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
 
@@ -1608,7 +1603,7 @@ mod tests {
     #[test]
     fn an_entry_whose_file_has_gone_is_kept_by_both_modes() {
         for mode in [Refresh::Update, Refresh::Rescan] {
-            let dir = scratch("missing");
+            let (_guard, dir) = scratch("missing");
             let root = dir.join("library");
             std::fs::create_dir_all(&root).unwrap();
 
@@ -1644,7 +1639,7 @@ mod tests {
     /// the missing one because it sorted first.
     #[test]
     fn a_renamed_file_replaces_its_old_path_rather_than_haunting_the_catalogue() {
-        let dir = scratch("renamed");
+        let (_guard, dir) = scratch("renamed");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
         let before = a_real_file(&root, "Zool (1992)(Gremlin).adf");
@@ -1684,7 +1679,7 @@ mod tests {
     /// entry. Following a move must not become deleting a title.
     #[test]
     fn a_file_that_moved_nowhere_still_keeps_its_entry() {
-        let dir = scratch("gone-for-good");
+        let (_guard, dir) = scratch("gone-for-good");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
         let file = a_real_file(&root, "Zool (1992)(Gremlin).adf");
@@ -1719,7 +1714,7 @@ mod tests {
             }
         }
 
-        let dir = scratch("progress");
+        let (_guard, dir) = scratch("progress");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
         let cached = a_real_file(&root, "Cached (1992)(Someone).adf");
@@ -1766,7 +1761,7 @@ mod tests {
             }
         }
 
-        let dir = scratch("cancel");
+        let (_guard, dir) = scratch("cancel");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
         a_real_file(&root, "One (1992)(Someone).adf");
@@ -1841,7 +1836,7 @@ mod tests {
     /// afterwards.
     #[test]
     fn overrides_survive_a_rescan() {
-        let dir = scratch("survive");
+        let (_guard, dir) = scratch("survive");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
         a_real_file(&root, "Zool (1992)(Gremlin).adf");
@@ -1881,7 +1876,7 @@ mod tests {
     /// mind leaves nothing behind.
     #[test]
     fn an_emptied_override_is_removed() {
-        let dir = scratch("empty-override");
+        let (_guard, dir) = scratch("empty-override");
         set_override(
             &dir,
             "some-id-00000000",
@@ -1904,7 +1899,7 @@ mod tests {
     /// so a catalogue cannot claim "ready" about a game on an unplugged drive.
     #[test]
     fn availability_comes_from_the_disk_not_the_file() {
-        let dir = scratch("availability");
+        let (_guard, dir) = scratch("availability");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
         let file = a_real_file(&root, "Zool (1992)(Gremlin).adf");
@@ -1935,7 +1930,7 @@ mod tests {
     /// update would improve it **without doing the update**.
     #[test]
     fn a_root_read_by_an_older_reader_is_flagged_as_stale() {
-        let dir = scratch("stale-flag");
+        let (_guard, dir) = scratch("stale-flag");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
 
@@ -1979,7 +1974,7 @@ mod tests {
     /// ```
     #[test]
     fn ten_thousand_entries_load_without_going_quadratic() {
-        let dir = scratch("ten-thousand");
+        let (_guard, dir) = scratch("ten-thousand");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
 
@@ -2073,7 +2068,7 @@ mod tests {
     /// twice does not double it.
     #[test]
     fn roots_keep_their_order_and_do_not_duplicate() {
-        let dir = scratch("roots");
+        let (_guard, dir) = scratch("roots");
         let a = dir.join("a");
         let b = dir.join("b");
         std::fs::create_dir_all(&a).unwrap();
@@ -2101,7 +2096,7 @@ mod tests {
     /// the user has really deleted.
     #[test]
     fn removing_a_root_takes_its_entries_with_it() {
-        let dir = scratch("remove");
+        let (_guard, dir) = scratch("remove");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
         a_real_file(&root, "Zool (1992)(Gremlin).adf");
@@ -2125,7 +2120,7 @@ mod tests {
     /// be gone; it is gone.
     #[test]
     fn removing_an_unknown_root_is_not_an_error() {
-        let dir = scratch("remove-unknown");
+        let (_guard, dir) = scratch("remove-unknown");
         assert!(remove_root(&dir, Path::new(r"E:\nowhere")).is_ok());
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -2134,7 +2129,7 @@ mod tests {
     /// does not sit in the list for ever producing nothing.
     #[test]
     fn a_root_that_is_not_a_directory_is_refused() {
-        let dir = scratch("bad-root");
+        let (_guard, dir) = scratch("bad-root");
         let file = a_real_file(&dir, "not-a-folder.adf");
         assert!(add_root(&dir, &file).is_err());
         std::fs::remove_dir_all(&dir).ok();
@@ -2143,7 +2138,7 @@ mod tests {
     /// A root file written and read back is the same value.
     #[test]
     fn a_root_file_round_trips() {
-        let dir = scratch("round-trip");
+        let (_guard, dir) = scratch("round-trip");
         let value = CatalogueRoot {
             schema: CATALOGUE_SCHEMA,
             root: r"E:\amiga\Amigatolon\WHDload".into(),
@@ -2171,7 +2166,7 @@ mod tests {
     /// catalogue is the normal first-run state.
     #[test]
     fn an_unscanned_root_reads_as_nothing() {
-        let dir = scratch("absent");
+        let (_guard, dir) = scratch("absent");
         assert_eq!(
             read_root(&dir, Path::new(r"E:\nowhere")).unwrap(),
             StoredRoot::Absent
@@ -2183,7 +2178,7 @@ mod tests {
     /// A catalogue directory that does not exist yet is created, not refused.
     #[test]
     fn the_catalogue_directory_is_created_on_first_write() {
-        let parent = scratch("mkdir");
+        let (_guard, parent) = scratch("mkdir");
         let dir = parent.join("does").join("not").join("exist");
 
         write_roots(
@@ -2219,7 +2214,7 @@ mod tests {
     /// used to describe something it cannot check. `CardManifest`'s rule.
     #[test]
     fn a_root_file_from_a_newer_art_is_refused() {
-        let dir = scratch("newer");
+        let (_guard, dir) = scratch("newer");
         let root = Path::new(r"E:\amiga");
         let json = format!(
             r#"{{"schema":{},"root":"E:\\amiga","scanned_at":null,"index_schema":1,"entries":[]}}"#,
@@ -2241,7 +2236,7 @@ mod tests {
     /// pins the opposite answer for the user's own corrections.
     #[test]
     fn a_corrupt_root_file_is_read_as_unreadable_rather_than_erroring() {
-        let dir = scratch("corrupt");
+        let (_guard, dir) = scratch("corrupt");
         let root = Path::new(r"E:\amiga");
         std::fs::write(dir.join(root_file_name(root)), b"{ not json at all").unwrap();
 
@@ -2258,7 +2253,7 @@ mod tests {
     /// must read this as `Unreadable`, not error.
     #[test]
     fn a_root_file_with_an_unknown_media_variant_is_read_as_unreadable() {
-        let dir = scratch("unknown-variant");
+        let (_guard, dir) = scratch("unknown-variant");
         let root = Path::new(r"E:\amiga");
         let json = format!(
             r#"{{"schema":{CATALOGUE_SCHEMA},"root":"E:\\amiga","scanned_at":null,"index_schema":{GAMEINDEX_SCHEMA},"entries":[{{"path":"E:\\amiga\\Lotus3.hdf","size":1,"mtime_ms":0,"record":{{"schema":{GAMEINDEX_SCHEMA},"id":"lotus-3-00000000","title":{{"value":"Lotus 3","from":"whdload-slave"}},"kind":null,"year":null,"publisher":null,"genre":null,"rating":null,"chipset":null,"kickstart":null,"media":{{"kind":"whdload-drawer","slave":"Lotus3.slave"}},"preview":null,"source":{{"name":"Lotus3.hdf","sha256":"{}","bytes":1}}}}}}]}}"#,
@@ -2278,7 +2273,7 @@ mod tests {
     /// title at all.
     #[test]
     fn load_reads_a_root_with_an_unknown_media_variant_as_stale_not_an_error() {
-        let dir = scratch("load-unknown-variant");
+        let (_guard, dir) = scratch("load-unknown-variant");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
 
@@ -2314,7 +2309,7 @@ mod tests {
     /// must still be a hard error rather than silently discarded.
     #[test]
     fn an_overrides_file_with_an_unknown_field_still_errors() {
-        let dir = scratch("overrides-unknown-field");
+        let (_guard, dir) = scratch("overrides-unknown-field");
         std::fs::create_dir_all(&dir).unwrap();
         // `ChipsetRequirement` has exactly two variants (`ocsecs`, `aga`); a
         // third one is exactly the shape an old-shaped root's `Media` was —
@@ -2330,7 +2325,7 @@ mod tests {
     /// returns where it went, the way every guarded write in ART does.
     #[test]
     fn writing_overrides_keeps_the_previous_version() {
-        let dir = scratch("overrides");
+        let (_guard, dir) = scratch("overrides");
 
         let first = Overrides {
             schema: CATALOGUE_SCHEMA,
@@ -2371,7 +2366,7 @@ mod tests {
     /// the field that one does not cover.
     #[test]
     fn a_hand_attached_picture_survives_a_refresh() {
-        let dir = scratch("art-binding");
+        let (_guard, dir) = scratch("art-binding");
         let root = dir.join("library");
         std::fs::create_dir_all(&root).unwrap();
         a_real_file(&root, "Turrican (1990)(Rainbow Arts).adf");
@@ -2425,7 +2420,7 @@ mod tests {
     /// this test names.
     #[test]
     fn removing_the_picture_leaves_no_trace() {
-        let dir = scratch("art-binding-removed");
+        let (_guard, dir) = scratch("art-binding-removed");
         set_override(
             &dir,
             "turrican-1a2b3c4d",

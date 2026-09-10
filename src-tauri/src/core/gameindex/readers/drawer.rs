@@ -222,13 +222,8 @@ mod tests {
     use crate::core::gameindex::scan::collect_drawers;
     use std::path::PathBuf;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-drawer-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-drawer", tag)
     }
 
     /// A minimal Amiga icon whose ToolTypes are `["SLAVE=<slave>",
@@ -254,7 +249,7 @@ mod tests {
 
     #[test]
     fn a_directory_holding_one_slave_is_a_title() {
-        let root = scratch("one");
+        let (_guard, root) = scratch("one");
         let dir = synthetic_drawer(&root, "Turrican", "Turrican.slave");
         let record = read_drawer(&dir).unwrap().expect("this is a title");
         match record.media {
@@ -269,7 +264,7 @@ mod tests {
 
     #[test]
     fn a_slave_is_found_whatever_the_extensions_case() {
-        let root = scratch("case");
+        let (_guard, root) = scratch("case");
         let dir = synthetic_drawer(&root, "Tag", "Tag.Slave");
         let record = read_drawer(&dir).unwrap().expect("`.Slave` is a slave");
         assert!(matches!(record.media, Media::WhdloadDrawer { .. }));
@@ -281,7 +276,7 @@ mod tests {
         // `Demos/T/Tag/data/01`…`data/82` is payload. iGame skips
         // `data`/`Data` for the same reason, and a scan that descends into
         // it invents titles where there is one.
-        let root = scratch("payload");
+        let (_guard, root) = scratch("payload");
         let dir = synthetic_drawer(&root, "Tag", "Tag.Slave");
         // The real payload's numbered files (`data/01`…`data/82`) never look
         // like a drawer themselves, so a fixture with only those does not
@@ -303,7 +298,7 @@ mod tests {
 
     #[test]
     fn a_drawer_with_two_slaves_is_refused_by_name() {
-        let root = scratch("two");
+        let (_guard, root) = scratch("two");
         let dir = synthetic_drawer(&root, "Ambiguous", "One.slave");
         // `synthetic_drawer`'s own icon names the one slave it was built with
         // ("One.slave"), which is one of the two candidates below — so left
@@ -329,7 +324,7 @@ mod tests {
     #[test]
     fn the_icons_slave_tooltype_settles_a_drawer_that_has_two() {
         // The one case where two slaves is answerable: the icon says which.
-        let root = scratch("two-icon");
+        let (_guard, root) = scratch("two-icon");
         let dir = synthetic_drawer(&root, "Decided", "One.slave");
         std::fs::write(
             dir.join("Two.slave"),
@@ -352,7 +347,7 @@ mod tests {
     /// than actually allocating 2 MB+ in a test.
     #[test]
     fn an_oversized_slave_is_refused_without_being_read_whole() {
-        let root = scratch("oversized");
+        let (_guard, root) = scratch("oversized");
         let dir = root.join("Huge");
         std::fs::create_dir_all(&dir).unwrap();
         let slave = dir.join("Huge.slave");
@@ -381,7 +376,7 @@ mod tests {
     /// a different reason. This one only refuses because of the bound.
     #[test]
     fn an_oversized_icon_settles_nothing_and_the_drawer_is_refused() {
-        let root = scratch("oversized-icon");
+        let (_guard, root) = scratch("oversized-icon");
         let dir = synthetic_drawer(&root, "Ambiguous", "One.slave");
         std::fs::write(
             dir.join("Two.slave"),
@@ -410,7 +405,7 @@ mod tests {
 
     #[test]
     fn a_directory_with_no_slave_is_not_a_title() {
-        let root = scratch("none");
+        let (_guard, root) = scratch("none");
         std::fs::create_dir_all(root.join("Docs")).unwrap();
         std::fs::write(root.join("Docs").join("ReadMe"), b"x").unwrap();
         assert!(read_drawer(&root.join("Docs")).unwrap().is_none());

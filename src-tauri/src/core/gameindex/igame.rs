@@ -868,18 +868,13 @@ mod tests {
 
     // -- the default path: a tree ART just built -------------------------
 
-    fn scratch(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-igame-beside-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-igame-beside", tag)
     }
 
     #[test]
     fn igame_data_lands_beside_the_slave() {
-        let root = scratch("igame-beside");
+        let (_guard, root) = scratch("igame-beside");
         let dir = root.join("Games/Turrican");
         std::fs::create_dir_all(&dir).unwrap();
         let data = IGameData {
@@ -897,7 +892,7 @@ mod tests {
     /// silently ignores keys it does not know.
     #[test]
     fn an_existing_file_is_edited_and_its_own_keys_survive() {
-        let root = scratch("igame-merge");
+        let (_guard, root) = scratch("igame-merge");
         let dir = root.join("Games/Tag");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(FILE_NAME), "; mine\nfavourite=yes\ntitle=Old\n").unwrap();
@@ -922,7 +917,7 @@ mod tests {
     /// written, the title is left out and named, and nothing is truncated.
     #[test]
     fn a_value_that_will_not_fit_is_left_out_and_named() {
-        let root = scratch("igame-long");
+        let (_guard, root) = scratch("igame-long");
         let dir = root.join("Games/Long");
         std::fs::create_dir_all(&dir).unwrap();
         let data = IGameData {
@@ -953,7 +948,7 @@ mod tests {
     /// outcome says so by name, and the omission is still reported.
     #[test]
     fn a_title_alone_that_does_not_fit_writes_nothing_at_all() {
-        let root = scratch("igame-nothing-fits");
+        let (_guard, root) = scratch("igame-nothing-fits");
         let dir = root.join("Games/NothingFits");
         std::fs::create_dir_all(&dir).unwrap();
         let data = IGameData {
@@ -986,7 +981,7 @@ mod tests {
     /// survives ART having nothing new to add.
     #[test]
     fn nothing_fitting_does_not_blank_an_existing_file() {
-        let root = scratch("igame-nothing-fits-existing");
+        let (_guard, root) = scratch("igame-nothing-fits-existing");
         let dir = root.join("Games/Kept");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(FILE_NAME), "; mine\nfavourite=yes\n").unwrap();
@@ -1019,7 +1014,7 @@ mod tests {
     /// `igamewrite::apply_one` used to compute for itself with a second read.
     #[test]
     fn a_second_identical_write_is_already_current_and_touches_nothing() {
-        let root = scratch("igame-already-current");
+        let (_guard, root) = scratch("igame-already-current");
         let dir = root.join("Games/Twice");
         std::fs::create_dir_all(&dir).unwrap();
         let first = write_beside(&dir, &data(), crate::core::safety::BackupPolicy::CONFIG).unwrap();
@@ -1052,7 +1047,7 @@ mod tests {
     /// whose permissions changed between the two steps).
     #[test]
     fn a_failed_write_after_a_successful_backup_still_reports_the_backup() {
-        let root = scratch("igame-failed-after-backup");
+        let (_guard, root) = scratch("igame-failed-after-backup");
         let dir = root.join("Games/Kept");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(FILE_NAME);

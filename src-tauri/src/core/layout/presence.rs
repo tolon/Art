@@ -464,14 +464,8 @@ mod tests {
     use super::*;
     use crate::core::layout::{ItemKind, LayoutItem};
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-presence-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-presence", tag)
     }
 
     fn item(source: PathBuf, destination: &str, placement: Placement) -> LayoutItem {
@@ -524,7 +518,7 @@ mod tests {
 
     #[test]
     fn a_destination_that_is_not_there_is_absent() {
-        let dir = scratch("absent");
+        let (_guard, dir) = scratch("absent");
         let source = dir.join("Disk.adf");
         std::fs::write(&source, b"bytes").unwrap();
         let root = dir.join("staging");
@@ -537,7 +531,7 @@ mod tests {
 
     #[test]
     fn the_same_file_already_written_is_already_in_place() {
-        let dir = scratch("same-file");
+        let (_guard, dir) = scratch("same-file");
         let source = dir.join("Disk.adf");
         std::fs::write(&source, b"the very same bytes").unwrap();
         let root = dir.join("staging");
@@ -555,7 +549,7 @@ mod tests {
     /// silently never copy the real one.
     #[test]
     fn a_different_file_of_the_same_length_is_different() {
-        let dir = scratch("same-size");
+        let (_guard, dir) = scratch("same-size");
         let source = dir.join("Disk.adf");
         std::fs::write(&source, b"aaaaaaaaaaaaaaaaaaaa").unwrap();
         let root = dir.join("staging");
@@ -574,7 +568,7 @@ mod tests {
 
     #[test]
     fn a_drawer_copied_whole_is_already_in_place_and_a_short_one_is_not() {
-        let dir = scratch("tree");
+        let (_guard, dir) = scratch("tree");
         let source = dir.join("TurricanII");
         std::fs::create_dir_all(source.join("data")).unwrap();
         std::fs::write(source.join("TurricanII.slave"), b"slave").unwrap();
@@ -608,7 +602,7 @@ mod tests {
     /// would have skipped placing it.
     #[test]
     fn two_trees_differing_only_by_an_empty_directory_are_different() {
-        let dir = scratch("empty-dir");
+        let (_guard, dir) = scratch("empty-dir");
         let source = dir.join("Game");
         std::fs::create_dir_all(source.join("Saves")).unwrap();
         std::fs::write(source.join("Game.slave"), b"slave").unwrap();
@@ -633,7 +627,7 @@ mod tests {
 
     #[test]
     fn a_whdload_drawer_matching_its_archive_is_already_in_place() {
-        let dir = scratch("pack");
+        let (_guard, dir) = scratch("pack");
         let archive = dir.join("Turrican.lha");
         whdload_lha(&archive);
 
@@ -667,7 +661,7 @@ mod tests {
     /// judged already-in-place and never rewritten.
     #[test]
     fn a_drawer_with_the_right_lengths_and_the_wrong_bytes_is_different() {
-        let dir = scratch("pack-wrong-bytes");
+        let (_guard, dir) = scratch("pack-wrong-bytes");
         let archive = dir.join("Turrican.lha");
         whdload_lha(&archive);
 
@@ -693,7 +687,7 @@ mod tests {
     /// it finished (§82).
     #[test]
     fn a_drawer_whose_icon_is_missing_asks_for_the_icon_and_not_a_collision() {
-        let dir = scratch("pack-no-icon");
+        let (_guard, dir) = scratch("pack-no-icon");
         let archive = dir.join("Turrican.lha");
         whdload_lha(&archive);
 
@@ -716,7 +710,7 @@ mod tests {
     /// repair: writing over it would be an overwrite (§93).
     #[test]
     fn a_drawer_whose_icon_is_someone_elses_is_different() {
-        let dir = scratch("pack-wrong-icon");
+        let (_guard, dir) = scratch("pack-wrong-icon");
         let archive = dir.join("Turrican.lha");
         whdload_lha(&archive);
 
@@ -734,7 +728,7 @@ mod tests {
     /// for that never arrives.
     #[test]
     fn a_source_that_cannot_be_read_is_different_not_already_in_place() {
-        let dir = scratch("unreadable");
+        let (_guard, dir) = scratch("unreadable");
         let root = dir.join("staging");
         std::fs::create_dir_all(root.join("Floppies")).unwrap();
         std::fs::write(root.join("Floppies").join("Disk.adf"), b"something").unwrap();
@@ -753,7 +747,7 @@ mod tests {
     /// no skip.
     #[test]
     fn an_archive_that_will_not_open_is_different() {
-        let dir = scratch("bad-archive");
+        let (_guard, dir) = scratch("bad-archive");
         let archive = dir.join("Turrican.lha");
         std::fs::write(&archive, b"not an archive at all").unwrap();
 
