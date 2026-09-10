@@ -797,6 +797,7 @@ mod tests {
             built_from: vec![MediaRecord {
                 volume_name: "Test".into(),
                 sha256: "0".repeat(64),
+                distinguished_by: None,
             }],
             files: vec![FileRecord {
                 path: owner_path.into(),

@@ -1625,6 +1625,7 @@ mod tests {
                 .map(|volume| super::super::apply::MediaRecord {
                     volume_name: (*volume).to_string(),
                     sha256: "0".repeat(64),
+                    distinguished_by: None,
                 })
                 .collect(),
             files: components.iter().map(|c| file_from(c)).collect(),
