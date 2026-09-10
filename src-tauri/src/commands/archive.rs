@@ -630,6 +630,8 @@ mod tests {
         use crate::core::volume::fixture::ffs_volume;
         use crate::core::volume::DosType;
 
+        let (_root_guard, scratch_root) =
+            crate::core::ScratchDir::pair("art-archive-cmd-root", "into-volume");
         let (_guard, dir) = scratch("into-volume");
         let archive = sample(&dir);
         let image = dir.join("disk.adf");
@@ -644,7 +646,7 @@ mod tests {
             0,
             0,
             OverwritePolicy::Skip,
-            &std::env::temp_dir(),
+            &scratch_root,
             &NoProgress,
         )
         .unwrap();
@@ -684,6 +686,8 @@ mod tests {
         use crate::core::volume::fixture::ffs_volume;
         use crate::core::volume::DosType;
 
+        let (_root_guard, scratch_root) =
+            crate::core::ScratchDir::pair("art-archive-cmd-root", "one-into-volume");
         let (_guard, dir) = scratch("one-into-volume");
         let archive = sample(&dir);
         let image = dir.join("disk.adf");
@@ -698,7 +702,7 @@ mod tests {
             0,
             0,
             OverwritePolicy::Skip,
-            &std::env::temp_dir(),
+            &scratch_root,
             &NoProgress,
         )
         .unwrap();

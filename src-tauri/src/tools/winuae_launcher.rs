@@ -245,17 +245,21 @@ mod real_boot_hook {
         println!("--- config ---\n{config}\n--- end ---");
 
         if let Ok(winuae) = std::env::var("ART_WINUAE") {
-            // ART-281 keeps the platform root **here on purpose**, and it is
-            // the one hook in this task that does. `launch_winuae` `release`s
-            // the child: WinUAE outlives this test and opens the generated
-            // `.uae` after the function has returned. A `ScratchDir` root
-            // would be removed on the way out of this scope — between the
-            // spawn and WinUAE's own read — and the emulator would fail to
-            // start for a reason that has nothing to do with what is being
-            // measured. `ask_a_tree_its_version_when_asked` below does take a
-            // guarded root, because it `terminate()`s the process before it
-            // returns.
-            let pid = launch_winuae(&PathBuf::from(&winuae), &config, &std::env::temp_dir())
+            // ART-281: the launcher's scratch root here is the folder beside
+            // the tree this hook already wrote `art-boot-39.uae` into two
+            // lines up — **not** a `ScratchDir` and not the platform root.
+            // `launch_winuae` `release`s the child: WinUAE outlives this test
+            // and opens the generated `.uae` after the function has returned,
+            // so a guarded root would be removed between the spawn and that
+            // read, and the emulator would fail to start for a reason that
+            // has nothing to do with what is being measured. The directory
+            // above is the owner's own, proven writable by the `write` on the
+            // line before, and it keeps the launcher's copy where the copy
+            // this hook prints already is. `ask_a_tree_its_version_when_asked`
+            // below does take a guarded root, because it `terminate()`s the
+            // process before it returns.
+            let uae_root = PathBuf::from(&tree).join("..");
+            let pid = launch_winuae(&PathBuf::from(&winuae), &config, &uae_root)
                 .expect("WinUAE must start");
             println!("WinUAE started, pid {pid}");
         }
