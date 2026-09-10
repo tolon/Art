@@ -252,8 +252,11 @@ one size — two identical 490 856 448-byte images — and proving them identica
 0.45 s warm. The memo lives in memory only; keeping the hash in the scan cache (`ScanCache` already
 stores md5s keyed by size and modification time) would let the next start pay nothing.
 
-**ART-303** 🟠 **Build runs a ticked update whose prerequisite is ticked but unresolved, and the core
-refuses it** — *found 2026-09-10 by the owner on `main-e2633a6`, fresh tree*
+## Fixed
+
+**ART-303** 🟠 ✅ **Build runs a ticked update whose prerequisite is ticked but unresolved, and the core
+refuses it** — *found 2026-09-10 by the owner on `main-e2633a6`, fresh tree; fixed the same night on
+`art-303-unresolved-gate` by the owner's ruling ("art 303'ü onaylıyorum yap")*
 `src/components/osbuilder/BuildTab.tsx` (the gate) · `src/components/osbuilder/ChoiceTab.tsx`
 (`useTickedUpdates`) · The owner's folder `E:/amiga/Amigatolon/paketler` holds **two different BoingBag
 3.9-1 archives** — `BoingBag39-1 (1).lha` (5 254 220 B, SHA-256 `833de18f…`, the copy the earlier tree
@@ -268,10 +271,16 @@ have succeeded. *names a ticked update whose file ART would not trust, and does 
 alone — so the test was written from the same reading as the code. The fix is the gate's: a ticked row
 that is unresolved should withhold Build (at least when a ticked row after it needs it), with the
 unresolved sentence standing in the button's place. Workaround today: choose one copy on the Amiga files
-tab's BoingBag 3.9-1 row, or take one copy out of the folder. **The owner's call before it is built**, because
-it reverses that test's stated design.
+tab's BoingBag 3.9-1 row, or take one copy out of the folder.
 
-## Fixed
+**The fix.** Tab 4's gate withholds Build while any ticked update is unresolved, and the button's place
+says so by name — `osBuilder.build.blocked.unresolved`, *"Build waits until one file is chosen for
+{{names}} …"* — under the yellow lines that say which file to choose. Any unresolved row, not only one a
+later row requires: a ticked row that silently does not run is the quiet form of the same defect, and the
+screen already promised *"it will not be written until you do"*. The test that pinned the old design was
+rewritten to the new one, with its reason in place: *names a ticked update whose file ART would not trust,
+and does not run it* now asserts the blocker's sentence and no Build button. Mutation: the gate taken out
+fails it.
 
 **ART-297** 🔴 ✅ **The OS Builder froze the window: every tab question re-hashed whole install
 discs, on the thread the window answers on** — *found 2026-09-10 by the owner driving
