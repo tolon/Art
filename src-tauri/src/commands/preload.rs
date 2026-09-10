@@ -670,14 +670,8 @@ mod tests {
     use super::*;
     use crate::core::preload::{PreloadPartition, ToolVersion};
 
-    fn scratch(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-preload-cmd-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-preload-cmd", tag)
     }
 
     /// **G9.** The command reads both records off disk — the tree's
@@ -687,7 +681,7 @@ mod tests {
     fn the_pairing_command_reads_both_manifests() {
         use crate::core::rom::pairing::Pairing;
 
-        let dir = scratch("pairing-command");
+        let (_guard, dir) = scratch("pairing-command");
         let tree = dir.join("dist");
         std::fs::create_dir_all(&tree).unwrap();
         std::fs::write(
@@ -762,7 +756,7 @@ mod tests {
             requires_major,
         };
 
-        let dir = scratch("pairing-39-minimum");
+        let (_guard, dir) = scratch("pairing-39-minimum");
         let tree = dir.join("dist");
         std::fs::create_dir_all(&tree).unwrap();
         std::fs::write(
@@ -831,7 +825,7 @@ mod tests {
     fn a_tree_manifest_is_read_past_its_files() {
         use crate::core::rom::pairing::{NotCheckedReason, Pairing};
 
-        let dir = scratch("pairing-narrow");
+        let (_guard, dir) = scratch("pairing-narrow");
         let tree = dir.join("dist");
         std::fs::create_dir_all(&tree).unwrap();
 
@@ -948,7 +942,7 @@ mod tests {
     fn the_plan_command_answers_from_the_card() {
         use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
 
-        let dir = scratch("plan");
+        let (_guard, dir) = scratch("plan");
         let image = dir.join("card.hdf");
         crate::core::hdf::create_hdf(
             &image,
@@ -1100,7 +1094,7 @@ mod tests {
     fn native_is_chosen_by_default_over_a_configured_but_unreachable_tool() {
         use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
 
-        let dir = scratch("default-native");
+        let (_guard, dir) = scratch("default-native");
         let image = dir.join("card.hdf");
         crate::core::hdf::create_hdf(
             &image,
@@ -1174,7 +1168,7 @@ mod tests {
     fn a_partition_whose_copy_must_fall_back_is_formatted_by_the_same_tool() {
         use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
 
-        let dir = scratch("paired-fallback");
+        let (_guard, dir) = scratch("paired-fallback");
         let image = dir.join("card.hdf");
         crate::core::hdf::create_hdf(
             &image,
@@ -1259,7 +1253,7 @@ mod tests {
     fn one_partitions_fallback_does_not_pull_another_partition_with_it() {
         use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
 
-        let dir = scratch("per-partition");
+        let (_guard, dir) = scratch("per-partition");
         let image = dir.join("card.hdf");
         crate::core::hdf::create_hdf(
             &image,
@@ -1397,7 +1391,7 @@ mod tests {
     fn a_copy_with_no_format_of_its_own_still_falls_back_by_itself() {
         use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
 
-        let dir = scratch("fallback-pfs3");
+        let (_guard, dir) = scratch("fallback-pfs3");
         let image = dir.join("card.hdf");
         crate::core::hdf::create_hdf(
             &image,

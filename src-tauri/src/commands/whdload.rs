@@ -356,12 +356,8 @@ mod tests {
         );
     }
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("art-whd-{name}-{}", crate::core::test_scratch_id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-whd", name)
     }
 
     /// A wrapped pack laid out on disk, the way an unpacked archive looks.
@@ -378,7 +374,7 @@ mod tests {
     /// all land, and the icon lands *beside* the drawer.
     #[test]
     fn an_install_creates_the_drawer_its_contents_and_its_icon() {
-        let dir = scratch("install");
+        let (_guard, dir) = scratch("install");
         let source = dir.join("unpacked");
         std::fs::create_dir_all(&source).unwrap();
         unpacked_pack(&source);
@@ -445,7 +441,7 @@ mod tests {
     /// generations of the same image.
     #[test]
     fn a_whole_install_backs_the_image_up_once() {
-        let dir = scratch("one-backup");
+        let (_guard, dir) = scratch("one-backup");
         let source = dir.join("unpacked");
         std::fs::create_dir_all(&source).unwrap();
         unpacked_pack(&source);

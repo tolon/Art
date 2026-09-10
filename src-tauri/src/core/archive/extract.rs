@@ -400,17 +400,8 @@ mod tests {
     use crate::core::archive::ArchiveEntry;
     use crate::core::jobs::NoProgress;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-archive-{tag}-{}-{}",
-            crate::core::test_scratch_id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-archive", tag)
     }
 
     /// A backend that says whatever a test needs it to say.
@@ -447,7 +438,7 @@ mod tests {
     /// declared, a megabyte delivered. Refused, and nothing written.
     #[test]
     fn an_entry_that_produces_more_than_it_declared_is_refused() {
-        let dir = scratch("liar");
+        let (_guard, dir) = scratch("liar");
         let dest = dir.join("out");
         let mut backend = Liar {
             entries: vec![entry("small.txt", 4)],
@@ -471,7 +462,7 @@ mod tests {
     /// the backend is asked for anything at all.
     #[test]
     fn an_entry_larger_than_the_per_entry_cap_is_refused() {
-        let dir = scratch("huge-entry");
+        let (_guard, dir) = scratch("huge-entry");
         let dest = dir.join("out");
         let mut backend = Liar {
             entries: vec![entry("huge.bin", MAX_ENTRY_OUTPUT + 1), entry("ok.txt", 2)],
@@ -495,7 +486,7 @@ mod tests {
     /// makes an unchecked running total wrap into something that fits.
     #[test]
     fn a_declared_size_that_would_overflow_the_running_total_aborts() {
-        let dir = scratch("overflow");
+        let (_guard, dir) = scratch("overflow");
         let dest = dir.join("out");
         let mut backend = Liar {
             entries: vec![entry("boom.bin", u64::MAX)],
@@ -517,7 +508,7 @@ mod tests {
     /// half-extracted.
     #[test]
     fn an_archive_with_more_entries_than_the_cap_is_refused() {
-        let dir = scratch("many");
+        let (_guard, dir) = scratch("many");
         let dest = dir.join("out");
         let mut backend = Liar {
             entries: (0..MAX_ENTRIES + 1)

@@ -171,22 +171,13 @@ mod tests {
     use super::*;
     use crate::core::lha::tests::make_minimal_lha;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-lha-backend-{tag}-{}-{}",
-            crate::core::test_scratch_id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-lha-backend", tag)
     }
 
     #[test]
     fn it_lists_and_reads_an_archive() {
-        let dir = scratch("list");
+        let (_guard, dir) = scratch("list");
         let archive = dir.join("test.lha");
         std::fs::write(&archive, make_minimal_lha()).unwrap();
 
@@ -205,7 +196,7 @@ mod tests {
     /// wrong would put one entry's contents in another entry's file.
     #[test]
     fn reading_an_entry_again_rewinds_rather_than_returning_the_next_one() {
-        let dir = scratch("rewind");
+        let (_guard, dir) = scratch("rewind");
         let archive = dir.join("test.lha");
         std::fs::write(&archive, make_minimal_lha()).unwrap();
 
@@ -221,7 +212,7 @@ mod tests {
     /// than a truncated file.
     #[test]
     fn a_read_past_its_limit_is_an_error_not_a_short_file() {
-        let dir = scratch("limit");
+        let (_guard, dir) = scratch("limit");
         let archive = dir.join("test.lha");
         std::fs::write(&archive, make_minimal_lha()).unwrap();
 
@@ -235,7 +226,7 @@ mod tests {
 
     #[test]
     fn a_file_that_is_not_an_lha_fails_at_open() {
-        let dir = scratch("not-lha");
+        let (_guard, dir) = scratch("not-lha");
         let bogus = dir.join("plain.lha");
         std::fs::write(&bogus, vec![0u8; 512]).unwrap();
 

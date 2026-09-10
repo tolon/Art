@@ -150,17 +150,8 @@ mod tests {
     use crate::core::jobs::NoProgress;
     use std::path::PathBuf;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-archive-gate-{tag}-{}-{}",
-            crate::core::test_scratch_id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-archive-gate", tag)
     }
 
     /// The same hostile archive, in every format ART reads.
@@ -208,7 +199,7 @@ mod tests {
     #[test]
     fn every_backend_refuses_the_same_hostile_entries() {
         for (format, filename, build) in backends() {
-            let dir = scratch(format);
+            let (_guard, dir) = scratch(format);
             let archive = dir.join(filename);
             std::fs::write(&archive, build(&hostile_entries())).unwrap();
             let dest = dir.join("out");
@@ -265,7 +256,7 @@ mod tests {
     #[test]
     fn every_backend_copies_one_folder_out_keeping_its_shape() {
         for (format, filename, build) in backends() {
-            let dir = scratch(&format!("{format}-subtree"));
+            let (_guard, dir) = scratch(&format!("{format}-subtree"));
             let archive = dir.join(filename);
             std::fs::write(
                 &archive,
@@ -388,7 +379,7 @@ mod tests {
     #[test]
     fn every_backend_stops_at_the_limit_it_is_given() {
         for (format, filename, build) in backends() {
-            let dir = scratch(&format!("{format}-limit"));
+            let (_guard, dir) = scratch(&format!("{format}-limit"));
             let archive = dir.join(filename);
             std::fs::write(&archive, build(&[("big.bin", &vec![b'x'; 4096])])).unwrap();
 

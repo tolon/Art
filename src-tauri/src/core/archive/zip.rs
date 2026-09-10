@@ -400,22 +400,13 @@ pub mod tests {
         out
     }
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-zip-{tag}-{}-{}",
-            crate::core::test_scratch_id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-zip", tag)
     }
 
     #[test]
     fn it_lists_and_reads_an_archive() {
-        let dir = scratch("list");
+        let (_guard, dir) = scratch("list");
         let archive = dir.join("test.zip");
         std::fs::write(
             &archive,
@@ -439,7 +430,7 @@ pub mod tests {
 
     #[test]
     fn a_file_that_is_not_a_zip_fails_at_open() {
-        let dir = scratch("not-zip");
+        let (_guard, dir) = scratch("not-zip");
         let bogus = dir.join("plain.zip");
         std::fs::write(&bogus, vec![0u8; 512]).unwrap();
 
@@ -456,7 +447,7 @@ pub mod tests {
     /// would happen.
     #[test]
     fn the_fixture_writer_stores_hostile_names_exactly_as_given() {
-        let dir = scratch("verbatim");
+        let (_guard, dir) = scratch("verbatim");
         let archive = dir.join("hostile.zip");
         // The same three names the shared gate test hands every backend.
         let names = [
@@ -487,7 +478,7 @@ pub mod tests {
     /// archive that was never really encrypted.
     #[test]
     fn the_encrypted_fixture_cannot_be_read_without_the_key() {
-        let dir = scratch("crypto-premise");
+        let (_guard, dir) = scratch("crypto-premise");
         let archive = dir.join("locked.zip");
         std::fs::write(
             &archive,
@@ -512,7 +503,7 @@ pub mod tests {
     /// The right key gives the bytes back, whole and unchanged.
     #[test]
     fn the_right_password_reads_the_entry_back_exactly() {
-        let dir = scratch("crypto-right");
+        let (_guard, dir) = scratch("crypto-right");
         let archive = dir.join("locked.zip");
         // Long enough to cross the cipher's own state a few hundred times,
         // so a keystream that desynchronised after the header would show.
@@ -538,7 +529,7 @@ pub mod tests {
     /// has already started doing something with the archive.
     #[test]
     fn a_wrong_password_is_refused_at_open_with_arts_own_sentence() {
-        let dir = scratch("crypto-wrong");
+        let (_guard, dir) = scratch("crypto-wrong");
         let archive = dir.join("locked.zip");
         std::fs::write(
             &archive,
@@ -573,7 +564,7 @@ pub mod tests {
     /// fact about the archive rather than a fault.
     #[test]
     fn a_password_for_an_archive_in_clear_is_not_an_error() {
-        let dir = scratch("crypto-unneeded");
+        let (_guard, dir) = scratch("crypto-unneeded");
         let archive = dir.join("plain.zip");
         std::fs::write(&archive, make_zip_with(&[("C/Assign", b"assign")])).unwrap();
 
@@ -588,7 +579,7 @@ pub mod tests {
     /// name, and every path under them is refused.
     #[test]
     fn a_directory_entry_is_reported_as_one() {
-        let dir = scratch("dirs");
+        let (_guard, dir) = scratch("dirs");
         let archive = dir.join("test.zip");
         let mut cursor = std::io::Cursor::new(Vec::new());
         {

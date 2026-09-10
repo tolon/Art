@@ -623,14 +623,8 @@ mod tests {
     use crate::core::volume::mount::mount;
     use crate::core::volume::DosType;
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-archives-t-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-archives-t", name)
     }
 
     fn disk(dir: &Path, name: &str) -> PathBuf {
@@ -657,7 +651,7 @@ mod tests {
     /// A single wrapping folder gives the drawer its name.
     #[test]
     fn one_top_level_directory_names_the_drawer() {
-        let dir = scratch("one-dir");
+        let (_guard, dir) = scratch("one-dir");
         let archive = dir.join("Pack.lha");
         std::fs::write(
             &archive,
@@ -684,7 +678,7 @@ mod tests {
     /// the archive's own file stem.
     #[test]
     fn several_top_level_entries_use_the_archive_stem() {
-        let dir = scratch("stem");
+        let (_guard, dir) = scratch("stem");
         let archive = dir.join("Loose Files.lha");
         std::fs::write(
             &archive,
@@ -709,7 +703,7 @@ mod tests {
     /// directory" either, and also falls back to the stem.
     #[test]
     fn a_single_top_level_file_uses_the_archive_stem() {
-        let dir = scratch("single-file");
+        let (_guard, dir) = scratch("single-file");
         let archive = dir.join("Doc.lha");
         std::fs::write(&archive, make_lha_with(&[("Readme.txt", b"about")])).unwrap();
 
@@ -732,7 +726,7 @@ mod tests {
     /// the archive's contents onto the staging root.
     #[test]
     fn a_stem_that_is_only_dots_is_refused_as_a_drawer_name() {
-        let dir = scratch("dotty-stem");
+        let (_guard, dir) = scratch("dotty-stem");
         let archive = dir.join("..lha");
         std::fs::write(&archive, make_lha_with(&[("Readme.txt", b"about")])).unwrap();
 
@@ -756,7 +750,7 @@ mod tests {
     /// exactly its own archive's contents — never merged.
     #[test]
     fn three_archives_install_into_three_drawers() {
-        let dir = scratch("three");
+        let (_guard, dir) = scratch("three");
         let a = dir.join("Turrican.lha");
         std::fs::write(&a, make_lha_with(&[("Turrican/Game", b"a-bytes")])).unwrap();
         let b = dir.join("Xenon2.lha");
@@ -818,7 +812,7 @@ mod tests {
     /// refused by name, not silently merged into one drawer.
     #[test]
     fn colliding_drawer_names_are_reported_not_merged() {
-        let dir = scratch("collide");
+        let (_guard, dir) = scratch("collide");
         let a = dir.join("release-a.lha");
         std::fs::write(&a, make_lha_with(&[("Turrican/Game", b"from a")])).unwrap();
         let b = dir.join("release-b.lha");
@@ -861,7 +855,7 @@ mod tests {
     /// nothing written — before a single archive is copied in.
     #[test]
     fn a_batch_that_does_not_fit_is_refused_before_anything_is_written() {
-        let dir = scratch("toobig");
+        let (_guard, dir) = scratch("toobig");
         let a = dir.join("Small.lha");
         std::fs::write(&a, make_lha_with(&[("Small/File", b"tiny")])).unwrap();
         let b = dir.join("Big.lha");
@@ -958,7 +952,7 @@ mod tests {
             }
         }
 
-        let dir = scratch("cancel-unpack");
+        let (_guard, dir) = scratch("cancel-unpack");
         let archives = five_archives(&dir);
 
         let image = disk(&dir, "disk.adf");
@@ -1019,7 +1013,7 @@ mod tests {
             }
         }
 
-        let dir = scratch("cancel-inside-archive");
+        let (_guard, dir) = scratch("cancel-inside-archive");
         let archive = dir.join("Game0.lha");
         std::fs::write(
             &archive,
@@ -1065,7 +1059,7 @@ mod tests {
             }
         }
 
-        let dir = scratch("plan-cancel");
+        let (_guard, dir) = scratch("plan-cancel");
         let archives = five_archives(&dir);
         let image = disk(&dir, "disk.adf");
 
@@ -1112,7 +1106,7 @@ mod tests {
             }
         }
 
-        let dir = scratch("cancel-copy");
+        let (_guard, dir) = scratch("cancel-copy");
         let archives = five_archives(&dir);
 
         let image = disk(&dir, "disk.adf");
@@ -1160,7 +1154,7 @@ mod tests {
             }
         }
 
-        let dir = scratch("cancel-early");
+        let (_guard, dir) = scratch("cancel-early");
         let archive = dir.join("Game.lha");
         std::fs::write(&archive, make_lha_with(&[("Game/Data", b"bytes")])).unwrap();
 
@@ -1212,7 +1206,7 @@ mod tests {
     /// headcount, which the module's own parallel tests make unreliable.
     #[test]
     fn a_refused_plan_cleans_up_its_staging_directory() {
-        let dir = scratch("cleanup-refused");
+        let (_guard, dir) = scratch("cleanup-refused");
         let a = dir.join("Small.lha");
         std::fs::write(&a, make_lha_with(&[("Small/File", b"tiny")])).unwrap();
         let b = dir.join("Big.lha");
@@ -1266,7 +1260,7 @@ mod tests {
         );
         let _cleanup = RemoveOnDrop(std::env::temp_dir().join(&marker));
 
-        let dir = scratch("traversal-unpack");
+        let (_guard, dir) = scratch("traversal-unpack");
         let archive = dir.join("Evil.lha");
         std::fs::write(
             &archive,
@@ -1321,7 +1315,7 @@ mod tests {
     /// where the second entry went.
     #[test]
     fn a_traversal_entry_contributes_nothing_to_the_drawer_and_is_reported() {
-        let dir = scratch("traversal-drawer");
+        let (_guard, dir) = scratch("traversal-drawer");
         let archive = dir.join("Evil.lha");
         std::fs::write(
             &archive,

@@ -441,17 +441,8 @@ mod tests {
     use crate::core::cbm::t64::fixture::{build, record};
     use crate::core::jobs::NoProgress;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-cbm-cmd-{tag}-{}-{}",
-            crate::core::test_scratch_id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-cbm-cmd", tag)
     }
 
     fn sample_disk(dir: &std::path::Path) -> PathBuf {
@@ -466,7 +457,7 @@ mod tests {
 
     #[test]
     fn a_disk_opens_and_lists_what_it_holds() {
-        let dir = scratch("disk");
+        let (_guard, dir) = scratch("disk");
         let disk = sample_disk(&dir);
 
         let info = cbm_open(disk.to_string_lossy().to_string()).unwrap();
@@ -487,7 +478,7 @@ mod tests {
 
     #[test]
     fn a_file_copies_out_with_its_type_as_an_extension() {
-        let dir = scratch("one-file");
+        let (_guard, dir) = scratch("one-file");
         let disk = sample_disk(&dir);
         let out = dir.join("out");
         std::fs::create_dir_all(&out).unwrap();
@@ -506,7 +497,7 @@ mod tests {
 
     #[test]
     fn the_whole_disk_copies_out_into_a_folder_of_its_own() {
-        let dir = scratch("whole");
+        let (_guard, dir) = scratch("whole");
         let disk = sample_disk(&dir);
         let out = dir.join("out");
 
@@ -525,7 +516,7 @@ mod tests {
     /// than looked for on the disk.
     #[test]
     fn a_selection_copies_out_exactly_what_was_named() {
-        let dir = scratch("selection");
+        let (_guard, dir) = scratch("selection");
         let disk = sample_disk(&dir);
         let out = dir.join("out");
 
@@ -550,7 +541,7 @@ mod tests {
     /// One broken file does not cost the user the rest of the disk.
     #[test]
     fn a_file_that_cannot_be_read_is_reported_and_the_others_still_land() {
-        let dir = scratch("broken");
+        let (_guard, dir) = scratch("broken");
         let mut builder = D64Builder::new(35);
         builder.add_file("GOOD", b"fine", &[(17, 0)]);
         builder.add_directory_entry(
@@ -577,7 +568,7 @@ mod tests {
     /// disagrees with its records is reported rather than obeyed.
     #[test]
     fn a_tape_archive_opens_and_says_when_its_header_was_wrong() {
-        let dir = scratch("tape");
+        let (_guard, dir) = scratch("tape");
         let tape = dir.join("games.t64");
         // `used = 0` with a real record: the common broken T64.
         std::fs::write(&tape, build(&[record("GAME", 0x0801, b"tape bytes")], 0)).unwrap();

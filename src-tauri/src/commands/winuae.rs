@@ -78,13 +78,8 @@ mod tests {
     use super::*;
     use crate::core::hdf::HardfileShape;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-winuae-cmd-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-winuae-cmd", tag)
     }
 
     /// ART-146: WinUAE Studio's manual launch hands over a raw
@@ -92,7 +87,7 @@ mod tests {
     /// one, from the file itself, before `generate_uae_config` ever runs.
     #[test]
     fn detects_the_shape_of_a_manually_selected_hardfile() {
-        let dir = scratch("vhd");
+        let (_guard, dir) = scratch("vhd");
         let hdf = dir.join("AmiKit.hdf");
         let mut image = vec![0u8; 512 * 4];
         image[0..8].copy_from_slice(b"conectix");

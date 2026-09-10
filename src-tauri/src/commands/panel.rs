@@ -461,19 +461,13 @@ mod tests {
         assert_eq!(format_windows_attrs(!known), "----");
     }
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-panel-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-panel", name)
     }
 
     #[test]
     fn folders_come_first_then_names_in_order() {
-        let dir = scratch("order");
+        let (_guard, dir) = scratch("order");
         std::fs::write(dir.join("zebra.txt"), b"z").unwrap();
         std::fs::write(dir.join("Apple.txt"), b"a").unwrap();
         std::fs::create_dir(dir.join("Tools")).unwrap();
@@ -491,7 +485,7 @@ mod tests {
 
     #[test]
     fn a_listing_knows_its_parent() {
-        let dir = scratch("parent");
+        let (_guard, dir) = scratch("parent");
         let child = dir.join("inside");
         std::fs::create_dir(&child).unwrap();
 
@@ -506,7 +500,7 @@ mod tests {
     /// source actually reports one rather than always coming back `None`.
     #[test]
     fn a_freshly_written_file_has_a_recent_date() {
-        let dir = scratch("date");
+        let (_guard, dir) = scratch("date");
         let before = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -533,7 +527,7 @@ mod tests {
 
     #[test]
     fn file_sizes_are_reported_and_folders_are_zero() {
-        let dir = scratch("sizes");
+        let (_guard, dir) = scratch("sizes");
         std::fs::write(dir.join("data.bin"), vec![0u8; 1234]).unwrap();
         std::fs::create_dir(dir.join("sub")).unwrap();
 
@@ -555,7 +549,7 @@ mod tests {
     /// silently showing a prefix as if it were everything.
     #[test]
     fn an_enormous_folder_is_truncated_and_says_so() {
-        let dir = scratch("many");
+        let (_guard, dir) = scratch("many");
         for i in 0..(MAX_ENTRIES + 10) {
             std::fs::write(dir.join(format!("f{i}")), b"x").unwrap();
         }
@@ -569,7 +563,7 @@ mod tests {
 
     #[test]
     fn listing_something_that_is_not_a_folder_is_refused() {
-        let dir = scratch("notdir");
+        let (_guard, dir) = scratch("notdir");
         let file = dir.join("a.txt");
         std::fs::write(&file, b"x").unwrap();
 

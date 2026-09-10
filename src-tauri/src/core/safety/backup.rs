@@ -123,16 +123,13 @@ fn prune(backup_dir: &Path, name: &str, keep: usize) -> CoreResult<()> {
 mod tests {
     use super::*;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let s = crate::core::test_scratch_id();
-        let dir = std::env::temp_dir().join(format!("art-backup-{tag}-{s}"));
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-backup", tag)
     }
 
     #[test]
     fn copies_current_contents() {
-        let dir = scratch("copy");
+        let (_guard, dir) = scratch("copy");
         let target = dir.join("disk.adf");
         fs::write(&target, b"original bytes").unwrap();
 
@@ -147,7 +144,7 @@ mod tests {
 
     #[test]
     fn disabled_policy_makes_no_backup() {
-        let dir = scratch("disabled");
+        let (_guard, dir) = scratch("disabled");
         let target = dir.join("huge.hdf");
         fs::write(&target, b"big").unwrap();
 
@@ -160,7 +157,7 @@ mod tests {
 
     #[test]
     fn missing_file_is_not_an_error() {
-        let dir = scratch("missing");
+        let (_guard, dir) = scratch("missing");
         let target = dir.join("not-yet-created.adf");
 
         let backup = backup_file(&target, BackupPolicy::DISK_IMAGE).unwrap();
@@ -171,7 +168,7 @@ mod tests {
 
     #[test]
     fn prunes_beyond_the_keep_limit() {
-        let dir = scratch("prune");
+        let (_guard, dir) = scratch("prune");
         let target = dir.join("disk.adf");
         let policy = BackupPolicy {
             enabled: true,
@@ -193,7 +190,7 @@ mod tests {
 
     #[test]
     fn prune_only_touches_the_same_source_name() {
-        let dir = scratch("isolate");
+        let (_guard, dir) = scratch("isolate");
         let a = dir.join("a.adf");
         let b = dir.join("b.adf");
         let policy = BackupPolicy {

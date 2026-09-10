@@ -2252,30 +2252,25 @@ mod tests {
     use crate::core::volume::write::layout::BlockSet;
     use crate::core::volume::DosType;
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-cmd-write-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-cmd-write", name)
     }
 
     struct Image {
         dir: PathBuf,
         path: PathBuf,
+        _guard: crate::core::ScratchDir,
     }
 
     impl Image {
         /// A bare FFS volume in a file — the shape `scan_image` reports as one
         /// volume at index 0, which is every ADF.
         fn new(name: &str, total_blocks: u32) -> Self {
-            let dir = scratch(name);
+            let (_guard, dir) = scratch(name);
             let path = dir.join("disk.adf");
             let (bytes, _) = ffs_volume(total_blocks, DosType::new(*b"DOS\x01"));
             std::fs::write(&path, &bytes).unwrap();
-            Self { dir, path }
+            Self { dir, path, _guard }
         }
 
         fn text(&self) -> String {
@@ -2315,12 +2310,6 @@ mod tests {
             let set = BlockSet::new(geometry.block_size);
             crate::core::volume::write::file::read_file(&device, &set, &geometry, header_block)
                 .unwrap()
-        }
-    }
-
-    impl Drop for Image {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.dir);
         }
     }
 
@@ -2796,7 +2785,7 @@ mod tests {
     /// §3.4 and §89: never hide the volume, always give the reason.
     #[test]
     fn a_dircache_volume_reports_itself_as_read_only_rather_than_missing() {
-        let dir = scratch("dircache-capability");
+        let (_guard, dir) = scratch("dircache-capability");
         let path = dir.join("disk.adf");
         let (mut bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         bytes[3] = 5; // DOS\5 — FFS INTL with a directory cache.
@@ -3448,7 +3437,7 @@ mod tests {
         with_writer(&to.path, 0, |writer| writer.make_dir(0, "Dest")).unwrap();
         let dest = to.listing().into_iter().find(|e| e.name == "Dest").unwrap();
 
-        let cache = scratch("between-one-cache");
+        let (_guard, cache) = scratch("between-one-cache");
         let (report, committed) = copy_selection_between_volumes(
             &from.path,
             0,
@@ -3524,7 +3513,7 @@ mod tests {
             .find(|e| e.name == "Wanted.txt")
             .unwrap();
 
-        let cache = scratch("between-file-cache");
+        let (_guard, cache) = scratch("between-file-cache");
         let (report, _) = copy_selection_between_volumes(
             &from.path,
             0,
@@ -3570,7 +3559,7 @@ mod tests {
     /// containment trivially and lands a file the user never asked for).
     #[test]
     fn a_name_that_leaves_the_chosen_folder_is_refused_not_escaped() {
-        let dir = scratch("folder-destination");
+        let (_guard, dir) = scratch("folder-destination");
 
         for name in [r"..\..\Startup", "../../Startup", r"C:\Windows\Temp"] {
             let err = folder_destination(&dir, name).unwrap_err();
@@ -3609,7 +3598,7 @@ mod tests {
         })
         .unwrap();
 
-        let dest = scratch("copy-out-folder-dest");
+        let (_guard, dest) = scratch("copy-out-folder-dest");
         let report = copy_out_folder(
             &image.path,
             0,
@@ -3779,10 +3768,10 @@ mod tests {
     /// 12 MB, under the 16 MiB whole-file limit on purpose: at hard-disk sizes
     /// the block-journal strategy takes over and has always opened the volume
     /// at its own offset. The bug lived only in the small case.
-    fn small_rdb_image(name: &str) -> (PathBuf, PathBuf) {
+    fn small_rdb_image(name: &str) -> (crate::core::ScratchDir, PathBuf, PathBuf) {
         use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
 
-        let dir = scratch(name);
+        let (_guard, dir) = scratch(name);
         let path = dir.join("small.hdf");
 
         crate::core::hdf::create_hdf(
@@ -3819,7 +3808,7 @@ mod tests {
         file.write_all(&volume).unwrap();
         drop(file);
 
-        (dir, path)
+        (_guard, dir, path)
     }
 
     /// ART-043. The whole-file strategy chose itself by the *file's* size and
@@ -3833,7 +3822,7 @@ mod tests {
     /// not this volume's root. That it now succeeds is the fix.
     #[test]
     fn a_partition_inside_a_small_image_is_written_where_it_lives() {
-        let (dir, path) = small_rdb_image("art043-write");
+        let (_guard, dir, path) = small_rdb_image("art043-write");
 
         let before = std::fs::read(&path).unwrap();
         let entry = pick(&path, 0).unwrap();
@@ -3889,7 +3878,7 @@ mod tests {
     /// ground, which is what it did.
     #[test]
     fn the_gate_asks_about_the_volume_not_the_file() {
-        let (dir, path) = small_rdb_image("art043-gate");
+        let (_guard, dir, path) = small_rdb_image("art043-gate");
         let whole = std::fs::read(&path).unwrap();
         let entry = pick(&path, 0).unwrap();
         let start = entry.byte_offset as usize;
@@ -4150,7 +4139,7 @@ mod tests {
         with_writer(&to.path, 0, |writer| writer.make_dir(0, "Dest")).unwrap();
         let dest = to.listing().into_iter().find(|e| e.name == "Dest").unwrap();
 
-        let cache = scratch("between-many-cache");
+        let (_guard, cache) = scratch("between-many-cache");
         let (report, backup) = copy_selection_between_volumes(
             &from.path,
             0,
@@ -4210,7 +4199,7 @@ mod tests {
         let to = Image::new("between-many-cancel-to", 1760);
         let before = to.bytes();
 
-        let cache = scratch("between-many-cancel-cache");
+        let (_guard, cache) = scratch("between-many-cancel-cache");
         // High enough to let staging finish and low enough to stop the insert
         // partway: the staging pass reports 0 for each of the two roots, and
         // the insert reports a rising count as files land.

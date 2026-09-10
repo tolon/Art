@@ -897,14 +897,8 @@ mod tests {
 
     const GIB: u64 = 1024 * 1024 * 1024;
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-card-build-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-card-build", name)
     }
 
     /// A zip shaped like the real Emu68 release: files at the root, a folder,
@@ -934,7 +928,7 @@ mod tests {
     /// refused now, by name and with the remedy, before anything is written.
     #[test]
     fn an_encrypted_rom_with_no_key_is_refused_rather_than_written_to_a_card() {
-        let dir = scratch("cloanto-no-key");
+        let (_guard, dir) = scratch("cloanto-no-key");
         let mut rom = b"AMIROMTYPE1".to_vec();
         rom.extend(std::iter::repeat_n(0xA5u8, 524_288));
         let path = dir.join("amiga-os-310-a1200.rom");
@@ -957,7 +951,7 @@ mod tests {
     /// the decoded image, not the file.
     #[test]
     fn an_encrypted_rom_reaches_the_card_decoded() {
-        let dir = scratch("cloanto-keyed-card");
+        let (_guard, dir) = scratch("cloanto-keyed-card");
         let plain: Vec<u8> = (0..524_288u32).map(|i| (i % 251) as u8).collect();
         let key = b"the buyer's own key".to_vec();
         std::fs::write(dir.join("rom.key"), &key).unwrap();
@@ -1024,7 +1018,7 @@ mod tests {
     /// then lays out.
     #[test]
     fn a_second_amiga_disk_becomes_a_second_area() {
-        let dir = scratch("g16-two-disks");
+        let (_guard, dir) = scratch("g16-two-disks");
         let archive = emu68_zip(&dir);
         let mut request = request(&archive, &dir.join("card.img"));
         request.total_bytes = 4 * GIB;
@@ -1053,7 +1047,7 @@ mod tests {
     /// a tie is undocumented, so ART names the pair.
     #[test]
     fn two_systems_at_the_same_priority_are_named_in_the_plan() {
-        let dir = scratch("g16-tie");
+        let (_guard, dir) = scratch("g16-tie");
         let archive = emu68_zip(&dir);
         let mut request = request(&archive, &dir.join("card.img"));
         request.total_bytes = 4 * GIB;
@@ -1096,7 +1090,7 @@ mod tests {
     fn each_extra_disk_gets_the_size_it_asked_for() {
         use crate::core::rdb::AmigaHardDiskFs;
 
-        let dir = scratch("g16-sizes");
+        let (_guard, dir) = scratch("g16-sizes");
         let archive = emu68_zip(&dir);
         let mut request = request(&archive, &dir.join("card.img"));
         request.total_bytes = 8 * GIB;
@@ -1146,7 +1140,7 @@ mod tests {
         use crate::core::jobs::NoProgress;
         use crate::core::rdb::AmigaHardDiskFs;
 
-        let dir = scratch("g16-drivers");
+        let (_guard, dir) = scratch("g16-drivers");
         let archive = emu68_zip(&dir);
         let dest = dir.join("card.img");
 
@@ -1201,7 +1195,7 @@ mod tests {
     /// card ART has always built must not start warning.
     #[test]
     fn the_single_disk_card_gains_no_new_warning() {
-        let dir = scratch("g16-single");
+        let (_guard, dir) = scratch("g16-single");
         let archive = emu68_zip(&dir);
         let plan = card_plan_build(request(&archive, &dir.join("card.img"))).unwrap();
         assert!(!plan
@@ -1229,7 +1223,7 @@ mod tests {
         use crate::core::jobs::NoProgress;
         use crate::core::rdb::AmigaHardDiskFs;
 
-        let dir = scratch("pfs3-card");
+        let (_guard, dir) = scratch("pfs3-card");
         let archive = emu68_zip(&dir);
         let dest = dir.join("card.img");
 
@@ -1291,7 +1285,7 @@ mod tests {
     fn a_driver_that_states_no_version_is_refused_before_anything_is_written() {
         use crate::core::rdb::AmigaHardDiskFs;
 
-        let dir = scratch("pfs3-mute");
+        let (_guard, dir) = scratch("pfs3-mute");
         let archive = emu68_zip(&dir);
         let dest = dir.join("card.img");
 
@@ -1324,7 +1318,7 @@ mod tests {
     /// Kickstart mounts itself. The change must not make a driver compulsory.
     #[test]
     fn no_driver_is_still_a_perfectly_good_ffs_card() {
-        let dir = scratch("no-driver");
+        let (_guard, dir) = scratch("no-driver");
         let archive = emu68_zip(&dir);
         let req = request(&archive, &dir.join("card.img"));
 
@@ -1339,7 +1333,7 @@ mod tests {
     /// multiboot, which is SD-3's G16 and is not pretended at here.
     #[test]
     fn a_request_becomes_the_card_the_screen_asked_for() {
-        let dir = scratch("spec");
+        let (_guard, dir) = scratch("spec");
         let archive = emu68_zip(&dir);
         let req = request(&archive, &dir.join("card.img"));
 
@@ -1363,7 +1357,7 @@ mod tests {
     /// after pressing the button: the plan says it, so the screen can.
     #[test]
     fn the_plan_says_the_destination_is_there_rather_than_refusing() {
-        let dir = scratch("exists");
+        let (_guard, dir) = scratch("exists");
         let archive = emu68_zip(&dir);
         let dest = dir.join("card.img");
         std::fs::write(&dest, b"somebody's afternoon").unwrap();
@@ -1385,7 +1379,7 @@ mod tests {
     /// no ROM means no boot, and SD-1 builds a shape rather than a system.
     #[test]
     fn a_card_with_no_kickstart_is_planned_and_said_so() {
-        let dir = scratch("no-rom");
+        let (_guard, dir) = scratch("no-rom");
         let archive = emu68_zip(&dir);
 
         let plan = card_plan_build(request(&archive, &dir.join("card.img"))).unwrap();
@@ -1424,7 +1418,7 @@ mod tests {
         use crate::core::card::manifest::{manifest_path_for, read_manifest, verify_against_image};
         use crate::core::jobs::NoProgress;
 
-        let dir = scratch("manifest");
+        let (_guard, dir) = scratch("manifest");
         let archive = emu68_zip(&dir);
         let dest = dir.join("card.img");
         let mut req = request(&archive, &dest);
@@ -1477,7 +1471,7 @@ mod tests {
     /// from the major, so a swap or a copied constant would show up.
     #[test]
     fn source_facts_names_the_on_card_kickstart_and_its_stated_version() {
-        let dir = scratch("source-facts-rom");
+        let (_guard, dir) = scratch("source-facts-rom");
         let archive = emu68_zip(&dir);
 
         let mut rom = vec![0u8; 524_288];
@@ -1560,7 +1554,7 @@ mod tests {
         let Ok(zip) = std::env::var("ART_CARD_ZIP") else {
             return;
         };
-        let dir = scratch("real-plan");
+        let (_guard, dir) = scratch("real-plan");
 
         let mut req = request(std::path::Path::new(&zip), &dir.join("card.img"));
         req.kickstart = std::env::var("ART_CARD_ROM").ok();
@@ -1659,7 +1653,7 @@ mod tests {
     fn the_plan_describes_the_card_the_build_produces() {
         use crate::core::jobs::NoProgress;
 
-        let dir = scratch("agree");
+        let (_guard, dir) = scratch("agree");
         let archive = emu68_zip(&dir);
         let dest = dir.join("card.img");
         let req = request(&archive, &dest);
