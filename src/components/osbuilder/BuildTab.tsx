@@ -520,6 +520,17 @@ export function BuildTab() {
       // from it was first boot alone, and the owner's second press wrote
       // exactly that.
       { key: "osBuilder.build.summary.updatesChecking" }
+    : ticked.unresolved.length > 0
+    ? // **Nor over a ticked update ART cannot resolve** (ART-303, the owner's
+      // ruling of 2026-09-10). Running the rest without it was the design
+      // until two different BoingBag 3.9-1 archives sat in one of the owner's
+      // folders: BoingBag 3.9-2 then ran alone and the core refused it, as it
+      // must — it requires 3.9-1. The yellow lines above say which file to
+      // choose; this says that nothing is built until it is chosen.
+      {
+        key: "osBuilder.build.blocked.unresolved",
+        params: { names: ticked.unresolved.map((row) => row.name).join(", ") },
+      }
     : treePhaseNeeded
       ? planBlocker
       : phases.length === 0

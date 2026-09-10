@@ -66,6 +66,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Build waits when a ticked update has more than one candidate file.** With
+  two different copies of BoingBag 3.9-1 in a folder, ART ran BoingBag 3.9-2
+  without it and the update was refused. Build now says which update is
+  waiting for a file to be chosen, and runs nothing until it is.
 - **The OS Builder no longer freezes the window.** Moving between its tabs
   re-read every install disc whose name repeats — about 90 seconds a
   question on a large ISO folder — and did it on the window's own thread.

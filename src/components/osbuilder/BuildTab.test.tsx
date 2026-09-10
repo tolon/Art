@@ -549,6 +549,11 @@ describe("tab 4's four summary lines", () => {
     );
   });
 
+  // **ART-303, the owner's ruling of 2026-09-10.** This test used to end by
+  // pinning the run's own line to BoingBag 3.9-2 alone — the rest run without
+  // the unresolved row. On the owner's material that run could not succeed:
+  // BoingBag 3.9-2 requires 3.9-1, and the core refused it. A ticked update
+  // ART cannot resolve now withholds Build, by name, until a file is chosen.
   it("names a ticked update whose file ART would not trust, and does not run it", async () => {
     slotsMock.mockResolvedValue(
       slotsOf({ "package:boingbag-39-1": null, "package:boingbag-39-2": BB2 })
@@ -565,9 +570,13 @@ describe("tab 4's four summary lines", () => {
       i18n.t("osBuilder.build.unresolved", { name: "BoingBag 3.9-1" })
     );
     expect(named.textContent).toContain("BoingBag 3.9-1");
-    // …and the run's own line names only the one that can run.
-    await waitFor(() => expect(summaryLines()[1]).toContain("BoingBag 3.9-2"));
-    expect(summaryLines()[1]).not.toContain("BoingBag 3.9-1");
+    // …and nothing runs until a file is chosen: the button's place says why.
+    await waitFor(() =>
+      expect(screen.getByTestId("build-blocker").textContent).toBe(
+        i18n.t("osBuilder.build.blocked.unresolved", { names: "BoingBag 3.9-1" })
+      )
+    );
+    expect(screen.queryByTestId("build-run")).toBeNull();
   });
 });
 

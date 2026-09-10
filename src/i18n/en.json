@@ -754,7 +754,8 @@
       "navigationLocked": "A build is running — Stop it before leaving this tab.",
       "navigationLockedLane": "A build is running — Stop it on the OS Builder's Build tab before leaving.",
       "blocked": {
-        "nothingToRun": "Nothing is ticked to run. Tick an update, or turn first boot on, on the What to install tab."
+        "nothingToRun": "Nothing is ticked to run. Tick an update, or turn first boot on, on the What to install tab.",
+        "unresolved": "Build waits until one file is chosen for {{names}} — use one on the Amiga files tab, or take the extra copy out of the folder."
       },
       "confirmHint": "Nothing is written until you press Build.",
       "run": "Build",

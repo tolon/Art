@@ -754,7 +754,8 @@
       "navigationLocked": "Derleme sürüyor — sekmeden ayrılmadan önce Durdur'a basın.",
       "navigationLockedLane": "Derleme sürüyor — ayrılmadan önce İşletim Sistemi Kurucusu'nun Derle sekmesinde Durdur'a basın.",
       "blocked": {
-        "nothingToRun": "Koşulacak hiçbir şey işaretlenmedi. Ne kurulacak sekmesinden bir güncelleme işaretleyin ya da ilk açılışı açın."
+        "nothingToRun": "Koşulacak hiçbir şey işaretlenmedi. Ne kurulacak sekmesinden bir güncelleme işaretleyin ya da ilk açılışı açın.",
+        "unresolved": "Derleme, {{names}} için tek bir dosya seçilene kadar bekliyor — Amiga dosyaları sekmesinde birini kullanın ya da fazla kopyayı klasörden çıkarın."
       },
       "confirmHint": "Derle'ye basmadan hiçbir şey yazılmaz.",
       "run": "Derle",
