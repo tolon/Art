@@ -54,18 +54,6 @@ not close). Nothing in ART blocks history today, which is why the round ruled it
 rather than adding a `beforeunload`-shaped guard for one screen. The operation log is still the
 record of what the Rust job did.
 
-**ART-283** 🟡 **Opening the Files screen rewrites a remembered tab's location** —
-*found 2026-09-08 by the screenshot pass, reproduced twice from identical starting bytes*
-`src/pages/FileManager.tsx` · `src/lib/remembered.ts`
-
-With no click on any pane, opening `/files` changed `filesSession.left.tabs[1].location.path`
-in the settings store from `E:\amiga\Amigatolon\iso` to `E:\amiga\Amigatolon\adf` and wrote it.
-The store's hash moved on every open; restoring the file and opening again moved it the same
-way. This is ART-089's shape: a value the user did not touch was rewritten by a read. Suspect:
-the tab restore re-resolving a location it could not open (or a drop-target default) and
-persisting the result. Nothing changes unless the user changes it — a tab that cannot be
-restored keeps its remembered path and says so; it is not repointed.
-
 **ART-285** 🟡 **"23 install disks found" counts game and CD32 discs as install disks** —
 *found 2026-09-08 on `material.png`*
 `src/components/osbuilder/OsInstall.tsx` (the scan summary line) · `core/osinstall/scan.rs`
@@ -347,6 +335,54 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-283** 🟡 ✅ **Opening the Files screen rewrites a remembered tab's location** —
+*found 2026-09-08 by the screenshot pass, reproduced twice from identical starting bytes;
+fixed 2026-09-10 on `art-283-handover`*
+`src/pages/FileManager.tsx` (the `location.state` handover and the cold start)
+
+With no click on any pane, opening `/files` changed `filesSession.left.tabs[1].location.path`
+in the settings store from `E:\amiga\Amigatolon\iso` to `E:\amiga\Amigatolon\adf` and wrote it.
+The store's hash moved on every open; restoring the file and opening again moved it the same
+way. The entry's suspect was the tab restore re-resolving a location it could not open; that
+was eliminated first — an unopenable path stays in its pane as an error with its own path, and
+the mirror writes that path back unchanged.
+
+**The cause, traced from the writers.** Only one thing on this screen writes a tab's location:
+the effect that mirrors the live pane into the *active* tab (`updateActiveTab`), which the
+persistence effect then saves. So a remembered tab could only be repointed by something that
+opened a pane with no click, and the one such route is `location.state.path` — set by the
+dashboard's drop cards (`navigate(action.kind.route, { state: { path } })`; five catalogue
+workflows route to `/files`, `core/workflow/builtin.rs`) and opened by this screen in the
+**left pane, over whatever tab was active**. The screenshot pass had dropped the `adf` folder;
+the active left tab was the remembered `iso`; the mirror wrote `adf` into it and the store
+saved it. And react-router keeps `state` in the history entry, so every later mount of that
+entry — a Back, a reload — replayed the handover, which is why the hash moved *every* time. The
+owner's default folders were `null`, so the other candidate (defaults winning over the session)
+was measured out of it.
+
+**The fix, in one effect.** The handover waits for the cold start to finish (`coldStartDone`),
+so the restore and the handover no longer race for the left pane; it opens in a duplicate of
+the active tab (`duplicateTab`, the Ctrl+T shape) unless that tab already shows the path; and it
+is consumed — `navigate(pathname, { replace: true, state: null })` — so nothing replays it. The
+remembered tabs are the user's places; a dropped folder is a request to *see* it, not to repoint
+one of them. **Design choice, the owner's to overrule:** Total Commander would open a dropped
+folder in the current tab; ART's rule (*nothing changes unless the user changes it*) put it in a
+new one.
+
+*Tests* (`src/pages/FileManager.test.tsx`, *a path handed over by navigation (ART-283)*): *opens
+the folder in a new tab and leaves every remembered tab where it was* — a two-tab saved
+session, `state.path` in the router's entry, then the tab paths are `[test, iso, adf]` with `adf`
+active and the right pane untouched; *consumes the handover so a later mount of the same entry
+does not replay it* — a probe reads `useLocation().state` and sees `null`; *does not open a
+second tab when the active tab already shows that folder*. All three failed on the unfixed code
+— the first on `adf` written over `iso`, all three on the state still being carried — which is
+the mutation put back and seen to fail; no further mutation was run (the owner's session budget
+ended in this round, and it is disclosed here rather than assumed).
+
+**Not claimed.** Not driven on the real screen since the fix; the drop card → Files path on a
+real folder is owed. Whether the new-tab choice is the one the owner wants is a question, not a
+measurement.
 
 **ART-278** 🔴 ✅ **A hung Amiga-side installer writes unbounded output into the
 staged copy, and nothing in ART bounds it or notices it** — *found 2026-09-08

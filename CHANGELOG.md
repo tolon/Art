@@ -56,6 +56,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dropping a folder or an image onto the dashboard no longer rewrites one of
+  the Files screen's remembered tabs.** The dropped object opens in a new tab
+  on the left pane, your remembered tabs keep their places, and coming back to
+  the screen with Back or a reload does not open it again. Before, the active
+  tab's saved path was silently replaced by the dropped one — measured as the
+  settings file changing on every open of the screen.
 - **A damaged update package can no longer fill your disk from inside the
   emulator.** When a package's own installer runs on the Amiga, ART now
   watches how much it writes into the working copy. A copy that grows by more
