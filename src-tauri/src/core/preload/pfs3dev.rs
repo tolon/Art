@@ -251,14 +251,8 @@ mod tests {
     /// The repository's own convention (`core::volume::device::tests::scratch`,
     /// `core::volume::journal::tests::scratch`) — deliberately not `tempfile`,
     /// which is not a dependency of this project.
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-pfs3dev-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-pfs3dev", tag)
     }
 
     #[test]
@@ -304,7 +298,7 @@ mod tests {
     /// block belonging to the next partition — are exactly what they were.
     #[test]
     fn a_write_past_the_regions_end_cannot_reach_the_next_partition() {
-        let dir = scratch("bounded-writes");
+        let (_guard, dir) = scratch("bounded-writes");
         let image = dir.join("card.img");
 
         // Eight blocks: 0..4 are "our" partition, 4..8 are the next one.
@@ -342,7 +336,7 @@ mod tests {
     /// not spill into what comes after it.
     #[test]
     fn a_bulk_write_that_would_overrun_the_region_touches_nothing_past_it() {
-        let dir = scratch("bounded-bulk-write");
+        let (_guard, dir) = scratch("bounded-bulk-write");
         let image = dir.join("card.img");
 
         let mut bytes = vec![0u8; 512 * 8];
@@ -398,7 +392,7 @@ mod tests {
     /// and runs at all, which the earlier borrowed-device shape could not do.
     #[test]
     fn the_owned_adapter_composes_with_libpfs3s_volume_from_device() {
-        let dir = scratch("compose-with-volume");
+        let (_guard, dir) = scratch("compose-with-volume");
         let image = dir.join("disk.hdf");
         std::fs::write(&image, vec![0u8; 512 * 16]).unwrap();
 

@@ -1094,18 +1094,12 @@ mod tests {
     /// Several tests share a tag (`"pds3"`, for instance) because they are
     /// building the same *kind* of fixture, not because they may share a
     /// directory: Cargo runs tests in parallel within one process, so the tag
-    /// alone is not enough to keep two of them apart. A counter, not just the
-    /// pid, is what actually guarantees a fresh directory per call.
-    fn scratch(tag: &str) -> PathBuf {
-        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "art-preload-native-{tag}-{}-{n}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    /// alone is not enough to keep two of them apart. The local counter this
+    /// used to append is now inside [`crate::core::test_scratch_id`], which
+    /// every `ScratchDir` name carries, so one call still cannot collide with
+    /// another (ART-281).
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-preload-native", tag)
     }
 
     /// **ART-160.** `collect_entries` takes the AmigaDOS name off the tree's
@@ -1118,7 +1112,7 @@ mod tests {
     /// no Amiga names.
     #[test]
     fn an_escaped_host_name_is_copied_under_its_amiga_name() {
-        let dir = scratch("amiga-names");
+        let (_guard, dir) = scratch("amiga-names");
         let tree = dir.join("dist");
         std::fs::create_dir_all(tree.join("Storage").join("_CON")).unwrap();
         std::fs::write(tree.join("Storage").join("_CON").join("_AUX"), b"driver").unwrap();
@@ -1154,7 +1148,7 @@ mod tests {
     /// and a genuine `_AUX` stays `_AUX`.
     #[test]
     fn a_folder_without_a_manifest_is_copied_verbatim() {
-        let dir = scratch("no-manifest");
+        let (_guard, dir) = scratch("no-manifest");
         let tree = dir.join("src");
         std::fs::create_dir_all(&tree).unwrap();
         std::fs::write(tree.join("_AUX"), b"mine").unwrap();
@@ -1176,7 +1170,7 @@ mod tests {
     /// whatever it just backed up, at any depth in the tree.
     #[test]
     fn an_art_backup_drawer_is_never_copied_onto_the_card() {
-        let dir = scratch("art-backup-excluded");
+        let (_guard, dir) = scratch("art-backup-excluded");
         let tree = dir.join("dist");
         std::fs::create_dir_all(tree.join(BACKUP_DIR)).unwrap();
         std::fs::write(
@@ -1206,8 +1200,12 @@ mod tests {
         );
     }
 
-    fn card_with_partition(tag: &str, fs: AmigaHardDiskFs, size_mb: u32) -> PathBuf {
-        let dir = scratch(tag);
+    fn card_with_partition(
+        tag: &str,
+        fs: AmigaHardDiskFs,
+        size_mb: u32,
+    ) -> (crate::core::ScratchDir, PathBuf) {
+        let (_guard, dir) = scratch(tag);
         let path = dir.join("card.hdf");
         crate::core::hdf::create_hdf(
             &path,
@@ -1224,14 +1222,14 @@ mod tests {
             &[],
         )
         .unwrap();
-        path
+        (_guard, path)
     }
 
-    fn rdb_image_with_one_pds3_partition() -> PathBuf {
+    fn rdb_image_with_one_pds3_partition() -> (crate::core::ScratchDir, PathBuf) {
         card_with_partition("pds3", AmigaHardDiskFs::Pfs3DirectScsi, 8)
     }
 
-    fn rdb_image_with_one_dos3_partition() -> PathBuf {
+    fn rdb_image_with_one_dos3_partition() -> (crate::core::ScratchDir, PathBuf) {
         card_with_partition("dos3", AmigaHardDiskFs::FfsDirCache, 8)
     }
 
@@ -1241,28 +1239,28 @@ mod tests {
         card.areas[0].offset_bytes + part.byte_offset().unwrap()
     }
 
-    fn formatted_pds3_image() -> PathBuf {
-        let image = rdb_image_with_one_pds3_partition();
+    fn formatted_pds3_image() -> (crate::core::ScratchDir, PathBuf) {
+        let (_guard, image) = rdb_image_with_one_pds3_partition();
         NativeFormatter
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
-        image
+        (_guard, image)
     }
 
     /// A freshly formatted PFS3 partition of `mb` megabytes, on its own card.
-    fn formatted_pds3_image_of(mb: u32) -> PathBuf {
-        let path =
+    fn formatted_pds3_image_of(mb: u32) -> (crate::core::ScratchDir, PathBuf) {
+        let (_guard, path) =
             card_with_partition(&format!("pds3-{mb}mb"), AmigaHardDiskFs::Pfs3DirectScsi, mb);
         NativeFormatter
             .format_partition(&path, None, 1, "Work", &NoProgress)
             .unwrap();
-        path
+        (_guard, path)
     }
 
-    fn tree_of_bytes(bytes: usize) -> PathBuf {
-        let dir = scratch("big-tree");
+    fn tree_of_bytes(bytes: usize) -> (crate::core::ScratchDir, PathBuf) {
+        let (_guard, dir) = scratch("big-tree");
         std::fs::write(dir.join("Big.bin"), vec![0xABu8; bytes]).unwrap();
-        dir
+        (_guard, dir)
     }
 
     /// Bytes free on a formatted PFS3 partition, read with `libpfs3`'s own
@@ -1328,7 +1326,7 @@ mod tests {
 
     #[test]
     fn it_formats_a_pfs3_partition_and_reads_the_volume_name_back() {
-        let image = rdb_image_with_one_pds3_partition();
+        let (_guard, image) = rdb_image_with_one_pds3_partition();
         NativeFormatter
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
@@ -1349,8 +1347,8 @@ mod tests {
 
     #[test]
     fn copy_in_carries_the_protection_bits_out_of_the_uaem_sidecars() {
-        let image = formatted_pds3_image();
-        let tree = fixtures::scratch("copy-in-protection");
+        let (_guard, image) = formatted_pds3_image();
+        let (_guard, tree) = fixtures::scratch("copy-in-protection");
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C/Assign"), b"x").unwrap();
         std::fs::write(
@@ -1378,8 +1376,8 @@ mod tests {
 
     #[test]
     fn a_sidecar_is_applied_and_never_copied_as_a_file_of_its_own() {
-        let image = formatted_pds3_image();
-        let tree = fixtures::scratch("copy-in-sidecar-not-a-file");
+        let (_guard, image) = formatted_pds3_image();
+        let (_guard, tree) = fixtures::scratch("copy-in-sidecar-not-a-file");
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C/Assign"), b"x").unwrap();
         std::fs::write(
@@ -1402,8 +1400,8 @@ mod tests {
 
     #[test]
     fn copy_in_reports_what_it_moved() {
-        let image = formatted_pds3_image();
-        let tree = fixtures::scratch("copy-in-summary");
+        let (_guard, image) = formatted_pds3_image();
+        let (_guard, tree) = fixtures::scratch("copy-in-summary");
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C/Assign"), b"x").unwrap();
 
@@ -1424,9 +1422,9 @@ mod tests {
     /// checked less strictly.
     #[test]
     fn a_non_ascii_pfs3_file_name_is_refused_before_anything_is_written() {
-        let image = formatted_pds3_image();
+        let (_guard, image) = formatted_pds3_image();
         let before = std::fs::read(&image).unwrap();
-        let tree = fixtures::scratch("copy-in-non-ascii-file");
+        let (_guard, tree) = fixtures::scratch("copy-in-non-ascii-file");
         std::fs::write(tree.join("türkçe"), b"data").unwrap();
 
         let err = NativeFormatter
@@ -1453,9 +1451,9 @@ mod tests {
     /// gets checked, not merely everything nested under it.
     #[test]
     fn a_non_ascii_pfs3_directory_name_is_refused_even_when_its_contents_are_ascii() {
-        let image = formatted_pds3_image();
+        let (_guard, image) = formatted_pds3_image();
         let before = std::fs::read(&image).unwrap();
-        let tree = fixtures::scratch("copy-in-non-ascii-dir");
+        let (_guard, tree) = fixtures::scratch("copy-in-non-ascii-dir");
         std::fs::create_dir_all(tree.join("español")).unwrap();
         std::fs::write(tree.join("español").join("Readme"), b"data").unwrap();
 
@@ -1482,8 +1480,8 @@ mod tests {
     /// saying how many were left out.
     #[test]
     fn more_offending_names_than_the_bound_are_folded_into_a_count() {
-        let image = formatted_pds3_image();
-        let tree = fixtures::scratch("copy-in-non-ascii-many");
+        let (_guard, image) = formatted_pds3_image();
+        let (_guard, tree) = fixtures::scratch("copy-in-non-ascii-many");
         let total = MAX_NAMED_NON_ASCII + 5;
         for i in 0..total {
             std::fs::write(tree.join(format!("é{i}")), b"x").unwrap();
@@ -1506,11 +1504,11 @@ mod tests {
     /// FFS branch would still pass every PFS3-only test above.
     #[test]
     fn the_same_non_ascii_name_copies_in_fine_on_ffs() {
-        let image = rdb_image_with_one_dos3_partition();
+        let (_guard, image) = rdb_image_with_one_dos3_partition();
         NativeFormatter
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
-        let tree = fixtures::scratch("copy-in-non-ascii-ffs");
+        let (_guard, tree) = fixtures::scratch("copy-in-non-ascii-ffs");
         std::fs::write(tree.join("türkçe"), b"data").unwrap();
 
         let summary = NativeFormatter
@@ -1528,8 +1526,8 @@ mod tests {
     /// this checks both from the one sidecar in one assertion each.
     #[test]
     fn copy_in_pfs3_counts_a_dropped_comment_and_a_dropped_date() {
-        let image = formatted_pds3_image();
-        let tree = fixtures::scratch("copy-in-lost-metadata");
+        let (_guard, image) = formatted_pds3_image();
+        let (_guard, tree) = fixtures::scratch("copy-in-lost-metadata");
         std::fs::write(tree.join("Assign"), b"x").unwrap();
         std::fs::write(
             tree.join("Assign.uaem"),
@@ -1552,8 +1550,8 @@ mod tests {
     /// every sidecar unconditionally would still pass the test above.
     #[test]
     fn copy_in_pfs3_does_not_count_a_sidecar_with_no_comment_or_date_to_lose() {
-        let image = formatted_pds3_image();
-        let tree = fixtures::scratch("copy-in-nothing-lost");
+        let (_guard, image) = formatted_pds3_image();
+        let (_guard, tree) = fixtures::scratch("copy-in-nothing-lost");
         std::fs::write(tree.join("Assign"), b"x").unwrap();
         std::fs::write(
             tree.join("Assign.uaem"),
@@ -1576,11 +1574,11 @@ mod tests {
     /// would still pass every PFS3-only test above.
     #[test]
     fn copy_in_ffs_never_counts_anything_lost() {
-        let image = rdb_image_with_one_dos3_partition();
+        let (_guard, image) = rdb_image_with_one_dos3_partition();
         NativeFormatter
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
-        let tree = fixtures::scratch("copy-in-ffs-nothing-lost");
+        let (_guard, tree) = fixtures::scratch("copy-in-ffs-nothing-lost");
         std::fs::write(tree.join("Assign"), b"x").unwrap();
         std::fs::write(
             tree.join("Assign.uaem"),
@@ -1598,8 +1596,8 @@ mod tests {
 
     #[test]
     fn it_stops_between_files_when_cancelled() {
-        let image = formatted_pds3_image();
-        let tree = fixtures::scratch("copy-in-cancel");
+        let (_guard, image) = formatted_pds3_image();
+        let (_guard, tree) = fixtures::scratch("copy-in-cancel");
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C/Assign"), b"x").unwrap();
 
@@ -1615,8 +1613,8 @@ mod tests {
 
     #[test]
     fn a_tree_too_big_for_the_volume_is_refused_before_anything_is_written() {
-        let image = formatted_pds3_image_of(4); // MB
-        let tree = tree_of_bytes(8 * 1024 * 1024);
+        let (_guard, image) = formatted_pds3_image_of(4); // MB
+        let (_guard, tree) = tree_of_bytes(8 * 1024 * 1024);
         let before = std::fs::read(&image).unwrap();
 
         let err = NativeFormatter
@@ -1644,9 +1642,9 @@ mod tests {
 
     #[test]
     fn a_pfs3_tree_that_exactly_fills_the_volume_is_not_refused() {
-        let image = formatted_pds3_image_of(4);
+        let (_guard, image) = formatted_pds3_image_of(4);
         let free = pfs3_free_bytes(&image);
-        let tree = tree_of_bytes(free as usize);
+        let (_guard, tree) = tree_of_bytes(free as usize);
 
         NativeFormatter
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
@@ -1655,9 +1653,9 @@ mod tests {
 
     #[test]
     fn a_pfs3_tree_one_byte_over_the_limit_is_refused() {
-        let image = formatted_pds3_image_of(4);
+        let (_guard, image) = formatted_pds3_image_of(4);
         let free = pfs3_free_bytes(&image);
-        let tree = tree_of_bytes(free as usize + 1);
+        let (_guard, tree) = tree_of_bytes(free as usize + 1);
         let before = std::fs::read(&image).unwrap();
 
         let err = NativeFormatter
@@ -1679,7 +1677,7 @@ mod tests {
     /// one refuses it before anything is written.
     #[test]
     fn many_small_pfs3_files_are_refused_by_their_rounded_size_not_their_raw_bytes() {
-        let image = formatted_pds3_image_of(1);
+        let (_guard, image) = formatted_pds3_image_of(1);
         // One block per one-byte file, and comfortably more files than the
         // volume has free *blocks* — while their raw bytes (one each) are
         // nowhere near its free *bytes*. That gap is exactly what the old
@@ -1687,7 +1685,7 @@ mod tests {
         let block_size = crate::core::volume::SECTOR_BYTES as u64;
         let file_count = pfs3_free_bytes(&image) / block_size + 100;
 
-        let tree = fixtures::scratch("copy-in-many-small-pfs3");
+        let (_guard, tree) = fixtures::scratch("copy-in-many-small-pfs3");
         for i in 0..file_count {
             std::fs::write(tree.join(format!("F{i}")), b"x").unwrap();
         }
@@ -1706,14 +1704,14 @@ mod tests {
 
     #[test]
     fn an_ffs_tree_that_exactly_fills_the_volume_is_not_refused() {
-        let image = rdb_image_with_one_dos3_partition();
+        let (_guard, image) = rdb_image_with_one_dos3_partition();
         NativeFormatter
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let free = ffs_free_bytes(&image);
         let block_size = crate::core::volume::SECTOR_BYTES;
         let data_blocks = largest_single_ffs_file_data_blocks(free / block_size as u64, block_size);
-        let tree = tree_of_bytes(data_blocks as usize * block_size);
+        let (_guard, tree) = tree_of_bytes(data_blocks as usize * block_size);
 
         NativeFormatter
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
@@ -1722,7 +1720,7 @@ mod tests {
 
     #[test]
     fn an_ffs_tree_one_block_over_the_limit_is_refused() {
-        let image = rdb_image_with_one_dos3_partition();
+        let (_guard, image) = rdb_image_with_one_dos3_partition();
         NativeFormatter
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
@@ -1732,7 +1730,7 @@ mod tests {
         // One byte into the next data block: `budget_for` needs one more
         // data block (and, past the 72-block mark, sometimes one more
         // extension block too) — either way, strictly more than fits.
-        let tree = tree_of_bytes(data_blocks as usize * block_size + 1);
+        let (_guard, tree) = tree_of_bytes(data_blocks as usize * block_size + 1);
         let before = std::fs::read(&image).unwrap();
 
         let err = NativeFormatter
@@ -1764,8 +1762,8 @@ mod tests {
 
     #[test]
     fn a_directorys_own_sidecar_is_applied_on_pfs3() {
-        let image = formatted_pds3_image();
-        let tree = fixtures::scratch("copy-in-dir-sidecar-pfs3");
+        let (_guard, image) = formatted_pds3_image();
+        let (_guard, tree) = fixtures::scratch("copy-in-dir-sidecar-pfs3");
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C.uaem"), "--p-rwed 2021-04-13 02:43:13.68 \n").unwrap();
 
@@ -1788,11 +1786,11 @@ mod tests {
 
     #[test]
     fn a_directorys_own_sidecar_is_applied_on_ffs() {
-        let image = rdb_image_with_one_dos3_partition();
+        let (_guard, image) = rdb_image_with_one_dos3_partition();
         NativeFormatter
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
-        let tree = fixtures::scratch("copy-in-dir-sidecar-ffs");
+        let (_guard, tree) = fixtures::scratch("copy-in-dir-sidecar-ffs");
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C.uaem"), "--p-rwed 2021-04-13 02:43:13.68 \n").unwrap();
 
@@ -1811,11 +1809,11 @@ mod tests {
 
     #[test]
     fn ffs_copy_in_carries_the_protection_bits_out_of_the_uaem_sidecars() {
-        let image = rdb_image_with_one_dos3_partition();
+        let (_guard, image) = rdb_image_with_one_dos3_partition();
         NativeFormatter
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
-        let tree = fixtures::scratch("ffs-copy-in-protection");
+        let (_guard, tree) = fixtures::scratch("ffs-copy-in-protection");
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C/Assign"), b"x").unwrap();
         std::fs::write(
@@ -1839,11 +1837,11 @@ mod tests {
 
     #[test]
     fn ffs_a_sidecar_is_applied_and_never_copied_as_a_file_of_its_own() {
-        let image = rdb_image_with_one_dos3_partition();
+        let (_guard, image) = rdb_image_with_one_dos3_partition();
         NativeFormatter
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
-        let tree = fixtures::scratch("ffs-copy-in-sidecar-not-a-file");
+        let (_guard, tree) = fixtures::scratch("ffs-copy-in-sidecar-not-a-file");
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C/Assign"), b"x").unwrap();
         std::fs::write(
@@ -1880,7 +1878,7 @@ mod tests {
     /// Requirement 3: the engine validates the name itself, not a screen.
     #[test]
     fn format_partition_refuses_a_name_amigados_cannot_store() {
-        let image = rdb_image_with_one_pds3_partition();
+        let (_guard, image) = rdb_image_with_one_pds3_partition();
         let err = NativeFormatter
             .format_partition(&image, None, 1, "Not/Allowed", &NoProgress)
             .unwrap_err();
@@ -1895,14 +1893,14 @@ mod tests {
     /// here.
     #[test]
     fn copy_in_refuses_to_fill_an_already_populated_pfs3_volume_again() {
-        let image = formatted_pds3_image();
-        let tree = fixtures::scratch("copy-in-populated-pfs3");
+        let (_guard, image) = formatted_pds3_image();
+        let (_guard, tree) = fixtures::scratch("copy-in-populated-pfs3");
         std::fs::write(tree.join("First"), b"one").unwrap();
         NativeFormatter
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
-        let second = fixtures::scratch("copy-in-populated-pfs3-second");
+        let (_guard, second) = fixtures::scratch("copy-in-populated-pfs3-second");
         std::fs::write(second.join("Second"), b"two").unwrap();
         let err = NativeFormatter
             .copy_in(&image, None, "DH0", &second, &NoProgress)
@@ -1913,17 +1911,17 @@ mod tests {
     /// The FFS equivalent of the same requirement.
     #[test]
     fn copy_in_refuses_to_fill_an_already_populated_ffs_volume_again() {
-        let image = rdb_image_with_one_dos3_partition();
+        let (_guard, image) = rdb_image_with_one_dos3_partition();
         NativeFormatter
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
-        let tree = fixtures::scratch("copy-in-populated-ffs");
+        let (_guard, tree) = fixtures::scratch("copy-in-populated-ffs");
         std::fs::write(tree.join("First"), b"one").unwrap();
         NativeFormatter
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
-        let second = fixtures::scratch("copy-in-populated-ffs-second");
+        let (_guard, second) = fixtures::scratch("copy-in-populated-ffs-second");
         std::fs::write(second.join("Second"), b"two").unwrap();
         let err = NativeFormatter
             .copy_in(&image, None, "DH0", &second, &NoProgress)
@@ -1937,7 +1935,7 @@ mod tests {
     /// right. This reads the root block directly.
     #[test]
     fn format_ffs_writes_the_requested_volume_name_into_the_root_block() {
-        let image = rdb_image_with_one_dos3_partition();
+        let (_guard, image) = rdb_image_with_one_dos3_partition();
         NativeFormatter
             .format_partition(&image, None, 1, "MyDisk", &NoProgress)
             .unwrap();
@@ -1962,7 +1960,7 @@ mod tests {
     /// structurally present.
     #[test]
     fn a_freshly_formatted_ffs_volume_accepts_a_real_write() {
-        let image = rdb_image_with_one_dos3_partition();
+        let (_guard, image) = rdb_image_with_one_dos3_partition();
         NativeFormatter
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
@@ -1997,7 +1995,7 @@ mod tests {
     /// return, kept passing.
     #[test]
     fn import_filesystem_refuses_rather_than_guess() {
-        let image = rdb_image_with_one_pds3_partition();
+        let (_guard, image) = rdb_image_with_one_pds3_partition();
         let err = NativeFormatter
             .import_filesystem(
                 &image,
@@ -2018,7 +2016,7 @@ mod tests {
     /// A DosType neither family claims — ART refuses rather than guessing.
     #[test]
     fn format_partition_refuses_a_filesystem_neither_family_claims() {
-        let image = card_with_partition("sfs", AmigaHardDiskFs::Sfs0, 8);
+        let (_guard, image) = card_with_partition("sfs", AmigaHardDiskFs::Sfs0, 8);
         let err = NativeFormatter
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap_err();
@@ -2112,7 +2110,7 @@ mod tests {
         // this volume's.
         let aux: &[u8] = b"DOSDriver AUX\n";
 
-        let tree = fixtures::scratch("pfs3-oracle-write");
+        let (_guard, tree) = fixtures::scratch("pfs3-oracle-write");
         std::fs::create_dir_all(tree.join("C/Extra")).unwrap();
         std::fs::create_dir_all(tree.join("S")).unwrap();
         std::fs::create_dir_all(tree.join("DOSDrivers")).unwrap();

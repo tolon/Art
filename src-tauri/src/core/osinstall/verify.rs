@@ -923,16 +923,15 @@ mod tests {
     use crate::core::ScratchDir;
     use std::path::PathBuf;
 
-    /// A counter, not just `tag`: several tests below call helpers like
-    /// `written_volume()` that share a tag, and Cargo runs tests in parallel
-    /// threads of the same process (same pid) — `fixtures::scratch` alone
-    /// keys only on tag + pid, so two tests sharing a tag would race over the
-    /// same directory. The same fix `apply.rs`'s own `planned()` already
-    /// applies, for the exact same reason.
-    fn scratch(tag: &str) -> PathBuf {
-        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        fixtures::scratch(&format!("verify-{tag}-{n}"))
+    /// Several tests below call helpers like `written_volume()` that share a
+    /// tag, and Cargo runs tests in parallel threads of the same process, so
+    /// the tag alone cannot keep two of them apart. The counter that used to
+    /// live here is now inside [`crate::core::test_scratch_id`], which every
+    /// `ScratchDir` name carries, so `fixtures::scratch` is unique per call
+    /// on its own (ART-281) — and it hands back the guard that removes the
+    /// directory when the caller's scope ends.
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        fixtures::scratch(&format!("verify-{tag}"))
     }
 
     /// A card with one partition of `fs`, sized `mb` megabytes. The backing
@@ -1038,15 +1037,20 @@ mod tests {
     /// every caller now also needs somewhere to pass as `verify_volume`'s
     /// `dist_root`, and this is the same tree that was actually copied in,
     /// rather than an unrelated stand-in.
-    fn written_volume() -> (PathBuf, DistributionManifest, PathBuf) {
-        let dir = scratch("written-volume");
+    fn written_volume() -> (
+        crate::core::ScratchDir,
+        PathBuf,
+        DistributionManifest,
+        PathBuf,
+    ) {
+        let (_guard, dir) = scratch("written-volume");
         let content = b"cmd";
         let image = formatted_ffs_image(&dir);
         let tree = tree_with_load_module(&dir, content, 0x20);
         NativeFormatter
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
-        (image, manifest_for_load_module(content), tree)
+        (_guard, image, manifest_for_load_module(content), tree)
     }
 
     /// The same manifest as `written_volume` — it expects `--p-rwed` — but
@@ -1054,15 +1058,20 @@ mod tests {
     /// volume and the manifest genuinely disagree about `C/LoadModule`'s
     /// protection. `written_volume`'s own content and size stay correct, so
     /// this isolates the one field under test.
-    fn written_volume_with_the_pure_bit_dropped() -> (PathBuf, DistributionManifest, PathBuf) {
-        let dir = scratch("pure-bit-dropped");
+    fn written_volume_with_the_pure_bit_dropped() -> (
+        crate::core::ScratchDir,
+        PathBuf,
+        DistributionManifest,
+        PathBuf,
+    ) {
+        let (_guard, dir) = scratch("pure-bit-dropped");
         let content = b"cmd";
         let image = formatted_ffs_image(&dir);
         let tree = tree_with_load_module(&dir, content, 0x00); // pure bit gone
         NativeFormatter
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
-        (image, manifest_for_load_module(content), tree)
+        (_guard, image, manifest_for_load_module(content), tree)
     }
 
     /// Fix round 2's own finding: `verify_ffs_files` used to open the image
@@ -1082,7 +1091,7 @@ mod tests {
     /// the same tag fail silently rather than actually clear it).
     #[test]
     fn a_read_only_image_file_still_produces_a_report() {
-        let (image, manifest, tree) = written_volume();
+        let (_guard, image, manifest, tree) = written_volume();
 
         let mut perms = std::fs::metadata(&image).unwrap().permissions();
         perms.set_readonly(true);
@@ -1106,7 +1115,7 @@ mod tests {
 
     #[test]
     fn every_file_in_the_manifest_is_found_with_its_size_and_its_bits() {
-        let (image, manifest, tree) = written_volume();
+        let (_guard, image, manifest, tree) = written_volume();
         let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
         assert_eq!(report.failed, 0, "{:?}", report.files);
         assert_eq!(report.passed, manifest.files.len());
@@ -1114,7 +1123,7 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_a_fail_and_says_which_one() {
-        let (image, mut manifest, tree) = written_volume();
+        let (_guard, image, mut manifest, tree) = written_volume();
         manifest.files.push(FileRecord {
             path: "C/NeverWritten".into(),
             component: "workbench-base".into(),
@@ -1142,7 +1151,7 @@ mod tests {
     /// them corrupt *content* specifically.
     #[test]
     fn content_that_disagrees_with_the_manifests_sha256_is_a_fail() {
-        let (image, mut manifest, tree) = written_volume();
+        let (_guard, image, mut manifest, tree) = written_volume();
         manifest.files[0].sha256 = "0".repeat(64); // not b"cmd"'s real hash
         let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
         assert_eq!(report.failed, 1);
@@ -1165,7 +1174,7 @@ mod tests {
     /// still turn this test green.
     #[test]
     fn a_file_whose_protection_bits_are_wrong_is_a_fail_not_a_pass() {
-        let (image, manifest, tree) = written_volume_with_the_pure_bit_dropped();
+        let (_guard, image, manifest, tree) = written_volume_with_the_pure_bit_dropped();
         let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
         let verdict = report
             .files
@@ -1189,7 +1198,7 @@ mod tests {
     /// what it did not look at must never render as a tick.
     #[test]
     fn what_was_not_checked_is_its_own_state_and_never_a_pass() {
-        let (image, manifest, tree) = written_volume();
+        let (_guard, image, manifest, tree) = written_volume();
         let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
         assert_eq!(
             report.passed + report.failed + report.not_checked,
@@ -1213,7 +1222,7 @@ mod tests {
     /// content was never re-hashed, and that has to show.
     #[test]
     fn a_correct_pfs3_file_is_not_checked_not_passed() {
-        let dir = scratch("pfs3-not-checked");
+        let (_guard, dir) = scratch("pfs3-not-checked");
         let content = b"cmd";
         let image = formatted_pfs3_image(&dir);
         let tree = tree_with_load_module(&dir, content, 0x20);
@@ -1249,7 +1258,7 @@ mod tests {
     /// disagreement, and reuses no FFS machinery at all.
     #[test]
     fn a_pfs3_file_missing_from_the_volume_is_a_fail_not_a_shrug() {
-        let dir = scratch("pfs3-missing");
+        let (_guard, dir) = scratch("pfs3-missing");
         let image = formatted_pfs3_image(&dir);
         let manifest = manifest_for_load_module(b"cmd"); // never copied in
 
@@ -1269,7 +1278,7 @@ mod tests {
     /// directly rather than left asserted-but-untested.
     #[test]
     fn a_pfs3_file_whose_size_disagrees_with_the_manifest_is_a_fail() {
-        let dir = scratch("pfs3-wrong-size");
+        let (_guard, dir) = scratch("pfs3-wrong-size");
         let content = b"cmd";
         let image = formatted_pfs3_image(&dir);
         let tree = tree_with_load_module(&dir, content, 0x20);
@@ -1301,7 +1310,7 @@ mod tests {
     /// FFS's own pure-bit test — this is that test's PFS3 twin.
     #[test]
     fn a_pfs3_file_whose_protection_disagrees_with_the_manifest_is_a_fail() {
-        let dir = scratch("pfs3-wrong-protection");
+        let (_guard, dir) = scratch("pfs3-wrong-protection");
         let content = b"cmd";
         let image = formatted_pfs3_image(&dir);
         // The volume genuinely carries --p-rwed (0x20) ...
@@ -1341,7 +1350,7 @@ mod tests {
     /// compared to anything at all.
     #[test]
     fn a_pfs3_expected_protection_that_does_not_fit_a_byte_is_surfaced_not_matched() {
-        let dir = scratch("pfs3-unfittable-protection");
+        let (_guard, dir) = scratch("pfs3-unfittable-protection");
         let content = b"cmd";
         let image = formatted_pfs3_image(&dir);
         let tree = tree_with_load_module(&dir, content, 0x20);
@@ -1376,7 +1385,7 @@ mod tests {
     /// detail text quietly claiming a match that was never attempted.
     #[test]
     fn a_pfs3_file_with_no_recorded_protection_says_so_rather_than_claiming_a_match() {
-        let dir = scratch("pfs3-no-protection-recorded");
+        let (_guard, dir) = scratch("pfs3-no-protection-recorded");
         let content = b"cmd";
         let image = formatted_pfs3_image(&dir);
         let tree = tree_with_load_module(&dir, content, 0x20);
@@ -1408,7 +1417,7 @@ mod tests {
     /// volume at all — `family_of` only looks at the RDB's own DosType.
     #[test]
     fn an_unrecognised_filesystem_is_not_checked_for_every_file() {
-        let dir = scratch("unrecognised-fs");
+        let (_guard, dir) = scratch("unrecognised-fs");
         let image = card_with_partition(&dir, AmigaHardDiskFs::Sfs0, 8);
         let manifest = manifest_for_load_module(b"cmd");
 
@@ -1434,7 +1443,7 @@ mod tests {
     /// reaches for `Custom` with the real dircache flavour byte directly.
     #[test]
     fn a_dircache_volume_is_not_checked_rather_than_a_failed_run() {
-        let dir = scratch("dircache");
+        let (_guard, dir) = scratch("dircache");
         const DOS5_FFS_DIRCACHE: u32 = 0x444F_5305; // "DOS\5"
         let image = card_with_partition(&dir, AmigaHardDiskFs::Custom(DOS5_FFS_DIRCACHE), 8);
         let manifest = manifest_for_load_module(b"cmd");
@@ -1459,7 +1468,7 @@ mod tests {
     /// not "something unchecked". See the module doc comment's Decision 1.
     #[test]
     fn a_record_with_no_recorded_protection_can_still_pass_on_ffs() {
-        let dir = scratch("no-protection-recorded");
+        let (_guard, dir) = scratch("no-protection-recorded");
         let content = b"; composed\n";
         let image = formatted_ffs_image(&dir);
         let tree = dir.join("tree");
@@ -1506,7 +1515,7 @@ mod tests {
     /// it rather than sail through unnoticed.
     #[test]
     fn an_extra_file_on_the_volume_that_is_not_in_the_manifest_is_simply_invisible_to_the_report() {
-        let dir = scratch("extra-file");
+        let (_guard, dir) = scratch("extra-file");
         let image = formatted_ffs_image(&dir);
         let tree = tree_with_load_module(&dir, b"cmd", 0x20);
         std::fs::write(tree.join("Unlisted"), b"nobody told the manifest").unwrap();
@@ -1958,7 +1967,7 @@ mod tests {
     /// end to end, through the same call a real `osinstall_verify` makes.
     #[test]
     fn verify_volumes_report_folds_in_the_trees_own_prefs_check() {
-        let (image, manifest, tree) = written_volume();
+        let (_guard, image, manifest, tree) = written_volume();
         write_wbpattern_picture(&tree, "Sys:Prefs/Presets/Backdrops/default_pal.iff");
         // Never actually placed in the tree — a real dist-3.2-shaped orphan.
 
@@ -1989,7 +1998,7 @@ mod tests {
     /// disclosed).
     #[test]
     fn a_permission_error_walking_prefs_folds_into_one_named_fail_row() {
-        let (image, manifest, tree) = written_volume();
+        let (_guard, image, manifest, tree) = written_volume();
 
         let report = verify_volume_with(&image, None, 1, &manifest, &tree, |_dist_root| {
             Err(CoreError::Io(std::io::Error::new(

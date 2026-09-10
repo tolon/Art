@@ -853,7 +853,7 @@ mod tests {
     /// Three folders, one install.
     #[test]
     fn disks_in_several_folders_are_one_list() {
-        let dir = scratch("scan-across");
+        let (_guard, dir) = scratch("scan-across");
         let base = dir.join("base");
         let update = dir.join("Update");
         let hotfix = dir.join("Hotfix");
@@ -899,7 +899,7 @@ mod tests {
     /// want is not ART's to decide.
     #[test]
     fn the_same_volume_in_two_folders_stays_ambiguous() {
-        let dir = scratch("scan-across-dupes");
+        let (_guard, dir) = scratch("scan-across-dupes");
         let one = dir.join("one");
         let two = dir.join("two");
         for folder in [&one, &two] {
@@ -930,7 +930,7 @@ mod tests {
     /// to keep both.
     #[test]
     fn an_exact_copy_of_a_disk_in_two_folders_is_one_disk() {
-        let dir = scratch("scan-across-identical");
+        let (_guard, dir) = scratch("scan-across-identical");
         let one = dir.join("one");
         let two = dir.join("two");
         for folder in [&one, &two] {
@@ -951,7 +951,7 @@ mod tests {
     /// ambiguous with itself.
     #[test]
     fn the_same_folder_named_twice_is_read_once() {
-        let dir = scratch("scan-across-same");
+        let (_guard, dir) = scratch("scan-across-same");
         media(&dir, "Workbench3.2", "wb.adf", &[]);
 
         let found = find_media_across(&[dir.clone(), dir.clone()]).unwrap();
@@ -967,7 +967,7 @@ mod tests {
     /// gone" is a sentence about something they did.
     #[test]
     fn a_named_folder_that_is_not_there_fails_the_scan() {
-        let dir = scratch("scan-across-missing");
+        let (_guard, dir) = scratch("scan-across-missing");
         media(&dir, "Workbench3.2", "wb.adf", &[]);
         assert!(find_media_across(&[dir.clone(), dir.join("nowhere")]).is_err());
     }
@@ -979,7 +979,7 @@ mod tests {
 
     #[test]
     fn media_is_found_by_its_volume_name_not_its_filename() {
-        let dir = scratch("scan-by-volume-name");
+        let (_guard, dir) = scratch("scan-by-volume-name");
         media(&dir, "Workbench3.2", "wb.adf", &[]);
         // The point of the task: a disk that reached this folder under a
         // name that says nothing about what is on it still has to resolve —
@@ -999,7 +999,7 @@ mod tests {
 
     #[test]
     fn a_file_that_is_not_an_amiga_image_is_skipped_not_an_error() {
-        let dir = scratch("scan-skip-non-amiga");
+        let (_guard, dir) = scratch("scan-skip-non-amiga");
         std::fs::write(dir.join("readme.txt"), b"hello").unwrap();
         // Decision 2's other named case: an HDF is a real AmigaDOS image,
         // just not install media — `AdfSource::open` refuses it by name
@@ -1032,7 +1032,7 @@ mod tests {
     /// symlink half is documented, not tested here — see the module doc).
     #[test]
     fn the_scan_is_not_recursive() {
-        let dir = scratch("scan-not-recursive");
+        let (_guard, dir) = scratch("scan-not-recursive");
         let nested = dir.join("sub");
         std::fs::create_dir(&nested).unwrap();
         media(&nested, "Workbench3.2", "wb.adf", &[]);
@@ -1063,7 +1063,7 @@ mod tests {
     /// it either way.
     #[test]
     fn two_same_named_files_are_both_reported_and_neither_is_silently_dropped() {
-        let dir = scratch("scan-duplicate-names");
+        let (_guard, dir) = scratch("scan-duplicate-names");
         let second = media(&dir, "Workbench3.2", "wb-copy-2.adf", &[]);
         let first = media(&dir, "Workbench3.2", "wb-copy-1.adf", &[]);
 
@@ -1094,7 +1094,7 @@ mod tests {
 
     #[test]
     fn media_for_returns_missing_when_no_file_carries_the_name() {
-        let dir = scratch("scan-media-for-missing");
+        let (_guard, dir) = scratch("scan-media-for-missing");
         media(&dir, "Workbench3.2", "wb.adf", &[]);
 
         let found = find_media(&dir).unwrap();
@@ -1109,7 +1109,7 @@ mod tests {
 
     #[test]
     fn one_volume_name_in_two_layers_resolves_per_layer() {
-        let dir = scratch("scan-layers");
+        let (_guard, dir) = scratch("scan-layers");
         let base = dir.join("base");
         let update = dir.join("update");
         for folder in [&base, &update] {
@@ -1149,7 +1149,7 @@ mod tests {
 
     #[test]
     fn two_of_one_name_inside_one_layer_are_still_ambiguous() {
-        let dir = scratch("scan-layer-ambiguous");
+        let (_guard, dir) = scratch("scan-layer-ambiguous");
         let base = dir.join("base");
         std::fs::create_dir_all(&base).unwrap();
         media(&base, "DiskDoctor", "a.adf", &[("C/DiskDoctor", b"one", 0)]);
@@ -1168,7 +1168,7 @@ mod tests {
         // The defect this guards: `dedupe_identical_disks` run across layers
         // drops the update folder's copy and leaves that layer unable to
         // resolve a component that names it.
-        let dir = scratch("scan-layer-dedupe");
+        let (_guard, dir) = scratch("scan-layer-dedupe");
         let base = dir.join("base");
         let update = dir.join("update");
         for folder in [&base, &update] {
@@ -1200,7 +1200,7 @@ mod tests {
 
     #[test]
     fn a_byte_identical_disk_twice_inside_one_layer_is_still_one_disk() {
-        let dir = scratch("scan-layer-dedupe-within");
+        let (_guard, dir) = scratch("scan-layer-dedupe-within");
         let base = dir.join("base");
         std::fs::create_dir_all(&base).unwrap();
         let one = media(&base, "Workbench3.2", "wb.adf", &[("C/Assign", b"same", 0)]);
@@ -1219,7 +1219,7 @@ mod tests {
     /// the volume name recorded inside it.
     #[test]
     fn a_disc_is_found_and_named_by_its_own_volume() {
-        let dir = scratch("disc-found");
+        let (_guard, dir) = scratch("disc-found");
         write_test_iso(&dir, "os39.iso", "AmigaOS3.9");
 
         let found = find_media(&dir).unwrap();
@@ -1250,7 +1250,7 @@ mod tests {
     fn a_disc_is_identified_from_its_descriptor_without_walking_its_tree() {
         use crate::core::iso::fixture::{dir, file, IsoBuilder};
 
-        let scratch_dir = scratch("disc-identify-no-walk");
+        let (_guard, scratch_dir) = scratch("disc-identify-no-walk");
         // Seventeen levels; MAX_WALK_DEPTH is 16.
         let mut node = file("DEEP.TXT", "deep.txt", b"bottom");
         for level in (0..17).rev() {
@@ -1289,7 +1289,7 @@ mod tests {
     /// already works.
     #[test]
     fn a_floppy_is_still_found_as_a_floppy() {
-        let dir = scratch("floppy-still");
+        let (_guard, dir) = scratch("floppy-still");
         media(&dir, "Workbench3.2", "wb.adf", &[]);
 
         let found = find_media(&dir).unwrap();
@@ -1301,7 +1301,7 @@ mod tests {
     /// One factory, so a caller never has to ask what it is holding.
     #[test]
     fn the_factory_opens_whichever_kind_was_found() {
-        let dir = scratch("factory");
+        let (_guard, dir) = scratch("factory");
         media(&dir, "Workbench3.2", "wb.adf", &[]);
         write_test_iso(&dir, "os39.iso", "AmigaOS3.9");
 
@@ -1315,7 +1315,7 @@ mod tests {
     /// rule.
     #[test]
     fn something_that_is_neither_is_skipped_rather_than_failing_the_scan() {
-        let dir = scratch("neither");
+        let (_guard, dir) = scratch("neither");
         std::fs::write(dir.join("notes.txt"), b"not an image").unwrap();
 
         assert!(find_media(&dir).unwrap().is_empty());
@@ -1342,7 +1342,7 @@ mod tests {
 
     #[test]
     fn a_valid_package_is_found_and_a_non_archive_file_is_skipped_not_fatal() {
-        let dir = scratch("packages-mixed");
+        let (_guard, dir) = scratch("packages-mixed");
         std::fs::write(dir.join("readme.txt"), b"not an archive").unwrap();
         package(&dir, "bb1.zip", "BoingBag3.9-1", &[("C/Assign", b"a")]);
 
@@ -1355,7 +1355,7 @@ mod tests {
     /// same contract `find_media`'s own duplicate-name test pins.
     #[test]
     fn two_packages_are_both_reported_in_deterministic_order() {
-        let dir = scratch("packages-two");
+        let (_guard, dir) = scratch("packages-two");
         // Written in the *opposite* of lexicographic order, for the same
         // reason `find_media`'s duplicate-name test is: passing by
         // coincidence whenever creation order already matches sorted order
@@ -1370,7 +1370,7 @@ mod tests {
 
     #[test]
     fn an_unreadable_folder_is_an_error_not_an_empty_list() {
-        let dir = scratch("packages-unreadable");
+        let (_guard, dir) = scratch("packages-unreadable");
         let missing = dir.join("does-not-exist");
 
         assert!(find_packages(&missing).is_err());
@@ -1380,7 +1380,7 @@ mod tests {
 
     #[test]
     fn a_package_is_resolved_by_the_name_inside_its_archive() {
-        let dir = scratch("packages-resolve");
+        let (_guard, dir) = scratch("packages-resolve");
         crate::core::osinstall::fixtures::package_test_archive(&dir, "renamed-by-the-user.zip");
         let found = find_packages(&dir).unwrap();
 
@@ -1397,7 +1397,7 @@ mod tests {
     /// itself. Every claimant is reported, never one of them chosen.
     #[test]
     fn two_archives_claiming_one_name_come_back_ambiguous() {
-        let dir = scratch("packages-ambiguous-resolve");
+        let (_guard, dir) = scratch("packages-ambiguous-resolve");
         crate::core::osinstall::fixtures::package_test_archive(&dir, "a.zip");
         crate::core::osinstall::fixtures::package_test_archive(&dir, "b.zip");
         let found = find_packages(&dir).unwrap();
@@ -1464,7 +1464,7 @@ mod tests {
     /// filter and that arm keeps passing while every one below fails.
     #[test]
     fn eight_archives_claiming_localeupdate_are_separated_by_what_is_inside_them() {
-        let dir = scratch("packages-language-variants");
+        let (_guard, dir) = scratch("packages-language-variants");
         let turkce = language_pack(&dir, "BoingBag39-2-turkce.lha", TURKCE);
         language_pack(&dir, "BoingBag39-2-deutsch.lha", b"deutsch");
         let portugues = language_pack(&dir, "BoingBag39-2-portugues.lha", PORTUGUES);
@@ -1529,7 +1529,7 @@ mod tests {
     /// that arm and fail this one — which is exactly what the review found.
     #[test]
     fn a_drawer_spelled_in_upper_case_is_the_same_drawer() {
-        let dir = scratch("packages-intl-fold");
+        let (_guard, dir) = scratch("packages-intl-fold");
         // `TÜRKÇE`, Latin-1 upper case: T DC R K C7 E.
         let upper: &[u8] = &[0x54, 0xDC, 0x52, 0x4B, 0xC7, 0x45];
         let turkce = language_pack(&dir, "BoingBag39-2-turkce.lha", upper);
@@ -1571,7 +1571,7 @@ mod tests {
     /// behaviour merely produced a refusal.
     #[test]
     fn an_archive_that_cannot_be_reopened_does_not_satisfy_the_distinguisher() {
-        let dir = scratch("packages-fails-closed");
+        let (_guard, dir) = scratch("packages-fails-closed");
         let path = language_pack(&dir, "BoingBag39-2-turkce.lha", TURKCE);
         let found = find_packages(&dir).unwrap();
         assert_eq!(found.len(), 1, "one candidate — the case F7 is about");
@@ -1597,7 +1597,7 @@ mod tests {
     /// carries none of them, and used to pass.
     #[test]
     fn an_empty_declared_drawer_does_not_satisfy_the_distinguisher() {
-        let dir = scratch("packages-empty-drawer");
+        let (_guard, dir) = scratch("packages-empty-drawer");
 
         // An archive that declares `locale/catalogs/türkçe/` as a directory
         // row and puts nothing inside it. Real archives can be repacked this
@@ -1632,7 +1632,7 @@ mod tests {
 
         // The same archive with one catalog in it resolves — so this test is
         // about the emptiness and not about the fixture being unreadable.
-        let full = scratch("packages-empty-drawer-control");
+        let (_guard, full) = scratch("packages-empty-drawer-control");
         let path = language_pack(&full, "BoingBag39-2-turkce.lha", TURKCE);
         let found = find_packages(&full).unwrap();
         match package_for(
@@ -1652,7 +1652,7 @@ mod tests {
     /// been placed out of a German archive with nothing to warn anybody.
     #[test]
     fn a_single_candidate_of_the_wrong_variant_is_missing_not_found() {
-        let dir = scratch("packages-wrong-variant-alone");
+        let (_guard, dir) = scratch("packages-wrong-variant-alone");
         language_pack(&dir, "BoingBag39-2-deutsch.lha", b"deutsch");
         let found = find_packages(&dir).unwrap();
 
@@ -1678,7 +1678,7 @@ mod tests {
     /// shape: the same language pack downloaded twice.
     #[test]
     fn an_ambiguity_the_distinguisher_cannot_settle_still_names_both() {
-        let dir = scratch("packages-still-ambiguous");
+        let (_guard, dir) = scratch("packages-still-ambiguous");
         let a = language_pack(&dir, "BoingBag39-2-turkce.lha", TURKCE);
         let b = language_pack(&dir, "BoingBag39-2-turkce (1).lha", TURKCE);
         // A third archive of another language sits beside them, so this
@@ -1712,7 +1712,7 @@ mod tests {
     /// package recipe says, and `open_package` is where that is acted on.
     #[test]
     fn open_package_opens_the_nested_member_when_the_recipe_names_one() {
-        let dir = scratch("packages-open-nested");
+        let (_guard, dir) = scratch("packages-open-nested");
         let inner = crate::core::archive::zip::tests::make_zip_with(&[
             ("C/", b"" as &[u8]),
             ("C/Version", b"cmd bytes"),

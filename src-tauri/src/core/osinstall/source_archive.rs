@@ -722,7 +722,7 @@ mod tests {
 
     #[test]
     fn the_volume_name_is_the_single_top_level_directory() {
-        let dir = scratch("archive-volume");
+        let (_guard, dir) = scratch("archive-volume");
         let p = package_zip(
             &dir,
             "renamed-by-the-user.zip",
@@ -738,7 +738,7 @@ mod tests {
 
     #[test]
     fn two_top_level_directories_are_refused_by_name() {
-        let dir = scratch("archive-two-tops");
+        let (_guard, dir) = scratch("archive-two-tops");
         let p = package_zip(&dir, "two.zip", &[("One/a", b"a"), ("Two/b", b"b")]);
         let err = ArchiveSource::open(&p).unwrap_err().to_string();
         assert!(err.contains("One") && err.contains("Two"), "got {err}");
@@ -746,7 +746,7 @@ mod tests {
 
     #[test]
     fn no_top_level_directory_is_refused() {
-        let dir = scratch("archive-flat");
+        let (_guard, dir) = scratch("archive-flat");
         let p = package_zip(&dir, "flat.zip", &[("a", b"a"), ("b", b"b")]);
         assert!(ArchiveSource::open(&p).is_err());
     }
@@ -755,7 +755,7 @@ mod tests {
     /// rule's `from` says `C/Assign`, never `BoingBag3.9-1/C/Assign`.
     #[test]
     fn paths_are_relative_to_the_top_level_directory() {
-        let dir = scratch("archive-rel");
+        let (_guard, dir) = scratch("archive-rel");
         let p = package_zip(
             &dir,
             "bb.zip",
@@ -772,7 +772,7 @@ mod tests {
     /// round it.
     #[test]
     fn a_traversing_entry_name_is_refused() {
-        let dir = scratch("archive-traversal");
+        let (_guard, dir) = scratch("archive-traversal");
         let p = package_zip(
             &dir,
             "bad.zip",
@@ -795,7 +795,7 @@ mod tests {
     /// The BoingBag shape: an archive whose payload is another archive.
     #[test]
     fn a_nested_member_becomes_the_medium() {
-        let dir = scratch("archive-nested");
+        let (_guard, dir) = scratch("archive-nested");
         let inner = crate::core::archive::zip::tests::make_zip_with(&[
             ("Libs/version.library", b"lib bytes"),
             ("C/Version", b"cmd bytes"),
@@ -834,7 +834,7 @@ mod tests {
     /// merely looks unique — is what keeps them apart.
     #[test]
     fn two_concurrent_opens_of_the_same_member_name_never_cross_streams() {
-        let dir = scratch("archive-nested-concurrent");
+        let (_guard, dir) = scratch("archive-nested-concurrent");
         let inner_a =
             crate::core::archive::zip::tests::make_zip_with(&[("C/Version", b"FROM ARCHIVE A")]);
         let inner_b =
@@ -872,7 +872,7 @@ mod tests {
     /// empty medium — a silently empty medium is a silently short plan.
     #[test]
     fn a_member_that_is_not_an_archive_is_refused() {
-        let dir = scratch("archive-nested-bad");
+        let (_guard, dir) = scratch("archive-nested-bad");
         let outer = package_zip(
             &dir,
             "bad.zip",
@@ -887,7 +887,7 @@ mod tests {
     /// A member the outer archive does not hold is refused by name.
     #[test]
     fn a_missing_member_is_refused_by_name() {
-        let dir = scratch("archive-nested-missing");
+        let (_guard, dir) = scratch("archive-nested-missing");
         let outer = package_zip(&dir, "x.zip", &[("BB/Something", b"x")]);
         let err = ArchiveSource::open_nested(&outer, "AmigaOS-Update", &std::env::temp_dir(), None)
             .unwrap_err()
@@ -925,7 +925,7 @@ mod tests {
                 .count()
         }
 
-        let dir = scratch("archive-nested-cleanup");
+        let (_guard, dir) = scratch("archive-nested-cleanup");
         let inner = crate::core::archive::zip::tests::make_zip_with(&[("C/Version", b"cmd bytes")]);
         let good = package_zip(&dir, "Good.zip", &[(&format!("BB/{MEMBER}"), &inner)]);
         let bad = package_zip(
@@ -963,7 +963,7 @@ mod tests {
     /// handed only to the inner open.
     #[test]
     fn a_locked_nested_payload_opens_with_the_recipes_own_key() {
-        let dir = scratch("archive-nested-locked");
+        let (_guard, dir) = scratch("archive-nested-locked");
         let inner = crate::core::archive::zip::tests::make_zipcrypto_zip_with(
             &[
                 ("Libs/version.library", b"lib bytes"),
@@ -1005,7 +1005,7 @@ mod tests {
     /// extracted the payload into, whose path means nothing to anybody.
     #[test]
     fn a_wrong_key_is_refused_naming_the_archive_the_user_has() {
-        let dir = scratch("archive-nested-wrongkey");
+        let (_guard, dir) = scratch("archive-nested-wrongkey");
         let inner = crate::core::archive::zip::tests::make_zipcrypto_zip_with(
             &[("C/WBRun", b"amiga program")],
             b"93ABDF11",
@@ -1036,7 +1036,7 @@ mod tests {
     /// this refused every rule it had.
     #[test]
     fn a_top_level_drawer_no_entry_declares_still_resolves() {
-        let dir = scratch("archive-implicit-top");
+        let (_guard, dir) = scratch("archive-implicit-top");
         let p = package_zip(
             &dir,
             "no-dirs.zip",
@@ -1069,7 +1069,7 @@ mod tests {
     /// down is ever listed.
     #[test]
     fn every_intermediate_drawer_resolves_not_only_the_top_one() {
-        let dir = scratch("archive-implicit-deep");
+        let (_guard, dir) = scratch("archive-implicit-deep");
         let p = package_zip(
             &dir,
             "deep.zip",
@@ -1113,7 +1113,7 @@ mod tests {
     /// bothered to write the rows is not a caller's business.
     #[test]
     fn declared_and_undeclared_drawers_produce_the_same_media() {
-        let dir = scratch("archive-implicit-same");
+        let (_guard, dir) = scratch("archive-implicit-same");
         let declared = package_zip(
             &dir,
             "declared.zip",
@@ -1157,7 +1157,7 @@ mod tests {
     /// does not have.
     #[test]
     fn reading_a_synthesised_drawer_is_refused_as_a_drawer() {
-        let dir = scratch("archive-implicit-read");
+        let (_guard, dir) = scratch("archive-implicit-read");
         let p = package_zip(&dir, "implicit-read.zip", &[("BB/C/Assign", b"assign")]);
         let mut src = ArchiveSource::open(&p).unwrap();
 
@@ -1169,7 +1169,7 @@ mod tests {
     /// synthesised drawer as a payload rather than trying to read one.
     #[test]
     fn a_synthesised_drawer_is_not_a_payload_archive() {
-        let dir = scratch("archive-implicit-nested");
+        let (_guard, dir) = scratch("archive-implicit-nested");
         let p = package_zip(&dir, "implicit-nested.zip", &[("BB/C/Assign", b"assign")]);
 
         let err = ArchiveSource::open_nested(&p, "C", &std::env::temp_dir(), None)
@@ -1190,7 +1190,7 @@ mod tests {
     /// volume with nothing said about it (§89).
     #[test]
     fn a_drawer_spelled_two_ways_walks_as_one_drawer() {
-        let dir = scratch("archive-mixed-case");
+        let (_guard, dir) = scratch("archive-mixed-case");
         let p = package_zip(
             &dir,
             "mixed.zip",
@@ -1230,7 +1230,7 @@ mod tests {
     /// nothing unusual.
     #[test]
     fn a_refused_entry_name_is_reported_verbatim_not_merely_dropped() {
-        let dir = scratch("archive-refused-reported");
+        let (_guard, dir) = scratch("archive-refused-reported");
         let p = package_zip(
             &dir,
             "hostile.zip",
@@ -1258,7 +1258,7 @@ mod tests {
     /// real finding from the everyday case rather than always being full.
     #[test]
     fn an_ordinary_archive_reports_no_refused_names() {
-        let dir = scratch("archive-refused-none");
+        let (_guard, dir) = scratch("archive-refused-none");
         let p = package_zip(&dir, "ordinary.zip", &[("BB/C/Assign", b"assign")]);
         assert!(ArchiveSource::open(&p).unwrap().refused_names().is_empty());
     }
@@ -1268,7 +1268,7 @@ mod tests {
     /// It is a fact about the same package and survives.
     #[test]
     fn a_nested_medium_keeps_the_wrappers_refused_names_too() {
-        let dir = scratch("archive-refused-nested");
+        let (_guard, dir) = scratch("archive-refused-nested");
         let inner = crate::core::archive::zip::tests::make_zip_with(&[("C/Version", b"cmd")]);
         let outer = package_zip(
             &dir,
@@ -1335,7 +1335,7 @@ mod tests {
     /// it, synthesised drawers, bytes.
     #[test]
     fn an_lha_answers_everything_a_zip_does() {
-        let dir = scratch("archive-lha");
+        let (_guard, dir) = scratch("archive-lha");
         let p = package_lha(
             &dir,
             "BoingBag39-1.lha",
@@ -1358,7 +1358,7 @@ mod tests {
     /// dispatches to and the third `ArchiveSource`'s own module doc claims.
     #[test]
     fn a_7z_answers_everything_a_zip_does() {
-        let dir = scratch("archive-7z");
+        let (_guard, dir) = scratch("archive-7z");
         let p = package_7z(
             &dir,
             "pack.7z",
@@ -1388,7 +1388,7 @@ mod tests {
     /// engine actually takes.
     #[test]
     fn art_168_an_lha_name_s_latin_1_bytes_arrive_decoded() {
-        let dir = scratch("archive-lha-latin1");
+        let (_guard, dir) = scratch("archive-lha-latin1");
         // `LocaleUpdate/locale/catalogs/türkçe/sys.catalog`, Latin-1.
         let mut name: Vec<u8> = b"LocaleUpdate/locale/catalogs/".to_vec();
         name.extend_from_slice(&[0x74, 0xFC, 0x72, 0x6B, 0xE7, 0x65]); // türkçe

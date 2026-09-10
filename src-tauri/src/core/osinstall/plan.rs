@@ -2257,7 +2257,7 @@ mod condition_tests {
     /// existing way to get a private directory for one test.
     #[test]
     fn the_major_comes_from_the_roms_own_header() {
-        let dir = super::super::fixtures::scratch("plan-rom-header");
+        let (_guard, dir) = super::super::fixtures::scratch("plan-rom-header");
         let path = dir.join("fake.rom");
         let mut bytes = vec![0u8; 512 * 1024];
         bytes[12..14].copy_from_slice(&40u16.to_be_bytes());
@@ -2281,7 +2281,7 @@ mod condition_tests {
     /// actually present.
     #[test]
     fn a_cloanto_header_with_no_key_beside_it_is_refused_not_misread() {
-        let dir = super::super::fixtures::scratch("plan-rom-cloanto-no-key");
+        let (_guard, dir) = super::super::fixtures::scratch("plan-rom-cloanto-no-key");
         let path = dir.join("cloanto.rom");
 
         let mut bytes = b"AMIROMTYPE1".to_vec();
@@ -2304,7 +2304,7 @@ mod condition_tests {
     /// variant.
     #[test]
     fn content_that_is_not_a_rom_is_refused_as_invalid_input() {
-        let dir = super::super::fixtures::scratch("plan-rom-not-a-rom");
+        let (_guard, dir) = super::super::fixtures::scratch("plan-rom-not-a-rom");
         let path = dir.join("readme.txt");
         std::fs::write(&path, b"this is not a Kickstart image").unwrap();
 
@@ -2476,16 +2476,23 @@ mod plan_tests {
     /// are in the folder. Rom major `47` — V47 or later — keeps
     /// `modules-a1200`'s own condition off by default, so a test that is
     /// not about the ROM does not have to think about it.
-    fn plan_with(chosen: &[&str], present: &[&str]) -> InstallPlan {
-        crate::core::osinstall::fixtures::planned_with(chosen, present, Some(47)).0
+    fn plan_with(chosen: &[&str], present: &[&str]) -> (crate::core::ScratchDir, InstallPlan) {
+        let (guard, plan, _dir) =
+            crate::core::osinstall::fixtures::planned_with(chosen, present, Some(47));
+        (guard, plan)
     }
 
     /// The variant that *is* about the ROM. `Workbench3.2` alone is enough
     /// media for `workbench-base` (required) to resolve without noise; the
     /// point of this helper is `components_on`, not whether
     /// `modules-a1200`'s own media happens to be present too.
-    fn plan_with_rom(chosen: &[&str], rom_major: u16) -> InstallPlan {
-        crate::core::osinstall::fixtures::planned_with(chosen, &["Workbench3.2"], Some(rom_major)).0
+    fn plan_with_rom(chosen: &[&str], rom_major: u16) -> (crate::core::ScratchDir, InstallPlan) {
+        let (guard, plan, _dir) = crate::core::osinstall::fixtures::planned_with(
+            chosen,
+            &["Workbench3.2"],
+            Some(rom_major),
+        );
+        (guard, plan)
     }
 
     /// `Workbench3.2` built completely valid — every one of `workbench-base`'s
@@ -2493,8 +2500,8 @@ mod plan_tests {
     /// starts from the same recipe-derived content and then has its `L`
     /// entry removed — the one path this test means to break, and the only
     /// difference from an ordinary, fully-satisfied `Extras3.2`.
-    fn plan_where_extras_has_no_l() -> InstallPlan {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-extras-no-l");
+    fn plan_where_extras_has_no_l() -> (crate::core::ScratchDir, InstallPlan) {
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("plan-extras-no-l");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
@@ -2532,7 +2539,7 @@ mod plan_tests {
             excluded: Vec::new(),
             scan_cache: Default::default(),
         };
-        plan(&request, &recipe).unwrap()
+        (_guard, plan(&request, &recipe).unwrap())
     }
 
     /// Carried item 4, made falsifiable: the collision `recipe.rs`'s own
@@ -2544,8 +2551,9 @@ mod plan_tests {
     /// `plan_with_colliding_recipe` (`File` vs `File`) is the shape
     /// `recipe.rs` already covers statically; this is the shape only
     /// `plan()` — after `walk` — can see.
-    fn plan_with_a_walked_file_colliding_with_a_direct_file() -> InstallPlan {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-walked-collision");
+    fn plan_with_a_walked_file_colliding_with_a_direct_file(
+    ) -> (crate::core::ScratchDir, InstallPlan) {
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("plan-walked-collision");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         crate::core::osinstall::fixtures::media(
@@ -2621,7 +2629,7 @@ mod plan_tests {
             excluded: Vec::new(),
             scan_cache: Default::default(),
         };
-        plan(&request, &recipe).unwrap()
+        (_guard, plan(&request, &recipe).unwrap())
     }
 
     // -----------------------------------------------------------------
@@ -2630,8 +2638,8 @@ mod plan_tests {
 
     /// A recipe whose one component places two keymaps, so a selection has
     /// something real to be checked against.
-    fn keymap_fixture() -> (PathBuf, Recipe, PathBuf) {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-keymap");
+    fn keymap_fixture() -> (crate::core::ScratchDir, PathBuf, Recipe, PathBuf) {
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("plan-keymap");
         let folder = dir.join("media");
         std::fs::create_dir_all(&folder).unwrap();
         crate::core::osinstall::fixtures::media(
@@ -2664,7 +2672,7 @@ mod plan_tests {
                 removes: Vec::new(),
             }],
         };
-        (dir, recipe, folder)
+        (_guard, dir, recipe, folder)
     }
 
     fn keymap_request(folder: &Path, dest: PathBuf, keymap: Option<&str>) -> InstallRequest {
@@ -2694,7 +2702,7 @@ mod plan_tests {
     /// which is what `C/` in those same trees actually carries.
     #[test]
     fn choosing_a_keymap_writes_the_line_that_selects_it() {
-        let (dir, recipe, folder) = keymap_fixture();
+        let (_guard, dir, recipe, folder) = keymap_fixture();
         let request = keymap_request(&folder, dir.join("dist"), Some("türkçe"));
 
         let planned = plan(&request, &recipe).unwrap();
@@ -2713,7 +2721,7 @@ mod plan_tests {
     /// somebody's keyboard for them.
     #[test]
     fn choosing_nothing_leaves_the_startup_file_alone() {
-        let (dir, recipe, folder) = keymap_fixture();
+        let (_guard, dir, recipe, folder) = keymap_fixture();
         let request = keymap_request(&folder, dir.join("dist"), None);
 
         let planned = plan(&request, &recipe).unwrap();
@@ -2732,7 +2740,7 @@ mod plan_tests {
     /// name the caller typed.
     #[test]
     fn a_keymap_this_install_would_not_place_is_refused_rather_than_written() {
-        let (dir, recipe, folder) = keymap_fixture();
+        let (_guard, dir, recipe, folder) = keymap_fixture();
         let request = keymap_request(&folder, dir.join("dist"), Some("norsk"));
 
         let planned = plan(&request, &recipe).unwrap();
@@ -2758,7 +2766,7 @@ mod plan_tests {
     /// international fold `scan::media_for` already uses.
     #[test]
     fn the_selection_is_compared_the_way_amigados_compares_names() {
-        let (dir, recipe, folder) = keymap_fixture();
+        let (_guard, dir, recipe, folder) = keymap_fixture();
         let request = keymap_request(&folder, dir.join("dist"), Some("TÜRKÇE"));
 
         let planned = plan(&request, &recipe).unwrap();
@@ -2800,7 +2808,7 @@ mod plan_tests {
     /// named, every component from the other one came back `MediaMissing`.
     #[test]
     fn a_plan_reads_media_out_of_every_folder_it_was_given() {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-two-folders");
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("plan-two-folders");
         let base = dir.join("base");
         let update = dir.join("Update");
         std::fs::create_dir_all(&base).unwrap();
@@ -2892,8 +2900,8 @@ mod plan_tests {
     /// resolve `C` against, and a real Workbench disk's `C` genuinely is a
     /// directory. Only a hand-built, deliberately wrong recipe can put a
     /// `File` rule over a directory in front of `plan()`.
-    fn plan_with_a_file_rule_over_a_directory() -> InstallPlan {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-kind-file-over-dir");
+    fn plan_with_a_file_rule_over_a_directory() -> (crate::core::ScratchDir, InstallPlan) {
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("plan-kind-file-over-dir");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         crate::core::osinstall::fixtures::media(&folder, "M", "m.adf", &[("C/inner", b"x", 0)]);
@@ -2937,13 +2945,14 @@ mod plan_tests {
             excluded: Vec::new(),
             scan_cache: Default::default(),
         };
-        plan(&request, &recipe).unwrap()
+        (_guard, plan(&request, &recipe).unwrap())
     }
 
     /// The other direction: `kind: "subtree"` against `readme`, a path that
     /// is actually a plain file on its own media.
-    fn plan_with_a_subtree_rule_over_a_file() -> InstallPlan {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-kind-subtree-over-file");
+    fn plan_with_a_subtree_rule_over_a_file() -> (crate::core::ScratchDir, InstallPlan) {
+        let (_guard, dir) =
+            crate::core::osinstall::fixtures::scratch("plan-kind-subtree-over-file");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         crate::core::osinstall::fixtures::media(&folder, "M", "m.adf", &[("readme", b"x", 0)]);
@@ -2987,7 +2996,7 @@ mod plan_tests {
             excluded: Vec::new(),
             scan_cache: Default::default(),
         };
-        plan(&request, &recipe).unwrap()
+        (_guard, plan(&request, &recipe).unwrap())
     }
 
     /// A recipe built by hand, not the shipped one: two components with no
@@ -2995,8 +3004,8 @@ mod plan_tests {
     /// `no_two_components_claim_one_destination_without_declaring_it` test
     /// proves this shape never occurs in it, so the collision guard needs a
     /// fixture that manufactures the shape on purpose.
-    fn plan_with_colliding_recipe() -> InstallPlan {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-collision");
+    fn plan_with_colliding_recipe() -> (crate::core::ScratchDir, InstallPlan) {
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("plan-collision");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         crate::core::osinstall::fixtures::media(&folder, "A", "a.adf", &[("C/Assign", b"one", 0)]);
@@ -3042,7 +3051,7 @@ mod plan_tests {
             excluded: Vec::new(),
             scan_cache: Default::default(),
         };
-        plan(&request, &recipe).unwrap()
+        (_guard, plan(&request, &recipe).unwrap())
     }
 
     /// A recipe built by hand: two components share one `exclusive_group`,
@@ -3052,8 +3061,8 @@ mod plan_tests {
     /// through its own `Condition` — so this is the shape the coordinator
     /// asked for: a conflict the *resolved* set holds that the *requested*
     /// set never would have shown.
-    fn plan_with_exclusive_group_conflict() -> InstallPlan {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-exclusive-conflict");
+    fn plan_with_exclusive_group_conflict() -> (crate::core::ScratchDir, InstallPlan) {
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("plan-exclusive-conflict");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         crate::core::osinstall::fixtures::media(
@@ -3119,7 +3128,7 @@ mod plan_tests {
             excluded: Vec::new(),
             scan_cache: Default::default(),
         };
-        plan(&request, &recipe).unwrap()
+        (_guard, plan(&request, &recipe).unwrap())
     }
 
     /// Two members of one `exclusive_group`, each given its own `layer` and
@@ -3134,8 +3143,9 @@ mod plan_tests {
         layer_a: Option<&str>,
         layer_b: Option<&str>,
         b_overrides_a: bool,
-    ) -> InstallPlan {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-exclusive-group-layers");
+    ) -> (crate::core::ScratchDir, InstallPlan) {
+        let (_guard, dir) =
+            crate::core::osinstall::fixtures::scratch("plan-exclusive-group-layers");
         let make = |id: &str, to: &str, layer: Option<&str>, overrides: Vec<String>| Component {
             layer: layer.map(str::to_string),
             id: id.to_string(),
@@ -3199,7 +3209,7 @@ mod plan_tests {
             excluded: Vec::new(),
             scan_cache: Default::default(),
         };
-        plan(&request, &recipe).unwrap()
+        (_guard, plan(&request, &recipe).unwrap())
     }
 
     /// **ART-239.** The bug the layer-scoped check could never catch: two
@@ -3210,7 +3220,7 @@ mod plan_tests {
     /// apart and never compared them at all.
     #[test]
     fn two_members_of_one_group_in_different_layers_without_overrides_still_conflict() {
-        let plan = plan_with_group_members_in_layers(Some("base"), Some("update"), false);
+        let (_guard, plan) = plan_with_group_members_in_layers(Some("base"), Some("update"), false);
         assert!(
             plan.refusals
                 .iter()
@@ -3229,7 +3239,7 @@ mod plan_tests {
     /// layer split, is what must excuse this pair.
     #[test]
     fn two_members_of_one_group_in_different_layers_with_overrides_is_not_a_conflict() {
-        let plan = plan_with_group_members_in_layers(Some("base"), Some("update"), true);
+        let (_guard, plan) = plan_with_group_members_in_layers(Some("base"), Some("update"), true);
         assert!(
             !plan
                 .refusals
@@ -3249,8 +3259,10 @@ mod plan_tests {
     /// doc comment) must stay `false` and the whole group must still
     /// conflict, naming all three. The reviewer hand-traced this boundary
     /// case against the code; this pins it as a standing test.
-    fn plan_with_three_group_members_one_partial_override() -> InstallPlan {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-exclusive-group-partial");
+    fn plan_with_three_group_members_one_partial_override() -> (crate::core::ScratchDir, InstallPlan)
+    {
+        let (_guard, dir) =
+            crate::core::osinstall::fixtures::scratch("plan-exclusive-group-partial");
         let make = |id: &str, to: &str, overrides: Vec<String>| Component {
             layer: None,
             id: id.to_string(),
@@ -3306,12 +3318,12 @@ mod plan_tests {
             excluded: Vec::new(),
             scan_cache: Default::default(),
         };
-        plan(&request, &recipe).unwrap()
+        (_guard, plan(&request, &recipe).unwrap())
     }
 
     #[test]
     fn a_partial_override_in_a_three_member_group_does_not_resolve_it() {
-        let plan = plan_with_three_group_members_one_partial_override();
+        let (_guard, plan) = plan_with_three_group_members_one_partial_override();
         let conflict = plan.refusals.iter().find_map(|r| match r {
             RefusalReason::ExclusiveGroupConflict { group, components } if group == "modules" => {
                 Some(components.clone())
@@ -3345,7 +3357,7 @@ mod plan_tests {
     fn a_component_whose_media_is_a_disc_is_planned_from_the_disc() {
         use crate::core::iso::fixture::{file, IsoBuilder};
 
-        let dir = crate::core::osinstall::fixtures::scratch("plan-disc-media");
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("plan-disc-media");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
 
@@ -3429,7 +3441,7 @@ mod plan_tests {
     fn a_subtree_from_a_disc_cased_unlike_the_recipe_lands_at_to_not_under_itself() {
         use crate::core::iso::fixture::{dir, file, IsoBuilder};
 
-        let scratch = crate::core::osinstall::fixtures::scratch("plan-disc-case");
+        let (_guard, scratch) = crate::core::osinstall::fixtures::scratch("plan-disc-case");
         let folder = scratch.join("media");
         std::fs::create_dir(&folder).unwrap();
 
@@ -3504,7 +3516,7 @@ mod plan_tests {
 
     #[test]
     fn a_component_whose_media_is_absent_names_the_component_and_the_disk() {
-        let plan = plan_with(&["extras"], /* media present: */ &["Workbench3.2"]);
+        let (_guard, plan) = plan_with(&["extras"], /* media present: */ &["Workbench3.2"]);
         assert!(plan.refusals.contains(&RefusalReason::MediaMissing {
             component: "extras".into(),
             volume_name: "Extras3.2".into(),
@@ -3516,7 +3528,7 @@ mod plan_tests {
     /// media. Skipping it silently gives a system missing a library.
     #[test]
     fn a_path_the_recipe_expects_and_the_media_lacks_is_a_refusal_not_a_skip() {
-        let plan = plan_where_extras_has_no_l();
+        let (_guard, plan) = plan_where_extras_has_no_l();
         assert!(matches!(
             plan.refusals.as_slice(),
             [RefusalReason::MediaPathMissing { component, path, .. }]
@@ -3530,7 +3542,7 @@ mod plan_tests {
 
     #[test]
     fn two_components_wanting_one_path_without_an_override_is_a_collision() {
-        let plan = plan_with_colliding_recipe();
+        let (_guard, plan) = plan_with_colliding_recipe();
         assert!(matches!(
             plan.refusals.as_slice(),
             [RefusalReason::DestinationCollision { path, components }]
@@ -3548,8 +3560,8 @@ mod plan_tests {
     /// is a synthetic two-component recipe built for exactly this test —
     /// Task 8 runs the identical mutation (a `merge_icon` item quietly exempt
     /// from the collision check) against its own shipped recipe.
-    fn plan_with_icon_rule_and_file_rule_colliding() -> InstallPlan {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-icon-collision");
+    fn plan_with_icon_rule_and_file_rule_colliding() -> (crate::core::ScratchDir, InstallPlan) {
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("plan-icon-collision");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         crate::core::osinstall::fixtures::media(
@@ -3626,12 +3638,12 @@ mod plan_tests {
             excluded: Vec::new(),
             scan_cache: Default::default(),
         };
-        plan(&request, &recipe).unwrap()
+        (_guard, plan(&request, &recipe).unwrap())
     }
 
     #[test]
     fn an_icon_rule_and_a_file_rule_over_one_path_without_an_override_is_a_collision() {
-        let plan = plan_with_icon_rule_and_file_rule_colliding();
+        let (_guard, plan) = plan_with_icon_rule_and_file_rule_colliding();
         assert!(matches!(
             plan.refusals.as_slice(),
             [RefusalReason::DestinationCollision { path, components }]
@@ -3652,7 +3664,7 @@ mod plan_tests {
     /// before/after run.
     #[test]
     fn a_walked_file_colliding_with_a_directly_written_file_is_a_collision() {
-        let plan = plan_with_a_walked_file_colliding_with_a_direct_file();
+        let (_guard, plan) = plan_with_a_walked_file_colliding_with_a_direct_file();
         assert!(matches!(
             plan.refusals.as_slice(),
             [RefusalReason::DestinationCollision { path, components }]
@@ -3678,8 +3690,8 @@ mod plan_tests {
         subtree_from: &str,
         subtree_to: &str,
         entries: &[(&str, &[u8], u32)],
-    ) -> InstallPlan {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-drawer-icon");
+    ) -> (crate::core::ScratchDir, InstallPlan) {
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("plan-drawer-icon");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         crate::core::osinstall::fixtures::media(&folder, "Shelf", "shelf.adf", entries);
@@ -3723,7 +3735,7 @@ mod plan_tests {
             excluded: Vec::new(),
             scan_cache: Default::default(),
         };
-        plan(&request, &recipe).unwrap()
+        (_guard, plan(&request, &recipe).unwrap())
     }
 
     /// **The defect itself, reproduced synthetically.** `Prefs.info` sits
@@ -3732,7 +3744,7 @@ mod plan_tests {
     /// `Prefs.info -> Prefs.info` in addition to the subtree's own files.
     #[test]
     fn a_subtree_rule_also_places_the_drawers_own_icon() {
-        let plan = plan_with_one_subtree_rule(
+        let (_guard, plan) = plan_with_one_subtree_rule(
             "Prefs",
             "Prefs",
             &[
@@ -3756,7 +3768,7 @@ mod plan_tests {
     /// this component contributes does, not a value special-cased for icons.
     #[test]
     fn the_icon_item_is_attributed_to_the_same_component_and_medium() {
-        let plan = plan_with_one_subtree_rule(
+        let (_guard, plan) = plan_with_one_subtree_rule(
             "Prefs",
             "Prefs",
             &[
@@ -3779,7 +3791,8 @@ mod plan_tests {
     /// carry) — absence is not a refusal, and it places nothing.
     #[test]
     fn a_subtree_rule_whose_medium_has_no_sibling_icon_places_none() {
-        let plan = plan_with_one_subtree_rule("Prefs", "Prefs", &[("Prefs/dummy", b"data", 0)]);
+        let (_guard, plan) =
+            plan_with_one_subtree_rule("Prefs", "Prefs", &[("Prefs/dummy", b"data", 0)]);
         assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
         assert!(
             !plan.items.iter().any(|item| item.to == "Prefs.info"),
@@ -3802,7 +3815,8 @@ mod plan_tests {
     /// accident (see the mutation table in the task report).
     #[test]
     fn a_from_empty_subtree_rule_takes_no_icon() {
-        let plan = plan_with_one_subtree_rule("", "Fonts", &[(".info", b"whole-disk-icon", 0)]);
+        let (_guard, plan) =
+            plan_with_one_subtree_rule("", "Fonts", &[(".info", b"whole-disk-icon", 0)]);
         assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
         assert!(
             !plan.items.iter().any(|item| item.to == "Fonts.info"),
@@ -3817,7 +3831,7 @@ mod plan_tests {
     #[test]
     fn the_icon_item_is_a_file_not_a_directory() {
         let icon_bytes: &[u8] = b"icon-bytes";
-        let plan = plan_with_one_subtree_rule(
+        let (_guard, plan) = plan_with_one_subtree_rule(
             "Prefs",
             "Prefs",
             &[("Prefs/dummy", b"data", 0), ("Prefs.info", icon_bytes, 0)],
@@ -3838,7 +3852,7 @@ mod plan_tests {
     /// components writing the same `C/Format`.
     #[test]
     fn two_components_placing_the_same_drawer_icon_is_a_collision_like_any_other() {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-drawer-icon-collision");
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("plan-drawer-icon-collision");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         // Distinct names inside each subtree (`dummyA` / `dummyB`) so the
@@ -3928,7 +3942,7 @@ mod plan_tests {
     /// future release's recipe file can have this checked at all.
     #[test]
     fn a_file_rule_over_a_directory_is_a_kind_mismatch() {
-        let plan = plan_with_a_file_rule_over_a_directory();
+        let (_guard, plan) = plan_with_a_file_rule_over_a_directory();
         assert!(matches!(
             plan.refusals.as_slice(),
             [RefusalReason::RuleKindMismatch { component, from, expected, found }]
@@ -3944,8 +3958,8 @@ mod plan_tests {
     /// for `IconTooltypes`: it resolves against a media file exactly like a
     /// `File` rule, so a directory at `from` is refused by name rather than
     /// silently emitted as a `merge_icon` item nothing can actually merge.
-    fn plan_with_an_icon_rule_over_a_directory() -> InstallPlan {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-kind-icon-over-dir");
+    fn plan_with_an_icon_rule_over_a_directory() -> (crate::core::ScratchDir, InstallPlan) {
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("plan-kind-icon-over-dir");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         crate::core::osinstall::fixtures::media(&folder, "M", "m.adf", &[("C/inner", b"x", 0)]);
@@ -3989,12 +4003,12 @@ mod plan_tests {
             excluded: Vec::new(),
             scan_cache: Default::default(),
         };
-        plan(&request, &recipe).unwrap()
+        (_guard, plan(&request, &recipe).unwrap())
     }
 
     #[test]
     fn an_icon_rule_over_a_directory_is_a_kind_mismatch() {
-        let plan = plan_with_an_icon_rule_over_a_directory();
+        let (_guard, plan) = plan_with_an_icon_rule_over_a_directory();
         assert!(matches!(
             plan.refusals.as_slice(),
             [RefusalReason::RuleKindMismatch { component, from, expected, found }]
@@ -4011,7 +4025,7 @@ mod plan_tests {
     /// refused by name.
     #[test]
     fn a_subtree_rule_over_a_file_is_a_kind_mismatch() {
-        let plan = plan_with_a_subtree_rule_over_a_file();
+        let (_guard, plan) = plan_with_a_subtree_rule_over_a_file();
         assert!(matches!(
             plan.refusals.as_slice(),
             [RefusalReason::RuleKindMismatch { component, from, expected, found }]
@@ -4031,7 +4045,7 @@ mod plan_tests {
     /// still pass a test that chose both components explicitly.
     #[test]
     fn two_members_of_one_exclusive_group_both_resolved_on_is_a_conflict() {
-        let plan = plan_with_exclusive_group_conflict();
+        let (_guard, plan) = plan_with_exclusive_group_conflict();
         assert!(matches!(
             plan.refusals.as_slice(),
             [RefusalReason::ExclusiveGroupConflict { group, components }]
@@ -4133,8 +4147,8 @@ mod plan_tests {
     /// `switched_on` is placed by the media; `absent` is not. Which one the
     /// component asks for is the caller's, so one helper serves both the
     /// refusal and the acceptance.
-    fn plan_with_an_activation(tag: &str, ask_for: &str) -> InstallPlan {
-        let dir = crate::core::osinstall::fixtures::scratch(tag);
+    fn plan_with_an_activation(tag: &str, ask_for: &str) -> (crate::core::ScratchDir, InstallPlan) {
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch(tag);
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         crate::core::osinstall::fixtures::media(
@@ -4185,7 +4199,7 @@ mod plan_tests {
             excluded: Vec::new(),
             scan_cache: Default::default(),
         };
-        plan(&request, &recipe).unwrap()
+        (_guard, plan(&request, &recipe).unwrap())
     }
 
     /// **Through `plan()` itself**, not through the check in isolation.
@@ -4196,7 +4210,7 @@ mod plan_tests {
     /// is not a guard.
     #[test]
     fn plan_refuses_an_activation_whose_source_it_does_not_place() {
-        let plan = plan_with_an_activation("plan-activation-missing", "PAL");
+        let (_guard, plan) = plan_with_an_activation("plan-activation-missing", "PAL");
         assert!(
             plan.refusals.iter().any(|r| matches!(
                 r,
@@ -4216,7 +4230,7 @@ mod plan_tests {
     /// on `InstallPlan::activations`, and resolved to both its ends.
     #[test]
     fn plan_carries_an_activation_whose_source_it_places() {
-        let plan = plan_with_an_activation("plan-activation-ok", "NTSC");
+        let (_guard, plan) = plan_with_an_activation("plan-activation-ok", "NTSC");
         assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
         assert_eq!(plan.activations.len(), 1);
         let activation = &plan.activations[0];
@@ -4254,7 +4268,7 @@ mod plan_tests {
 
     #[test]
     fn a_declared_override_is_not_a_collision() {
-        let plan = plan_with(
+        let (_guard, plan) = plan_with(
             &["workbench-base", "extras"],
             &["Workbench3.2", "Extras3.2"],
         );
@@ -4266,7 +4280,7 @@ mod plan_tests {
 
     #[test]
     fn a_conditional_component_is_on_without_being_chosen() {
-        let plan = plan_with_rom(&["workbench-base"], 40);
+        let (_guard, plan) = plan_with_rom(&["workbench-base"], 40);
         assert!(plan.components_on.iter().any(|c| c == "modules-a1200"));
     }
 
@@ -4314,7 +4328,7 @@ mod plan_tests {
     fn an_unreadable_disk_is_a_refusal_and_excluding_it_still_plans() {
         use crate::core::iso::fixture::{dir, file, IsoBuilder};
 
-        let scratch = crate::core::osinstall::fixtures::scratch("plan-media-unreadable");
+        let (_guard, scratch) = crate::core::osinstall::fixtures::scratch("plan-media-unreadable");
         let folder = scratch.join("media");
         std::fs::create_dir(&folder).unwrap();
         let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
@@ -4439,7 +4453,7 @@ mod plan_tests {
     /// that refusal not apply at all, not merely reword it.
     #[test]
     fn excluding_a_condition_satisfied_component_with_no_media_present_is_not_a_refusal() {
-        let unexcluded = plan_with_rom(&["workbench-base"], 40);
+        let (_guard, unexcluded) = plan_with_rom(&["workbench-base"], 40);
         assert!(
             unexcluded.refusals.iter().any(|r| matches!(
                 r,
@@ -4450,7 +4464,7 @@ mod plan_tests {
             unexcluded.refusals
         );
 
-        let dir = crate::core::osinstall::fixtures::scratch("plan-excluded-no-media");
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("plan-excluded-no-media");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
@@ -4505,7 +4519,7 @@ mod plan_tests {
     #[test]
     fn excluding_a_component_wins_over_it_also_being_chosen() {
         let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
-        let dir = crate::core::osinstall::fixtures::scratch("plan-excluded-over-chosen");
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("plan-excluded-over-chosen");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         let wb = crate::core::osinstall::fixtures::entries_for(&recipe, "Workbench3.2");
@@ -4541,7 +4555,8 @@ mod plan_tests {
     #[test]
     fn required_cannot_be_excluded() {
         let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
-        let dir = crate::core::osinstall::fixtures::scratch("plan-required-not-excludable");
+        let (_guard, dir) =
+            crate::core::osinstall::fixtures::scratch("plan-required-not-excludable");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         let wb = crate::core::osinstall::fixtures::entries_for(&recipe, "Workbench3.2");
@@ -4589,7 +4604,7 @@ mod plan_tests {
     /// shown on the one path that runs on real hardware.
     #[test]
     fn the_modules_component_resolves_its_own_media_when_its_condition_is_on() {
-        let (plan, _dir) = crate::core::osinstall::fixtures::planned_with(
+        let (_guard, plan, _dir) = crate::core::osinstall::fixtures::planned_with(
             &["workbench-base"],
             &["Workbench3.2", "ModulesA1200_3.2"],
             Some(40),
@@ -4624,7 +4639,7 @@ mod plan_tests {
     /// version had and the same one this test was rewritten to escape.
     #[test]
     fn the_total_is_the_sum_of_what_will_actually_be_written() {
-        let plan = plan_with(&["workbench-base"], &["Workbench3.2"]);
+        let (_guard, plan) = plan_with(&["workbench-base"], &["Workbench3.2"]);
 
         // Every fixture file is `b"data"` — 4 bytes, from
         // `fixtures::entries_for` — so the total is grounded in the
@@ -4760,7 +4775,7 @@ mod plan_tests {
     /// itself.
     #[test]
     fn the_total_is_a_real_positive_number_not_just_self_consistent() {
-        let plan = plan_with(&["workbench-base"], &["Workbench3.2"]);
+        let (_guard, plan) = plan_with(&["workbench-base"], &["Workbench3.2"]);
         assert!(
             plan.total_bytes > 0,
             "workbench-base's media carries real bytes"
@@ -4776,7 +4791,7 @@ mod plan_tests {
     /// `CoreError` sentence `rom_facts` itself raises.
     #[test]
     fn a_rom_that_does_not_state_a_version_is_romunknown_not_a_core_error() {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-bad-rom");
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("plan-bad-rom");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         crate::core::osinstall::fixtures::workbench(&folder);
@@ -4813,7 +4828,7 @@ mod plan_tests {
     /// either file.
     #[test]
     fn two_files_claiming_one_volume_name_is_media_ambiguous_for_the_component_that_needs_it() {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-ambiguous");
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("plan-ambiguous");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
@@ -4883,10 +4898,11 @@ mod plan_tests {
     /// this helper is called from more than one test, several of which run
     /// in parallel threads of the same test binary (same pid) — `planned()`
     /// in `apply.rs` documents the exact race a shared tag causes here.
-    fn plan_with_user_startup_components() -> InstallPlan {
+    fn plan_with_user_startup_components() -> (crate::core::ScratchDir, InstallPlan) {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = crate::core::osinstall::fixtures::scratch(&format!("plan-user-startup-{n}"));
+        let (_guard, dir) =
+            crate::core::osinstall::fixtures::scratch(&format!("plan-user-startup-{n}"));
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         crate::core::osinstall::fixtures::media(&folder, "A", "a.adf", &[("x", b"one", 0)]);
@@ -4939,7 +4955,7 @@ mod plan_tests {
             excluded: Vec::new(),
             scan_cache: Default::default(),
         };
-        plan(&request, &recipe).unwrap()
+        (_guard, plan(&request, &recipe).unwrap())
     }
 
     /// The property `apply` (Task 7) actually leans on: a switched-on
@@ -4947,7 +4963,7 @@ mod plan_tests {
     /// plan, under its own id.
     #[test]
     fn a_component_with_user_startup_lines_is_carried_on_the_plan() {
-        let plan = plan_with_user_startup_components();
+        let (_guard, plan) = plan_with_user_startup_components();
         let contribution = plan
             .user_startup
             .iter()
@@ -4963,7 +4979,7 @@ mod plan_tests {
     /// only checked `alpha`'s presence.
     #[test]
     fn a_switched_on_component_with_no_lines_contributes_nothing() {
-        let plan = plan_with_user_startup_components();
+        let (_guard, plan) = plan_with_user_startup_components();
         assert!(plan.components_on.iter().any(|id| id == "gamma"));
         assert!(!plan.user_startup.iter().any(|c| c.component == "gamma"));
     }
@@ -4976,7 +4992,7 @@ mod plan_tests {
     /// pass if `user_startup` tracks the recipe, not the request.
     #[test]
     fn user_startup_is_carried_in_recipe_order_not_request_order() {
-        let plan = plan_with_user_startup_components();
+        let (_guard, plan) = plan_with_user_startup_components();
         let ids: Vec<&str> = plan
             .user_startup
             .iter()
@@ -4992,7 +5008,7 @@ mod plan_tests {
     /// or dropped.
     #[test]
     fn the_shipped_recipe_contributes_no_user_startup_lines_yet() {
-        let plan = plan_with(&["workbench-base"], &["Workbench3.2"]);
+        let (_guard, plan) = plan_with(&["workbench-base"], &["Workbench3.2"]);
         assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
         assert!(plan.user_startup.is_empty());
     }
@@ -5005,7 +5021,7 @@ mod plan_tests {
     /// needs no re-planning and no media.
     #[test]
     fn the_plan_records_the_rom_it_was_planned_against() {
-        let (plan, dir) = crate::core::osinstall::fixtures::planned_with(
+        let (_guard, plan, dir) = crate::core::osinstall::fixtures::planned_with(
             &["workbench-base"],
             &["Workbench3.2"],
             Some(47),
@@ -5035,7 +5051,7 @@ mod plan_tests {
     /// nothing — `requires_major` is `None` for the opposite reason.
     #[test]
     fn a_tree_built_for_a_pre_v47_rom_requires_nothing_of_the_card() {
-        let (plan, dir) = crate::core::osinstall::fixtures::planned_with(
+        let (_guard, plan, dir) = crate::core::osinstall::fixtures::planned_with(
             &["workbench-base"],
             &["Workbench3.2", "ModulesA1200_3.2"],
             Some(40),
@@ -5053,7 +5069,7 @@ mod plan_tests {
     /// component is *not* on states what a future ROM has to be.
     #[test]
     fn a_tree_planned_on_v47_without_modules_requires_v47() {
-        let (plan, dir) = crate::core::osinstall::fixtures::planned_with(
+        let (_guard, plan, dir) = crate::core::osinstall::fixtures::planned_with(
             &["workbench-base"],
             &["Workbench3.2", "ModulesA1200_3.2"],
             Some(47),
@@ -5070,7 +5086,7 @@ mod plan_tests {
     /// refused the whole install with "does not state a Kickstart version".
     #[test]
     fn a_licensed_rom_with_its_key_beside_it_states_its_version() {
-        let dir = crate::core::osinstall::fixtures::scratch("rom-facts-cloanto");
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("rom-facts-cloanto");
         let key = b"a key".to_vec();
         std::fs::write(dir.join("rom.key"), &key).unwrap();
 
@@ -5102,16 +5118,16 @@ mod plan_tests {
     /// two separate directories — which is the point: the owner keeps discs
     /// in one folder and archives in another, so a fixture that put them in
     /// one place would be testing a folder layout nobody has.
-    fn package_dirs(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+    fn package_dirs(tag: &str) -> (crate::core::ScratchDir, PathBuf, PathBuf, PathBuf) {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = fixtures::scratch(&format!("plan-packages-{tag}-{n}"));
+        let (_guard, dir) = fixtures::scratch(&format!("plan-packages-{tag}-{n}"));
         let media = dir.join("media");
         let packages = dir.join("packages");
         std::fs::create_dir(&media).unwrap();
         std::fs::create_dir(&packages).unwrap();
         fixtures::package_test_media(&media);
-        (dir, media, packages)
+        (_guard, dir, media, packages)
     }
 
     fn package_request(
@@ -5197,7 +5213,7 @@ mod plan_tests {
 
     #[test]
     fn a_chosen_package_is_planned_after_the_releases_own_components() {
-        let (dir, media, packages) = package_dirs("after");
+        let (_guard, dir, media, packages) = package_dirs("after");
         fixtures::package_test_archive(&packages, "pack.zip");
 
         let request = package_request(&dir, &media, Some(&packages), &["test-package"]);
@@ -5245,7 +5261,7 @@ mod plan_tests {
 
     #[test]
     fn packages_are_planned_in_dependency_order_not_the_order_they_were_chosen() {
-        let (dir, media, packages) = package_dirs("order");
+        let (_guard, dir, media, packages) = package_dirs("order");
         extra_archive(&packages, "PackA", "a.zip");
         extra_archive(&packages, "PackB", "b.zip");
         let catalogue = vec![
@@ -5277,7 +5293,7 @@ mod plan_tests {
 
     #[test]
     fn packages_named_with_no_package_folder_are_refused_saying_which() {
-        let (dir, media, _packages) = package_dirs("no-folder");
+        let (_guard, dir, media, _packages) = package_dirs("no-folder");
 
         let request = package_request(&dir, &media, None, &["test-package"]);
         let plan = plan_over(
@@ -5299,7 +5315,7 @@ mod plan_tests {
     /// silent about a folder nobody needed.
     #[test]
     fn no_packages_and_no_folder_is_not_a_refusal() {
-        let (dir, media, _packages) = package_dirs("none");
+        let (_guard, dir, media, _packages) = package_dirs("none");
 
         let request = package_request(&dir, &media, None, &[]);
         let plan = plan_over(&request, &fixtures::package_test_recipe(), &[]).unwrap();
@@ -5311,7 +5327,7 @@ mod plan_tests {
 
     #[test]
     fn a_package_whose_archive_is_not_in_the_folder_is_refused_by_name() {
-        let (dir, media, packages) = package_dirs("missing");
+        let (_guard, dir, media, packages) = package_dirs("missing");
         // The folder exists and holds nothing this package answers to.
 
         let request = package_request(&dir, &media, Some(&packages), &["test-package"]);
@@ -5336,7 +5352,7 @@ mod plan_tests {
     /// resolved by whichever sorted first.
     #[test]
     fn two_archives_claiming_one_package_name_are_ambiguous_not_a_guess() {
-        let (dir, media, packages) = package_dirs("ambiguous");
+        let (_guard, dir, media, packages) = package_dirs("ambiguous");
         fixtures::package_test_archive(&packages, "pack.zip");
         fixtures::package_test_archive(&packages, "pack-copy.zip");
 
@@ -5367,7 +5383,7 @@ mod plan_tests {
     /// every problem at once cannot show one that was raised as an error.
     #[test]
     fn a_requirement_that_was_not_chosen_reaches_refusals_not_a_hard_error() {
-        let (dir, media, packages) = package_dirs("requires");
+        let (_guard, dir, media, packages) = package_dirs("requires");
         extra_archive(&packages, "PackB", "b.zip");
         let catalogue = vec![
             extra_package("pack-a", "PackA", &[]),
@@ -5397,7 +5413,7 @@ mod plan_tests {
     /// name.
     #[test]
     fn a_package_needing_a_component_that_is_off_is_refused_by_name() {
-        let (dir, media, packages) = package_dirs("needs-component");
+        let (_guard, dir, media, packages) = package_dirs("needs-component");
         fixtures::package_test_archive(&packages, "pack.zip");
 
         let mut package = fixtures::package_test_package();
@@ -5429,7 +5445,7 @@ mod plan_tests {
     fn a_package_that_cannot_be_placed_from_the_host_is_refused_by_type() {
         use super::super::HostPlacementBlock;
 
-        let (dir, media, packages) = package_dirs("host-blocked");
+        let (_guard, dir, media, packages) = package_dirs("host-blocked");
         fixtures::package_test_archive(&packages, "pack.zip");
 
         let mut package = fixtures::package_test_package();
@@ -5454,7 +5470,7 @@ mod plan_tests {
     /// refusal above is about the block and not about the fixture.
     #[test]
     fn the_same_package_without_a_block_plans_cleanly() {
-        let (dir, media, packages) = package_dirs("host-unblocked");
+        let (_guard, dir, media, packages) = package_dirs("host-unblocked");
         fixtures::package_test_archive(&packages, "pack.zip");
 
         let package = fixtures::package_test_package();
@@ -5478,7 +5494,7 @@ mod plan_tests {
     /// not about the declaration itself.
     #[test]
     fn a_package_needing_a_component_that_is_on_plans_cleanly() {
-        let (dir, media, packages) = package_dirs("has-component");
+        let (_guard, dir, media, packages) = package_dirs("has-component");
         fixtures::package_test_archive(&packages, "pack.zip");
 
         let mut package = fixtures::package_test_package();
@@ -5492,7 +5508,7 @@ mod plan_tests {
 
     #[test]
     fn an_unknown_package_id_is_refused_rather_than_skipped() {
-        let (dir, media, packages) = package_dirs("unknown");
+        let (_guard, dir, media, packages) = package_dirs("unknown");
 
         let request = package_request(&dir, &media, Some(&packages), &["no-such-package"]);
         let plan = plan_over(&request, &fixtures::package_test_recipe(), &[]).unwrap();
@@ -5508,7 +5524,7 @@ mod plan_tests {
     /// which is not in the recipe at all.
     #[test]
     fn a_package_overwriting_a_base_file_without_declaring_it_is_a_collision() {
-        let (dir, media, packages) = package_dirs("undeclared");
+        let (_guard, dir, media, packages) = package_dirs("undeclared");
         fixtures::package_test_archive(&packages, "pack.zip");
 
         let mut package = fixtures::package_test_package();
@@ -5532,7 +5548,7 @@ mod plan_tests {
     /// declaration mean something rather than being decoration.
     #[test]
     fn a_declared_package_override_is_not_a_collision() {
-        let (dir, media, packages) = package_dirs("declared");
+        let (_guard, dir, media, packages) = package_dirs("declared");
         fixtures::package_test_archive(&packages, "pack.zip");
 
         let request = package_request(&dir, &media, Some(&packages), &["test-package"]);
@@ -5591,7 +5607,7 @@ mod plan_tests {
 
     #[test]
     fn two_layers_on_one_folder_refuse_by_naming_the_fields() {
-        let dir = fixtures::scratch("plan-same-folder");
+        let (_guard, dir) = fixtures::scratch("plan-same-folder");
         let one = dir.join("everything");
         std::fs::create_dir_all(&one).unwrap();
         fixtures::media(&one, "DiskDoctor", "dd.adf", &[("C/DiskDoctor", b"x", 0)]);
@@ -5629,7 +5645,8 @@ mod plan_tests {
     /// closes it; this pins the unlayered arm.
     #[test]
     fn an_unlayered_plan_naming_one_folder_twice_still_plans() {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-unlayered-duplicate-folder");
+        let (_guard, dir) =
+            crate::core::osinstall::fixtures::scratch("plan-unlayered-duplicate-folder");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
@@ -5671,7 +5688,7 @@ mod plan_tests {
     /// `layers` must be empty, matching how an older manifest reads back.
     #[test]
     fn an_unlayered_plan_reports_no_layers_at_all() {
-        let plan = plan_with(&["workbench-base"], &["Workbench3.2"]);
+        let (_guard, plan) = plan_with(&["workbench-base"], &["Workbench3.2"]);
         assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
         assert!(
             plan.layers.is_empty(),
@@ -5745,7 +5762,7 @@ mod plan_tests {
     /// `overrides` entry fails this test (ART-238's own missing guard).
     #[test]
     fn the_shipped_322_recipe_plans_against_a_pre_47_rom_without_an_exclusive_group_refusal() {
-        let dir = crate::core::osinstall::fixtures::scratch("plan-322-pre47-rom");
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("plan-322-pre47-rom");
         let rom = fake_pre_47_rom_with_old_exec(&dir);
         let recipe = crate::core::osinstall::recipe::by_release("AmigaOS 3.2.2")
             .expect("the shipped 3.2.2 recipe must load");

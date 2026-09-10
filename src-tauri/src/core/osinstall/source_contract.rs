@@ -99,12 +99,12 @@ const EMPTY_DIR: &str = "Empty";
 const MISSING: &str = "Libs/Nothing";
 
 /// A blank ADF carrying the shared tree.
-fn floppy(tag: &str) -> Box<dyn MediaSource> {
+fn floppy(tag: &str) -> (crate::core::ScratchDir, Box<dyn MediaSource>) {
     use crate::core::volume::device::FileRegionMut;
     use crate::core::volume::write::VolumeWriter;
     use crate::core::volume::{DosType, VolumeGeometry};
 
-    let dir = super::fixtures::scratch(&format!("contract-adf-{tag}"));
+    let (_guard, dir) = super::fixtures::scratch(&format!("contract-adf-{tag}"));
     let image = super::fixtures::media(
         &dir,
         "Workbench3.2",
@@ -122,14 +122,14 @@ fn floppy(tag: &str) -> Box<dyn MediaSource> {
         writer.make_dir(0, EMPTY_DIR).unwrap();
     }
 
-    Box::new(AdfSource::open(&image).unwrap())
+    (_guard, Box::new(AdfSource::open(&image).unwrap()))
 }
 
 /// A Joliet ISO9660 disc carrying the same tree.
-fn disc(tag: &str) -> Box<dyn MediaSource> {
+fn disc(tag: &str) -> (crate::core::ScratchDir, Box<dyn MediaSource>) {
     use crate::core::iso::fixture::{dir as iso_dir, file as iso_file, IsoBuilder};
 
-    let scratch = super::fixtures::scratch(&format!("contract-iso-{tag}"));
+    let (_guard, scratch) = super::fixtures::scratch(&format!("contract-iso-{tag}"));
     let bytes = IsoBuilder {
         volume: "WORKBENCH32".to_string(),
         joliet_volume: "Workbench3.2".to_string(),
@@ -148,7 +148,7 @@ fn disc(tag: &str) -> Box<dyn MediaSource> {
     let path = scratch.join("wb.iso");
     std::fs::write(&path, bytes).unwrap();
 
-    Box::new(CdSource::open(&path).unwrap())
+    (_guard, Box::new(CdSource::open(&path).unwrap()))
 }
 
 /// The shared tree as a package archive's entry list — one file under a
@@ -165,17 +165,21 @@ const ARCHIVE_ENTRIES: &[(&str, &[u8])] = &[
 /// One `ArchiveSource` over `bytes`, written to a scratch file named
 /// `file_name`. `core::archive::open` decides the format from the file's own
 /// bytes, so the extension here is documentation rather than dispatch.
-fn archive_source(tag: &str, file_name: &str, bytes: Vec<u8>) -> Box<dyn MediaSource> {
-    let scratch = super::fixtures::scratch(&format!("contract-{tag}"));
+fn archive_source(
+    tag: &str,
+    file_name: &str,
+    bytes: Vec<u8>,
+) -> (crate::core::ScratchDir, Box<dyn MediaSource>) {
+    let (_guard, scratch) = super::fixtures::scratch(&format!("contract-{tag}"));
     let path = scratch.join(file_name);
     std::fs::write(&path, bytes).unwrap();
-    Box::new(ArchiveSource::open(&path).unwrap())
+    (_guard, Box::new(ArchiveSource::open(&path).unwrap()))
 }
 
 /// A ZIP package archive carrying the shared tree under a single top-level
 /// directory — the volume name an `ArchiveSource` states about itself, and
 /// the shape a real catalog pack has.
-fn zip_archive(tag: &str) -> Box<dyn MediaSource> {
+fn zip_archive(tag: &str) -> (crate::core::ScratchDir, Box<dyn MediaSource>) {
     archive_source(
         &format!("archive-zip-{tag}"),
         "package.zip",
@@ -194,7 +198,7 @@ fn zip_archive(tag: &str) -> Box<dyn MediaSource> {
 /// suite and was found only by a real run against the owner's own
 /// `BoingBag39-2-turkce.lha`. A fixture whose *format* is more helpful than
 /// reality hides exactly as much as one whose contents are.
-fn lha_archive(tag: &str) -> Box<dyn MediaSource> {
+fn lha_archive(tag: &str) -> (crate::core::ScratchDir, Box<dyn MediaSource>) {
     archive_source(
         &format!("archive-lha-{tag}"),
         "package.lha",
@@ -206,7 +210,7 @@ fn lha_archive(tag: &str) -> Box<dyn MediaSource> {
 /// dispatches to, and the third `ArchiveSource` claims in its own module doc
 /// ("LHA, ZIP or 7z"). Reachable the same way the other two are, so it is
 /// asked the same questions rather than left as a claim.
-fn sevenz_archive(tag: &str) -> Box<dyn MediaSource> {
+fn sevenz_archive(tag: &str) -> (crate::core::ScratchDir, Box<dyn MediaSource>) {
     archive_source(
         &format!("archive-7z-{tag}"),
         "package.7z",
@@ -221,13 +225,23 @@ fn sevenz_archive(tag: &str) -> Box<dyn MediaSource> {
 /// implementation of the trait, but three different readers underneath it,
 /// and the contract's whole premise is that a caller written against the
 /// trait cannot tell its backings apart.
-fn sources(tag: &str) -> Vec<(&'static str, Box<dyn MediaSource>)> {
+fn sources(tag: &str) -> Vec<(&'static str, Box<dyn MediaSource>, crate::core::ScratchDir)> {
+    // Each entry carries the guard over the scratch directory its medium was
+    // written into (ART-281): the file has to outlive the source reading it,
+    // and the guard dropping with the loop's own iteration is exactly that.
+    let (adf, adf_source) = floppy(tag);
+    let (iso, iso_source) = disc(tag);
+    let (zip, zip_source) = zip_archive(tag);
+    let (lha, lha_source) = lha_archive(tag);
+    let (sevenz, sevenz_source) = sevenz_archive(tag);
+    let (cached_adf, cached_adf_source) = floppy(tag);
+    let (cached_iso, cached_iso_source) = disc(tag);
     vec![
-        ("AdfSource", floppy(tag)),
-        ("CdSource", disc(tag)),
-        ("ArchiveSource/zip", zip_archive(tag)),
-        ("ArchiveSource/lha", lha_archive(tag)),
-        ("ArchiveSource/7z", sevenz_archive(tag)),
+        ("AdfSource", adf_source, adf),
+        ("CdSource", iso_source, iso),
+        ("ArchiveSource/zip", zip_source, zip),
+        ("ArchiveSource/lha", lha_source, lha),
+        ("ArchiveSource/7z", sevenz_source, sevenz),
         // ART-194. `CachedSource` answers `entry` and `walk` out of a stored
         // listing rather than off the medium, which makes it a **sixth**
         // implementation of these three answers — and the most dangerous one
@@ -235,8 +249,16 @@ fn sources(tag: &str) -> Vec<(&'static str, Box<dyn MediaSource>)> {
         // second preview of a disc, after the first one looked right. Two of
         // them, over the two backings whose listings differ most: a real
         // AmigaDOS volume and a Joliet-pressed ISO.
-        ("CachedSource/adf", cached(floppy(tag), MediaKind::Floppy)),
-        ("CachedSource/disc", cached(disc(tag), MediaKind::Disc)),
+        (
+            "CachedSource/adf",
+            cached(cached_adf_source, MediaKind::Floppy),
+            cached_adf,
+        ),
+        (
+            "CachedSource/disc",
+            cached(cached_iso_source, MediaKind::Disc),
+            cached_iso,
+        ),
     ]
 }
 
@@ -260,7 +282,7 @@ fn cached(mut source: Box<dyn MediaSource>, kind: MediaKind) -> Box<dyn MediaSou
 
 #[test]
 fn every_source_answers_an_empty_path_with_its_own_root() {
-    for (name, mut source) in sources("root-entry") {
+    for (name, mut source, _guard) in sources("root-entry") {
         let entry = source
             .entry("")
             .unwrap_or_else(|e| panic!("{name}: {e}"))
@@ -272,7 +294,7 @@ fn every_source_answers_an_empty_path_with_its_own_root() {
 
 #[test]
 fn every_source_answers_a_drawer_with_a_directory_entry() {
-    for (name, mut source) in sources("dir-entry") {
+    for (name, mut source, _guard) in sources("dir-entry") {
         let entry = source
             .entry(DIR_PATH)
             .unwrap_or_else(|e| panic!("{name}: {e}"))
@@ -284,7 +306,7 @@ fn every_source_answers_a_drawer_with_a_directory_entry() {
 
 #[test]
 fn every_source_walks_a_drawer_as_what_is_under_it() {
-    for (name, mut source) in sources("dir-walk") {
+    for (name, mut source, _guard) in sources("dir-walk") {
         let walked = source
             .walk(DIR_PATH)
             .unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -295,7 +317,7 @@ fn every_source_walks_a_drawer_as_what_is_under_it() {
 
 #[test]
 fn every_source_answers_a_missing_path_with_none_rather_than_an_error() {
-    for (name, mut source) in sources("missing-entry") {
+    for (name, mut source, _guard) in sources("missing-entry") {
         assert!(
             source
                 .entry(MISSING)
@@ -311,7 +333,7 @@ fn every_source_answers_a_missing_path_with_none_rather_than_an_error() {
 /// second divergence: `CdSource` matched only the exact byte case.
 #[test]
 fn every_source_resolves_a_path_case_insensitively() {
-    for (name, mut source) in sources("case") {
+    for (name, mut source, _guard) in sources("case") {
         assert!(
             source
                 .entry("c/loadmodule")
@@ -343,7 +365,7 @@ fn every_source_resolves_a_path_case_insensitively() {
 /// answer.
 #[test]
 fn every_source_answers_with_the_medias_own_casing_never_the_callers() {
-    for (name, mut source) in sources("case-answer") {
+    for (name, mut source, _guard) in sources("case-answer") {
         let entry = source
             .entry("c/loadmodule")
             .unwrap_or_else(|e| panic!("{name}: {e}"))
@@ -378,7 +400,7 @@ fn every_source_answers_with_the_medias_own_casing_never_the_callers() {
 /// answers every question.
 #[test]
 fn every_source_walks_a_drawer_the_same_whatever_case_it_is_asked_in() {
-    for (name, mut source) in sources("case-walk") {
+    for (name, mut source, _guard) in sources("case-walk") {
         let asked = source.walk("c").unwrap_or_else(|e| panic!("{name}: {e}"));
         let paths: Vec<&str> = asked.iter().map(|e| e.path.as_str()).collect();
         assert_eq!(paths, vec![FILE_PATH], "{name}");
@@ -387,7 +409,7 @@ fn every_source_walks_a_drawer_the_same_whatever_case_it_is_asked_in() {
 
 #[test]
 fn every_source_walks_the_whole_media_for_an_empty_path() {
-    for (name, mut source) in sources("root-walk") {
+    for (name, mut source, _guard) in sources("root-walk") {
         let walked = source.walk("").unwrap_or_else(|e| panic!("{name}: {e}"));
         let paths: Vec<&str> = walked.iter().map(|e| e.path.as_str()).collect();
         assert!(paths.contains(&FILE_PATH), "{name}: {paths:?}");
@@ -397,7 +419,7 @@ fn every_source_walks_the_whole_media_for_an_empty_path() {
 
 #[test]
 fn every_source_walks_a_missing_path_as_empty_rather_than_an_error() {
-    for (name, mut source) in sources("missing-walk") {
+    for (name, mut source, _guard) in sources("missing-walk") {
         assert!(
             source
                 .walk(MISSING)
@@ -413,7 +435,7 @@ fn every_source_walks_a_missing_path_as_empty_rather_than_an_error() {
 /// stated in the trait doc rather than left to be discovered.
 #[test]
 fn every_source_walks_an_empty_drawer_as_empty_rather_than_an_error() {
-    for (name, mut source) in sources("empty-walk") {
+    for (name, mut source, _guard) in sources("empty-walk") {
         let walked = source
             .walk(EMPTY_DIR)
             .unwrap_or_else(|e| panic!("{name}: an empty drawer is not an error: {e}"));
@@ -426,7 +448,7 @@ fn every_source_walks_an_empty_drawer_as_empty_rather_than_an_error() {
 /// never an empty answer indistinguishable from an empty drawer.
 #[test]
 fn every_source_refuses_to_walk_a_path_that_names_a_file() {
-    for (name, mut source) in sources("file-walk") {
+    for (name, mut source, _guard) in sources("file-walk") {
         let err = source
             .walk(FILE_PATH)
             .expect_err(&format!("{name}: walking a file must be refused"));
@@ -444,7 +466,7 @@ fn every_source_refuses_to_walk_a_path_that_names_a_file() {
 
 #[test]
 fn every_source_refuses_to_read_the_root() {
-    for (name, mut source) in sources("root-read") {
+    for (name, mut source, _guard) in sources("root-read") {
         let err = source
             .read("")
             .expect_err(&format!("{name}: the root is not a file"));
@@ -462,7 +484,7 @@ fn every_source_refuses_to_read_the_root() {
 
 #[test]
 fn every_source_refuses_to_read_a_missing_path() {
-    for (name, mut source) in sources("missing-read") {
+    for (name, mut source, _guard) in sources("missing-read") {
         let err = source
             .read(MISSING)
             .expect_err(&format!("{name}: a missing file is not readable"));
@@ -473,7 +495,7 @@ fn every_source_refuses_to_read_a_missing_path() {
 
 #[test]
 fn every_source_reads_a_files_bytes() {
-    for (name, mut source) in sources("read") {
+    for (name, mut source, _guard) in sources("read") {
         assert_eq!(
             source
                 .read(FILE_PATH)
