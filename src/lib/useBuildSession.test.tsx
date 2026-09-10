@@ -389,11 +389,7 @@ describe("a folder taken out of the material list is out of the build (F10)", ()
   /// removed folder — cannot come back through this, because the run takes a
   /// whole file path and `add_package` takes the folder the file was found
   /// in.
-  // ART-291: a folder an older ART wrote here steers only while the list still
-  // holds it. Take it out of the list and the list's own answer takes over —
-  // and the stored key is **not** rewritten: the fix gates the read and never
-  // restores a write, because nothing writes this key any more (spec § 5).
-  it("stops steering from a folder seeded by an older ART once the list stops holding it", async () => {
+  it("keeps a folder seeded from an older ART even after the list stops holding it", async () => {
     seed({
       "buildSession.material.AmigaOS 3.2": {
         folders: [
@@ -409,29 +405,12 @@ describe("a folder taken out of the material list is out of the build (F10)", ()
     await userEvent.click(screen.getByText("remove archives"));
 
     expect(screen.getByTestId("material").textContent).toBe("E:\\disks");
-    expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\disks");
+    expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\archives");
     const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
     expect(bag["buildSession.packages.AmigaOS 3.2"]).toEqual({
       folder: "E:\\archives",
       chosen: [],
     });
-  });
-
-  // The list holds a folder however it is spelled: `canonicalFolder` is the
-  // one rule for "the same folder" in this lane, and a second, stricter one
-  // here would drop a seed the list plainly still carries.
-  it("keeps a seeded folder the list holds under another spelling", () => {
-    seed({
-      "buildSession.material.AmigaOS 3.2": {
-        folders: [
-          { path: "E:\\disks", layer: null },
-          { path: "E:\\Archives\\", layer: null },
-        ],
-      },
-      "buildSession.packages.AmigaOS 3.2": { folder: "e:/archives", chosen: [] },
-    });
-    render(<MaterialProbe />);
-    expect(screen.getByTestId("packagesFolder").textContent).toBe("e:/archives");
   });
 
   /// The other half, and the one that decides *where* the fix goes. When

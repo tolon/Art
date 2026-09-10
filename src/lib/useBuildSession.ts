@@ -32,7 +32,6 @@ import {
   ROM_SPEC,
   SESSION_KEYS,
   TREE_SPEC,
-  canonicalFolder,
   firstUntaggedFolder,
   isBuildKind,
   seedCardImage,
@@ -305,22 +304,9 @@ export function useBuildSession(): BuildSessionApi {
   // `AmigaInstallPanel`'s dialogs open on and which folder its catalogue is
   // asked about — both of which the panel overrides with the folder the user
   // picked this session, and neither of which resolves a file.
-  //
-  // **Only while the list still holds it** (ART-291). A seed the user has
-  // taken out of the material list stops steering, and the list's own answer
-  // takes over. The key is not rewritten: the read is gated, and no write
-  // comes back — nothing writes this key any more, and a gate on a read is
-  // the one fix that keeps it that way. "Holds" is `canonicalFolder`'s rule,
-  // the one this lane already uses for "the same folder".
-  const seeded = packagesShape.folder;
-  const heldSeed =
-    seeded != null &&
-    material.folders.some((entry) => canonicalFolder(entry.path) === canonicalFolder(seeded))
-      ? seeded
-      : null;
   const packages = useMemo<PackageChoice>(
-    () => ({ folder: heldSeed ?? derivedFolder, chosen: packagesShape.chosen }),
-    [derivedFolder, heldSeed, packagesShape.chosen]
+    () => ({ folder: packagesShape.folder ?? derivedFolder, chosen: packagesShape.chosen }),
+    [derivedFolder, packagesShape.folder, packagesShape.chosen]
   );
 
   const session = useMemo<BuildSession>(
