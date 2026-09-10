@@ -166,12 +166,34 @@ Tests use **synthetic, legally-clean fixtures** generated in a scratch
 directory during the test run. ART never distributes copyrighted commercial
 content.
 
-Three rules about that scratch, each of them paid for once:
+Six rules about that scratch, each of them paid for once:
 
 - **Take a `core::ScratchDir`; it removes itself on `Drop`.** A trailing
   `remove_dir_all` is skipped exactly when a test panics, which is when a red
   suite leaks most — 169 291 directories and ~987 GB into `%TEMP%` in one
   session, filling a 2 TB system drive ([ART-184](ISSUES.md#fixed)).
+- **The shape is `ScratchDir::pair`.** A module's local helper is one line —
+  `fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+  crate::core::ScratchDir::pair("art-<module>", tag) }` — and a call site is
+  `let (_guard, dir) = scratch("x")`, which leaves `dir` the plain `PathBuf`
+  the body already used. `_guard`, **never `_`**: a bare `_` drops at once and
+  is the leak back in one character. Product code that takes a scratch root
+  gets that `dir`, never `&std::env::temp_dir()` — its staging lands under
+  whatever root it is given, and no sweeper runs in a test. A trailing
+  `let _ = remove_dir_all(&dir)` next to a guard is now **redundant**; it goes
+  when the file is next touched, not in a churn pass of its own
+  ([ART-281](ISSUES.md#fixed)).
+- **A guard must outlive every handle inside its directory, and the two
+  containers order the opposite way.** Bindings drop right-to-left, so a guard
+  returned in a **tuple goes first** (`(ScratchDir, FileRegion)` — otherwise
+  the directory is removed while the region is still open). Struct fields drop
+  in **declaration order**, so a `_guard: ScratchDir` **field goes last**.
+  Both were caught in review during ART-281, one each way round.
+- **`scripts/scratch-guard-sweep.py` keeps all three shapes from coming back**
+  — a `fn scratch(` returning a bare path, a `scratch(` call bound without its
+  guard (`let (_, ` included), and a test that builds a scratch path by hand
+  (`temp_dir().join(…)`) or hands `&std::env::temp_dir()` to product code as
+  its root. It is blocking in CI beside `scratch-root-sweep.py`.
 - **The name must be unique within the process, not just per run.** Cargo runs
   the whole suite in one process, so the pid is shared and `as_nanos()` alone
   can repeat; use a process-wide counter, or the thread id where the test is
@@ -327,6 +349,7 @@ python scripts/oracle-check.py         # amitools oracle, both directions
 python scripts/rom-table-check.py      # the Kickstart table against amitools' Remus data
 python scripts/control-byte-sweep.py   # no stray control bytes in tracked text (ART-216)
 python scripts/scratch-root-sweep.py   # every staging site goes through the scratch root (ART-196)
+python scripts/scratch-guard-sweep.py  # every test scratch hands out its guard (ART-281)
 python scripts/contrast-check.py --quiet    # every colour pair, both themes, against WCAG
 cargo deny check                       # licence + advisory audit
 pnpm tauri build                       # full production build

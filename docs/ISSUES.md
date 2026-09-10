@@ -49,39 +49,40 @@ name no shipped recipe names is not an install disk: say *"11 install media foun
 in these folders are not install media ART knows and were left closed"*, with the names behind a
 disclosure, not in the headline.
 
-**ART-281** 🔴 **The unit suite's scratch directories are never removed:
-`D:\tmp\art-tests` holds 263 484 directories and 764 GB** — *found 2026-09-08
-during round 3 task 3, on `art-osbuilder-intake`*
-`src-tauri/.cargo/config.toml` · every `ScratchDir`/`scratch()` fixture
+**ART-293** 🔵 **A whole suite run still leaves one 794-byte scan-cache file
+under the scratch root** — *found 2026-09-10 while measuring
+[ART-281](#fixed)'s fixed arm*
+`src-tauri/src/commands/osinstall.rs::osinstall_plan` ·
+`src-tauri/src/core/osinstall/scan_cache.rs` · `src-tauri/src/scratch.rs`
 
-**This is [ART-184](#open) still running, three weeks on, at the place it was
-moved to rather than fixed.** That entry moved `TMP` off the system drive after
-a day of suite runs put 169 291 directories (~987 GB) in
-`C:\Users\…\AppData\Local\Temp` and filled a 2 TB disk; its own note says so
-plainly — *"pointing `TMP` at the project disk does not fix that."* The counts
-below are what "does not fix that" looks like now.
+`commands::osinstall::tests::planning_against_a_real_folder_returns_the_plan`
+calls `osinstall_plan`, a `#[tauri::command]` whose `InstallRequest` carries
+**no scratch root**: it resolves its own with `crate::scratch::root()`, which
+returns `std::env::temp_dir()` while nothing has been chosen
+(`src/scratch.rs`), and `ScanCache::in_dir` then writes
+`art-osinstall-scan-<hash>.json` there. No test argument reaches that
+decision, so ART-281's rewrite could not reach it either — this is a third
+shape beside the two that round converted: **the product picks the root
+itself**. The same default reaches `gather_facts`, `remembered_hashes_in` and
+`osinstall_rescan_media`.
 
-Measured on 2026-09-08 (read-only; **nothing was deleted**):
+**It accumulates rather than being overwritten.** Two whole-suite runs on
+2026-09-10 left two *different* names — `art-osinstall-scan-24d0d20618102d7e.json`
+and `art-osinstall-scan-b2937e2874e0432f.json`, 794 bytes each. The hash keys
+on the archive path, which carries the run's own scratch id, so every run is a
+new name. Thirty-five such files stood under `D:\tmp\art-tests` when this was
+filed. It is 🔵 and not 🟡 because the pile is **bounded**: `ScanCache::sweep`
+removes cache files older than 30 days and runs on this very path, so the
+steady state is a month of suite runs — about 25 KB — not the 764 GB ART-281
+measured.
 
-| | |
-|---|---|
-| directories under `D:\tmp\art-tests` | **263 484** |
-| bytes | **764 GB** |
-| oldest | 2026-08-20 — the day ART-184 was filed |
-| created today alone | **28 568** |
-| top prefixes | `art-osinstall-apply-planned` 13 202 · `art-osinstall-planned-with` 9 373 · `art-preload-native-pds` 8 995 |
-
-The shape is the one ART-184 named: a test scratch name is unique **per run**
-(process id plus a counter — `scratch-counter-sweep.py` exists to keep it
-unique *within* a process), so nothing ever collides with a previous run's
-directory and nothing sweeps them. `core::ScratchDir` removes itself on `Drop`
-and the ones that do are fine; what accumulates are the fixtures that build a
-path by hand and the ones whose `Drop` never runs.
-
-`core/osinstall`'s **production** code sweeps its own scratch after an hour.
-The test fixtures have no such sweep, and that asymmetry is the whole defect.
-
-**The cause, measured the same day** (`.superpowers/sdd/2026-09-08-intake/scratch-leak-investigation.md`, local-only; the numbers are re-runnable): `core::ScratchDir` — the `Drop`-removed scratch ART-184 was written for — is used by **6** of the ~69 files that create a test scratch; the other **63** carry a local `fn scratch(tag) -> PathBuf` that creates the directory and returns a bare path nothing ever removes (`osinstall::fixtures::scratch` is the biggest, its own doc calling the pattern "the repository's own convention"; `core/preload/*`, `core/artwork/*`, `core/archive/*`, `core/layout/*`, `core/volume/**`, `commands/*` likewise) — ~773 call sites. The controlled experiment: one test through `fixtures::scratch` left the directory count **+1** permanently (263 484 → 263 485); one through `ScratchDir` left it **unchanged** (263 485 → 263 485). So this is ART-184's defect copied into sixty-three files after its fix existed, not a `Drop` that fails. **Fix:** every `scratch()` helper returns a `ScratchDir` (a mechanical conversion, its own round — the tests that keep the path past the helper's scope must hold the guard), and a `Drop` whose `remove_dir_all` fails must say so on stderr rather than swallow it; `scratch-counter-sweep.py` gains a sibling that fails on any `fn scratch(` returning a bare `PathBuf`. Everything older than today under `D:\tmp\art-tests` is a test's own `art-*` scratch (0 other names; one `winuaetemplog.txt`) and can be deleted on the owner's word.
+**Why the test cannot simply hand it a root.** The only way to choose one is
+`crate::scratch`'s crate-wide `CHOSEN` lock, and writing it from one test
+while cargo runs the rest of the suite in parallel threads of the same process
+is the flake class [ART-182](#fixed) was filed for. The fix is to give
+`osinstall_plan` an explicit root — a `plan_in`-shaped variant, which is the
+shape the other commands already grew in ART-281's Task 7b — and let the test
+pass it a `ScratchDir` path.
 
 **ART-279** 🟡 **The `TimedOut` next step tells the user to watch the emulator
 window, which is wrong advice for an installer that is hung rather than
@@ -352,6 +353,128 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-281** 🔴 ✅ **The unit suite's scratch directories were never removed:
+`D:\tmp\art-tests` held 263 484 directories and 764 GB** — *found 2026-09-08
+during round 3 task 3, on `art-osbuilder-intake`; fixed 2026-09-10 on `art-281-scratch`*
+`src-tauri/src/core/mod.rs::ScratchDir` · every `scratch()` fixture under
+`src-tauri/src/` · `scripts/scratch-guard-sweep.py` ·
+`scripts/scratch-residue.py` · `.github/workflows/ci.yml` ·
+`src-tauri/.cargo/config.toml`
+
+**This is [ART-184](#fixed) still running, three weeks on, at the place it was
+moved to rather than fixed.** That entry moved `TMP` off the system drive after
+a day of suite runs put 169 291 directories (~987 GB) in
+`C:\Users\…\AppData\Local\Temp` and filled a 2 TB disk; its own note says so
+plainly — *"pointing `TMP` at the project disk does not fix that."* The counts
+below are what "does not fix that" looks like now.
+
+Measured on 2026-09-08 (read-only; **nothing was deleted**):
+
+| | |
+|---|---|
+| directories under `D:\tmp\art-tests` | **263 484** |
+| bytes | **764 GB** |
+| oldest | 2026-08-20 — the day ART-184 was filed |
+| created today alone | **28 568** |
+| top prefixes | `art-osinstall-apply-planned` 13 202 · `art-osinstall-planned-with` 9 373 · `art-preload-native-pds` 8 995 |
+
+The shape is the one ART-184 named: a test scratch name is unique **per run**
+(process id plus a counter — `scratch-counter-sweep.py` exists to keep it
+unique *within* a process), so nothing ever collides with a previous run's
+directory and nothing sweeps them. `core::ScratchDir` removes itself on `Drop`
+and the ones that do are fine; what accumulates are the fixtures that build a
+path by hand and the ones whose `Drop` never runs.
+
+`core/osinstall`'s **production** code sweeps its own scratch after an hour.
+The test fixtures have no such sweep, and that asymmetry is the whole defect.
+
+**The cause, measured the same day** (`.superpowers/sdd/2026-09-08-intake/scratch-leak-investigation.md`, local-only; the numbers are re-runnable): `core::ScratchDir` — the `Drop`-removed scratch ART-184 was written for — is used by **6** of the ~69 files that create a test scratch; the other **63** carry a local `fn scratch(tag) -> PathBuf` that creates the directory and returns a bare path nothing ever removes (`osinstall::fixtures::scratch` is the biggest, its own doc calling the pattern "the repository's own convention"; `core/preload/*`, `core/artwork/*`, `core/archive/*`, `core/layout/*`, `core/volume/**`, `commands/*` likewise) — ~773 call sites. The controlled experiment: one test through `fixtures::scratch` left the directory count **+1** permanently (263 484 → 263 485); one through `ScratchDir` left it **unchanged** (263 485 → 263 485). So this is ART-184's defect copied into sixty-three files after its fix existed, not a `Drop` that fails. **Fix:** every `scratch()` helper returns a `ScratchDir` (a mechanical conversion, its own round — the tests that keep the path past the helper's scope must hold the guard), and a `Drop` whose `remove_dir_all` fails must say so on stderr rather than swallow it; `scratch-counter-sweep.py` gains a sibling that fails on any `fn scratch(` returning a bare `PathBuf`. Everything older than today under `D:\tmp\art-tests` is a test's own `art-*` scratch (0 other names; one `winuaetemplog.txt`) and can be deleted on the owner's word.
+
+**Fixed 2026-09-10 on branch `art-281-scratch`, in the four parts this entry
+named.**
+
+**1. A guard for every scratch.** `core::ScratchDir::pair(prefix, tag) ->
+(ScratchDir, PathBuf)` gives a module's local helper a one-line body, and a
+call site becomes `let (_guard, dir) = scratch("x")` with `dir` still the plain
+`PathBuf` the test body already used. Converted: the **63 helpers** and their
+**~770 call sites** the census above named; **48 scratch paths built by hand**
+as `temp_dir().join(format!("art-…"))` in bodies and in helpers not called
+`scratch` (30 files); and **96 sites that handed `&std::env::temp_dir()` to
+product code as *its* scratch root** (9 files) — a shape the first census
+missed entirely, where the product's own staging lands under the platform root
+and no sweeper runs in a test. Five `temp_dir()` sites stay, each because the
+assertion is about the platform root itself.
+
+Ordering turned out to be part of the fix, and the two containers run opposite
+ways: bindings drop right-to-left, so a guard returned in a **tuple goes
+first**; struct fields drop in declaration order, so a `_guard` **field goes
+last**. Both were found in review — `core/osinstall/source_contract.rs::sources`
+returned the guard after an open `FileRegion`, and `Fixture`/`Disk` in
+`core/volume/write/` declared it before every other field.
+
+**2. A `Drop` that says when it failed.** On Windows `remove_dir_all` fails
+while any handle in the tree is open, and that failure used to be swallowed.
+It now prints `ScratchDir: <path> not removed: <err>` on stderr — stderr and
+not a panic, which would abort an already-panicking test twice.
+
+*Tests:* `core::scratch_pair_removes_its_directory_when_the_guard_drops` and
+`core::scratch_pair_keeps_the_directory_while_the_guard_lives`. **The mutation
+is the experiment in miniature:** with `pair`'s guard defeated the two tests
+left `art-core-pair-10248-1` and `art-core-pair-live-10248-0` behind (**+2**),
+and the restored pair left the count unchanged (**+0**).
+
+**3. A sweep, blocking in CI.** `scripts/scratch-guard-sweep.py` listed **778
+offenders** the day it was written — 63 helpers returning a bare path, 697 call
+sites bound without a guard, 15 helpers returning a path whose guard they drop
+— and lists none now. It refuses `let (_, ` as well: a bare `_` drops at once
+and is the leak back in one character. It later gained the two shapes the
+census had missed (a hand-built scratch path; the platform root handed to
+product code). `scripts/scratch-residue.py` is how the root is counted — never
+`ls | wc -l`, whose failure would read as a clean zero and turn a defective arm
+into a fixed one.
+
+**4. The owner's deletion**: 52 044 entries older than that day, 135 GB,
+removed on 2026-09-10 (0 failed, 0 foreign, 0 kept).
+
+**Both arms, batch by batch** (`scratch-residue.py`, then `cargo test <module>
+--lib` unpiped, then `scratch-residue.py` again):
+
+| Batch | defective arm | fixed arm |
+|---|---|---|
+| osinstall + preload | **+422** | +0, twice |
+| volume + card + rom + hdf | +0 | +0 |
+| gameindex + layout + artwork + launch | **+8** (`art-rebind-*`) | +0 |
+| commands + archive + the rest | **+10** (`art-hostfs-*`) | +0 |
+| the 48 hand-built paths | **+43** directories, named | 0 |
+| the 96 product roots | **+3** (`art-osinstall-collisions-*`) | 0 |
+
+The volume batch measuring +0 in **both** arms is not a null result waved
+through: those modules removed their directories by hand on the happy path, so
+their leak only appeared when a test panicked — which is exactly the case
+ART-184 was filed for, and exactly what a `Drop` covers and a trailing line
+does not.
+
+**The whole suite, run twice** (2026-09-10, `cargo test --lib`, output to a
+file, never piped):
+
+| run | entries before | entries after | new names |
+|---|---|---|---|
+| 1 | 730 | 731 | `art-osinstall-scan-24d0d20618102d7e.json` |
+| 2 | 731 | 732 | `art-osinstall-scan-b2937e2874e0432f.json` |
+
+`test result: ok. 3188 passed; 0 failed; 53 ignored; 0 measured; 0 filtered
+out` both times, and **neither log contains a `ScratchDir: … not removed`
+line** — no `Drop` failed silently on an open handle. The defective arm of the
+whole suite is the 2026-09-08 measurement above (**28 568 entries in one
+day**): it was deliberately **not** re-run, because re-running it would put
+tens of GB back on the disk, and the six per-batch defective arms are this
+round's control.
+
+**What survives is one 794-byte *file* per suite run, not a directory** —
+`art-osinstall-scan-<hash>.json`, written by `osinstall_plan`, which resolves
+its own root because no argument gives it one. Filed as [ART-293](#open) with
+its own measurement.
 
 **ART-288** 🔴 ✅ **The headline feature of 0.9.1 refused on the owner's
 own material: the host placement resolved a package's archive by identity
@@ -4956,8 +5079,12 @@ not stop the machine.
 `src-tauri/src/scratch.rs::sweep_crash_leftovers`.
 
 The fixture half landed with ART-196: `core::ScratchDir` removes its directory
-on `Drop`, so a panicking test cleans up too. What was still owed was the
-sweep for what a **crash** leaves — a killed job, a panic, a machine that lost
+on `Drop`, so a panicking test cleans up too. **That half was only half true
+for three more weeks**, and [ART-281](#fixed) is what it cost: `ScratchDir`
+existed, but 63 of the ~69 files that make a test scratch never used it, and
+763 GB accumulated at the new location. It was closed on 2026-09-10 by
+converting every one of them and by a sweep that fails CI if the pattern comes
+back. What was still owed here was the sweep for what a **crash** leaves — a killed job, a panic, a machine that lost
 power — and `root()` having made the location a choice did nothing about it.
 
 **Four conditions, all of them, and every one is a refusal rather than a
