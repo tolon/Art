@@ -134,7 +134,7 @@ struct Rehearsed {
     discarded: bool,
 }
 
-/// The ending, for the operation log. Four strings for four endings — the
+/// The ending, for the operation log. Five strings for five endings — the
 /// same rule the screen follows, one layer down.
 fn ending_of(outcome: &RehearsalOutcome) -> &'static str {
     match outcome {
@@ -142,6 +142,7 @@ fn ending_of(outcome: &RehearsalOutcome) -> &'static str {
         RehearsalOutcome::StepRefused { .. } => "a step refused",
         RehearsalOutcome::TimedOut { .. } => "timed out",
         RehearsalOutcome::EmulatorClosed { .. } => "the emulator was closed",
+        RehearsalOutcome::WroteWithoutStopping { .. } => "wrote without stopping",
     }
 }
 
@@ -206,7 +207,8 @@ fn perform(
                 })
             }
         },
-        // Refused, timed out, closed: the copy is the evidence and it stays.
+        // Refused, timed out, closed, wrote without stopping: the copy is
+        // the evidence and it stays.
         Ok(outcome) => Ok(Rehearsed {
             outcome,
             copy,
@@ -468,13 +470,19 @@ mod tests {
             },
             RehearsalOutcome::EmulatorClosed {
                 waited: Duration::from_secs(1),
+                report: report.clone(),
+            },
+            RehearsalOutcome::WroteWithoutStopping {
+                waited: Duration::from_secs(1),
+                written: 4096,
+                ceiling: 1024,
                 report,
             },
         ];
         let said: Vec<&str> = endings.iter().map(ending_of).collect();
         assert_eq!(
             said.iter().collect::<std::collections::BTreeSet<_>>().len(),
-            4,
+            5,
             "got {said:?}"
         );
     }
@@ -565,7 +573,8 @@ mod tests {
             RehearsalOutcome::Finished { report }
             | RehearsalOutcome::StepRefused { report }
             | RehearsalOutcome::TimedOut { report, .. }
-            | RehearsalOutcome::EmulatorClosed { report, .. } => report,
+            | RehearsalOutcome::EmulatorClosed { report, .. }
+            | RehearsalOutcome::WroteWithoutStopping { report, .. } => report,
         };
         let names: Vec<&str> = report.steps.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(

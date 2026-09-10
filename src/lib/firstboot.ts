@@ -10,7 +10,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-import { waitedSeconds, type WireDuration } from "@/lib/amigainstall";
+import { mebibytes, waitedSeconds, type WireDuration } from "@/lib/amigainstall";
 import type { Phrase } from "@/lib/phrase";
 
 export type FatMount = { kind: "available" } | { kind: "unavailable"; needs: string };
@@ -173,7 +173,7 @@ export function stepOutcomeTone(outcome: StepOutcome): "ok" | "muted" | "warn" |
 // an emulator `10-hardware` writes `skipped uae` and copies nothing. That
 // half closes on a real card only.
 //
-// Four endings, four sentences, exactly like `amigainstall`'s: "the window
+// Five endings, five sentences, exactly like `amigainstall`'s: "the window
 // was closed" and "nobody answered in time" call for opposite next steps, so
 // collapsing them into "it did not work" is the defect, not a shortcut.
 
@@ -185,7 +185,16 @@ export type RehearsalOutcome =
   | { kind: "finished"; report: FirstBootReport }
   | { kind: "step-refused"; report: FirstBootReport }
   | { kind: "timed-out"; waited: WireDuration; report: FirstBootReport }
-  | { kind: "emulator-closed"; waited: WireDuration; report: FirstBootReport };
+  | { kind: "emulator-closed"; waited: WireDuration; report: FirstBootReport }
+  /** ART-294: the copy grew by `written` bytes, past the `ceiling` bytes a
+   *  run may add to it, while the first boot was still writing. */
+  | {
+      kind: "wrote-without-stopping";
+      waited: WireDuration;
+      written: number;
+      ceiling: number;
+      report: FirstBootReport;
+    };
 
 /** A finished rehearsal's own answer. `job_id` is snake_case to match every
  *  other job result in ART. */
@@ -252,6 +261,15 @@ export function rehearsalOutcomePhrase(outcome: RehearsalOutcome): Phrase {
         key: "firstboot.rehearsal.outcome.emulatorClosed",
         params: { seconds: waitedSeconds(outcome.waited) },
       };
+    case "wrote-without-stopping":
+      return {
+        key: "firstboot.rehearsal.outcome.wroteWithoutStopping",
+        params: {
+          seconds: waitedSeconds(outcome.waited),
+          written: mebibytes(outcome.written),
+          ceiling: mebibytes(outcome.ceiling),
+        },
+      };
   }
 }
 
@@ -267,6 +285,8 @@ export function rehearsalNextStepPhrase(outcome: RehearsalOutcome): Phrase {
       return { key: "firstboot.rehearsal.next.timedOut" };
     case "emulator-closed":
       return { key: "firstboot.rehearsal.next.emulatorClosed" };
+    case "wrote-without-stopping":
+      return { key: "firstboot.rehearsal.next.wroteWithoutStopping" };
   }
 }
 
@@ -281,5 +301,8 @@ export function rehearsalTone(outcome: RehearsalOutcome): "ok" | "warn" | "err" 
     case "timed-out":
     case "emulator-closed":
       return "warn";
+    // A refusal's colour, as an install's runaway: something kept writing.
+    case "wrote-without-stopping":
+      return "err";
   }
 }

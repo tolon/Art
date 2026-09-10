@@ -139,6 +139,13 @@ const REHEARSAL_ENDINGS: RehearsalOutcome[] = [
   { kind: "step-refused", report: EMPTY_REPORT },
   { kind: "timed-out", waited: { secs: 90, nanos: 0 }, report: EMPTY_REPORT },
   { kind: "emulator-closed", waited: { secs: 12, nanos: 0 }, report: EMPTY_REPORT },
+  {
+    kind: "wrote-without-stopping",
+    waited: { secs: 40, nanos: 0 },
+    written: 170_328_064,
+    ceiling: 67_108_864,
+    report: EMPTY_REPORT,
+  },
 ];
 
 /** `EmulatorClosed` → `emulator-closed`, which is what `rename_all` does. */
@@ -161,7 +168,13 @@ describe("rehearse.rs still tags RehearsalOutcome kebab-case, and the union know
       .map((line) => line.trim())
       .filter((line) => /^[A-Z][A-Za-z0-9]*\s*(\{|,|$)/.test(line))
       .map((line) => kebab(line.replace(/[^A-Za-z0-9].*$/, "")));
-    expect(rust).toEqual(["finished", "step-refused", "timed-out", "emulator-closed"]);
+    expect(rust).toEqual([
+      "finished",
+      "step-refused",
+      "timed-out",
+      "emulator-closed",
+      "wrote-without-stopping",
+    ]);
     expect([...REHEARSAL_ENDINGS.map((o) => o.kind)].sort()).toEqual([...rust].sort());
   });
 
@@ -170,7 +183,7 @@ describe("rehearse.rs still tags RehearsalOutcome kebab-case, and the union know
   });
 });
 
-describe("the four rehearsal endings stay four sentences", () => {
+describe("the five rehearsal endings stay five sentences", () => {
   // "Nobody answered — watch the window next time" is the wrong advice for a
   // window the owner shut themselves, and "every step ran" said about a step
   // that refused is the confident wrong sentence this project pays most for.
@@ -186,6 +199,19 @@ describe("the four rehearsal endings stay four sentences", () => {
     expect(rehearsalOutcomePhrase(REHEARSAL_ENDINGS[2]).params).toEqual({ seconds: 90 });
     expect(rehearsalOutcomePhrase(REHEARSAL_ENDINGS[3]).params).toEqual({ seconds: 12 });
     expect(rehearsalOutcomePhrase(REHEARSAL_ENDINGS[0]).params).toBeUndefined();
+  });
+
+  // ART-294: the runaway is the one ending with a measurement, and it
+  // carries it in whole mebibytes, the same unit an install's runaway uses.
+  it("says how much a runaway first boot wrote, against what it was allowed", () => {
+    const runaway = REHEARSAL_ENDINGS[4];
+    expect(rehearsalOutcomePhrase(runaway).params).toEqual({ seconds: 40, written: 162, ceiling: 64 });
+    expect(rehearsalTone(runaway)).toBe("err");
+    // Not the timeout's advice: a first boot that kept writing was not
+    // waiting on anybody.
+    expect(rehearsalNextStepPhrase(runaway).key).not.toBe(
+      rehearsalNextStepPhrase(REHEARSAL_ENDINGS[2]).key
+    );
   });
 
   it("colours a refusal as an error and an unanswered run as a warning", () => {

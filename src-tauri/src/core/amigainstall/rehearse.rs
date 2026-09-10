@@ -18,6 +18,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use super::run::{deadline_secs, end_session, Clock, EmulatorLauncher, EmulatorSession, RunLimits};
+use super::stage::tree_bytes;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::firstboot::report::{parse_bytes, Ending, FirstBootReport, StepOutcome};
 use crate::core::firstboot::REPORT_PATH;
@@ -58,7 +59,7 @@ pub struct RehearseRequest<'a> {
     pub limits: RunLimits,
 }
 
-/// The four endings a rehearsal can have. Distinct on purpose (spec's
+/// The five endings a rehearsal can have. Distinct on purpose (spec's
 /// "the failure that does not crash"): a step that refused is not the same
 /// sentence as one that finished, and a closed window is not a timeout.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -80,6 +81,19 @@ pub enum RehearsalOutcome {
     /// still told the host something.
     EmulatorClosed {
         waited: Duration,
+        report: FirstBootReport,
+    },
+    /// The copy grew by more than a run may add to it while the first boot
+    /// was still going (ART-294) — the ceiling and the reasoning are an
+    /// install's ([`super::run::GrowthCeiling`],
+    /// [`super::RunOutcome::WroteWithoutStopping`]). `written` is the growth
+    /// beyond the copy as the rehearsal found it and `ceiling` what it was
+    /// allowed, both in bytes. Carries what the Amiga had logged by then, like
+    /// every other ending here.
+    WroteWithoutStopping {
+        waited: Duration,
+        written: u64,
+        ceiling: u64,
         report: FirstBootReport,
     },
 }
@@ -136,6 +150,11 @@ pub fn rehearse_with(
     let config = generate_uae_config(request.profile, &media)?;
     let report_file = request.tree_copy.join(REPORT_PATH);
 
+    // The copy's size as the rehearsal found it — what ART-294's growth
+    // ceiling is measured from. Read before the launch, so nothing the first
+    // boot writes can be mistaken for something the tree already held.
+    let baseline = tree_bytes(request.tree_copy)?;
+
     // Before the launch is the cheapest place to stop: nothing has started,
     // so there is nothing to terminate and nothing to leave behind.
     if sink.is_cancelled() {
@@ -148,7 +167,14 @@ pub fn rehearse_with(
     // `run_with` uses and for the same reason: keeping the session alive
     // until `end_session` runs is what stops a transient read error from
     // orphaning a WinUAE window on the owner's desktop.
-    let ending = poll(request, session.as_mut(), clock, sink, &report_file);
+    let ending = poll(
+        request,
+        session.as_mut(),
+        clock,
+        sink,
+        &report_file,
+        baseline,
+    );
     end_session(session.as_mut(), sink);
     ending
 }
@@ -161,7 +187,9 @@ fn poll(
     clock: &dyn Clock,
     sink: &dyn ProgressSink,
     report_file: &Path,
+    baseline: u64,
 ) -> CoreResult<RehearsalOutcome> {
+    let ceiling = request.limits.growth.allowed(baseline);
     loop {
         // The report is read first, every time round, for the same reason
         // `run_with` reads its result file first: an answer that landed
@@ -189,6 +217,22 @@ fn poll(
             }
             return Ok(RehearsalOutcome::EmulatorClosed {
                 waited: clock.elapsed(),
+                report,
+            });
+        }
+
+        // ART-294: what the first boot has added to the copy so far,
+        // against what a run may. Before the deadline, for the reason
+        // `run.rs` gives: it is the more specific of the two observations,
+        // and "nobody answered" would send the user to watch a window that
+        // was never going to ask anything. Growth, not size — steps delete
+        // themselves, and a copy that shrank counts as nothing.
+        let written = tree_bytes(request.tree_copy)?.saturating_sub(baseline);
+        if written > ceiling {
+            return Ok(RehearsalOutcome::WroteWithoutStopping {
+                waited: clock.elapsed(),
+                written,
+                ceiling,
                 report,
             });
         }
@@ -247,6 +291,7 @@ fn finished(report: &FirstBootReport) -> Option<RehearsalOutcome> {
 #[cfg(test)]
 mod tests {
     use super::super::run::fakes::{CancelAfter, FakeLauncher, TestClock};
+    use super::super::run::GrowthCeiling;
     use super::*;
     use crate::core::jobs::NoProgress;
     use crate::core::profile::AmigaProfile;
@@ -278,6 +323,161 @@ mod tests {
                 ..RunLimits::default()
             },
         }
+    }
+
+    /// ART-294: a rehearsal boots the same kind of copy an install does,
+    /// beside the user's tree, and nothing bounded what the run wrote into
+    /// it. A first boot that keeps writing is its own ending, found before
+    /// the deadline, with the emulator ended and what the Amiga had logged
+    /// carried along — the same ceiling ART-278 gave an install.
+    #[test]
+    fn a_copy_that_grows_past_the_ceiling_ends_the_rehearsal_before_the_deadline() {
+        let profile = AmigaProfile::a1200_aga();
+        let d = copy_with_report("runaway", "art-firstboot 1\nstep 10-hardware started\n");
+        let rom = d.join("kick.rom");
+        fs::write(&rom, vec![0u8; 16]).unwrap();
+        let mut req = request(d.path(), d.path(), &profile, &rom);
+        req.limits = RunLimits {
+            deadline: Duration::from_secs(60),
+            poll_interval: Duration::from_secs(2),
+            growth: GrowthCeiling {
+                multiple: 0,
+                floor: 1024,
+            },
+        };
+
+        let runaway = d.join("runaway.bin");
+        let clock = TestClock::new(move |n| {
+            if n == 2 {
+                fs::write(&runaway, vec![0u8; 4096]).unwrap();
+            }
+        });
+        let launcher = FakeLauncher::running_forever();
+
+        let outcome = rehearse_with(&req, &launcher, &clock, &NoProgress).unwrap();
+
+        match outcome {
+            RehearsalOutcome::WroteWithoutStopping {
+                waited,
+                written,
+                ceiling,
+                report,
+            } => {
+                assert!(
+                    waited < req.limits.deadline,
+                    "the ceiling must end the rehearsal, not the deadline; waited {waited:?}"
+                );
+                assert_eq!(written, 4096, "what the run wrote beyond the copy as found");
+                assert_eq!(ceiling, 1024, "the floor, with a multiple of zero");
+                assert_eq!(
+                    report.ending,
+                    Ending::Unfinished,
+                    "what the Amiga had logged comes with it"
+                );
+            }
+            other => panic!("a runaway first boot is its own ending, got {other:?}"),
+        }
+        assert_eq!(
+            launcher.log.terminated.lock().unwrap().as_slice(),
+            &[4242],
+            "the emulator ART started is ended, once"
+        );
+        assert_eq!(clock.sleeps(), 2, "found on the first poll after the write");
+    }
+
+    /// Growth under the ceiling is not a runaway: the log itself grows, and a
+    /// first boot that wrote a little and then stopped answering is still a
+    /// timeout.
+    #[test]
+    fn rehearsal_growth_under_the_ceiling_is_still_a_timeout() {
+        let profile = AmigaProfile::a1200_aga();
+        let d = copy_with_report("modest", "art-firstboot 1\n");
+        let rom = d.join("kick.rom");
+        fs::write(&rom, vec![0u8; 16]).unwrap();
+        let mut req = request(d.path(), d.path(), &profile, &rom);
+        req.limits = RunLimits {
+            deadline: Duration::from_secs(8),
+            poll_interval: Duration::from_secs(2),
+            growth: GrowthCeiling {
+                multiple: 0,
+                floor: 1024,
+            },
+        };
+
+        let written = d.join("modest.bin");
+        let clock = TestClock::new(move |n| {
+            if n == 1 {
+                fs::write(&written, vec![0u8; 512]).unwrap();
+            }
+        });
+
+        let outcome =
+            rehearse_with(&req, &FakeLauncher::running_forever(), &clock, &NoProgress).unwrap();
+
+        assert!(
+            matches!(outcome, RehearsalOutcome::TimedOut { .. }),
+            "512 bytes under a 1 KiB ceiling is not a runaway, got {outcome:?}"
+        );
+    }
+
+    /// The ceiling and the deadline on the same poll: the ceiling wins, as in
+    /// `run.rs`, because it is the more specific observation.
+    #[test]
+    fn a_rehearsal_ceiling_reached_on_the_deadline_poll_is_reported_as_the_ceiling() {
+        let profile = AmigaProfile::a1200_aga();
+        let d = copy_with_report("both", "art-firstboot 1\n");
+        let rom = d.join("kick.rom");
+        fs::write(&rom, vec![0u8; 16]).unwrap();
+        let mut req = request(d.path(), d.path(), &profile, &rom);
+        req.limits = RunLimits {
+            deadline: Duration::from_secs(2),
+            poll_interval: Duration::from_secs(2),
+            growth: GrowthCeiling {
+                multiple: 0,
+                floor: 1024,
+            },
+        };
+
+        let runaway = d.join("runaway.bin");
+        let clock = TestClock::new(move |n| {
+            if n == 1 {
+                fs::write(&runaway, vec![0u8; 4096]).unwrap();
+            }
+        });
+
+        let outcome =
+            rehearse_with(&req, &FakeLauncher::running_forever(), &clock, &NoProgress).unwrap();
+
+        assert!(
+            matches!(outcome, RehearsalOutcome::WroteWithoutStopping { .. }),
+            "the ceiling is checked before the deadline, got {outcome:?}"
+        );
+    }
+
+    /// What the frontend reads: the tag is kebab-case like every other
+    /// ending, and the two measurements are plain byte counts.
+    #[test]
+    fn a_runaway_rehearsal_reaches_the_wire_with_its_measurement() {
+        let outcome = RehearsalOutcome::WroteWithoutStopping {
+            waited: Duration::from_secs(40),
+            written: 4096,
+            ceiling: 1024,
+            report: FirstBootReport {
+                version: Some(1),
+                system: None,
+                steps: Vec::new(),
+                ending: Ending::Unfinished,
+                fat_copy_failed: false,
+                reboot_requested_by: None,
+                unknown: Vec::new(),
+            },
+        };
+        let json = serde_json::to_value(&outcome).unwrap();
+        assert_eq!(json["kind"], "wrote-without-stopping");
+        assert_eq!(json["waited"]["secs"], 40);
+        assert_eq!(json["written"], 4096);
+        assert_eq!(json["ceiling"], 1024);
+        assert!(json["report"].is_object(), "the report travels with it");
     }
 
     #[test]
