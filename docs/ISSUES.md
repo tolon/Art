@@ -69,9 +69,14 @@ itself**. The same default reaches `gather_facts`, `remembered_hashes_in` and
 **It accumulates rather than being overwritten.** Two whole-suite runs on
 2026-09-10 left two *different* names — `art-osinstall-scan-24d0d20618102d7e.json`
 and `art-osinstall-scan-b2937e2874e0432f.json`, 794 bytes each. The hash keys
-on the archive path, which carries the run's own scratch id, so every run is a
-new name. Thirty-five such files stood under `D:\tmp\art-tests` when this was
-filed. It is 🔵 and not 🟡 because the pile is **bounded**: `ScanCache::sweep`
+on the **media folder path** (`scan_cache.rs`, `media_path.hash`), and in this
+test that folder is a scratch directory carrying the run's own id, so every
+run is a new name. **21** such files stood under `D:\tmp\art-tests` when this
+was filed — the entry first said thirty-five, which was a name filter that
+never asked `is_file()`: the other 14 are directories,
+`art-osinstall-scan-across-*`, residue of a defective arm measured before
+Task 2 landed and nothing to do with this. It is 🔵 and not 🟡 because the
+pile is **bounded**: `ScanCache::sweep`
 removes cache files older than 30 days and runs on this very path, so the
 steady state is a month of suite runs — about 25 KB — not the 764 GB ART-281
 measured.
@@ -83,6 +88,19 @@ is the flake class [ART-182](#fixed) was filed for. The fix is to give
 `osinstall_plan` an explicit root — a `plan_in`-shaped variant, which is the
 shape the other commands already grew in ART-281's Task 7b — and let the test
 pass it a `ScratchDir` path.
+
+**The same shape has a second population, and it is a blind spot rather than a
+leak.** Five production thin wrappers exist only so tests need not name a root
+— `apply`, `add_package`, `open_package`, `plan_with_cache` and `plan_over`
+(`core/osinstall/apply.rs`, `plan.rs`, `scan.rs`) — and each hands
+`&std::env::temp_dir()` straight to its `_in(` sibling. About **121** calls in
+test regions reach them, and `scratch-guard-sweep.py`'s rule 5 cannot see any
+of them: the `temp_dir()` is in production code, not at the call site. Three
+whole-suite runs measured them **clean** — the staging beneath them guards
+itself — so this is not the leak ART-281 was about. It is named here because
+the wrappers' own doc comments say "kept for tests", which is exactly the
+population the sweep exists to watch; a rule that lists such wrappers and
+refuses an unexempted test call to one would close it.
 
 **ART-279** 🟡 **The `TimedOut` next step tells the user to watch the emulator
 window, which is wrong advice for an installer that is hung rather than
@@ -397,14 +415,27 @@ named.**
 **1. A guard for every scratch.** `core::ScratchDir::pair(prefix, tag) ->
 (ScratchDir, PathBuf)` gives a module's local helper a one-line body, and a
 call site becomes `let (_guard, dir) = scratch("x")` with `dir` still the plain
-`PathBuf` the test body already used. Converted: the **63 helpers** and their
-**~770 call sites** the census above named; **48 scratch paths built by hand**
-as `temp_dir().join(format!("art-…"))` in bodies and in helpers not called
-`scratch` (30 files); and **96 sites that handed `&std::env::temp_dir()` to
-product code as *its* scratch root** (9 files) — a shape the first census
-missed entirely, where the product's own staging lands under the platform root
-and no sweeper runs in a test. Five `temp_dir()` sites stay, each because the
-assertion is about the platform root itself.
+`PathBuf` the test body already used. Converted: the **63 helpers** the census
+above named and the **700 call sites** that were bound without a guard (the
+sweep counts **765** in all, the other 65 being the six files that already
+kept their guard before this round and are not its work); **48 scratch paths
+built by hand** as `temp_dir().join(format!("art-…"))` in bodies and in
+helpers not called `scratch` (30 files); and **96 sites that handed
+`&std::env::temp_dir()` to product code as *its* scratch root** (9 files) — a
+shape the first census missed entirely, where the product's own staging lands
+under the platform root and no sweeper runs in a test.
+
+Five `temp_dir()` sites stay. **Four** are exempt because the assertion is
+about the platform root itself. The fifth is not, and 7b's report said so at
+the time:
+`sweep_stale_preview_scratch_dirs_removes_only_old_directories_under_its_own_prefix`
+(`commands/osinstall.rs`) creates `…sweep-test-stale` and `…sweep-test-fresh`
+directly under the platform root through an intermediate `let temp =
+std::env::temp_dir()` — a shape the sweep's rule 4 cannot see — and removes
+`fresh` only when it does not panic. The names are fixed, so it is bounded at
+one entry rather than accumulating, and the sweeper it tests takes a root
+argument, so a guarded root would exercise the same code. It was left as it
+stands and is owed.
 
 Ordering turned out to be part of the fix, and the two containers run opposite
 ways: bindings drop right-to-left, so a guard returned in a **tuple goes
@@ -425,9 +456,12 @@ left `art-core-pair-10248-1` and `art-core-pair-live-10248-0` behind (**+2**),
 and the restored pair left the count unchanged (**+0**).
 
 **3. A sweep, blocking in CI.** `scripts/scratch-guard-sweep.py` listed **778
-offenders** the day it was written — 63 helpers returning a bare path, 697 call
-sites bound without a guard, 15 helpers returning a path whose guard they drop
-— and lists none now. It refuses `let (_, ` as well: a bare `_` drops at once
+offenders** once it could see every module — 63 helpers returning a bare path,
+**700** call sites bound without a guard, 15 helpers returning a path whose
+guard they drop. (Its first baseline was 775; the three that made it 778 are
+`core/osinstall/source_contract.rs`, a module gated at its declaration, which
+the script could not see until it was taught to.) It lists none now. It
+refuses `let (_, ` as well: a bare `_` drops at once
 and is the leak back in one character. It later gained the two shapes the
 census had missed (a hand-built scratch path; the platform root handed to
 product code). `scripts/scratch-residue.py` is how the root is counted — never
@@ -475,6 +509,27 @@ round's control.
 `art-osinstall-scan-<hash>.json`, written by `osinstall_plan`, which resolves
 its own root because no argument gives it one. Filed as [ART-293](#open) with
 its own measurement.
+
+**What the round knowingly left, so nobody has to rediscover it:**
+
+- **[ART-293](#open)** — that file, and the five production thin wrappers that
+  hand `temp_dir()` onward from ~121 test calls (measured clean; a blind spot
+  of the guard, not a leak).
+- **286 trailing `let _ = std::fs::remove_dir_all(&…)` lines still stand beside
+  a guard** that now does the same job (`grep -rn "let _ =
+  std::fs::remove_dir_all" src-tauri/src` finds 312 in all, production
+  included). They are harmless — `Drop` is silent on a directory that is
+  already gone — and deleting them across sixty files is churn with no
+  measurement behind it, so [testing.md](testing.md#test-corpus) says they go
+  when a file is next touched. The risk they carry is a reader crediting the
+  wrong line for the cleanup.
+- **The sweep does not see everything, and its header says which.** Undisclosed
+  at the time of this entry: a guard dropped as a temporary
+  (`ScratchDir::pair(..).1`), a helper not named `scratch` that returns a bare
+  path, a 3-tuple helper whose first element is `_`, and `temp_dir()` reached
+  through an intermediate variable or a `use std::env::temp_dir` import. Each
+  is a shape somebody could write tomorrow; none exists in the tree today.
+- **The fifth `temp_dir()` test** named above (the stale-preview sweeper's).
 
 **ART-288** 🔴 ✅ **The headline feature of 0.9.1 refused on the owner's
 own material: the host placement resolved a package's archive by identity
