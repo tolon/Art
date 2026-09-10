@@ -147,9 +147,19 @@ impl Drop for ScratchDir {
         // while any handle in the tree is still open, and a scratch that
         // survives silently is how 763 GB accumulated. A panic here would
         // abort a panicking test twice; stderr is the honest middle.
+        //
+        // `writeln!` and not `eprintln!`, whose macro panics if the write to
+        // stderr fails — which would be exactly the double-abort the line
+        // above rejects. A closed stderr is theoretical; a `Drop` that can
+        // panic is not worth keeping for a shorter line.
         if let Err(err) = std::fs::remove_dir_all(&self.0) {
             if self.0.exists() {
-                eprintln!("ScratchDir: {} not removed: {err}", self.0.display());
+                use std::io::Write as _;
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "ScratchDir: {} not removed: {err}",
+                    self.0.display()
+                );
             }
         }
     }

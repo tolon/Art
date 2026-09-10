@@ -32,8 +32,15 @@ defects.
 
 ## What counts as an offender
 
-Only **test** code — everything before a file's first `#[cfg(test)]` is
-production and is never examined. Three rules:
+Only **test** code. For most files that means everything before the file's
+first `#[cfg(test)]` is production and is never examined — but a module can
+be gated where it is *declared* instead: `core/osinstall/source_contract.rs`
+carries no `#[cfg(test)]` at all, because `core/osinstall/mod.rs` says
+`#[cfg(test)] mod source_contract;`. The first version of this sweep cut on
+the file's own attribute alone and skipped that file whole, three unguarded
+call sites and ~90 leaked directories with it. So a file with no attribute of
+its own is checked against its parent module's declaration, and when the
+declaration is gated the whole file counts as test code. Three rules:
 
   1. **returns a bare path** — a `fn scratch(` whose return type on the
      signature line is `PathBuf` / `std::path::PathBuf` / `&Path` and does not
@@ -100,8 +107,10 @@ ROOT = Path(__file__).resolve().parent.parent / "src-tauri" / "src"
 # while allowing `fixtures::scratch(` — `:` is not a word character.
 CALL = re.compile(r"(?<![A-Za-z0-9_])scratch\(")
 FN_RE = re.compile(r"^(\s*)(pub(\([^)]*\))? )?(async )?fn (\w+)")
-SCRATCH_DEF = re.compile(r"^\s*(pub(\([^)]*\))? )?fn scratch\(")
-# `let (a, b) = …` — two plain identifiers, `_guard` included.
+SCRATCH_DEF = re.compile(r"^\s*(pub(\([^)]*\))? )?(async )?fn scratch\(")
+# `let (a, b) = …` — two plain identifiers, `_guard` included. The first
+# element is read back out, because `let (_ , dir) = …` — a space before the
+# comma — is `let (_, dir)` in rustfmt's clothes and must not pass as a tuple.
 TUPLE_LET = re.compile(r"^let\s*\(\s*(\w+)\s*,\s*(\w+)\s*\)\s*=")
 IDENT_LET = re.compile(r"^let\s+(?:mut\s+)?(\w+)\s*=")
 # A return type that is a path and nothing else: `-> PathBuf`,
@@ -142,8 +151,49 @@ def first_cfg_test(lines: list[str]) -> int | None:
     return None
 
 
+def gated_at_its_declaration(path: Path) -> bool:
+    """A file with no `#[cfg(test)]` of its own can still be test code from its
+    first line: `core/osinstall/source_contract.rs` is declared
+
+        #[cfg(test)]
+        mod source_contract;
+
+    in `core/osinstall/mod.rs`. The first version of this sweep cut on the
+    file's own attribute alone and therefore skipped that module whole — three
+    unguarded call sites, ~90 leaked `art-osinstall-contract-*` directories,
+    and a sweep that would have certified the file converted without ever
+    reading it. That is the vacuous guard this script's own header warns
+    about, one level up.
+
+    So: look in the parent module for the declaration. `mod.rs` first, then
+    the 2018-style sibling (`core/osinstall.rs` for `core/osinstall/…`), then
+    `lib.rs` / `main.rs` for a file sitting directly in `src/`."""
+    stem = path.stem
+    if stem in ("mod", "lib", "main"):
+        return False
+    parents = [path.parent / "mod.rs", path.parent.with_suffix(".rs")]
+    if path.parent == ROOT:
+        parents += [ROOT / "lib.rs", ROOT / "main.rs"]
+    decl = re.compile(
+        r"#\[cfg\(test\)\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+" + re.escape(stem) + r"\s*;"
+    )
+    for parent in parents:
+        if parent == path or not parent.is_file():
+            continue
+        if decl.search(parent.read_text(encoding="utf-8")):
+            return True
+    return False
+
+
 def is_comment(line: str, col: int) -> bool:
-    """The match at `col` sits inside a `//` comment on its own line."""
+    """The match at `col` sits inside a `//` comment on its own line.
+
+    Deliberately crude, and its two blind spots are named rather than left to
+    be found: a `//` inside a *string literal* earlier on the same line
+    suppresses a real offender, and `/* … */` blocks are not handled at all.
+    Neither shape exists anywhere in the tree today; both would make the sweep
+    under-report, so if one ever appears it is a missing line, not a false
+    accusation."""
     head = line[:col]
     return "//" in head or line.strip().startswith("//")
 
@@ -225,7 +275,11 @@ def main() -> int:
         lines = sources[path]
         cut = first_cfg_test(lines)
         if cut is None:
-            continue
+            # No attribute of its own — but the module may be gated where it
+            # is declared, in which case the whole file is test code.
+            if not gated_at_its_declaration(path):
+                continue
+            cut = 0
         shape = resolved_shape(path)
 
         for i in range(cut, len(lines)):
@@ -260,13 +314,16 @@ def main() -> int:
             # it reaches actually returns.
             calls += 1
             stmt = lines[statement_start(lines, i)].strip()
-            if stmt.startswith("let (_,") or stmt.startswith("let ( _,"):
+            tuple_let = TUPLE_LET.match(stmt)
+            if tuple_let and tuple_let.group(1) == "_":
+                # Read out of the match, not off the raw prefix, so
+                # `let (_ , dir) = …` cannot slip through on one space.
                 offenders.append((rel, i + 1, "guard dropped at once"))
                 rule_counts["guard dropped at once"] += 1
+            elif tuple_let:
+                accepted_calls += 1
             elif shape == "guard" and IDENT_LET.match(stmt):
                 # `let dir = scratch("x")` where `dir` *is* the guard.
-                accepted_calls += 1
-            elif TUPLE_LET.match(stmt):
                 accepted_calls += 1
             elif IDENT_LET.match(stmt):
                 offenders.append((rel, i + 1, "bound without its guard"))

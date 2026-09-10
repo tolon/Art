@@ -17,7 +17,9 @@ The root is read from `src-tauri/.cargo/config.toml` — the same file Cargo
 reads to point `TMP` off the system drive — so moving the root moves this
 counter with it and no second copy of the path drifts. If that file cannot be
 parsed the fall-back is the value it holds today, `D:/tmp/art-tests`, and the
-line says which of the two was used.
+line says *why* it fell back — a config that could not be read and a config
+with no `TMP` line are different problems with different fixes, and one
+sentence for both would send someone to repair a file that is fine.
 
 Usage:  python scripts/scratch-residue.py          # entries under <root>: N
         python scripts/scratch-residue.py --json    # {"root": …, "entries": N}
@@ -40,15 +42,22 @@ TMP_RE = re.compile(r'^\s*TMP\s*=\s*\{\s*value\s*=\s*"([^"]+)"')
 
 
 def scratch_root() -> tuple[str, str]:
-    """(root, where it came from)."""
+    """(root, where it came from).
+
+    Three endings, three sentences: the config named the root ("config"), the
+    config was there but held no `TMP = { value = "…" }` line ("unparsed" — a
+    reformatted file, or a plain-string `TMP = "…"`), or the config could not
+    be read at all ("unreadable"). Collapsing the last two into one message
+    would tell someone to go fix a file that is fine."""
     try:
-        for line in CONFIG.read_text(encoding="utf-8").splitlines():
-            m = TMP_RE.match(line)
-            if m:
-                return m.group(1), "config"
+        text = CONFIG.read_text(encoding="utf-8")
     except OSError:
-        pass
-    return FALLBACK, "fallback"
+        return FALLBACK, "unreadable"
+    for line in text.splitlines():
+        m = TMP_RE.match(line)
+        if m:
+            return m.group(1), "config"
+    return FALLBACK, "unparsed"
 
 
 def count_entries(root: str) -> int:
@@ -71,7 +80,11 @@ def main() -> int:
     if "--json" in sys.argv:
         print(json.dumps({"root": root, "entries": entries, "source": source}))
     else:
-        suffix = "" if source == "config" else " (fallback: config unreadable)"
+        suffix = {
+            "config": "",
+            "unparsed": f" (fallback: no TMP line found in {CONFIG.name})",
+            "unreadable": f" (fallback: {CONFIG.name} could not be read)",
+        }[source]
         print(f"entries under {root}: {entries}{suffix}")
     return 0
 
