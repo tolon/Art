@@ -535,10 +535,11 @@ its own measurement.
   as a temporary (`pair(..).1`), a helper not named `scratch` that returns a
   bare path, and a 3-tuple helper whose first element is `_` — are **caught**
   since the sweep began finding its guard sources by return type rather than
-  by name. What remains, all of it under-reporting: **a helper reached by a
-  `use` import and then called bare** (`use crate::core::x::tests::helper;`),
-  which resolves to nothing — two files do exactly that, and the next script
-  commit closes it; **a guard that leaves a helper inside a type the sweep
+  by name; so is **a helper reached by a `use` import and then called bare**
+  (`use super::fixtures::scratch;` — `scan.rs` and `source_archive.rs`, 56
+  calls), which the sweep follows through the test region's `use` lines
+  since `b876d52`; a glob import (`use super::*;`) is still not followed.
+  What remains, all of it under-reporting: **a guard that leaves a helper inside a type the sweep
   cannot read**, an `InstallPlan` or a `Box<dyn MediaSource>` holding a scratch
   path, since rule 3 judges the *shape* of a return type; and **a binding
   spread over two statements** (`let p = helper(); let dir = p.1;`), each read
