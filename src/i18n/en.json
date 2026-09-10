@@ -733,7 +733,7 @@
         "on": "on",
         "off": "off"
       },
-      "goToBuild": "Go to Build"
+      "next": "Next: {{step}}"
     },
     "build": {
       "summary": {

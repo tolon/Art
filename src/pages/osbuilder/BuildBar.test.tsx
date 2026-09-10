@@ -155,10 +155,26 @@ describe("the build bar", () => {
     expect(screen.getByTestId("build-bar-destination").textContent).toBe(i18n.t("osBuilder.bar.noDestination"));
   });
 
-  it("goes to the build tab and starts nothing", async () => {
-    renderAt("/os-builder/secim");
-    await userEvent.setup().click(screen.getByTestId("build-bar-go"));
-    expect(screen.getByTestId("where").textContent).toBe("/os-builder/derle");
+  // The owner, 2026-09-10: "direkt derleye git diye buton var, bir sonraki
+  // adıma gitmeli". The bar's button takes the person one tab on, in the
+  // lane's own order, and names where it goes. Straight to Build from the
+  // first tab skipped two tabs of choices.
+  it("goes to the next tab in the lane's order, names it, and starts nothing", async () => {
+    const user = userEvent.setup();
+    for (const [from, to] of [
+      ["dosyalar", "secim"],
+      ["secim", "makine"],
+      ["makine", "derle"],
+    ] as const) {
+      renderAt(`/os-builder/${from}`);
+      const button = screen.getByTestId("build-bar-go");
+      expect(button.textContent).toBe(
+        i18n.t("osBuilder.bar.next", { step: i18n.t(`osBuilder.step.${to}`) })
+      );
+      await user.click(button);
+      expect(screen.getByTestId("where").textContent).toBe(`/os-builder/${to}`);
+      cleanup();
+    }
   });
 
   it("has no button on the build tab itself — one label, one effect", () => {

@@ -712,6 +712,9 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // up (and where), created, or — returning `null` — nothing to add.
     // The Build button's ternary is a third label wide now and still one
     // dynamic site, so it moves nothing.
-    expect(dynamicCalls).toBe(186);
+    // 186 → 187 (the owner's findings of 2026-09-10): the build bar's button names
+    // the next tab, `t(stepLabelKey(next))` — the pattern `OsBuilder.tsx`'s own
+    // strip already uses for the same labels, not a new one.
+    expect(dynamicCalls).toBe(187);
   });
 });

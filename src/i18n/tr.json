@@ -733,7 +733,7 @@
         "on": "açık",
         "off": "kapalı"
       },
-      "goToBuild": "Derle'ye git"
+      "next": "Sonraki adım: {{step}}"
     },
     "build": {
       "summary": {
