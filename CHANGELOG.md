@@ -64,6 +64,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OS Builder, Build tab: after a run has succeeded the button says **Build
   again**, not Build.
 
+### Changed
+
+- **Card builder: any Emu68 archive can go on the card.** A prerelease, a
+  nightly or another board's build is no longer refused because ART's table
+  names a different file for your board and release line; the plan says what
+  you chose and what the table names, then the card is built from your choice.
+  `Emu68-raspi.zip` — Emu68 for a bare Raspberry Pi, not PiStorm firmware — is
+  still refused.
+
 ### Fixed
 
 - **BoingBag 3.9-2 Contribution goes on after BoingBag 3.9-2.** Both archives
