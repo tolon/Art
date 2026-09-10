@@ -1,5 +1,11 @@
 import { useEffect } from "react";
-import { HashRouter, Route, Routes, Navigate } from "react-router-dom";
+import {
+  Navigate,
+  Route,
+  RouterProvider,
+  createHashRouter,
+  createRoutesFromElements,
+} from "react-router-dom";
 
 import { Layout } from "@/components/layout/Layout";
 import { Dashboard } from "@/pages/Dashboard";
@@ -24,6 +30,52 @@ import { changeLanguage, SUPPORTED_LANGUAGES, type Language } from "@/i18n";
 import { initLogging } from "@/lib/log";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useRecentFilesStore } from "@/stores/recentFilesStore";
+
+/**
+ * The application's routes, as a **data router** (ART-292).
+ *
+ * `HashRouter` could not do the one thing the run lock needed from it: refuse
+ * the browser's own Back and Forward while a build is in flight. React
+ * Router's `useBlocker` works only inside a data router — in 7.18 it says so
+ * itself, *"must be used within a data router"* — so the routes are the same
+ * and only the container changed. Created once, at module load, which is what
+ * `createHashRouter` expects; `App` itself renders the provider.
+ */
+const router = createHashRouter(
+  createRoutesFromElements(
+    <Route element={<Layout />}>
+      <Route index element={<Dashboard />} />
+      <Route path="settings" element={<SettingsPage />} />
+      {/* Phase 1 — ADF + LHA browsers */}
+      <Route path="disk-tools" element={<AdfBrowser />} />
+      <Route path="archive-tools" element={<LhaBrowser />} />
+      {/* Phase 2 — WinUAE + Kickstart ROM Studios */}
+      <Route path="winuae" element={<WinuaeStudio />} />
+      <Route path="rom" element={<RomStudio />} />
+      {/* Phase 3/4 — Hard Disk Studio */}
+      <Route path="hard-disk" element={<HardDiskStudio />} />
+      {/* Phase 5 — Gotek Studio */}
+      <Route path="gotek" element={<GotekStudio />} />
+      {/* Phase 6 & 7 — PiStorm & Forensic Hex Tools */}
+      <Route path="pistorm" element={<PistormStudio />} />
+      {/* The OS Builder is a sequence of steps, each its own sub-route, so
+          back/forward and a jump to a step work at the router level. The
+          parent still renders, which is what keeps `route::OS_BUILDER` a
+          real route for `builtin.rs` to point a workflow at. */}
+      <Route path="os-builder" element={<OsBuilder />}>
+        {osBuilderRoutes()}
+      </Route>
+      <Route path="layout" element={<ContentLayout />} />
+      <Route path="tools" element={<HexTools />} />
+      {/* Phase 8 — Collection Studio */}
+      <Route path="collection" element={<CollectionStudio />} />
+      <Route path="aminet" element={<AminetStudio />} />
+      <Route path="files" element={<FileManager />} />
+      <Route path="whdload" element={<WhdloadInstall />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Route>
+  )
+);
 
 export default function App() {
   const settings = useSettingsStore((s) => s.settings);
@@ -55,40 +107,6 @@ export default function App() {
   }, [settings.theme]);
 
   return (
-    <HashRouter>
-      <Routes>
-        <Route element={<Layout />}>
-          <Route index element={<Dashboard />} />
-          <Route path="settings" element={<SettingsPage />} />
-          {/* Phase 1 — ADF + LHA browsers */}
-          <Route path="disk-tools" element={<AdfBrowser />} />
-          <Route path="archive-tools" element={<LhaBrowser />} />
-          {/* Phase 2 — WinUAE + Kickstart ROM Studios */}
-          <Route path="winuae" element={<WinuaeStudio />} />
-          <Route path="rom" element={<RomStudio />} />
-          {/* Phase 3/4 — Hard Disk Studio */}
-          <Route path="hard-disk" element={<HardDiskStudio />} />
-          {/* Phase 5 — Gotek Studio */}
-          <Route path="gotek" element={<GotekStudio />} />
-          {/* Phase 6 & 7 — PiStorm & Forensic Hex Tools */}
-          <Route path="pistorm" element={<PistormStudio />} />
-          {/* The OS Builder is a sequence of steps, each its own sub-route, so
-              back/forward and a jump to a step work at the router level. The
-              parent still renders, which is what keeps `route::OS_BUILDER` a
-              real route for `builtin.rs` to point a workflow at. */}
-          <Route path="os-builder" element={<OsBuilder />}>
-            {osBuilderRoutes()}
-          </Route>
-          <Route path="layout" element={<ContentLayout />} />
-          <Route path="tools" element={<HexTools />} />
-          {/* Phase 8 — Collection Studio */}
-          <Route path="collection" element={<CollectionStudio />} />
-          <Route path="aminet" element={<AminetStudio />} />
-          <Route path="files" element={<FileManager />} />
-          <Route path="whdload" element={<WhdloadInstall />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
-    </HashRouter>
+    <RouterProvider router={router} />
   );
 }

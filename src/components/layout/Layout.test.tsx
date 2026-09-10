@@ -17,8 +17,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { useEffect } from "react";
+import { RouterProvider, createMemoryRouter } from "react-router-dom";
+import { useEffect, type ReactElement } from "react";
 import i18n from "i18next";
 
 // Side-effecting: a real, synchronously-initialised i18next instance, so the
@@ -51,6 +51,22 @@ function RunningScreen() {
   return <div data-testid="running-screen" />;
 }
 
+/**
+ * The shell at `entries`, the last one current, with `screens` as its routed
+ * children — through a **data router**, because that is what `App` builds and
+ * what `useBlocker` needs (ART-292). A plain `MemoryRouter` would make the
+ * shell's own history guard throw, which is a harness that no longer matches
+ * the application.
+ */
+function shellAt(entries: string[], screens: { path: string; element: ReactElement }[]) {
+  const router = createMemoryRouter([{ element: <Layout />, children: screens }], {
+    initialEntries: entries,
+    initialIndex: entries.length - 1,
+  });
+  render(<RouterProvider router={router} />);
+  return router;
+}
+
 beforeEach(() => {
   useSettingsStore.setState({ loaded: true, settings: { ...DEFAULT_SETTINGS } });
 });
@@ -60,15 +76,7 @@ afterEach(cleanup);
 describe("the shell provides the run lock", () => {
   it("carries a routed screen's lock out to the sidebar", async () => {
     await act(async () => {
-      render(
-        <MemoryRouter initialEntries={["/os-builder"]}>
-          <Routes>
-            <Route element={<Layout />}>
-              <Route path="/os-builder" element={<RunningScreen />} />
-            </Route>
-          </Routes>
-        </MemoryRouter>
-      );
+      shellAt(["/os-builder"], [{ path: "/os-builder", element: <RunningScreen /> }]);
     });
 
     await screen.findByTestId("running-screen");
@@ -84,19 +92,116 @@ describe("the shell provides the run lock", () => {
     // The control, measured rather than assumed: a shell that were always
     // locked would pass the case above and prove nothing.
     await act(async () => {
-      render(
-        <MemoryRouter initialEntries={["/os-builder"]}>
-          <Routes>
-            <Route element={<Layout />}>
-              <Route path="/os-builder" element={<div data-testid="quiet-screen" />} />
-            </Route>
-          </Routes>
-        </MemoryRouter>
-      );
+      shellAt(["/os-builder"], [
+        { path: "/os-builder", element: <div data-testid="quiet-screen" /> },
+      ]);
     });
 
     await screen.findByTestId("quiet-screen");
     expect(screen.queryByTestId("sidebar-locked")).toBeNull();
     expect(screen.getAllByRole("link").length).toBeGreaterThan(1);
+  });
+});
+
+describe("the browser's back and forward are inside the run lock (ART-292)", () => {
+  // Alt+Left and a mouse's back button were the one door the lock did not
+  // cover: leaving the build tab unmounts the loop that starts the next
+  // phase, so the ticked updates and first boot silently never ran.
+  it("keeps a running build's screen when history goes back", async () => {
+    let router!: ReturnType<typeof createMemoryRouter>;
+    await act(async () => {
+      router = shellAt(
+        ["/", "/os-builder"],
+        [
+          { path: "/", element: <div data-testid="home-screen" /> },
+          { path: "/os-builder", element: <RunningScreen /> },
+        ]
+      );
+    });
+    await screen.findByTestId("running-screen");
+
+    await act(async () => {
+      await router.navigate(-1);
+    });
+
+    expect(router.state.location.pathname).toBe("/os-builder");
+    expect(screen.getByTestId("running-screen")).toBeTruthy();
+    expect(screen.queryByTestId("home-screen")).toBeNull();
+    // Refused where the user can read why: the sidebar's own sentence names
+    // the OS Builder and Stop.
+    expect(screen.getByTestId("sidebar-locked").textContent).toBe(
+      i18n.t("osBuilder.build.navigationLockedLane")
+    );
+  });
+
+  // The control: with nothing running, history goes back as it always did.
+  // A shell that blocked every POP would pass the case above and break the
+  // browser for every screen.
+  it("lets history go back when no build is running", async () => {
+    let router!: ReturnType<typeof createMemoryRouter>;
+    await act(async () => {
+      router = shellAt(
+        ["/", "/os-builder"],
+        [
+          { path: "/", element: <div data-testid="home-screen" /> },
+          { path: "/os-builder", element: <div data-testid="quiet-screen" /> },
+        ]
+      );
+    });
+    await screen.findByTestId("quiet-screen");
+
+    await act(async () => {
+      await router.navigate(-1);
+    });
+
+    expect(router.state.location.pathname).toBe("/");
+    expect(await screen.findByTestId("home-screen")).toBeTruthy();
+  });
+});
+
+describe("the shell lets go of history when the build does (ART-292)", () => {
+  /** A build that is running until its own Stop is pressed. */
+  function StoppableScreen() {
+    const { setRunning } = useRunLock();
+    useEffect(() => {
+      setRunning(true);
+    }, [setRunning]);
+    return (
+      <button data-testid="stop-build" onClick={() => setRunning(false)}>
+        stop
+      </button>
+    );
+  }
+
+  // A refused Back must not leave the router holding the refused move: once
+  // the build stops, the very same Back goes through. This is what the
+  // blocker's reset is for, and the case above cannot see it.
+  it("goes back once the build has stopped, after refusing while it ran", async () => {
+    let router!: ReturnType<typeof createMemoryRouter>;
+    await act(async () => {
+      router = shellAt(
+        ["/", "/os-builder"],
+        [
+          { path: "/", element: <div data-testid="home-screen" /> },
+          { path: "/os-builder", element: <StoppableScreen /> },
+        ]
+      );
+    });
+    await screen.findByTestId("stop-build");
+
+    await act(async () => {
+      await router.navigate(-1);
+    });
+    expect(router.state.location.pathname).toBe("/os-builder");
+
+    await act(async () => {
+      screen.getByTestId("stop-build").click();
+    });
+    await act(async () => {
+      await router.navigate(-1);
+    });
+
+    expect(router.state.location.pathname).toBe("/");
+    expect(await screen.findByTestId("home-screen")).toBeTruthy();
   });
 });
