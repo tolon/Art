@@ -469,17 +469,8 @@ mod tests {
     use super::*;
     use crate::core::iso::fixture::{dir, file, IsoBuilder};
 
-    fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "art-iso-cmd-{name}-{}-{}",
-            crate::core::test_scratch_id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    fn tmp(name: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-iso-cmd", name)
     }
 
     fn sample_disc() -> Vec<u8> {
@@ -498,7 +489,7 @@ mod tests {
     /// the routing case the brief asks for at the command layer.
     #[test]
     fn opening_a_file_that_is_not_a_disc_is_an_error() {
-        let d = tmp("not-a-disc");
+        let (_guard, d) = tmp("not-a-disc");
         let p = d.join("plain.iso");
         std::fs::write(&p, vec![0u8; 4096]).unwrap();
 
@@ -511,7 +502,7 @@ mod tests {
     /// A bad extent is an error rather than a panic — same case, for `iso_list`.
     #[test]
     fn listing_a_bad_extent_is_an_error_not_a_panic() {
-        let d = tmp("bad-extent");
+        let (_guard, d) = tmp("bad-extent");
         let p = d.join("disc.iso");
         std::fs::write(&p, sample_disc()).unwrap();
 
@@ -525,7 +516,7 @@ mod tests {
     /// round-trip a pane makes on first opening a disc.
     #[test]
     fn opening_then_listing_the_root_returns_what_the_disc_holds() {
-        let d = tmp("open-list");
+        let (_guard, d) = tmp("open-list");
         let p = d.join("disc.iso");
         std::fs::write(&p, sample_disc()).unwrap();
         let path = p.to_string_lossy().to_string();
@@ -556,7 +547,7 @@ mod tests {
     /// than silently replacing it (`SAFE_CREATE`).
     #[test]
     fn extract_file_writes_one_file_and_refuses_to_overwrite_it_by_default() {
-        let d = tmp("extract-file");
+        let (_guard, d) = tmp("extract-file");
         let p = d.join("disc.iso");
         std::fs::write(&p, sample_disc()).unwrap();
         let out = d.join("out");
@@ -601,7 +592,7 @@ mod tests {
     /// path too.
     #[test]
     fn extract_file_reports_a_bad_extent_instead_of_panicking() {
-        let d = tmp("extract-file-bad");
+        let (_guard, d) = tmp("extract-file-bad");
         let p = d.join("disc.iso");
         std::fs::write(&p, sample_disc()).unwrap();
         let out = d.join("out");
@@ -620,7 +611,7 @@ mod tests {
     fn copying_a_directory_out_refuses_a_name_that_leaves_the_chosen_folder() {
         use crate::core::jobs::NoProgress;
 
-        let d = tmp("escape");
+        let (_guard, d) = tmp("escape");
         let p = d.join("disc.iso");
         std::fs::write(&p, sample_disc()).unwrap();
         let out = d.join("out");
@@ -653,7 +644,7 @@ mod tests {
     fn copying_a_directory_out_lands_it_under_the_chosen_folder() {
         use crate::core::jobs::NoProgress;
 
-        let d = tmp("copy-out");
+        let (_guard, d) = tmp("copy-out");
         let p = d.join("disc.iso");
         std::fs::write(&p, sample_disc()).unwrap();
         let out = d.join("out");
@@ -694,7 +685,7 @@ mod tests {
     /// of it went across.
     #[test]
     fn a_single_selected_file_is_copied_into_a_volume_on_its_own() {
-        let d = tmp("disc-source");
+        let (_guard, d) = tmp("disc-source");
         let p = d.join("disc.iso");
         std::fs::write(&p, sample_disc()).unwrap();
 
@@ -743,7 +734,7 @@ mod tests {
     /// would probe for itself — the contract `open_image` exists to keep.
     #[test]
     fn a_format_hint_opens_the_same_disc_as_self_probing() {
-        let d = tmp("hint");
+        let (_guard, d) = tmp("hint");
         let p = d.join("disc.iso");
         std::fs::write(&p, sample_disc()).unwrap();
         let path = p.to_string_lossy().to_string();

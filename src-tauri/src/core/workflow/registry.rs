@@ -143,8 +143,7 @@ mod tests {
 
     #[test]
     fn hash_workflow_runs_on_file() {
-        let d = std::env::temp_dir().join(format!("art-wf-{}", crate::core::test_scratch_id()));
-        std::fs::create_dir_all(&d).unwrap();
+        let (_guard, d) = crate::core::ScratchDir::pair("art-wf", "hash");
         let p = d.join("x.rom");
         std::fs::write(&p, b"abc").unwrap();
 
@@ -167,9 +166,7 @@ mod tests {
         builtin::register_all(&mut reg);
         let engine = WorkflowEngine::new(reg);
 
-        let d =
-            std::env::temp_dir().join(format!("art-wf-plan-{}", crate::core::test_scratch_id()));
-        std::fs::create_dir_all(&d).unwrap();
+        let (_guard, d) = crate::core::ScratchDir::pair("art-wf-plan", "floppy");
         let p = d.join("disk.adf");
         std::fs::write(&p, vec![0u8; crate::core::detect::sizes::ADF_DD as usize]).unwrap();
 
@@ -198,9 +195,7 @@ mod tests {
         builtin::register_all(&mut reg);
         let engine = WorkflowEngine::new(reg);
 
-        let d =
-            std::env::temp_dir().join(format!("art-wf-later-{}", crate::core::test_scratch_id()));
-        std::fs::create_dir_all(&d).unwrap();
+        let (_guard, d) = crate::core::ScratchDir::pair("art-wf-later", "catalogue");
         let p = d.join("disk.adf");
         std::fs::write(&p, vec![0u8; crate::core::detect::sizes::ADF_DD as usize]).unwrap();
 

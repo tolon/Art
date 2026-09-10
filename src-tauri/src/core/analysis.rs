@@ -181,8 +181,7 @@ mod tests {
 
     #[test]
     fn read_hex_chunk_with_signature() {
-        let dir = std::env::temp_dir().join("art-test-hex");
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-test-hex", "signature");
         let file_path = dir.join("test.adf");
 
         let mut data = vec![0u8; 1024];

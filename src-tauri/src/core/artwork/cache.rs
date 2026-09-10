@@ -239,19 +239,13 @@ mod tests {
     /// A directory of this test's own. The name is passed in rather than taken
     /// from the thread, because the harness reuses threads and two tests
     /// sharing a directory fail in a way that looks like a cache bug.
-    fn tempdir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-artwork-{}-{name}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn tempdir(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-artwork", name)
     }
 
     #[test]
     fn a_stored_image_comes_back_and_its_bytes_are_on_disk() {
-        let dir = tempdir("stored");
+        let (_guard, dir) = tempdir("stored");
         let mut cache = Cache::open(&dir).unwrap();
         let art = cache
             .store(
@@ -274,7 +268,7 @@ mod tests {
     /// The point of the cache: a second run asks for nothing it already knows.
     #[test]
     fn a_saved_cache_reloads_with_its_entries_and_misses() {
-        let dir = tempdir("reload");
+        let (_guard, dir) = tempdir("reload");
         {
             let mut cache = Cache::open(&dir).unwrap();
             cache
@@ -293,7 +287,7 @@ mod tests {
     /// and must still be tried.
     #[test]
     fn a_miss_is_per_source_not_per_title() {
-        let dir = tempdir("miss-per-source");
+        let (_guard, dir) = tempdir("miss-per-source");
         let mut cache = Cache::open(&dir).unwrap();
         cache.record_miss("moonstone", ArtKind::Icon, "libretro");
         assert!(cache.is_missing("moonstone", ArtKind::Icon, "libretro"));
@@ -304,7 +298,7 @@ mod tests {
     /// directory, whatever it contains.
     #[test]
     fn a_traversing_title_cannot_write_outside_the_cache() {
-        let dir = tempdir("traversal");
+        let (_guard, dir) = tempdir("traversal");
         let mut cache = Cache::open(&dir).unwrap();
         let art = cache
             .store("../../evil", ArtKind::Boxart, "libretro", "png", b"X")
@@ -326,7 +320,7 @@ mod tests {
     /// to land somewhere rather than producing an empty name.
     #[test]
     fn a_title_with_nothing_usable_in_it_still_gets_a_file() {
-        let dir = tempdir("unusable");
+        let (_guard, dir) = tempdir("unusable");
         let mut cache = Cache::open(&dir).unwrap();
         let art = cache
             .store("///", ArtKind::Boxart, "libretro", "png", b"X")
@@ -339,7 +333,7 @@ mod tests {
     /// good. Without adoption every one of them is fetched again.
     #[test]
     fn a_picture_already_on_disk_is_adopted_rather_than_refetched() {
-        let dir = tempdir("adopt");
+        let (_guard, dir) = tempdir("adopt");
         {
             let mut first = Cache::open(&dir).unwrap();
             first
@@ -370,7 +364,7 @@ mod tests {
     /// index pointing at nothing.
     #[test]
     fn adopt_finds_nothing_when_there_is_no_file() {
-        let dir = tempdir("adopt-empty");
+        let (_guard, dir) = tempdir("adopt-empty");
         let mut cache = Cache::open(&dir).unwrap();
         assert!(cache
             .adopt("never fetched", ArtKind::Boxart, "libretro", "png")
@@ -382,7 +376,7 @@ mod tests {
     /// rebuild it from the UI.
     #[test]
     fn opening_a_directory_with_a_corrupt_index_starts_empty_rather_than_failing() {
-        let dir = tempdir("corrupt");
+        let (_guard, dir) = tempdir("corrupt");
         std::fs::write(dir.join(INDEX_FILE), b"{ not json").unwrap();
         let cache = Cache::open(&dir).unwrap();
         assert!(cache.get("anything", ArtKind::Boxart).is_none());
@@ -392,7 +386,7 @@ mod tests {
     /// `ArtKind::ALL` — a cover beats an icon, whatever order they arrived in.
     #[test]
     fn best_prefers_the_kind_a_screen_should_show_first() {
-        let dir = tempdir("best");
+        let (_guard, dir) = tempdir("best");
         let mut cache = Cache::open(&dir).unwrap();
         cache
             .store("moonstone", ArtKind::Icon, "whdload-de", "png", b"I")
@@ -409,7 +403,7 @@ mod tests {
     /// cache entry rather than fetching twice.
     #[test]
     fn the_key_is_taken_as_given_so_the_caller_normalises_once() {
-        let dir = tempdir("key-as-given");
+        let (_guard, dir) = tempdir("key-as-given");
         let mut cache = Cache::open(&dir).unwrap();
         cache
             .store("turrican ii", ArtKind::Boxart, "libretro", "png", b"X")
@@ -422,7 +416,7 @@ mod tests {
     /// second removal of the same title is quiet rather than an error.
     #[test]
     fn a_removed_picture_leaves_neither_an_entry_nor_a_file() {
-        let dir = tempdir("removed");
+        let (_guard, dir) = tempdir("removed");
         let mut cache = Cache::open(&dir).unwrap();
         let art = cache
             .store("moonstone", ArtKind::Boxart, "manual", "png", b"X")
@@ -441,7 +435,7 @@ mod tests {
     /// Removing a title nothing was ever stored for is a no-op, not an error.
     #[test]
     fn removing_a_title_with_nothing_stored_is_quiet() {
-        let dir = tempdir("remove-nothing");
+        let (_guard, dir) = tempdir("remove-nothing");
         let mut cache = Cache::open(&dir).unwrap();
         cache.remove("never stored", ArtKind::Boxart).unwrap();
     }

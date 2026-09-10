@@ -360,26 +360,21 @@ mod tests {
     struct Fixture {
         dir: PathBuf,
         cache: CacheLayout,
+        /// **Last**, because a struct's fields drop in declaration order and
+        /// the directory must outlive everything reading from it (ART-281).
+        /// It also replaces this fixture's own `Drop`, which only ran when
+        /// the test did not panic.
+        _guard: crate::core::ScratchDir,
     }
 
     impl Fixture {
         fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!(
-                "art-fetch-{name}-{}",
-                crate::core::test_scratch_id()
-            ));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
+            let (guard, dir) = crate::core::ScratchDir::pair("art-fetch", name);
             Self {
                 cache: CacheLayout::new(dir.join("cache")),
                 dir,
+                _guard: guard,
             }
-        }
-    }
-
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.dir);
         }
     }
 

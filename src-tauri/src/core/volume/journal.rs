@@ -1048,12 +1048,7 @@ mod crash_safety {
         };
 
         for point in INJECTION_POINTS {
-            let dir = std::env::temp_dir().join(format!(
-                "art-crash-{point}-{}",
-                crate::core::test_scratch_id()
-            ));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
+            let (_guard, dir) = crate::core::ScratchDir::pair("art-crash", point);
             let image = dir.join("disk.hdf");
             let before = image_at(&image);
 
@@ -1104,12 +1099,7 @@ mod crash_safety {
             return;
         };
 
-        let dir = std::env::temp_dir().join(format!(
-            "art-crash-stale-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-crash-stale", "not-applied");
         let image = dir.join("disk.hdf");
         image_at(&image);
 

@@ -512,14 +512,8 @@ mod tests {
         assert_eq!(picture_extension(Path::new("cover")), None);
     }
 
-    fn tempdir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-artwork-cmd-{}-{name}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn tempdir(name: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-artwork-cmd", name)
     }
 
     /// The defect this exists for: the cache write (bytes plus index row)
@@ -529,7 +523,7 @@ mod tests {
     /// while the catalogue has no idea it exists.
     #[test]
     fn a_failed_override_write_rolls_back_the_cache_entry() {
-        let root = tempdir("rollback");
+        let (_guard, root) = tempdir("rollback");
         let cache_dir = root.join("artwork");
         let catalogue_dir = root.join("catalogue");
         std::fs::create_dir_all(&catalogue_dir).unwrap();
@@ -567,7 +561,7 @@ mod tests {
     /// attach's picture is findable afterwards, normalised key and all.
     #[test]
     fn a_successful_attach_leaves_the_picture_in_the_cache() {
-        let root = tempdir("success");
+        let (_guard, root) = tempdir("success");
         let cache_dir = root.join("artwork");
         let catalogue_dir = root.join("catalogue");
         std::fs::create_dir_all(&catalogue_dir).unwrap();
@@ -618,7 +612,7 @@ mod tests {
     /// (`MAX_PREVIEW_BYTES`); this is the one that did not, until now.
     #[test]
     fn a_picture_larger_than_the_ceiling_is_refused() {
-        let root = tempdir("oversized");
+        let (_guard, root) = tempdir("oversized");
         let cache_dir = root.join("artwork");
         let catalogue_dir = root.join("catalogue");
         std::fs::create_dir_all(&catalogue_dir).unwrap();
@@ -661,7 +655,7 @@ mod tests {
         use crate::core::artwork::rebind::rebind_manual_art;
         use crate::core::jobs::NoProgress;
 
-        let root = tempdir("rebind-round-trip");
+        let (_guard, root) = tempdir("rebind-round-trip");
         let cache_dir = root.join("artwork");
         let catalogue_dir = root.join("catalogue");
         std::fs::create_dir_all(&catalogue_dir).unwrap();

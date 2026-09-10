@@ -807,10 +807,7 @@ mod tests {
     fn a_plain_hdf_comes_back_as_one_area_at_offset_zero() {
         use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
 
-        let dir =
-            std::env::temp_dir().join(format!("art-card-cmd-{}", crate::core::test_scratch_id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-card-cmd", "plain-hdf");
         let path = dir.join("plain.hdf");
 
         crate::core::hdf::create_hdf(
@@ -852,12 +849,7 @@ mod tests {
     fn a_partition_with_no_driver_anywhere_on_the_card_is_named() {
         use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
 
-        let dir = std::env::temp_dir().join(format!(
-            "art-card-cmd-pfs-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-card-cmd-pfs", "no-driver");
         let path = dir.join("pfs.hdf");
 
         // PFS3 is not in Kickstart: without a driver in the RDB, an Amiga

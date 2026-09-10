@@ -427,29 +427,18 @@ mod tests {
     /// is `a_file_that_is_not_a_disk_image_is_refused_at_open`'s fixture read
     /// under this test's name. Same mechanism and same one-line fix as
     /// ART-164 in `core::iso`.
-    fn write(bytes: &[u8]) -> (PathBuf, PathBuf) {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "art-cbm-{}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+    fn write(bytes: &[u8]) -> (crate::core::ScratchDir, PathBuf, PathBuf) {
+        let (guard, dir) = crate::core::ScratchDir::pair("art-cbm", "d");
         let path = dir.join("disk.d64");
         std::fs::write(&path, bytes).unwrap();
-        (dir, path)
+        (guard, dir, path)
     }
 
     #[test]
     fn a_disk_reports_its_name_and_id() {
         let mut builder = D64Builder::new(35);
         builder.write_header("ELITE", "2A");
-        let (d, p) = write(&builder.build());
+        let (_guard, d, p) = write(&builder.build());
 
         let image = D64Image::open(&p).unwrap();
         let (name, id) = image.disk_name().unwrap();
@@ -464,7 +453,7 @@ mod tests {
         let mut builder = D64Builder::new(35);
         builder.add_file("LOADER", b"hello", &[(17, 0)]);
         builder.add_file("DATA FILE", b"world", &[(17, 1)]);
-        let (d, p) = write(&builder.build());
+        let (_guard, d, p) = write(&builder.build());
 
         let entries = D64Image::open(&p).unwrap().list().unwrap();
         assert_eq!(entries.len(), 2, "{entries:?}");
@@ -485,7 +474,7 @@ mod tests {
         let contents: Vec<u8> = (0..600u32).map(|i| (i % 251) as u8).collect();
         let mut builder = D64Builder::new(35);
         builder.add_file("BIG", &contents, &[(17, 0), (17, 1), (17, 2)]);
-        let (d, p) = write(&builder.build());
+        let (_guard, d, p) = write(&builder.build());
 
         let image = D64Image::open(&p).unwrap();
         let entries = image.list().unwrap();
@@ -501,7 +490,7 @@ mod tests {
     fn a_one_sector_file_reads_back_exactly_its_bytes() {
         let mut builder = D64Builder::new(35);
         builder.add_file("SMALL", b"hi", &[(17, 0)]);
-        let (d, p) = write(&builder.build());
+        let (_guard, d, p) = write(&builder.build());
 
         let image = D64Image::open(&p).unwrap();
         let entries = image.list().unwrap();
@@ -519,7 +508,7 @@ mod tests {
         builder.add_file("LOOP", &vec![b'x'; 300], &[(17, 0), (17, 1)]);
         // Make the second sector point back at the first.
         builder.link_directory((17, 1), (17, 0));
-        let (d, p) = write(&builder.build());
+        let (_guard, d, p) = write(&builder.build());
 
         let image = D64Image::open(&p).unwrap();
         let entries = image.list().unwrap();
@@ -537,7 +526,7 @@ mod tests {
         builder.add_file("ONE", b"a", &[(17, 0)]);
         let dir = (18, builder.geometry.directory_sector());
         builder.link_directory(dir, dir);
-        let (d, p) = write(&builder.build());
+        let (_guard, d, p) = write(&builder.build());
 
         let entries = D64Image::open(&p).unwrap().list().unwrap();
         assert_eq!(entries.len(), 1, "listed more than once: {entries:?}");
@@ -551,7 +540,7 @@ mod tests {
     fn an_entry_pointing_outside_the_disk_is_an_error() {
         let mut builder = D64Builder::new(35);
         builder.add_directory_entry("GHOST", FileType::Prg, (99, 0), 1);
-        let (d, p) = write(&builder.build());
+        let (_guard, d, p) = write(&builder.build());
 
         let image = D64Image::open(&p).unwrap();
         let entries = image.list().unwrap();
@@ -568,7 +557,7 @@ mod tests {
     fn an_entry_with_no_first_sector_is_refused() {
         let mut builder = D64Builder::new(35);
         builder.add_directory_entry("NOWHERE", FileType::Seq, (0, 0), 0);
-        let (d, p) = write(&builder.build());
+        let (_guard, d, p) = write(&builder.build());
 
         let image = D64Image::open(&p).unwrap();
         let entries = image.list().unwrap();
@@ -587,7 +576,7 @@ mod tests {
         let bytes = builder.build();
         assert_eq!(bytes.len(), 196_608);
 
-        let (d, p) = write(&bytes);
+        let (_guard, d, p) = write(&bytes);
         let image = D64Image::open(&p).unwrap();
         assert_eq!(image.geometry().tracks, 40);
         let entries = image.list().unwrap();
@@ -602,7 +591,7 @@ mod tests {
     fn an_unknown_file_type_is_reported_as_unknown() {
         let mut builder = D64Builder::new(35);
         builder.add_directory_entry("ODD", FileType::Unknown(7), (17, 0), 1);
-        let (d, p) = write(&builder.build());
+        let (_guard, d, p) = write(&builder.build());
 
         let entries = D64Image::open(&p).unwrap().list().unwrap();
         assert_eq!(entries[0].file_type, FileType::Unknown(7));
@@ -648,7 +637,7 @@ mod tests {
 
     #[test]
     fn a_file_that_is_not_a_disk_image_is_refused_at_open() {
-        let (d, p) = write(&vec![0u8; 1000]);
+        let (_guard, d, p) = write(&vec![0u8; 1000]);
         assert!(D64Image::open(&p).is_err());
         std::fs::remove_dir_all(&d).ok();
     }

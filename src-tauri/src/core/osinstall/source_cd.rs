@@ -339,13 +339,8 @@ mod tests {
     // `OS-Version3.9`, `Workbench3.5` and the rest of the deep, long-named
     // path every test here reads back, exactly as a real AmigaOS 3.9 disc
     // does (test 5 below is the one that makes this load-bearing explicit).
-    fn disc(dirname: &str) -> std::path::PathBuf {
-        let folder = std::env::temp_dir().join(format!(
-            "art-cdsource-{dirname}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&folder);
-        std::fs::create_dir_all(&folder).unwrap();
+    fn disc(dirname: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        let (guard, folder) = crate::core::ScratchDir::pair("art-cdsource", dirname);
         let bytes = IsoBuilder {
             volume: "AmigaOS3.9".to_string(),
             joliet_volume: "AmigaOS3.9".to_string(),
@@ -367,7 +362,7 @@ mod tests {
         .build();
         let path = folder.join("os39.iso");
         std::fs::write(&path, bytes).unwrap();
-        path
+        (guard, path)
     }
 
     /// **ART-158.** A disc nested deeper than `MAX_WALK_DEPTH` is refused
@@ -381,16 +376,8 @@ mod tests {
     /// searches for.
     #[test]
     fn a_disc_deeper_than_art_will_walk_is_a_limit_not_a_malformed_disc() {
-        let folder = std::env::temp_dir().join(format!(
-            "art-cdsource-toodeep-{}-{}",
-            crate::core::test_scratch_id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_dir_all(&folder);
-        std::fs::create_dir_all(&folder).unwrap();
+        let (_guard, folder) =
+            crate::core::ScratchDir::pair("art-cdsource-toodeep", "deeper-than-walk");
 
         // Twenty levels, past MAX_WALK_DEPTH's sixteen.
         let mut node = dir("L20", "L20", vec![file("LEAF.;1", "Leaf", b"deep")]);
@@ -430,7 +417,7 @@ mod tests {
     /// file.
     #[test]
     fn a_disc_that_is_damaged_is_still_malformed() {
-        let path = disc("truncated");
+        let (_guard, path) = disc("truncated");
         let bytes = std::fs::read(&path).unwrap();
         // Sector 16 is the Primary descriptor, 17 the Joliet one, 18 the
         // terminator — keep those and cut everything the root points at.
@@ -448,7 +435,7 @@ mod tests {
     /// `AdfSource` follows so a renamed image still identifies itself.
     #[test]
     fn a_disc_answers_with_the_volume_name_recorded_inside_it() {
-        let path = disc("volume");
+        let (_guard, path) = disc("volume");
         let source = CdSource::open(&path).unwrap();
         assert_eq!(source.volume_name(), "AmigaOS3.9");
     }
@@ -457,7 +444,7 @@ mod tests {
     /// and a CD's is deep where a floppy's is shallow.
     #[test]
     fn a_deep_path_is_found_and_read() {
-        let path = disc("deep");
+        let (_guard, path) = disc("deep");
         let mut source = CdSource::open(&path).unwrap();
 
         let entry = source
@@ -476,7 +463,7 @@ mod tests {
     /// path asked for — the trait says so, and `apply` relies on it.
     #[test]
     fn walk_returns_paths_from_the_discs_own_root() {
-        let path = disc("walk");
+        let (_guard, path) = disc("walk");
         let mut source = CdSource::open(&path).unwrap();
 
         let entries = source.walk("OS-Version3.9/Workbench3.5/C").unwrap();
@@ -491,7 +478,7 @@ mod tests {
     /// decides whether a missing path is a refusal.
     #[test]
     fn a_path_the_disc_does_not_hold_is_absent_rather_than_an_error() {
-        let path = disc("absent");
+        let (_guard, path) = disc("absent");
         let mut source = CdSource::open(&path).unwrap();
 
         assert!(source.entry("OS-Version3.9/NotThere").unwrap().is_none());
@@ -503,12 +490,7 @@ mod tests {
     /// written against.
     #[test]
     fn the_long_names_are_the_ones_a_recipe_sees() {
-        let folder = std::env::temp_dir().join(format!(
-            "art-cdsource-joliet-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&folder);
-        std::fs::create_dir_all(&folder).unwrap();
+        let (_guard, folder) = crate::core::ScratchDir::pair("art-cdsource-joliet", "long-names");
         let bytes = IsoBuilder {
             volume: "AmigaOS3.9".to_string(),
             joliet_volume: "AmigaOS3.9".to_string(),
@@ -544,7 +526,7 @@ mod tests {
     /// identical reason.
     #[test]
     fn an_empty_path_entry_resolves_to_the_root_directory() {
-        let path = disc("root-entry");
+        let (_guard, path) = disc("root-entry");
         let mut source = CdSource::open(&path).unwrap();
 
         let entry = source.entry("").unwrap().unwrap();
@@ -561,7 +543,7 @@ mod tests {
     /// ISO9660 directory extent happens to read back as.
     #[test]
     fn read_refuses_a_path_that_names_a_drawer() {
-        let path = disc("read-wrong-kind");
+        let (_guard, path) = disc("read-wrong-kind");
         let mut source = CdSource::open(&path).unwrap();
 
         let err = source.read("OS-Version3.9/Workbench3.5/C").unwrap_err();
@@ -578,7 +560,7 @@ mod tests {
     /// which now asks both implementations this and seven other questions.
     #[test]
     fn walk_refuses_a_path_that_names_a_file() {
-        let path = disc("walk-a-file");
+        let (_guard, path) = disc("walk-a-file");
         let mut source = CdSource::open(&path).unwrap();
 
         let err = source
@@ -597,7 +579,7 @@ mod tests {
     /// same call.
     #[test]
     fn read_of_the_root_says_it_is_a_drawer_not_that_it_is_absent() {
-        let path = disc("read-root");
+        let (_guard, path) = disc("read-root");
         let mut source = CdSource::open(&path).unwrap();
 
         let err = source.read("").unwrap_err();
@@ -623,12 +605,8 @@ mod tests {
     /// contents can be walked.
     #[test]
     fn a_mixed_case_path_resolves_case_insensitively() {
-        let folder = std::env::temp_dir().join(format!(
-            "art-cdsource-case-fallback-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&folder);
-        std::fs::create_dir_all(&folder).unwrap();
+        let (_guard, folder) =
+            crate::core::ScratchDir::pair("art-cdsource-case-fallback", "mixed-case");
         let bytes = IsoBuilder {
             volume: "AMIGAOS39".to_string(),
             joliet_volume: "AmigaOS3.9".to_string(),
@@ -667,12 +645,8 @@ mod tests {
     /// case-insensitive search happens to reach first.
     #[test]
     fn an_exact_case_match_wins_over_a_differently_cased_entry() {
-        let folder = std::env::temp_dir().join(format!(
-            "art-cdsource-exact-wins-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&folder);
-        std::fs::create_dir_all(&folder).unwrap();
+        let (_guard, folder) =
+            crate::core::ScratchDir::pair("art-cdsource-exact-wins", "exact-match");
         let bytes = IsoBuilder {
             volume: "AMIGAOS39".to_string(),
             joliet_volume: "AmigaOS3.9".to_string(),
@@ -714,12 +688,8 @@ mod tests {
     /// exact-match-first. Only containment is folded.
     #[test]
     fn two_drawers_differing_only_in_case_are_one_drawer_to_amigados() {
-        let folder = std::env::temp_dir().join(format!(
-            "art-cdsource-fold-walk-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&folder);
-        std::fs::create_dir_all(&folder).unwrap();
+        let (_guard, folder) =
+            crate::core::ScratchDir::pair("art-cdsource-fold-walk", "folded-walk");
         let bytes = IsoBuilder {
             volume: "AMIGAOS39".to_string(),
             joliet_volume: "AmigaOS3.9".to_string(),

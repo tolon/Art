@@ -308,8 +308,7 @@ mod tests {
 
     #[test]
     fn create_and_open_rdb_hdf() {
-        let dir = std::env::temp_dir().join(format!("art-hdf-{}", crate::core::test_scratch_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-hdf", "create-open");
         let hdf_path = dir.join("System.hdf");
 
         let specs = vec![PartitionSpec {

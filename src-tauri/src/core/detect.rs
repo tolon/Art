@@ -669,25 +669,13 @@ mod tests {
     /// `write` for the measurement behind the counter (ART-173). This helper
     /// takes no tag at all, so pid plus a timestamp was the only thing
     /// keeping two of its twenty-odd callers apart.
-    fn tmp() -> std::path::PathBuf {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let d = std::env::temp_dir().join(format!(
-            "art-detect-{}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&d).unwrap();
-        d
+    fn tmp() -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-detect", "d")
     }
 
     #[test]
     fn detects_directory() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let det = detect(&d).unwrap();
         assert_eq!(det.category, FormatCategory::Directory);
         assert!(det.is_dir);
@@ -697,7 +685,7 @@ mod tests {
 
     #[test]
     fn detects_adf_by_size_and_extension() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("disk.adf");
         let mut f = fs::File::create(&p).unwrap();
         // Write exactly ADF_DD zero bytes — no DOS signature, so this
@@ -731,7 +719,7 @@ mod tests {
     /// builder the LHA tests use.
     #[test]
     fn detects_lha_by_signature() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("game.dat"); // the extension deliberately says nothing
         fs::write(
             &p,
@@ -748,7 +736,7 @@ mod tests {
     /// And the shape that used to pass is not an archive at all.
     #[test]
     fn a_method_field_at_offset_zero_is_not_an_lha() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("bogus.dat");
         fs::write(&p, b"-lh5-not-an-archive").unwrap();
         assert_ne!(detect(&p).unwrap().category, FormatCategory::Archive);
@@ -759,7 +747,7 @@ mod tests {
     /// and the header sector is read to raise confidence rather than to gate.
     #[test]
     fn detects_a_c64_disk_by_size_and_confirms_it_by_its_header() {
-        let d = tmp();
+        let (_guard, d) = tmp();
 
         // A real fixture, so the header byte is where a drive would put it.
         let p = d.join("game.d64");
@@ -796,7 +784,7 @@ mod tests {
 
     #[test]
     fn detects_the_other_commodore_disk_sizes() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         for (bytes, hint) in [(349_696usize, "d71"), (819_200, "d81")] {
             let p = d.join(format!("{hint}.img"));
             fs::write(&p, vec![0u8; bytes]).unwrap();
@@ -812,7 +800,7 @@ mod tests {
     /// property of the formats rather than a gap (§10, §89).
     #[test]
     fn detects_the_signed_commodore_formats() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         for (magic, hint) in [
             (b"C64 tape image file".to_vec(), "t64"),
             (b"C64-TAPE-RAW".to_vec(), "tap"),
@@ -835,7 +823,7 @@ mod tests {
     /// the `DOS` signature wins in any case.
     #[test]
     fn an_adf_is_not_mistaken_for_a_c64_disk() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("disk.adf");
         let mut bytes = vec![0u8; sizes::ADF_DD as usize];
         bytes[0..4].copy_from_slice(b"DOS\x00");
@@ -847,7 +835,7 @@ mod tests {
 
     #[test]
     fn detects_zip_by_signature() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("pack.dat");
         fs::write(
             &p,
@@ -863,7 +851,7 @@ mod tests {
 
     #[test]
     fn detects_7z_by_signature() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("pack.dat");
         fs::write(
             &p,
@@ -879,7 +867,7 @@ mod tests {
 
     #[test]
     fn detects_unknown_for_unrecognised_file() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("random.bin");
         fs::write(&p, b"not an amiga file").unwrap();
         let det = detect(&p).unwrap();
@@ -914,7 +902,7 @@ mod tests {
 
     #[test]
     fn an_img_holding_a_floppy_is_a_floppy_not_an_unknown() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("disk.img");
         let mut f = fs::File::create(&p).unwrap();
         f.write_all(b"DOS\0").unwrap();
@@ -935,7 +923,7 @@ mod tests {
 
     #[test]
     fn an_adf_that_is_really_an_iso_is_reported_as_an_iso() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("disk.adf");
         write_at(&p, 0x8001, b"CD001");
 
@@ -948,7 +936,7 @@ mod tests {
 
     #[test]
     fn a_raw_track_iso_is_detected_at_0x9311() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("disk.iso");
         write_at(&p, 0x9311, b"CD001");
 
@@ -966,7 +954,7 @@ mod tests {
     /// and mixed-mode discs are where this appears.
     #[test]
     fn a_raw_mode2_xa_track_is_detected_at_0x9319() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("cd32.iso");
         write_at(&p, 0x9319, b"CD001");
 
@@ -980,7 +968,7 @@ mod tests {
     /// not an XA disc that happens to have a byte there.
     #[test]
     fn a_mode1_raw_track_is_not_reported_as_xa() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("mode1.iso");
         write_at(&p, 0x9311, b"CD001");
 
@@ -990,7 +978,7 @@ mod tests {
 
     #[test]
     fn a_file_shorter_than_the_signature_offset_is_not_a_panic() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("tiny.iso");
         fs::write(&p, vec![0u8; 100]).unwrap();
 
@@ -1003,7 +991,7 @@ mod tests {
 
     #[test]
     fn an_empty_file_is_not_a_panic() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("empty.iso");
         fs::write(&p, []).unwrap();
 
@@ -1034,7 +1022,7 @@ mod tests {
     /// nothing about the extension is consulted.
     #[test]
     fn a_dynamic_vhd_wearing_an_hdf_extension_is_named_as_one() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("AmiKit.hdf");
         let mut file = vhd_footer(3, 512, 4 * 1024 * 1024 * 1024);
         file.extend_from_slice(&[0u8; 4096]); // header, BAT, blocks — unread
@@ -1055,7 +1043,7 @@ mod tests {
     /// unchanged — and its footer is only at the end.
     #[test]
     fn a_fixed_vhd_is_named_separately_from_a_dynamic_one() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("fixed.vhd");
         let mut file = b"RDSK".to_vec();
         file.extend_from_slice(&[0u8; 2048]);
@@ -1073,7 +1061,7 @@ mod tests {
     /// what decides.
     #[test]
     fn a_first_sector_that_looks_like_a_fixed_footer_does_not_settle_it() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("odd.hdf");
         let mut file = vhd_footer(2, u64::MAX, 99); // at offset 0: impossible
         file.extend_from_slice(&[0u8; 1024]);
@@ -1094,7 +1082,7 @@ mod tests {
     /// before — which is what makes the check safe to run first.
     #[test]
     fn an_ordinary_hdf_is_still_an_ordinary_hdf() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("plain.hdf");
         let mut file = b"RDSK".to_vec();
         file.extend_from_slice(&[0u8; 4096]);
@@ -1113,7 +1101,7 @@ mod tests {
     /// and treated as opaque, rather than guessed into one of the three.
     #[test]
     fn an_unnamed_vhd_disk_type_is_named_vhd_and_nothing_more() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("future.hdf");
         let mut file = vhd_footer(9, 512, 1024);
         file.extend_from_slice(&[0u8; 512]);
@@ -1125,7 +1113,7 @@ mod tests {
 
     #[test]
     fn detects_rdb_hard_disk_by_signature() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("disk.hdf");
         fs::write(&p, b"RDSK").unwrap();
 
@@ -1138,7 +1126,7 @@ mod tests {
 
     #[test]
     fn detects_pfs3_hard_disk_by_signature() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("disk.hdf");
         fs::write(&p, b"PFS\x03").unwrap();
 
@@ -1150,7 +1138,7 @@ mod tests {
 
     #[test]
     fn detects_sfs_hard_disk_by_signature() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("disk.hdf");
         fs::write(&p, b"SFS\x00").unwrap();
 
@@ -1162,7 +1150,7 @@ mod tests {
 
     #[test]
     fn a_dos_signature_at_harddisk_size_is_a_harddisk_not_a_floppy() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("disk.img");
         let mut f = fs::File::create(&p).unwrap();
         f.write_all(b"DOS\x01").unwrap();
@@ -1183,7 +1171,7 @@ mod tests {
 
     #[test]
     fn probe_at_returns_empty_past_end_of_file_without_panicking() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("tiny.bin");
         fs::write(&p, vec![0u8; 10]).unwrap();
 
@@ -1200,7 +1188,7 @@ mod tests {
 
     #[test]
     fn rom_known_size_has_higher_confidence() {
-        let d = tmp();
+        let (_guard, d) = tmp();
         let p = d.join("kick.rom");
         let mut f = fs::File::create(&p).unwrap();
         let chunk = vec![0u8; 8192];

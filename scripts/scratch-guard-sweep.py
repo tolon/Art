@@ -40,7 +40,7 @@ carries no `#[cfg(test)]` at all, because `core/osinstall/mod.rs` says
 the file's own attribute alone and skipped that file whole, three unguarded
 call sites and ~90 leaked directories with it. So a file with no attribute of
 its own is checked against its parent module's declaration, and when the
-declaration is gated the whole file counts as test code. Three rules:
+declaration is gated the whole file counts as test code. Five rules:
 
   1. **returns a bare path** — a `fn scratch(` whose return type on the
      signature line is `PathBuf` / `std::path::PathBuf` / `&Path` and does not
@@ -71,6 +71,36 @@ declaration is gated the whole file counts as test code. Three rules:
      closing brace while the path it returns is used by the caller — so the
      directory is both leaked *and*, once the helpers are converted, gone
      early. These need the guard threaded out to the caller.
+  4. **builds a scratch path by hand** — test code that writes
+     `std::env::temp_dir().join(…)` itself instead of asking `ScratchDir`.
+     The 63 helpers rules 1-3 cover were the dominant shape, not the only
+     one: ~48 more sites in test bodies and in helpers *not* named `scratch`
+     built the same `art-…-{test_scratch_id()}` path inline, created it, and
+     left it (ART-281 task 7a). Every one becomes
+     `let (_guard, dir) = ScratchDir::pair("art-…", "<tag>")`.
+
+     Three kinds of line are **not** offenders, because none of them creates
+     anything: a line that only reads (`read_dir(`, an `assert`, `.exists()`),
+     a line inside `ScratchDir`'s own `impl` — which is where the one
+     legitimate `temp_dir().join(` in the crate lives — and the four sites in
+     `ALLOWED_HAND_BUILT` below, each of which names a path the test
+     deliberately never creates (or, in `commands/archives.rs`, the escape
+     target a traversal test needs *outside* every scratch, already owned by
+     a `RemoveOnDrop`). Those four are listed by file and by the literal that
+     identifies them rather than by line number, so an edit that changes what
+     the site does stops matching the exemption and comes back as an
+     offender.
+  5. **hands the platform root to product code** — test code passing
+     `&std::env::temp_dir()` as a call argument, which is the *other* half of
+     ART-281 (task 7b): ART's own staging then lands directly in the platform
+     root under the product's names, and nothing in a test run ever sweeps
+     it. Each such test binds one `ScratchDir` and passes `&root` instead.
+
+     Exempt: the same read-only lines as rule 4, plus a call to
+     `scratch_root_for(` or `sweep_stale_preview_scratch_dirs(`, where the
+     platform root **is** the subject of the test — a namespace derived from
+     it, or the sweeper that cleans it — and substituting a scratch would
+     delete the assertion rather than move it.
 
 ## What this sweep cannot see
 
@@ -81,6 +111,13 @@ out of rule 2 instead: the `let` inside them is listed, and threading the
 guard out is part of fixing the call site. This is stated rather than
 silently assumed: a guard that passes vacuously is the class of defect the
 counter sweep already shipped once.
+
+Rules 4 and 5 read one line at a time, so a `temp_dir()` split across two
+lines by rustfmt is caught only in the one shape that exists today (the
+`.join(` continuing on the next line); a scratch path assembled through an
+intermediate variable — `let t = std::env::temp_dir(); t.join(…)` — is
+invisible to both. Neither shape is in the tree on 2026-09-10, and both would
+make the sweep under-report rather than accuse a clean line.
 
 Run it from `amiga-retro-toolkit/`:
 
@@ -116,6 +153,31 @@ IDENT_LET = re.compile(r"^let\s+(?:mut\s+)?(\w+)\s*=")
 # A return type that is a path and nothing else: `-> PathBuf`,
 # `-> std::path::PathBuf`, `-> (PathBuf, PathBuf)`, `-> &Path`.
 PATH_SHAPED = re.compile(r"\bPathBuf\b|\bPath\b")
+# Rule 4: a scratch path built by hand. `temp_dir()` and `.join(` may be split
+# by rustfmt, so the `.join(` is also looked for at the head of the next line.
+TEMP_DIR = re.compile(r"(?<![A-Za-z0-9_])temp_dir\(\)")
+# Rule 5: the platform root handed to product code as *its* scratch root.
+TEMP_ROOT_ARG = re.compile(r"&\s*std::env::temp_dir\(\)")
+# Neither rule accuses a line that only looks at the root.
+READ_ONLY = ("read_dir(", "assert", ".exists()")
+# Rule 5's own exemption: the platform root is the subject of the test — the
+# namespace derived from it, or the sweeper that cleans it.
+ROOT_IS_THE_SUBJECT = ("scratch_root_for(", "sweep_stale_preview_scratch_dirs(")
+# Rule 4's exemptions, by file and by the literal that identifies the site
+# rather than by a line number that drifts. Each names a path the test never
+# creates — except the first, which is the one place a test needs a path
+# *outside* every scratch and already owns it.
+ALLOWED_HAND_BUILT = {
+    "src-tauri/src/core/osinstall/scan_cache.rs": [
+        ("art-measure-dest", "the same, in an #[ignore]d measurement that "
+                             "plans and never applies"),
+    ],
+    "src-tauri/src/core/sources/library.rs": [
+        ("art-library-does-not-exist", "the test's subject is a root that "
+                                       "does not exist; creating it would "
+                                       "delete the assertion"),
+    ],
+}
 
 
 def rust_files() -> list[Path]:
@@ -142,6 +204,35 @@ def helper_shapes(path: Path, lines: list[str]) -> str | None:
     if not shapes:
         return None
     return shapes.pop() if len(shapes) == 1 else "path"
+
+
+def scratchdir_impl_lines(lines: list[str]) -> set[int]:
+    """The line indexes inside `impl ScratchDir` / `impl Drop for ScratchDir`.
+
+    That impl is the one place in the crate where building a path under
+    `std::env::temp_dir()` is the point rather than the defect, so rule 4 must
+    not accuse it. Both impls sit at the file's top level, so a `}` in column
+    zero ends them."""
+    inside: set[int] = set()
+    open_block = False
+    for i, line in enumerate(lines):
+        if re.match(r"^impl\s+(Drop\s+for\s+)?ScratchDir\b", line):
+            open_block = True
+        if open_block:
+            inside.add(i)
+            if line.rstrip() == "}":
+                open_block = False
+    return inside
+
+
+def exempt_hand_built(rel: str, line: str) -> str | None:
+    """The documented reason this hand-built path is not an offender, or
+    `None`. Matched on the literal, not the line number, so a site that
+    changes what it does loses its exemption."""
+    for needle, why in ALLOWED_HAND_BUILT.get(rel, []):
+        if needle in line:
+            return why
+    return None
 
 
 def first_cfg_test(lines: list[str]) -> int | None:
@@ -253,7 +344,10 @@ def main() -> int:
     calls = accepted_calls = 0
     rule_counts = {"returns a bare path": 0, "bound without its guard": 0,
                    "guard dropped at once": 0, "used without binding its guard": 0,
-                   "returns a path whose guard it drops": 0}
+                   "returns a path whose guard it drops": 0,
+                   "builds a scratch path by hand": 0,
+                   "hands the platform root to product code": 0}
+    hand_built = exempted = root_args = 0
     rule3_seen: set[tuple[str, int]] = set()
 
     files = rust_files()
@@ -281,6 +375,48 @@ def main() -> int:
                 continue
             cut = 0
         shape = resolved_shape(path)
+
+        # Rules 4 and 5: the two shapes that carry no `scratch(` call at all.
+        in_guard_impl = scratchdir_impl_lines(lines)
+        for i in range(cut, len(lines)):
+            line = lines[i]
+            if any(marker in line for marker in READ_ONLY):
+                continue
+
+            m = TEMP_DIR.search(line)
+            if m and not is_comment(line, m.start()) and i not in in_guard_impl:
+                # The continuation shape is `…temp_dir()` at the *end* of the
+                # line and `.join(` at the head of the next. Accepting any
+                # following `.join(` accused
+                # `namespace_of(&scratch_root_for(&std::env::temp_dir()))`
+                # whose next line was a `JoinHandle`'s own `.join()` — a false
+                # accusation is worse than a missed line, so the tail is
+                # anchored.
+                joined = ".join(" in line[m.end():] or (
+                    line.rstrip().endswith("temp_dir()")
+                    and i + 1 < len(lines)
+                    and lines[i + 1].lstrip().startswith(".join(")
+                )
+                if joined:
+                    hand_built += 1
+                    why = exempt_hand_built(rel, line)
+                    if why is None and i + 1 < len(lines):
+                        why = exempt_hand_built(rel, lines[i + 1])
+                    if why is None:
+                        offenders.append((rel, i + 1, "builds a scratch path by hand"))
+                        rule_counts["builds a scratch path by hand"] += 1
+                    else:
+                        exempted += 1
+
+            m = TEMP_ROOT_ARG.search(line)
+            if m and not is_comment(line, m.start()):
+                root_args += 1
+                if not any(name in line for name in ROOT_IS_THE_SUBJECT):
+                    offenders.append(
+                        (rel, i + 1, "hands the platform root to product code"))
+                    rule_counts["hands the platform root to product code"] += 1
+                else:
+                    exempted += 1
 
         for i in range(cut, len(lines)):
             line = lines[i]
@@ -348,7 +484,9 @@ def main() -> int:
         print(f"{rel}:{line}: {why}")
 
     if not offenders:
-        print(f"scratch-guard sweep: clean — {helpers} helpers, {calls} call sites")
+        print(f"scratch-guard sweep: clean — {helpers} helpers, {calls} call "
+              f"sites, {hand_built} hand-built paths, {root_args} platform-root "
+              f"arguments ({exempted} exempt)")
         return 0
 
     print()
@@ -356,6 +494,9 @@ def main() -> int:
           f" ({guarded_helpers} already hand out a guard)")
     print(f"call sites                         : {calls}"
           f" ({accepted_calls} keep their guard)")
+    print(f"hand-built paths                   : {hand_built}")
+    print(f"platform-root arguments            : {root_args}")
+    print(f"exempt, with a reason              : {exempted}")
     for why, n in rule_counts.items():
         if n:
             print(f"  {why:33s}: {n}")

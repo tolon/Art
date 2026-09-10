@@ -403,19 +403,13 @@ fn rename_on_disk(path: &str, new_name: &str) -> Result<String, CoreError> {
 mod rename_tests {
     use super::rename_on_disk;
 
-    fn tempdir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-rename-{}-{name}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn tempdir(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-rename", name)
     }
 
     #[test]
     fn a_file_is_renamed_and_its_bytes_are_untouched() {
-        let dir = tempdir("ok");
+        let (_guard, dir) = tempdir("ok");
         let from = dir.join("ADPro_D1.adf");
         std::fs::write(&from, b"DISKDATA").unwrap();
 
@@ -434,7 +428,7 @@ mod rename_tests {
     /// and the user asked to tidy a name, not to lose a disk.
     #[test]
     fn an_existing_target_is_refused_and_both_files_survive() {
-        let dir = tempdir("exists");
+        let (_guard, dir) = tempdir("exists");
         let from = dir.join("A-Train Disk 1.adf");
         let occupied = dir.join("A-Train (Disk 1).adf");
         std::fs::write(&from, b"ONE").unwrap();
@@ -451,7 +445,7 @@ mod rename_tests {
     /// else — least of all somewhere above its own folder.
     #[test]
     fn a_name_that_is_really_a_path_is_refused() {
-        let dir = tempdir("traversal");
+        let (_guard, dir) = tempdir("traversal");
         let from = dir.join("game.adf");
         std::fs::write(&from, b"X").unwrap();
 
@@ -469,7 +463,7 @@ mod rename_tests {
 
     #[test]
     fn an_empty_name_is_refused() {
-        let dir = tempdir("empty");
+        let (_guard, dir) = tempdir("empty");
         let from = dir.join("game.adf");
         std::fs::write(&from, b"X").unwrap();
         assert!(rename_on_disk(from.to_str().unwrap(), "   ").is_err());
@@ -478,7 +472,7 @@ mod rename_tests {
 
     #[test]
     fn a_missing_file_is_refused_rather_than_creating_one() {
-        let dir = tempdir("missing");
+        let (_guard, dir) = tempdir("missing");
         let from = dir.join("not-here.adf");
         assert!(rename_on_disk(from.to_str().unwrap(), "renamed.adf").is_err());
         assert!(!dir.join("renamed.adf").exists());
