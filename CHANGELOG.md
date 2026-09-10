@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A damaged update package can no longer fill your disk from inside the
+  emulator.** When a package's own installer runs on the Amiga, ART now
+  watches how much it writes into the working copy. A copy that grows by more
+  than twice its size, or by more than 64 MB, ends the run at once — the
+  emulator is closed, the copy is kept and named, and the report says what was
+  written and that the archive, not your attention, is the problem. Measured
+  on a BoingBag with one damaged byte: 170 MB written in thirty minutes before
+  the deadline stopped it; now stopped inside a minute.
+- **The "nobody answered" ending says why ART believes that.** Its next step
+  used to tell you to watch the emulator window even when the installer was
+  hung on a broken archive. That case has its own ending now, and the timeout's
+  advice states its basis: the copy was not running away, so the installer was
+  most likely waiting on a question.
+
 ## [0.9.1] - 2026-09-08
 
 ### Added
