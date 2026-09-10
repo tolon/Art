@@ -252,6 +252,25 @@ one size — two identical 490 856 448-byte images — and proving them identica
 0.45 s warm. The memo lives in memory only; keeping the hash in the scan cache (`ScanCache` already
 stores md5s keyed by size and modification time) would let the next start pay nothing.
 
+**ART-303** 🟠 **Build runs a ticked update whose prerequisite is ticked but unresolved, and the core
+refuses it** — *found 2026-09-10 by the owner on `main-e2633a6`, fresh tree*
+`src/components/osbuilder/BuildTab.tsx` (the gate) · `src/components/osbuilder/ChoiceTab.tsx`
+(`useTickedUpdates`) · The owner's folder `E:/amiga/Amigatolon/paketler` holds **two different BoingBag
+3.9-1 archives** — `BoingBag39-1 (1).lha` (5 254 220 B, SHA-256 `833de18f…`, the copy the earlier tree
+was built from) and `BoingBag39-1.lha` (5 254 174 B, `1e8b76e2…`), both with the top-level directory
+`BoingBag3.9-1`. ART rightly does not choose between them, so the row's slot is ambiguous and
+`useTickedUpdates` puts it in `unresolved`. Tab 4 names it in a yellow line — *"more than one file
+carries it … it will not be written until you do"* — **and still offers Build**, over a sequence built
+without it. BoingBag 3.9-2 then runs alone and the core refuses it:
+`package-requirement-missing`, *"BoingBag 3.9-2 needs BoingBag 3.9-1 applied first"*. The run could not
+have succeeded. *names a ticked update whose file ART would not trust, and does not run it*
+(`BuildTab.test.tsx`) pins exactly this arrangement — BB1 unresolved, BB2 ticked, the summary naming BB2
+alone — so the test was written from the same reading as the code. The fix is the gate's: a ticked row
+that is unresolved should withhold Build (at least when a ticked row after it needs it), with the
+unresolved sentence standing in the button's place. Workaround today: choose one copy on the Amiga files
+tab's BoingBag 3.9-1 row, or take one copy out of the folder. **The owner's call before it is built**, because
+it reverses that test's stated design.
+
 ## Fixed
 
 **ART-297** 🔴 ✅ **The OS Builder froze the window: every tab question re-hashed whole install

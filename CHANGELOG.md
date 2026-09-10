@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The Files screen's columns can be resized and hidden, and ART remembers
+  them.** Drag the edge of a column header to resize it; right-click the
+  header row to show or hide Ext, Size, Date and Attr, or to reset them. Both
+  panes share one set, and it keeps its proportions when you change the text
+  size.
+
 ### Changed
 
 - OS Builder: the button in the bar under the tabs goes to the next tab and

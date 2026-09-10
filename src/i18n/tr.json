@@ -1414,6 +1414,12 @@
       "descending": "azalan",
       "title": "{{column}} sırasına göre, {{direction}} — değiştirmek için tıklayın"
     },
+    "columns": {
+      "menuTitle": "Sütunlar",
+      "reset": "Sütunları sıfırla",
+      "grip": "{{column}} sütununu boyutlandır",
+      "headerHint": "Sütunlar için sağ tıklayın"
+    },
     "tc": {
       "dirSize": "<DIR>",
       "counting": "sayılıyor…",
