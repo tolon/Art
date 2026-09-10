@@ -418,6 +418,39 @@ pub fn release_holding(found: &[String]) -> CoreResult<Option<String>> {
     })
 }
 
+/// Which of these volume names are install media at all — named by a
+/// component of at least one shipped recipe (ART-285).
+///
+/// **Not identification.** [`identify`] asks which *release* a folder holds
+/// and deliberately discounts names several releases share; this asks only
+/// whether a name is install media for *any* of them, so `Fonts` counts here
+/// even though it can never tell 3.1 from 3.2. A name no recipe asks for —
+/// `CD32`, `CAVIAR_02`, a game disc — is not install media, whatever it was
+/// read off, and the folder column used to count it as one: *"23 install
+/// disks found"* over a folder of game discs.
+///
+/// The names come back in the order they were given and in the **medium's**
+/// spelling, for the reason [`evidence_of`] reports the medium's: the screen
+/// names what the disc calls itself. Comparison is
+/// [`super::amiga_names_equal`], the fold every other match in this module
+/// uses.
+pub fn install_media(found: &[String]) -> CoreResult<Vec<String>> {
+    let mut asked_for: Vec<String> = Vec::new();
+    for release in recipe::releases() {
+        let recipe = recipe::by_release(release)?;
+        asked_for.extend(recipe.components.iter().map(|c| c.media.clone()));
+    }
+    Ok(found
+        .iter()
+        .filter(|name| {
+            asked_for
+                .iter()
+                .any(|media| super::amiga_names_equal(name, media))
+        })
+        .cloned()
+        .collect())
+}
+
 /// What **this one release's** own signature made of the names in hand —
 /// never which release, that is [`release_holding`]'s job.
 ///
@@ -787,6 +820,39 @@ mod tests {
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    /// ART-285: the folder column counted every volume name `find_media`
+    /// could read as an install disk — `CD32` and `CAVIAR_02` among them. A
+    /// name no shipped recipe asks for is not install media, whatever disc
+    /// it came off. `Fonts` stays: it is shared between releases, so it
+    /// cannot *identify* one, but every one of them asks for it.
+    #[test]
+    fn install_media_keeps_only_names_a_shipped_recipe_asks_for() {
+        let found = names(&["CD32", "Workbench3.2", "CAVIAR_02", "AmigaOS3.9", "Fonts"]);
+        assert_eq!(
+            install_media(&found).expect("the shipped recipes must load"),
+            names(&["Workbench3.2", "AmigaOS3.9", "Fonts"]),
+        );
+    }
+
+    /// The medium's own spelling comes back, in the order it was found, and
+    /// the comparison is AmigaDOS's — the same fold `evidence_of` uses.
+    #[test]
+    fn install_media_reports_the_mediums_own_spelling_and_folds_case() {
+        let found = names(&["WORKBENCH3.2", "CD32", "amigaos3.9"]);
+        assert_eq!(
+            install_media(&found).expect("the shipped recipes must load"),
+            names(&["WORKBENCH3.2", "amigaos3.9"]),
+        );
+    }
+
+    #[test]
+    fn install_media_of_other_discs_is_nothing() {
+        assert!(install_media(&[]).unwrap().is_empty());
+        assert!(install_media(&names(&["CD32", "CAVIAR_02"]))
+            .unwrap()
+            .is_empty());
     }
 
     fn identified(list: &[&str]) -> ReleaseEvidence {

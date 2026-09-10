@@ -227,6 +227,17 @@ pub fn osinstall_release_for_media(volume_names: Vec<String>) -> AppResult<Optio
     )?)
 }
 
+/// Which of these volume names are install media for any shipped release
+/// (ART-285) — so the folder column counts install disks, not every disc it
+/// could read a name from. Names, not a folder, for the same reason
+/// [`osinstall_release_for_media`] takes them.
+#[tauri::command]
+pub fn osinstall_install_media(volume_names: Vec<String>) -> AppResult<Vec<String>> {
+    Ok(crate::core::osinstall::identify::install_media(
+        &volume_names,
+    )?)
+}
+
 /// What **one** release's own signature made of these volume names — never
 /// which release, that is [`osinstall_release_for_media`]'s job.
 ///

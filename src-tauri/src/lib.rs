@@ -150,6 +150,7 @@ pub fn run() {
             commands::layout::layout_apply,
             commands::osinstall::osinstall_scan_media,
             commands::osinstall::osinstall_release_for_media,
+            commands::osinstall::osinstall_install_media,
             commands::osinstall::osinstall_media_evidence,
             commands::osinstall::osinstall_layer_for_media,
             commands::osinstall::osinstall_layers,

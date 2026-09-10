@@ -79,6 +79,7 @@ const dialogOpenMock = vi.hoisted(() => vi.fn());
 const onJobProgressMock = vi.hoisted(() => vi.fn());
 const rescanMock = vi.hoisted(() => vi.fn());
 const releaseForMediaMock = vi.hoisted(() => vi.fn());
+const installMediaMock = vi.hoisted(() => vi.fn());
 const mediaEvidenceMock = vi.hoisted(() => vi.fn());
 const identifyMediaMock = vi.hoisted(() => vi.fn());
 const slotsMock = vi.hoisted(() => vi.fn());
@@ -93,6 +94,7 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   osinstallPlan: planMock,
   osinstallRescanMedia: rescanMock,
   osinstallReleaseForMedia: releaseForMediaMock,
+  osinstallInstallMedia: installMediaMock,
   osinstallMediaEvidence: mediaEvidenceMock,
   osinstallIdentifyMedia: identifyMediaMock,
   osinstallSlots: slotsMock,
@@ -516,6 +518,10 @@ beforeEach(() => {
   onJobProgressMock.mockReset().mockResolvedValue(() => {});
   rescanMock.mockReset().mockResolvedValue(1);
   releaseForMediaMock.mockReset().mockResolvedValue(null);
+  // ART-285: every fixture disk in this file is install media, so the
+  // core's answer is the names it was asked about. The found-line cases
+  // below then fail if the answer never reaches the folder column.
+  installMediaMock.mockReset().mockImplementation(async (names: string[]) => names);
   // ART-253. `wrongMediaFolder`'s claim is checked against the chosen
   // release's own recipe rather than inferred, so this screen asks Rust what
   // the folder holds of it. The default is the ordinary state of the
@@ -2814,5 +2820,24 @@ describe("choosing between two copies of one archive", () => {
 
     await waitFor(() => expect(slotsMock.mock.calls.length).toBeGreaterThan(before));
     expect(slotsMock.mock.calls.at(-1)![4]).toEqual([["package:boingbag-39-1", ONE]]);
+  });
+});
+
+describe("the folder column asks which discs are install media (ART-285)", () => {
+  // Every other case in this file answers with the names it was asked about,
+  // so a column that skipped the question and counted every disc the scan
+  // named would read the same there. Here the core calls the one disc
+  // something else, and only a column that used the answer says so.
+  it("counts what the core calls install media, not every disc the scan named", async () => {
+    installMediaMock.mockReset().mockResolvedValue([]);
+    await renderFull();
+
+    await waitFor(() => expect(installMediaMock).toHaveBeenCalledWith(["Workbench3.2"]));
+    const other = await screen.findByTestId("osinstall-media-other");
+    expect(other.textContent).toContain("Workbench3.2");
+    expect(
+      screen.queryByText(i18n.t("osinstall.media.found", { count: 1, names: "Workbench3.2" }))
+    ).toBeNull();
+    expect(screen.getByText(i18n.t("osinstall.media.empty"))).toBeTruthy();
   });
 });

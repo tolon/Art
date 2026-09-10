@@ -1174,6 +1174,16 @@ export async function osinstallReleaseForMedia(volumeNames: string[]): Promise<s
 }
 
 /**
+ * Which of these volume names are install media for any release ART ships
+ * (ART-285), in the order given and in the disc's own spelling. A game disc's
+ * name is not among them — the folder column counts install disks with this,
+ * and names every other disc apart from it.
+ */
+export async function osinstallInstallMedia(volumeNames: string[]): Promise<string[]> {
+  return invoke<string[]>("osinstall_install_media", { volumeNames });
+}
+
+/**
  * What **one** release's own signature made of the volume names in hand —
  * mirrors `core::osinstall::identify::ReleaseEvidence`.
  *

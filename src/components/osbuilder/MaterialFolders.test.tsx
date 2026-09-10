@@ -43,6 +43,7 @@ function renderFolders(over: Partial<Props> = {}) {
     unusedForPlan: [],
     amigaForeverOffer: null,
     foundVolumeNames: [],
+    installVolumeNames: [],
     onAdd: vi.fn(),
     onRemove: vi.fn(),
     onTag: vi.fn(),
@@ -136,7 +137,10 @@ describe("the list", () => {
 
 describe("what the folders hold (ART-256)", () => {
   it("says what was found, under the list and before the guide", () => {
-    renderFolders({ foundVolumeNames: ["Workbench3.1", "Install3.1"] });
+    renderFolders({
+      foundVolumeNames: ["Workbench3.1", "Install3.1"],
+      installVolumeNames: ["Workbench3.1", "Install3.1"],
+    });
     const found = document.getElementById("osinstall-media-found");
     expect(found).toBeTruthy();
     expect(found!.textContent).toBe(
@@ -157,6 +161,51 @@ describe("what the folders hold (ART-256)", () => {
     renderFolders({ folders: [], foundVolumeNames: [] });
     expect(document.getElementById("osinstall-media-empty")).toBeNull();
     expect(document.getElementById("osinstall-media-found")).toBeNull();
+  });
+});
+
+describe("install media apart from every other disc (ART-285)", () => {
+  // The owner's folder column read "23 install disks found: CD32, CAVIAR_02…"
+  // over a folder of game discs. The headline is a claim about install media,
+  // so it counts only what a shipped recipe asks for; the rest are named, but
+  // behind a disclosure and never under that headline.
+  it("counts only install media in the headline and names the other discs behind a closed disclosure", () => {
+    renderFolders({
+      foundVolumeNames: ["CD32", "Workbench3.1", "CAVIAR_02"],
+      installVolumeNames: ["Workbench3.1"],
+    });
+    expect(document.getElementById("osinstall-media-found")!.textContent).toBe(
+      i18n.t("osinstall.media.found", { count: 1, names: "Workbench3.1" })
+    );
+    const other = screen.getByTestId("osinstall-media-other");
+    expect(other.querySelector("summary")!.textContent).toBe(
+      i18n.t("osinstall.media.otherDiscs", { count: 2 })
+    );
+    expect(other.textContent).toContain("CD32, CAVIAR_02");
+    expect(other.hasAttribute("open")).toBe(false);
+  });
+
+  it("says no install disks were found when every disc is something else, and still names them", () => {
+    renderFolders({ foundVolumeNames: ["CD32"], installVolumeNames: [] });
+    expect(document.getElementById("osinstall-media-found")).toBeNull();
+    expect(document.getElementById("osinstall-media-empty")!.textContent).toBe(
+      i18n.t("osinstall.media.empty")
+    );
+    expect(screen.getByTestId("osinstall-media-other").textContent).toContain("CD32");
+  });
+
+  it("has no other-discs line when every disc is install media", () => {
+    renderFolders({ foundVolumeNames: ["Workbench3.1"], installVolumeNames: ["Workbench3.1"] });
+    expect(screen.queryByTestId("osinstall-media-other")).toBeNull();
+  });
+
+  // Not "0 install disks" and not the old count of everything: until ART has
+  // answered which names are install media, the column claims nothing.
+  it("claims nothing while the question is still out", () => {
+    renderFolders({ foundVolumeNames: ["CD32", "Workbench3.1"], installVolumeNames: null });
+    expect(document.getElementById("osinstall-media-found")).toBeNull();
+    expect(document.getElementById("osinstall-media-empty")).toBeNull();
+    expect(screen.queryByTestId("osinstall-media-other")).toBeNull();
   });
 });
 

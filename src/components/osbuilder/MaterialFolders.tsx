@@ -53,6 +53,10 @@ export interface MaterialFoldersProps {
    *  step's scans — the two ART-256 lines are claims about the folders, so
    *  they render here, under the list and before the guide. */
   foundVolumeNames: string[];
+  /** Which of `foundVolumeNames` are install media for any shipped release
+   *  (ART-285), or `null` while that is being asked. The headline counts
+   *  these; every other name is listed apart, behind a disclosure. */
+  installVolumeNames: string[] | null;
   onAdd: () => void;
   onRemove: (path: string) => void;
   onTag: (path: string, layer: string) => void;
@@ -70,6 +74,7 @@ export function MaterialFolders({
   unusedForPlan,
   amigaForeverOffer,
   foundVolumeNames,
+  installVolumeNames,
   onAdd,
   onRemove,
   onTag,
@@ -77,6 +82,13 @@ export function MaterialFolders({
   onAmigaForeverDismiss,
 }: MaterialFoldersProps) {
   const { t, i18n } = useTranslation();
+  /** Every disc the folders hold that no shipped release asks for — named,
+   *  never counted as install media (ART-285). Empty while the question is
+   *  out: nothing is sorted into "other" before ART has said what is not. */
+  const otherDiscs =
+    installVolumeNames === null
+      ? []
+      : foundVolumeNames.filter((name) => !installVolumeNames.includes(name));
 
   /**
    * What the guide button last answered, per folder.
@@ -295,19 +307,36 @@ export function MaterialFolders({
         folder column (the readout is per slot). ART-285 — that this
         sentence counts game discs as install disks — is open and not
         touched by the move.
+
+        ART-285, fixed: the headline counts only `installVolumeNames` — the
+        names a shipped recipe asks for — and every other disc is named in a
+        closed disclosure under it. Before the answer arrives neither line is
+        drawn, so the column never shows the old count of everything.
       */}
-      {folders.length > 0 && foundVolumeNames.length === 0 && (
+      {folders.length > 0 && installVolumeNames !== null && installVolumeNames.length === 0 && (
         <p id="osinstall-media-empty" className="faint" style={{ fontSize: 11, margin: "8px 0 0" }}>
           {t("osinstall.media.empty")}
         </p>
       )}
-      {foundVolumeNames.length > 0 && (
+      {installVolumeNames !== null && installVolumeNames.length > 0 && (
         <p id="osinstall-media-found" className="faint" style={{ fontSize: 11, margin: "8px 0 0" }}>
           {t("osinstall.media.found", {
-            count: foundVolumeNames.length,
-            names: foundVolumeNames.join(", "),
+            count: installVolumeNames.length,
+            names: installVolumeNames.join(", "),
           })}
         </p>
+      )}
+      {otherDiscs.length > 0 && (
+        <details
+          data-testid="osinstall-media-other"
+          className="faint"
+          style={{ fontSize: 11, margin: "4px 0 0" }}
+        >
+          <summary style={{ cursor: "pointer" }}>
+            {t("osinstall.media.otherDiscs", { count: otherDiscs.length })}
+          </summary>
+          <p style={{ margin: "4px 0 0" }}>{otherDiscs.join(", ")}</p>
+        </details>
       )}
       {/*
         **The list, in the folder** (intake design § 3.7). The readout is on screen
