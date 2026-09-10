@@ -38,7 +38,7 @@
 // about is a feature nobody has.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { analyzePaths } from "@/lib/api";
 import { useTranslation } from "react-i18next";
@@ -614,6 +614,11 @@ export function FileManager() {
   /** True once a saved session has been considered, so the first-run opener
    *  below knows whether it still has a job to do. */
   const sessionRestored = useRef(false);
+  /** True once the cold start below has finished opening whatever it opens —
+   *  the saved session, the default folders or the first mount. A path handed
+   *  over by navigation waits for this (ART-283): applied earlier it lands on
+   *  panes the restore is about to overwrite, or the restore lands on it. */
+  const [coldStartDone, setColdStartDone] = useState(false);
   /**
    * Each pane's own back/forward list (`@/lib/paneHistory`).
    *
@@ -992,7 +997,10 @@ export function FileManager() {
         // 3. The first enumerated mount, which is what there was before any of
         //    this and is still the honest answer when nothing else is known.
         const hasDefaults = Boolean(defaultLeftPath || defaultRightPath);
-        if (!(alwaysUseDefaultFolders && hasDefaults) && (await restoreSession())) return;
+        if (!(alwaysUseDefaultFolders && hasDefaults) && (await restoreSession())) {
+          setColdStartDone(true);
+          return;
+        }
         sessionRestored.current = true;
 
         const wanted: Record<Side, string | null> = {
@@ -1007,8 +1015,12 @@ export function FileManager() {
           if (wanted[side]) await openLocal(side, wanted[side] as string);
         }
         setFocused("left");
+        setColdStartDone(true);
       })
-      .catch((e) => setError(errorText(t, e)));
+      .catch((e) => {
+        setError(errorText(t, e));
+        setColdStartDone(true);
+      });
     // Keyed on the settings arriving, not on mount: see `settingsLoaded`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsLoaded]);
@@ -1359,9 +1371,13 @@ export function FileManager() {
    * action in the first place — rather than from the extension.
    */
   const location = useLocation();
+  const navigate = useNavigate();
   useEffect(() => {
     const wanted = (location.state as { path?: string } | null)?.path;
-    if (!wanted) return;
+    // Not before the cold start has landed (ART-283): the restore and this
+    // both write the left pane, and whichever lands second wins — measured
+    // as a remembered tab's path rewritten to the dropped folder's.
+    if (!wanted || !coldStartDone) return;
 
     let cancelled = false;
     void (async () => {
@@ -1369,6 +1385,17 @@ export function FileManager() {
         const [analysis] = await analyzePaths([wanted]);
         if (cancelled || !analysis?.plan) return;
         const category = analysis.plan.detection.category;
+        // ART-283: the handover opens in a tab of its own. The tabs on this
+        // screen are the user's remembered places, and a dropped folder is a
+        // request to *see* it, not to repoint one of them at it — the tab
+        // that held `iso` was rewritten to `adf` and saved, with no click on
+        // any pane. Unless the active tab already shows that path, in which
+        // case a second tab of the same place is clutter.
+        setTabs((current) => {
+          const set = current.left;
+          if (!set || activeTab(set).location.path === wanted) return current;
+          return { ...current, left: duplicateTab(set, mintTabId()) };
+        });
         // Also `host: null`: the object came from a drop, not from a folder
         // this pane was standing in.
         if (category === "optical-image") await openIso("left", wanted, null, null, [], null);
@@ -1381,6 +1408,12 @@ export function FileManager() {
         // A path that cannot be analysed is not worth an error banner on a
         // screen the user may have navigated to for something else; the pane
         // simply stays as it was.
+      } finally {
+        // Consumed, not kept (ART-283). Left in the history entry the
+        // handover replays on every mount of this screen — a Back, a reload —
+        // which is what moved the settings file on every open, and would now
+        // open one more tab each time.
+        if (!cancelled) navigate(location.pathname, { replace: true, state: null });
       }
     })();
 
@@ -1389,7 +1422,19 @@ export function FileManager() {
     };
     // `location.state` is the trigger: navigating here again with a different
     // object must open that one.
-  }, [location.state, openIso, openArchive, openCbm, openAdf, openHdf, openLocal]);
+  }, [
+    location.state,
+    location.pathname,
+    coldStartDone,
+    navigate,
+    mintTabId,
+    openIso,
+    openArchive,
+    openCbm,
+    openAdf,
+    openHdf,
+    openLocal,
+  ]);
 
   async function chooseFolder(side: Side) {
     const picked = await open({ directory: true, multiple: false });
