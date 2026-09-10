@@ -1493,6 +1493,14 @@ fn tree_totals(items: &[PlanItem]) -> (u64, u64) {
     (per_destination.values().sum(), per_destination.len() as u64)
 }
 
+/// Plan with no scan cache and the platform's temp folder for any nested
+/// payload.
+///
+/// **Compiled for tests only** (ART-295). The product never calls this: its
+/// `_in` sibling takes the scratch root the user chose, and the compiler now
+/// holds that line rather than a doc comment. ART-296 was a production call
+/// to one of these, staging BoingBag payloads on the system drive.
+#[cfg(test)]
 pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan> {
     plan_with_cache(request, recipe, &ScanCache::off())
 }
@@ -1503,11 +1511,16 @@ pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan
 /// **The cache directory is the caller's, never this module's.** `core/` is
 /// platform-independent, and where a platform keeps scratch files is not a
 /// question it gets to answer — `core::artwork::cache` takes its directory the
-/// same way. `commands::osinstall` is the one production caller and passes
-/// `%TEMP%`, beside the extraction cache; `plan` itself passes
-/// [`ScanCache::off`], so a test or a future CLI shell that has not chosen a
-/// directory reads the medium every time rather than writing somewhere it did
-/// not ask for.
+/// same way. The product calls [`plan_with_cache_in`] with the root the user
+/// chose; this and [`plan`], which passes [`ScanCache::off`], are for tests,
+/// so a test reads the medium every time rather than writing somewhere it
+/// did not ask for.
+///
+/// **Compiled for tests only** (ART-295). The product never calls this: its
+/// `_in` sibling takes the scratch root the user chose, and the compiler now
+/// holds that line rather than a doc comment. ART-296 was a production call
+/// to one of these, staging BoingBag payloads on the system drive.
+#[cfg(test)]
 pub fn plan_with_cache(
     request: &InstallRequest,
     recipe: &Recipe,
@@ -1544,6 +1557,12 @@ pub fn plan_with_cache_in(
 /// base file. Exactly the reason [`super::package::order_over`] and
 /// `package::parse_all` are parameterised, applied one level up; [`plan`]
 /// is the thin wrapper that passes the real catalogue.
+///
+/// **Compiled for tests only** (ART-295). The product never calls this: its
+/// `_in` sibling takes the scratch root the user chose, and the compiler now
+/// holds that line rather than a doc comment. ART-296 was a production call
+/// to one of these, staging BoingBag payloads on the system drive.
+#[cfg(test)]
 pub(super) fn plan_over(
     request: &InstallRequest,
     recipe: &Recipe,

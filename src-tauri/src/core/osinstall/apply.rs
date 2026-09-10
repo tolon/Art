@@ -1205,8 +1205,14 @@ fn switch_on(
 /// temp directory. **The product never calls it** —
 /// [`apply_staging_in`] is what the shell uses, because where ART stages work
 /// it will throw away is the user's choice and not this module's (ART-196).
-/// Kept for tests and for a future CLI shell that has not chosen a directory,
-/// the same split `plan` / [`super::plan::plan_with_cache`] already has.
+/// Kept for tests only, the same split `plan` /
+/// [`super::plan::plan_with_cache`] has.
+///
+/// **Compiled for tests only** (ART-295). The product never calls this: its
+/// `_in` sibling takes the scratch root the user chose, and the compiler now
+/// holds that line rather than a doc comment. ART-296 was a production call
+/// to one of these, staging BoingBag payloads on the system drive.
+#[cfg(test)]
 pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreResult<ApplyOutcome> {
     apply_staging_in(plan, root, &std::env::temp_dir(), sink)
 }
@@ -1765,6 +1771,12 @@ fn refusal_summary(refusals: &[super::RefusalReason]) -> String {
 /// `apply` would have re-composed afterwards — the one shape in which the
 /// two entry points do not agree, stated rather than papered over, and
 /// unreachable with anything ART ships today.
+///
+/// **Compiled for tests only** (ART-295). The product never calls this: its
+/// `_in` sibling takes the scratch root the user chose, and the compiler now
+/// holds that line rather than a doc comment. ART-296 was a production call
+/// to one of these, staging BoingBag payloads on the system drive.
+#[cfg(test)]
 pub fn add_package(
     tree_root: &Path,
     package: &super::package::Package,

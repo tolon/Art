@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Outlet } from "react-router-dom";
+import { Outlet, useBlocker } from "react-router-dom";
 
 import { JobBar } from "@/components/JobBar";
 import { ScratchRootGate } from "@/components/ScratchRootGate";
@@ -46,6 +46,22 @@ export function Layout() {
    */
   const [running, setRunning] = useState(false);
   const runLock = useMemo(() => ({ running, setRunning }), [running]);
+
+  // ART-292: the browser's own history is the one way out of a running build
+  // that the sidebar and the tab strip cannot close. Leaving the build tab
+  // unmounts the loop that starts the next phase, so the ticked updates and
+  // first boot silently never ran. While a build runs, a change of screen by
+  // Back, Forward or a hash edit is refused here and undone at once; the
+  // sidebar's own sentence, drawn for exactly this state, says why and names
+  // Stop. A change that stays on the same path is not leaving the screen and
+  // passes.
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      running && currentLocation.pathname !== nextLocation.pathname
+  );
+  useEffect(() => {
+    if (blocker.state === "blocked") blocker.reset();
+  }, [blocker]);
 
   // The sidebar is collapsible (Ctrl+B), and the state is a *preference*: it
   // survives a restart, because someone who works with the panes full-width
