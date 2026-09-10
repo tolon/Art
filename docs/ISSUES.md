@@ -27,7 +27,8 @@ pass — filed and closed together rather than sitting in Open in between.
 ## Open
 
 **ART-291** 🔵 **A `packages.folder` seeded from an older ART steers the archive dialogs even
-after the folder leaves the material list** — *found 2026-09-10 during four-tabs round 5, task 2*
+after the folder leaves the material list** — *found 2026-09-10 during four-tabs round 5, task 2;
+a fix built from this entry's own proposal was measured wrong and reverted the same day*
 `src/lib/useBuildSession.ts` (the `packagesShape.folder ?? derivedFolder` read)
 
 Spec § 5 is met — nothing writes `buildSession.packages.<release>.folder` any more, and the F10
@@ -38,36 +39,24 @@ on and the folder its catalogue is asked about. No file resolves through it — 
 against the material list, the catalogue answers the same list whichever folder it is given, and
 `add_package` is told the folder its file was found in — so this is a starting folder, not a
 result. Pinned by `keeps a folder seeded from an older ART even after the list stops holding it`
-(`useBuildSession.test.tsx`) rather than passed over. The fix that keeps *never written* is to
-gate the read — `stored` only while the material list still holds it — never to restore a write.
+(`useBuildSession.test.tsx`) rather than passed over.
 
-**ART-292** 🔵 **Browser back and forward are outside the run lock** — *found 2026-09-10 during
-four-tabs round 5, task 3; the plan's own ruling*
-`src/lib/runLock.tsx` · `src/components/layout/Sidebar.tsx` · `src/pages/Dashboard.tsx` ·
-`src/pages/OsBuilder.tsx`
+**The fix this entry used to propose is wrong, and was reverted.** It said to gate the read —
+`stored` only while the material list still holds it. Built on `art-291-292-295` (`5c41d2b`), it
+broke the population fix round 1 (F1) exists for: a user whose archives folder is **not** their
+disks folder, carried in from an older ART's settings file and never in the material list, because
+round 5 did not migrate it there. The read alone cannot tell "this folder was never in the list"
+(keep steering) from "the user took it out of the list" (this entry). Measured with one variable,
+2026-09-10: with only `useBuildSession.ts` put back to before the gate, `AmigaInstallPanel.test.tsx`
+passes **77 of 77**; with the gate, **7 fail** — the catalogue asked about the disks folder, the
+package rows never drawn, names falling back to ids. Reverted as `bcf1cce`.
 
-While a build runs, the tab strip, every sidebar entry and the dashboard's route actions refuse to
-navigate and say why. The browser's own history does not: `Alt+Left`, a mouse's back button or a
-hash edit still leaves the build tab, and `useBuildRun`'s loop stops advancing on unmount, so the
-ticked updates and first boot silently never run (round 4's I2, by the one door the fix wave did
-not close). Nothing in ART blocks history today, which is why the round ruled it out of scope
-rather than adding a `beforeunload`-shaped guard for one screen. The operation log is still the
-record of what the Rust job did.
-
-**ART-295** 🔵 **Five production wrappers exist so tests need not name a root, and
-`scratch-guard-sweep.py` cannot see a test call to one** — *split out of [ART-293](#fixed)
-on 2026-09-10, when that entry's first half was fixed*
-`src-tauri/src/core/osinstall/apply.rs` · `plan.rs` · `scan.rs` · `scripts/scratch-guard-sweep.py`
-
-`apply`, `add_package`, `open_package`, `plan_with_cache` and `plan_over` each hand
-`&std::env::temp_dir()` straight to their `_in(` sibling, and about **121** calls in test regions
-reach them (ART-293's count, 2026-09-10). The sweep's rule 5 cannot see any of them: the
-`temp_dir()` is in production code, not at the call site. Three whole-suite runs measured them
-**clean** — the staging beneath them guards itself — so this is a blind spot, not a leak. It is
-named because the wrappers' own doc comments say "kept for tests", which is exactly the population
-the sweep exists to watch. Two ways to close it: a sweep rule that lists such wrappers and refuses
-an unexempted test call to one, or retiring the wrappers the way ART-293 retired
-`osinstall_plan`'s implicit root — the body takes its root, and tests pass their own.
+**What is left is a decision, not a fix.** The one signal that tells the two cases apart is the
+user's own removal of that folder from the list. Acting on it means clearing the stored seed at that
+moment — a write to `buildSession.packages.<release>.folder`, which spec § 5 rules out ("never
+written again"). The write would be caused by the user's own action, which *nothing changes unless
+the user changes it* allows and spec § 5 does not. The owner's call. Until then the seed is only a
+starting folder: no file resolves through it.
 
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
@@ -270,6 +259,110 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-296** 🟠 ✅ **The BoingBag preview staged its payload on the system drive, not under the
+chosen scratch root** — *found 2026-09-10 by ART-295's measurement; fixed 2026-09-10 on
+`art-291-292-295`*
+`src-tauri/src/commands/osinstall.rs::extract_package_items` ·
+`src-tauri/src/core/osinstall/scan.rs::open_package`
+
+`extract_package_items` — behind `extract_incoming_for_preview`, the preview of what an update would
+replace — opened a package through `open_package`, the thin wrapper that stages a nested payload in
+`std::env::temp_dir()`, although it had been handed the scratch root the user chose as a parameter.
+The two shipped packages that declare a `member` are BoingBag 3.9-1 and 3.9-2 (`AmigaOS-Update`), so
+the first preview of either wrote its payload to `%TEMP%` on the system drive. `ArchiveSource::
+open_nested` removes that file on both the success and the failure path, so the write was
+**transient** — which is why this is 🟠 and not 🔴 — but the owner's rule is that ART writes
+nothing to `C:` (ART-196), and 0.9.1's headline feature broke it. The wrapper's own doc said "the
+product never calls it"; `scratch-root-sweep.py` could not see the call because `scan.rs` was on
+its allow-list for that very wrapper.
+
+**Fixed:** `open_package_staging_in(&medium, scratch_root)`. **The guard is the compiler:**
+`open_package` is `#[cfg(test)]` ([ART-295](#fixed)), so a production call does not build. Red
+first — the attribute on, the call still there, the production build failed — and put back
+afterwards, when the build fails again with `E0425` at the call. No behavioural test: observing
+where a payload lands under the platform root would race every other test in the process that uses
+it ([ART-182](#fixed)).
+
+**Not claimed.** Not re-run against the owner's own BoingBag archives since the fix.
+
+**ART-295** 🔵 ✅ **Five production wrappers exist so tests need not name a root, and
+`scratch-guard-sweep.py` cannot see a test call to one** — *split out of [ART-293](#fixed) on
+2026-09-10; fixed 2026-09-10 on `art-291-292-295`*
+`src-tauri/src/core/osinstall/apply.rs` · `plan.rs` · `scan.rs` · `scripts/scratch-guard-sweep.py` ·
+`scripts/scratch-root-sweep.py`
+
+`apply`, `add_package`, `open_package`, `plan_with_cache` and `plan_over` each hand
+`&std::env::temp_dir()` straight to their `_in(` sibling, and about **121** calls in test regions
+reach them (ART-293's count, 2026-09-10). The sweep's rule 5 cannot see any of them: the
+`temp_dir()` is in production code, not at the call site. Three whole-suite runs measured them
+**clean** — the staging beneath them guards itself — so this is a blind spot, not a leak. It is
+named because the wrappers' own doc comments say "kept for tests", which is exactly the population
+the sweep exists to watch. Two ways to close it: a sweep rule that lists such wrappers and refuses
+an unexempted test call to one, or retiring the wrappers the way ART-293 retired
+`osinstall_plan`'s implicit root — the body takes its root, and tests pass their own.
+
+**Measured before deciding, with the compiler.** A regex could not tell osinstall's `apply` from
+`layout`'s, so each wrapper was marked `#[deprecated]` and the warnings counted per file and
+region: **122 uses in tests** (`apply` 70, `add_package` 26, `plan_over` 17, `plan_with_cache` 5,
+`open_package` 4) and **two outside them** — `plan()`'s own call to `plan_with_cache`, `plan` itself
+used only by tests (50 uses, none in production, measured the same way), and
+**`extract_package_items`'s call to `open_package`, a real production call staging BoingBag
+payloads on the system drive**, filed and fixed as [ART-296](#fixed). The blind spot this entry
+named was hiding a defect. Two earlier counts read zero and were not measurements: a
+`#[cfg(any())]` run stopped at the first unresolved import, and a parse of the warnings lost its
+backslashes in a heredoc — CLAUDE.md's shell trap, on a regex this time.
+
+**The fix is structural.** All six functions — the five and `plan` — are `#[cfg(test)]`, so a
+production call does not build. That moved them into test regions, where `scratch-guard-sweep.py`'s
+rule 5 sees them: it names the five that hand the platform root onward in `TEST_ONLY_WRAPPERS`, by
+file and by the wrapper's **own** name, never by the callee — exempting `apply_staging_in(` would
+excuse any test handing it the platform root directly — and `--self-test` gains three cases and a
+header check (20/20). `scratch-root-sweep.py` drops the three whole-file exemptions (8 named
+exceptions to 5) and reads test code item by item through the guard sweep's own
+`test_region_mask`, imported rather than copied: its old "everything after the first
+`#[cfg(test)]`" reading would have gone blind below the first gated wrapper in each file.
+
+**Mutations**, each restored by copyfile: `open_package` without its attribute — killed by the root
+sweep; the wrapper renamed out of the table — killed by the guard sweep; a production `temp_dir()`
+below an item-level `#[cfg(test)]` in `apply.rs` — killed by the new root sweep and passed clean by
+the old one, run as the control; ART-296's call put back — the production build fails.
+
+**ART-292** 🔵 ✅ **Browser back and forward are outside the run lock** — *found 2026-09-10 during
+four-tabs round 5, task 3; fixed 2026-09-10 on `art-291-292-295`*
+`src/App.tsx` · `src/components/layout/Layout.tsx` · `src/lib/runLock.tsx`
+
+While a build runs, the tab strip, every sidebar entry and the dashboard's route actions refuse to
+navigate and say why. The browser's own history does not: `Alt+Left`, a mouse's back button or a
+hash edit still leaves the build tab, and `useBuildRun`'s loop stops advancing on unmount, so the
+ticked updates and first boot silently never run (round 4's I2, by the one door the fix wave did
+not close). Nothing in ART blocks history today, which is why the round ruled it out of scope
+rather than adding a `beforeunload`-shaped guard for one screen. The operation log is still the
+record of what the Rust job did.
+
+**Fixed with the router's own blocker.** React Router's `useBlocker` works only inside a data
+router — 7.18.2 says so itself, *"must be used within a data router"* — so `App` builds the same
+routes with `createHashRouter(createRoutesFromElements(…))` and renders `RouterProvider`. The routes
+are unchanged, `osBuilderRoutes()`'s mapped array included, and `pnpm build` bundles it. `Layout`,
+which holds the run lock, blocks a change of path while a build runs and resets the blocked move;
+the sidebar's existing `osBuilder.build.navigationLockedLane` sentence, drawn for exactly this
+state, says why and names Stop. Before blocking every change of path, every programmatic navigation
+in the OS Builder was checked: the hand-off link to the card lane, the drop redirect, the strip's
+next step and the build bar all fire only when no build is running, or sit behind a control the
+lock already disables. A hash typed into an address bar is a development-browser concern; the Tauri
+window has none.
+
+*Tests* (`Layout.test.tsx`, now on `createMemoryRouter`, because a plain `MemoryRouter` would make
+the shell's own guard throw): *keeps a running build's screen when history goes back* — the
+location stays, the home screen is not drawn, the sidebar's sentence is on screen; *lets history
+go back when no build is running*, the control; *goes back once the build has stopped, after
+refusing while it ran*. **Mutations:** the blocker never blocking — killed; blocking whether or not
+a build runs — killed by the control; **the blocker's `reset()` removed — survives every case, a
+wrong mutation rather than a weak guard:** measured, React Router 7.18 lets the later Back through
+without it once the predicate is false. The reset stays because it is the documented contract.
+
+**Not claimed.** Not driven in the real window: Alt+Left and a mouse's back button during a real
+build are owed with the four-tab drive.
+
 **ART-293** 🔵 ✅ **A whole suite run still leaves one 794-byte scan-cache file
 under the scratch root** — *found 2026-09-10 while measuring [ART-281](#fixed)'s fixed arm;
 fixed 2026-09-10 on `art-293-plan-root`*
@@ -295,7 +388,7 @@ gone away. Resolving the root up front would have let a missing root outrank a m
 different sentence for the same state. The command passes `crate::scratch::root`; the leaking test
 and a new guard pass a closure over their own `ScratchDir` path through `plan_in`, a helper that
 lives in the test module. No production wrapper exists "for tests" — that shape is the entry's
-second half, filed as [ART-295](#open).
+second half, filed as [ART-295](#fixed).
 
 *Tests:* `the_plan_writes_its_scan_cache_under_the_root_it_is_given` — one scan-cache file under the
 root the plan was handed; red first as a compile error, since `plan_with_root` did not exist.

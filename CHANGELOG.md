@@ -56,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pressing Back while a build runs no longer abandons it.** The browser's
+  Back and Forward — Alt+Left, a mouse's back button — now stay on the Build
+  tab while a build is running, the same way the sidebar and the tabs already
+  did, and the sidebar says why. Before, they left the tab and the remaining
+  steps silently never ran.
+- **Previewing a BoingBag update no longer writes to your system drive.** The
+  preview of what BoingBag 3.9-1 or 3.9-2 would replace unpacked its payload
+  into Windows' own temp folder, even with a scratch folder chosen in
+  Settings. It now uses the folder you chose, like everything else in ART.
 - **A first-boot rehearsal under WinUAE can no longer fill your disk either.**
   The limit an Amiga-side install got now applies to the rehearsal too: a
   copy that grows by more than twice its size, or by more than 64 MB, ends the
