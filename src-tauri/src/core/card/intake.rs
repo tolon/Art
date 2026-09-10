@@ -27,7 +27,8 @@
 //! what ART-091 was about. So the name is what is matched, against the table
 //! in `core/pistorm/hardware`, and the answer carries which board and line the
 //! name implies rather than asserting the file is right for the user's setup.
-//! `emu68_payload` still makes that decision, and still refuses.
+//! `emu68_payload` compares it with the user's own board and line, and since
+//! ART-305 names a difference rather than refusing it.
 
 use std::path::Path;
 
@@ -52,7 +53,8 @@ pub enum CardRole {
     /// `means` is what the *name* implies, and may be more than one entry:
     /// `Emu68-pistorm.zip` is the classic board on the stable line and the
     /// PiStorm600 on it too (ART-091). Never a claim that it suits the user's
-    /// board — `emu68_payload` decides that and refuses.
+    /// board — `emu68_payload` compares it and, since ART-305, names a
+    /// difference rather than refusing it.
     Emu68Archive { means: Vec<ArchiveNameMeans> },
     /// A Kickstart ROM for the boot partition.
     Kickstart,
@@ -175,7 +177,7 @@ mod tests {
     /// **ART-091, carried into the drop target.** One name means different
     /// boards in different release lines, so the answer carries every reading
     /// rather than picking one — the user's own setting decides, and
-    /// `emu68_payload` refuses if it disagrees.
+    /// `emu68_payload` names it when it disagrees (ART-305).
     #[test]
     fn a_name_that_means_two_boards_says_both() {
         let CardRole::Emu68Archive { means } = role("Emu68-pistorm.zip", FormatCategory::Archive)

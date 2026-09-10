@@ -116,7 +116,20 @@ export type CardBuildWarning =
   | { kind: "tied-boot-priority"; priority: number; driveNames: string[] }
   /** The card's Amiga disks boot nothing — legitimate, and said out loud. */
   | { kind: "nothing-bootable" }
-  | { kind: "volumes-unformatted" };
+  | { kind: "volumes-unformatted" }
+  /**
+   * The Emu68 archive is not the one ART's table names for this board and
+   * release line (ART-305). Written anyway, by the owner's ruling: whoever
+   * builds a PiStorm card picks their own Emu68. `expected` is null when the
+   * line has no archive for the board at all.
+   */
+  | {
+      kind: "archive-not-in-table";
+      archive: string;
+      expected: string | null;
+      board: string;
+      line: Emu68Line;
+    };
 
 /** A ROM as ART identifies it. The fields this screen uses. */
 export interface PlannedRom {
@@ -688,6 +701,25 @@ export function warningPhrase(warning: CardBuildWarning): Phrase {
       return { key: "cardBuilder.warning.nothingBootable" };
     case "volumes-unformatted":
       return { key: "cardBuilder.warning.volumesUnformatted" };
+    case "archive-not-in-table": {
+      // The line as its version number, which reads the same in every
+      // language — the sentence around it is the catalogue's.
+      const line = warning.line === "stable" ? "1.0.x" : "1.1";
+      return warning.expected === null
+        ? {
+            key: "cardBuilder.warning.archiveNotInTableNone",
+            params: { archive: warning.archive, board: warning.board, line },
+          }
+        : {
+            key: "cardBuilder.warning.archiveNotInTable",
+            params: {
+              archive: warning.archive,
+              expected: warning.expected,
+              board: warning.board,
+              line,
+            },
+          };
+    }
   }
 }
 

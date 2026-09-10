@@ -254,6 +254,81 @@ stores md5s keyed by size and modification time) would let the next start pay no
 
 ## Fixed
 
+**ART-306** 🟠 ✅ **Two card-plan warnings reached the screen with their names as `undefined`, and one
+took the wrong sentence** — *found 2026-09-11 while adding ART-305's warning; fixed on the same
+branch*
+`src-tauri/src/commands/card.rs` (`CardBuildWarning`) · `src/lib/cardBuild.ts` · The enum carried
+`#[serde(tag = "kind", rename_all = "kebab-case")]`, which renames the **variants** only. Its struct
+variants' fields went out as `drive_name`, `rom_major`, `drive_names`; the frontend's type reads
+`driveName`, `romMajor`, `driveNames`. A hypothesis from reading, so it was asked of the artefact: a
+new test serialised `TiedBootPriority` and got
+`{"drive_names":["SDH0","SDH2"],"kind":"tied-boot-priority","priority":0}` — `driveNames` is `Null`.
+What the screen said: the tied-priority warning named its drives `undefined`; the FFS-past-4-GB
+warning named its drive `undefined`, and since `romMajor` was `undefined` rather than `null`,
+`warningPhrase` took the *"Kickstart {{major}}'s own file system"* branch even with no Kickstart
+chosen — *"Kickstart undefined's own file system can only address 4 GB"* — the confident wrong
+sentence, where the no-ROM sentence was meant. Not caught before because the frontend tests build
+the warning objects by hand in the TypeScript shape, and no Rust test serialised the enum.
+
+**The fix.** `rename_all_fields = "camelCase"` beside `rename_all`. Test:
+`card_build_warnings_arrive_under_the_names_the_frontend_reads` (asserts `driveNames`, `driveName`,
+`romMajor` in the JSON) — red before the attribute (the JSON above), green after. Mutation: the attribute taken back out
+fails it. (The first attempt at that mutation matched nothing — `cargo fmt` had split the attribute
+over five lines — and the script refused to run it rather than report a survivor; re-written to the
+formatted text, it killed.)
+The same shape — a kind-tagged enum with multi-word fields in its struct variants and no
+`rename_all_fields` — occurs in sixteen more enums; whether each is a defect depends on what its
+TypeScript type reads, so each was checked against its TS type the same night (a read-only audit,
+field by field): **none mismatches.** `SizeConcern` and `BootConcern` never reach the frontend (they
+are copied into `CardBuildWarning`, the defect path, now fixed); `SettlementReport::Promoted` and
+`Collision` carry their own camelCase renames; the other twelve go out snake_case and their TS types
+read snake_case (`job_id`, `error_code`, `files_landed`, `rom_major`, `drive_name`, `volume_name`,
+`at_least`, `gained_crlf`, …). Not covered: `RefusalReason`'s other variants beyond `volume_name`, and
+nothing guards this generally — only per-type tests such as the one above.
+
+**ART-305** 🟠 ✅ **The card builder refused any Emu68 archive but the one ART's table names — a
+prerelease, a nightly, a build the user is testing** — *found 2026-09-11 by the owner on
+`main-ae030ff`, writing a card; changed the same night on `art-305-emu68-any-release` by the owner's
+ruling*
+`src-tauri/src/core/card/payload.rs` · `src-tauri/src/commands/card.rs` (`CardBuildWarning`) ·
+`src/lib/cardBuild.ts` · The owner chose `Emu68-pistorm-classic.zip` from `v1.1.0-beta.1` with the
+release line on stable and got *"invalid input: the PiStorm needs 'Emu68-pistorm.zip' from the stable
+release line, and this is 'Emu68-pistorm-classic.zip'"* (`ART-INPUT-INVALID`). The refusal was
+ART-091's design: a name means another board in another line, so a mismatch was refused. The
+owner's ruling: *"Gerek yok stable ye bunu yapan kişi ne yaptığını biliyor kullanıcı kitlemizin kim
+olduğu belli istediği versyonu secsin. Neyi sectiğini söyleyeyim uyarı olarak yeterli."* Checked
+against `api.github.com/repos/michalsc/Emu68/releases` the same night: stable `v1.0.7` ships
+`Emu68-pistorm.zip`, `Emu68-pistorm32lite.zip`, `Emu68-raspi.zip`; prerelease `v1.1.0-beta.1`
+(2026-09-01) ships `Emu68-pistorm-classic.zip`, `Emu68-pistorm.zip`, `Emu68-raspi.zip`,
+`VideoCore.card`; the `nightly` tag carries dated names (`Emu68-pistorm-classic-20260728-614794.zip`)
+that no table entry can equal — so a strict name check also refused every nightly.
+
+**The change.** `emu68_payload` compares the name with ART's table and returns an `ArchiveMismatch`
+(the chosen name, the table's name or none, board, line) instead of an error; `card_plan_build` turns
+it into `CardBuildWarning::ArchiveNotInTable`, shown in the plan before the button, in both
+languages. The refusal kept is `Emu68-raspi.zip`: it is not a version of the PiStorm firmware but
+Emu68 for a bare Pi. The line selector and ART-091's table are unchanged — the table still decides
+what the sentence says. Two tests that pinned the refusal were rewritten to the ruling with their
+reason in place (`an_archive_for_another_board_is_written_and_named`,
+`the_release_line_decides_what_the_name_means`).
+
+**Evidence.** Decided before the run: the rewritten and new tests red on the unfixed code for the
+refusal's own reason, the `raspi` refusal and the table's-own-name control green. Measured, `TMP`/`TEMP`
+on `E:`: **before** `4 passed; 6 failed` — `an_archive_for_another_board_is_written_and_named`,
+`a_prerelease_archive_on_the_stable_line_is_written_and_named` (the owner's sentence word for word),
+`a_nightly_archive_is_written_and_named`, `a_line_with_nothing_for_the_board_is_written_and_said`,
+`the_release_line_decides_what_the_name_means`, `the_plan_names_an_emu68_archive_the_table_does_not_expect`
+failed; `the_raspi_build_is_refused_for_what_it_is`, the intake's raspi test and
+`the_plan_says_nothing_about_an_emu68_archive_the_table_names` passed. **After:** all green.
+Frontend: `warningPhrase` names both archives (`cardBuild.test.ts`, *names the chosen Emu68 archive
+beside the one ART's table names*), both branches resolve in both catalogues (`phrase-keys.test.ts`);
+`pnpm lint` clean, Vitest `109 passed` files / `1655 passed` tests. **Five mutations, five killed**,
+each by the tests named for it beforehand (backup by absolute path, restored with `shutil.copyfile`
+and compared byte for byte): a name mismatch never reported; a line with nothing for the board not
+reported; the old refusal put back; the plan not carrying the warning; the `raspi` refusal taken out.
+Full `cargo test --lib` twice: `3224 passed; 0 failed; 58 ignored` both times. clippy, fmt,
+control-byte, scratch-root, scratch-guard and counter sweeps clean.
+
 **ART-304** 🟠 ✅ **Contribution could never go on after BoingBag 3.9-2: two packages whose archives
 share a top-level name were taken for two copies of one** — *found 2026-09-11 by the owner driving
 `main-706de9f` over `E:/amiga/Amigatolon/sonuclar`; fixed the same night on `art-304-shared-top-level`*
