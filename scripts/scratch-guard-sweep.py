@@ -47,30 +47,52 @@ declaration is gated the whole file counts as test code. Five rules:
      mention `ScratchDir`. Both accepted shapes name the guard in the
      signature: `-> ScratchDir` (`core/rom/place.rs`) and
      `-> (ScratchDir, PathBuf)` (`core/whdload/install.rs`, ART-242).
-  2. **bound without its guard** — a call to `scratch(` (bare, or qualified:
-     `fixtures::scratch(`, `super::scratch(`, `crate::…::scratch(`) whose
-     statement is `let <ident> = …` rather than `let (<ident>, <ident>) = …`.
-     `let (_, dir) = …` is worse than either and is called out separately:
-     a bare `_` drops the guard at once, deleting the directory before the
-     test's first line, which is the leak back in one character wearing the
-     fix's clothes.
+  2. **bound without its guard** — a call to a **guard source** whose
+     binding lets the guard go. A guard source is any function that hands one
+     to its caller, and they are discovered **by return type, never by name**:
+     `ScratchDir::new` and `ScratchDir::pair` themselves, every `fn` whose
+     return type mentions `ScratchDir` — bare (`-> ScratchDir`), in a tuple
+     (`-> (ScratchDir, PathBuf)`, and `write_image`'s three-element form), or
+     inside a collection (`-> Vec<(ScratchDir, &str, Box<dyn MediaSource>)>`)
+     — and every `fn` returning a struct that owns one in a field
+     (`sources::fetch::Fixture`, `pistorm::tests::Card`).
 
-     This rule reads the helper first, because the shape a call site must have
-     is the shape its helper returns. A helper that returns a plain
-     `ScratchDir` (`core/rom/place.rs`, `core/osinstall/chain.rs`,
-     `core/amigainstall/{packagevol,run,workvol}.rs`) is *already* correct with
-     `let dir = scratch("x")` — `dir` is the guard — and demanding a tuple
-     there would be this sweep inventing a defect. Only a helper that returns
-     a tuple or a bare path makes `let <ident> =` wrong. The helper is looked
-     up the way Rust would: the calling file's own `fn scratch`, else the
-     directory's `mod.rs` (`super::`, and every `fixtures::scratch` call under
-     `core/osinstall/`), else — nothing found — the strict reading.
+     Keying on the identifier `scratch(` instead, as this rule did until the
+     final review, left the 48 direct `ScratchDir::pair(` sites and the 17
+     fixture helpers with other names (`tmp`, `tempdir`, `disc`, `write`,
+     `write_image`, `planned_with`, `sources`, …) outside the guard
+     altogether: 765 call sites were checked where 1691 exist, and a probe
+     showed `let (_, dir, _n) = helper("x")`, `let dir = pair(..).1` and a
+     non-`scratch` helper dropping a guard all passing. The tree was clean of
+     all three, which is what a vacuous guard looks like from the outside.
+
+     What a correct binding is depends on the shape the source returns. A
+     bare `ScratchDir` (`core/rom/place.rs`, `core/osinstall/chain.rs`) is
+     correct as `let dir = scratch("x")` — `dir` *is* the guard — and
+     demanding a tuple there would be this sweep inventing a defect. A tuple
+     must be destructured with the guard's own element held by a real name:
+     `let (_, dir) = …` drops it at once, deleting the directory before the
+     test's first line, and is called out separately. The guard is element 0
+     everywhere in ART today; the message names the position when it is not.
+     A collection may be bound whole (it owns every guard it holds) or
+     destructured per element in a `for` pattern. `pair(..).1` is an offender
+     and `pair(..).0` is not: the first drops the guard with the temporary it
+     came from, the second keeps it.
+
+     Names are resolved the way Rust resolves them: `Self::new(` and
+     `Type::new(` reach that type's associated function and no other
+     (`core/amigainstall/run.rs` has four unrelated `fn new`), an unqualified
+     call reaches this file's own free functions, and `super::` / `fixtures::`
+     reach the directory's `mod.rs`. A method call (`dir.join(`) is never one
+     of ours.
   3. **returns a path whose guard it drops** — a helper `fn` that is not a
-     `#[test]`, calls `scratch(`, and returns a `PathBuf`/`Path`-shaped type
-     with no `ScratchDir` in it. The guard it creates dies at that helper's
-     closing brace while the path it returns is used by the caller — so the
-     directory is both leaked *and*, once the helpers are converted, gone
-     early. These need the guard threaded out to the caller.
+     `#[test]`, calls a guard source, and returns a `PathBuf`/`Path`-shaped
+     type or a struct that does not carry a `ScratchDir`. The guard dies at
+     that helper's closing brace while the path it returns is used by the
+     caller — so the directory is both leaked *and*, once the helpers are
+     converted, gone early. These need the guard threaded out, which is what
+     `core::iso::tests::write_image`, `cbm::{d64,t64}::write` and
+     `osinstall::source_cd::disc` had to do.
   4. **builds a scratch path by hand** — test code that writes
      `std::env::temp_dir().join(…)` itself instead of asking `ScratchDir`.
      The 63 helpers rules 1-3 cover were the dominant shape, not the only
@@ -115,10 +137,12 @@ declaration is gated the whole file counts as test code. Five rules:
 
 ## Which lines count as test code
 
-Rules 1-3 key on `fn scratch(` and `scratch(` — tokens that do not appear in
-production code, so "everything after the file's first `#[cfg(test)]`" was
-close enough for them. Rules 4 and 5 key on `temp_dir()`, which production
-code uses legitimately (`src/scratch.rs`'s own fallback, `commands/preload.rs`),
+Rules 1-3 once keyed on `fn scratch(` and `scratch(` — tokens that do not
+appear in production code, so "everything after the file's first
+`#[cfg(test)]`" was close enough for them. It is not close enough now that
+they follow return types across every function in the file. Rules 4 and 5 key
+on `temp_dir()`, which production code uses legitimately (`src/scratch.rs`'s
+own fallback, `commands/preload.rs`),
 and a review probe showed the loose reading accusing two production lines that
 merely sat after a `#[cfg(test)] use` (review I1). A lint that can redden CI on
 a clean production line is the same defect as the leak it hunts, so the region
@@ -171,6 +195,27 @@ Neither rule looks inside a macro body or a `build.rs`, and neither can tell a
 test helper compiled into the crate for an integration test (`tests/`) from
 production — ART has no `tests/` directory today.
 
+Rules 2 and 3 have three blind spots of their own, all under-reporting:
+
+  - **A guard source in another module reached by a longer path.** Resolution
+    covers this file, `super::`/`fixtures::` into the directory's `mod.rs`,
+    and `Type::`/`Self::` for associated functions. A helper imported by
+    `use crate::core::x::tests::helper;` and then called bare resolves to
+    nothing, so its call sites are not checked. Nothing in the tree does that
+    today (every fixture helper is same-file or `fixtures::`).
+  - **A guard that leaves a helper inside a type the sweep cannot read** — an
+    `InstallPlan` or a `Box<dyn MediaSource>` holding a scratch path. Rule 3
+    asks the *shape* of the return type, so only a path-shaped one or a
+    struct declared in the same file can be judged; anything else passes. The
+    call sites inside such a helper are still checked by rule 2.
+  - **A binding spread over more than one statement** — `let pair = helper();
+    let dir = pair.1;` — is two statements, and each is read alone.
+
+Rule 1 still keys on the name `fn scratch(`, because "a helper that hands back
+a bare path" cannot be recognised from a return type alone: that *is* the
+shape of every path-returning function in the crate. Rule 3 is what catches
+the same defect under another name, by asking what the helper calls.
+
 Run it from `amiga-retro-toolkit/`:
 
     python scripts/scratch-guard-sweep.py
@@ -179,16 +224,19 @@ Run it from `amiga-retro-toolkit/`:
 Exit 0 with `scratch-guard sweep: clean — N helpers, M call sites, …`. Exit 1
 lists every offender as `path:line: <why>` and prints the totals.
 
-`--self-test` runs rules 4 and 5 over synthetic source held in this file — no
+`--self-test` runs the rules over synthetic source held in this file — no
 repository file is read and none is written — and checks each case against the
-answer written down beside it. Every case is one of the two arms of a defect
-this sweep has actually had: a production line after a `#[cfg(test)] use` that
-must **not** be accused, a hand-built path whose *literal* contains the word
-"assert" that must be, an `assert!`-wrapped product call that must be, the
-`JoinHandle::join()` line that must not, and the header's own exemption
-paragraph checked against `ALLOWED_HAND_BUILT`. It is the probe a reader can
-re-run instead of trusting this paragraph, and it fails if a rule is loosened
-back to any of those shapes.
+answer written down beside it. Every case is one arm of a defect this sweep
+has actually had, with its clean twin beside it, so a rule that stops
+accusing and a rule that starts over-accusing both fail here: a production
+line after a `#[cfg(test)] use` that must **not** be accused, a hand-built
+path whose *literal* contains the word "assert" that must be, an
+`assert!`-wrapped product call that must be, the `JoinHandle::join()` line
+that must not, `let (_, dir, _n) = helper("x")`, `let dir = pair(..).1`, a
+non-`scratch` helper returning a path from a guard it drops, a carrier struct
+and a `for`-destructured collection that must both pass, and the header's own
+exemption paragraph checked against `ALLOWED_HAND_BUILT`. It is the probe a
+reader can re-run instead of trusting this paragraph.
 
 Deliberately a script and not a Rust test, matching the two sweeps beside it:
 a test that reads the source of the crate it is compiled into is a strange
@@ -213,10 +261,26 @@ SCRATCH_DEF = re.compile(r"^\s*(pub(\([^)]*\))? )?(async )?fn scratch\(")
 # element is read back out, because `let (_ , dir) = …` — a space before the
 # comma — is `let (_, dir)` in rustfmt's clothes and must not pass as a tuple.
 TUPLE_LET = re.compile(r"^let\s*\(\s*(\w+)\s*,\s*(\w+)\s*\)\s*=")
-IDENT_LET = re.compile(r"^let\s+(?:mut\s+)?(\w+)\s*=")
+IDENT_LET = re.compile(r"^(?:let|for)\s+(?:mut\s+)?(\w+)\s*(?:=|in\b)")
 # A return type that is a path and nothing else: `-> PathBuf`,
 # `-> std::path::PathBuf`, `-> (PathBuf, PathBuf)`, `-> &Path`.
 PATH_SHAPED = re.compile(r"\bPathBuf\b|\bPath\b")
+# Rules 2 and 3, generalised: a call to *any* function, with its qualifier read
+# off the text in front of it. `scratch(` was never the population — the tree
+# holds 17 fixture helpers with other names and 48 direct `ScratchDir::pair(`
+# sites (final review, I1).
+CALL_TOKEN = re.compile(r"(?<![A-Za-z0-9_])([a-z_]\w*)\s*\(")
+QUALIFIER = re.compile(r"([A-Za-z0-9_]+)::\s*$")
+# `let (a, b, c) = …` with any arity. The elements are read back out, because
+# it is the element at the *guard's* position that has to be a real binding.
+TUPLE_LET_ANY = re.compile(
+    r"^(?:let|for|if\s+let|while\s+let)\s*\(\s*([^)]*?)\s*\)\s*(?:=|in\b)")
+# `= helper(…).0` — the tuple is a temporary, so every element it holds but
+# that one is dropped before the next statement.
+FIELD_ACCESS = re.compile(r"\)\s*\.(\d+)")
+STRUCT_DEF = re.compile(r"^(\s*)(?:pub(?:\([^)]*\))?\s+)?struct\s+(\w+)")
+# The two the crate itself provides. Every other guard source is discovered.
+BUILTIN_GUARD_SOURCES = {"pair": ("tuple", 0), "new": ("guard", 0)}
 # Rule 4: a scratch path built by hand. `temp_dir()` and `.join(` may be split
 # by rustfmt, so the `.join(` is also looked for at the head of the next line.
 TEMP_DIR = re.compile(r"(?<![A-Za-z0-9_])temp_dir\(\)")
@@ -518,13 +582,21 @@ def signature(lines: list[str], start: int) -> str:
     return " ".join(out)
 
 
+def code_of(line: str) -> str:
+    """The line without its trailing `//` comment, string literals blanked
+    first so a `//` inside one cannot cut the code short."""
+    blanked = strip_string_literals(line)
+    at = blanked.find("//")
+    return line[:at] if at != -1 else line
+
+
 def statement_start(lines: list[str], index: int) -> int:
     """The first line of the statement containing line `index`. Walks back
     while the previous line looks like a continuation — it does not end a
     statement or a block."""
     i = index
     while i > 0:
-        prev = lines[i - 1].rstrip()
+        prev = code_of(lines[i - 1]).rstrip()
         if prev == "" or prev.endswith((";", "{", "}", ",")) or prev.lstrip().startswith("//"):
             break
         i -= 1
@@ -555,6 +627,304 @@ def is_test_fn(lines: list[str], fn_line: int) -> bool:
             continue
         return False
     return False
+
+
+def split_top_level(text: str) -> list[str]:
+    """Split a tuple's element list on its top-level commas."""
+    out, depth, current = [], 0, ""
+    for ch in text:
+        if ch in "(<[":
+            depth += 1
+        elif ch in ")>]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(current)
+            current = ""
+            continue
+        current += ch
+    out.append(current)
+    return [part.strip() for part in out if part.strip()]
+
+
+def return_type(sig: str) -> str:
+    """The return type out of a signature line, without its body."""
+    if "->" not in sig:
+        return ""
+    ret = sig.split("->", 1)[1]
+    return ret.split("{", 1)[0].strip()
+
+
+def carrier_structs(lines: list[str], mask: list[bool]) -> set[str]:
+    """Structs that carry a `ScratchDir` in a field — `sources::fetch::Fixture`,
+    `sources::library::Fixture`, `pistorm::tests::Card`.
+
+    A value of such a type *is* the guard's owner, so a helper may return one
+    by value and a call site may bind it with a plain `let`. Both the named
+    form (`_guard: ScratchDir`) and the tuple form (`Card(PathBuf,
+    ScratchDir)`) count; the guard's field name is not required to be
+    `_guard`, because what makes it a carrier is the type."""
+    found: set[str] = set()
+    for i, line in enumerate(lines):
+        m = STRUCT_DEF.match(line)
+        if not m or not mask[i]:
+            continue
+        name, indent = m.group(2), len(m.group(1))
+        if line.rstrip().endswith(";") or "ScratchDir" in line:
+            # A one-line declaration answers for itself, either way.
+            if "ScratchDir" in line:
+                found.add(name)
+            continue
+        j = i + 1
+        while j < len(lines):
+            if len(lines[j]) - len(lines[j].lstrip()) == indent and lines[j].strip() in ("}", "};"):
+                break
+            if "ScratchDir" in lines[j]:
+                found.add(name)
+                break
+            if lines[j].strip().startswith("fn ") or STRUCT_DEF.match(lines[j]):
+                break
+            if lines[j].rstrip().endswith(";"):
+                # A one-line tuple struct ends here. Walking past it made
+                # `VecDevice` a carrier because a `ScratchDir` appeared later
+                # in the file — a false accusation in `volume/write/bitmap.rs`.
+                break
+            j += 1
+    return found
+
+
+def guard_sources(lines: list[str], mask: list[bool], carriers: set[str]) -> dict:
+    """Every function in this file that hands a guard to its caller, keyed by
+    name, discovered by **return type** and never by name (final review, I1).
+
+    Three shapes: `("guard", 0)` for `-> ScratchDir`; `("tuple", i)` for a
+    tuple whose element `i` is the guard (`-> (ScratchDir, PathBuf)`, and
+    `write_image`'s three-element form); `("carrier", 0)` for a function
+    returning a struct that owns one in a field (`-> Self` inside such a
+    struct's `impl`)."""
+    sources: dict = {}
+    for i, line in enumerate(lines):
+        m = FN_RE.match(line)
+        if not m or not mask[i]:
+            continue
+        name = m.group(5)
+        ret = return_type(signature(lines, i))
+        if not ret:
+            continue
+        shape = None
+        if "ScratchDir" in ret:
+            if ret.startswith("("):
+                inner = ret[1:ret.rfind(")")] if ret.endswith(")") else ret[1:]
+                parts = split_top_level(inner)
+                idx = next((k for k, part in enumerate(parts) if "ScratchDir" in part), 0)
+                shape = ("tuple", idx)
+            elif "(" in ret:
+                # A container of tuples — `Vec<(ScratchDir, &str, Box<dyn
+                # MediaSource>)>` in `core/osinstall/source_contract.rs`. The
+                # collection owns every guard, so binding it whole is correct
+                # and so is destructuring an element in a `for` pattern; the
+                # index is the one inside the element tuple.
+                inner = ret[ret.index("(") + 1:ret.rindex(")")]
+                parts = split_top_level(inner)
+                idx = next((k for k, part in enumerate(parts) if "ScratchDir" in part), 0)
+                shape = ("container", idx)
+            else:
+                shape = ("guard", 0)
+        else:
+            base = ret.lstrip("&").split("<")[0].strip()
+            if ret == "Self":
+                base = enclosing_impl(lines, i) or "Self"
+            if base in carriers:
+                shape = ("carrier", 0)
+        if shape is None:
+            continue
+        owner = enclosing_impl(lines, i)
+        indent = len(m.group(1))
+        if owner is not None and indent > 0:
+            # An associated function: `Fixture::new` is not the same function
+            # as the `new` three impls further down, and keying by bare name
+            # made every `Self::new(` in `core/amigainstall/run.rs` resolve to
+            # whichever came last.
+            sources[(owner, name)] = shape
+        else:
+            sources[name] = shape
+    return sources
+
+
+def qualifier_of(line: str, start: int) -> str | None:
+    """What sits in front of a call: `None` for an unqualified one, the last
+    path segment for `crate::core::ScratchDir::pair(`, and `"."` for a method
+    call, which is never one of ours."""
+    head = line[:start].rstrip()
+    if head.endswith("."):
+        return "."
+    if head.endswith("::"):
+        m = QUALIFIER.search(head)
+        return m.group(1) if m else None
+    return None
+
+
+IMPL_RE = re.compile(r"^\s*impl(?:<[^>]*>)?\s+(?:.+\s+for\s+)?([A-Za-z_]\w*)")
+MOD_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+")
+
+
+def make_resolver(own: dict, theirs: dict, carriers: set[str]):
+    """`(name, qualifier, owner) -> shape | None`, looked up the way Rust
+    would. Shared by `main` and by `--self-test` rather than written twice: a
+    probe that resolves differently from the sweep proves nothing about the
+    sweep."""
+    near = carriers | {"Self", "super", "self", "fixtures", "tests", "crate"}
+
+    def resolve(name, qualifier, owner=None):
+        if qualifier == "ScratchDir":
+            return BUILTIN_GUARD_SOURCES.get(name)
+        if qualifier == "Self":
+            return own.get((owner, name)) if owner else None
+        if qualifier is not None and qualifier[:1].isupper():
+            return own.get((qualifier, name))
+        if qualifier is None:
+            return own.get(name)
+        if qualifier not in near:
+            return None
+        return own.get(name) or theirs.get(name)
+
+    return resolve
+
+
+def analyse_guards(rel: str, lines: list[str], whole_file: bool = False,
+                   theirs: dict | None = None):
+    """Everything rules 2 and 3 need for one file, in one call."""
+    mask = test_region_mask(lines, whole_file)
+    carriers = carrier_structs(lines, mask)
+    structs = {m.group(2) for i, m in
+               ((i, STRUCT_DEF.match(line)) for i, line in enumerate(lines))
+               if m and mask[i]}
+    sources = guard_sources(lines, mask, carriers)
+    resolve = make_resolver(sources, theirs or {}, carriers)
+    return guard_rules(rel, lines, mask, resolve, carriers, structs, sources)
+
+
+def enclosing_impl(lines: list[str], index: int) -> str | None:
+    """The type of the `impl` block that contains line `index`, or `None` when
+    the item is free.
+
+    Bounded, unlike the first version, which walked back to the nearest `impl`
+    *anywhere* above and so made every free helper inside `mod tests` an
+    associated function of a production impl earlier in the file — 48 one-line
+    helpers accused in one run. Only a line at a **lower indent** can be the
+    container, and the first such line decides: an `impl` header means yes, a
+    `mod` header or a closing brace means no."""
+    if index >= len(lines):
+        return None
+    inner = indent_of(lines[index])
+    for i in range(index - 1, -1, -1):
+        line = lines[i]
+        if not line.strip() or indent_of(line) >= inner:
+            continue
+        m = IMPL_RE.match(line)
+        if m:
+            return m.group(1)
+        return None
+    return None
+
+
+def guard_rules(
+    rel: str,
+    lines: list[str],
+    in_test: list[bool],
+    resolve,
+    carriers: set[str],
+    structs: set[str],
+    sources: dict[str, tuple[str, int]],
+) -> tuple[list[tuple[str, int, str]], tuple[int, int]]:
+    """Rules 2 and 3 over every call of a **guard source** in one file.
+
+    `resolve(name, qualifier)` hands back the shape the callee returns, or
+    `None` when the call is not one of ours. Returns the offenders and
+    `(call sites, call sites that keep their guard)`."""
+    offenders: list[tuple[str, int, str]] = []
+    calls = accepted = 0
+    rule3_seen: set[int] = set()
+    in_guard_impl = scratchdir_impl_lines(lines)
+
+    for i, line in enumerate(lines):
+        if not in_test[i] or FN_RE.match(line) or i in in_guard_impl:
+            # `ScratchDir`'s own impl is where a guard is created and handed
+            # on; rule 4 already exempts it for the same reason.
+            continue
+        for m in CALL_TOKEN.finditer(line):
+            if is_comment(line, m.start()):
+                continue
+            qual = qualifier_of(line, m.start())
+            if qual == ".":
+                continue
+            fn_name, fn_line = enclosing_fn(lines, i)
+            owner = enclosing_impl(lines, fn_line)
+            shape = resolve(m.group(1), qual, owner)
+            if shape is None:
+                continue
+
+            calls += 1
+            kind, idx = shape
+            enclosing_is_source = fn_name in sources or (owner, fn_name) in sources
+            stmt = lines[statement_start(lines, i)].strip()
+            tup = TUPLE_LET_ANY.match(stmt)
+            ident = IDENT_LET.match(stmt)
+            field = FIELD_ACCESS.search(line[m.end():])
+            where = "" if idx == 0 else f" (the guard is element {idx})"
+
+            if field and kind in ("tuple", "container"):
+                # `pair(..).1` drops the guard with the temporary it came
+                # from; `pair(..).0` keeps the guard and drops the path, which
+                # is a shape a test may legitimately want.
+                if int(field.group(1)) == idx and ident and ident.group(1) != "_":
+                    accepted += 1
+                else:
+                    offenders.append(
+                        (rel, i + 1, f"guard discarded by a field access{where}"))
+            elif kind == "container" and ident and ident.group(1) != "_":
+                # The collection owns every guard it holds.
+                accepted += 1
+            elif kind in ("tuple", "container") and tup:
+                parts = split_top_level(tup.group(1))
+                held = idx < len(parts) and parts[idx].split()[-1] != "_"
+                if held:
+                    accepted += 1
+                else:
+                    offenders.append((rel, i + 1, f"guard dropped at once{where}"))
+            elif kind not in ("tuple", "container") and ident:
+                if ident.group(1) == "_":
+                    offenders.append((rel, i + 1, "guard dropped at once"))
+                else:
+                    accepted += 1
+            elif ident or tup:
+                # A binding of the wrong shape for what the callee returns.
+                offenders.append((rel, i + 1, f"bound without its guard{where}"))
+            elif enclosing_is_source:
+                # A tail expression inside another guard source: the guard is
+                # what that function hands on, so it is not dropped here.
+                accepted += 1
+            else:
+                offenders.append((rel, i + 1, "used without binding its guard"))
+
+            # Rule 3: the helper that calls a guard source and returns
+            # something that cannot carry it.
+            if fn_line in rule3_seen or is_test_fn(lines, fn_line):
+                continue
+            rule3_seen.add(fn_line)
+            ret = return_type(signature(lines, fn_line))
+            if not ret or "ScratchDir" in ret:
+                continue
+            base = ret.lstrip("&").split("<")[0].strip()
+            if ret == "Self":
+                base = enclosing_impl(lines, fn_line) or "Self"
+            if base in carriers:
+                continue
+            if PATH_SHAPED.search(ret) or base in structs:
+                offenders.append(
+                    (rel, fn_line + 1,
+                     f"returns a path whose guard it drops (fn {fn_name})"))
+
+    return offenders, (calls, accepted)
 
 
 def temp_dir_rules(
@@ -711,14 +1081,121 @@ mod tests {
 ]
 
 
+# The same, for rules 2 and 3. Every case is a shape the final review's probe
+# ran against the sweep and found passing (I1) — the guard being vacuous over
+# roughly a third of the converted sites — with its clean twin beside it, so a
+# rule that stops accusing and a rule that starts over-accusing both fail here.
+
+GUARD_TEST_CASES: list[tuple[str, str, set[int]]] = [
+    (
+        "a guard element dropped with `_` is an offender whatever the helper "
+        "is called, and the same call bound properly is not",
+        """#[cfg(test)]
+mod tests {
+    fn helper(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf, usize) {
+        let (guard, dir) = crate::core::ScratchDir::pair("art-probe", tag);
+        (guard, dir, 0)
+    }
+
+    #[test]
+    fn t() {
+        let (_, dir, _n) = helper("x");
+        let (_guard, kept, _n) = helper("y");
+    }
+}
+""",
+        {10},
+    ),
+    (
+        "a guard reached through `.1` is dropped with the temporary it came "
+        "from; `.0` keeps it",
+        """#[cfg(test)]
+mod tests {
+    #[test]
+    fn t() {
+        let dir = crate::core::ScratchDir::pair("art-probe", "field").1;
+        let guard = crate::core::ScratchDir::pair("art-probe", "kept").0;
+        let (_guard, both) = crate::core::ScratchDir::pair("art-probe", "ok");
+    }
+}
+""",
+        {5},
+    ),
+    (
+        "a helper named anything at all that returns a path from a guard it "
+        "drops (rule 3), beside one that hands the guard on",
+        """#[cfg(test)]
+mod tests {
+    fn tmp(tag: &str) -> std::path::PathBuf {
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-probe", tag);
+        dir
+    }
+
+    fn kept(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-probe", tag)
+    }
+}
+""",
+        {3},
+    ),
+    (
+        "a struct that owns the guard in a field is bound with a plain `let`, "
+        "and its constructor is not a rule-3 offender",
+        """#[cfg(test)]
+mod tests {
+    struct Fixture {
+        dir: std::path::PathBuf,
+        _guard: crate::core::ScratchDir,
+    }
+
+    impl Fixture {
+        fn new(tag: &str) -> Self {
+            let (guard, dir) = crate::core::ScratchDir::pair("art-probe", tag);
+            Self { dir, _guard: guard }
+        }
+    }
+
+    #[test]
+    fn t() {
+        let f = Fixture::new("x");
+    }
+}
+""",
+        set(),
+    ),
+    (
+        "a collection of tuples is destructured in a `for` pattern, and the "
+        "guard element still has to be held",
+        """#[cfg(test)]
+mod tests {
+    fn sources(tag: &str) -> Vec<(crate::core::ScratchDir, &'static str)> {
+        vec![]
+    }
+
+    #[test]
+    fn t() {
+        for (_guard, name) in sources("ok") {
+            let _ = name;
+        }
+        for (_, name) in sources("dropped") {
+            let _ = name;
+        }
+    }
+}
+""",
+        {12},
+    ),
+]
+
+
 def self_test() -> int:
     """Run rules 4 and 5 over the synthetic cases above, plus the header's
     agreement with `ALLOWED_HAND_BUILT`. No repository file is touched."""
     failures = 0
-    for name, src, expected in SELF_TEST_CASES:
-        lines = src.split("\n")
-        mask = test_region_mask(lines, whole_file=False)
-        found, _ = temp_dir_rules("src-tauri/src/probe.rs", lines, mask)
+    total = len(SELF_TEST_CASES) + len(GUARD_TEST_CASES) + 1
+
+    def check(name, found, expected):
+        nonlocal failures
         got = {line for _, line, _ in found}
         ok = got == expected
         failures += 0 if ok else 1
@@ -727,6 +1204,16 @@ def self_test() -> int:
             print(f"        expected lines {sorted(expected)}, got {sorted(got)}")
             for _, line, why in sorted(found, key=lambda o: o[1]):
                 print(f"        line {line}: {why}")
+
+    for name, src, expected in SELF_TEST_CASES:
+        lines = src.splitlines()
+        mask = test_region_mask(lines, whole_file=False)
+        found, _ = temp_dir_rules("src-tauri/src/probe.rs", lines, mask)
+        check(name, found, expected)
+
+    for name, src, expected in GUARD_TEST_CASES:
+        found, _ = analyse_guards("src-tauri/src/probe.rs", src.splitlines())
+        check(name, found, expected)
 
     # The header paragraph and the exemption table must agree (I3): the prose
     # once said "the four sites" and named a file the table did not hold.
@@ -746,8 +1233,7 @@ def self_test() -> int:
     print(f"  {'PASS' if prose_ok else 'FAIL'}  the header's exemption "
           f"paragraph matches ALLOWED_HAND_BUILT ({n} site(s))")
 
-    print(f"scratch-guard self-test: {len(SELF_TEST_CASES) + 1 - failures}"
-          f"/{len(SELF_TEST_CASES) + 1} passed")
+    print(f"scratch-guard self-test: {total - failures}/{total} passed")
     return 1 if failures else 0
 
 
@@ -761,25 +1247,43 @@ def main() -> int:
                    "builds a scratch path by hand": 0,
                    "hands the platform root to product code": 0}
     hand_built = exempted = root_args = 0
+    guard_sources_found = 0
     rule3_seen: set[tuple[str, int]] = set()
 
     files = rust_files()
-    sources = {p: p.read_text(encoding="utf-8").split("\n") for p in files}
-    shape_of = {p: helper_shapes(p, sources[p]) for p in files}
+    src = {p: p.read_text(encoding="utf-8").splitlines() for p in files}
+    # The whole population, discovered by return type rather than by name
+    # (final review, I1): every function that hands a guard to its caller,
+    # and every struct that owns one in a field.
+    masks = {p: test_region_mask(src[p], gated_at_its_declaration(p)) for p in files}
+    carriers_of = {p: carrier_structs(src[p], masks[p]) for p in files}
+    structs_of = {
+        p: {m.group(2) for i, m in
+            ((i, STRUCT_DEF.match(line)) for i, line in enumerate(src[p]))
+            if m and masks[p][i]}
+        for p in files
+    }
+    sources_of = {p: guard_sources(src[p], masks[p], carriers_of[p]) for p in files}
 
-    def resolved_shape(path: Path) -> str:
-        """The helper a call in `path` reaches: its own file's, else its
-        directory module's (`super::…`, `fixtures::…`), else the strict
-        reading."""
-        own = shape_of.get(path)
-        if own is not None:
-            return own
+    def resolve_for(path: Path):
+        """`(name, qualifier) -> shape | None`, looked up the way Rust
+        would: `ScratchDir`'s own two constructors, then this file's own
+        functions, then the directory module's (`super::`, `fixtures::`).
+
+        A qualifier that is neither of those, nor a carrier struct in this
+        file, means the call is somebody else's — `std::fs::write(` must
+        not resolve to `core::cbm::d64::tests::write`, which is a guard
+        source with the same name in the same file."""
         parent = path.parent / "mod.rs"
-        return shape_of.get(parent) or "path"
+        return make_resolver(
+            sources_of.get(path, {}),
+            sources_of.get(parent, {}) if parent != path else {},
+            carriers_of.get(path, set()),
+        )
 
     for path in files:
         rel = path.relative_to(ROOT.parent.parent).as_posix()
-        lines = sources[path]
+        lines = src[path]
         cut = first_cfg_test(lines)
         whole_file = False
         if cut is None:
@@ -792,8 +1296,7 @@ def main() -> int:
         # The real region, item by item (fix round 1, I1). `cut` still bounds
         # the loops below — it is cheap and never wrong in the other
         # direction — but membership is decided by the mask.
-        in_test = test_region_mask(lines, whole_file)
-        shape = resolved_shape(path)
+        in_test = masks[path]
 
         # Rules 4 and 5: the two shapes that carry no `scratch(` call at all.
         found, counted = temp_dir_rules(rel, lines, in_test)
@@ -804,81 +1307,41 @@ def main() -> int:
         root_args += counted[1]
         exempted += counted[2]
 
-        for i in range(cut, len(lines)):
-            line = lines[i]
-            if not in_test[i]:
-                continue
-            m = CALL.search(line)
-            if not m or is_comment(line, m.start()):
-                continue
+        guard_sources_found += len(sources_of[path])
 
-            # Rule 1: the definition itself.
-            if SCRATCH_DEF.match(line):
-                helpers += 1
-                sig = signature(lines, i)
-                ret = sig.split("->", 1)[1] if "->" in sig else ""
-                if "ScratchDir" in ret:
-                    guarded_helpers += 1
-                elif PATH_SHAPED.search(ret):
-                    offenders.append((rel, i + 1, "returns a bare path"))
-                    rule_counts["returns a bare path"] += 1
-                continue
-            if FN_RE.match(line):
-                # Some other `fn` whose signature mentions `scratch(` — not a
-                # call site and not the helper.
-                continue
+        # Rules 1-3, over every guard source this file can reach.
+        found, counted = guard_rules(rel, lines, in_test, resolve_for(path),
+                                     carriers_of[path], structs_of[path],
+                                     sources_of[path])
+        offenders.extend(found)
+        for _, _, why in found:
+            rule_counts[why.split(" (")[0]] += 1
+        calls += counted[0]
+        accepted_calls += counted[1]
 
-            fn_name, fn_line = enclosing_fn(lines, i)
-            # The body of a `fn scratch` is where a scratch is legitimately
-            # created; rule 1 has already judged that helper by its signature.
-            if fn_name == "scratch":
+        # Rule 1 keeps its name: a `fn scratch(` that hands back a bare path.
+        for i, line in enumerate(lines):
+            if not in_test[i] or not SCRATCH_DEF.match(line):
                 continue
-
-            # Rule 2: how the call is bound — judged against what the helper
-            # it reaches actually returns.
-            calls += 1
-            stmt = lines[statement_start(lines, i)].strip()
-            tuple_let = TUPLE_LET.match(stmt)
-            if tuple_let and tuple_let.group(1) == "_":
-                # Read out of the match, not off the raw prefix, so
-                # `let (_ , dir) = …` cannot slip through on one space.
-                offenders.append((rel, i + 1, "guard dropped at once"))
-                rule_counts["guard dropped at once"] += 1
-            elif tuple_let:
-                accepted_calls += 1
-            elif shape == "guard" and IDENT_LET.match(stmt):
-                # `let dir = scratch("x")` where `dir` *is* the guard.
-                accepted_calls += 1
-            elif IDENT_LET.match(stmt):
-                offenders.append((rel, i + 1, "bound without its guard"))
-                rule_counts["bound without its guard"] += 1
-            else:
-                offenders.append((rel, i + 1, "used without binding its guard"))
-                rule_counts["used without binding its guard"] += 1
-
-            # Rule 3: the helper that returns the path and drops the guard.
-            if (rel, fn_line) in rule3_seen or is_test_fn(lines, fn_line):
-                continue
-            rule3_seen.add((rel, fn_line))
-            sig = signature(lines, fn_line)
-            ret = sig.split("->", 1)[1] if "->" in sig else ""
-            if PATH_SHAPED.search(ret) and "ScratchDir" not in ret:
-                offenders.append(
-                    (rel, fn_line + 1,
-                     f"returns a path whose guard it drops (fn {fn_name})"))
-                rule_counts["returns a path whose guard it drops"] += 1
-
+            helpers += 1
+            ret = return_type(signature(lines, i))
+            if "ScratchDir" in ret:
+                guarded_helpers += 1
+            elif PATH_SHAPED.search(ret):
+                offenders.append((rel, i + 1, "returns a bare path"))
+                rule_counts["returns a bare path"] += 1
     for rel, line, why in sorted(offenders):
         print(f"{rel}:{line}: {why}")
 
     if not offenders:
-        print(f"scratch-guard sweep: clean — {helpers} helpers, {calls} call "
-              f"sites, {hand_built} hand-built paths, {root_args} platform-root "
-              f"arguments ({exempted} exempt)")
+        print(f"scratch-guard sweep: clean — {guard_sources_found} guard sources "
+              f"(by return type), {calls} call sites, {hand_built} hand-built "
+              f"paths, {root_args} platform-root arguments ({exempted} exempt)")
         return 0
 
     print()
-    print(f"helpers                            : {helpers}"
+    print(f"guard sources (by return type)     : {guard_sources_found}")
+    print(f"`fn scratch` helpers               : {helpers}"
           f" ({guarded_helpers} already hand out a guard)")
     print(f"call sites                         : {calls}"
           f" ({accepted_calls} keep their guard)")
