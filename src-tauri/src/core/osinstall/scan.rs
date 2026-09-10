@@ -805,9 +805,13 @@ pub struct PackageMedium {
 /// The thin wrapper, staging into the platform's own temp directory. The
 /// product never calls it: [`open_package_staging_in`] is what the shell uses,
 /// because where a nested payload is unpacked is the user's choice and not
-/// this module's (ART-196). Kept for tests and for a future CLI shell that has
-/// not chosen a directory — the same split
-/// `collection::scan_collection_directory` / `..._with` already uses.
+/// this module's (ART-196). Kept for tests only.
+///
+/// **Compiled for tests only** (ART-295). The product never calls this: its
+/// `_in` sibling takes the scratch root the user chose, and the compiler now
+/// holds that line rather than a doc comment. ART-296 was a production call
+/// to one of these, staging BoingBag payloads on the system drive.
+#[cfg(test)]
 pub fn open_package(medium: &PackageMedium) -> CoreResult<Box<dyn MediaSource>> {
     open_package_staging_in(medium, &std::env::temp_dir())
 }

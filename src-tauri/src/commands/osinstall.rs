@@ -101,8 +101,8 @@ use crate::core::osinstall::plan::{
 };
 use crate::core::osinstall::recipe;
 use crate::core::osinstall::scan::{
-    self, find_media, find_packages, open_package, package_for, FoundMedia, FoundPackage,
-    MediaMatch, PackageMedium,
+    self, find_media, find_packages, open_package_staging_in, package_for, FoundMedia,
+    FoundPackage, MediaMatch, PackageMedium,
 };
 use crate::core::osinstall::scan_cache::ScanCache;
 use crate::core::osinstall::slots::{self, Facts, SetSummary, SlotState};
@@ -1727,7 +1727,7 @@ fn extract_package_items(
         member: package.member.clone(),
         payload_password: package.payload_password.clone(),
     };
-    let mut source = open_package(&medium)?;
+    let mut source = open_package_staging_in(&medium, scratch_root)?;
 
     let mut refusals = Vec::new();
     let items = expand_rules(&package.component, source.as_mut(), &mut refusals)?;
@@ -2960,6 +2960,7 @@ pub fn osinstall_verify(
 mod tests {
     use super::*;
     use crate::core::jobs::NoProgress;
+    use crate::core::osinstall::scan::open_package;
     use crate::core::ScratchDir;
 
     /// **ART-203.** The screen asks this while the folder is being picked, and
