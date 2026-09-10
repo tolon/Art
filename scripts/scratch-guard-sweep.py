@@ -80,27 +80,65 @@ declaration is gated the whole file counts as test code. Five rules:
      `let (_guard, dir) = ScratchDir::pair("art-…", "<tag>")`.
 
      Three kinds of line are **not** offenders, because none of them creates
-     anything: a line that only reads (`read_dir(`, an `assert`, `.exists()`),
-     a line inside `ScratchDir`'s own `impl` — which is where the one
-     legitimate `temp_dir().join(` in the crate lives — and the four sites in
-     `ALLOWED_HAND_BUILT` below, each of which names a path the test
-     deliberately never creates (or, in `commands/archives.rs`, the escape
-     target a traversal test needs *outside* every scratch, already owned by
-     a `RemoveOnDrop`). Those four are listed by file and by the literal that
-     identifies them rather than by line number, so an edit that changes what
-     the site does stops matching the exemption and comes back as an
-     offender.
+     anything. First, a use that only reads — and "only reads" is decided by
+     *where the match sits*, not by what the line mentions: the occurrence
+     must be inside the parentheses of an `assert!` / `assert_eq!` /
+     `assert_ne!` or of a `read_dir(`, or the joined path must be asked
+     `.exists()` / `.is_dir()` / `.is_file()` on that same line with nothing
+     on it that creates. The first version tested the whole line for the
+     substring `assert`, which let `let dir = temp_dir().join("art-probe-
+     assertive")` through on its literal alone (fix round 1, review I2).
+     Second, a line inside `ScratchDir`'s own `impl` — where the one
+     legitimate `temp_dir().join(` in the crate lives. Third, the two sites
+     in `ALLOWED_HAND_BUILT` below — `art-measure-dest` and
+     `art-library-does-not-exist` — each of which names a path the test
+     deliberately never creates. Those two are listed by file and by the
+     literal that identifies them rather than by line number, so an edit that
+     changes what the site does stops matching the exemption and comes back
+     as an offender — and `--self-test` fails if this paragraph and that
+     table stop agreeing.
   5. **hands the platform root to product code** — test code passing
      `&std::env::temp_dir()` as a call argument, which is the *other* half of
      ART-281 (task 7b): ART's own staging then lands directly in the platform
      root under the product's names, and nothing in a test run ever sweeps
      it. Each such test binds one `ScratchDir` and passes `&root` instead.
 
-     Exempt: the same read-only lines as rule 4, plus a call to
+     Exempt: **one** thing only — an occurrence inside the parentheses of
      `scratch_root_for(` or `sweep_stale_preview_scratch_dirs(`, where the
-     platform root **is** the subject of the test — a namespace derived from
-     it, or the sweeper that cleans it — and substituting a scratch would
-     delete the assertion rather than move it.
+     platform root **is** the subject of the test (a namespace derived from
+     it, or the sweeper that cleans it) and substituting a scratch would
+     delete the assertion rather than move it. Rule 4's read-only exemption
+     deliberately does **not** carry over: `assert!(build_plan(&std::env::
+     temp_dir(), …).is_ok())` hands the platform root to product code exactly
+     like the un-asserted call does, and the first version of this rule let
+     that whole shape through (fix round 1, review I2).
+
+## Which lines count as test code
+
+Rules 1-3 key on `fn scratch(` and `scratch(` — tokens that do not appear in
+production code, so "everything after the file's first `#[cfg(test)]`" was
+close enough for them. Rules 4 and 5 key on `temp_dir()`, which production
+code uses legitimately (`src/scratch.rs`'s own fallback, `commands/preload.rs`),
+and a review probe showed the loose reading accusing two production lines that
+merely sat after a `#[cfg(test)] use` (review I1). A lint that can redden CI on
+a clean production line is the same defect as the leak it hunts, so the region
+is now computed rather than assumed, for **all five** rules:
+
+  - every line of a file whose parent module declares it `#[cfg(test)] mod x;`
+    (`core/osinstall/source_contract.rs`);
+  - the item each `#[cfg(test)]` attribute is attached to, from the attribute
+    through the `}` that closes it — or through its own `;` when it has no
+    block (`#[cfg(test)] mod x;`).
+
+The item's end is found by **indent**, not by counting braces, and string
+literals are blanked first. Both rules are borrowed wholesale from this
+crate's own `core::independence::test_regions` (`src-tauri/src/core/mod.rs`),
+which walks the same tree for a different reason and had both defects found in
+review: a `format!` assembling an AmigaDOS script or a `.uae` file carries
+literal braces, and a signature rustfmt wrapped across lines does not open its
+block on the line after the attribute. `cargo fmt --check` is blocking in CI,
+so a closing brace is always aligned with the line that opened it, which is
+what makes indent the reliable signal here.
 
 ## What this sweep cannot see
 
@@ -119,12 +157,38 @@ intermediate variable — `let t = std::env::temp_dir(); t.join(…)` — is
 invisible to both. Neither shape is in the tree on 2026-09-10, and both would
 make the sweep under-report rather than accuse a clean line.
 
+Rule 4's read-only exemption has two blind spots of its own, both stated
+rather than left to be found. An `assert!` that *creates* while it reads —
+`assert!(std::fs::create_dir_all(std::env::temp_dir().join("x")).is_ok())` —
+is exempt, because the anchor asks where the match sits and not what the
+enclosing call does; and the `.exists()` tail is judged on one line, so a path
+joined on one line and created on the next escapes. Both are under-reporting
+of a shape nothing in the tree has. The creation test that guards the tail
+(`create_dir`, `File::create`, `fs::write(`) is a keyword list, not an
+analysis.
+
+Neither rule looks inside a macro body or a `build.rs`, and neither can tell a
+test helper compiled into the crate for an integration test (`tests/`) from
+production — ART has no `tests/` directory today.
+
 Run it from `amiga-retro-toolkit/`:
 
     python scripts/scratch-guard-sweep.py
+    python scripts/scratch-guard-sweep.py --self-test
 
-Exit 0 with `scratch-guard sweep: clean — N helpers, M call sites`. Exit 1
+Exit 0 with `scratch-guard sweep: clean — N helpers, M call sites, …`. Exit 1
 lists every offender as `path:line: <why>` and prints the totals.
+
+`--self-test` runs rules 4 and 5 over synthetic source held in this file — no
+repository file is read and none is written — and checks each case against the
+answer written down beside it. Every case is one of the two arms of a defect
+this sweep has actually had: a production line after a `#[cfg(test)] use` that
+must **not** be accused, a hand-built path whose *literal* contains the word
+"assert" that must be, an `assert!`-wrapped product call that must be, the
+`JoinHandle::join()` line that must not, and the header's own exemption
+paragraph checked against `ALLOWED_HAND_BUILT`. It is the probe a reader can
+re-run instead of trusting this paragraph, and it fails if a rule is loosened
+back to any of those shapes.
 
 Deliberately a script and not a Rust test, matching the two sweeps beside it:
 a test that reads the source of the crate it is compiled into is a strange
@@ -158,15 +222,23 @@ PATH_SHAPED = re.compile(r"\bPathBuf\b|\bPath\b")
 TEMP_DIR = re.compile(r"(?<![A-Za-z0-9_])temp_dir\(\)")
 # Rule 5: the platform root handed to product code as *its* scratch root.
 TEMP_ROOT_ARG = re.compile(r"&\s*std::env::temp_dir\(\)")
-# Neither rule accuses a line that only looks at the root.
-READ_ONLY = ("read_dir(", "assert", ".exists()")
-# Rule 5's own exemption: the platform root is the subject of the test — the
-# namespace derived from it, or the sweeper that cleans it.
+# Rule 4 only: a use that reads and cannot create. Each is asked of the place
+# the match *sits*, never of the whole line — `assert` as a substring exempted
+# `let dir = temp_dir().join("art-probe-assertive")` on its literal alone.
+ASSERT_MACROS = ("assert!(", "assert_eq!(", "assert_ne!(", "debug_assert!(")
+READ_DIR_CALLS = ("read_dir(",)
+READ_ONLY_TAILS = (".exists()", ".is_dir()", ".is_file()")
+# The keyword list that stops the `.exists()` tail from exempting a line that
+# also creates. A list, not an analysis — said in the header.
+CREATES = ("create_dir", "File::create", "fs::write(", "write(&", "copy(")
+# Rule 5's only exemption: the platform root is the subject of the test — the
+# namespace derived from it, or the sweeper that cleans it. Anchored the same
+# way: the match must sit inside that call's parentheses.
 ROOT_IS_THE_SUBJECT = ("scratch_root_for(", "sweep_stale_preview_scratch_dirs(")
 # Rule 4's exemptions, by file and by the literal that identifies the site
 # rather than by a line number that drifts. Each names a path the test never
-# creates — except the first, which is the one place a test needs a path
-# *outside* every scratch and already owns it.
+# creates. `--self-test` checks this table against the header paragraph that
+# describes it, because the two disagreed once already (fix round 1, I3).
 ALLOWED_HAND_BUILT = {
     "src-tauri/src/core/osinstall/scan_cache.rs": [
         ("art-measure-dest", "the same, in an #[ignore]d measurement that "
@@ -204,6 +276,153 @@ def helper_shapes(path: Path, lines: list[str]) -> str | None:
     if not shapes:
         return None
     return shapes.pop() if len(shapes) == 1 else "path"
+
+
+def strip_string_literals(line: str) -> str:
+    """The line with the *contents* of its string literals blanked out.
+
+    A `format!` that assembles an AmigaDOS script or a `.uae` file carries
+    literal `{` and `}`, and `test_regions` below decides where a
+    `#[cfg(test)]` item ends by looking at braces and indentation. Blanking
+    the contents first means both questions are asked of the code. Ported,
+    with its reason, from `core::independence::strip_string_literals` in
+    `src-tauri/src/core/mod.rs`, where the same defect was found in review.
+
+    Raw strings (`r"…"`, `r#"…"#`) and char literals are handled crudely: the
+    opening quote of a raw string is found, the matching hash-delimited close
+    is looked for, and anything unterminated blanks to end of line. That is
+    conservative in the safe direction — a line whose literals are blanked can
+    only lose braces, never gain them."""
+    out: list[str] = []
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if ch == "r" and i + 1 < n and (line[i + 1] == '"' or line[i + 1] == "#"):
+            j = i + 1
+            hashes = 0
+            while j < n and line[j] == "#":
+                hashes += 1
+                j += 1
+            if j < n and line[j] == '"':
+                close = '"' + "#" * hashes
+                end = line.find(close, j + 1)
+                end = n if end == -1 else end + len(close)
+                out.append(line[i:j + 1])
+                out.append(" " * (end - j - 1))
+                i = end
+                continue
+        if ch == '"':
+            j = i + 1
+            while j < n:
+                if line[j] == "\\":
+                    j += 2
+                    continue
+                if line[j] == '"':
+                    break
+                j += 1
+            end = min(j, n)
+            out.append('"')
+            out.append(" " * max(0, end - i - 1))
+            if end < n:
+                out.append('"')
+            i = end + 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def indent_of(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def test_region_mask(lines: list[str], whole_file: bool) -> list[bool]:
+    """Which lines are test code, one bool per line.
+
+    Not "everything after the first `#[cfg(test)]`": rules 4 and 5 key on
+    `temp_dir()`, which production code uses, and that loose reading accused
+    two production lines sitting after a `#[cfg(test)] use` in a review probe
+    (fix round 1, I1). A region is the item an attribute is attached to, from
+    the attribute through the `}` aligned with it — or through the item's own
+    `;` when it has no block. Stacked attributes at the same indent and a
+    signature rustfmt wrapped across lines are both handled, because
+    `core::independence::test_regions` had that exact bug found in its own
+    review (`core/volume/write/mod.rs`'s wrapped `commit_blocks`)."""
+    if whole_file:
+        return [True] * len(lines)
+    scan = [strip_string_literals(line) for line in lines]
+    mask = [False] * len(lines)
+    i = 0
+    while i < len(scan):
+        if scan[i].strip() != "#[cfg(test)]":
+            i += 1
+            continue
+        indent = indent_of(scan[i])
+        j = i + 1
+        # Stacked attributes sit at the same indent as the item they gate.
+        while j < len(scan) and indent_of(scan[j]) == indent and scan[j].lstrip().startswith("#"):
+            j += 1
+        # The declaration may wrap; find the line that opens the block.
+        sig_end = j
+        opens_block = False
+        while sig_end < len(scan):
+            trimmed = scan[sig_end].rstrip()
+            if trimmed.endswith("{"):
+                opens_block = True
+                break
+            if trimmed.endswith(";") or not trimmed.strip():
+                break
+            sig_end += 1
+        if opens_block:
+            end = sig_end + 1
+            while end < len(scan) and not (
+                indent_of(scan[end]) == indent and scan[end].strip() == "}"
+            ):
+                end += 1
+            end = min(end, len(scan) - 1)
+        else:
+            end = min(sig_end, len(scan) - 1)
+        for k in range(i, end + 1):
+            mask[k] = True
+        i = end + 1
+    return mask
+
+
+def inside_call(line: str, col: int, names: tuple[str, ...]) -> bool:
+    """`col` sits inside the parentheses of one of `names`.
+
+    The anchor that replaced a whole-line substring test (fix round 1, I2):
+    `assert` *somewhere* on the line is not the same claim as "this match is
+    an argument of an assertion", and the difference is a hand-built scratch
+    path whose literal happens to contain the word."""
+    for name in names:
+        start = 0
+        while True:
+            q = line.find(name, start)
+            if q == -1 or q >= col:
+                break
+            depth = 0
+            for ch in line[q + len(name) - 1:col]:
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+            if depth >= 1:
+                return True
+            start = q + 1
+    return False
+
+
+def only_reads(line: str, start: int, end: int) -> bool:
+    """Rule 4's read-only exemption, anchored. Three shapes, no others: the
+    match is an argument of an assertion, or of a `read_dir(`, or the joined
+    path is asked `.exists()` / `.is_dir()` / `.is_file()` on this same line
+    and nothing on the line creates."""
+    if inside_call(line, start, ASSERT_MACROS) or inside_call(line, start, READ_DIR_CALLS):
+        return True
+    tail = line[end:]
+    return any(t in tail for t in READ_ONLY_TAILS) and not any(c in line for c in CREATES)
 
 
 def scratchdir_impl_lines(lines: list[str]) -> set[int]:
@@ -338,6 +557,200 @@ def is_test_fn(lines: list[str], fn_line: int) -> bool:
     return False
 
 
+def temp_dir_rules(
+    rel: str, lines: list[str], in_test: list[bool]
+) -> tuple[list[tuple[str, int, str]], tuple[int, int, int]]:
+    """Rules 4 and 5 over one file's lines.
+
+    Split out of `main` so `--self-test` can run it against synthetic source
+    without reading or writing anything in the repository. Returns the
+    offenders and `(hand-built paths, platform-root arguments, exempt)`."""
+    offenders: list[tuple[str, int, str]] = []
+    hand_built = root_args = exempted = 0
+    in_guard_impl = scratchdir_impl_lines(lines)
+
+    for i, line in enumerate(lines):
+        if not in_test[i]:
+            continue
+
+        m = TEMP_DIR.search(line)
+        if m and not is_comment(line, m.start()) and i not in in_guard_impl:
+            # The continuation shape is `…temp_dir()` at the *end* of the
+            # line and `.join(` at the head of the next. Accepting any
+            # following `.join(` accused
+            # `namespace_of(&scratch_root_for(&std::env::temp_dir()))`
+            # whose next line was a `JoinHandle`'s own `.join()` — a false
+            # accusation is worse than a missed line, so the tail is
+            # anchored.
+            joined = ".join(" in line[m.end():] or (
+                line.rstrip().endswith("temp_dir()")
+                and i + 1 < len(lines)
+                and lines[i + 1].lstrip().startswith(".join(")
+            )
+            if joined:
+                hand_built += 1
+                why = exempt_hand_built(rel, line)
+                if why is None and only_reads(line, m.start(), m.end()):
+                    why = "reads the path and cannot create it"
+                if why is None and line.rstrip().endswith("temp_dir()") and i + 1 < len(lines):
+                    # Only the split-line shape may borrow the next line's
+                    # literal (fix round 1, M2) — an exempt literal below an
+                    # unrelated hand-built path no longer covers it.
+                    why = exempt_hand_built(rel, lines[i + 1])
+                if why is None:
+                    offenders.append((rel, i + 1, "builds a scratch path by hand"))
+                else:
+                    exempted += 1
+
+        m = TEMP_ROOT_ARG.search(line)
+        if m and not is_comment(line, m.start()):
+            root_args += 1
+            if inside_call(line, m.start(), ROOT_IS_THE_SUBJECT):
+                exempted += 1
+            else:
+                offenders.append((rel, i + 1, "hands the platform root to product code"))
+
+    return offenders, (hand_built, root_args, exempted)
+
+
+# --- the self-test -----------------------------------------------------------
+#
+# Each case is source this sweep has been wrong about, with the answer written
+# down beside it. `expected` is the set of 1-based line numbers that must be
+# reported; anything else — an extra accusation or a missing one — fails.
+
+SELF_TEST_CASES: list[tuple[str, str, set[int]]] = [
+    (
+        "production code after a `#[cfg(test)] use` is not test code (I1)",
+        """#[cfg(test)]
+use std::fs;
+
+pub fn production_default_root() -> PathBuf {
+    std::env::temp_dir().join("art-runtime-cache")
+}
+
+pub fn production_call() -> bool {
+    prepare(&std::env::temp_dir())
+}
+""",
+        set(),
+    ),
+    (
+        "a `#[cfg(test)]` item ends at its own closing brace, and the "
+        "production line after it is not swept in (I1)",
+        """#[cfg(test)]
+pub struct ScratchDirLike(PathBuf);
+
+pub fn production_default_root() -> PathBuf {
+    std::env::temp_dir().join("art-runtime-cache")
+}
+""",
+        set(),
+    ),
+    (
+        "inside `mod tests`, a hand-built path is an offender — including one "
+        "whose literal merely contains the word assert (I2)",
+        """#[cfg(test)]
+mod tests {
+    #[test]
+    fn t() {
+        let plain = std::env::temp_dir().join("art-probe-plain");
+        let assertive = std::env::temp_dir().join("art-probe-assertive");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::create_dir_all(&assertive).unwrap();
+    }
+}
+""",
+        {5, 6},
+    ),
+    (
+        "an assertion that only looks at the platform root is exempt; a "
+        "product call wrapped in one is not (I2)",
+        """#[cfg(test)]
+mod tests {
+    #[test]
+    fn t() {
+        assert!(!std::env::temp_dir().join("escaped.txt").exists());
+        assert!(build_plan(&std::env::temp_dir(), "x").is_ok());
+    }
+}
+""",
+        {6},
+    ),
+    (
+        "the platform root as the subject of the test is exempt, and a "
+        "`JoinHandle::join()` on the next line is not a `.join(` continuation",
+        """#[cfg(test)]
+mod tests {
+    #[test]
+    fn t() {
+        let mine = namespace_of(&scratch_root_for(&std::env::temp_dir()));
+        let theirs = std::thread::spawn(|| namespace_of(&scratch_root_for(&std::env::temp_dir())))
+            .join()
+            .unwrap();
+        let commented = 1; // let d = std::env::temp_dir().join("art-x");
+    }
+}
+""",
+        set(),
+    ),
+    (
+        "a brace inside a string literal does not end the test region",
+        """#[cfg(test)]
+mod tests {
+    #[test]
+    fn t() {
+        let script = format!("if EXISTS {name}\\n}}\\n");
+        let dir = std::env::temp_dir().join("art-probe-after-a-brace");
+        std::fs::create_dir_all(&dir).unwrap();
+    }
+}
+""",
+        {6},
+    ),
+]
+
+
+def self_test() -> int:
+    """Run rules 4 and 5 over the synthetic cases above, plus the header's
+    agreement with `ALLOWED_HAND_BUILT`. No repository file is touched."""
+    failures = 0
+    for name, src, expected in SELF_TEST_CASES:
+        lines = src.split("\n")
+        mask = test_region_mask(lines, whole_file=False)
+        found, _ = temp_dir_rules("src-tauri/src/probe.rs", lines, mask)
+        got = {line for _, line, _ in found}
+        ok = got == expected
+        failures += 0 if ok else 1
+        print(f"  {'PASS' if ok else 'FAIL'}  {name}")
+        if not ok:
+            print(f"        expected lines {sorted(expected)}, got {sorted(got)}")
+            for _, line, why in sorted(found, key=lambda o: o[1]):
+                print(f"        line {line}: {why}")
+
+    # The header paragraph and the exemption table must agree (I3): the prose
+    # once said "the four sites" and named a file the table did not hold.
+    doc = __doc__ or ""
+    words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
+    n = sum(len(v) for v in ALLOWED_HAND_BUILT.values())
+    claim = f"the {words.get(n, str(n))} sites in `ALLOWED_HAND_BUILT`"
+    prose_ok = claim in " ".join(doc.split())
+    if not prose_ok:
+        print(f'        the header does not say "{claim}"')
+    for literals in ALLOWED_HAND_BUILT.values():
+        for literal, _ in literals:
+            if literal not in doc:
+                prose_ok = False
+                print(f"        {literal} is exempt but the header never names it")
+    failures += 0 if prose_ok else 1
+    print(f"  {'PASS' if prose_ok else 'FAIL'}  the header's exemption "
+          f"paragraph matches ALLOWED_HAND_BUILT ({n} site(s))")
+
+    print(f"scratch-guard self-test: {len(SELF_TEST_CASES) + 1 - failures}"
+          f"/{len(SELF_TEST_CASES) + 1} passed")
+    return 1 if failures else 0
+
+
 def main() -> int:
     offenders: list[tuple[str, int, str]] = []
     helpers = guarded_helpers = 0
@@ -368,58 +781,33 @@ def main() -> int:
         rel = path.relative_to(ROOT.parent.parent).as_posix()
         lines = sources[path]
         cut = first_cfg_test(lines)
+        whole_file = False
         if cut is None:
             # No attribute of its own — but the module may be gated where it
             # is declared, in which case the whole file is test code.
             if not gated_at_its_declaration(path):
                 continue
             cut = 0
+            whole_file = True
+        # The real region, item by item (fix round 1, I1). `cut` still bounds
+        # the loops below — it is cheap and never wrong in the other
+        # direction — but membership is decided by the mask.
+        in_test = test_region_mask(lines, whole_file)
         shape = resolved_shape(path)
 
         # Rules 4 and 5: the two shapes that carry no `scratch(` call at all.
-        in_guard_impl = scratchdir_impl_lines(lines)
+        found, counted = temp_dir_rules(rel, lines, in_test)
+        offenders.extend(found)
+        for _, _, why in found:
+            rule_counts[why] += 1
+        hand_built += counted[0]
+        root_args += counted[1]
+        exempted += counted[2]
+
         for i in range(cut, len(lines)):
             line = lines[i]
-            if any(marker in line for marker in READ_ONLY):
+            if not in_test[i]:
                 continue
-
-            m = TEMP_DIR.search(line)
-            if m and not is_comment(line, m.start()) and i not in in_guard_impl:
-                # The continuation shape is `…temp_dir()` at the *end* of the
-                # line and `.join(` at the head of the next. Accepting any
-                # following `.join(` accused
-                # `namespace_of(&scratch_root_for(&std::env::temp_dir()))`
-                # whose next line was a `JoinHandle`'s own `.join()` — a false
-                # accusation is worse than a missed line, so the tail is
-                # anchored.
-                joined = ".join(" in line[m.end():] or (
-                    line.rstrip().endswith("temp_dir()")
-                    and i + 1 < len(lines)
-                    and lines[i + 1].lstrip().startswith(".join(")
-                )
-                if joined:
-                    hand_built += 1
-                    why = exempt_hand_built(rel, line)
-                    if why is None and i + 1 < len(lines):
-                        why = exempt_hand_built(rel, lines[i + 1])
-                    if why is None:
-                        offenders.append((rel, i + 1, "builds a scratch path by hand"))
-                        rule_counts["builds a scratch path by hand"] += 1
-                    else:
-                        exempted += 1
-
-            m = TEMP_ROOT_ARG.search(line)
-            if m and not is_comment(line, m.start()):
-                root_args += 1
-                if not any(name in line for name in ROOT_IS_THE_SUBJECT):
-                    offenders.append(
-                        (rel, i + 1, "hands the platform root to product code"))
-                    rule_counts["hands the platform root to product code"] += 1
-                else:
-                    exempted += 1
-
-        for i in range(cut, len(lines)):
-            line = lines[i]
             m = CALL.search(line)
             if not m or is_comment(line, m.start()):
                 continue
@@ -505,4 +893,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(self_test() if "--self-test" in sys.argv[1:] else main())
