@@ -245,6 +245,16 @@ mod real_boot_hook {
         println!("--- config ---\n{config}\n--- end ---");
 
         if let Ok(winuae) = std::env::var("ART_WINUAE") {
+            // ART-281 keeps the platform root **here on purpose**, and it is
+            // the one hook in this task that does. `launch_winuae` `release`s
+            // the child: WinUAE outlives this test and opens the generated
+            // `.uae` after the function has returned. A `ScratchDir` root
+            // would be removed on the way out of this scope — between the
+            // spawn and WinUAE's own read — and the emulator would fail to
+            // start for a reason that has nothing to do with what is being
+            // measured. `ask_a_tree_its_version_when_asked` below does take a
+            // guarded root, because it `terminate()`s the process before it
+            // returns.
             let pid = launch_winuae(&PathBuf::from(&winuae), &config, &std::env::temp_dir())
                 .expect("WinUAE must start");
             println!("WinUAE started, pid {pid}");
@@ -392,6 +402,7 @@ mod real_version_hook {
     #[test]
     #[ignore = "opens WinUAE against the owner's own tree and ROM; run explicitly"]
     fn ask_a_tree_its_version_when_asked() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-winuae-root", "ask-version");
         let (Ok(tree), Ok(rom), Ok(winuae)) = (
             std::env::var("ART_BOOT_TREE"),
             std::env::var("ART_BOOT_ROM"),
@@ -450,8 +461,7 @@ mod real_version_hook {
         };
 
         let config = generate_uae_config(&AmigaProfile::a1200_aga(), &media).unwrap();
-        let mut process =
-            launch_winuae_process(&PathBuf::from(&winuae), &config, &std::env::temp_dir()).unwrap();
+        let mut process = launch_winuae_process(&PathBuf::from(&winuae), &config, &root).unwrap();
         println!("WinUAE pid {}", process.pid());
 
         let started = Instant::now();

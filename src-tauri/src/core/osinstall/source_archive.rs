@@ -795,6 +795,7 @@ mod tests {
     /// The BoingBag shape: an archive whose payload is another archive.
     #[test]
     fn a_nested_member_becomes_the_medium() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-srcarchive-root", "nested");
         let (_guard, dir) = scratch("archive-nested");
         let inner = crate::core::archive::zip::tests::make_zip_with(&[
             ("Libs/version.library", b"lib bytes"),
@@ -809,9 +810,7 @@ mod tests {
             ],
         );
 
-        let mut src =
-            ArchiveSource::open_nested(&outer, "AmigaOS-Update", &std::env::temp_dir(), None)
-                .unwrap();
+        let mut src = ArchiveSource::open_nested(&outer, "AmigaOS-Update", &root, None).unwrap();
         // The volume name is the *wrapper's* top-level directory ("BB"),
         // never anything read from inside the payload — swapping outer and
         // inner identity here would still open, still read, and still be
@@ -834,6 +833,8 @@ mod tests {
     /// merely looks unique — is what keeps them apart.
     #[test]
     fn two_concurrent_opens_of_the_same_member_name_never_cross_streams() {
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-srcarchive-root", "concurrent");
         let (_guard, dir) = scratch("archive-nested-concurrent");
         let inner_a =
             crate::core::archive::zip::tests::make_zip_with(&[("C/Version", b"FROM ARCHIVE A")]);
@@ -845,20 +846,20 @@ mod tests {
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
 
         let barrier_a = barrier.clone();
+        let root_a = root.clone();
         let handle_a = std::thread::spawn(move || {
             barrier_a.wait();
             let mut src =
-                ArchiveSource::open_nested(&outer_a, "AmigaOS-Update", &std::env::temp_dir(), None)
-                    .unwrap();
+                ArchiveSource::open_nested(&outer_a, "AmigaOS-Update", &root_a, None).unwrap();
             src.read("C/Version").unwrap()
         });
 
         let barrier_b = barrier.clone();
+        let root_b = root.clone();
         let handle_b = std::thread::spawn(move || {
             barrier_b.wait();
             let mut src =
-                ArchiveSource::open_nested(&outer_b, "AmigaOS-Update", &std::env::temp_dir(), None)
-                    .unwrap();
+                ArchiveSource::open_nested(&outer_b, "AmigaOS-Update", &root_b, None).unwrap();
             src.read("C/Version").unwrap()
         });
 
@@ -872,24 +873,24 @@ mod tests {
     /// empty medium — a silently empty medium is a silently short plan.
     #[test]
     fn a_member_that_is_not_an_archive_is_refused() {
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-srcarchive-root", "not-archive");
         let (_guard, dir) = scratch("archive-nested-bad");
         let outer = package_zip(
             &dir,
             "bad.zip",
             &[("BB/AmigaOS-Update", b"not an archive, just bytes")],
         );
-        assert!(
-            ArchiveSource::open_nested(&outer, "AmigaOS-Update", &std::env::temp_dir(), None)
-                .is_err()
-        );
+        assert!(ArchiveSource::open_nested(&outer, "AmigaOS-Update", &root, None).is_err());
     }
 
     /// A member the outer archive does not hold is refused by name.
     #[test]
     fn a_missing_member_is_refused_by_name() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-srcarchive-root", "missing");
         let (_guard, dir) = scratch("archive-nested-missing");
         let outer = package_zip(&dir, "x.zip", &[("BB/Something", b"x")]);
-        let err = ArchiveSource::open_nested(&outer, "AmigaOS-Update", &std::env::temp_dir(), None)
+        let err = ArchiveSource::open_nested(&outer, "AmigaOS-Update", &root, None)
             .unwrap_err()
             .to_string();
         assert!(err.contains("AmigaOS-Update"), "got {err}");
@@ -911,10 +912,11 @@ mod tests {
     /// temp files too, whichever happened to be mid-flight.
     #[test]
     fn the_temporary_extraction_is_cleaned_up_either_way() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-srcarchive-root", "cleanup");
         const MEMBER: &str = "NestedCleanupCheck";
 
-        fn count_leftover_temp_files() -> usize {
-            std::fs::read_dir(std::env::temp_dir())
+        fn count_leftover_temp_files(root: &Path) -> usize {
+            std::fs::read_dir(root)
                 .into_iter()
                 .flatten()
                 .filter_map(|e| e.ok())
@@ -934,20 +936,19 @@ mod tests {
             &[(&format!("BB/{MEMBER}"), b"not an archive")],
         );
 
-        let before = count_leftover_temp_files();
+        let before = count_leftover_temp_files(&root);
 
-        let mut ok =
-            ArchiveSource::open_nested(&good, MEMBER, &std::env::temp_dir(), None).unwrap();
+        let mut ok = ArchiveSource::open_nested(&good, MEMBER, &root, None).unwrap();
         assert_eq!(ok.read("C/Version").unwrap(), b"cmd bytes");
         assert_eq!(
-            count_leftover_temp_files(),
+            count_leftover_temp_files(&root),
             before,
             "a successful open_nested left its extraction behind"
         );
 
-        assert!(ArchiveSource::open_nested(&bad, MEMBER, &std::env::temp_dir(), None).is_err());
+        assert!(ArchiveSource::open_nested(&bad, MEMBER, &root, None).is_err());
         assert_eq!(
-            count_leftover_temp_files(),
+            count_leftover_temp_files(&root),
             before,
             "a failed open_nested left its extraction behind"
         );
@@ -963,6 +964,7 @@ mod tests {
     /// handed only to the inner open.
     #[test]
     fn a_locked_nested_payload_opens_with_the_recipes_own_key() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-srcarchive-root", "locked");
         let (_guard, dir) = scratch("archive-nested-locked");
         let inner = crate::core::archive::zip::tests::make_zipcrypto_zip_with(
             &[
@@ -980,13 +982,8 @@ mod tests {
             ],
         );
 
-        let mut src = ArchiveSource::open_nested(
-            &outer,
-            "AmigaOS-Update",
-            &std::env::temp_dir(),
-            Some("93ABDF11"),
-        )
-        .unwrap();
+        let mut src =
+            ArchiveSource::open_nested(&outer, "AmigaOS-Update", &root, Some("93ABDF11")).unwrap();
         assert_eq!(src.volume_name(), "BB");
         assert_eq!(src.read("Libs/version.library").unwrap(), b"lib bytes");
         assert_eq!(src.read("C/WBRun").unwrap(), b"amiga program");
@@ -994,9 +991,7 @@ mod tests {
         // The premise, asserted rather than assumed: without the key the
         // very same archive cannot be read, so the test above is proving the
         // key did the work.
-        let mut locked =
-            ArchiveSource::open_nested(&outer, "AmigaOS-Update", &std::env::temp_dir(), None)
-                .unwrap();
+        let mut locked = ArchiveSource::open_nested(&outer, "AmigaOS-Update", &root, None).unwrap();
         assert!(locked.read("C/WBRun").is_err());
     }
 
@@ -1005,6 +1000,7 @@ mod tests {
     /// extracted the payload into, whose path means nothing to anybody.
     #[test]
     fn a_wrong_key_is_refused_naming_the_archive_the_user_has() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-srcarchive-root", "wrong-key");
         let (_guard, dir) = scratch("archive-nested-wrongkey");
         let inner = crate::core::archive::zip::tests::make_zipcrypto_zip_with(
             &[("C/WBRun", b"amiga program")],
@@ -1012,13 +1008,8 @@ mod tests {
         );
         let outer = package_lha(&dir, "BoingBag39-1.lha", &[("BB/AmigaOS-Update", &inner)]);
 
-        let err = ArchiveSource::open_nested(
-            &outer,
-            "AmigaOS-Update",
-            &std::env::temp_dir(),
-            Some("NOTTHEKEY"),
-        )
-        .expect_err("the key does not fit this build of the archive");
+        let err = ArchiveSource::open_nested(&outer, "AmigaOS-Update", &root, Some("NOTTHEKEY"))
+            .expect_err("the key does not fit this build of the archive");
         assert_eq!(err.code(), "ART-PAYLOAD-PASSWORD");
         let text = err.to_string();
         assert!(
@@ -1169,10 +1160,12 @@ mod tests {
     /// synthesised drawer as a payload rather than trying to read one.
     #[test]
     fn a_synthesised_drawer_is_not_a_payload_archive() {
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-srcarchive-root", "synth-drawer");
         let (_guard, dir) = scratch("archive-implicit-nested");
         let p = package_zip(&dir, "implicit-nested.zip", &[("BB/C/Assign", b"assign")]);
 
-        let err = ArchiveSource::open_nested(&p, "C", &std::env::temp_dir(), None)
+        let err = ArchiveSource::open_nested(&p, "C", &root, None)
             .unwrap_err()
             .to_string();
         assert!(err.contains("drawer"), "got {err}");
@@ -1268,6 +1261,8 @@ mod tests {
     /// It is a fact about the same package and survives.
     #[test]
     fn a_nested_medium_keeps_the_wrappers_refused_names_too() {
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-srcarchive-root", "refused-names");
         let (_guard, dir) = scratch("archive-refused-nested");
         let inner = crate::core::archive::zip::tests::make_zip_with(&[("C/Version", b"cmd")]);
         let outer = package_zip(
@@ -1280,8 +1275,7 @@ mod tests {
             ],
         );
 
-        let Ok(src) = ArchiveSource::open_nested(&outer, "Payload", &std::env::temp_dir(), None)
-        else {
+        let Ok(src) = ArchiveSource::open_nested(&outer, "Payload", &root, None) else {
             return;
         };
         assert_eq!(src.refused_names(), &["BB/../../outside".to_string()]);

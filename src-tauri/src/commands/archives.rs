@@ -651,6 +651,7 @@ mod tests {
     /// A single wrapping folder gives the drawer its name.
     #[test]
     fn one_top_level_directory_names_the_drawer() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-archives-root", "one-dir");
         let (_guard, dir) = scratch("one-dir");
         let archive = dir.join("Pack.lha");
         std::fs::write(
@@ -661,8 +662,7 @@ mod tests {
 
         let staging = dir.join("staging");
         std::fs::create_dir_all(&staging).unwrap();
-        let (drawers, roots) =
-            prepare_archives(&[archive], &staging, &std::env::temp_dir(), &NoProgress).unwrap();
+        let (drawers, roots) = prepare_archives(&[archive], &staging, &root, &NoProgress).unwrap();
 
         assert_eq!(drawers.len(), 1);
         assert_eq!(drawers[0].drawer, "Turrican");
@@ -678,6 +678,7 @@ mod tests {
     /// the archive's own file stem.
     #[test]
     fn several_top_level_entries_use_the_archive_stem() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-archives-root", "several");
         let (_guard, dir) = scratch("stem");
         let archive = dir.join("Loose Files.lha");
         std::fs::write(
@@ -688,8 +689,7 @@ mod tests {
 
         let staging = dir.join("staging");
         std::fs::create_dir_all(&staging).unwrap();
-        let (drawers, roots) =
-            prepare_archives(&[archive], &staging, &std::env::temp_dir(), &NoProgress).unwrap();
+        let (drawers, roots) = prepare_archives(&[archive], &staging, &root, &NoProgress).unwrap();
 
         assert_eq!(drawers[0].drawer, "Loose Files");
         assert_eq!(roots[0], staging.join("Loose Files"));
@@ -703,14 +703,14 @@ mod tests {
     /// directory" either, and also falls back to the stem.
     #[test]
     fn a_single_top_level_file_uses_the_archive_stem() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-archives-root", "single-file");
         let (_guard, dir) = scratch("single-file");
         let archive = dir.join("Doc.lha");
         std::fs::write(&archive, make_lha_with(&[("Readme.txt", b"about")])).unwrap();
 
         let staging = dir.join("staging");
         std::fs::create_dir_all(&staging).unwrap();
-        let (drawers, roots) =
-            prepare_archives(&[archive], &staging, &std::env::temp_dir(), &NoProgress).unwrap();
+        let (drawers, roots) = prepare_archives(&[archive], &staging, &root, &NoProgress).unwrap();
 
         assert_eq!(drawers[0].drawer, "Doc");
         assert!(roots[0].join("Readme.txt").is_file());
@@ -726,6 +726,7 @@ mod tests {
     /// the archive's contents onto the staging root.
     #[test]
     fn a_stem_that_is_only_dots_is_refused_as_a_drawer_name() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-archives-root", "dots-stem");
         let (_guard, dir) = scratch("dotty-stem");
         let archive = dir.join("..lha");
         std::fs::write(&archive, make_lha_with(&[("Readme.txt", b"about")])).unwrap();
@@ -737,8 +738,7 @@ mod tests {
         // renaming onto the staging directory itself.
         let staging = dir.join("staging");
         std::fs::create_dir_all(&staging).unwrap();
-        let err =
-            prepare_archives(&[archive], &staging, &std::env::temp_dir(), &NoProgress).unwrap_err();
+        let err = prepare_archives(&[archive], &staging, &root, &NoProgress).unwrap_err();
         assert_eq!(err.code(), "ART-INPUT-INVALID");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -750,6 +750,7 @@ mod tests {
     /// exactly its own archive's contents — never merged.
     #[test]
     fn three_archives_install_into_three_drawers() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-archives-root", "three");
         let (_guard, dir) = scratch("three");
         let a = dir.join("Turrican.lha");
         std::fs::write(&a, make_lha_with(&[("Turrican/Game", b"a-bytes")])).unwrap();
@@ -765,7 +766,7 @@ mod tests {
         let image = disk(&dir, "disk.adf");
         let archives = vec![a, b, c];
 
-        let plan = build_plan(&archives, &image, 0, 0, &std::env::temp_dir(), &NoProgress).unwrap();
+        let plan = build_plan(&archives, &image, 0, 0, &root, &NoProgress).unwrap();
         assert_eq!(plan.drawers.len(), 3);
         assert_eq!(plan.drawers[0].drawer, "Turrican");
         assert_eq!(plan.drawers[1].drawer, "Xenon2");
@@ -778,7 +779,7 @@ mod tests {
             0,
             0,
             OverwritePolicy::Skip,
-            &std::env::temp_dir(),
+            &root,
             &NoProgress,
         )
         .unwrap();
@@ -812,6 +813,7 @@ mod tests {
     /// refused by name, not silently merged into one drawer.
     #[test]
     fn colliding_drawer_names_are_reported_not_merged() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-archives-root", "collide");
         let (_guard, dir) = scratch("collide");
         let a = dir.join("release-a.lha");
         std::fs::write(&a, make_lha_with(&[("Turrican/Game", b"from a")])).unwrap();
@@ -822,8 +824,7 @@ mod tests {
         let before = std::fs::read(&image).unwrap();
         let archives = vec![a.clone(), b.clone()];
 
-        let err =
-            build_plan(&archives, &image, 0, 0, &std::env::temp_dir(), &NoProgress).unwrap_err();
+        let err = build_plan(&archives, &image, 0, 0, &root, &NoProgress).unwrap_err();
         let message = err.to_string();
         assert!(message.contains("Turrican"), "{message}");
         assert!(message.contains("release-a.lha"), "{message}");
@@ -835,7 +836,7 @@ mod tests {
             0,
             0,
             OverwritePolicy::Skip,
-            &std::env::temp_dir(),
+            &root,
             &NoProgress,
         )
         .unwrap_err();
@@ -855,6 +856,7 @@ mod tests {
     /// nothing written — before a single archive is copied in.
     #[test]
     fn a_batch_that_does_not_fit_is_refused_before_anything_is_written() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-archives-root", "too-big");
         let (_guard, dir) = scratch("toobig");
         let a = dir.join("Small.lha");
         std::fs::write(&a, make_lha_with(&[("Small/File", b"tiny")])).unwrap();
@@ -866,7 +868,7 @@ mod tests {
         let before = std::fs::read(&image).unwrap();
         let archives = vec![a, b];
 
-        let plan = build_plan(&archives, &image, 0, 0, &std::env::temp_dir(), &NoProgress).unwrap();
+        let plan = build_plan(&archives, &image, 0, 0, &root, &NoProgress).unwrap();
         assert!(!plan.cost.fits(), "a batch this large must not fit");
         let refusal = plan
             .cost
@@ -886,7 +888,7 @@ mod tests {
             0,
             0,
             OverwritePolicy::Skip,
-            &std::env::temp_dir(),
+            &root,
             &NoProgress,
         )
         .unwrap_err();
@@ -938,6 +940,8 @@ mod tests {
     /// path this one does not.
     #[test]
     fn cancelling_during_unpacking_writes_nothing() {
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-archives-root", "cancel-unpack");
         use std::sync::atomic::{AtomicBool, Ordering};
 
         struct StopDuringUnpack(AtomicBool);
@@ -959,16 +963,8 @@ mod tests {
         let before = std::fs::read(&image).unwrap();
 
         let sink = StopDuringUnpack(AtomicBool::new(false));
-        let err = install_archives(
-            &archives,
-            &image,
-            0,
-            0,
-            OverwritePolicy::Skip,
-            &std::env::temp_dir(),
-            &sink,
-        )
-        .expect_err("a cancelled batch must not come back as a successful install");
+        let err = install_archives(&archives, &image, 0, 0, OverwritePolicy::Skip, &root, &sink)
+            .expect_err("a cancelled batch must not come back as a successful install");
 
         assert_eq!(
             err.code(),
@@ -996,6 +992,7 @@ mod tests {
     /// travelled *into* the unpack. Against the old code it returned `Ok`.
     #[test]
     fn stop_is_heard_inside_an_archive_not_only_between_them() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-archives-root", "stop-inside");
         use std::sync::atomic::{AtomicBool, Ordering};
 
         /// Trips on the first report the unpack itself makes — `BatchStep`
@@ -1029,7 +1026,7 @@ mod tests {
         std::fs::create_dir_all(&staging).unwrap();
 
         let sink = StopInsideUnpack(AtomicBool::new(false));
-        let err = prepare_archives(&[archive], &staging, &std::env::temp_dir(), &sink)
+        let err = prepare_archives(&[archive], &staging, &root, &sink)
             .expect_err("a cancelled unpack must not come back as a prepared batch");
         assert_eq!(err.code(), "ART-CANCELLED", "{err}");
 
@@ -1047,6 +1044,7 @@ mod tests {
     /// is `spawn_job` plus an event, neither of which a unit test can host.
     #[test]
     fn planning_answers_stop() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-archives-root", "plan-stop");
         use std::sync::atomic::{AtomicBool, Ordering};
 
         struct StopAtOnce(AtomicBool);
@@ -1064,7 +1062,7 @@ mod tests {
         let image = disk(&dir, "disk.adf");
 
         let sink = StopAtOnce(AtomicBool::new(false));
-        let err = build_plan(&archives, &image, 0, 0, &std::env::temp_dir(), &sink)
+        let err = build_plan(&archives, &image, 0, 0, &root, &sink)
             .expect_err("a cancelled plan must not come back as a plan");
         assert_eq!(err.code(), "ART-CANCELLED", "{err}");
 
@@ -1086,6 +1084,7 @@ mod tests {
     /// stops too early to reach it.
     #[test]
     fn cancelling_during_the_copy_phase_writes_nothing() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-archives-root", "cancel-copy");
         use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
         struct StopDuringCopy {
@@ -1116,16 +1115,8 @@ mod tests {
             copy_reports: AtomicU64::new(0),
             cancelled: AtomicBool::new(false),
         };
-        let err = install_archives(
-            &archives,
-            &image,
-            0,
-            0,
-            OverwritePolicy::Skip,
-            &std::env::temp_dir(),
-            &sink,
-        )
-        .expect_err("a cancelled batch must not come back as a successful install");
+        let err = install_archives(&archives, &image, 0, 0, OverwritePolicy::Skip, &root, &sink)
+            .expect_err("a cancelled batch must not come back as a successful install");
 
         assert_eq!(
             err.code(),
@@ -1146,6 +1137,8 @@ mod tests {
     /// — and nothing in the temp directory either.
     #[test]
     fn cancelling_before_the_first_archive_unpacks_writes_nothing() {
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-archives-root", "cancel-first");
         struct AlwaysCancelled;
         impl ProgressSink for AlwaysCancelled {
             fn report(&self, _: u64, _: Option<u64>, _: &str) {}
@@ -1167,7 +1160,7 @@ mod tests {
             0,
             0,
             OverwritePolicy::Skip,
-            &std::env::temp_dir(),
+            &root,
             &AlwaysCancelled,
         )
         .unwrap_err();
@@ -1187,8 +1180,10 @@ mod tests {
     /// `core::volume::write::copy`.
     #[test]
     fn staging_removes_itself_on_drop() {
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-archives-root", "staging-drop");
         let path = {
-            let staging = Staging::in_dir(&std::env::temp_dir()).unwrap();
+            let staging = Staging::in_dir(&root).unwrap();
             let path = staging.path().to_path_buf();
             assert!(path.is_dir(), "Staging::new must create the directory");
             path
@@ -1206,6 +1201,8 @@ mod tests {
     /// headcount, which the module's own parallel tests make unreliable.
     #[test]
     fn a_refused_plan_cleans_up_its_staging_directory() {
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-archives-root", "refused-plan");
         let (_guard, dir) = scratch("cleanup-refused");
         let a = dir.join("Small.lha");
         std::fs::write(&a, make_lha_with(&[("Small/File", b"tiny")])).unwrap();
@@ -1215,7 +1212,7 @@ mod tests {
 
         let image = disk(&dir, "disk.adf");
 
-        let plan = build_plan(&[a, b], &image, 0, 0, &std::env::temp_dir(), &NoProgress).unwrap();
+        let plan = build_plan(&[a, b], &image, 0, 0, &root, &NoProgress).unwrap();
         assert!(!plan.cost.fits(), "this batch must be refused");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1239,13 +1236,18 @@ mod tests {
     /// unpack's own skipped list rather than silently dropped.
     #[test]
     fn hostile_entries_are_rejected_at_their_real_target_not_just_absent_from_scratch() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-archives-root", "hostile");
         // `Scratch::new()` always creates its directory one level directly
-        // under `std::env::temp_dir()`, so a naive join of `"../whatever"`
-        // with the scratch root resolves to a path in that *shared* system
-        // temp directory, not somewhere private to this test. A guard removes
-        // it on every exit path, including a panicked assertion, so a real
-        // regression here does not also leave litter for the next run to
-        // trip over — and the name carries this process's id so two test
+        // under the scratch root it is handed, so a naive join of
+        // `"../whatever"` with that directory resolves to a path in the root
+        // itself — one level *above* where the unpack writes, which is the
+        // whole point of checking there. Since ART-281 that root is `root`
+        // above rather than the shared `std::env::temp_dir()`, so an escape
+        // that did land would land inside this test's own guarded directory.
+        // `RemoveOnDrop` stays anyway: it removes the marker on every exit
+        // path, including a panicked assertion, and it is what makes the
+        // assertion below about *this* file rather than about whatever the
+        // last run left — and the name carries this process's id so two test
         // binaries running at once can never collide on it.
         struct RemoveOnDrop(PathBuf);
         impl Drop for RemoveOnDrop {
@@ -1258,7 +1260,7 @@ mod tests {
             "art-oracle-traversal-marker-{}.txt",
             crate::core::test_scratch_id()
         );
-        let _cleanup = RemoveOnDrop(std::env::temp_dir().join(&marker));
+        let _cleanup = RemoveOnDrop(root.join(&marker));
 
         let (_guard, dir) = scratch("traversal-unpack");
         let archive = dir.join("Evil.lha");
@@ -1274,7 +1276,7 @@ mod tests {
         .unwrap();
 
         let (scratch_dir, unpack_skipped) =
-            unpack_for_install(&archive, &std::env::temp_dir(), &NoProgress).unwrap();
+            unpack_for_install(&archive, &root, &NoProgress).unwrap();
 
         // The safe entry landed, under the scratch root...
         assert!(scratch_dir.path().join("Evil").join("Game").is_file());
@@ -1315,6 +1317,7 @@ mod tests {
     /// where the second entry went.
     #[test]
     fn a_traversal_entry_contributes_nothing_to_the_drawer_and_is_reported() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-archives-root", "traversal");
         let (_guard, dir) = scratch("traversal-drawer");
         let archive = dir.join("Evil.lha");
         std::fs::write(
@@ -1328,8 +1331,7 @@ mod tests {
 
         let staging = dir.join("staging");
         std::fs::create_dir_all(&staging).unwrap();
-        let (drawers, roots) =
-            prepare_archives(&[archive], &staging, &std::env::temp_dir(), &NoProgress).unwrap();
+        let (drawers, roots) = prepare_archives(&[archive], &staging, &root, &NoProgress).unwrap();
 
         // The safe entry still installs...
         assert_eq!(drawers[0].drawer, "Evil");
