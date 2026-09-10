@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { InstallLayer } from "@/lib/osinstall";
 import { recallInto } from "@/lib/remembered";
 import {
+  DEFAULT_FIRSTBOOT,
+  FIRSTBOOT_SPEC,
   foldersForPlan,
   isMaterialFolders,
   MATERIAL_SPEC,
@@ -14,6 +16,7 @@ import {
   LEGACY_KEYS,
   SESSION_KEYS,
   withFolder,
+  type FirstBootChoice,
   type MaterialChoice,
 } from "./buildSession";
 
@@ -427,5 +430,61 @@ describe("withFolder", () => {
     // Same folder, different spelling, different tag — the held entry wins,
     // and it is the same array back, so nothing downstream re-renders.
     expect(withFolder(held, { path: "e:/media/", layer: null })).toBe(held);
+  });
+});
+
+describe("FIRSTBOOT_SPEC", () => {
+  // **Absent means ticked** (four-tab design § 3.2, § 5). The tick is a new
+  // field on a shape people already have stored, and the migration is
+  // `recallInto`'s own mechanism rather than a written default: it starts
+  // from the fallback and overwrites a field only where the *stored* object
+  // holds a value the guard accepts.
+  //
+  // Both halves matter and either alone passes for the wrong reason. That
+  // `wanted` is `undefined` after recalling `{ written: true }` says nothing
+  // was invented for a user who has never seen the tick; that a stored
+  // `false` comes back `false` says the guard is not throwing the user's own
+  // choice away — a guard that rejected `false` would silently re-tick a box
+  // they turned off, which is the remembered-settings rule broken in the
+  // direction nobody notices.
+  it("leaves wanted absent for a firstboot written by an ART that had no tick", () => {
+    const recalled = recallInto<FirstBootChoice>(
+      { [SESSION_KEYS.firstboot]: { written: true } },
+      SESSION_KEYS.firstboot,
+      FIRSTBOOT_SPEC,
+      DEFAULT_FIRSTBOOT
+    );
+    expect(recalled.written).toBe(true);
+    expect(recalled.wanted).toBeUndefined();
+    expect("wanted" in recalled).toBe(false);
+  });
+
+  it("keeps a tick the user turned off", () => {
+    expect(
+      recallInto<FirstBootChoice>(
+        { [SESSION_KEYS.firstboot]: { written: false, wanted: false } },
+        SESSION_KEYS.firstboot,
+        FIRSTBOOT_SPEC,
+        DEFAULT_FIRSTBOOT
+      ).wanted
+    ).toBe(false);
+    // And a tick they turned back on.
+    expect(
+      recallInto<FirstBootChoice>(
+        { [SESSION_KEYS.firstboot]: { written: false, wanted: true } },
+        SESSION_KEYS.firstboot,
+        FIRSTBOOT_SPEC,
+        DEFAULT_FIRSTBOOT
+      ).wanted
+    ).toBe(true);
+  });
+
+  it("ships no wanted in the default, so rendering the tick stores nothing", () => {
+    // The default is what `useRememberedShape` hands back when nothing is
+    // stored, and what its setter merges a change into. A `wanted: true`
+    // here would be written to `settings.json` the first time anything else
+    // on the session was set — a value the user never chose, indistinguishable
+    // from one they did.
+    expect("wanted" in DEFAULT_FIRSTBOOT).toBe(false);
   });
 });

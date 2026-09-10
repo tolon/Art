@@ -111,20 +111,23 @@ export interface ComponentChoice {
 
 export interface PackageChoice {
   /**
-   * The folder the two package panels read archives out of.
+   * The folder the Amiga-side install panel reads archives out of. It was
+   * two panels' until round 3 task 3 deleted `PackagePanel`.
    *
-   * **Still stored, and that is a decision rather than an oversight** (fix
-   * round 1, F1). It is *also* in {@link MaterialChoice.folders} — adding a
-   * folder here adds it there — but it keeps its own value while
-   * `PackagePanel` and `AmigaInstallPanel` still take one folder each. Making
-   * it a pure view onto the list's first untagged entry broke two things at
-   * once for a user whose archives live apart from their disks: on upgrade
-   * the panels were handed the *disks* folder and their own already-chosen
-   * packages sat above a catalogue that could not see them, and afterwards
-   * the panel's own Browse button became a no-op, because it appended to the
-   * list while the field went on showing the list's head. "Nothing changes
-   * unless the user changes it", running backwards: they changed it and
-   * nothing changed.
+   * @deprecated **Read only since round 5** (spec § 5): seeded once from an
+   * older settings file by {@link seedPackagesFolder}, and written by
+   * nothing. `setPackages` does not take it, and the panel's own Browse adds
+   * the folder it was given to {@link MaterialChoice.folders} — the one list
+   * the slots resolve against — rather than storing a second copy here.
+   *
+   * It is **kept, not deleted**, and that is a decision rather than an
+   * oversight (fix round 1, F1). Making it a pure view onto the list's first
+   * untagged entry broke two things at once for a user whose archives live
+   * apart from their disks: on upgrade the panels were handed the *disks*
+   * folder and their own already-chosen packages sat above a catalogue that
+   * could not see them. So an older ART's value is still read; it is now
+   * exactly one thing — the folder `AmigaInstallPanel` starts its dialogs and
+   * its catalogue on until the user picks another.
    *
    * `null` here means *nothing stored*, and only then does the session derive
    * {@link firstUntaggedFolder} — which is what makes a user who never had a
@@ -164,6 +167,24 @@ export interface CardChoice {
  */
 export interface FirstBootChoice {
   written: boolean;
+  /**
+   * Whether the build should write a first-boot block at all — the choice
+   * tab's third group (four-tab design § 3.2), and a different question from
+   * `written`, which is a fact about a folder.
+   *
+   * **Absent means ticked, and absent is the shipped default.** The
+   * first-boot block is what makes a PiStorm tree boot its own hardware
+   * (first-boot design § 3), so the wanted state is on — but writing `true`
+   * into everybody's `settings.json` on first render would be ART's own
+   * "nothing changes unless the user changes it" broken by the screen that
+   * merely displays the default. `recallInto` is what makes the optional
+   * field expressible: it starts from the fallback and overwrites a field
+   * only where the guard accepts a **stored** value, so a
+   * `buildSession.firstboot` written by today's ART — `{ written: true }` —
+   * comes back with `wanted` still absent, and only a user who touches the
+   * tick puts a boolean there. A stored `false` is a boolean and survives.
+   */
+  wanted?: boolean;
 }
 
 /**
@@ -336,6 +357,11 @@ export const CARD_SPEC: { [K in keyof CardChoice]: Guard<CardChoice[K]> } = {
 
 export const FIRSTBOOT_SPEC: { [K in keyof FirstBootChoice]: Guard<FirstBootChoice[K]> } = {
   written: isFlag,
+  // Guarded like every other field, and **not** in `DEFAULT_FIRSTBOOT`: the
+  // guard is what lets a stored `false` through, and the absence from the
+  // default is what keeps an untouched tick out of `settings.json`. See
+  // `FirstBootChoice.wanted`.
+  wanted: isFlag,
 };
 
 export const DEFAULT_MATERIAL: MaterialChoice = { folders: [] };

@@ -7,7 +7,7 @@
 //
 // Mocked at the `@/lib/*` boundary, the house pattern `NetworkPanel.test.tsx`
 // already established for this same step. `@/lib/settings` is mocked one
-// layer further down for the reason `OsInstall.test.tsx` records:
+// layer further down for the reason `FilesTab.test.tsx` records:
 // `useRemembered` writes through `useSettingsStore`, and the real
 // `saveSettings` rejects in jsdom with nothing to catch it.
 
@@ -34,7 +34,7 @@ vi.mock("@/lib/appearance", async (importOriginal) => ({
 
 // ART-248: `appearanceApply` now only starts the job (it resolves with a job
 // id) and the outcome arrives through `awaitJobResult` — the same seam
-// `FirstBootPanel.test.tsx` mocks for its own rehearsal job. `isJobCancellation`
+// `FirstBootRehearse.test.tsx` mocks for its own rehearsal job. `isJobCancellation`
 // stays real, the same reason: it is a pure predicate and the whole point of
 // the "stopped, not an error" test below is that the panel's own use of it is
 // correct. `fraction` and `subscribeSafely` stay real for the identical
@@ -107,7 +107,7 @@ beforeEach(() => {
   // `awaitJobResult`'s own contract: it calls `start` itself (which is what
   // actually invokes `appearanceApply` and sets the panel's own job id) and
   // hands back a promise this default resolves with `currentOutcome` — the
-  // same shape `FirstBootPanel.test.tsx`'s own `awaitJobResultMock` uses.
+  // same shape `FirstBootRehearse.test.tsx`'s own `awaitJobResultMock` uses.
   awaitJobResultMock.mockReset().mockImplementation((_event: string, start: () => Promise<number>) => {
     void start();
     return Promise.resolve(currentOutcome);
@@ -225,7 +225,7 @@ describe("a choice survives a remount", () => {
 
     // Remount without re-seeding — a real remount reads back whatever the
     // live settings store already holds, the same shape
-    // `OsInstall.test.tsx`'s own remount test uses. `wallpaperOn` is itself
+    // `FilesTab.test.tsx`'s own remount test uses. `wallpaperOn` is itself
     // remembered and is already `true` from the click above, so the section
     // is open again without touching the checkbox a second time — clicking
     // it again would toggle it back off.

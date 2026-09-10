@@ -1,7 +1,8 @@
 // Placing a package's files from Windows — the machinery two screens now
 // share (round 3, task 2).
 //
-// `PackagePanel` has owned this since Task 7: preview what the archive would
+// `PackagePanel` owned this from Task 7 until round 3 task 3 deleted it, and
+// the machine is unchanged by the move: preview what the archive would
 // replace (`osinstall_collisions`), let the user confirm the *set* rather
 // than each file, apply it (`osinstall_add_package`), and report what
 // happened. The chain screen needs exactly that for its host-placed rows —
@@ -69,9 +70,9 @@ export interface HostPlacement {
  * The preview → confirm → apply → report machine for a host-placed set.
  *
  * `enabled` is the caller's own answer to "may this set be previewed at
- * all": `PackagePanel` says no while its catalogue has not landed or while
- * the selection holds a package that cannot be placed from the host, and the
- * chain screen says no unless the row it is about is *ready*. Previewing a
+ * all": the chain screen says no unless the row it is about is *ready*, and
+ * the deleted `PackagePanel` said no while its catalogue had not landed or
+ * while the selection held a package that cannot be placed from the host. Previewing a
  * set that can never be applied reaches the payload's own reader and comes
  * back as a raw English `Password required to decrypt file` — after the user
  * has committed to the selection (Task 7's M3).
@@ -361,9 +362,9 @@ export function HostPlacementPreview({ placement }: { placement: HostPlacement }
  * asked for it (ART-202: a run that ended has to say so where the control
  * is).
  *
- * **Takes the two values rather than the whole placement**, because the two
- * screens hold them for different lengths of time. `PackagePanel` hands
- * straight through. The chain screen keeps its own copy: a successful
+ * **Takes the two values rather than the whole placement**, because a screen
+ * may hold them for longer than the hook does. The deleted `PackagePanel`
+ * handed straight through. The chain screen keeps its own copy: a successful
  * placement makes the chain re-ask, the row becomes installed and the button
  * moves on — which would clear the hook's own outcome and leave the screen
  * saying nothing about work it had just done.

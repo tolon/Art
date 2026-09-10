@@ -24,10 +24,10 @@
 // ROMs. And ART's output is an **image file**, never a physical card
 // (`docs/owner-checklist.md` § 4).
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
-import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import {
   distroCheckCard,
@@ -49,17 +49,14 @@ import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
 import { isTextOrNothing, isWholeNumberBetween } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useBuildSession } from "@/lib/useBuildSession";
-import { stepLabelKey, stepsFor, type StepId } from "@/lib/buildSteps";
+import { kindLabelKey, stepLabelKey, stepPath, stepsFor } from "@/lib/buildSteps";
 import type { BuildKind } from "@/lib/buildSession";
 import { errorText } from "@/lib/errorText";
+import { BuildBar } from "@/pages/osbuilder/BuildBar";
+import { useRunLock } from "@/lib/runLock";
 
 /** Card sizes people actually buy. Typed sizes are allowed too. */
 const CARD_SIZES_GB = [16, 32, 64, 128, 256];
-
-/** Where a step lives. One place, so a link and a route cannot drift apart. */
-function stepPath(step: StepId): string {
-  return `/os-builder/${step}`;
-}
 
 /**
  * The shell: what is being built, how far along it is, and the step itself.
@@ -76,6 +73,16 @@ export function OsBuilder() {
   const navigate = useNavigate();
 
   const steps = stepsFor(session.kind);
+
+  /**
+   * **The shell's run lock, read** (round 4 whole-branch review I2; the
+   * provider moved to `Layout` in round 5) — see `runLock.tsx` for the
+   * defect. This screen only draws it: a strip whose links keep working while
+   * a run is in flight is four ways to abandon a build without being told,
+   * and the sidebar beside it is fifteen more. `BuildTab` is the only thing
+   * that sets it.
+   */
+  const { running } = useRunLock();
 
   // A disc dropped on the drop panel routes here (`os.install-from-disc`)
   // carrying the file in router state. Under sub-routes the shell has to
@@ -94,8 +101,8 @@ export function OsBuilder() {
     const state = location.state as { path?: string } | null;
     if (!state?.path) return;
     setKind("install");
-    if (location.pathname !== stepPath("kaynak")) {
-      navigate(stepPath("kaynak"), { state, replace: true });
+    if (location.pathname !== stepPath("dosyalar")) {
+      navigate(stepPath("dosyalar"), { state, replace: true });
     }
   }, [location.state, location.key, location.pathname, setKind, navigate]);
 
@@ -107,37 +114,89 @@ export function OsBuilder() {
       </p>
 
       <nav
-        style={{
-          display: "flex",
-          gap: 8,
-          flexWrap: "wrap",
-          marginBottom: 16,
-          paddingBottom: 12,
-          borderBottom: "1px solid var(--border)",
-        }}
+        aria-label={t("nav.osBuilder")}
+        style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}
       >
-        {steps.map((step, at) => {
-          const here = location.pathname === stepPath(step);
-          return (
-            <Link
-              key={step}
-              to={stepPath(step)}
-              className="btn"
-              style={{
-                fontSize: 12,
-                textDecoration: "none",
-                border: here ? "1px solid var(--accent)" : "1px solid var(--border)",
-                background: here ? "var(--bg-hover)" : "var(--bg)",
-              }}
-            >
-              {at + 1}. {t(stepLabelKey(step))}
-            </Link>
-          );
-        })}
+        {/* `hedef` is the entry, not a numbered step (four-tab design § 2):
+            the chip names the kind and links back to the picker. */}
+        <StripChip locked={running} to={stepPath("hedef")} testId="strip-hedef">
+          {t(kindLabelKey(session.kind))}
+        </StripChip>
+        {steps.slice(1).map((step, at) => (
+          <StripChip key={step} locked={running} to={stepPath(step)}>
+            {at + 1}. {t(stepLabelKey(step))}
+          </StripChip>
+        ))}
+        {/* **Why the chips have gone dead, beside the chips** (I2). A
+            disabled control with no sentence next to it is a screen that has
+            refused and not said so, and the refusal names the control that
+            lifts it — Stop, which is two inches below on the tab the person
+            is already looking at. */}
+        {running && (
+          <span
+            className="badge badge-warn"
+            data-testid="strip-locked"
+            style={{ fontSize: 11 }}
+          >
+            {t("osBuilder.build.navigationLocked")}
+          </span>
+        )}
       </nav>
 
       <Outlet />
+      <BuildBar />
     </div>
+  );
+}
+
+/**
+ * One chip of the strip — a link, or a dead span while a build is running.
+ *
+ * **A `NavLink` with `pointer-events: none` would look the same and behave
+ * differently**: it stays in the tab order, it stays an `<a href>` a keyboard
+ * or a screen reader still activates, and middle-click still opens it. What a
+ * lock has to remove is the navigation, so the element that navigates is the
+ * element that goes. `aria-disabled` rather than a `<button disabled>` because
+ * this is not a control that is temporarily broken — it is a destination that
+ * is temporarily closed, and the name still has to be readable.
+ */
+function StripChip({
+  locked,
+  to,
+  testId,
+  children,
+}: {
+  locked: boolean;
+  to: string;
+  testId?: string;
+  children: ReactNode;
+}) {
+  const style = {
+    fontSize: 12,
+    textDecoration: "none",
+    border: "1px solid var(--border)",
+    background: "var(--bg)",
+  };
+  if (locked) {
+    return (
+      <span className="btn" data-testid={testId} aria-disabled="true" style={{ ...style, opacity: 0.5 }}>
+        {children}
+      </span>
+    );
+  }
+  return (
+    <NavLink
+      to={to}
+      className="btn"
+      data-testid={testId}
+      style={({ isActive }) => ({
+        ...style,
+        border: isActive ? "1px solid var(--accent)" : "1px solid var(--border)",
+        background: isActive ? "var(--bg-hover)" : "var(--bg)",
+      })}
+    >
+      {children}
+    </NavLink>
   );
 }
 

@@ -91,7 +91,7 @@
 // Remembered through `@/lib/remembered`'s guards — the package, its two
 // archives and the Kickstart, because every one of them is a decision the
 // user made and would be annoyed to make again tomorrow. The tree itself is
-// the caller's (`OsInstall.tsx` remembers one for both package panels): which
+// the caller's (`FilesTab.tsx` remembers one for both package panels): which
 // tree a screen has open is not a setting, which the collection wave already
 // ruled.
 
@@ -132,16 +132,19 @@ import {
   osinstallChain,
   osinstallPackages,
   osinstallSlots,
+  rememberedComponentKey,
   type ApplyOutcome,
   type ChainReport,
   type ChainRow,
-  type InstallRelease,
   type PackageSummary,
   type SlotOverride,
   type SlotReport,
   type SlotState,
 } from "@/lib/osinstall";
 import { chainLines, chainSummaryLine, type ChainLine } from "@/lib/chain";
+// Moved to `src/lib/buildRun.ts` in round 4 task 1 — tab 4's run needs the
+// same answer for the same reason (which folder the archive was found in).
+import { folderOf } from "@/lib/buildRun";
 import {
   candidateLines,
   crowdedFolderLines,
@@ -157,42 +160,11 @@ import {
 import type { Phrase } from "@/lib/phrase";
 import { fraction, onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
 import { isTextOrNothing } from "@/lib/remembered";
+import { useChainTree } from "@/lib/useChainTree";
 import { useRemembered } from "@/lib/useRemembered";
 import { usePowerMode } from "@/lib/uxmode";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { Field } from "@/components/osbuilder/Field";
-
-export interface AmigaInstallPanelProps {
-  /** The distribution tree the installer runs against — controlled by the
-   *  caller, which is what lets this and `PackagePanel` speak about the same
-   *  tree without either owning it. */
-  treeRoot: string | null;
-  onTreeRootChange?: (path: string | null) => void;
-  /** Where the user keeps their update archives. Used for the catalogue —
-   *  which packages ART ships a recipe for — and as the file dialogs'
-   *  starting folder. The run itself takes a whole file path, never a folder:
-   *  the archive is chosen deliberately, not guessed at. */
-  packageFolder?: string | null;
-  /**
-   * **Every folder this build's material is in** (design § 3.1), in list
-   * order — what the slots are resolved against.
-   *
-   * Separate from `packageFolder` above, which is one folder and stays one:
-   * `PackagePanel`'s own `osinstallCollisions`/`osinstallAddPackage` take a
-   * single folder and this panel's dialogs need a place to open. What this
-   * carries is the *question* — "given everything the user has, which file is
-   * BoingBag 3.9-1?" — and it is a list because that is what the answer has
-   * to be resolved over. A folder the user removed from the list therefore
-   * stops filling these fields, which is the whole of design § 3.4.
-   */
-  materialFolders?: string[];
-  /** Which AmigaOS release this build is for — the packages offered are a
-   *  function of it (ART-209). This panel runs a package's own installer on
-   *  the Amiga, and a BoingBag is AmigaOS 3.9's; offering one on a 3.2 build
-   *  is offering to run an installer for an operating system that is not
-   *  there. */
-  release: InstallRelease;
-}
 
 /**
  * A refusal, as the screen says it.
@@ -430,38 +402,96 @@ function SlotField({
 }
 
 /**
- * The folder a file sits in, by name alone.
+ * **This panel takes no props** (four tabs, round 5).
  *
- * Used for one thing: handing `osinstall_add_package` the folder a
- * host-placed row's archive was actually **found** in, rather than assuming
- * it is the archives folder. This build's material is a list of folders and
- * the file may be in any of them; the slot already knows which.
+ * It used to be handed six by `FilesTab`, and that was the right shape while
+ * it was mounted inside the wizard: one screen resolved the tree, the
+ * release, the folders, and every panel on it spoke about the same ones. It
+ * is mounted in the **WinUAE studio** now, which has no build session of its
+ * own to resolve anything from — so a panel that only works where a caller
+ * has already done the work would work on one of its two mounts.
  *
- * No path building happens here — the answer is a prefix of a path Rust
- * itself produced, and Rust validates it again on the way back in.
+ * So it resolves its own inputs, from the same places the four tabs do:
+ *
+ *   - `session.release`, `session.material.folders` and
+ *     `session.packages.folder` from `useBuildSession` — the build's own
+ *     values, wherever this is drawn;
+ *   - the tree from `useChainTree(destination)`, the one rule about which
+ *     tree an update run is about (see that hook's own comment), reading the
+ *     very key tab 3's picker writes.
+ *
+ * One rule, two mounts, one answer. Nothing here is read from a second key,
+ * and nothing is written on render.
  */
-function folderOf(path: string): string | null {
-  const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
-  return cut > 0 ? path.slice(0, cut) : null;
-}
-
-export function AmigaInstallPanel({
-  treeRoot,
-  onTreeRootChange,
-  packageFolder = null,
-  materialFolders = [],
-  release,
-}: AmigaInstallPanelProps) {
+export function AmigaInstallPanel() {
   const { t } = useTranslation();
-  const { session, setRom } = useBuildSession();
+  const { session, setRom, setTree, addMaterialFolder } = useBuildSession();
   const power = usePowerMode();
+  const release = session.release;
+  /**
+   * **Every folder this build's material is in** (design § 3.1), in list
+   * order — what the slots are resolved against.
+   *
+   * Separate from `packageFolder` below, which is one folder and stays one:
+   * `osinstallCollisions`/`osinstallAddPackage` take a single folder and this
+   * panel's dialogs need a place to open. What this carries is the
+   * *question* — "given everything the user has, which file is BoingBag
+   * 3.9-1?" — and it is a list because that is what the answer has to be
+   * resolved over. A folder the user removed from the list therefore stops
+   * filling these fields, which is the whole of design § 3.4.
+   */
+  const materialFolders = session.material.folders.map((entry) => entry.path);
+  /** Where the user keeps their update archives. Used for the catalogue —
+   *  which packages ART ships a recipe for — and as the file dialogs'
+   *  starting folder. The run itself takes a whole file path, never a folder:
+   *  the archive is chosen deliberately, not guessed at. */
+  const packageFolder = session.packages.folder;
+  /**
+   * Tab 3's destination, read through the key tab 3 writes
+   * (`rememberedComponentKey`, per release) and **never written here** — this
+   * panel owns no destination picker.
+   */
+  const [destination] = useRemembered<string | null>(
+    rememberedComponentKey("osinstall.destination", release),
+    isTextOrNothing,
+    null
+  );
+  /**
+   * The tree an update run is about, by `useChainTree`'s one rule: the
+   * destination when ART has looked at it and found a build, the session's
+   * own tree otherwise.
+   *
+   * **`treeFromDestination` is why `source` is read rather than the two paths
+   * compared** (round 3 fix wave, Important 2). When the destination won,
+   * this panel's Browse would write a value that loses — `setTree` changes
+   * `session.tree.root`, the hook goes on preferring the destination, and the
+   * path in the field snaps straight back to it, a control that appears to
+   * work and changes nothing. So the field is not drawn at all in that case;
+   * one sentence says where the tree came from and where to change it, which
+   * is tab 3. Nothing is disabled and nothing is hidden that the user could
+   * still act on here.
+   *
+   * **`treeSettled` is the other half, and this panel owes it the same
+   * answer tabs 2 and 3 give** (whole-branch review of round 5, Important 2).
+   * `isTree` arrives by round trip, so for the first render or two a
+   * destination that *is* a build looks like one that is not: without this
+   * flag the panel drew the Browse row for the *session's* tree and swapped
+   * it for the destination sentence a moment later, and asked the chain and
+   * the slots about the session tree first — a row reading *ready* and then
+   * *installed* about one file, which is exactly the defect `useChainTree`'s
+   * own comment names. So while the check is in flight the panel draws
+   * neither branch and asks nothing; `ChoiceTab` gates the same ask on
+   * `treeSettled` and `StepSecim` draws nothing until `settled`.
+   */
+  const { treeRoot, source: treeSource, settled: treeSettled } = useChainTree(destination);
+  const treeFromDestination = treeSource === "destination";
   const winuaePath = useSettingsStore((s) => s.settings.winuaePath);
   /**
    * The user's own per-slot file choices, as both `osinstall_slots` and
    * `osinstall_chain` take them (ART-284).
    *
    * **A string, deposited into a `useMemo`, because both effects below start
-   * disk work** — the same rule `OsInstall.tsx` and `MaterialReadout.tsx`
+   * disk work** — the same rule `FilesTab.tsx` and `MaterialReadout.tsx`
    * already keep for this exact value: an array rebuilt each render is a
    * fresh identity and would re-scan the folders on every keystroke.
    */
@@ -541,6 +571,9 @@ export function AmigaInstallPanel({
    *  be offered, without the user reloading the step. */
   const [chainAsked, setChainAsked] = useState(0);
   useEffect(() => {
+    // Not until the tree is settled — see `treeSettled` above. One ask,
+    // about the right folder, rather than two about two.
+    if (!treeSettled) return;
     const list = materialKey ? materialKey.split("\n") : [];
     let cancelled = false;
     osinstallChain(release, list, treeRoot, kickstart, JSON.parse(overridesKey))
@@ -556,7 +589,7 @@ export function AmigaInstallPanel({
     return () => {
       cancelled = true;
     };
-  }, [release, materialKey, treeRoot, kickstart, chainAsked, overridesKey]);
+  }, [release, materialKey, treeRoot, kickstart, chainAsked, overridesKey, treeSettled]);
 
   /**
    * The rows and their sentences, paired **by index**: `chainLines` maps one
@@ -826,6 +859,10 @@ export function AmigaInstallPanel({
    */
   const [slotReport, setSlotReport] = useState<SlotReport | null>(null);
   useEffect(() => {
+    // The same gate as the chain's, for the same reason: every field below
+    // is resolved against the tree, so asking before the destination check
+    // has answered fills them from one tree and then from another.
+    if (!treeSettled) return;
     const list = materialKey ? materialKey.split("\n") : [];
     let cancelled = false;
     osinstallSlots(release, list, treeRoot, kickstart, JSON.parse(overridesKey))
@@ -845,7 +882,7 @@ export function AmigaInstallPanel({
     };
     // `chainAsked` too: a package placed from Windows changes what the
     // manifest records, and the fields above are resolved against it.
-  }, [release, materialKey, treeRoot, kickstart, chainAsked, overridesKey]);
+  }, [release, materialKey, treeRoot, kickstart, chainAsked, overridesKey, treeSettled]);
 
   const slotStates = slotReport?.states ?? [];
   /** The chosen package's own slot. */
@@ -965,8 +1002,19 @@ export function AmigaInstallPanel({
    * `available`, filtering on `amigaInstallable` alone). So the fallback
    * changes which folder the picker opens on and nothing else about what is
    * offered.
+   *
+   * **`pickedFolder` is ahead of both, and it is a `useState`** (round 5,
+   * task 2). The archive Browse below adds the folder it was handed to the
+   * material list — `packages.folder` is read only now (spec § 5) — and
+   * `addMaterialFolder` *appends*, so the folder the person just pointed at
+   * is the list's last entry while this reads its first. Without this line
+   * the one folder the catalogue would not be asked about is the one they
+   * chose. It is deliberately **not remembered**: a dialog answer is not a
+   * setting, and the folder itself is already kept, in the material list
+   * where the rest of the build can see it.
    */
-  const catalogueFolder = packageFolder ?? materialFolders[0] ?? null;
+  const [pickedFolder, setPickedFolder] = useState<string | null>(null);
+  const catalogueFolder = pickedFolder ?? packageFolder ?? materialFolders[0] ?? null;
 
   /**
    * The folder a **host-placed** row's archive is actually in.
@@ -1074,6 +1122,10 @@ export function AmigaInstallPanel({
       true;
 
   const request: AmigaInstallRequest | null =
+    // The third tree-driven ask, gated like the chain and the slots: a
+    // preview composed against the session tree during the destination
+    // check would be a preview of the wrong tree.
+    treeSettled &&
     treeRoot &&
     activePackageId &&
     packageBelongsHere &&
@@ -1099,7 +1151,7 @@ export function AmigaInstallPanel({
    *
    * Guarded on `catalogue !== null` for ART-089's reason, and on
    * `packageId !== null` so this cannot loop. `sanitizeChosen`'s own
-   * comment on `OsInstall.tsx` says the same thing about the same hazard.
+   * comment on `FilesTab.tsx` says the same thing about the same hazard.
    */
   useEffect(() => {
     if (!catalogue || !packageId) return;
@@ -1108,7 +1160,7 @@ export function AmigaInstallPanel({
 
   // The catalogue. Loaded whenever the package folder changes, `null` (never
   // `[]`) until something arrives, so "not loaded yet" and "loaded and empty"
-  // stay different states — the distinction `OsInstall.tsx` already draws.
+  // stay different states — the distinction `FilesTab.tsx` already draws.
   useEffect(() => {
     if (!catalogueFolder) {
       setCatalogue(null);
@@ -1181,7 +1233,7 @@ export function AmigaInstallPanel({
   // button is ever offered and before one byte is copied.
   //
   // The `cancelled` guard is ART-089's, the same one every effect on
-  // `OsInstall.tsx` carries: a late-landing answer must not overwrite what
+  // `FilesTab.tsx` carries: a late-landing answer must not overwrite what
   // the user has since chosen.
   useEffect(() => {
     setConfirmed(false);
@@ -1281,7 +1333,8 @@ export function AmigaInstallPanel({
       onAmigaInstallResult((answer) => {
         // The run's answer is emitted from inside the job closure, so it
         // always arrives before the runner's own terminal progress event
-        // clears `job.current` — the same ordering `PackagePanel` relies on.
+        // clears `job.current` — the ordering every job-backed panel here
+        // relies on.
         if (answer.job_id !== job.current) return;
         setResult(answer);
         setConfirmed(false);
@@ -1303,9 +1356,28 @@ export function AmigaInstallPanel({
       multiple: false,
       title: t("osinstall.packages.treeRoot.chooseTitle"),
     });
-    if (typeof picked === "string") onTreeRootChange?.(picked);
+    // The session's own tree, which is what `useChainTree` falls back to and
+    // what the readouts elsewhere in the wizard read. `builtHere: false`
+    // because a folder pointed at by hand is not a build ART just wrote.
+    if (typeof picked === "string") setTree({ root: picked, builtHere: false });
   }
 
+  /**
+   * Pick an archive by hand — and **keep the folder it came out of** (round
+   * 5, task 2; spec § 3.4).
+   *
+   * The file becomes this package's own override, as it always has. The
+   * folder goes into the build's material list, because that list is what
+   * every slot on this screen is resolved against and what
+   * `osinstall_add_package` is told to look in: a folder known only to this
+   * dialog is a folder the next row cannot see, and the panel would go on
+   * saying "not in the folders you named" about a file the user has just
+   * pointed at. It is not written to `packages.folder`, which nothing writes
+   * any more.
+   *
+   * `pickedFolder` is the same folder held for this session's own dialogs and
+   * catalogue — see `catalogueFolder`.
+   */
   async function chooseArchive(set: (path: string | null) => void, title: string) {
     const picked = await open({
       multiple: false,
@@ -1313,7 +1385,12 @@ export function AmigaInstallPanel({
       defaultPath: catalogueFolder ?? undefined,
       filters: [{ name: "Package archive", extensions: ["lha", "lzh", "zip", "7z"] }],
     });
-    if (typeof picked === "string") set(picked);
+    if (typeof picked !== "string") return;
+    set(picked);
+    const folder = folderOf(picked);
+    if (!folder) return;
+    addMaterialFolder(folder);
+    setPickedFolder(folder);
   }
 
   async function chooseKickstart() {
@@ -1573,14 +1650,43 @@ export function AmigaInstallPanel({
         {t("osinstall.amigaInstall.chainNote")}
       </p>
 
-      <Field
-        label={t("osinstall.packages.treeRoot.label")}
-        value={treeRoot}
-        empty={t("osinstall.packages.treeRoot.none")}
-        onChoose={() => void chooseTreeRoot()}
-        choose={t("common.browse")}
-        hint={t("osinstall.packages.treeRoot.hint")}
-      />
+      {/* **The tree, and who owns it right now.** With the destination
+          winning (`useChainTree`), a Browse here would write a value the
+          hook immediately overrules — so the row says where the tree came
+          from and where to change it instead of offering a dead field.
+
+          **And neither until the check has answered** (whole-branch review
+          of round 5, Important 2). A Browse row drawn for one render and
+          replaced by the destination sentence is a control the user may have
+          reached for; one faint line saying what ART is doing is the honest
+          state, and it is the same wait tabs 2 and 3 already keep. */}
+      {!treeSettled ? (
+        <p
+          className="faint"
+          data-testid="amiga-tree-checking"
+          style={{ fontSize: 11, margin: "0 0 12px" }}
+        >
+          {t("osinstall.chain.checkingDestination")}
+        </p>
+      ) : treeFromDestination ? (
+        <p
+          className="faint"
+          data-testid="amiga-tree-from-destination"
+          style={{ fontSize: 11, margin: "0 0 12px", wordBreak: "break-all" }}
+        >
+          {t("osinstall.amigaInstall.treeRoot.fromDestination", { path: treeRoot ?? "" })}
+        </p>
+      ) : (
+        <Field
+          label={t("osinstall.packages.treeRoot.label")}
+          value={treeRoot}
+          empty={t("osinstall.packages.treeRoot.none")}
+          onChoose={() => void chooseTreeRoot()}
+          choose={t("common.browse")}
+          hint={t("osinstall.packages.treeRoot.hint")}
+          testId="amiga-tree-root-field"
+        />
+      )}
 
       {/*
         **The chain** (round 3 § 2): one row per link, in the material's own
@@ -1603,12 +1709,16 @@ export function AmigaInstallPanel({
               : t("osinstall.chain.treeNone")}
           </p>
           {/* **Where ART was told to look, when it was told nowhere**
-              (fix round 1, F6). Once, above the rows, carrying the next
-              step; each row says the short form of it for itself. */}
+              (fix round 1, F6). Once, above the rows, carrying where the
+              folders are added; each row says the short form of it for
+              itself. Since round 5 this panel's only mount is the WinUAE
+              studio, which holds no folder list at all, so the sentence
+              names the Amiga files tab — the same tab the link below it goes
+              to (whole-branch review of round 5, Important 1). */}
           {noFolders && (
             <p className="badge badge-warn" data-testid="amiga-chain-no-folders" style={{ display: "block", padding: "6px 12px", fontSize: 12, margin: "0 0 8px" }}>
               {t("osinstall.chain.noFolders")}{" "}
-              <Link to="/os-builder/kaynak">{t("osBuilder.step.kaynak")}</Link>
+              <Link to="/os-builder/dosyalar">{t("osBuilder.step.dosyalar")}</Link>
             </p>
           )}
           {/* **What was not looked at** (fix round 1, F5). A remembered
@@ -1670,12 +1780,14 @@ export function AmigaInstallPanel({
                       {t(line.where.key, line.where.params)}
                     </span>
                   )}
-                  {/* The first link is a disc, and it is not obtained here.
-                      The link says where it is chosen instead of leaving a
-                      row nobody can act on. */}
+                  {/* The first link is a disc, and it is not chosen here.
+                      The link says where it is chosen — the OS Builder's
+                      Amiga files tab (this panel lives in the WinUAE studio
+                      since round 5) — instead of leaving a row nobody can
+                      act on. */}
                   {row.packageId === null && (
                     <span style={{ marginLeft: 6 }}>
-                      <Link data-testid="amiga-chain-cd-link" to="/os-builder/kaynak">
+                      <Link data-testid="amiga-chain-cd-link" to="/os-builder/dosyalar">
                         {t("osinstall.chain.cdLink")}
                       </Link>
                     </span>
@@ -2034,7 +2146,7 @@ export function AmigaInstallPanel({
           changed nothing the reader could see, and the honest conclusion
           available to them was that it had done nothing. The owner's operation
           log recorded seven identical runs of an unchanged request.
-          `OsInstall.tsx` already carried this lesson in the owner's own words:
+          `BuildTab.tsx` carries this lesson in the owner's own words:
           a job that ended badly has to say so where the button is.
 
           The first fix rendered it in **both** places, and the owner read the

@@ -26,6 +26,34 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-291** 🔵 **A `packages.folder` seeded from an older ART steers the archive dialogs even
+after the folder leaves the material list** — *found 2026-09-10 during four-tabs round 5, task 2*
+`src/lib/useBuildSession.ts` (the `packagesShape.folder ?? derivedFolder` read)
+
+Spec § 5 is met — nothing writes `buildSession.packages.<release>.folder` any more, and the F10
+clear went with the write it undid. What is left is the *read*: `stored ?? derived` prefers the
+stored side, so a settings file written by an older ART keeps its folder even after the user takes
+that folder out of the material list, and it is then the folder `AmigaInstallPanel`'s dialogs open
+on and the folder its catalogue is asked about. No file resolves through it — every slot resolves
+against the material list, the catalogue answers the same list whichever folder it is given, and
+`add_package` is told the folder its file was found in — so this is a starting folder, not a
+result. Pinned by `keeps a folder seeded from an older ART even after the list stops holding it`
+(`useBuildSession.test.tsx`) rather than passed over. The fix that keeps *never written* is to
+gate the read — `stored` only while the material list still holds it — never to restore a write.
+
+**ART-292** 🔵 **Browser back and forward are outside the run lock** — *found 2026-09-10 during
+four-tabs round 5, task 3; the plan's own ruling*
+`src/lib/runLock.tsx` · `src/components/layout/Sidebar.tsx` · `src/pages/Dashboard.tsx` ·
+`src/pages/OsBuilder.tsx`
+
+While a build runs, the tab strip, every sidebar entry and the dashboard's route actions refuse to
+navigate and say why. The browser's own history does not: `Alt+Left`, a mouse's back button or a
+hash edit still leaves the build tab, and `useBuildRun`'s loop stops advancing on unmount, so the
+ticked updates and first boot silently never run (round 4's I2, by the one door the fix wave did
+not close). Nothing in ART blocks history today, which is why the round ruled it out of scope
+rather than adding a `beforeunload`-shaped guard for one screen. The operation log is still the
+record of what the Rust job did.
+
 **ART-283** 🟡 **Opening the Files screen rewrites a remembered tab's location** —
 *found 2026-09-08 by the screenshot pass, reproduced twice from identical starting bytes*
 `src/pages/FileManager.tsx` · `src/lib/remembered.ts`
@@ -598,6 +626,96 @@ its own measurement.
   alone. The enclosing-`fn` walk is indentation-based, which is sound only
   because `cargo fmt --check` is blocking in the same CI run.
 - **The fifth `temp_dir()` test** named above (the stale-preview sweeper's).
+
+**ART-289** ✅ **The packages step's preview refused two copies of BoingBag 1
+that the readout had already resolved** — *found 2026-09-09 by the owner on the
+0.9.1 build, screenshot 1 and 3 of that afternoon; fixed 2026-09-09 in round 4
+of the four-tab rewrite*
+`src/components/osbuilder/ChoiceTab.tsx` · `src/lib/useUpdatesPreview.ts` ·
+`src/components/osbuilder/PackagePanel.tsx` (deleted) ·
+`src/components/osbuilder/HostPlacement.tsx` · `src-tauri/src/commands/osinstall.rs:2361`
+
+Over `E:\amiga\Amigatolon\os39`, which holds `BoingBag39-1.lha` and
+`BoingBag39-1 (1).lha`, the readout said *BoingBag39-1 (1).lha — the file you
+chose* while the packages step's preview two sections below said *invalid input:
+more than one archive carries 'BoingBag3.9-1' … (ART-INPUT-INVALID)* and the add
+button stayed disabled. Two answers to one file on one screen, and the one that
+refused was the one that does the work. Cause: `osinstall_collisions` takes
+`overrides: Option<Vec<(String, PathBuf)>>` exactly as `osinstall_add_package`
+does, and `AmigaInstallPanel` passed the slot overrides
+(`amigaInstall.archive.<pkg>`), but `PackagePanel`'s `useHostPlacement` call
+passed none — ART-288 fixed the add path and never reached this preview.
+
+Fixed by the four-tab design's one list (`§ 3.2`), in two halves. The rows tab 2
+draws and the rows tab 4 runs now come from one internal input hook,
+`useChoiceInputs` in `ChoiceTab.tsx` — one chain, one tree, one Kickstart, one
+set of the user's own per-slot choices — so the two lanes cannot resolve one
+archive differently. `useTickedUpdates()` resolves each ticked row through
+`osinstall_slots` to the file the readout found (a find, never a guess:
+`hash`, `volume-name`, `top-level-directory` and the file the user named by
+hand; never `filename`), and `useUpdatesPreview` asks `osinstall_collisions`
+once per row with that row's own folder and its `(slot, path)` pair as the
+override. `PackagePanel` itself was deleted in round 3.
+
+*Tests:* `asks the preview with the readout's file for each ticked update`
+(`src/lib/useUpdatesPreview.test.tsx`) is § 7's guard — two ticked updates, two
+folders, and the **whole** call asserted per row (destination, the row's own
+folder, the one package id, the `(slot, path)` override), because dropping any
+one of the four is the same defect. Supported by `gives the run the file the
+user chose by hand (ART-277/ART-289)`, `does not run a row whose file ART only
+guessed at, and names it instead` and `asks the chain exactly the question tab
+2's own list asks` (`src/components/osbuilder/ChoiceTab.test.tsx`).
+**Mutations:** dropping the override from the call fell on the guard
+(*"expected [ Array(3) ] to deeply equal [ Array(4) ]"*, the missing member
+being `[["package:boingbag-39-1", "…\BoingBag39-1 (1).lha"]]`); using one folder
+for the whole build instead of the row's own fell on the same case; trusting
+`filename` fell on the guess case (*"expected [ { packageId: 'locale-39', …(3) }
+] to deeply equal []"*); resolving the slots against the hook's own tree rather
+than the tab's fell on the shared-input case (*"expected [] to deeply equal
+[ [ 'package:boingbag-39-2', …(1) ] ]"*). Twelve mutations in all, eleven fell;
+the survivor is the deliberately
+redundant second `runsOnAmiga` guard, which `choiceRowState` already decides
+(`src/lib/chain.ts`, tested there and on screen in `never offers a row that runs
+on the Amiga — one route in the wizard`).
+
+**ART-290** ✅ **Component ticks lived in two stores, and the session's copy
+went stale after the first change** — *found 2026-09-09 while planning round 3
+of the four-tab rewrite; fixed 2026-09-09 in that round*
+`src/components/osbuilder/OsInstall.tsx` · `src/components/osbuilder/ChoiceTab.tsx` ·
+`src/lib/useInstallPlan.ts` · `src/lib/useBuildSession.ts`
+
+`OsInstall.tsx` read and wrote `osinstall.chosen.<release>` and
+`osinstall.excludedConditional.<release>` directly, while
+`buildSession.components.<release>` — seeded once from those very keys by
+`seededComponents` — was the session's copy that nothing wrote. Two values for
+one tick set. The session's went stale the moment a tick changed, so any screen
+reading `session.components` read the ticks as they were on first seed, and the
+tabs the four-tab rewrite was building would have disagreed with each other
+about what the build contains.
+
+**Fixed by making the session the only writer.** The component ticks are
+`session.components.<release>`, through `setComponents`; the two legacy keys
+are read **exactly once** by `seededComponents`, when the session holds nothing
+for that release, and are never written again and never deleted — a migration,
+not a rename, so a settings file written by 0.9.1 opens with its ticks intact
+and a downgrade still finds them where it left them (CLAUDE.md's *nothing
+changes unless the user changes it*). The rows that do the ticking moved to
+tab 2 (`ChoiceTab.tsx`) in the same round, and `useInstallPlan.ts` — the one
+plan hook both tabs use — is what writes the sanitize and prune results back,
+so there is one writer rather than one per screen.
+
+*Tests:* `ticks through the session, never the legacy key (ART-290)`
+(`src/components/osbuilder/ChoiceTab.test.tsx`) asserts **both** halves —
+`buildSession.components.AmigaOS 3.2` gains the ticked id, *and*
+`osinstall.chosen` is still the empty list the test seeded — because either
+half alone passes for the wrong reason. Supported by `keeps each release's own
+ticks when the release changes and comes back` (the per-release scoping the
+seed depends on) and, on the hook, `does not write a tick set while the
+catalogue has not arrived (ART-089)`. **Mutations:** a tick made to write the
+legacy key *as well as* the session fell on the second assertion
+(*"+ [ \"extras\" ]"* where the seeded `[]` was expected); a tick made to write
+nothing fell on three cases at once; and sanitizing against `catalogue ?? []`
+before the catalogue lands fell on the ART-089 case (*"Number of calls: 2"*).
 
 **ART-288** 🔴 ✅ **The headline feature of 0.9.1 refused on the owner's
 own material: the host placement resolved a package's archive by identity

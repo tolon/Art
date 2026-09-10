@@ -13,8 +13,10 @@ an opinion are not a reproduction. This prints numbers.
 
 What it reports, per language and per build kind:
 
-    steps     how many links the strip offers — must match `stepsFor(kind)`
-    labels    the rendered text of each, so a raw `osBuilder.step.*` key or an
+    steps     how many links the strip offers — must match `stepsFor(kind)`.
+              The strip's first link is the hedef chip (`osBuilder.what.*`),
+              so steps= counts the chip plus the numbered tabs
+    labels    the rendered text of each, so a raw `osBuilder.*` key or an
               unrendered `{{…}}` is visible rather than inferred
     strip     the strip's own client/scroll width. `over` above zero is a strip
               wider than its box
@@ -109,7 +111,7 @@ MEASURE_JS = r"""
     }
     const links = [...strip.querySelectorAll("a")];
     const labels = links.map((a) => a.textContent.trim()).join(" | ");
-    const raw = /osBuilder\.step\./.test(labels) || /\{\{/.test(labels);
+    const raw = /osBuilder\./.test(labels) || /\{\{/.test(labels);
     const doc = document.documentElement;
     out.push(
       [
@@ -146,17 +148,17 @@ MEASURE_JS = r"""
     if (await chooseKind("osBuilder.what.prepareVolumes")) {
       await measure(lng + " kind=prepare-volumes");
     }
-    // Install is the widest: four steps.
+    // Install is the widest: the hedef chip plus four numbered tabs.
     if (await chooseKind("osBuilder.what.install")) {
       await measure(lng + " kind=install    ");
-      location.hash = "#/os-builder/paketler";
-      await measure(lng + " kind=install@paketler");
+      location.hash = "#/os-builder/secim";
+      await measure(lng + " kind=install@secim");
 
       // **Application Size.** It exists because most of the people using this
       // are over fifty, and CLAUDE.md's rule is that a new screen inherits it
-      // from the shell rather than fighting it. The widest strip (four steps)
-      // in the longer language is the case that would break first, so it is
-      // the one measured at every size.
+      // from the shell rather than fighting it. The widest strip (the chip
+      // plus four) in the longer language is the case that would break first,
+      // so it is the one measured at every size.
       for (const z of [1, 1.3, 2]) {
         document.documentElement.style.setProperty("--app-zoom", String(z));
         document.body.offsetHeight;

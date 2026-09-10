@@ -703,14 +703,103 @@
   "osBuilder": {
     "step": {
       "hedef": "Ne yapıyoruz",
-      "kaynak": "Kurulum ortamı",
-      "paketler": "Güncelleme paketleri",
-      "amiga-kurulum": "AmigaOS güncellemeleri",
-      "ilk-acilis": "Amiga'da ilk açılış",
+      "dosyalar": "Amiga dosyaları",
+      "secim": "Ne kurulacak",
+      "makine": "Kickstart ve hedef",
+      "derle": "Derle",
       "kart": "Kart imajı",
       "birimler": "Birimleri hazırla",
-      "asksTree": "Bu adım bir AmigaOS klasörü üzerinde çalışır, henüz seçilmedi. Aşağıdan birini seç ya da önce bir tane kur:",
-      "notATree": "Bu klasör ART'ın kurduğu bir AmigaOS klasörü değil: içinde distribution.json yok, bu yüzden ART içinde ne olduğunu ve bir paketin neyin yerine geçeceğini söyleyemez. Aşağıdan başka bir klasör seç ya da burada bir tane kur:"
+      "asksTree": "Bu sekme bir AmigaOS ağacı üzerinde çalışır, henüz seçilmedi. Hedefi Kickstart ve hedef sekmesinde seçin ya da önce bir tane kurun:",
+      "notATree": "Bu klasör ART'ın kurduğu bir AmigaOS ağacı değil: içinde distribution.json yok, bu yüzden ART içinde ne olduğunu ve bir güncellemenin neyin yerine geçeceğini söyleyemez. Kickstart ve hedef sekmesinde başka bir klasör seçin ya da önce bir tane kurun:"
+    },
+    "choice": {
+      "firstboot": "Amiga'da ilk açılışta",
+      "firstbootHint": "Bir kez koşar, sonra kendini siler. Raporu kart hattında okursunuz.",
+      "firstbootRow": "Amiga'da ilk açılışta: donanımı tanı, ek diskleri ve datatype'ları kur, raporu S:FirstBoot.log'a yaz",
+      "lead": "Tek liste, malzemenin kendi sırasıyla. İşaretli satırlar yazılır; yazılamayan satır nedenini söyler ve kapalı durur.",
+      "notInList": "{{id}} bu sürümün listesinde yok",
+      "parts": "Sistemin parçaları",
+      "replaces_one": "Ağaçtaki {{count}} dosyanın yerine geçer (hangileri, açın)",
+      "replaces_other": "Ağaçtaki {{count}} dosyanın yerine geçer (hangileri, açın)",
+      "tickedButClosed": "Daha önce işaretlenmiş — şimdi yazılamaz; işareti kaldırın ya da yukarıdaki satırı düzeltin.",
+      "untick": "İşareti kaldır",
+      "updates": "Güncellemeler, sırasıyla"
+    },
+    "bar": {
+      "destination": "Ağaç: {{path}}",
+      "noDestination": "Hedef klasör henüz seçilmedi — Kickstart ve hedef sekmesinde seçin.",
+      "size": "{{updates}} güncelleme işaretli · ilk açılış {{firstboot}}",
+      "firstboot": {
+        "on": "açık",
+        "off": "kapalı"
+      },
+      "goToBuild": "Derle'ye git"
+    },
+    "build": {
+      "summary": {
+        "tree": "{{files}} dosya, {{bytes}} — {{components}}",
+        "treeExisting": "Var olan ağaç: {{release}}, {{count}} dosya — güncellenecek",
+        "updates_one": "{{count}} güncelleme, şu sırayla: {{names}}",
+        "updates_other": "{{count}} güncelleme, şu sırayla: {{names}}",
+        "updatesNone": "Hiçbir güncelleme işaretlenmedi",
+        "firstboot": "İlk açılış: ART'ın Amiga'da bir kez çalışacak hazırlığı",
+        "firstbootOff": "İlk açılış: kapalı",
+        "replaces": "{{replaced}} dosyanın yerine geçer (sistemin parçalarında {{fresh}} yeni, {{unchanged}} aynı)",
+        "replacesUpdates": "Güncellemeler ağaçtaki {{replaced}} dosyanın yerine geçer",
+        "replacesPending": "Henüz önizlenmedi",
+        "checking": "Hedef denetleniyor…"
+      },
+      "unresolved": "{{name}}: birden fazla dosya taşıyor. Amiga dosyaları sekmesinde birini kullanın (okuma satırı her birini sunar); seçene kadar yazılmaz.",
+      "navigationLocked": "Derleme sürüyor — sekmeden ayrılmadan önce Durdur'a basın.",
+      "navigationLockedLane": "Derleme sürüyor — ayrılmadan önce İşletim Sistemi Kurucusu'nun Derle sekmesinde Durdur'a basın.",
+      "blocked": {
+        "nothingToRun": "Koşulacak hiçbir şey işaretlenmedi. Ne kurulacak sekmesinden bir güncelleme işaretleyin ya da ilk açılışı açın."
+      },
+      "confirmHint": "Derle'ye basmadan hiçbir şey yazılmaz.",
+      "run": "Derle",
+      "running": "Derleniyor…",
+      "runAgain": "Yeniden derle",
+      "stop": "Durdur",
+      "progress": {
+        "soFar": "şimdiye kadar {{done}}"
+      },
+      "handoff": "Ağaç hazır: {{root}}",
+      "handoffLink": "Karta yaz",
+      "previewNoFolder": "ART {{file}} dosyasının hangi klasörde olduğunu belirleyemedi, bu yüzden bu güncelleme önizlenmedi.",
+      "phase": {
+        "pending": "Sırasını bekliyor",
+        "running": "Çalışıyor: {{name}}",
+        "elapsed": "{{seconds}} sn",
+        "tree": {
+          "succeeded": "Ağaç yazıldı: {{files}} dosya, {{bytes}}.",
+          "refused": "ART ağacı yazmayı reddetti — nedeni aşağıda.",
+          "failed": "Ağaç yazılamadı: {{message}}",
+          "cancelled": "Ağacın yazılması durduruldu.",
+          "notAttempted": "Ağaç denenmedi."
+        },
+        "package": {
+          "succeeded": "{{name}} eklendi: {{files}} dosya, {{bytes}}.",
+          "refused": "ART {{name}} paketini eklemeyi reddetti — nedeni aşağıda.",
+          "failed": "{{name}} eklenemedi: {{message}}",
+          "cancelled": "{{name}} eklemesi durduruldu.",
+          "notAttempted": "{{name}} denenmedi."
+        },
+        "firstboot": {
+          "succeeded": "İlk açılış hazırlandı: ağaca {{files}} dosya yazıldı.",
+          "backup": "S/User-Startup şuraya yedeklendi: {{path}}.",
+          "created": "S/User-Startup yoktu; ART oluşturdu.",
+          "refused": "ART ilk açılışı hazırlamayı reddetti — nedeni aşağıda.",
+          "failed": "İlk açılış hazırlanamadı: {{message}}",
+          "cancelled": "İlk açılış hazırlığı durduruldu.",
+          "notAttempted": "İlk açılış denenmedi."
+        }
+      },
+      "next": {
+        "refused": "Reddin işaret ettiğini düzeltin, sonra Derle'ye basın.",
+        "failed": "Ağaç {{root}} yolunda; {{total}} öğeden {{done}} tanesi yerleşmişti. Hiçbir şey geri alınmadı.",
+        "failedUnknown": "Ağaç {{root}} yolunda; ART işin ne kadarının yapıldığını söyleyecek kadar ilerleyemedi. Hiçbir şey geri alınmadı.",
+        "cancelled": "Ağaç şurada: {{root}} — siz durdurmadan önce {{files}} dosya yazılmıştı. Hiçbir şey geri alınmadı."
+      }
     },
     "intro": "PiStorm üzerinde çalışan AmigaOS dağıtımları, her birinin sizden ne istediği ve elinizdekinin uyup uymadığı. ART hiçbir dağıtımı indirmez — siz indirir, ART'a dosyayı gösterirsiniz.",
     "notBuiltYet": "ART henüz dağıtım kartı yazamıyor. Bu ekran bir dağıtımın neye ihtiyaç duyduğunu söyler ve elinizdeki ROM ile kartı buna göre denetler.",
@@ -1090,6 +1179,8 @@
     "msg": {
       "launched": "🚀 WinUAE, {{name}} ile başarıyla başlatıldı (PID: {{pid}})"
     },
+    "installHeading": "Paket kurucusunu WinUAE'de koştur",
+    "installIntro": "Kurucusu Amiga'da koşması gereken güncellemeler için. Ağaç ve arşivler İşletim Sistemi Kurucusu'ndaki seçimlerden gelir.",
     "profilesHeading": "Amiga Donanım Profilleri",
     "profilesIntro": "Doğru bir donanım yapılandırma ön ayarı seçin:",
     "launcherHeading": "Emülasyon Başlatıcı",
@@ -2169,16 +2260,17 @@
   },
   "osinstall": {
     "blocked": {
-      "noFolder": "Önce medya klasörünü seç.",
-      "noDestination": "Önce dağıtım ağacının nereye kurulacağını seç.",
+      "noFolder": "Önce Amiga dosyaları sekmesinde ortam klasörünü seçin.",
+      "noDestination": "Önce Kickstart ve hedef sekmesinde ağacın nereye yazılacağını seçin.",
       "notPlanned": "Önce önizle — ne olacağını görmeden hiçbir şey kurulmaz.",
+      "planning": "Plan hâlâ hesaplanıyor…",
       "folderUnreadable": "ART bu klasörü okuyamadı — yolu kontrol et.",
       "refusals": "Önce reddedilen(ler)i çöz — plan ilerleyemezken hiçbir şey kurulmaz.",
       "wrongFolder": "Bu klasördeki disklerin hiçbiri bu sürümün istediklerinden değil. Klasörde bulunan: {{found}}. Kurulum disklerinin bulunduğu klasörü seç, ya da yukarıdan sürümü değiştir.",
       "wrongFolderIsRelease": "Bu klasördeki diskler bu sürüme ait değil — {{release}} medyası ({{found}}). Sürümü {{release}} yap, ya da kurulum disklerinin bulunduğu klasörü seç.",
       "switchRelease": "Sürümü {{release}} yap",
       "nothingToInstall": "Hiçbir şey kurulmayacak — en az bir bileşen seç.",
-      "destinationExists": "{{path}} yolunda zaten bir şey var. ART, var olanın üzerine dağıtım ağacı kurmaz — henüz var olmayan bir ad seçin ya da eskisini kenara alın."
+      "destinationExists": "{{path}} yolunda zaten bir şey var. ART, var olanın üzerine dağıtım ağacı kurmaz — henüz var olmayan bir ad seçin ya da eskisini kenara alın — Kickstart ve hedef sekmesinde."
     },
     "evidence": {
       "sameRelease": "Bu klasörde şunlar var: {{found}}; bunların arasında bu sürümün kendi ortamı da var. Eksik kalanlar: {{missing}}.",
@@ -2189,7 +2281,7 @@
       "mediaMissing": "{{component}}, {{volume}} istiyor ve medya klasöründe bu birim adını taşıyan bir dosya yok.",
       "mediaPathMissing": "{{component}}'in kendi {{path}} yolu {{media}}'da eksik — bu diskin farklı bir sürümü gibi görünüyor.",
       "mediaUnreadable": "{{component}} için {{volume}} {{path}} konumunda bulundu, ancak ART onu okuyamadı: {{reason}}",
-      "romUnknown": "Kickstart tanımlanamadı, bu yüzden ART sürümüne bağlı şeylere karar veremiyor.",
+      "romUnknown": "Kickstart tanımlanamadı, bu yüzden ART sürümüne bağlı şeylere karar veremiyor. Kickstart ve hedef sekmesinde başka bir Kickstart seçin.",
       "residentTableUnreadable": "\"{{component}}\", eşleştirilen Kickstart'ın kendi {{resident}} modülünün yeterince eski olup olmadığını bilmek zorunda, ama ART bunu kontrol etmek için bu ROM'un modül tablosunu okuyamadı. Makinenizin buna ihtiyacı olduğunu biliyorsanız bileşen listesinden \"{{component}}\"'i kendiniz işaretleyin.",
       "destinationCollision": "{{path}} birden fazla bileşen tarafından isteniyor ({{components}}) ve hiçbiri diğerinin üzerine yazabileceğini belirtmiyor.",
       "mediaAmbiguous": "Medya klasöründe {{component}}'in ihtiyaç duyduğu {{volume}} birim adını taşıyan birden fazla dosya var: {{paths}}.",
@@ -2244,9 +2336,11 @@
       "amigaForeverAdd": "Ekle",
       "amigaForeverDismiss": "Şimdi değil",
       "readoutHeading": "Bu sürüm neye ihtiyaç duyuyor, klasörlerinizde ne var",
+      "askFolders": "Henüz bildirilecek bir şey yok. Bu sürümün disklerini ve arşivlerini tutan bir klasör ekleyin; ART ne bulduğunu burada söyler.",
       "readoutFailed": "ART bu klasörlerde ne olduğunu çıkaramadı: {{detail}}. Bu ART'ın kusuru, dosyalarınız hakkında bir yargı değil.",
       "required": "zorunlu",
       "optional": "isteğe bağlı",
+      "chooseThis": "{{file}} kullan",
       "guide": {
         "intro": "ART bu listeyi bir klasöre metin dosyası olarak yazabilir; böylece dosyaların yanında durur. Siz istemeden hiçbir şey yazılmaz.",
         "button": "{{folder}} klasörüne bir kılavuz yaz",
@@ -2265,8 +2359,8 @@
       "setLine": "{{release}} · {{total}} taneden {{found}} tanesi bulundu · {{missingRequired}} zorunlu eksik",
       "setLineReady": "{{release}} · {{total}} taneden {{found}} tanesi bulundu · zorunlu olan her şey burada",
       "romChosen": "Kickstart {{identity}} ya da daha yenisi: {{path}}, bu yapı için seçildi.",
-      "romNotChosen": "Henüz Kickstart seçilmedi — bu adımdaki alandan Kickstart {{identity}} ya da daha yenisini seçin. ART malzeme klasörlerinizde Kickstart aramaz.",
-      "romNotChosenNoFloor": "Henüz Kickstart seçilmedi — bu adımdaki alandan birini seçin. ART malzeme klasörlerinizde Kickstart aramaz.",
+      "romNotChosen": "Henüz Kickstart seçilmedi — Kickstart ve hedef sekmesinde {{identity}} ya da daha yeni bir Kickstart seçin. ART malzeme klasörlerinizde Kickstart aramaz.",
+      "romNotChosenNoFloor": "Henüz Kickstart seçilmedi — Kickstart ve hedef sekmesinde bir Kickstart seçin. ART malzeme klasörlerinizde Kickstart aramaz.",
       "installedArchiveGone": "{{name}} bu ağaçta zaten var ve geldiği arşiv artık adını verdiğiniz klasörlerde değil. Yeniden gerekmiyor.",
       "incomplete": "{{file}} dosyası {{name}}, ama bu kopya eksik: {{directory}} taşımıyor. Başka bir kopya aramak yerine elinizdekine bakın.",
       "crowdedFolder": "{{folder}} klasörü ART’ın tek seferde açtığından fazla dosya tutuyor; ART ilk {{bound}} tanesine baktı. Bu kadar arşiv tutan bir klasör malzeme klasörü değildir — ART’ı daha küçük bir klasöre yöneltin, yoksa içindeki bir şeyin gözden kaçmasını bekleyin.",
@@ -2293,7 +2387,7 @@
       "blockedComponent": "{{name}} için önce ağaçta {{components}} bileşeninin kurulu olması gerekiyor — bu, ağaç kurulurken seçilir, burada değil.",
       "missing": "{{name}} adını verdiğiniz klasörlerde yok. Beklenen: {{filenames}}.",
       "missingUnnamed": "{{name}} adını verdiğiniz klasörlerde yok.",
-      "mediumNotBuiltFrom": "Bu ağaç {{name}} diskinden kurulmamış. Bu işlem kaynak adımında yapılır, bu ekranda değil.",
+      "mediumNotBuiltFrom": "Bu ağaç {{name}} diskinden kurulmamış. O diski İşletim Sistemi Kurucusu'nun Amiga dosyaları sekmesinde gösterin.",
       "notNeeded": "{{name}} gerekmiyor — {{supersededBy}} bunu zaten içeriyor.",
       "refusedAmbiguous": "Buradaki {{count}} dosya {{name}} olabilir ve ART aralarında seçim yapmaz: {{candidates}}. Hangisini kastettiğinizi siz seçin.",
       "notYetRunnable": {
@@ -2305,13 +2399,13 @@
       "setLineNotNeeded": "{{release}} güncellemeleri — {{total}} satırın {{installed}} tanesi uygulandı — {{notNeeded}} tanesi gerekmiyor",
       "tree": "ağaç {{root}}",
       "treeNone": "Henüz bir dağıtım ağacı seçilmedi — biri seçilene kadar buradaki hiçbir şey uygulanmış olarak kaydedilemez.",
-      "cdLink": "Diski kaynak adımında seçin",
+      "cdLink": "Diski Amiga dosyaları sekmesinde seçin",
       "next": "Sıradaki: {{name}}",
       "reportRow": "Bu rapor {{name}} hakkında.",
-      "updatesLink": "{{release}} güncellemeleri",
       "noneReady": "Burada henüz çalıştırılabilecek bir şey yok.",
       "allApplied": "Bu zincirin her halkası hesaba katıldı — çalıştırılacak bir şey kalmadı.",
-      "noFolders": "ART bu dosyaları arayacak bir yer bilmiyor: arşivlerinizin bulunduğu klasörleri kaynak adımında ekleyin.",
+      "noFolders": "ART bu dosyaları arayacak bir yer bilmiyor: arşivlerinizin bulunduğu klasörleri İşletim Sistemi Kurucusu'nun Amiga dosyaları sekmesinde ekleyin.",
+      "checkingDestination": "Hedef denetleniyor…",
       "missingNoFolders": "{{name}} — henüz hiçbir malzeme klasörü seçilmedi.",
       "runRow": "Bu satırı çalıştır",
       "refusedNotPlaceable": {
@@ -2337,7 +2431,9 @@
       "folderIdentified": "{{folder}} — içeriğine göre tanımlandı.",
       "folderUnreadable": "{{folder}} — ART bu klasörü okuyamadı, dolayısıyla içindeki hiçbir şey tanımlanmadı.",
       "folderStopped": "{{folder}} — ART bu klasörü okurken taramayı durdurdunuz, dolayısıyla içindeki hiçbir şey tanımlanmadı. Bu, klasörde bir kusur olduğu anlamına gelmez.",
-      "folderNotReached": "{{folder}} — tarama bu klasörün sırası gelmeden bitti, klasör hiç açılmadı. Hakkında ne olumlu ne olumsuz bir şey biliniyor."
+      "folderNotReached": "{{folder}} — tarama bu klasörün sırası gelmeden bitti, klasör hiç açılmadı. Hakkında ne olumlu ne olumsuz bir şey biliniyor.",
+      "foldSummary_one": "Ayrıntılar: bu klasörlerdeki {{count}} dosya içeriğine göre ne",
+      "foldSummary_other": "Ayrıntılar: bu klasörlerdeki {{count}} dosya içeriğine göre ne"
     },
     "rom": {
       "label": "Eşlenen Kickstart",
@@ -2351,7 +2447,10 @@
       "label": "Şuraya kur",
       "none": "Hedef seçilmedi.",
       "chooseTitle": "Dağıtım ağacının nereye kurulacağını seç",
-      "hint": "Yeni ya da boş bir klasör. Seçme penceresinde Yeni klasör ile oluşturup seçebilirsin — ART yalnızca içinde bir şey olan klasörü reddeder."
+      "hint": "Yeni ya da boş bir klasör. Seçme penceresinde Yeni klasör ile oluşturup seçebilirsin — ART yalnızca içinde bir şey olan klasörü reddeder.",
+      "taken": "ART buraya yazmaz: bu yol yeni ya da boş bir klasör değil. Başka bir klasör seçin.",
+      "tree": "Bu klasörde ART'ın kurduğu bir ağaç var: {{release}}, {{count}} dosya.",
+      "fresh": "ART buraya yazabilir: yeni bir ağaç oluşturulur."
     },
     "layer": {
       "base32": "AmigaOS 3.2 temel ortamı",
@@ -2359,8 +2458,6 @@
       "wrongLayer": "Bu klasör bu alanın istediğini değil, {{actual}} disklerini taşıyor ({{found}}). Klasörü {{actual}} alanına taşıyın, ya da bu alanın istediği disklerin bulunduğu klasörü seçin."
     },
     "components": {
-      "heading": "Bileşenler",
-      "intro": "Yukarıda seçilen sürümün bileşenleri. Bazıları her zaman kurulur; geri kalanı isteğe bağlıdır, ya da eşlenen Kickstart ihtiyaç duyduğunda kendiliğinden açılır.",
       "required": "Zorunlu",
       "loading": "Bu sürümün bileşenleri okunuyor…",
       "unavailable": "ART bu sürümün bileşenlerini okuyamadı.",
@@ -2419,30 +2516,14 @@
     "refusals": {
       "heading": "Bu henüz neden kurulamıyor"
     },
-    "plan": {
-      "heading": "Ne yazılacağı",
-      "summary_one": "{{count}} dosya, toplam {{bytes}}",
-      "summary_other": "{{count}} dosya, toplam {{bytes}}",
-      "summaryItems_one": "{{count}} plan öğesinden.",
-      "summaryItems_other": "{{count}} plan öğesinden."
-    },
     "run": {
-      "heading": "Kur",
-      "confirm": "Yukarıdaki dosya listesini inceledim.",
-      "run": "Dağıtım ağacını kur",
-      "running": "Kuruluyor…",
+      "confirm": "Yukarıdaki özeti gözden geçirdim.",
       "progress": {
         "starting": "Başlıyor…",
-        "percent": "%{{percent}} — {{total}} dosyadan {{done}} tanesi"
-      },
-      "cancelled": "Kurulum iptal edildi. {{files}} dosya zaten yazılmıştı ve diskte duruyor."
+        "percent": "%{{percent}} — {{total}} öğeden {{done}} tanesi"
+      }
     },
     "result": {
-      "heading": "Kuruldu",
-      "summary": "{{files}} dosya, {{directories}} klasör, toplam {{bytes}}.",
-      "root": "Dağıtım ağacı: {{root}}",
-      "carried": "Güncelleme ve Amiga'da kurulum adımları bu klasör üzerinde çalışacak: {{root}}",
-      "nextStep": "Bunu bir karta kopyalamak için OS Builder → Amiga birimlerini hazırla ekranını bu klasöre yönlendir.",
       "statedRelease": {
         "confirmed": "Ağacın kendisi \"{{stated}}\" diyor — kendi Prefs/Env-Archive/Versions/Release imi, yapılan kurulumla uyuşuyor.",
         "mismatch": "Ağacın kendisi bu kurulumun hedeflediği \"{{expected}}\" değil, \"{{stated}}\" diyor — bir sorun bildirirken bu ekrana değil ağacın kendi imine güven.",
@@ -2503,27 +2584,15 @@
       "error": "ART doğrulayamadı: {{message}}"
     },
     "packages": {
-      "heading": "Güncelleme paketleri",
-      "intro": "ART'ın ya da senin zaten kurduğun bir dağıtım ağacına bir BoingBag ya da başka bir güncelleme paketi ekle.",
-      "scopeNote": "ART {{count}} güncelleme paketi için tarif gönderiyor — her biri dosyaların ve kendi hedeflerinin elle yazılmış bir listesidir — ve başka hiçbir arşive dokunmaz. Böyle bir tarifi olmayan bir paket, ya da kurulumu gerçek donanımda çalışma anında karar veren bir Amiga Installer betiği olan bir paket burada yerleştirilemez: ART'ın o kararı yeniden üretecek hiçbir şeyi yok.",
-      "scopeBlocked": "Bunlardan {{count}} tanesi, arşivin kaç kopyası elinde olursa olsun, Windows üzerinden hiç yerleştirilemez — her biri nedenini aşağıda kendi satırında söylüyor.",
       "treeRoot": {
         "label": "Dağıtım ağacı",
         "none": "Dağıtım ağacı seçilmedi.",
         "chooseTitle": "Dağıtım ağacının kendi kökünü seç — distribution.json'ın yazıldığı yer",
-        "hint": "distribution.json'ı tutan klasör — aşağıdaki Doğrula bölümünün baktığı aynı ağaç."
-      },
-      "packageFolder": {
-        "label": "Güncelleme paketleri klasörü",
-        "none": "Klasör seçilmedi.",
-        "chooseTitle": "Güncelleme paketi arşivlerinin bulunduğu klasörü seç",
-        "hint": "Kurulum disklerinden farklı bir klasör — BoingBag'lerinin ve diğer güncelleme arşivlerinin bulunduğu yer."
+        "hint": "distribution.json'ı tutan klasör."
       },
       "catalogue": {
-        "unavailable": "ART gönderilen paket listesini okuyamadı.",
         "needsFolder": "Hangi arşivlerin gerçekten burada olduğunu görmek için güncelleme paketleri klasörünü seç."
       },
-      "archiveMissing": "Arşiv bulunamadı",
       "blocked": {
         "badge": "Windows üzerinden yerleştirilemez",
         "encryptedPayload": "Bu paketin içindeki dosyalar kilitli ve anahtar yalnızca paketin kendi Amiga tarafındaki Updater'ında. O Updater bir Amiga programı: Amiga'nın kendisinde çalışmak zorunda — diğer bütün dağıtım kurucuları da bu paketi böyle kuruyor. ART kilidi kırmaz, dolayısıyla buradan tek bir dosya bile yerleştiremez — arşivi Amiga'na koy ve kendi Updater'ını orada çalıştır.",
@@ -2531,13 +2600,7 @@
         "needsInstallerScript": "Bu paket düz dosyalardan oluşuyor, ama hangilerini alacağını bir Installer betiği kararlaştırıyor: işlemcine uyan yapıyı seçiyor, hangi dilleri kuracağını soruyor, hangi makinenin SCSI sürücüsünü istediğini soruyor, AmiTCP: ve AWeb neredeyse oraya kopyalıyor ve startup-sequence'ını düzenliyor. ART sabit bir yol kümesi yerleştirir ve bunların hiçbirini senin yerine yanıtlayamaz — yarım yerleştirilmiş bir ağaç açılır ve sessizce eksik olur. Bunun yerine Install betiğini Amiga'da çalıştır.",
         "chosen": "{{names}} Windows üzerinden yerleştirilemez, bu yüzden bu seçim için hiçbir şey önizlenemez ve eklenemez. Tikini kaldır, ya da paketin kendi Updater'ı ile Amiga'da ekle."
       },
-      "refusedNames": "Bu arşiv, ART'ın kullanmayı reddettiği {{count}} giriş adı taşıyor; çünkü ait oldukları klasörün dışını gösteriyorlar: {{names}}. Onlardan hiçbir şey yerleştirilmeyecek — arşivin geri kalanı bundan etkilenmez.",
-      "archiveGone": "Bu paket, sen seçtiğin için tikli kalıyor, ama arşivi artık güncelleme paketleri klasöründe değil — onun için hiçbir şey eklenmeyecek. Tikini kaldır, ya da arşivi geri koy; o zaman yeniden sunulur.",
-      "unknown": "Burada sunulmuyor",
-      "unknownHint": "Bu kimlik daha önceki bir seçimden hatırlandı, ama ART'ın bugün gönderdiği paketlerden biri değil — büyük olasılıkla eski bir sürümden kalma bir seçim. Tikini kaldır; ne olursa olsun onun için hiçbir şey eklenmeyecek.",
-      "needsFolderToPreview": "Bu {{count}} paketin neyin yerine geçeceğini önizlemek için yukarıdan güncelleme paketleri klasörünü seç.",
       "requiresPackages": "Önce {{list}} uygulanmasına ihtiyaç duyuyor.",
-      "requiresComponents": "{{list}} bileşeninin açık olmasına ihtiyaç duyuyor.",
       "preview": {
         "loading": "Bunun neyin yerini alacağı kontrol ediliyor…",
         "refused": "Denetim tamamlanmadı — söylediği aşağıda.",
@@ -2569,11 +2632,6 @@
         "cancelled": "Yarıda iptal edildi.",
         "progressStarting": "Başlıyor…",
         "progressPercent": "%{{percent}} — {{total}} dosyadan {{done}} tanesi"
-      },
-      "treePicker": {
-        "heading": "O klasörde {{count}} yapı var — birini seçin:",
-        "row": "{{release}} · {{files}} dosya · {{components}} bileşen",
-        "alreadyInstalled": "· Amiga'da zaten kurulu: {{packages}}"
       }
     },
     "amigaInstall": {
@@ -2582,6 +2640,9 @@
       "chainNote": "Sırayı bu ekran değil, paketlerin kendisi belirler: önce temiz bir AmigaOS 3.9, sonra BoingBag 3.9-1, sonra BoingBag 3.9-2, ancak ondan sonra geri kalanlar. ART hiçbir şey kopyalamadan önce ağacın neyin yapıldığına dair kendi kaydını okur; bir önceki paketi eksik olan kurulum daha başta geri çevrilir ve hangisinin, hangi sırayla kurulacağı söylenir.",
       "emulatorWindow": "Bu, bu masaüstünde gerçek bir emülatör penceresi açar ve onu kendisi yönetir. Çalışırken ona dokunmayın — o pencereyi kapatmak, kurucu daha hiçbir şey söylemeden koşuyu bitirir.",
       "copyNote": "Kurulum ağacınızın bir kopyası üzerinde koşar, ağacın kendisi üzerinde değil. Kopya, ancak kurucu başarı bildirdiğinde ağacın yerine geçer; bildirmezse ağacınız olduğu gibi kalır ve bu ekran kopyanın nerede olduğunu söyler.",
+      "treeRoot": {
+        "fromDestination": "Ağaç, Kickstart ve hedef sekmesinde seçilen hedef: {{path}}"
+      },
       "package": {
         "label": "Paket",
         "needsFolder": "ART'ın Amiga tarafında hangi paketleri çalıştırabildiğini görmek için yukarıdan güncelleme paketleri klasörünü seçin.",
@@ -2599,7 +2660,7 @@
       },
       "classify": {
         "anotherPackage": "Bu, {{other}} paketinin kendi arşivi — ama seçili olan {{selected}}. Onu kurmak için {{other}}'ı seçin, ya da buraya {{selected}} paketinin kendi arşivini verin.",
-        "sharedArtefact": "'{{path}}', Paketler adımının Windows tarafında yerleştirdiği {{media}} arşivi — bunu {{packages}} okuyor.",
+        "sharedArtefact": "'{{path}}', {{media}} arşivi — bunu {{packages}} okuyor.",
         "otherArtefact": "'{{path}}', bu adımın çalıştırmadığı {{media}} arşivi — {{selected}} burada {{expected}} istiyor.",
         "otherArtefactGeneric": "'{{path}}', bu adımın çalıştırmadığı {{media}} arşivi."
       },
@@ -2672,7 +2733,6 @@
       }
     },
     "replaces": {
-      "heading": "Bunun neyin yerine geçeceği",
       "summary": "{{components}} {{placed}} dosya yerleştirecek: {{fresh}} yeni, {{unchanged}} zaten birebir aynı ve {{replaced}} tanesi bu sürümün başka bir parçasının önce koyduğu dosyaların üzerine.",
       "failed": "ART bunun neyin yerine geçeceğini hesaplayamadı: {{error}}"
     },
@@ -2934,20 +2994,11 @@
       "details": "Ayrıntılar",
       "readFailed": "Bu kartın ilk açılış raporu okunamadı:"
     },
+    "rehearse": {
+      "needsTree": "Ağacı yukarıdan (kurucunun Dağıtım ağacı alanı) ya da İşletim Sistemi Kurucusu'nun Kickstart ve hedef sekmesinden seçin."
+    },
     "panel": {
-      "heading": "Amiga'da ilk açılış",
-      "intro": "Amiga, ART'ın host tarafından başlatamadığını tamamlar: donanımı algılar, FAT önyükleme bölümünü bağlar ve makinenin kendisinde çalışması gereken paketleri çalıştırır. Bir kez yazın, sonra kartı açıp gerçekleştiğini görün.",
-      "tree": "AmigaOS klasörü",
-      "preview": "İlk açılışın yazacakları",
-      "steps": "Ne yapacağı, sırasıyla",
-      "bytes": "Ağaç yaklaşık {{kb}} KB büyür.",
       "alreadyWritten": "Bu ağaç zaten bir ilk-açılış bloğu taşıyor. Yeniden yazmak onun yerine geçer.",
-      "write": "İlk açılışı yaz",
-      "writeAgain": "Yeniden yaz",
-      "written": "Ağaca {{count}} dosya yazıldı.",
-      "backup": "S/User-Startup zaten vardı; önceki kopyası {{path}} konumunda saklandı.",
-      "created": "S/User-Startup yoktu; ART onu oluşturdu.",
-      "nothingWritten": "Hiçbir şey yazılmadı.",
       "rehearse": "WinUAE altında prova et",
       "rehearseIntro": "Ağacın kendisini değil, bir kopyasını açar ve mekanizmanın çalıştığını kanıtlar: dağıtıcı başlar, her adım bildirir ve blok başarıyla kendini kaldırır. Donanım adımı emülatör altında her zaman atlanır — o yarı yalnızca gerçek makinede kanıtlanır.",
       "kickstart": "Prova için Kickstart",

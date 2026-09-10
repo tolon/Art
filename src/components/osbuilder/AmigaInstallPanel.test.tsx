@@ -22,15 +22,15 @@
 // same seam `commands/amigainstall.rs` gave its own tests for exactly this
 // reason.
 
-import type { ComponentProps } from "react";
+import { useEffect, useRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import i18n from "i18next";
 
 // Side-effecting: gives `useTranslation` a real, synchronously-initialised
-// instance, the way `OsInstall.test.tsx` and `PackagePanel.test.tsx` do.
+// instance, the way `FilesTab.test.tsx` does.
 import "@/i18n";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type {
@@ -39,15 +39,17 @@ import type {
   ArchiveClassification,
   RunOutcome,
 } from "@/lib/amigainstall";
-import type { ApplyOutcome } from "@/lib/osinstall";
+import { rememberedComponentKey, type ApplyOutcome } from "@/lib/osinstall";
 import type {
   ChainReport,
   ChainRow,
   ChainState,
+  InstallRelease,
   PackageSummary,
   SlotCandidate,
   SlotReport,
   SlotState,
+  TreeSummary,
 } from "@/lib/osinstall";
 import type { JobProgress } from "@/lib/jobs";
 
@@ -63,6 +65,11 @@ const chainMock = vi.hoisted(() => vi.fn());
 const collisionsMock = vi.hoisted(() => vi.fn());
 const addPackageMock = vi.hoisted(() => vi.fn());
 const onAddPackageResultMock = vi.hoisted(() => vi.fn());
+// `useChainTree` asks these two about tab 3's destination (round 5, task 1:
+// the panel resolves its own tree now). Mocked at the same boundary as the
+// rest — a real call has no Tauri IPC bridge to reach in jsdom.
+const describeTreeMock = vi.hoisted(() => vi.fn());
+const destinationTakenMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/amigainstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/amigainstall")>()),
@@ -82,6 +89,8 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   osinstallCollisions: collisionsMock,
   osinstallAddPackage: addPackageMock,
   onOsInstallAddPackageResult: onAddPackageResultMock,
+  osinstallDescribeTree: describeTreeMock,
+  osinstallDestinationTaken: destinationTakenMock,
 }));
 
 vi.mock("@/lib/jobs", async (importOriginal) => ({
@@ -91,7 +100,7 @@ vi.mock("@/lib/jobs", async (importOriginal) => ({
 
 // `useRemembered` writes through `useSettingsStore.update()`, which calls the
 // real `tauri-plugin-store` IPC on every tick — an unhandled rejection in
-// jsdom (see `OsInstall.test.tsx`'s own note).
+// jsdom (see `FilesTab.test.tsx`'s own note).
 vi.mock("@/lib/settings", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/settings")>()),
   saveSettings: saveSettingsMock,
@@ -105,16 +114,112 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 const { AmigaInstallPanel: Panel } = await import("@/components/osbuilder/AmigaInstallPanel");
 
 /**
+ * What the panel used to be handed as props, and now reads for itself.
+ *
+ * **Round 5, task 1.** `AmigaInstallPanel` takes no props: it is mounted in
+ * the WinUAE studio as well as nowhere else, and a component that only works
+ * where a caller has already resolved its inputs would work on one of its
+ * mounts. So it reads `session.release`, `session.material.folders`,
+ * `session.packages.folder` and `useChainTree(destination)` itself.
+ *
+ * Every case below therefore keeps the props it always passed, and the
+ * wrapper turns them into the **seeds** the panel reads them back out of.
+ * Not one `it(...)` was renamed and not one assertion was rewritten for the
+ * move; what changed is where the value enters.
+ */
+interface PanelSeeds {
+  release: InstallRelease;
+  treeRoot: string | null;
+  packageFolder?: string | null;
+  materialFolders?: string[];
+  /**
+   * **The destination won** — seeded as tab 3's own remembered key rather
+   * than as a flag, because that is the only way the panel can learn it: it
+   * asks `useChainTree`, which asks `osinstall_describe_tree` about the
+   * destination. `describeTreeMock` answers a build by default (see
+   * `beforeEach`), so seeding the key is what makes `source` come back
+   * `"destination"` — and the cases that do not seed it ask nothing at all,
+   * because `useDestinationCheck(null)` makes no round trip.
+   */
+  treeFromDestination?: boolean;
+  /**
+   * The destination path itself, when it has to differ from `treeRoot`.
+   *
+   * **Two distinct paths is what makes the destination-wins assertion a
+   * guard** (whole-branch review of round 5, Minor 9). Seeding one path into
+   * both the session's tree and tab 3's destination key made the sentence
+   * true of either rule, so a panel that read `session.tree.root` alone
+   * would have printed the same string. Pass this and the two are told
+   * apart. Defaults to `treeRoot`, which is what the cases written before
+   * the review already assumed.
+   */
+  destination?: string;
+}
+
+/** Put this build's own values where `useBuildSession` and `useRemembered`
+ *  read them, merging rather than replacing: `withChoices()` has usually run
+ *  first and owns the `amigaInstall.*` keys. */
+function seedSession(seeds: PanelSeeds) {
+  const { release, treeRoot, packageFolder = null, materialFolders = [] } = seeds;
+  useSettingsStore.setState((state) => ({
+    settings: {
+      ...state.settings,
+      remembered: {
+        ...(state.settings.remembered as Record<string, unknown>),
+        "buildSession.release": release,
+        [`buildSession.material.${release}`]: {
+          folders: materialFolders.map((path) => ({ path, layer: null })),
+        },
+        [`buildSession.packages.${release}`]: { folder: packageFolder, chosen: [] },
+        "buildSession.tree": { root: treeRoot, builtHere: false },
+        ...(seeds.treeFromDestination
+          ? {
+              [rememberedComponentKey("osinstall.destination", release)]:
+                seeds.destination ?? treeRoot,
+            }
+          : {}),
+      },
+    },
+  }));
+}
+
+/**
  * Every render below goes through a router, because the chain's first row —
  * the CD — is a `<Link>` to the source step, and `react-router`'s `Link`
  * throws outside a `Router`. Wrapping the component here rather than at each
- * of the twenty-five render sites keeps this file's history readable: not one
- * existing case changed a line to gain a router.
+ * of the thirty-odd render sites keeps this file's history readable: not one
+ * existing case changed a line to gain a router, and not one changed a line
+ * when the props became seeds.
+ *
+ * **The seeding is split in two on purpose.** The lazy `useState` initialiser
+ * runs during this wrapper's *first* render — before `Panel` below it has
+ * rendered once, which is what the panel's mount effects need — and nothing
+ * else is subscribed to the store at that moment. The effect covers a
+ * `rerender` with different props (the two cases that add a material folder
+ * mid-test), where a store write during render would be a write into a
+ * mounted tree. Neither writes anything the panel itself has not been given.
  */
-function AmigaInstallPanel(props: ComponentProps<typeof Panel>) {
+function AmigaInstallPanel(props: PanelSeeds) {
+  useState(() => {
+    seedSession(props);
+    return null;
+  });
+  const seeded = useRef(true);
+  const key = JSON.stringify(props);
+  useEffect(() => {
+    if (seeded.current) {
+      seeded.current = false;
+      return;
+    }
+    seedSession(props);
+    // The props themselves, flattened: a fresh object every render is a fresh
+    // identity, and this effect would then re-seed on every one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
   return (
     <MemoryRouter>
-      <Panel {...props} />
+      <Panel />
     </MemoryRouter>
   );
 }
@@ -429,6 +534,20 @@ beforeEach(() => {
   // panel then shows the package list it had before the chain existed. Every
   // case written before round 3 therefore reads exactly as it did.
   chainMock.mockResolvedValue(chainReport([]));
+  // **A build, and that is not the default answer it looks like.** Only the
+  // cases that seed a destination reach this at all — with no destination
+  // `useDestinationCheck` makes no round trip — so answering *is a tree*
+  // here is what makes `treeFromDestination` mean "the user seeded one",
+  // rather than a second thing every case would have to opt out of.
+  describeTreeMock.mockResolvedValue({
+    isTree: true,
+    release: "AmigaOS 3.9",
+    files: 1915,
+    components: ["workbench-base"],
+    amigaInstalled: [],
+    problem: null,
+  });
+  destinationTakenMock.mockResolvedValue(false);
   collisionsMock.mockResolvedValue([]);
   addPackageMock.mockResolvedValue({ outcome: "started", job_id: 11 });
   onAddPackageResultMock.mockImplementation(
@@ -1555,6 +1674,67 @@ describe("the fields are filled from the slots (design § 3.4)", () => {
       )
     ).toBeTruthy();
   });
+
+  /// **Round 5, task 2 (spec § 5, spec § 3.4).** This Browse is the panel's
+  /// one dialog that reaches a folder full of the user's archives, and until
+  /// this round the folder it reached went nowhere: the file became the
+  /// per-package override and the folder was forgotten. `packages.folder` —
+  /// the key the retired `PackagePanel`'s own Browse used to write — is read
+  /// only now, so the folder goes where every other folder in this build
+  /// goes and where the slots are actually resolved from: the material list.
+  it("adds the folder of an archive chosen by hand to the material list", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValue("F:/downloads/BoingBag39-1.lha");
+    withPackageChosen();
+    slotsMock.mockResolvedValue(slotReport([slotState()]));
+    renderPanel();
+
+    await screen.findByTestId("amiga-slot-archive");
+    await userEvent
+      .setup()
+      .click(browseFor(i18n.t("osinstall.amigaInstall.archive.label")) as HTMLElement);
+
+    await waitFor(() =>
+      expect(bag()["buildSession.material.AmigaOS 3.9"]).toEqual({
+        folders: [
+          { path: "E:/material", layer: null },
+          { path: "F:/downloads", layer: null },
+        ],
+      })
+    );
+    // **And not into `packages`**, which is what spec § 5 turns into a rule:
+    // the seeded object is exactly as this test seeded it, folder included.
+    expect(bag()["buildSession.packages.AmigaOS 3.9"]).toEqual({
+      folder: "D:/pkg",
+      chosen: [],
+    });
+    // The file itself is still the choice it always was.
+    expect(bag()["amigaInstall.archive.boingbag-39-1"]).toBe("F:/downloads/BoingBag39-1.lha");
+  });
+
+  /// The other half of that move, and the reason the panel keeps a
+  /// `useState` for it: `addMaterialFolder` **appends**, so the folder the
+  /// person just pointed at is the list's last entry, while the catalogue
+  /// reads `packages.folder ?? materialFolders[0]` — the folder they picked
+  /// would be the one folder the catalogue does not ask about.
+  it("asks the catalogue about the folder just browsed to, not the list's first", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValue("F:/downloads/BoingBag39-1.lha");
+    withPackageChosen();
+    slotsMock.mockResolvedValue(slotReport([slotState()]));
+    renderPanel();
+
+    // The control: before the click it is the seeded archives folder.
+    await waitFor(() => expect(packagesMock).toHaveBeenCalledWith("D:/pkg", "AmigaOS 3.9"));
+    await screen.findByTestId("amiga-slot-archive");
+    await userEvent
+      .setup()
+      .click(browseFor(i18n.t("osinstall.amigaInstall.archive.label")) as HTMLElement);
+
+    await waitFor(() =>
+      expect(packagesMock).toHaveBeenLastCalledWith("F:/downloads", "AmigaOS 3.9")
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2088,12 +2268,12 @@ describe("the chain", () => {
     expect(radioAt(7).checked).toBe(true);
   });
 
-  it("sends the CD row to the step where a disc is chosen, and never runs it", async () => {
+  it("sends the CD row to the Amiga files tab, where a disc is chosen, and never runs it", async () => {
     renderChain();
     await screen.findAllByTestId("amiga-chain-row");
 
     const link = screen.getByTestId("amiga-chain-cd-link");
-    expect(link.getAttribute("href")).toBe("/os-builder/kaynak");
+    expect(link.getAttribute("href")).toBe("/os-builder/dosyalar");
     expect(link.textContent).toBe(i18n.t("osinstall.chain.cdLink"));
 
     await userEvent.setup().click(radioFor("AmigaOS3.9"));
@@ -2116,7 +2296,7 @@ describe("the chain", () => {
     expect(row.textContent).not.toContain(i18n.t("osinstall.chain.missingUnnamed", { name: "AmigaOS3.9" }));
     // And the link is still there, because it is the row's only action.
     expect(screen.getByTestId("amiga-chain-cd-link").getAttribute("href")).toBe(
-      "/os-builder/kaynak"
+      "/os-builder/dosyalar"
     );
   });
 
@@ -2393,10 +2573,11 @@ describe("the chain", () => {
     );
     const rows = await screen.findAllByTestId("amiga-chain-row");
 
-    // Once, above the rows, with the next step and where to take it.
+    // Once, above the rows, naming where the folders are added.
     const banner = screen.getByTestId("amiga-chain-no-folders");
     expect(banner.textContent).toContain(i18n.t("osinstall.chain.noFolders"));
-    expect(banner.querySelector("a")?.getAttribute("href")).toBe("/os-builder/kaynak");
+    expect(banner.querySelector("a")?.getAttribute("href")).toBe("/os-builder/dosyalar");
+    expect(banner.querySelector("a")?.textContent).toBe(i18n.t("osBuilder.step.dosyalar"));
 
     // And the missing row says the short form of it rather than the sentence
     // about folders nobody named.
@@ -2463,5 +2644,243 @@ describe("the chain", () => {
     // BoingBags and BoingBags 3&4, which is listed and disabled (§10).
     expect(await screen.findAllByTestId("amiga-package-row")).toHaveLength(3);
     expect(screen.queryByTestId("amiga-chain")).toBeNull();
+  });
+});
+
+/**
+ * **The tree field is not offered when the caller's tree is the destination**
+ * (round 3 fix wave, Important 2).
+ *
+ * `FilesTab` hands this panel `useChainTree`'s tree. When that hook picked
+ * the *destination*, this panel's own Browse wrote `session.tree.root` — a
+ * value the hook goes on overruling — so the path in the field snapped back
+ * to the destination on the next render. A control that appears to work and
+ * changes nothing is the confident wrong sentence in its purest form; the
+ * panel says where the tree came from instead, and where to change it.
+ */
+describe("the distribution tree field, when the destination is what won", () => {
+  it("draws one sentence with the path instead of a Browse row", async () => {
+    // **Two distinct paths** (whole-branch review, Minor 9): the session
+    // carries one tree, tab 3's destination is another, and the sentence
+    // must print the destination. Seeded to one path — as this case was
+    // until the review — a panel reading `session.tree.root` alone would
+    // print the same string and pass.
+    render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.9"
+        treeRoot="D:/amiga/session-tree"
+        destination="D:/amiga/os39"
+        packageFolder={null}
+        treeFromDestination
+      />
+    );
+
+    // **`find`, not `get`** (round 5, task 1): the panel asks
+    // `osinstall_describe_tree` about the destination itself now, so *the
+    // destination is a build* is a round trip rather than a prop. Until it
+    // lands the panel draws the checking line the case below asserts — not
+    // the Browse row it drew until the whole-branch review's Important 2.
+    const said = await screen.findByTestId("amiga-tree-from-destination");
+    expect(screen.queryByTestId("amiga-tree-root-field")).toBeNull();
+    expect(said.textContent).toBe(
+      i18n.t("osinstall.amigaInstall.treeRoot.fromDestination", { path: "D:/amiga/os39" })
+    );
+    // The sentence carries the path itself, and names the tab that owns it —
+    // a user told "you cannot change it here" and not told where would have
+    // been given nothing.
+    expect(said.textContent).toContain("D:/amiga/os39");
+    // And it is the *destination*, not the session's own tree: the two are
+    // different paths in this case on purpose.
+    expect(said.textContent).not.toContain("session-tree");
+    expect(said.textContent).toContain(i18n.t("osBuilder.step.makine"));
+  });
+
+  it("still offers the Browse row when the tree is the session's own", () => {
+    // The other arm, and the one that makes the first mean something: with
+    // the prop absent this panel is what it always was.
+    render(
+      <AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder={null} />
+    );
+
+    const field = screen.getByTestId("amiga-tree-root-field");
+    expect(within(field).getByRole("button", { name: i18n.t("common.browse") })).toBeTruthy();
+    expect(field.textContent).toContain(i18n.t("osinstall.packages.treeRoot.label"));
+    expect(screen.queryByTestId("amiga-tree-from-destination")).toBeNull();
+  });
+
+  // **Added in round 5, task 1, because the write moved.** Until this round
+  // the Browse row called an `onTreeRootChange` prop and `FilesTab` did the
+  // writing; neither file guarded the wiring, and a mutation confirmed it —
+  // dropping the call entirely left the whole suite green. The panel writes
+  // `session.tree` itself now, so the case is written where the write is.
+  //
+  // Asserted on the store rather than on the field, because a value the
+  // *session* does not carry is a Browse that appears to work and changes
+  // nothing — this panel's own founding defect, one control along.
+  it("writes the folder Browse returns into the build session's own tree", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValue("D:/amiga/picked-by-hand");
+    render(
+      <AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder={null} />
+    );
+
+    const field = screen.getByTestId("amiga-tree-root-field");
+    await userEvent
+      .setup()
+      .click(within(field).getByRole("button", { name: i18n.t("common.browse") }));
+
+    await waitFor(() => {
+      const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
+      expect(bag["buildSession.tree"]).toMatchObject({
+        root: "D:/amiga/picked-by-hand",
+        builtHere: false,
+      });
+    });
+  });
+});
+
+/**
+ * **Neither branch, and no question, until the destination check has
+ * answered** (whole-branch review of round 5, Important 2).
+ *
+ * `useChainTree`'s `settled` exists for one defect and its own comment names
+ * it: `isTree` arrives by round trip, so for the first render or two a
+ * destination that *is* a build looks like one that is not. The panel
+ * ignored the flag, so it
+ *
+ *   - drew the *Distribution tree* Browse row for the session's tree and
+ *     replaced it with the destination sentence a moment later — a control
+ *     the user may have reached for, gone by the time they got there; and
+ *   - asked `osinstall_chain` and `osinstall_slots` about the session's tree
+ *     first and the destination second, so a row could read *ready* and then
+ *     *installed* about one file, which is the exact contradiction the hook
+ *     was written to end.
+ *
+ * `ChoiceTab` gates its ask on `treeSettled` and `StepSecim` draws nothing
+ * until `settled`; these three cases are the panel saying the same thing.
+ * The two arms below are the control: whichever way the check answers, the
+ * panel commits to one branch and asks once.
+ */
+describe("the tree, while ART is still looking at the destination", () => {
+  /** A `describe_tree` held open, plus the resolver for it. */
+  function heldTree(): (summary: TreeSummary) => void {
+    let answer: (summary: TreeSummary) => void = () => {};
+    describeTreeMock.mockImplementation(
+      () =>
+        new Promise<TreeSummary>((resolve) => {
+          answer = resolve;
+        })
+    );
+    return (summary: TreeSummary) => act(() => answer(summary));
+  }
+
+  const A_TREE: TreeSummary = {
+    isTree: true,
+    release: "AmigaOS 3.9",
+    files: 1915,
+    components: ["workbench-base"],
+    amigaInstalled: [],
+    problem: null,
+  };
+  const NOT_A_TREE: TreeSummary = {
+    isTree: false,
+    release: null,
+    files: 0,
+    components: [],
+    amigaInstalled: [],
+    problem: "holds no distribution.json",
+  };
+
+  /** The destination and the session's tree are different paths on purpose:
+   *  the chain's third argument then says which of the two was asked about. */
+  function renderPending() {
+    render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.9"
+        treeRoot="D:/amiga/session-tree"
+        destination="D:/amiga/os39"
+        packageFolder={null}
+        treeFromDestination
+      />
+    );
+  }
+
+  it("draws one line about the wait, offers no field and asks no question", async () => {
+    heldTree();
+    renderPending();
+
+    const line = await screen.findByTestId("amiga-tree-checking");
+    expect(line.textContent).toBe(i18n.t("osinstall.chain.checkingDestination"));
+    // Neither branch of the ternary: not the Browse row for a tree that may
+    // be about to lose, and not a sentence about a destination ART has not
+    // finished looking at.
+    expect(screen.queryByTestId("amiga-tree-root-field")).toBeNull();
+    expect(screen.queryByTestId("amiga-tree-from-destination")).toBeNull();
+    // And nothing was asked about either tree. Asserted as "not called at
+    // all" rather than "not called with the session tree", because a call
+    // with `null` would be the same defect wearing a different argument.
+    expect(chainMock).not.toHaveBeenCalled();
+    expect(slotsMock).not.toHaveBeenCalled();
+  });
+
+  it("commits to the destination sentence and asks once, when the look finds a build", async () => {
+    const answer = heldTree();
+    renderPending();
+    await screen.findByTestId("amiga-tree-checking");
+
+    answer(A_TREE);
+
+    const said = await screen.findByTestId("amiga-tree-from-destination");
+    expect(said.textContent).toContain("D:/amiga/os39");
+    expect(screen.queryByTestId("amiga-tree-checking")).toBeNull();
+    expect(screen.queryByTestId("amiga-tree-root-field")).toBeNull();
+    // **Once, and about the destination.** Two calls is the `ready →
+    // installed` flip; one call naming `D:/amiga/session-tree` is the wrong
+    // tree asked once.
+    await waitFor(() => expect(chainMock).toHaveBeenCalledTimes(1));
+    expect(chainMock.mock.calls[0][2]).toBe("D:/amiga/os39");
+    await waitFor(() => expect(slotsMock).toHaveBeenCalledTimes(1));
+    expect(slotsMock.mock.calls[0][2]).toBe("D:/amiga/os39");
+  });
+
+  it("offers the Browse row and asks about the session's tree, when the look finds no build", async () => {
+    const answer = heldTree();
+    renderPending();
+    await screen.findByTestId("amiga-tree-checking");
+
+    answer(NOT_A_TREE);
+
+    const field = await screen.findByTestId("amiga-tree-root-field");
+    expect(within(field).getByRole("button", { name: i18n.t("common.browse") })).toBeTruthy();
+    expect(screen.queryByTestId("amiga-tree-checking")).toBeNull();
+    expect(screen.queryByTestId("amiga-tree-from-destination")).toBeNull();
+    await waitFor(() => expect(chainMock).toHaveBeenCalledTimes(1));
+    expect(chainMock.mock.calls[0][2]).toBe("D:/amiga/session-tree");
+    await waitFor(() => expect(slotsMock).toHaveBeenCalledTimes(1));
+    expect(slotsMock.mock.calls[0][2]).toBe("D:/amiga/session-tree");
+  });
+
+  // **The third tree-driven ask** (the fix wave's re-review, finding 1). A
+  // remembered package, archive and Kickstart compose a preview request the
+  // moment `treeRoot` exists — and while the chain is unanswered, the
+  // "runs on the Amiga" and "ready" gates take their permissive defaults,
+  // so the preview would run against the session's tree during the wait
+  // and against the destination after it. Gated on `treeSettled` like the
+  // other two; the control arm shows the preview does still run, once,
+  // about the tree that won.
+  it("previews nothing during the wait, then once about the destination", async () => {
+    withChoices();
+    const answer = heldTree();
+    renderPending();
+    await screen.findByTestId("amiga-tree-checking");
+    expect(previewMock).not.toHaveBeenCalled();
+
+    answer(A_TREE);
+
+    await screen.findByTestId("amiga-tree-from-destination");
+    await waitFor(() => expect(previewMock).toHaveBeenCalled());
+    for (const call of previewMock.mock.calls) {
+      expect(call[0].tree).toBe("D:/amiga/os39");
+    }
   });
 });

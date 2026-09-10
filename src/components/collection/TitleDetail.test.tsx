@@ -16,7 +16,7 @@
 //       error and nothing to retry.
 //
 // Mocked at the `@/lib/*` boundary, the house pattern (see
-// `OsInstall.test.tsx`'s own note for why that layer and not
+// `FilesTab.test.tsx`'s own note for why that layer and not
 // `@tauri-apps/api` itself). `@/lib/launch` is mocked because the panel plans
 // a launch on mount when asked to; nothing here asks, but its module-level
 // imports still have to resolve without a Tauri bridge.

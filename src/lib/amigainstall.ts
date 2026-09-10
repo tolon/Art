@@ -483,6 +483,13 @@ export function settlementPhrase(settlement: SettlementReport): Phrase {
  * `chosen-missing` is its own ending precisely so the user is told rather
  * than quietly dropped back to whatever ART found.
  */
+/** The base the per-package archive keys hang off, and the prefix a package's
+ *  slot id carries. Named once, because {@link slotOverrides} and
+ *  {@link slotArchiveKey} are exact inverses and two spellings of one prefix
+ *  is how a pair like that comes apart. */
+const ARCHIVE_KEY_BASE = "amigaInstall.archive";
+const PACKAGE_SLOT_PREFIX = "package:";
+
 export function slotOverrides(remembered: unknown): SlotOverride[] {
   const bag =
     typeof remembered === "object" && remembered !== null
@@ -491,13 +498,38 @@ export function slotOverrides(remembered: unknown): SlotOverride[] {
   const out: SlotOverride[] = [];
   for (const [key, value] of Object.entries(bag)) {
     if (typeof value !== "string" || value === "") continue;
-    if (key.startsWith("amigaInstall.archive.")) {
-      out.push([`package:${key.slice("amigaInstall.archive.".length)}`, value]);
+    if (key.startsWith(`${ARCHIVE_KEY_BASE}.`)) {
+      out.push([
+        `${PACKAGE_SLOT_PREFIX}${key.slice(ARCHIVE_KEY_BASE.length + 1)}`,
+        value,
+      ]);
     }
   }
   // Sorted, so two equal bags give one string to `MaterialReadout`'s own
   // primitive dependency and the readout does not re-ask on a key reorder.
   return out.sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+/**
+ * **{@link slotOverrides} read backwards**: the remembered key that fills one
+ * slot, or `null` when the slot is not a package's.
+ *
+ * The readout is the one screen that both shows an ambiguous slot and knows
+ * which candidates it has, so it is the screen that offers the choice (round 4
+ * whole-branch review, C1) — and a choice offered there has to be written
+ * where `slotOverrides` will read it back, which is the panel's own
+ * `amigaInstall.archive.<packageId>` (ART-277). Writing that key by hand at
+ * the call site is exactly the drift this closes: the reader is above, the
+ * writer is here, and both spell the two halves once.
+ *
+ * A ROM or a medium slot answers `null` rather than an unscoped key: those
+ * are not chosen through this bag at all, and a key that named no package
+ * would be a preference nothing ever reads.
+ */
+export function slotArchiveKey(slotId: string): string | null {
+  if (!slotId.startsWith(PACKAGE_SLOT_PREFIX)) return null;
+  const packageId = slotId.slice(PACKAGE_SLOT_PREFIX.length);
+  return packageId ? amigaInstallArchiveKey(ARCHIVE_KEY_BASE, packageId) : null;
 }
 
 export function readinessBlockers(

@@ -615,6 +615,103 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // checking, the counts, and refused — so `previewHeadingPhrase` in
     // `@/lib/osinstall` decides which key and the two panels only render it.
     // Both panels count, because both render that heading.
-    expect(dynamicCalls).toBe(178);
+    // 178 -> 179 (2026-09-09, four tabs round 1, task 3). One: the `hedef`
+    // chip in `OsBuilder.tsx`'s strip renders `t(kindLabelKey(session.kind))`
+    // — the same pattern the numbered tabs already use for `stepLabelKey`,
+    // now covering the kind's own name too.
+    // 179 -> 180 (2026-09-09, four tabs round 2, task 4). One: the folded
+    // identity line's `<summary>` renders the pass's own running sentence
+    // while the pass is running — `mediaIdentitySummary` in `@/lib/osinstall`
+    // decides that key, and the summary only renders it. Counting lines that
+    // do not exist yet would say "what 0 files … are" over folders ART is at
+    // that moment reading.
+    // 180 -> 181 (2026-09-09, four tabs round 3, task 2). One: `ChoiceTab`
+    // resolves a component's own name the way `OsInstall.tsx` already does —
+    // `t(def.labelKey)` when the recipe declares one — because the component
+    // rows moved to tab 2 while the plan section and a refusal's sentence,
+    // which name a component the same way, stayed on tab 1. Two screens
+    // drawing one catalogue, not a new pattern: `recipe-component-keys.test.ts`
+    // checks every `labelKey` a shipped recipe names against both catalogues,
+    // which is the check this scan cannot make.
+    // 181 -> 178 -> 181 (2026-09-09, four tabs round 3, task 3). **Net
+    // zero, and the two halves are not the same three.** `PackagePanel.tsx`
+    // is deleted and took three with it — `hostPlacementBlockKey`, the
+    // preview heading's `Phrase`, and the run button's ternary over two
+    // literal keys. `ChoiceTab.tsx`'s updates group adds three, all of them
+    // the rule this count exists for: the row's own state sentence
+    // (`t(said.key, said.params)`, eight endings that must never collapse
+    // into "not done"), the row's `where` — *runs on the Amiga* / *placed
+    // from Windows*, its own field because it is true of the row whatever
+    // state the row is in — and `t(component.labelKey)`, which fills the one
+    // parameter `@/lib/chain` cannot: a row blocked on a component names it
+    // by the key the parts group above labels it with, because that module
+    // never renders. `chain.test.ts` enumerates every variant of the first
+    // two; the third is a recipe's own `labelKey`, covered the way "130 ->
+    // 131" covers it (`recipe-component-keys.test.ts`, and `dead-keys.test.
+    // ts` reading the recipe files themselves).
+    // 181 -> 191 (2026-09-09, four tabs round 4, task 4). **Ten, and every
+    // one of them is a `Phrase` from `src/lib` reaching the screen** — the
+    // pattern this count exists to keep deliberate rather than to discourage.
+    // `BuildTab.tsx` adds eight: the four summary lines
+    // (`runSummaryLines`), the refusals card's own list (`refusalPhrase`) and
+    // the evidence line above it (`mediaEvidence`), the blocker sentence that
+    // stands in the Build button's place (`osinstallBlocker`), and — per
+    // phase of the run — its outcome (`phaseOutcomePhrase`, fifteen keys that
+    // must never collapse into "it did not work"), the refusals that phase
+    // earned, and its next step (`phaseNextStepPhrase`). The eighth is the
+    // Build button's own label over two literal keys, Build and Building.
+    // `buildSummary.ts` adds the ninth, `t(def.labelKey)`, the same component
+    // label `ChoiceTab` and `OsInstall` already resolve — the one parameter
+    // `src/lib` cannot fill, because it holds no catalogue. `BuildBar.tsx`
+    // adds the tenth: the bar draws the first two of those same summary
+    // lines. `buildRun.test.ts` asserts every one of the phase keys is a leaf
+    // in **both** catalogues and that the params each phrase supplies are
+    // exactly the ones both sentences name, which is the check this scan
+    // cannot make.
+    // 191 -> 186 (2026-09-09, four tabs round 4, task 5). **Five, all of them
+    // the *originals* of sites task 4 copied**, going out with the sections
+    // they belonged to as `OsInstall.tsx` became `FilesTab.tsx`: the refusals
+    // card's list (`refusalPhrase`), the evidence line above it
+    // (`mediaEvidence`), the blocker in the Build button's place
+    // (`osinstallBlocker`), the Build button's own two-literal ternary, and
+    // `label()`'s `t(def.labelKey)`, which is `buildSummary.ts`'s now. Every
+    // one of the five is still counted — on `BuildTab.tsx` and
+    // `buildSummary.ts`, in the ten "181 -> 191" added. Five survive here,
+    // and they are the material's: the folded pass's summary and its per-file
+    // and per-folder lines (`mediaIdentity*`), and `layerLabel`'s
+    // `t(layer.labelKey)`. **`BuildBar.tsx` is a net zero rather than an
+    // untouched file**: its `t(line.key, line.params)` over `useBuildSummary`
+    // went with that hook, and the bar's own `t(wanted ? on : off)` took its
+    // place — one dynamic site either way, over a value the session holds
+    // instead of a plan the bar had to compute.
+    // 186 -> 184 (four tabs round 5, task 1): `FirstBootPanel.tsx` is deleted
+    // and `FirstBootRehearse.tsx` is what came out of it, so five dynamic
+    // sites become three. The three that moved are the rehearsal's own —
+    // `rehearsalOutcomePhrase`, `rehearsalNextStepPhrase` and the
+    // run/running ternary. The two that went with the panel are
+    // `fatMountPhrase` (the FAT-mount line of a preview this component does
+    // not draw) and the write/writeAgain ternary (the write is tab 4's
+    // phase). The write keys were deleted from both catalogues in the same
+    // commit, which is what `dead-keys.test.ts` is there to insist on.
+    //
+    // **That paragraph used to end "`firstboot.fat.*` is
+    // `FirstBootReportPanel.tsx`'s too", and it was false** (round 5, task 4,
+    // from task 1's own review). That panel renders a *report* of a boot that
+    // has already happened; neither `firstboot.fat.available` nor
+    // `.unavailable` appears in it, and deleting `FirstBootPanel` left both
+    // with no reader at all. `dead-keys.test.ts` did not catch it because the
+    // keys are named in `firstboot.ts`'s mapper, which is a reader as far as
+    // that scan can see — a mapper nobody calls is exactly the blind spot its
+    // own header warns about. A confident wrong elimination costs more than
+    // no elimination, so it is corrected here rather than quietly dropped.
+    // 184 -> 186 (round 5, task 4): two, and the first is that repair.
+    // `ChoiceTab.tsx` renders `fatMountPhrase` under tab 2's first-boot tick,
+    // where the fact is still actionable — the tree can gain `L:fat95` before
+    // the run. `BuildTab.tsx`'s phase row renders the second, `phaseDetailPhrase`,
+    // which is what a first-boot success says about `S/User-Startup`: backed
+    // up (and where), created, or — returning `null` — nothing to add.
+    // The Build button's ternary is a third label wide now and still one
+    // dynamic site, so it moves nothing.
+    expect(dynamicCalls).toBe(186);
   });
 });

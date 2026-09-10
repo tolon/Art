@@ -703,14 +703,103 @@
   "osBuilder": {
     "step": {
       "hedef": "What are we building",
-      "kaynak": "Install media",
-      "paketler": "Update packages",
-      "amiga-kurulum": "AmigaOS updates",
-      "ilk-acilis": "First boot on the Amiga",
+      "dosyalar": "Amiga files",
+      "secim": "What to install",
+      "makine": "Kickstart and destination",
+      "derle": "Build",
       "kart": "The card image",
       "birimler": "Prepare volumes",
-      "asksTree": "This step works on an AmigaOS folder, and none has been chosen yet. Pick one below, or build one first:",
-      "notATree": "This folder is not an AmigaOS folder ART built: it holds no distribution.json, so ART cannot say what is in it or what a package would replace. Pick another folder below, or build one here:"
+      "asksTree": "This tab works on an AmigaOS tree, and none is chosen yet. Choose the destination on the Kickstart and destination tab, or build one first:",
+      "notATree": "This folder is not an AmigaOS tree ART built: it holds no distribution.json, so ART cannot say what is in it or what an update would replace. Choose another on the Kickstart and destination tab, or build one first:"
+    },
+    "choice": {
+      "firstboot": "At first boot on the Amiga",
+      "firstbootHint": "Runs once, then removes itself. You read the report on the card lane.",
+      "firstbootRow": "At first boot on the Amiga: detect the hardware, mount the extra disks and datatypes, write the report to S:FirstBoot.log",
+      "lead": "One list, in the material's own order. Ticked rows are written; a row that cannot be written says why and stays closed.",
+      "notInList": "{{id}} is not in this release's list",
+      "parts": "The release's parts",
+      "replaces_one": "Would replace {{count}} file already in the tree (open to see which)",
+      "replaces_other": "Would replace {{count}} files already in the tree (open to see which)",
+      "tickedButClosed": "Ticked earlier — cannot be written now; untick it or fix the row above.",
+      "untick": "Untick",
+      "updates": "The updates, in order"
+    },
+    "bar": {
+      "destination": "Tree: {{path}}",
+      "noDestination": "No destination folder chosen yet — choose it on the Kickstart and destination tab.",
+      "size": "{{updates}} updates ticked · first boot {{firstboot}}",
+      "firstboot": {
+        "on": "on",
+        "off": "off"
+      },
+      "goToBuild": "Go to Build"
+    },
+    "build": {
+      "summary": {
+        "tree": "{{files}} files, {{bytes}} — {{components}}",
+        "treeExisting": "Existing tree: {{release}}, {{count}} files — will be updated",
+        "updates_one": "{{count}} update, in this order: {{names}}",
+        "updates_other": "{{count}} updates, in this order: {{names}}",
+        "updatesNone": "No update ticked",
+        "firstboot": "First boot: ART's one-time setup on the Amiga",
+        "firstbootOff": "First boot: off",
+        "replaces": "Would replace {{replaced}} files ({{fresh}} new and {{unchanged}} identical among the release's parts)",
+        "replacesUpdates": "The updates would replace {{replaced}} files already in the tree",
+        "replacesPending": "Not previewed yet",
+        "checking": "Checking the destination…"
+      },
+      "unresolved": "{{name}}: more than one file carries it. Use one of them on the Amiga files tab (the readout's row offers each); it will not be written until you do.",
+      "navigationLocked": "A build is running — Stop it before leaving this tab.",
+      "navigationLockedLane": "A build is running — Stop it on the OS Builder's Build tab before leaving.",
+      "blocked": {
+        "nothingToRun": "Nothing is ticked to run. Tick an update, or turn first boot on, on the What to install tab."
+      },
+      "confirmHint": "Nothing is written until you press Build.",
+      "run": "Build",
+      "running": "Building…",
+      "runAgain": "Build again",
+      "stop": "Stop",
+      "progress": {
+        "soFar": "{{done}} so far"
+      },
+      "handoff": "The tree is ready at {{root}}.",
+      "handoffLink": "Write it to a card",
+      "previewNoFolder": "ART could not tell which folder {{file}} is in, so this update was not previewed.",
+      "phase": {
+        "pending": "Waiting its turn",
+        "running": "Running: {{name}}",
+        "elapsed": "{{seconds}} s",
+        "tree": {
+          "succeeded": "The tree was written: {{files}} files, {{bytes}}.",
+          "refused": "ART would not write the tree — the reason is below.",
+          "failed": "Writing the tree failed: {{message}}",
+          "cancelled": "Writing the tree was stopped.",
+          "notAttempted": "The tree was not attempted."
+        },
+        "package": {
+          "succeeded": "{{name}} was added: {{files}} files, {{bytes}}.",
+          "refused": "ART would not add {{name}} — the reason is below.",
+          "failed": "Adding {{name}} failed: {{message}}",
+          "cancelled": "Adding {{name}} was stopped.",
+          "notAttempted": "{{name}} was not attempted."
+        },
+        "firstboot": {
+          "succeeded": "First boot was prepared: {{files}} files written into the tree.",
+          "backup": "S/User-Startup was backed up to {{path}}.",
+          "created": "S/User-Startup did not exist; ART created it.",
+          "refused": "ART would not prepare first boot — the reason is below.",
+          "failed": "Preparing first boot failed: {{message}}",
+          "cancelled": "Preparing first boot was stopped.",
+          "notAttempted": "First boot was not attempted."
+        }
+      },
+      "next": {
+        "refused": "Fix what the refusal names, then press Build.",
+        "failed": "The tree is at {{root}}; {{done}} of {{total}} items were placed before this. Nothing was undone.",
+        "failedUnknown": "The tree is at {{root}}; ART did not get far enough to say how much of the work was done. Nothing was undone.",
+        "cancelled": "The tree is at {{root}}; {{files}} files were written before you stopped it. Nothing was undone."
+      }
     },
     "intro": "The AmigaOS distributions that run on a PiStorm, what each one needs from you, and whether what you have suits it. ART never downloads a distribution — you fetch it yourself and point ART at the file.",
     "notBuiltYet": "ART cannot write a distribution card yet. This screen tells you what a distribution requires and checks the ROM and card you have against it.",
@@ -1090,6 +1179,8 @@
     "msg": {
       "launched": "🚀 WinUAE launched successfully (PID: {{pid}}) with {{name}}"
     },
+    "installHeading": "Run a package's own installer",
+    "installIntro": "For updates whose installer must run on the Amiga. The tree and the archives come from the OS Builder's choices.",
     "profilesHeading": "Amiga Hardware Profiles",
     "profilesIntro": "Choose an accurate hardware configuration preset:",
     "launcherHeading": "Emulation Launcher",
@@ -2169,16 +2260,17 @@
   },
   "osinstall": {
     "blocked": {
-      "noFolder": "Choose the media folder first.",
-      "noDestination": "Choose where to build the distribution tree first.",
+      "noFolder": "Choose the media folder on the Amiga files tab first.",
+      "noDestination": "Choose where to build the distribution tree on the Kickstart and destination tab first.",
       "notPlanned": "Preview it first — nothing is built before you have seen what would be.",
+      "planning": "The plan is still being computed…",
       "folderUnreadable": "ART could not read that folder — check the path.",
       "refusals": "Resolve the refusal(s) first — nothing is built while the plan cannot proceed.",
       "wrongFolder": "None of the disks in this folder are ones this release asks for. It holds: {{found}}. Choose the folder your install disks are in, or change the release above.",
       "wrongFolderIsRelease": "The disks in this folder are not this release's — they are {{release}} media ({{found}}). Switch to {{release}}, or choose the folder your install disks are in.",
       "switchRelease": "Switch to {{release}}",
       "nothingToInstall": "Nothing would be installed — choose at least one component.",
-      "destinationExists": "Something already exists at {{path}}. ART never builds a distribution tree over what is already there — choose a name that does not exist yet, or move the old one aside."
+      "destinationExists": "Something already exists at {{path}}. ART never builds a distribution tree over what is already there — choose a name that does not exist yet, or move the old one aside — on the Kickstart and destination tab."
     },
     "evidence": {
       "sameRelease": "This folder holds {{found}}, and this release's own media is among them. Still missing: {{missing}}.",
@@ -2189,7 +2281,7 @@
       "mediaMissing": "{{component}} needs {{volume}}, and no file in the media folder carries that volume name.",
       "mediaPathMissing": "{{component}}'s own {{path}} is missing from {{media}} — this looks like a different revision of that disk.",
       "mediaUnreadable": "{{volume}} was found for {{component}} at {{path}}, but ART could not read it: {{reason}}",
-      "romUnknown": "The Kickstart could not be identified, so ART cannot decide what depends on its version.",
+      "romUnknown": "The Kickstart could not be identified, so ART cannot decide what depends on its version. Choose another on the Kickstart and destination tab.",
       "residentTableUnreadable": "\"{{component}}\" needs to know whether the paired Kickstart's own {{resident}} module is old enough, but ART could not read this ROM's module table to check. Tick \"{{component}}\" in the component list yourself if you know your machine needs it.",
       "destinationCollision": "{{path}} is wanted by more than one component ({{components}}), and neither declares it may override the other.",
       "mediaAmbiguous": "More than one file in the media folder carries the volume name {{volume}} that {{component}} needs: {{paths}}.",
@@ -2244,9 +2336,11 @@
       "amigaForeverAdd": "Add it",
       "amigaForeverDismiss": "Not now",
       "readoutHeading": "What this release needs, and what your folders hold",
+      "askFolders": "Nothing to report yet. Add a folder holding this release's disks and archives, and ART will say here what it found.",
       "readoutFailed": "ART could not work out what these folders hold: {{detail}}. That is a fault in ART, not a statement about your files.",
       "required": "required",
       "optional": "optional",
+      "chooseThis": "Use {{file}}",
       "guide": {
         "intro": "ART can write this list into a folder as a text file, so you have it where the files are. Nothing is written until you ask for it.",
         "button": "Write a guide into {{folder}}",
@@ -2265,8 +2359,8 @@
       "setLine": "{{release}} · {{found}} of {{total}} found · {{missingRequired}} required missing",
       "setLineReady": "{{release}} · {{found}} of {{total}} found · everything required is here",
       "romChosen": "Kickstart {{identity}} or newer: {{path}}, chosen for this build.",
-      "romNotChosen": "No Kickstart chosen yet — choose a Kickstart {{identity}} or newer in the field on this step. ART does not look for one in your material folders.",
-      "romNotChosenNoFloor": "No Kickstart chosen yet — choose one in the field on this step. ART does not look for one in your material folders.",
+      "romNotChosen": "No Kickstart chosen yet — choose a Kickstart {{identity}} or newer on the Kickstart and destination tab. ART does not look for one in your material folders.",
+      "romNotChosenNoFloor": "No Kickstart chosen yet — choose a Kickstart on the Kickstart and destination tab. ART does not look for one in your material folders.",
       "installedArchiveGone": "{{name}} is already in this tree, and the archive it came from is no longer in the folders you named. It is not needed again.",
       "incomplete": "{{file}} is {{name}}, and this copy is incomplete: it does not carry {{directory}}. Look at the copy you have rather than going to find another.",
       "crowdedFolder": "{{folder}} holds more files than ART opens in one pass; ART looked at the first {{bound}}. A folder with that many archives in it is not a material folder — point ART at a smaller one, or expect something in it to be missed.",
@@ -2293,7 +2387,7 @@
       "blockedComponent": "{{name}} needs the {{components}} component installed on the tree first — that is chosen when the tree is built, not here.",
       "missing": "{{name}} is not in the folders you named. Expected {{filenames}}.",
       "missingUnnamed": "{{name}} is not in the folders you named.",
-      "mediumNotBuiltFrom": "This tree was not built from {{name}}. That happens on the source step, not on this screen.",
+      "mediumNotBuiltFrom": "This tree was not built from {{name}}. Point ART at that disc on the OS Builder's Amiga files tab.",
       "notNeeded": "{{name}} is not needed — {{supersededBy}} already contains it.",
       "refusedAmbiguous": "{{count}} files here could be {{name}}, and ART will not choose between them: {{candidates}}. Pick the one you mean.",
       "notYetRunnable": {
@@ -2305,13 +2399,13 @@
       "setLineNotNeeded": "{{release}} updates — {{installed}} of {{total}} applied — {{notNeeded}} not needed",
       "tree": "tree {{root}}",
       "treeNone": "No distribution tree chosen yet — nothing here can be recorded as applied until one is.",
-      "cdLink": "Choose the disc on the source step",
+      "cdLink": "Choose the disc on the Amiga files tab",
       "next": "Next: {{name}}",
       "reportRow": "This report is about {{name}}.",
-      "updatesLink": "{{release}} updates",
       "noneReady": "Nothing here can run yet.",
       "allApplied": "Every link of this chain is accounted for — there is nothing left to run.",
-      "noFolders": "ART has nowhere to look for these files: add the folders your archives are in on the source step.",
+      "noFolders": "ART has nowhere to look for these files: add the folders your archives are in on the OS Builder's Amiga files tab.",
+      "checkingDestination": "Checking the destination…",
       "missingNoFolders": "{{name}} — no material folders chosen yet.",
       "runRow": "Run this row",
       "refusedNotPlaceable": {
@@ -2337,7 +2431,9 @@
       "folderIdentified": "{{folder}} — identified by content.",
       "folderUnreadable": "{{folder}} — ART could not read this folder, so nothing in it was identified.",
       "folderStopped": "{{folder}} — you stopped the pass while ART was reading this folder, so nothing in it was identified. That is not a fault in the folder.",
-      "folderNotReached": "{{folder}} — the pass ended before this folder’s turn, so it was never opened. Nothing is known about it either way."
+      "folderNotReached": "{{folder}} — the pass ended before this folder’s turn, so it was never opened. Nothing is known about it either way.",
+      "foldSummary_one": "Details: what {{count}} file in these folders is, by content",
+      "foldSummary_other": "Details: what {{count}} files in these folders are, by content"
     },
     "rom": {
       "label": "Paired Kickstart",
@@ -2351,7 +2447,10 @@
       "label": "Build into",
       "none": "No destination chosen.",
       "chooseTitle": "Choose where to build the distribution tree",
-      "hint": "A new or empty folder. In the picker you can make one with New folder and choose it — ART refuses only a folder that already has something in it."
+      "hint": "A new or empty folder. In the picker you can make one with New folder and choose it — ART refuses only a folder that already has something in it.",
+      "taken": "ART will not write here: this is not a new or empty folder. Choose another.",
+      "tree": "This folder holds a tree ART built: {{release}}, {{count}} files.",
+      "fresh": "ART can write here: a new tree will be created."
     },
     "layer": {
       "base32": "AmigaOS 3.2 base media",
@@ -2359,8 +2458,6 @@
       "wrongLayer": "This folder holds {{actual}} disks ({{found}}), not what this field asks for. Move it to the {{actual}} field, or choose the folder holding what this field wants."
     },
     "components": {
-      "heading": "Components",
-      "intro": "The components of the release chosen above. Some are always installed; the rest are optional, or switch on by themselves when the paired Kickstart needs them.",
       "required": "Required",
       "loading": "Reading this release's components…",
       "unavailable": "ART could not read this release's components.",
@@ -2419,30 +2516,14 @@
     "refusals": {
       "heading": "Why this cannot be built yet"
     },
-    "plan": {
-      "heading": "What would be written",
-      "summary_one": "{{count}} file, {{bytes}} total",
-      "summary_other": "{{count}} files, {{bytes}} total",
-      "summaryItems_one": "from {{count}} planned item.",
-      "summaryItems_other": "from {{count}} planned items."
-    },
     "run": {
-      "heading": "Build",
-      "confirm": "I have reviewed the file list above.",
-      "run": "Build the distribution tree",
-      "running": "Building…",
+      "confirm": "I have reviewed the summary above.",
       "progress": {
         "starting": "Starting…",
-        "percent": "{{percent}}% — {{done}} of {{total}} files"
-      },
-      "cancelled": "Install cancelled. {{files}} file(s) were already written and are still on disk."
+        "percent": "{{percent}}% — {{done}} of {{total}} items"
+      }
     },
     "result": {
-      "heading": "Built",
-      "summary": "{{files}} files, {{directories}} directories, {{bytes}} total.",
-      "root": "Distribution tree: {{root}}",
-      "carried": "The update and Amiga-side install steps will act on this folder: {{root}}",
-      "nextStep": "Point the card preparation screen (OS Builder → Prepare Amiga volumes) at this folder to copy it onto a card.",
       "statedRelease": {
         "confirmed": "The tree itself states \"{{stated}}\" — its own Prefs/Env-Archive/Versions/Release marker agrees with what was built.",
         "mismatch": "The tree itself states \"{{stated}}\", not the \"{{expected}}\" this build was for — trust the tree's own marker over this screen, and say so if you report a problem.",
@@ -2503,27 +2584,15 @@
       "error": "ART could not verify: {{message}}"
     },
     "packages": {
-      "heading": "Update packages",
-      "intro": "Add a BoingBag or another update pack onto a distribution tree ART, or you, already built.",
-      "scopeNote": "ART ships a recipe for {{count}} update packages — each one a hand-written list of files and their own destinations — and will touch no other archive. A package with no such recipe, or one whose own installer is an Amiga Installer script deciding what to do at run time on real hardware, cannot be placed here: there is nothing for ART to reproduce that decision with.",
-      "scopeBlocked": "{{count}} of them cannot be placed from Windows at all, however many copies of the archive you have — each says why on its own row below.",
       "treeRoot": {
         "label": "Distribution tree",
         "none": "No distribution tree chosen.",
         "chooseTitle": "Choose the distribution tree's own root — where distribution.json was written",
-        "hint": "The folder holding distribution.json — the same tree the Verify section below checks."
-      },
-      "packageFolder": {
-        "label": "Update packages folder",
-        "none": "No folder chosen.",
-        "chooseTitle": "Choose the folder holding your update package archives",
-        "hint": "A different folder from your install disks — where your BoingBags and other update archives live."
+        "hint": "The folder holding distribution.json."
       },
       "catalogue": {
-        "unavailable": "ART could not read the shipped package list.",
         "needsFolder": "Choose the update packages folder to see which archives are actually here."
       },
-      "archiveMissing": "Archive not found",
       "blocked": {
         "badge": "Cannot be placed from Windows",
         "encryptedPayload": "The files inside this package are locked, and only the package's own Amiga-side Updater has the key. That Updater is an Amiga program: it has to run on the Amiga itself, which is how every other distribution builder installs this package too. ART will not break the lock, so it cannot place a single file from here — put the archive on your Amiga and run its own Updater there instead.",
@@ -2531,13 +2600,7 @@
         "needsInstallerScript": "This package is plain files with an Installer script that decides which of them you get: it picks the build that matches your processor, asks which languages to install, asks which machine's SCSI driver you need, copies into whatever AmiTCP: and AWeb happen to be, and edits your startup-sequence. ART places a fixed set of paths and cannot answer any of that for you — a half-placed tree would boot and quietly be short of what it thinks it has. Run its Install script on the Amiga instead.",
         "chosen": "{{names}} cannot be placed from Windows, so nothing can be previewed or added for this selection. Untick it, or add it on the Amiga with the package's own Updater."
       },
-      "refusedNames": "This archive carries {{count}} entry name(s) ART refuses to use, because they point outside the folder they belong in: {{names}}. Nothing will ever be placed from them — the rest of the archive is unaffected.",
-      "archiveGone": "This package stays ticked because you chose it, but its archive is no longer in the update packages folder — nothing will be added for it. Untick it, or put the archive back and it will be offered again.",
-      "unknown": "Not offered here",
-      "unknownHint": "This id was remembered from an earlier choice, but it is not one of the packages ART ships today — a stale pick, most likely from an older version. Untick it; nothing will be added for it either way.",
-      "needsFolderToPreview": "Choose the update packages folder above to preview what these {{count}} package(s) would replace.",
       "requiresPackages": "Needs {{list}} applied first.",
-      "requiresComponents": "Needs the {{list}} component switched on.",
       "preview": {
         "loading": "Checking what this would replace…",
         "refused": "The check did not finish — what it said is below.",
@@ -2569,11 +2632,6 @@
         "cancelled": "Cancelled partway through.",
         "progressStarting": "Starting…",
         "progressPercent": "{{percent}}% — {{done}} of {{total}} files"
-      },
-      "treePicker": {
-        "heading": "{{count}} build(s) in that folder — pick one:",
-        "row": "{{release}} · {{files}} files · {{components}} components",
-        "alreadyInstalled": "· already installed on the Amiga: {{packages}}"
       }
     },
     "amigaInstall": {
@@ -2582,6 +2640,9 @@
       "chainNote": "The order comes from the packages themselves, not from this screen: a clean AmigaOS 3.9, then BoingBag 3.9-1, then BoingBag 3.9-2, and only then the rest. ART reads the tree's own record of what has already been done before it copies anything, so a package whose predecessor is missing is refused first and told which one to install, in which order.",
       "emulatorWindow": "This opens a real emulator window on this desktop and drives it. Leave it alone while it works — closing that window ends the run before the installer has said anything.",
       "copyNote": "The install runs against a copy of your tree, never the tree itself. The copy replaces it only when the installer reports success; if it does not, your tree is left exactly as it was and this screen says where the copy is.",
+      "treeRoot": {
+        "fromDestination": "The tree is the destination chosen on the Kickstart and destination tab: {{path}}"
+      },
       "package": {
         "label": "Package",
         "needsFolder": "Choose the update packages folder above to see which packages ART can run on the Amiga.",
@@ -2599,7 +2660,7 @@
       },
       "classify": {
         "anotherPackage": "This is {{other}}'s own archive — but {{selected}} is selected. Select {{other}} to install it, or give {{selected}}'s own archive here.",
-        "sharedArtefact": "'{{path}}' is the {{media}} archive, which the Packages step places from Windows — {{packages}} all read it.",
+        "sharedArtefact": "'{{path}}' is the {{media}} archive — {{packages}} all read it.",
         "otherArtefact": "'{{path}}' is the {{media}} archive, which this step does not run — {{selected}} wants {{expected}} here.",
         "otherArtefactGeneric": "'{{path}}' is the {{media}} archive, which this step does not run."
       },
@@ -2672,7 +2733,6 @@
       }
     },
     "replaces": {
-      "heading": "What this would replace",
       "summary": "{{components}} would place {{placed}} files: {{fresh}} new, {{unchanged}} already identical, and {{replaced}} over files another part of this release puts down first.",
       "failed": "ART could not work out what this would replace: {{error}}"
     },
@@ -2934,20 +2994,11 @@
       "details": "Details",
       "readFailed": "This card's first-boot report could not be read:"
     },
+    "rehearse": {
+      "needsTree": "Choose the tree above (the installer's Distribution tree field) or the destination on the OS Builder's Kickstart and destination tab."
+    },
     "panel": {
-      "heading": "First boot on the Amiga",
-      "intro": "The Amiga finishes what ART cannot start from the host: it detects the hardware, mounts the FAT boot partition and runs the packages that need to run on the machine itself. Write it once, then boot the card to see it happen.",
-      "tree": "AmigaOS folder",
-      "preview": "What first boot will write",
-      "steps": "What it will do, in order",
-      "bytes": "The tree grows by about {{kb}} KB.",
       "alreadyWritten": "This tree already carries a first-boot block. Writing again replaces it.",
-      "write": "Write first boot",
-      "writeAgain": "Write again",
-      "written": "{{count}} files written into the tree.",
-      "backup": "S/User-Startup already existed; the previous copy was kept at {{path}}.",
-      "created": "S/User-Startup did not exist; ART created it.",
-      "nothingWritten": "Nothing was written.",
       "rehearse": "Rehearse under WinUAE",
       "rehearseIntro": "Boots a copy of the tree, never the tree itself, and proves the mechanism runs: the dispatcher starts, each step reports and the block removes itself on success. The hardware step always skips under an emulator — that half only proves out on the real machine.",
       "kickstart": "Kickstart for the rehearsal",

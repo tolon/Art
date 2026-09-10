@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- OS Builder, source step: what ART found comes first, with the folder list
+  beside it; with no folder chosen the step says what to do next instead of
+  reporting nothing.
+- OS Builder: the install lane is four tabs (Amiga files · What to install ·
+  Kickstart and destination · Build); the old step URLs redirect.
+- OS Builder: the Kickstart and the destination folder have their own tab; the
+  per-file "what these files are" list is folded behind one line on the files
+  tab.
+- OS Builder: what to install is one list — the release's parts, the AmigaOS
+  3.9 updates in order, first boot — with the parts' ticks now kept with the
+  rest of the build's choices.
+- **OS Builder: the install lane is complete, and building is one press.**
+  Four tabs — the Amiga files, what to install, Kickstart and destination,
+  and Build. The Build tab tells you in four lines what it is about to do,
+  then does it in order: the system tree, then each update you ticked in the
+  order the material itself states, then first boot. It stops at the first
+  step that does not succeed, and **every step reports in its own words** —
+  succeeded, refused, failed, stopped, or never attempted, never collapsed
+  into "it failed". Pointing Build at a folder that already holds a system
+  ART built updates it instead of refusing it. BoingBag 1 and 2, the locale
+  updates and the Turkish catalogs are placed from Windows, in that order,
+  with no emulator. First boot is one tick on the second tab rather than a
+  step of its own. A step whose job cannot say how much work there is says
+  how much it has done instead of drawing a bar that means nothing. The old
+  packages, Amiga-install and first-boot step URLs still redirect.
+- **The Amiga-side installer run and the first-boot rehearsal are in the WinUAE
+  studio now, not in the OS Builder.** Both start an emulator, which is what
+  that screen is for: open WinUAE and the section under the launchers runs a
+  package's own installer on the Amiga and rehearses a first boot, using the
+  tree, the archives and the release the OS Builder already knows about. The
+  OS Builder's own first boot is unchanged — one tick on the second tab, one
+  step of the build.
+- **While a build is running, the sidebar says so.** Its entries stop
+  navigating, each with a sentence naming what to press and where: stopping
+  the build is on the OS Builder's Build tab. Before, only the tabs inside the
+  OS Builder refused, and leaving by the sidebar quietly abandoned the rest of
+  the run. The dashboard's drop cards honour the same lock, though no run
+  reaches them today — a run lives on the Build tab, and the dashboard is not
+  on screen while one is going.
+- OS Builder, Build tab: when first boot succeeds, the line under it says what
+  happened to `S/User-Startup` — the file the old one was backed up to, or that
+  ART created it because there was none.
+- OS Builder, Build tab: after a run has succeeded the button says **Build
+  again**, not Build.
+
 ### Fixed
 
 - **A damaged update package can no longer fill your disk from inside the
@@ -22,6 +69,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hung on a broken archive. That case has its own ending now, and the timeout's
   advice states its basis: the copy was not running away, so the installer was
   most likely waiting on a question.
+- OS Builder, what to install: the "choose a tree first" and "this is not a
+  tree ART built" banners judge the same folder the list under them works on,
+  and send you to the Kickstart and destination tab instead of to a picker
+  that is no longer there.
+- OS Builder, files tab: the Amiga-side update panel no longer offers a
+  Distribution tree Browse that could not change anything — when the tree is
+  the destination you chose, it says so and names the tab that owns it.
+- OS Builder, Build tab: the preview of what an update would replace now
+  asks about **the file you chose**. With two builds of BoingBag 1 in your
+  folders, the readout named one and the preview answered about the other.
+  ([ART-289](docs/ISSUES.md))
+- OS Builder, what to install: which parts of a release are ticked is kept
+  with the rest of the build's choices, in one place, instead of in two
+  stores that could disagree about the same release.
+  ([ART-290](docs/ISSUES.md))
+- OS Builder: browsing for an update archive no longer writes a second,
+  separate "archives folder" setting. The folder the file came from joins the
+  one folder list the whole build uses, where it is visible on the Amiga files
+  tab and can be removed there.
 
 ## [0.9.1] - 2026-09-08
 

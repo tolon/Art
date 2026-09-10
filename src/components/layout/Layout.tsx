@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Outlet } from "react-router-dom";
 
@@ -15,6 +15,7 @@ import {
 } from "@/lib/appZoom";
 import { setupDragDrop, type DropHandler } from "@/lib/dnd";
 import { subscribeSafely } from "@/lib/jobs";
+import { RunLockContext } from "@/lib/runLock";
 import { useRecentFilesStore } from "@/stores/recentFilesStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type { DroppedAnalysis } from "@/types";
@@ -32,6 +33,19 @@ export function Layout() {
   const record = useRecentFilesStore((s) => s.record);
   const reloadRecent = useRecentFilesStore((s) => s.load);
   const { t } = useTranslation();
+
+  /**
+   * **The run lock** (`@/lib/runLock` — round 4 whole-branch
+   * review I2, widened in round 5).
+   *
+   * It lives here rather than in `OsBuilder` because the thing being refused
+   * is a *navigation*, and every element that navigates is drawn by the
+   * shell: the sidebar's entries, the dashboard's drop cards, and the OS
+   * Builder's own strip. `BuildTab` is the only thing that sets it; everyone
+   * above reads it.
+   */
+  const [running, setRunning] = useState(false);
+  const runLock = useMemo(() => ({ running, setRunning }), [running]);
 
   // The sidebar is collapsible (Ctrl+B), and the state is a *preference*: it
   // survives a restart, because someone who works with the panes full-width
@@ -173,35 +187,37 @@ export function Layout() {
   }, [record, reloadRecent]);
 
   return (
-    <div
-      className={`app-shell${dragOver ? " app-shell-dragover" : ""}${
-        collapsed ? " app-shell-collapsed" : ""
-      }${widthClasses ? ` ${widthClasses}` : ""}`}
-    >
-      <Sidebar />
-      <div className="app-main">
-        <TopBar />
-        <main className="app-content">
-          {/* Above the job bar and above every screen: it is asked once, and
-              until it is answered it is the first thing ART has to say
-              (ART-196). Renders nothing at all afterwards. */}
-          <ScratchRootGate />
-          <JobBar />
-          <Outlet context={{ analyses, dragOver }} />
-        </main>
-      </div>
-      {/* The way back when the sidebar is hidden. Placed on the shell rather
-          than inside the sidebar for the obvious reason: a control that lives
-          in the thing it un-hides is unreachable once it works. */}
-      <button
-        type="button"
-        className="app-sidebar-toggle"
-        aria-label={t(collapsed ? "nav.showSidebar" : "nav.hideSidebar")}
-        title={`${t(collapsed ? "nav.showSidebar" : "nav.hideSidebar")} (Ctrl+B)`}
-        onClick={() => void toggleSidebar()}
+    <RunLockContext.Provider value={runLock}>
+      <div
+        className={`app-shell${dragOver ? " app-shell-dragover" : ""}${
+          collapsed ? " app-shell-collapsed" : ""
+        }${widthClasses ? ` ${widthClasses}` : ""}`}
       >
-        {collapsed ? "›" : "‹"}
-      </button>
-    </div>
+        <Sidebar />
+        <div className="app-main">
+          <TopBar />
+          <main className="app-content">
+            {/* Above the job bar and above every screen: it is asked once, and
+                until it is answered it is the first thing ART has to say
+                (ART-196). Renders nothing at all afterwards. */}
+            <ScratchRootGate />
+            <JobBar />
+            <Outlet context={{ analyses, dragOver }} />
+          </main>
+        </div>
+        {/* The way back when the sidebar is hidden. Placed on the shell rather
+            than inside the sidebar for the obvious reason: a control that lives
+            in the thing it un-hides is unreachable once it works. */}
+        <button
+          type="button"
+          className="app-sidebar-toggle"
+          aria-label={t(collapsed ? "nav.showSidebar" : "nav.hideSidebar")}
+          title={`${t(collapsed ? "nav.showSidebar" : "nav.hideSidebar")} (Ctrl+B)`}
+          onClick={() => void toggleSidebar()}
+        >
+          {collapsed ? "›" : "‹"}
+        </button>
+      </div>
+    </RunLockContext.Provider>
   );
 }

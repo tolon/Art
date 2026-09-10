@@ -5,7 +5,7 @@
 // WiFi bilgilerini girelim."*
 //
 // Mocked at the `@/lib/*` boundary, the house pattern. `@/lib/settings` is
-// mocked one layer further down for the reason `OsInstall.test.tsx` records:
+// mocked one layer further down for the reason `FilesTab.test.tsx` records:
 // `useRemembered` writes through `useSettingsStore` and the real
 // `saveSettings` rejects in jsdom with nothing to catch it.
 //
