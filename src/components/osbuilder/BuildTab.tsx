@@ -513,6 +513,13 @@ export function BuildTab() {
       // decided by a round trip that has not landed, and a button pressed
       // before it lands runs the wrong one.
       { key: "osBuilder.build.summary.checking" }
+    : summary.ticked.loading
+    ? // **Nor over a list that is still loading** (the owner's finding of
+      // 2026-09-10). After a run the tab asks again which updates are
+      // ticked, and until it hears the list is empty: the sequence built
+      // from it was first boot alone, and the owner's second press wrote
+      // exactly that.
+      { key: "osBuilder.build.summary.updatesChecking" }
     : treePhaseNeeded
       ? planBlocker
       : phases.length === 0

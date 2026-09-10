@@ -1431,7 +1431,10 @@ mod tests {
         );
         assert_eq!(
             super::shipped_component_overrides("locale-turkish").unwrap(),
-            Some(vec!["locale-base".to_string()]),
+            Some(vec![
+                "locale-base".to_string(),
+                "locale-39-turkish".to_string()
+            ]),
             "a package, which is all this used to be able to answer for"
         );
         assert_eq!(

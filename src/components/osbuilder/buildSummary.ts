@@ -115,6 +115,11 @@ export function useBuildSummary({
     // be trees, which is the work this saves and the answer this must not
     // hold.
     previewCollisions: destinationChecked && !destinationIsTree,
+    // **And no plan at all there, for the same reason** (the owner's finding
+    // of 2026-09-10: the tab froze the PC). Update mode's run has no tree
+    // phase and reads no plan; the one plan it did not need read every disc
+    // in the owner's folders.
+    plan: destinationChecked && !destinationIsTree,
   });
 
   // **The same `revision`, and for the same reason** (round 4 whole-branch
@@ -179,7 +184,13 @@ export function useBuildSummary({
       ? { fresh: 0, unchanged: 0, replaced: 0 }
       : null;
 
-  const replaces: ReplacesSummary = destinationIsTree
+  // Until ART knows which updates are ticked, their count is not zero — it
+  // is unknown (the owner's finding of 2026-09-10: *"replaces 0 files"*
+  // over a list that was still loading).
+  const updatesSettled = !ticked.loading;
+  const replaces: ReplacesSummary = !updatesSettled
+    ? { state: "pending" }
+    : destinationIsTree
     ? // **Update mode says only what the updates would do** (fix round 1,
       // C1). The component preview describes the release's own parts
       // landing in an empty folder, and in update mode they do not land at
@@ -213,6 +224,7 @@ export function useBuildSummary({
     plan: plan.effectivePlan,
     destinationIsTree,
     destinationChecked,
+    updatesSettled,
     treeSummary: tree,
     updates: ticked.rows,
     firstBootWanted,

@@ -134,8 +134,10 @@
   "requires_components": [
     "locale-base"
   ],
+  "_why_overrides_locale_39_turkish": "Measured 2026-09-10 on the owner's own archives (7-Zip 26.02, `$VER:` read from each file): of the 33 catalogs `locale-39-turkish` places, 32 are in this package too - 17 byte-identical, and each of the other 15 the same version or newer here (`amplifier.catalog` 2.20 to 2.31, `find.catalog` 45.5 to 45.12, `installer.catalog` 43.2 to 44.2). The chain ranks that package 4 and this one 5, so in one run this one lands second and writes over those catalogs, and this declaration is what allows it. The reverse - adding `locale-39-turkish` to a tree that already has this one - stays refused, and the chain row says why before anybody ticks it (`ChainState::OvertakenBy`).",
   "overrides": [
-    "locale-base"
+    "locale-base",
+    "locale-39-turkish"
   ],
   "rules": [
     {

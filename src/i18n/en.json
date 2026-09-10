@@ -742,6 +742,7 @@
         "updates_one": "{{count}} update, in this order: {{names}}",
         "updates_other": "{{count}} updates, in this order: {{names}}",
         "updatesNone": "No update ticked",
+        "updatesChecking": "Checking which updates are ticked…",
         "firstboot": "First boot: ART's one-time setup on the Amiga",
         "firstbootOff": "First boot: off",
         "replaces": "Would replace {{replaced}} files ({{fresh}} new and {{unchanged}} identical among the release's parts)",
@@ -2391,6 +2392,7 @@
       "missingUnnamed": "{{name}} is not in the folders you named.",
       "mediumNotBuiltFrom": "This tree was not built from {{name}}. Point ART at that disc on the OS Builder's Amiga files tab.",
       "notNeeded": "{{name}} is not needed — {{supersededBy}} already contains it.",
+      "overtaken": "{{name}} cannot be added to this tree — {{names}} comes after it, is already here and replaces its files, so adding it now would put older files over newer ones. On a tree built afresh it goes in before {{names}}.",
       "refusedAmbiguous": "{{count}} files here could be {{name}}, and ART will not choose between them: {{candidates}}. Pick the one you mean.",
       "notYetRunnable": {
         "installerNotMeasured": "{{name}} — ART has never run this one: it installs through an Installer script, and nobody has measured whether that script finishes without somebody at the window. It is listed rather than hidden, so you can see the recipe exists."

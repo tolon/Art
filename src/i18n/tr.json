@@ -742,6 +742,7 @@
         "updates_one": "{{count}} güncelleme, şu sırayla: {{names}}",
         "updates_other": "{{count}} güncelleme, şu sırayla: {{names}}",
         "updatesNone": "Hiçbir güncelleme işaretlenmedi",
+        "updatesChecking": "İşaretli güncellemeler denetleniyor…",
         "firstboot": "İlk açılış: ART'ın Amiga'da bir kez çalışacak hazırlığı",
         "firstbootOff": "İlk açılış: kapalı",
         "replaces": "{{replaced}} dosyanın yerine geçer (sistemin parçalarında {{fresh}} yeni, {{unchanged}} aynı)",
@@ -2391,6 +2392,7 @@
       "missingUnnamed": "{{name}} adını verdiğiniz klasörlerde yok.",
       "mediumNotBuiltFrom": "Bu ağaç {{name}} diskinden kurulmamış. O diski İşletim Sistemi Kurucusu'nun Amiga dosyaları sekmesinde gösterin.",
       "notNeeded": "{{name}} gerekmiyor — {{supersededBy}} bunu zaten içeriyor.",
+      "overtaken": "{{name}} bu ağaca eklenemez — ondan sonra gelen ve dosyalarının yerine geçen {{names}} ağaçta zaten var; şimdi eklemek eski dosyaları yenilerin üzerine yazar. Sıfırdan kurulan bir ağaçta {{names}} öncesinde girer.",
       "refusedAmbiguous": "Buradaki {{count}} dosya {{name}} olabilir ve ART aralarında seçim yapmaz: {{candidates}}. Hangisini kastettiğinizi siz seçin.",
       "notYetRunnable": {
         "installerNotMeasured": "{{name}} — ART bunu hiç çalıştırmadı: bir Installer betiği ile kuruluyor ve o betiğin pencerede biri olmadan bitip bitmediğini kimse ölçmedi. Gizlemek yerine listeleniyor, böylece tarifin var olduğunu görebilirsiniz."
