@@ -1316,11 +1316,14 @@ mod tests {
     }
 
     struct Fixture {
-        _guard: crate::core::ScratchDir,
         dir: PathBuf,
         image: PathBuf,
         source: PathBuf,
         geometry: VolumeGeometry,
+        /// Last on purpose (ART-281): struct fields drop in declaration
+        /// order, so a field holding an open handle must drop before the
+        /// guard removes the directory underneath it.
+        _guard: crate::core::ScratchDir,
     }
 
     impl Fixture {
@@ -1334,11 +1337,11 @@ mod tests {
             std::fs::write(&image, &bytes).unwrap();
 
             Self {
-                _guard,
                 dir,
                 image,
                 source,
                 geometry,
+                _guard,
             }
         }
 

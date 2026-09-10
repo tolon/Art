@@ -1182,9 +1182,12 @@ mod tests {
 
     /// A real volume in a real file, which is what the journal needs.
     struct Disk {
-        _guard: crate::core::ScratchDir,
         path: PathBuf,
         geometry: VolumeGeometry,
+        /// Last on purpose (ART-281): struct fields drop in declaration
+        /// order, so a field holding an open handle must drop before the
+        /// guard removes the directory underneath it.
+        _guard: crate::core::ScratchDir,
     }
 
     impl Disk {
@@ -1194,9 +1197,9 @@ mod tests {
             let (bytes, geometry) = ffs_volume(total_blocks, DosType::new(dos));
             std::fs::write(&path, &bytes).unwrap();
             Self {
-                _guard,
                 path,
                 geometry,
+                _guard,
             }
         }
 
