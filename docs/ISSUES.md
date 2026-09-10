@@ -254,6 +254,75 @@ stores md5s keyed by size and modification time) would let the next start pay no
 
 ## Fixed
 
+**ART-304** 🟠 ✅ **Contribution could never go on after BoingBag 3.9-2: two packages whose archives
+share a top-level name were taken for two copies of one** — *found 2026-09-11 by the owner driving
+`main-706de9f` over `E:/amiga/Amigatolon/sonuclar`; fixed the same night on `art-304-shared-top-level`*
+`src-tauri/src/core/osinstall/apply.rs` (`add_package_staging_in`, `MediaRecord`) ·
+`src-tauri/src/core/osinstall/plan.rs` · Build stopped on its sixth row with *"BoingBag 3.9-2
+Contribution eklenemedi: invalid input: 'BoingBag3.9-2' in this tree came from a different archive
+(sha256 4b2a777a2895…, which placed boingbag-39-2) than '…\BoingBag39-2-Contribution.lha' (sha256
+ac6feb0eb53a…)"*. Both hashes are the owner's own files, read with `sha256sum`: `4b2a777a2895` is
+`BoingBag39-2.lha`, `ac6feb0eb53a` is `BoingBag39-2-Contribution.lha`. **Two commits of 2026-09-08
+disagreed about what a medium name means.** `975c166` shipped `boingbag-39-2-contribution.json` with
+`"media": "BoingBag3.9-2"` — the same top-level directory as `boingbag-39-2`, told apart only by
+`distinguished_by` (`AmigaOS-Update` vs `Contribution/ClassAction/ClassAction`, the ART-167
+measurement). `d6fcb04` (ART-276) made `add_package`'s clash check look `built_from` up **by
+`volume_name` alone**, on the reasoning that one name meaning two archives is the genuine
+ambiguity. For these two packages it is not: they are two identities, and the check refused the
+second whichever went on first. Nothing tested the pair in sequence — the Contribution test places
+it on a tree with no `BoingBag3.9-2` record, and the ART-276 tests use packages with no
+`distinguished_by`. The same assumption had a second door: `plan()` keys `package_media` by `media`,
+so choosing both in one plan would have left one archive in the map and `apply` reading both
+packages' files out of it. No screen reaches that door today (the Build tab adds packages one at a
+time through `osinstall_add_package`; the frontend never sets `InstallRequest.package_folder`).
+
+**The fix.** A package archive's identity is `(media, distinguished_by)`, and `built_from` now says
+so: `MediaRecord` carries `distinguished_by` (serde default, skipped when `None`, so a floppy's record
+and an older tree's `distribution.json` are unchanged on disk and still read). The clash check and
+the upsert both match on the pair; a record whose identity is still unknown matches every identity,
+which is the old, conservative behaviour. **An older tree is attributed, not guessed:**
+`backfill_record_identities` gives a `None` record the `distinguished_by` of the catalogue package(s)
+that placed files from it, when they agree on exactly one — the owner's record is placed by
+`boingbag-39-2`, so it becomes `AmigaOS-Update` and Contribution goes on beside it. The refusal names
+only the components of the clashing identity, not every component under the name. `plan()` refuses
+two chosen packages whose archives share a `media` but are different files, rather than letting one
+overwrite the other.
+
+**Evidence.** Decided before the run: four new tests red on the unfixed code for the refusal's own
+reason, the control green. Measured, `TMP`/`TEMP` on `E:`: **before the fix** `7 passed; 4 failed` —
+`two_packages_sharing_a_top_level_name_but_told_apart_inside_are_both_accepted`,
+`contribution_goes_on_a_tree_whose_boingbag_two_record_predates_identity` (which reproduced the
+owner's sentence word for word, *"which placed boingbag-39-2"*),
+`a_second_contribution_archive_is_refused_naming_only_what_the_first_placed` and
+`two_chosen_packages_sharing_a_top_level_name_are_refused_not_overwritten` failed; the control
+`the_same_told_apart_package_from_a_different_archive_is_still_refused` and every existing
+Contribution test passed. **After:** all eleven pass, and with the three `backfill_record_identities`
+unit tests (`a_record_placed_by_{one_identity_is_attributed_to_it,two_identities_is_left_unknown,
+packages_without_a_distinguisher_is_left_unknown}`) `33 passed; 0 failed`. **On the owner's own
+material:** `the_owners_contribution_goes_on_their_own_tree_when_asked` (`#[ignore]`d, env-gated,
+command line in its doc comment) copies `E:/amiga/Amigatolon/sonuclar/distribution.json` into a
+scratch tree and adds the real `BoingBag39-2-Contribution.lha` through the shipped catalogue:
+accepted, 432 files placed, the `BoingBag3.9-2` records now `(AmigaOS-Update, 4b2a777a2895…)` and
+`(Contribution/ClassAction/ClassAction, ac6feb0eb53a…)`. It proves the record and the placement, not
+that the result boots. `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean.
+Full `cargo test --lib` twice: `3218 passed; 0 failed; 58 ignored` both times (3210 + the eight new;
+the new ignored one is the owner's-material test). control-byte, scratch-root, scratch-guard and
+counter sweeps clean. **Six mutations, six killed**, each by the tests named for it beforehand
+(backup by absolute path, restored with `shutil.copyfile` and compared byte for byte): the key by
+name alone; no backfill; the record written without its identity; the refusal not narrowed; the
+plan gate off; the backfill choosing one of two disagreeing identities. The last one first "survived"
+because the mutation run's name filter did not select its killer — a wrong run, not a weak guard;
+re-run with the filter corrected, it failed `a_record_placed_by_two_identities_is_left_unknown`.
+
+**Not done, deliberately.** `apply()` — the path that places packages chosen *inside* a plan —
+still writes its package records without `distinguished_by`. No screen reaches it (above), a `None`
+record matches every identity and is attributed on the next `add_package`, so nothing refuses
+wrongly; but the "same tree whichever path built it" comparison
+(`assert_trees_agree`, fix round 2 F5) would tell a real distinguished package's two paths apart. Its
+fixtures declare no distinguisher, so it does not today. Closing it is one
+`backfill_record_identities` call before `apply`'s `write_manifest`, with a test that needs a
+shipped package in a hand-built plan.
+
 **ART-303** 🟠 ✅ **Build runs a ticked update whose prerequisite is ticked but unresolved, and the core
 refuses it** — *found 2026-09-10 by the owner on `main-e2633a6`, fresh tree; fixed the same night on
 `art-303-unresolved-gate` by the owner's ruling ("art 303'ü onaylıyorum yap")*
