@@ -107,23 +107,6 @@ the wrappers' own doc comments say "kept for tests", which is exactly the
 population the sweep exists to watch; a rule that lists such wrappers and
 refuses an unexempted test call to one would close it.
 
-**ART-294** 🔵 **The first-boot rehearsal has no growth ceiling** — *found
-2026-09-10 while fixing ART-278, on `art-278-runaway`*
-`src-tauri/src/core/amigainstall/rehearse.rs`
-
-[ART-278](#fixed) gave an Amiga-side *install* a ceiling on what it may write
-into the staged copy, and a fifth ending when it is crossed. The rehearsal
-(`rehearse_with`) boots the same kind of copy under the same `RunLimits` and
-reads `limits.growth` nowhere: its poll loop has the deadline and the
-emulator-gone check and nothing about size. The exposure is smaller, not
-absent — a rehearsal runs ART's own first-boot block, not a third-party
-payload, so what could loop is a step ART wrote, and the copy sits beside the
-user's tree exactly as an install's does. Fix shape: the same baseline before
-the launch, the same per-poll `tree_bytes`, a fifth `RehearsalOutcome`
-carrying the measurement, and the frontend's `firstboot.ts` mappers grown by
-one case in both catalogues. Not done in ART-278's round because that round
-was scoped to the install and the rehearsal's endings carry a `report` the
-install's do not.
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
 the crash itself is still unresolved** — *found 2026-08-15/16, Task 13's
@@ -325,6 +308,50 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-294** 🔵 ✅ **The first-boot rehearsal has no growth ceiling** — *found
+2026-09-10 while fixing ART-278, on `art-278-runaway`; fixed 2026-09-10 on
+`art-294-rehearsal-ceiling`*
+`src-tauri/src/core/amigainstall/rehearse.rs` · `src-tauri/src/commands/firstboot.rs` ·
+`src/lib/firstboot.ts` · `src/i18n/en.json` · `src/i18n/tr.json`
+
+[ART-278](#fixed) gave an Amiga-side *install* a ceiling on what it may write into the staged
+copy, and a fifth ending when it is crossed. The rehearsal (`rehearse_with`) boots the same kind
+of copy under the same `RunLimits` and read `limits.growth` nowhere: its poll loop had the
+deadline and the emulator-gone check and nothing about size. The exposure is smaller, not
+absent — a rehearsal runs ART's own first-boot block, not a third-party payload — but the copy
+sits beside the user's tree exactly as an install's does.
+
+**Fixed the way the entry said, and the way ART-278 was.** `rehearse_with` reads the copy's bytes
+before the launch (`stage::tree_bytes`) and the poll loop reads them again every poll; growth
+past `RunLimits::growth.allowed(baseline)` ends the rehearsal as a fifth `RehearsalOutcome`,
+`WroteWithoutStopping { waited, written, ceiling, report }`, **checked before the deadline**,
+with the emulator ended through the same `end_session` and the copy kept — the command keeps
+every ending but `Finished`. What the Amiga had logged travels with it, as with every other
+ending here. The frontend maps it to its own sentence and next step in both catalogues, tone
+`err`, the measurement in MiB. The next step says a step that started and never finished is the
+*likeliest* writer: the log can name the step that was running, not prove it was the one writing.
+
+*Tests:* `core::amigainstall::rehearse` —
+`a_copy_that_grows_past_the_ceiling_ends_the_rehearsal_before_the_deadline`,
+`rehearsal_growth_under_the_ceiling_is_still_a_timeout`,
+`a_rehearsal_ceiling_reached_on_the_deadline_poll_is_reported_as_the_ceiling`,
+`a_runaway_rehearsal_reaches_the_wire_with_its_measurement`;
+`commands::firstboot::every_ending_is_logged_as_a_different_sentence`, now five;
+`src/lib/firstboot.test.ts` *says how much a runaway first boot wrote, against what it was
+allowed* and the Rust-vs-TypeScript variant list; `FirstBootRehearse.test.tsx`'s five-endings
+block.
+
+**Mutations**, each put back and restored by copyfile: the ceiling check removed — killed by two;
+the baseline not subtracted — one; the ceiling checked after the deadline — one; the log word
+collapsed to "timed out" — one; the tone a warning — one; the timeout's next step — two; the
+measurement in raw bytes — one; the timeout's sentence — one. Eight of eight. The on-screen
+five-endings case does not catch the last of those by itself, because it derives the expected
+sentence from the same mapper; the unit case in `firstboot.test.ts` does.
+
+**Not claimed.** No rehearsal has been seen to reach the ceiling on real material, and nothing in
+ART's own first-boot block is known to loop. This is the bound ART-278 measured the need for,
+applied where the same copy sits.
+
 **ART-285** 🟡 ✅ **"23 install disks found" counts game and CD32 discs as install disks** —
 *found 2026-09-08 on `material.png`; fixed 2026-09-10 on `art-285-install-media`*
 `src-tauri/src/core/osinstall/identify.rs::install_media` ·
@@ -490,7 +517,7 @@ Mutations put back and seen to fail, 2026-09-10 (`cargo test --lib amigainstall:
 **Not claimed.** The ceiling has not been seen to fire on the real damaged
 archive — the numbers above are the 2026-09-08 measurement read against the
 new rule, not a re-run of the experiment through it. The rehearsal has no
-ceiling ([ART-294](#open)). `AmigaInstallPanel.tsx`'s own comments still say
+ceiling ([ART-294](#fixed), fixed the same day). `AmigaInstallPanel.tsx`'s own comments still say
 "four endings" in places; the component renders through the three mappers in
 `src/lib/amigainstall.ts` and needed no change, and its comments were left
 alone so as not to collide with the four-tabs branch that rewrites it.

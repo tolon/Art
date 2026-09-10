@@ -56,6 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A first-boot rehearsal under WinUAE can no longer fill your disk either.**
+  The limit an Amiga-side install got now applies to the rehearsal too: a
+  copy that grows by more than twice its size, or by more than 64 MB, ends the
+  rehearsal at once, keeps the copy, and says what was written and which step
+  to look at.
 - **The OS Builder's folder list counts install disks, not every disc.** A
   folder holding CD32 or other game discs used to be reported as "23 install
   disks found". The line now counts only the disks an AmigaOS release ART
