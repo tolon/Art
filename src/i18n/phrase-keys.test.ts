@@ -667,6 +667,21 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       { kind: "tied-boot-priority", priority: 0, driveNames: ["SDH0", "SDH2"] },
       { kind: "nothing-bootable" },
       { kind: "volumes-unformatted" },
+      // ART-305, both branches: the table names another archive, or none.
+      {
+        kind: "archive-not-in-table",
+        archive: "Emu68-pistorm-classic.zip",
+        expected: "Emu68-pistorm.zip",
+        board: "PiStorm",
+        line: "stable",
+      },
+      {
+        kind: "archive-not-in-table",
+        archive: "Emu68-pistorm.zip",
+        expected: null,
+        board: "PiStorm16",
+        line: "stable",
+      },
     ];
     for (const warning of warnings) {
       const phrase = warningPhrase(warning);

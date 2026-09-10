@@ -105,6 +105,25 @@ describe("warningPhrase", () => {
     expect(phrase.key).toBe("cardBuilder.warning.romWrongMachine");
     expect(phrase.params).toEqual({ rom: "Kickstart 3.1 (A600)" });
   });
+
+  // ART-305: the owner's own card — the 1.1 beta's classic archive with the
+  // line left on stable — written, and said with both names.
+  it("names the chosen Emu68 archive beside the one ART's table names", () => {
+    const phrase = warningPhrase({
+      kind: "archive-not-in-table",
+      archive: "Emu68-pistorm-classic.zip",
+      expected: "Emu68-pistorm.zip",
+      board: "PiStorm",
+      line: "stable",
+    });
+    expect(phrase.key).toBe("cardBuilder.warning.archiveNotInTable");
+    expect(phrase.params).toEqual({
+      archive: "Emu68-pistorm-classic.zip",
+      expected: "Emu68-pistorm.zip",
+      board: "PiStorm",
+      line: "1.0.x",
+    });
+  });
 });
 
 describe("healthVerdict", () => {

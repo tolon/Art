@@ -6,18 +6,22 @@
 //! and checked against the board they actually have, plus their Kickstart under
 //! the name the firmware looks for, plus the two config files.
 //!
-//! ## The archive's name is a claim ART checks
+//! ## The archive's name is a claim ART names, and the user decides
 //!
 //! `Emu68-pistorm.zip` means the **classic** board in the 1.0.x line and
-//! PiStorm32-lite/PiStorm16 in the 1.1 alpha, and no release has ever shipped
+//! PiStorm32-lite/PiStorm16 in the 1.1 line, and no release has ever shipped
 //! `Emu68-pistorm16.zip` at all — that was ART-091, a name ART invented and
 //! told people to download for months. So the archive a user hands over is
-//! checked against the board and the release line before a byte of it reaches
-//! a card, and the wrong one is refused with both names in the sentence.
+//! compared with the board and the release line before a byte of it reaches a
+//! card. Until 2026-09-11 a difference was refused; by the owner's ruling
+//! (ART-305) it is **written and said**: the people who build a PiStorm card
+//! pick their own Emu68 — a prerelease, a nightly, a build they are testing —
+//! so the payload carries an [`ArchiveMismatch`] with both names and the plan
+//! shows it before the card is written.
 //!
-//! `Emu68-raspi.zip` gets its own refusal. It sits in the same release, it is
-//! the commonest thing to pick by mistake, and it is Emu68 running on a Pi on
-//! its own rather than the firmware for a PiStorm.
+//! `Emu68-raspi.zip` is still refused. It is not a version of the PiStorm
+//! firmware at all but Emu68 running on a Pi on its own, it sits in the same
+//! release, and it is the commonest thing to pick by mistake.
 //!
 //! ## The config files are edited, never regenerated
 //!
@@ -33,7 +37,9 @@ use crate::core::archive;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::fat32::BootFile;
 use crate::core::pistorm::firmware::{merge_config_txt_with_overlays, FirmwareConfig};
-use crate::core::pistorm::hardware::{kernel_archive, Emu68Line, KernelArchive, PistormHardware};
+use crate::core::pistorm::hardware::{
+    kernel_archive, Emu68Line, KernelArchive, PistormHardware, PistormVariant,
+};
 use crate::core::pistorm::options::{merge_cmdline, storage_overlay_lines, Emu68Options};
 
 /// The most one file in the Emu68 archive may decompress to.
@@ -76,6 +82,24 @@ pub struct PayloadSpec {
     pub kickstart: Option<Vec<u8>>,
 }
 
+/// The Emu68 archive the user chose, where ART's table names another for this
+/// board and release line (ART-305).
+///
+/// Written anyway and said, never refused — the owner's ruling of 2026-09-11:
+/// the people who build a PiStorm card choose their Emu68 on purpose (a
+/// prerelease, a nightly, a build they are testing), so the card is theirs and
+/// the sentence is ART's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveMismatch {
+    /// The chosen file's own name.
+    pub given: String,
+    /// What the table names for this board in this line — `None` when the line
+    /// ships nothing for the board at all (PiStorm16 on stable, ART-091).
+    pub expected: Option<String>,
+    pub variant: PistormVariant,
+    pub line: Emu68Line,
+}
+
 /// Everything that goes on the boot partition, and what the card will boot.
 #[derive(Debug)]
 pub struct Emu68Payload {
@@ -88,6 +112,9 @@ pub struct Emu68Payload {
     /// name that is not among `files` is a card that fails on the Amiga where
     /// nobody can see why.
     pub kernel_file: String,
+    /// Set when the archive is not the one ART's table names for this board
+    /// and line — written anyway, and said (ART-305).
+    pub archive_mismatch: Option<ArchiveMismatch>,
 }
 
 /// Everything that goes on the boot partition, in the order it will be written.
@@ -102,7 +129,7 @@ fn payload_within(
     spec: &PayloadSpec,
     max_total: u64,
 ) -> CoreResult<Emu68Payload> {
-    check_archive_is_for_this_board(archive_path, spec)?;
+    let archive_mismatch = archive_mismatch_for(archive_path, spec)?;
 
     let mut backend = archive::open(archive_path)?;
     let entries = backend.entries()?;
@@ -210,6 +237,7 @@ fn payload_within(
     Ok(Emu68Payload {
         files,
         kernel_file: firmware.kernel_file,
+        archive_mismatch,
     })
 }
 
@@ -261,14 +289,23 @@ fn kernel_among(files: &[BootFile]) -> Option<String> {
         .cloned()
 }
 
-/// Refuse an archive that is not the one this board boots from.
-fn check_archive_is_for_this_board(archive_path: &Path, spec: &PayloadSpec) -> CoreResult<()> {
+/// How the chosen archive stands against ART's table for this board and line.
+///
+/// `Emu68-raspi.zip` is the one refusal: it is not a version of the PiStorm
+/// firmware at all but Emu68 for a bare Raspberry Pi, and a card built from it
+/// cannot boot a PiStorm. Everything else the user chose is theirs to choose
+/// (ART-305, the owner's ruling) — a name the table does not expect comes back
+/// as an [`ArchiveMismatch`] for the screen to say, never as an error.
+fn archive_mismatch_for(
+    archive_path: &Path,
+    spec: &PayloadSpec,
+) -> CoreResult<Option<ArchiveMismatch>> {
     let given = archive_path
         .file_name()
-        .map(|name| name.to_string_lossy().to_lowercase())
+        .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    if given == RASPI_ARCHIVE {
+    if given.to_lowercase() == RASPI_ARCHIVE {
         return Err(CoreError::InvalidInput(
             "'Emu68-raspi.zip' is Emu68 running on a Raspberry Pi by itself, not the firmware \
              for a PiStorm. The card needs the archive for your board."
@@ -276,31 +313,21 @@ fn check_archive_is_for_this_board(archive_path: &Path, spec: &PayloadSpec) -> C
         ));
     }
 
-    match kernel_archive(spec.hardware.variant, spec.line) {
-        KernelArchive::Named(expected) => {
-            if given != expected.to_lowercase() {
-                return Err(CoreError::InvalidInput(format!(
-                    "the {} needs '{expected}' from the {} release line, and this is '{}'",
-                    spec.hardware.variant.display_name(),
-                    spec.line.display_name(),
-                    archive_path
-                        .file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                )));
-            }
-            Ok(())
-        }
-        KernelArchive::Absent => Err(CoreError::InvalidInput(format!(
-            "the {} release line ships nothing for the {}",
-            spec.line.display_name(),
-            spec.hardware.variant.display_name(),
-        ))),
+    let mismatch = |expected: Option<&str>| ArchiveMismatch {
+        given: given.clone(),
+        expected: expected.map(str::to_string),
+        variant: spec.hardware.variant,
+        line: spec.line,
+    };
+    Ok(match kernel_archive(spec.hardware.variant, spec.line) {
+        KernelArchive::Named(expected) if given.to_lowercase() == expected.to_lowercase() => None,
+        KernelArchive::Named(expected) => Some(mismatch(Some(expected))),
+        KernelArchive::Absent => Some(mismatch(None)),
         // The release exists for this board and its notes do not say which
         // asset covers it. ART has no better answer than the user's, and
-        // inventing one is what ART-091 was.
-        KernelArchive::Unstated => Ok(()),
-    }
+        // inventing one is what ART-091 was — so there is nothing to compare.
+        KernelArchive::Unstated => None,
+    })
 }
 
 #[cfg(test)]
@@ -553,21 +580,82 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// ART-091, at the point where it would cost a card. `Emu68-pistorm.zip`
-    /// is the classic board's in the stable line and the *other* boards' in
-    /// the alpha, so the name alone cannot be trusted — the board and the line
-    /// decide, and a mismatch is refused with both names in the sentence.
+    /// ART-091 made this a refusal; the owner's ruling of 2026-09-11 (ART-305)
+    /// made it a sentence. The people who build a PiStorm card choose their
+    /// Emu68 on purpose — a prerelease, a nightly, another board's build to
+    /// test — so ART writes what it was given and names it against its own
+    /// table. `Emu68-pistorm.zip` still means another board in the other line
+    /// (ART-091); that is exactly what the sentence carries now.
     #[test]
-    fn an_archive_for_another_board_is_refused_by_name() {
+    fn an_archive_for_another_board_is_written_and_named() {
         let (_guard, dir) = scratch("wrong-board");
         let archive = emu68_zip(&dir, "Emu68-pistorm32lite.zip");
 
-        let err = emu68_payload(&archive, &spec(classic(), Emu68Line::Stable)).unwrap_err();
-        let message = err.to_string();
-        assert!(message.contains("Emu68-pistorm.zip"), "{message}");
-        assert!(message.contains("Emu68-pistorm32lite.zip"), "{message}");
+        let payload = emu68_payload(&archive, &spec(classic(), Emu68Line::Stable))
+            .expect("the user's choice is written, not refused");
+        assert_eq!(
+            payload.archive_mismatch,
+            Some(ArchiveMismatch {
+                given: "Emu68-pistorm32lite.zip".into(),
+                expected: Some("Emu68-pistorm.zip".into()),
+                variant: PistormVariant::Classic,
+                line: Emu68Line::Stable,
+            })
+        );
+    }
 
-        let _ = std::fs::remove_dir_all(&dir);
+    /// **The owner's own card, 2026-09-11:** the 1.1 beta's classic archive
+    /// with the release line left on stable. Refused until ART-305 with *"the
+    /// PiStorm needs 'Emu68-pistorm.zip' from the stable release line, and
+    /// this is 'Emu68-pistorm-classic.zip'"*.
+    #[test]
+    fn a_prerelease_archive_on_the_stable_line_is_written_and_named() {
+        let (_guard, dir) = scratch("prerelease-on-stable");
+        let archive = emu68_zip(&dir, "Emu68-pistorm-classic.zip");
+
+        let payload = emu68_payload(&archive, &spec(classic(), Emu68Line::Stable))
+            .expect("the owner's Emu68 is written");
+        assert!(payload.files.iter().any(|f| f.name == payload.kernel_file));
+        assert_eq!(
+            payload.archive_mismatch.map(|m| (m.given, m.expected)),
+            Some((
+                "Emu68-pistorm-classic.zip".to_string(),
+                Some("Emu68-pistorm.zip".to_string())
+            ))
+        );
+    }
+
+    /// A nightly carries its date and commit in its name
+    /// (`api.github.com/repos/michalsc/Emu68/releases`, tag `nightly`), so no
+    /// table entry can ever equal it — and it is what somebody testing the
+    /// project picks.
+    #[test]
+    fn a_nightly_archive_is_written_and_named() {
+        let (_guard, dir) = scratch("nightly");
+        let archive = emu68_zip(&dir, "Emu68-pistorm-classic-20260728-614794.zip");
+
+        let payload = emu68_payload(&archive, &spec(classic(), Emu68Line::Stable))
+            .expect("a nightly is written");
+        assert_eq!(
+            payload.archive_mismatch.map(|m| m.given),
+            Some("Emu68-pistorm-classic-20260728-614794.zip".to_string())
+        );
+    }
+
+    /// PiStorm16 has no stable release at all (ART-091's table). That was a
+    /// refusal too; it is now the same sentence with nothing to name.
+    #[test]
+    fn a_line_with_nothing_for_the_board_is_written_and_said() {
+        let (_guard, dir) = scratch("absent");
+        let archive = emu68_zip(&dir, "Emu68-pistorm.zip");
+        let mut hardware = classic();
+        hardware.variant = PistormVariant::Pistorm16;
+
+        let payload = emu68_payload(&archive, &spec(hardware, Emu68Line::Stable))
+            .expect("written, not refused");
+        let mismatch = payload.archive_mismatch.expect("and said");
+        assert_eq!(mismatch.expected, None);
+        assert_eq!(mismatch.variant, PistormVariant::Pistorm16);
     }
 
     /// The commonest mistake in the whole release, and it is in the same zip
@@ -586,8 +674,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The classic board's archive is named differently in the two lines, and
-    /// the alpha's name is the one that would have been accepted by mistake.
+    /// The classic board's archive is named differently in the two lines: the
+    /// table's own name raises nothing, and the other line's is named — the
+    /// same name means another board in the 1.1 line (ART-091).
     #[test]
     fn the_release_line_decides_what_the_name_means() {
         let (_guard, dir) = scratch("lines");
@@ -595,14 +684,18 @@ mod tests {
         let stable = emu68_zip(&dir, "Emu68-pistorm.zip");
         let alpha = emu68_zip(&dir, "Emu68-pistorm-classic.zip");
 
-        assert!(emu68_payload(&stable, &spec(classic(), Emu68Line::Stable)).is_ok());
-        assert!(emu68_payload(&alpha, &spec(classic(), Emu68Line::Alpha11)).is_ok());
-        assert!(
-            emu68_payload(&stable, &spec(classic(), Emu68Line::Alpha11)).is_err(),
-            "the same name means another board in the alpha"
+        let mismatch = |archive: &std::path::Path, line| {
+            emu68_payload(archive, &spec(classic(), line))
+                .unwrap()
+                .archive_mismatch
+        };
+        assert_eq!(mismatch(&stable, Emu68Line::Stable), None);
+        assert_eq!(mismatch(&alpha, Emu68Line::Alpha11), None);
+        assert_eq!(
+            mismatch(&stable, Emu68Line::Alpha11).and_then(|m| m.expected),
+            Some("Emu68-pistorm-classic.zip".to_string()),
+            "the same name means another board in the 1.1 line"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A card with no ROM will not boot, and ART says so by leaving it out

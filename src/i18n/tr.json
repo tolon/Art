@@ -1958,7 +1958,9 @@
       "beyondKickstartFfs": "{{drive}} {{gb}} GB'lık FFS, ama Kickstart {{major}}'ın kendi dosya sistemi yalnızca 4 GB adresleyebiliyor. Ötesinde reddetmiyor — diski bozuyor. PFS3 kullanın, küçültün ya da Kickstart 3.1.4/3.2 ile açın.",
       "beyondKickstartFfsNoRom": "{{drive}} {{gb}} GB'lık FFS. Kickstart 3.1'in dosya sistemi 4 GB'ı aşınca diski bozar; 3.1.4 ve 3.2 sorunsuz. Kickstart seçilmediği için ART bu kartın hangisiyle açılacağını bilemiyor.",
       "tiedBootPriority": "{{drives}} aynı öncelikte ({{priority}}) açılmak üzere ayarlı. Yüksek olan önce açılır, eşitlikte ne olacağı ise belgelenmemiş — hangisinin açılacağını bilmek için her sisteme kendi numarasını verin.",
-      "nothingBootable": "Bu kartın Amiga disklerinin hiçbiri açılabilir işaretli değil. Salt veri diskleri için normal, ama atlanmış bir işaret de böyle görünür."
+      "nothingBootable": "Bu kartın Amiga disklerinin hiçbiri açılabilir işaretli değil. Salt veri diskleri için normal, ama atlanmış bir işaret de böyle görünür.",
+      "archiveNotInTable": "Seçtiğin arşiv: {{archive}}. ART'ın tablosu Emu68 {{line}} hattında {{board}} için {{expected}} diyor — kart senin seçtiğinle oluşturulacak.",
+      "archiveNotInTableNone": "Seçtiğin arşiv: {{archive}}. ART'ın tablosunda Emu68 {{line}} hattında {{board}} için bir arşiv yok — kart senin seçtiğinle oluşturulacak."
     },
     "blocked": {
       "noArchive": "Önce Emu68 sürüm arşivini seç.",

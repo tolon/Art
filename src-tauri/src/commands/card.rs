@@ -201,8 +201,18 @@ pub struct PlacedFile {
 /// A typed value rather than a sentence: `CoreError`'s English strings reach
 /// the UI untranslated (ART-060) and this is a screen's own text, so the kind
 /// travels and the words are the interface's, in the user's language.
+///
+/// **`rename_all_fields` as well as `rename_all` (ART-306).** `rename_all`
+/// renames the *variants* only; without the second, `drive_name`, `rom_major`
+/// and `drive_names` reached a frontend reading `driveName`, `romMajor` and
+/// `driveNames` as `undefined` — a tie named "undefined", and a card with no
+/// Kickstart told its Kickstart "undefined" could not address 4 GB.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum CardBuildWarning {
     /// No Kickstart was chosen. The card is built and it will not boot.
     NoKickstart,
@@ -254,6 +264,17 @@ pub enum CardBuildWarning {
     /// and volumes it will offer to format; putting a system on them is SD-2's
     /// work. Said plainly rather than left to be discovered (§10, §89).
     VolumesUnformatted,
+    /// **The Emu68 archive is not the one ART's table names** for this board
+    /// and release line (ART-305). A warning and never a refusal, by the
+    /// owner's ruling of 2026-09-11: whoever builds a PiStorm card picks their
+    /// Emu68 on purpose, so ART says what was picked and writes it. `expected`
+    /// is `None` when the line has no archive for the board at all.
+    ArchiveNotInTable {
+        archive: String,
+        expected: Option<String>,
+        board: String,
+        line: Emu68Line,
+    },
 }
 
 /// What building this request would produce. Writes nothing.
@@ -462,6 +483,17 @@ pub fn card_plan_build(request: CardBuildRequest) -> AppResult<CardBuildPlan> {
     let layout = plan_card(spec.total_bytes, spec.boot_bytes, &shares)?;
 
     let mut warnings = vec![CardBuildWarning::VolumesUnformatted];
+
+    // ART-305: the user's own Emu68, named against ART's table — before the
+    // button, never as a refusal.
+    if let Some(mismatch) = &payload.archive_mismatch {
+        warnings.push(CardBuildWarning::ArchiveNotInTable {
+            archive: mismatch.given.clone(),
+            expected: mismatch.expected.clone(),
+            board: mismatch.variant.display_name().to_string(),
+            line: mismatch.line,
+        });
+    }
 
     let rom = match &request.kickstart {
         None => {
@@ -912,6 +944,75 @@ mod tests {
         }
         zip.finish().unwrap();
         path
+    }
+
+    /// **ART-305 — the owner's card, 2026-09-11.** Writing was refused with
+    /// *"the PiStorm needs 'Emu68-pistorm.zip' from the stable release line,
+    /// and this is 'Emu68-pistorm-classic.zip'"*. By the owner's ruling the
+    /// user's Emu68 is written, and the plan — the screen before the button —
+    /// says what was chosen against ART's table.
+    #[test]
+    fn the_plan_names_an_emu68_archive_the_table_does_not_expect() {
+        let (_guard, dir) = scratch("emu68-not-in-table");
+        let archive = dir.join("Emu68-pistorm-classic.zip");
+        std::fs::rename(emu68_zip(&dir), &archive).unwrap();
+
+        let plan = card_plan_build(request(&archive, &dir.join("card.img")))
+            .expect("the user's own Emu68 is planned, not refused");
+        assert!(
+            plan.warnings
+                .contains(&CardBuildWarning::ArchiveNotInTable {
+                    archive: "Emu68-pistorm-classic.zip".into(),
+                    expected: Some("Emu68-pistorm.zip".into()),
+                    board: "PiStorm".into(),
+                    line: Emu68Line::Stable,
+                }),
+            "{:?}",
+            plan.warnings
+        );
+    }
+
+    /// Every field the frontend's `CardBuildWarning` type reads has to arrive
+    /// under that name. `src/lib/cardBuild.ts` reads `driveName`, `romMajor`
+    /// and `driveNames`; the enum's `rename_all` renames the *variants* only.
+    #[test]
+    fn card_build_warnings_arrive_under_the_names_the_frontend_reads() {
+        let tied = serde_json::to_value(CardBuildWarning::TiedBootPriority {
+            priority: 0,
+            drive_names: vec!["SDH0".into(), "SDH2".into()],
+        })
+        .unwrap();
+        assert_eq!(tied["kind"], "tied-boot-priority");
+        assert_eq!(
+            tied["driveNames"],
+            serde_json::json!(["SDH0", "SDH2"]),
+            "{tied}"
+        );
+
+        let ffs = serde_json::to_value(CardBuildWarning::PartitionBeyondKickstartFfs {
+            drive_name: "SDH1".into(),
+            bytes: 1,
+            limit: 1,
+            rom_major: Some(40),
+        })
+        .unwrap();
+        assert_eq!(ffs["driveName"], "SDH1", "{ffs}");
+        assert_eq!(ffs["romMajor"], 40, "{ffs}");
+    }
+
+    /// The control: the table's own name raises no such sentence.
+    #[test]
+    fn the_plan_says_nothing_about_an_emu68_archive_the_table_names() {
+        let (_guard, dir) = scratch("emu68-in-table");
+        let plan = card_plan_build(request(&emu68_zip(&dir), &dir.join("card.img"))).unwrap();
+        assert!(
+            !plan
+                .warnings
+                .iter()
+                .any(|w| matches!(w, CardBuildWarning::ArchiveNotInTable { .. })),
+            "{:?}",
+            plan.warnings
+        );
     }
 
     /// **ART-128.** An encrypted Amiga Forever ROM used to be copied onto the
