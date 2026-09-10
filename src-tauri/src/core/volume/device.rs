@@ -407,14 +407,8 @@ mod tests {
         bytes
     }
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-device-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-device", name)
     }
 
     // ---- in-memory ----
@@ -468,7 +462,7 @@ mod tests {
 
     #[test]
     fn a_file_region_reads_blocks_relative_to_its_own_start() {
-        let dir = scratch("region");
+        let (_guard, dir) = scratch("region");
         let path = dir.join("disk.hdf");
         std::fs::write(&path, image(10)).unwrap();
 
@@ -495,7 +489,7 @@ mod tests {
     /// don't read garbage".
     #[test]
     fn a_region_longer_than_its_file_is_clamped_not_invented() {
-        let dir = scratch("clamp");
+        let (_guard, dir) = scratch("clamp");
         let path = dir.join("short.hdf");
         std::fs::write(&path, image(6)).unwrap();
 
@@ -513,7 +507,7 @@ mod tests {
 
     #[test]
     fn a_region_that_starts_past_the_end_is_refused() {
-        let dir = scratch("past");
+        let (_guard, dir) = scratch("past");
         let path = dir.join("small.hdf");
         std::fs::write(&path, image(2)).unwrap();
 
@@ -525,7 +519,7 @@ mod tests {
 
     #[test]
     fn a_region_with_no_whole_block_is_refused() {
-        let dir = scratch("tiny");
+        let (_guard, dir) = scratch("tiny");
         let path = dir.join("tiny.hdf");
         std::fs::write(&path, vec![0u8; 600]).unwrap();
 
@@ -538,7 +532,7 @@ mod tests {
     /// not produce a device at all.
     #[test]
     fn a_nonsense_block_size_is_refused() {
-        let dir = scratch("blocksize");
+        let (_guard, dir) = scratch("blocksize");
         let path = dir.join("d.hdf");
         std::fs::write(&path, image(4)).unwrap();
 
@@ -556,7 +550,7 @@ mod tests {
     /// device never grows with the file it points into.
     #[test]
     fn a_file_region_does_not_hold_the_file() {
-        let dir = scratch("sparse");
+        let (_guard, dir) = scratch("sparse");
         let path = dir.join("big.hdf");
         let file = std::fs::File::create(&path).unwrap();
         file.set_len(64 * 1024 * 1024).unwrap();
@@ -609,7 +603,7 @@ mod tests {
     fn a_writable_region_writes_where_the_volume_starts_not_where_the_file_does() {
         use crate::core::volume::BlockDeviceMut;
 
-        let dir = scratch("region-mut");
+        let (_guard, dir) = scratch("region-mut");
         let path = dir.join("disk.hdf");
         std::fs::write(&path, image(16)).unwrap();
 
@@ -632,7 +626,7 @@ mod tests {
     /// image would let a write land wherever the arithmetic pointed.
     #[test]
     fn a_writable_region_refuses_to_open_past_the_end_rather_than_clamping() {
-        let dir = scratch("region-mut-short");
+        let (_guard, dir) = scratch("region-mut-short");
         let path = dir.join("disk.hdf");
         std::fs::write(&path, image(8)).unwrap();
 
@@ -652,7 +646,7 @@ mod tests {
     fn a_writable_region_refuses_a_block_past_its_end() {
         use crate::core::volume::BlockDeviceMut;
 
-        let dir = scratch("region-mut-range");
+        let (_guard, dir) = scratch("region-mut-range");
         let path = dir.join("disk.hdf");
         std::fs::write(&path, image(8)).unwrap();
 

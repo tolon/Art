@@ -1899,6 +1899,8 @@ mod tests {
     /// **No emulator is opened by this test**: it never gets past the unpack.
     #[test]
     fn a_wrong_archive_is_refused_before_the_tree_is_copied() {
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-amigainstall-root", "wrong-archive");
         let scratch = ScratchDir::new("art-amigainstall-cmd", "wrong-archive");
         let tree = tree_in(&scratch);
         let archive = scratch.join("Euro-Update.lha");
@@ -1919,7 +1921,7 @@ mod tests {
             &AmigaProfile::a1200_aga(),
             Path::new("no-such.rom"),
             Path::new("no-such.exe"),
-            &std::env::temp_dir(),
+            &root,
             &Sink::default(),
         )
         .unwrap_err();
@@ -1946,6 +1948,7 @@ mod tests {
     /// which is `media_for`'s ART-185 guard doing its job one step earlier.
     #[test]
     fn the_right_archive_unpacks_and_the_run_gets_as_far_as_the_kickstart() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-amigainstall-root", "unpacks");
         let scratch = ScratchDir::new("art-amigainstall-cmd", "unpacks");
         let tree = tree_in(&scratch);
         let archive = scratch.join("BoingBag39-1.lha");
@@ -1960,7 +1963,7 @@ mod tests {
             &AmigaProfile::a1200_aga(),
             Path::new("no-such.rom"),
             Path::new("no-such.exe"),
-            &std::env::temp_dir(),
+            &root,
             &sink,
         )
         .unwrap_err();
@@ -1990,6 +1993,8 @@ mod tests {
     /// hostile archive in silence.
     #[test]
     fn a_hostile_entry_in_the_package_archive_is_reported_and_never_written() {
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-amigainstall-root", "hostile-entry");
         let scratch = ScratchDir::new("art-amigainstall-cmd", "hostile-entry");
         let tree = tree_in(&scratch);
         let archive = scratch.join("BoingBag39-1.lha");
@@ -2017,7 +2022,7 @@ mod tests {
             &AmigaProfile::a1200_aga(),
             Path::new("no-such.rom"),
             Path::new("no-such.exe"),
-            &std::env::temp_dir(),
+            &root,
             &sink,
         );
 
@@ -2746,6 +2751,8 @@ mod real_install_hook {
     #[test]
     #[ignore = "opens WinUAE against the owner's own tree, ROM and packages; run explicitly"]
     fn install_a_real_package_when_asked() {
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-amigainstall-root", "real-package");
         let (Ok(tree), Ok(rom), Ok(winuae), Ok(packages), Ok(package_id)) = (
             std::env::var("ART_AMIGA_TREE"),
             std::env::var("ART_AMIGA_ROM"),
@@ -2798,7 +2805,7 @@ mod real_install_hook {
             &profile,
             &PathBuf::from(&rom),
             &PathBuf::from(&winuae),
-            &std::env::temp_dir(),
+            &root,
             &sink,
         );
         let elapsed = started.elapsed();

@@ -320,21 +320,15 @@ mod tests {
     use crate::core::adf::create::create_blank_adf;
     use crate::core::adf::FileSystemType;
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-cmd-adf-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-cmd-adf", name)
     }
 
     /// The same operation the file manager performs, through the ADF commands.
     /// Both must land on `core/volume` so the two screens cannot disagree.
     #[test]
     fn adding_a_file_goes_through_the_volume_writer() {
-        let dir = scratch("add");
+        let (_guard, dir) = scratch("add");
         let path = dir.join("disk.adf");
         std::fs::write(
             &path,
@@ -377,7 +371,7 @@ mod tests {
     /// (`core/adf/mutate` was deleted once this held for all four).
     #[test]
     fn creating_a_directory_goes_through_the_volume_writer() {
-        let dir = scratch("mkdir");
+        let (_guard, dir) = scratch("mkdir");
         let path = dir.join("disk.adf");
         std::fs::write(
             &path,
@@ -408,7 +402,7 @@ mod tests {
 
     #[test]
     fn deleting_an_entry_goes_through_the_volume_writer() {
-        let dir = scratch("delete");
+        let (_guard, dir) = scratch("delete");
         let path = dir.join("disk.adf");
         std::fs::write(
             &path,
@@ -443,7 +437,7 @@ mod tests {
 
     #[test]
     fn renaming_an_entry_goes_through_the_volume_writer() {
-        let dir = scratch("rename");
+        let (_guard, dir) = scratch("rename");
         let path = dir.join("disk.adf");
         std::fs::write(
             &path,
@@ -516,7 +510,7 @@ mod tests {
     /// touched in the first place.
     #[test]
     fn a_failure_after_the_mutation_never_reaches_the_disk() {
-        let dir = scratch("post-mutation-failure");
+        let (_guard, dir) = scratch("post-mutation-failure");
         let path = dir.join("disk.adf");
         std::fs::write(
             &path,

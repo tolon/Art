@@ -255,14 +255,8 @@ mod tests {
     /// test suite nobody runs twice.
     const SMALLEST: u64 = 2 * GIB;
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-cardbuild-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-cardbuild", name)
     }
 
     fn work_partition(name: &str, size_mb: u32) -> PartitionSpec {
@@ -282,7 +276,7 @@ mod tests {
     /// one that opens CaffeineOS and MultibootOS, reads it back.
     #[test]
     fn a_built_card_reads_back_as_a_card() {
-        let dir = scratch("whole");
+        let (_guard, dir) = scratch("whole");
         let dest = dir.join("card.img");
 
         let built = build_card(
@@ -345,7 +339,7 @@ mod tests {
     /// silently.
     #[test]
     fn a_card_built_as_a_vhd_costs_a_fraction_and_reads_back_the_same() {
-        let dir = scratch("vhd");
+        let (_guard, dir) = scratch("vhd");
         let raw_dest = dir.join("card.img");
         let vhd_dest = dir.join("card.vhd");
 
@@ -408,7 +402,7 @@ mod tests {
     /// looking at byte zero finds the partition table, not an Amiga disk.
     #[test]
     fn every_amiga_disk_gets_its_own_table_at_its_own_offset() {
-        let dir = scratch("two-areas");
+        let (_guard, dir) = scratch("two-areas");
         let dest = dir.join("card.img");
 
         let built = build_card(
@@ -447,7 +441,7 @@ mod tests {
     /// past its end, and `Region` is what makes that true rather than luck.
     #[test]
     fn the_boot_partition_still_reads_after_the_amiga_disks_are_written() {
-        let dir = scratch("boot-survives");
+        let (_guard, dir) = scratch("boot-survives");
         let dest = dir.join("card.img");
 
         build_card(
@@ -589,7 +583,7 @@ mod tests {
     /// `SAFE_CREATE`: a card that is already there is not built over.
     #[test]
     fn an_existing_file_is_refused_rather_than_replaced() {
-        let dir = scratch("exists");
+        let (_guard, dir) = scratch("exists");
         let dest = dir.join("card.img");
         std::fs::write(&dest, b"somebody's afternoon").unwrap();
 
@@ -621,7 +615,7 @@ mod tests {
     /// half-built file behind.
     #[test]
     fn a_card_too_small_leaves_nothing_behind() {
-        let dir = scratch("too-small");
+        let (_guard, dir) = scratch("too-small");
         let dest = dir.join("card.img");
 
         assert!(build_card(

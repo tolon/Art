@@ -196,22 +196,13 @@ mod tests {
     use crate::core::jobs::NoProgress;
     use std::path::PathBuf;
 
-    fn scratch(tag: &str) -> PathBuf {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "art-dirsize-{tag}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-dirsize", tag)
     }
 
     #[test]
     fn a_folder_totals_every_file_beneath_it() {
-        let dir = scratch("host");
+        let (_guard, dir) = scratch("host");
         std::fs::create_dir_all(dir.join("sub").join("deeper")).unwrap();
         std::fs::write(dir.join("a"), vec![0u8; 10]).unwrap();
         std::fs::write(dir.join("sub").join("b"), vec![0u8; 20]).unwrap();
@@ -228,7 +219,7 @@ mod tests {
 
     #[test]
     fn an_empty_folder_is_zero_and_not_partial() {
-        let dir = scratch("empty");
+        let (_guard, dir) = scratch("empty");
         let total = host_total(&dir, &NoProgress).unwrap();
         assert_eq!(total, DirTotal::default());
         let _ = std::fs::remove_dir_all(&dir);
@@ -238,7 +229,7 @@ mod tests {
     /// number that is quietly far too small — the same silence ART-107 was.
     #[test]
     fn a_tree_deeper_than_the_cap_reports_a_floor_not_a_total() {
-        let root = scratch("deep");
+        let (_guard, root) = scratch("deep");
         let mut deep = root.clone();
         for i in 0..(MAX_TOTAL_DEPTH * 2) {
             deep = deep.join(format!("d{i}"));
@@ -259,7 +250,7 @@ mod tests {
 
     #[test]
     fn a_file_is_not_a_folder() {
-        let dir = scratch("notdir");
+        let (_guard, dir) = scratch("notdir");
         let file = dir.join("one");
         std::fs::write(&file, b"x").unwrap();
         assert!(matches!(
@@ -280,7 +271,7 @@ mod tests {
             }
         }
 
-        let dir = scratch("cancel");
+        let (_guard, dir) = scratch("cancel");
         std::fs::write(dir.join("a"), vec![0u8; 10]).unwrap();
 
         assert!(matches!(
@@ -300,7 +291,7 @@ mod tests {
         use crate::core::volume::write::{FileMeta, VolumeWriter};
         use crate::core::volume::DosType;
 
-        let dir = scratch("volume");
+        let (_guard, dir) = scratch("volume");
         let path = dir.join("disk.adf");
         let (bytes, geometry) = ffs_volume(1760, DosType::new(*b"DOS"));
         std::fs::write(&path, &bytes).unwrap();
@@ -350,7 +341,7 @@ mod tests {
         use crate::core::volume::fixture::ffs_volume;
         use crate::core::volume::DosType;
 
-        let dir = scratch("volume-bad");
+        let (_guard, dir) = scratch("volume-bad");
         let path = dir.join("disk.adf");
         let (bytes, geometry) = ffs_volume(1760, DosType::new(*b"DOS"));
         std::fs::write(&path, &bytes).unwrap();

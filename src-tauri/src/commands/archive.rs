@@ -483,17 +483,8 @@ mod tests {
     use super::*;
     use crate::core::jobs::NoProgress;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-archive-cmd-{tag}-{}-{}",
-            crate::core::test_scratch_id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-archive-cmd", tag)
     }
 
     /// A ZIP is the cheapest of the three to build and the tree is format
@@ -515,7 +506,7 @@ mod tests {
 
     #[test]
     fn opening_then_listing_walks_the_tree() {
-        let dir = scratch("open");
+        let (_guard, dir) = scratch("open");
         let archive = sample(&dir);
         let path = archive.to_string_lossy().to_string();
 
@@ -542,7 +533,7 @@ mod tests {
 
     #[test]
     fn listing_a_folder_that_is_not_there_is_an_error_not_an_empty_pane() {
-        let dir = scratch("no-folder");
+        let (_guard, dir) = scratch("no-folder");
         let archive = sample(&dir);
 
         let err =
@@ -554,7 +545,7 @@ mod tests {
 
     #[test]
     fn a_file_copies_out_on_its_own_and_a_second_run_leaves_it_alone() {
-        let dir = scratch("one-file");
+        let (_guard, dir) = scratch("one-file");
         let archive = sample(&dir);
         let out = dir.join("out");
         std::fs::create_dir_all(&out).unwrap();
@@ -576,7 +567,7 @@ mod tests {
 
     #[test]
     fn a_folder_copies_out_under_the_name_the_user_picked() {
-        let dir = scratch("folder");
+        let (_guard, dir) = scratch("folder");
         let archive = sample(&dir);
         let out = dir.join("out");
 
@@ -609,7 +600,7 @@ mod tests {
     /// pre-joined to somewhere else.
     #[test]
     fn a_name_that_leaves_the_chosen_folder_is_refused_before_anything_is_read() {
-        let dir = scratch("escape");
+        let (_guard, dir) = scratch("escape");
         let archive = sample(&dir);
         let out = dir.join("out");
         std::fs::create_dir_all(&out).unwrap();
@@ -639,7 +630,9 @@ mod tests {
         use crate::core::volume::fixture::ffs_volume;
         use crate::core::volume::DosType;
 
-        let dir = scratch("into-volume");
+        let (_root_guard, scratch_root) =
+            crate::core::ScratchDir::pair("art-archive-cmd-root", "into-volume");
+        let (_guard, dir) = scratch("into-volume");
         let archive = sample(&dir);
         let image = dir.join("disk.adf");
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
@@ -653,7 +646,7 @@ mod tests {
             0,
             0,
             OverwritePolicy::Skip,
-            &std::env::temp_dir(),
+            &scratch_root,
             &NoProgress,
         )
         .unwrap();
@@ -693,7 +686,9 @@ mod tests {
         use crate::core::volume::fixture::ffs_volume;
         use crate::core::volume::DosType;
 
-        let dir = scratch("one-into-volume");
+        let (_root_guard, scratch_root) =
+            crate::core::ScratchDir::pair("art-archive-cmd-root", "one-into-volume");
+        let (_guard, dir) = scratch("one-into-volume");
         let archive = sample(&dir);
         let image = dir.join("disk.adf");
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
@@ -707,7 +702,7 @@ mod tests {
             0,
             0,
             OverwritePolicy::Skip,
-            &std::env::temp_dir(),
+            &scratch_root,
             &NoProgress,
         )
         .unwrap();
@@ -721,7 +716,7 @@ mod tests {
     /// how much it is not showing, rather than quietly holding entries back.
     #[test]
     fn unusable_names_are_counted_in_what_opening_reports() {
-        let dir = scratch("hostile");
+        let (_guard, dir) = scratch("hostile");
         let archive = dir.join("hostile.zip");
         std::fs::write(
             &archive,

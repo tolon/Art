@@ -277,22 +277,11 @@ mod tests {
     /// what the counter is for and what it was measured costing (ART-173).
     /// This helper has the identical shape and the identical exposure: every
     /// caller writes to the same `tape.t64` inside whatever directory it got.
-    fn write(bytes: &[u8]) -> (PathBuf, PathBuf) {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "art-t64-{}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+    fn write(bytes: &[u8]) -> (crate::core::ScratchDir, PathBuf, PathBuf) {
+        let (guard, dir) = crate::core::ScratchDir::pair("art-t64", "d");
         let path = dir.join("tape.t64");
         std::fs::write(&path, bytes).unwrap();
-        (dir, path)
+        (guard, dir, path)
     }
 
     #[test]
@@ -304,7 +293,7 @@ mod tests {
             ],
             2,
         );
-        let (d, p) = write(&bytes);
+        let (_guard, d, p) = write(&bytes);
 
         let archive = T64Archive::open(&p).unwrap();
         assert_eq!(archive.container_name(), "TAPE");
@@ -326,7 +315,7 @@ mod tests {
     #[test]
     fn a_used_count_of_zero_does_not_hide_the_records() {
         let bytes = build(&[record("REAL FILE", 0x0801, b"here")], 0);
-        let (d, p) = write(&bytes);
+        let (_guard, d, p) = write(&bytes);
 
         let archive = T64Archive::open(&p).unwrap();
         assert_eq!(archive.entries().len(), 1, "the record is what counts");
@@ -348,7 +337,7 @@ mod tests {
         let mut records = vec![record("BACKWARDS", 0x1000, b"eight!!!")];
         records[0].end = 0x0800;
         let bytes = build(&records, 1);
-        let (d, p) = write(&bytes);
+        let (_guard, d, p) = write(&bytes);
 
         let archive = T64Archive::open(&p).unwrap();
         let entry = &archive.entries()[0];
@@ -366,7 +355,7 @@ mod tests {
         let mut records = vec![record("TOO BIG", 0x0801, b"only four")];
         records[0].end = 0xFFFF;
         let bytes = build(&records, 1);
-        let (d, p) = write(&bytes);
+        let (_guard, d, p) = write(&bytes);
 
         let archive = T64Archive::open(&p).unwrap();
         let entry = &archive.entries()[0];
@@ -383,7 +372,7 @@ mod tests {
     fn a_max_entry_count_larger_than_the_file_does_not_read_past_it() {
         let mut bytes = build(&[record("ONE", 0x0801, b"a")], 1);
         bytes[0x22..0x24].copy_from_slice(&60_000u16.to_le_bytes());
-        let (d, p) = write(&bytes);
+        let (_guard, d, p) = write(&bytes);
 
         let archive = T64Archive::open(&p).unwrap();
         assert_eq!(archive.entries().len(), 1);
@@ -398,7 +387,7 @@ mod tests {
         let mut bytes = build(&[record("GHOST", 0x0801, b"x")], 1);
         let at = HEADER_LEN + 8;
         bytes[at..at + 4].copy_from_slice(&999_999u32.to_le_bytes());
-        let (d, p) = write(&bytes);
+        let (_guard, d, p) = write(&bytes);
 
         let archive = T64Archive::open(&p).unwrap();
         assert!(archive.entries().is_empty(), "{:?}", archive.entries());
@@ -408,14 +397,14 @@ mod tests {
 
     #[test]
     fn a_file_that_is_not_a_t64_is_refused() {
-        let (d, p) = write(&vec![0u8; 512]);
+        let (_guard, d, p) = write(&vec![0u8; 512]);
         assert!(T64Archive::open(&p).is_err());
         std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
     fn a_file_shorter_than_the_header_is_refused_rather_than_read() {
-        let (d, p) = write(b"C64 tape");
+        let (_guard, d, p) = write(b"C64 tape");
         let err = T64Archive::open(&p).unwrap_err();
         assert!(err.to_string().contains("too short"), "{err}");
         std::fs::remove_dir_all(&d).ok();
@@ -438,7 +427,7 @@ mod tests {
         let mut bytes = build(&records, 3);
         // Blank the middle record's type byte, the way a free slot is written.
         bytes[HEADER_LEN + RECORD_LEN] = 0;
-        let (d, p) = write(&bytes);
+        let (_guard, d, p) = write(&bytes);
 
         let archive = T64Archive::open(&p).unwrap();
         let names: Vec<&str> = archive.entries().iter().map(|e| e.name.as_str()).collect();

@@ -477,14 +477,8 @@ pub fn settled_in_with(
 mod tests {
     use super::*;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-layout-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-layout", tag)
     }
 
     /// A 901 120-byte file whose first bytes say `DOS\0` is an ADF, and
@@ -527,7 +521,7 @@ mod tests {
 
     #[test]
     fn a_floppy_image_is_proposed_for_the_floppies_drawer() {
-        let dir = scratch("adf");
+        let (_guard, dir) = scratch("adf");
         let root = dir.join("staging");
         adf(&dir.join("Workbench.adf"));
 
@@ -546,7 +540,7 @@ mod tests {
     /// copied as a tree.
     #[test]
     fn a_whdload_drawer_is_proposed_whole_under_games() {
-        let dir = scratch("drawer");
+        let (_guard, dir) = scratch("drawer");
         let root = dir.join("staging");
         let game = dir.join("TurricanII");
         std::fs::create_dir_all(&game).unwrap();
@@ -576,7 +570,7 @@ mod tests {
     /// harmless flavour, not what triggers detection.
     #[test]
     fn a_rom_is_refused_with_a_reason_and_never_reaches_items() {
-        let dir = scratch("rom");
+        let (_guard, dir) = scratch("rom");
         let root = dir.join("staging");
         let rom = dir.join("kick.rom");
         // 512 KB — the size a real Kickstart ROM is, and the only thing
@@ -602,7 +596,7 @@ mod tests {
     /// before the button rather than discovered during the copy.
     #[test]
     fn two_things_wanting_one_name_are_a_collision() {
-        let dir = scratch("collide");
+        let (_guard, dir) = scratch("collide");
         let root = dir.join("staging");
         std::fs::create_dir_all(dir.join("one")).unwrap();
         std::fs::create_dir_all(dir.join("two")).unwrap();
@@ -627,7 +621,7 @@ mod tests {
     /// applier never overwrites, so the plan has to say it first.
     #[test]
     fn a_name_already_in_the_staging_tree_is_a_collision() {
-        let dir = scratch("exists");
+        let (_guard, dir) = scratch("exists");
         let root = dir.join("staging");
         std::fs::create_dir_all(root.join("Floppies")).unwrap();
         std::fs::write(root.join("Floppies").join("Disk.adf"), b"already here").unwrap();
@@ -644,7 +638,7 @@ mod tests {
     /// screen before the button.
     #[test]
     fn the_plan_totals_the_bytes_the_tree_will_need() {
-        let dir = scratch("bytes");
+        let (_guard, dir) = scratch("bytes");
         let root = dir.join("staging");
         adf(&dir.join("A.adf"));
         adf(&dir.join("B.adf"));
@@ -661,7 +655,7 @@ mod tests {
     /// reading the archive's entry list, not from the archive's own filename.
     #[test]
     fn a_whdload_archive_is_unpacked_under_games_by_default() {
-        let dir = scratch("whdload-unpack");
+        let (_guard, dir) = scratch("whdload-unpack");
         let root = dir.join("staging");
         let archive = dir.join("Turrican.zip");
         whdload_zip(&archive);
@@ -687,7 +681,7 @@ mod tests {
     /// filename, not the pack's name.
     #[test]
     fn as_archive_policy_copies_the_whdload_zip_in_whole() {
-        let dir = scratch("whdload-as-archive");
+        let (_guard, dir) = scratch("whdload-as-archive");
         let root = dir.join("staging");
         let archive = dir.join("Turrican.zip");
         whdload_zip(&archive);
@@ -715,7 +709,7 @@ mod tests {
     /// the branch that fires when `whdload_name` comes back `None`.
     #[test]
     fn a_zip_with_no_slave_is_a_plain_archive_into_unsorted() {
-        let dir = scratch("plain-archive");
+        let (_guard, dir) = scratch("plain-archive");
         let root = dir.join("staging");
         let archive = dir.join("stuff.zip");
         plain_zip(&archive);
@@ -742,7 +736,7 @@ mod tests {
     /// reached from the other side.
     #[test]
     fn an_icon_already_in_the_staging_tree_is_a_collision() {
-        let dir = scratch("icon-collision");
+        let (_guard, dir) = scratch("icon-collision");
         let root = dir.join("staging");
         std::fs::create_dir_all(root.join("Games")).unwrap();
         std::fs::write(root.join("Games").join("Turrican.info"), b"an older icon").unwrap();
@@ -779,7 +773,7 @@ mod tests {
     /// never be written, which is as wrong as missing one that will.
     #[test]
     fn a_pack_with_no_icon_claims_no_icon_destination() {
-        let dir = scratch("no-icon");
+        let (_guard, dir) = scratch("no-icon");
         let root = dir.join("staging");
         std::fs::create_dir_all(root.join("Games")).unwrap();
         std::fs::write(root.join("Games").join("Turrican.info"), b"unrelated").unwrap();
@@ -819,7 +813,7 @@ mod tests {
     /// field, two answers — ART-176's divergence in a second place.
     #[test]
     fn a_destination_with_a_trailing_separator_names_the_icon_the_same_way() {
-        let dir = scratch("icon-trailing");
+        let (_guard, dir) = scratch("icon-trailing");
         let root = dir.join("staging");
         let archive = dir.join("Turrican.zip");
         whdload_zip(&archive);
@@ -848,7 +842,7 @@ mod tests {
     /// about where the row *used* to point.
     #[test]
     fn a_retargeted_row_moves_its_icon_destination_with_it() {
-        let dir = scratch("icon-retarget");
+        let (_guard, dir) = scratch("icon-retarget");
         let root = dir.join("staging");
         let archive = dir.join("Turrican.zip");
         whdload_zip(&archive);
@@ -891,7 +885,7 @@ mod tests {
             }
         }
 
-        let dir = scratch("cancel");
+        let (_guard, dir) = scratch("cancel");
         let root = dir.join("staging");
         adf(&dir.join("Workbench.adf"));
 

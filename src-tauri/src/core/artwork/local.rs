@@ -133,14 +133,8 @@ mod tests {
         path
     }
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-local-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-local", tag)
     }
 
     /// The Collection screen never asks the cache for the raw title — it asks
@@ -150,7 +144,7 @@ mod tests {
     /// reader uses rather than the raw title `adopt_local` was given.
     #[test]
     fn a_preview_inside_a_package_becomes_a_cached_picture() {
-        let dir = scratch("adopt");
+        let (_guard, dir) = scratch("adopt");
         let cache_dir = dir.join("cache");
         let pkg = package(
             &dir,
@@ -194,7 +188,7 @@ mod tests {
     /// `store` did on the first pass.
     #[test]
     fn a_second_pass_adopts_rather_than_rewrites() {
-        let dir = scratch("second");
+        let (_guard, dir) = scratch("second");
         let cache_dir = dir.join("cache");
         let pkg = package(&dir, "Agony.rp9", &[("rp9-preview.png", b"PNGDATA")]);
         let ask = || LocalPreview {
@@ -223,7 +217,7 @@ mod tests {
     /// The entry name comes out of a file somebody else made.
     #[test]
     fn an_entry_that_escapes_the_cache_is_refused() {
-        let dir = scratch("traversal");
+        let (_guard, dir) = scratch("traversal");
         let cache_dir = dir.join("cache");
         let pkg = package(
             &dir,
@@ -258,7 +252,7 @@ mod tests {
     /// A catalogue can outlive the file it describes.
     #[test]
     fn a_package_that_is_no_longer_there_is_a_miss_and_not_an_error() {
-        let dir = scratch("missing");
+        let (_guard, dir) = scratch("missing");
         let outcome = adopt_local(
             &dir.join("cache"),
             &[LocalPreview {
@@ -286,7 +280,7 @@ mod tests {
             }
         }
 
-        let dir = scratch("cancel");
+        let (_guard, dir) = scratch("cancel");
         let pkg = package(&dir, "One.rp9", &[("rp9-preview.png", b"PNGDATA")]);
         let err = adopt_local(
             &dir.join("cache"),

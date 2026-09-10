@@ -423,14 +423,8 @@ mod tests {
 
     const GIB: u64 = 1024 * 1024 * 1024;
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-manifest-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-manifest", name)
     }
 
     pub(super) fn source() -> SourceFacts {
@@ -511,7 +505,7 @@ mod tests {
     /// Amiga disk landed, and what its RDB says.
     #[test]
     fn a_manifest_describes_the_card_that_was_built() {
-        let dir = scratch("describe");
+        let (_guard, dir) = scratch("describe");
         let image = dir.join("card.img");
         build(&image, 2 * GIB, "SDH0");
 
@@ -534,7 +528,7 @@ mod tests {
     /// The point of the whole thing.
     #[test]
     fn a_manifest_verifies_the_card_it_describes() {
-        let dir = scratch("verify");
+        let (_guard, dir) = scratch("verify");
         let image = dir.join("card.img");
         build(&image, 2 * GIB, "SDH0");
 
@@ -551,7 +545,7 @@ mod tests {
     /// recorded and left unchecked — said out loud, never passed over.
     #[test]
     fn the_boot_partitions_files_are_reported_as_unchecked() {
-        let dir = scratch("unchecked");
+        let (_guard, dir) = scratch("unchecked");
         let image = dir.join("card.img");
         build(&image, 2 * GIB, "SDH0");
 
@@ -571,7 +565,7 @@ mod tests {
     fn one_byte_changed_in_the_partition_table_is_named() {
         use std::io::Write as _;
 
-        let dir = scratch("tamper");
+        let (_guard, dir) = scratch("tamper");
         let image = dir.join("card.img");
         build(&image, 2 * GIB, "SDH0");
         let manifest = describe_card(&image, source(), boot_files(), None).unwrap();
@@ -611,7 +605,7 @@ mod tests {
     fn a_byte_written_into_the_reserved_area_is_caught() {
         use std::io::Write as _;
 
-        let dir = scratch("rdb-tamper");
+        let (_guard, dir) = scratch("rdb-tamper");
         let image = dir.join("card.img");
         build(&image, 2 * GIB, "SDH0");
         let manifest = describe_card(&image, source(), boot_files(), None).unwrap();
@@ -641,7 +635,7 @@ mod tests {
     /// difference named, not accepted because the shape happens to match.
     #[test]
     fn another_cards_manifest_is_refused() {
-        let dir = scratch("other");
+        let (_guard, dir) = scratch("other");
         let mine = dir.join("mine.img");
         let theirs = dir.join("theirs.img");
         build(&mine, 2 * GIB, "SDH0");
@@ -667,7 +661,7 @@ mod tests {
     /// fields this one does not know are the ones it cannot check.
     #[test]
     fn a_newer_schema_is_refused_rather_than_half_understood() {
-        let dir = scratch("schema");
+        let (_guard, dir) = scratch("schema");
         let image = dir.join("card.img");
         build(&image, 2 * GIB, "SDH0");
 
@@ -735,7 +729,7 @@ mod tests {
     /// It has to survive a trip through the file it is written to.
     #[test]
     fn a_manifest_round_trips_through_json() {
-        let dir = scratch("json");
+        let (_guard, dir) = scratch("json");
         let image = dir.join("card.img");
         build(&image, 2 * GIB, "SDH0");
 

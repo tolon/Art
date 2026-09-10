@@ -249,14 +249,8 @@ mod tests {
     use crate::core::volume::fixture::{make_ffs_volume, FixtureFile};
     use std::io::{Seek, SeekFrom, Write};
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-volcmd-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-volcmd", name)
     }
 
     /// An RDB image with one FFS partition holding one file.
@@ -297,7 +291,7 @@ mod tests {
 
     #[test]
     fn a_partition_lists_its_files_through_the_command() {
-        let dir = scratch("list");
+        let (_guard, dir) = scratch("list");
         let path = dir.join("disk.hdf");
         image_with_partition(&path);
 
@@ -317,7 +311,7 @@ mod tests {
 
     #[test]
     fn a_file_copies_out_of_a_partition_byte_for_byte() {
-        let dir = scratch("extract");
+        let (_guard, dir) = scratch("extract");
         let path = dir.join("disk.hdf");
         image_with_partition(&path);
         let out = dir.join("out");
@@ -341,7 +335,7 @@ mod tests {
     /// A second copy must not silently replace the first.
     #[test]
     fn copying_out_twice_keeps_the_first_file() {
-        let dir = scratch("twice");
+        let (_guard, dir) = scratch("twice");
         let path = dir.join("disk.hdf");
         image_with_partition(&path);
         let out = dir.join("out");
@@ -361,7 +355,7 @@ mod tests {
 
     #[test]
     fn asking_for_a_volume_that_is_not_there_is_an_honest_error() {
-        let dir = scratch("missing");
+        let (_guard, dir) = scratch("missing");
         let path = dir.join("disk.hdf");
         image_with_partition(&path);
 
@@ -380,7 +374,7 @@ mod tests {
     /// against.
     #[test]
     fn a_listing_entry_s_attrs_matches_the_attributes_dialog_s_bits() {
-        let dir = scratch("attrs-drift");
+        let (_guard, dir) = scratch("attrs-drift");
         let path = dir.join("disk.hdf");
         image_with_partition(&path);
 

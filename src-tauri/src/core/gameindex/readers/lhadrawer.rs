@@ -351,13 +351,8 @@ mod tests {
     use crate::core::jobs::NoProgress;
     use std::path::PathBuf;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-lhadrawer-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-lhadrawer", tag)
     }
 
     /// The common case: a valid slave stating a name and a copyright, at a
@@ -397,7 +392,7 @@ mod tests {
     /// `scan::is_archive_candidate` at all.
     #[test]
     fn a_drawer_inside_a_zip_is_found_too() {
-        let root = scratch("zip");
+        let (_guard, root) = scratch("zip");
         let archive = synthetic_zip(
             &root,
             &[
@@ -420,7 +415,7 @@ mod tests {
 
     #[test]
     fn every_drawer_in_an_archive_becomes_a_title() {
-        let root = scratch("every-drawer");
+        let (_guard, root) = scratch("every-drawer");
         let archive = synthetic_lha(
             &root,
             &[
@@ -446,7 +441,7 @@ mod tests {
 
     #[test]
     fn an_archived_title_records_the_archive_it_came_from() {
-        let root = scratch("names");
+        let (_guard, root) = scratch("names");
         let archive = synthetic_lha(&root, &[("D/Tag/Tag.Slave", slave_bytes("Tag"))]);
         let found = read_archive_drawers(&archive, &NoProgress).unwrap();
         match &found[0].media {
@@ -462,7 +457,7 @@ mod tests {
 
     #[test]
     fn a_payload_directory_inside_an_archive_is_not_a_title() {
-        let root = scratch("payload");
+        let (_guard, root) = scratch("payload");
         let archive = synthetic_lha(
             &root,
             &[
@@ -480,7 +475,7 @@ mod tests {
 
     #[test]
     fn an_archive_with_no_slave_yields_no_titles() {
-        let root = scratch("empty");
+        let (_guard, root) = scratch("empty");
         let archive = synthetic_lha(&root, &[("Docs/ReadMe", b"x".to_vec())]);
         assert!(read_archive_drawers(&archive, &NoProgress)
             .unwrap()
@@ -496,7 +491,7 @@ mod tests {
     /// `a_payload_directory_is_not_a_title` comment calls out.
     #[test]
     fn a_slave_sitting_inside_a_data_directory_is_not_a_title() {
-        let root = scratch("data-slave");
+        let (_guard, root) = scratch("data-slave");
         let archive = synthetic_lha(
             &root,
             &[
@@ -548,7 +543,7 @@ mod tests {
             }
         }
 
-        let root = scratch("cancel-mid-scan");
+        let (_guard, root) = scratch("cancel-mid-scan");
         let archive = synthetic_lha(
             &root,
             &[
@@ -579,7 +574,7 @@ mod tests {
     /// returning `Err` for the archive as a whole.
     #[test]
     fn one_junk_slave_does_not_lose_the_others_in_the_archive() {
-        let root = scratch("one-junk");
+        let (_guard, root) = scratch("one-junk");
         let archive = synthetic_lha(
             &root,
             &[
@@ -603,7 +598,7 @@ mod tests {
     /// same way, not propagated as an archive-wide error.
     #[test]
     fn an_oversized_slave_does_not_lose_the_others_in_the_archive() {
-        let root = scratch("one-oversized");
+        let (_guard, root) = scratch("one-oversized");
         let archive = synthetic_lha(
             &root,
             &[
@@ -630,7 +625,7 @@ mod tests {
     /// still does.
     #[test]
     fn a_drawer_with_two_slaves_and_no_icon_yields_no_title_but_others_still_do() {
-        let root = scratch("ambiguous");
+        let (_guard, root) = scratch("ambiguous");
         let archive = synthetic_lha(
             &root,
             &[
@@ -658,7 +653,7 @@ mod tests {
     /// resolution did not accidentally consume or disturb it.
     #[test]
     fn a_drawer_with_two_slaves_is_settled_by_its_icons_slave_tooltype() {
-        let root = scratch("icon-settles");
+        let (_guard, root) = scratch("icon-settles");
         let icon = synthetic_icon(&["SLAVE=Two.slave", "PRELOAD"], 0, b"");
         let archive = synthetic_lha(
             &root,
@@ -694,7 +689,7 @@ mod tests {
     /// other, unrelated drawer.
     #[test]
     fn an_icon_too_large_to_read_settles_nothing_but_the_clean_drawer_still_stands() {
-        let root = scratch("icon-oversized");
+        let (_guard, root) = scratch("icon-oversized");
         let archive = synthetic_lha(
             &root,
             &[
@@ -729,7 +724,7 @@ mod tests {
     /// order or a hash of their drawer paths would.
     #[test]
     fn the_result_is_sorted_by_title_not_left_to_hash_order() {
-        let root = scratch("sorted");
+        let (_guard, root) = scratch("sorted");
         let archive = synthetic_lha(
             &root,
             &[

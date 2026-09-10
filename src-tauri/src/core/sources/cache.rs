@@ -112,21 +112,16 @@ fn key_for(repo_path: &str) -> String {
 mod tests {
     use super::*;
 
-    fn layout(name: &str) -> (CacheLayout, PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "art-cache-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        (CacheLayout::new(&dir), dir)
+    fn layout(name: &str) -> (crate::core::ScratchDir, CacheLayout, PathBuf) {
+        let (guard, dir) = crate::core::ScratchDir::pair("art-cache", name);
+        (guard, CacheLayout::new(&dir), dir)
     }
 
     const SHA: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
     #[test]
     fn an_object_is_filed_under_the_first_two_digits_of_its_hash() {
-        let (cache, dir) = layout("objects");
+        let (_guard, cache, dir) = layout("objects");
         let path = cache.object_path(SHA).unwrap();
 
         assert_eq!(path, dir.join("objects").join("e3").join(&SHA[2..]));
@@ -137,7 +132,7 @@ mod tests {
     /// component, so it is validated rather than trusted.
     #[test]
     fn only_a_real_digest_can_name_an_object() {
-        let (cache, dir) = layout("badsha");
+        let (_guard, cache, dir) = layout("badsha");
 
         for bad in [
             "",
@@ -156,7 +151,7 @@ mod tests {
     /// A hostile package name must never become a file name.
     #[test]
     fn a_repository_path_never_becomes_a_path_component() {
-        let (cache, dir) = layout("keys");
+        let (_guard, cache, dir) = layout("keys");
 
         let partial = cache.partial_path("../../../etc/passwd");
         let pointer = cache.pointer_path("util/libs/\u{1b}[2J.lha");
@@ -170,7 +165,7 @@ mod tests {
 
     #[test]
     fn the_same_path_always_maps_to_the_same_key() {
-        let (cache, dir) = layout("stable");
+        let (_guard, cache, dir) = layout("stable");
         assert_eq!(
             cache.partial_path("util/libs/A.lha"),
             cache.partial_path("util/libs/A.lha")
@@ -186,7 +181,7 @@ mod tests {
     /// "not cached", not a failure.
     #[test]
     fn a_pointer_to_a_missing_object_reads_as_no_cache_entry() {
-        let (cache, dir) = layout("dangling");
+        let (_guard, cache, dir) = layout("dangling");
         cache.ensure_dirs().unwrap();
 
         std::fs::write(cache.pointer_path("util/libs/A.lha"), SHA).unwrap();
@@ -205,7 +200,7 @@ mod tests {
 
     #[test]
     fn a_corrupt_pointer_reads_as_no_cache_entry() {
-        let (cache, dir) = layout("corruptptr");
+        let (_guard, cache, dir) = layout("corruptptr");
         cache.ensure_dirs().unwrap();
 
         std::fs::write(cache.pointer_path("a/b.lha"), "not a hash").unwrap();

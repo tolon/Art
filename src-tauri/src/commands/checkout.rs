@@ -376,14 +376,8 @@ pub fn volume_icon_for(
 mod tests {
     use super::*;
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-cmd-co-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-cmd-co", name)
     }
 
     /// The manifest has to outlive the process: a checkout is a file the user
@@ -391,7 +385,7 @@ mod tests {
     /// temp directory and an edit with nowhere to go back to.
     #[test]
     fn the_state_reloads_its_manifest_from_disk() {
-        let dir = scratch("reload");
+        let (_guard, dir) = scratch("reload");
 
         let first = CheckoutState_::new(dir.clone());
         first
@@ -424,7 +418,7 @@ mod tests {
     /// a checkin of nothing.
     #[test]
     fn a_row_reports_a_missing_working_copy() {
-        let dir = scratch("row-missing");
+        let (_guard, dir) = scratch("row-missing");
         let row = row_of(Checkout {
             id: "abc".into(),
             image: "D:/Work.adf".into(),

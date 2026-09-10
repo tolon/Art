@@ -95,9 +95,7 @@ mod tests {
     /// "unsupported" is not.
     #[test]
     fn identify_names_the_format_and_says_why_it_is_not_browsable() {
-        let dir =
-            std::env::temp_dir().join(format!("art-cbm-id-{}", crate::core::test_scratch_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-cbm-id", "identify");
 
         let tap = dir.join("game.tap");
         std::fs::write(&tap, b"C64-TAPE-RAW\x00\x00\x00\x00").unwrap();

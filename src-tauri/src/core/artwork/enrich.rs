@@ -467,14 +467,8 @@ mod tests {
         }
     }
 
-    fn tempdir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-enrich-{}-{name}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn tempdir(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-enrich", name)
     }
 
     fn libretro_only() -> Vec<ConfiguredSource> {
@@ -518,7 +512,7 @@ mod tests {
 
     #[test]
     fn a_matched_title_is_written_to_the_cache() {
-        let dir = tempdir("matched");
+        let (_guard, dir) = tempdir("matched");
         let sources = libretro_only();
         let titles = vec!["Turrican II".to_string()];
         let client = libretro_client();
@@ -544,7 +538,7 @@ mod tests {
     /// The whole point of recording misses: the second run asks for no images.
     #[test]
     fn an_unmatched_title_is_recorded_as_a_miss_and_not_retried() {
-        let dir = tempdir("miss-not-retried");
+        let (_guard, dir) = tempdir("miss-not-retried");
         let sources = libretro_only();
         let titles = vec!["No Such Game".to_string()];
 
@@ -572,7 +566,7 @@ mod tests {
 
     #[test]
     fn a_cached_title_is_not_fetched_again() {
-        let dir = tempdir("cached");
+        let (_guard, dir) = tempdir("cached");
         let sources = libretro_only();
         let titles = vec!["Turrican II".to_string()];
 
@@ -611,7 +605,7 @@ mod tests {
 
     #[test]
     fn an_unreachable_source_does_not_stop_the_other() {
-        let dir = tempdir("unreachable");
+        let (_guard, dir) = tempdir("unreachable");
         let sources = vec![
             ConfiguredSource {
                 id: "libretro".into(),
@@ -663,7 +657,7 @@ mod tests {
 
     #[test]
     fn cancellation_returns_cancelled_and_leaves_a_whole_cache() {
-        let dir = tempdir("cancelled");
+        let (_guard, dir) = tempdir("cancelled");
         let sources = libretro_only();
         let titles = vec!["Turrican II".to_string(), "Turrican II".to_string()];
         let client = libretro_client();
@@ -694,7 +688,7 @@ mod tests {
 
     #[test]
     fn a_disabled_source_is_never_asked() {
-        let dir = tempdir("disabled");
+        let (_guard, dir) = tempdir("disabled");
         let sources = vec![ConfiguredSource {
             id: "libretro".into(),
             enabled: false,
@@ -725,7 +719,7 @@ mod tests {
     /// title's miss, not a failed run.
     #[test]
     fn an_image_the_server_does_not_have_is_a_miss_not_an_error() {
-        let dir = tempdir("gone");
+        let (_guard, dir) = tempdir("gone");
         let sources = libretro_only();
         let titles = vec!["Turrican II".to_string()];
 
@@ -764,7 +758,7 @@ mod tests {
     /// and a directory the repository adds later would stay invisible.
     #[test]
     fn a_kind_with_no_index_is_skipped_rather_than_recorded_as_missing() {
-        let dir = tempdir("no-index-for-kind");
+        let (_guard, dir) = tempdir("no-index-for-kind");
         let sources = libretro_only();
         let titles = vec!["Turrican II".to_string()];
         let client = libretro_client();
@@ -810,7 +804,7 @@ mod tests {
     /// recoverable.
     #[test]
     fn a_cancelled_run_keeps_its_record_and_the_next_run_refetches_nothing() {
-        let dir = tempdir("cancel-keeps-record");
+        let (_guard, dir) = tempdir("cancel-keeps-record");
         let sources = libretro_only();
         let titles = vec!["Turrican II".to_string(), "Turrican II".to_string()];
 
@@ -866,7 +860,7 @@ mod tests {
     /// is what recovers the 790 files the first real run left behind.
     #[test]
     fn pictures_on_disk_without_an_index_are_adopted_not_refetched() {
-        let dir = tempdir("adopt-orphans");
+        let (_guard, dir) = tempdir("adopt-orphans");
         let sources = libretro_only();
         let titles = vec!["Turrican II".to_string()];
 
@@ -915,7 +909,7 @@ mod tests {
     /// show; the engine fetches that and no more.
     #[test]
     fn only_the_wanted_kinds_are_fetched() {
-        let dir = tempdir("wanted");
+        let (_guard, dir) = tempdir("wanted");
         let sources = libretro_only();
         let titles = vec!["Turrican II".to_string()];
         let client = FakeClient::with(&[
@@ -972,7 +966,7 @@ mod tests {
     /// here can only be the pin, never a fixture that had nothing to offer.
     #[test]
     fn a_pinned_title_is_left_alone() {
-        let dir = tempdir("pinned");
+        let (_guard, dir) = tempdir("pinned");
         let sources = source_that_always_answers();
         let titles = vec!["Turrican II".to_string()];
         let pinned = vec!["Turrican II".to_string()];

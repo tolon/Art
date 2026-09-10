@@ -296,11 +296,8 @@ mod tests {
   </application>
 </rp9>"#;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("art-rp9-{tag}-{}", crate::core::test_scratch_id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-rp9", tag)
     }
 
     /// Build a `.rp9`: a zip carrying the manifest, a preview and a disk.
@@ -334,7 +331,7 @@ mod tests {
     /// which arrives out of sequence in the XML on purpose.
     #[test]
     fn an_rp9_reads_its_manifest() {
-        let dir = scratch("read");
+        let (_guard, dir) = scratch("read");
         let path = write_rp9(&dir, MANIFEST);
 
         let facts = read_rp9(&path).unwrap();
@@ -360,7 +357,7 @@ mod tests {
     /// machine carry a hardfile rather than floppies.
     #[test]
     fn a_demo_says_so() {
-        let dir = scratch("demo");
+        let (_guard, dir) = scratch("demo");
         let manifest = MANIFEST
             .replace("<type>game</type>", "<type>demo</type>")
             .replace(
@@ -383,7 +380,7 @@ mod tests {
     /// real collection then produced thirty-five such packages.
     #[test]
     fn an_unknown_type_is_kept_verbatim() {
-        let dir = scratch("othertype");
+        let (_guard, dir) = scratch("othertype");
         let manifest = MANIFEST.replace("<type>game</type>", "<type>application</type>");
         let path = write_rp9(&dir, &manifest);
 
@@ -397,7 +394,7 @@ mod tests {
     /// Malformed XML is refused with a reason, not half-read.
     #[test]
     fn a_broken_manifest_is_refused() {
-        let dir = scratch("broken");
+        let (_guard, dir) = scratch("broken");
         let path = write_rp9(&dir, "<rp9><application><title>Half");
         assert!(read_rp9(&path).is_err());
         std::fs::remove_dir_all(&dir).ok();
@@ -407,7 +404,7 @@ mod tests {
     /// record that looks like a real one is worse than a refusal.
     #[test]
     fn a_manifest_with_no_title_is_refused() {
-        let dir = scratch("notitle");
+        let (_guard, dir) = scratch("notitle");
         let path = write_rp9(
             &dir,
             "<rp9><application><year>1996</year></application></rp9>",
@@ -420,7 +417,7 @@ mod tests {
     /// A zip with no manifest is not an `.rp9`.
     #[test]
     fn a_zip_without_a_manifest_is_not_an_rp9() {
-        let dir = scratch("nomanifest");
+        let (_guard, dir) = scratch("nomanifest");
         let path = write_zip(&dir, "plain.rp9", &[("readme.txt", b"hello")]);
         let err = read_rp9(&path).unwrap_err();
         assert!(err.to_string().contains("not an .rp9"), "{err}");
@@ -431,7 +428,7 @@ mod tests {
     /// and not a hand-rolled reader.
     #[test]
     fn escaped_text_is_unescaped() {
-        let dir = scratch("escapes");
+        let (_guard, dir) = scratch("escapes");
         let manifest = MANIFEST.replace(
             "<title>Aerial Racers</title>",
             "<title>Rock &amp; Roll &lt;Deluxe&gt;</title>",
@@ -489,7 +486,7 @@ mod tests {
     /// the ones a launcher should not list say so.
     #[test]
     fn every_measured_type_is_kept() {
-        let dir = scratch("types");
+        let (_guard, dir) = scratch("types");
         for (word, expected, playable) in [
             ("game", TitleKind::Game, true),
             ("demo", TitleKind::Demo, true),

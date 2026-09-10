@@ -655,7 +655,11 @@ mod tests {
     /// A card built in a temp directory, the way every fixture in this
     /// repository is: synthetic, made at run time, and carrying no Amiga
     /// content ART does not own.
-    struct Card(PathBuf);
+    /// The guard field is **last**: a struct's fields drop in declaration
+    /// order, so the path is gone by the time the directory is removed, and
+    /// the removal is `ScratchDir`'s rather than a `Drop` of this fixture's
+    /// own (ART-281).
+    struct Card(PathBuf, crate::core::ScratchDir);
 
     impl Card {
         fn path(&self) -> &Path {
@@ -663,20 +667,12 @@ mod tests {
         }
     }
 
-    impl Drop for Card {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
     fn card(files: &[(&str, &str)]) -> Card {
-        let dir =
-            std::env::temp_dir().join(format!("art-pistorm-{}", crate::core::test_scratch_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let (guard, dir) = crate::core::ScratchDir::pair("art-pistorm", "card");
         for (name, contents) in files {
             std::fs::write(dir.join(name), contents).unwrap();
         }
-        Card(dir)
+        Card(dir, guard)
     }
 
     /// **The check reaching a real folder**, which is the half the pure tests

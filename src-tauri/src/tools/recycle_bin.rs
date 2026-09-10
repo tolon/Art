@@ -72,14 +72,8 @@ mod tests {
     use crate::core::jobs::NoProgress;
     use std::path::PathBuf;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-recyclebin-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-recyclebin", tag)
     }
 
     /// The trait's own answer, which is what reaches the screen and which the
@@ -108,7 +102,7 @@ mod tests {
     #[test]
     #[ignore = "puts a file in the machine's real Recycle Bin"]
     fn a_real_file_really_goes_to_the_real_bin() {
-        let dir = scratch("real");
+        let (_guard, dir) = scratch("real");
         let path = dir.join("art-recycle-bin-probe.txt");
         std::fs::write(&path, b"ART").unwrap();
 

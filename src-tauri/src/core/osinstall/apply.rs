@@ -2312,7 +2312,7 @@ mod tests {
     /// AmigaOS 3.2's `Startup-Sequence` runs `Resident C:Assign PURE` and
     /// fails without it. `C/Other` exists so a cancellation test has a
     /// second file to stop before reaching.
-    fn planned() -> (InstallPlan, PathBuf) {
+    fn planned() -> (crate::core::ScratchDir, InstallPlan, PathBuf) {
         // A fresh scratch directory every call, not a fixed tag: several of
         // this module's own tests call `planned()` and run in parallel
         // threads of the same test binary (same pid), and `fixtures::scratch`
@@ -2321,7 +2321,7 @@ mod tests {
         // counter was added (see the report).
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = fixtures::scratch(&format!("apply-planned-{n}"));
+        let (_guard, dir) = fixtures::scratch(&format!("apply-planned-{n}"));
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         fixtures::media(
@@ -2376,7 +2376,7 @@ mod tests {
             removals: Vec::new(),
             layers: Vec::new(),
         };
-        (plan, dir)
+        (_guard, plan, dir)
     }
 
     fn media_folder(dir: &Path) -> PathBuf {
@@ -2393,10 +2393,10 @@ mod tests {
     /// and NTFS refuses it outright, so before this fix `apply()` did not
     /// write it under a wrong name, it failed with a raw OS error partway
     /// through building the tree.
-    fn planned_with_host_hostile_names() -> (InstallPlan, PathBuf) {
+    fn planned_with_host_hostile_names() -> (crate::core::ScratchDir, InstallPlan, PathBuf) {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = fixtures::scratch(&format!("apply-hostile-{n}"));
+        let (_guard, dir) = fixtures::scratch(&format!("apply-hostile-{n}"));
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         fixtures::media(
@@ -2451,7 +2451,7 @@ mod tests {
             removals: Vec::new(),
             layers: Vec::new(),
         };
-        (plan, dir)
+        (_guard, plan, dir)
     }
 
     /// **ART-160's corollary (F5): two names, one host file.**
@@ -2466,7 +2466,7 @@ mod tests {
     fn two_destinations_that_escape_to_one_host_name_are_refused() {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = fixtures::scratch(&format!("apply-hostclash-{n}"));
+        let (_guard, dir) = fixtures::scratch(&format!("apply-hostclash-{n}"));
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         fixtures::media(
@@ -2587,7 +2587,7 @@ mod tests {
     fn a_case_differing_pair_is_refused_by_apply_not_written_once_and_recorded_twice() {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = fixtures::scratch(&format!("apply-hostcase-{n}"));
+        let (_guard, dir) = fixtures::scratch(&format!("apply-hostcase-{n}"));
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         fixtures::media(
@@ -2716,7 +2716,7 @@ mod tests {
     /// manifest keeps both names.
     #[test]
     fn a_name_windows_reserves_is_escaped_on_disk_and_recorded_in_the_manifest() {
-        let (plan, dir) = planned_with_host_hostile_names();
+        let (_guard, plan, dir) = planned_with_host_hostile_names();
         let root = dir.join("dist");
         apply(&plan, &root, &NoProgress).unwrap();
 
@@ -2766,7 +2766,7 @@ mod tests {
     /// against a manifest `apply()` actually produced.
     #[test]
     fn the_amiga_name_is_recoverable_from_the_tree_apply_wrote() {
-        let (plan, dir) = planned_with_host_hostile_names();
+        let (_guard, plan, dir) = planned_with_host_hostile_names();
         let root = dir.join("dist");
         apply(&plan, &root, &NoProgress).unwrap();
 
@@ -2780,7 +2780,7 @@ mod tests {
     /// is unchanged by this feature existing.
     #[test]
     fn an_ordinary_tree_records_no_host_path() {
-        let (plan, dir) = planned();
+        let (_guard, plan, dir) = planned();
         let root = dir.join("dist");
         apply(&plan, &root, &NoProgress).unwrap();
 
@@ -2793,7 +2793,7 @@ mod tests {
 
     #[test]
     fn the_tree_carries_a_uaem_sidecar_for_every_file_with_something_to_say() {
-        let (plan, dir) = planned();
+        let (_guard, plan, dir) = planned();
         let root = dir.join("dist");
         apply(&plan, &root, &NoProgress).unwrap();
 
@@ -2806,7 +2806,7 @@ mod tests {
 
     #[test]
     fn the_manifest_says_which_component_and_which_media_each_file_came_from() {
-        let (plan, dir) = planned();
+        let (_guard, plan, dir) = planned();
         let root = dir.join("dist");
         apply(&plan, &root, &NoProgress).unwrap();
 
@@ -2860,7 +2860,8 @@ mod tests {
     /// agrees with it.
     #[test]
     fn a_real_plan_builds_a_tree_that_matches_the_plan_including_its_directories() {
-        let (plan, dir) = fixtures::planned_with(&["workbench-base"], &["Workbench3.2"], Some(47));
+        let (_guard, plan, dir) =
+            fixtures::planned_with(&["workbench-base"], &["Workbench3.2"], Some(47));
         assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
         let root = dir.join("dist");
 
@@ -2919,7 +2920,8 @@ mod tests {
     /// `media_stamps` would prove the comparison and not the stamping.
     #[test]
     fn a_medium_that_changed_since_the_preview_is_refused_by_name() {
-        let (plan, dir) = fixtures::planned_with(&["workbench-base"], &["Workbench3.2"], Some(47));
+        let (_guard, plan, dir) =
+            fixtures::planned_with(&["workbench-base"], &["Workbench3.2"], Some(47));
         assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
         assert!(
             !plan.media_stamps.is_empty(),
@@ -2959,7 +2961,8 @@ mod tests {
     /// pass the test above and be useless.
     #[test]
     fn an_unchanged_medium_builds_exactly_as_before() {
-        let (plan, dir) = fixtures::planned_with(&["workbench-base"], &["Workbench3.2"], Some(47));
+        let (_guard, plan, dir) =
+            fixtures::planned_with(&["workbench-base"], &["Workbench3.2"], Some(47));
         let root = dir.join("dist");
         let outcome =
             apply(&plan, &root, &NoProgress).expect("nothing changed, so nothing refuses");
@@ -2973,7 +2976,7 @@ mod tests {
     /// means "nothing was recorded", never "everything changed".
     #[test]
     fn a_plan_that_recorded_no_stamps_is_not_treated_as_a_changed_disc() {
-        let (mut plan, dir) =
+        let (_guard, mut plan, dir) =
             fixtures::planned_with(&["workbench-base"], &["Workbench3.2"], Some(47));
         plan.media_stamps.clear();
 
@@ -3016,15 +3019,15 @@ mod tests {
 
     /// A tree with something on the shelf, so `switch_on` has a real file to
     /// move rather than a fixture's idea of one.
-    fn tree_with_a_shelf(tag: &str) -> (PathBuf, PathBuf) {
-        let dir = fixtures::scratch(&format!("activation-{tag}"));
+    fn tree_with_a_shelf(tag: &str) -> (crate::core::ScratchDir, PathBuf, PathBuf) {
+        let (_guard, dir) = fixtures::scratch(&format!("activation-{tag}"));
         let root = dir.join("dist");
         std::fs::create_dir_all(root.join("Storage").join("Monitors")).unwrap();
         std::fs::create_dir_all(root.join("Tools").join("Commodities")).unwrap();
         std::fs::write(root.join("Storage/Monitors/NTSC"), b"monitor").unwrap();
         std::fs::write(root.join("Tools/Commodities/Blanker"), b"commodity").unwrap();
         std::fs::write(root.join("Tools/Commodities/Blanker.info"), b"icon").unwrap();
-        (dir, root)
+        (_guard, dir, root)
     }
 
     /// **The switch is thrown, into the drawer AmigaOS actually reads.**
@@ -3034,7 +3037,7 @@ mod tests {
     /// could not see that.
     #[test]
     fn an_activation_copies_the_file_where_amigados_will_look_for_it() {
-        let (dir, root) = tree_with_a_shelf("monitor");
+        let (_guard, dir, root) = tree_with_a_shelf("monitor");
         let mut outcome = ApplyOutcome {
             root: root.clone(),
             files: 0,
@@ -3094,7 +3097,7 @@ mod tests {
     /// looks thrown and is not.
     #[test]
     fn a_commodity_takes_its_icon_with_it() {
-        let (dir, root) = tree_with_a_shelf("commodity");
+        let (_guard, dir, root) = tree_with_a_shelf("commodity");
         let mut outcome = ApplyOutcome {
             root: root.clone(),
             files: 0,
@@ -3138,7 +3141,7 @@ mod tests {
     /// optional — `plan` promised it would be there.
     #[test]
     fn a_missing_icon_is_skipped_and_not_an_error() {
-        let (dir, root) = tree_with_a_shelf("no-icon");
+        let (_guard, dir, root) = tree_with_a_shelf("no-icon");
         let mut outcome = ApplyOutcome {
             root: root.clone(),
             files: 0,
@@ -3175,7 +3178,7 @@ mod tests {
     /// here).
     #[test]
     fn switching_the_same_thing_on_twice_is_still_one_file() {
-        let (dir, root) = tree_with_a_shelf("twice");
+        let (_guard, dir, root) = tree_with_a_shelf("twice");
         let mut outcome = ApplyOutcome {
             root: root.clone(),
             files: 0,
@@ -3219,7 +3222,7 @@ mod tests {
         // `classes` overrides `workbench-base` — the double-count — and
         // `backdrops` writes into `Prefs/Presets/Backdrops`, whose middle
         // directory no rule names: the two halves of ART-124 in one plan.
-        let (plan, dir) = fixtures::planned_with(
+        let (_guard, plan, dir) = fixtures::planned_with(
             &["classes", "backdrops"],
             &["Workbench3.2", "Classes3.2", "Install3.2", "Backdrops3.2"],
             Some(47),
@@ -3331,7 +3334,7 @@ mod tests {
     fn the_plan_predicts_the_bytes_the_tree_will_hold_not_the_bytes_it_reads() {
         // `classes` overrides `workbench-base` in the shipped 3.2 recipe —
         // the same fixture the file-count half uses.
-        let (plan, dir) = fixtures::planned_with(
+        let (_guard, plan, dir) = fixtures::planned_with(
             &["classes", "backdrops"],
             &["Workbench3.2", "Classes3.2", "Install3.2", "Backdrops3.2"],
             Some(47),
@@ -3416,7 +3419,7 @@ mod tests {
     /// never reached for it at all.
     #[test]
     fn excluding_a_component_means_apply_never_opens_or_records_its_media() {
-        let dir = fixtures::scratch("apply-excluded-media-untouched");
+        let (_guard, dir) = fixtures::scratch("apply-excluded-media-untouched");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
 
@@ -3490,7 +3493,7 @@ mod tests {
     /// absent, so `plan()` returns a real `MediaMissing` refusal.
     #[test]
     fn a_plan_with_refusals_is_refused_not_silently_built_empty() {
-        let (plan, dir) = fixtures::planned_with(&["extras"], &["Workbench3.2"], Some(47));
+        let (_guard, plan, dir) = fixtures::planned_with(&["extras"], &["Workbench3.2"], Some(47));
         assert!(
             !plan.refusals.is_empty(),
             "sanity: this plan should have refused (extras's media is absent)"
@@ -3545,7 +3548,7 @@ mod tests {
     /// checked against the refusal surface.
     #[test]
     fn amigaos_32_plans_and_applies_the_same_tree_before_and_after_the_default4types_file_rule() {
-        let dir = fixtures::scratch("apply-322-before-after-extras-rule");
+        let (_guard, dir) = fixtures::scratch("apply-322-before-after-extras-rule");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
 
@@ -3665,7 +3668,7 @@ mod tests {
     /// §10 asked for, for the recipe that had nothing to diff.
     #[test]
     fn amigaos_39_plans_cleanly_against_a_full_synthetic_fixture() {
-        let dir = fixtures::scratch("plan-39-full-fixture");
+        let (_guard, dir) = fixtures::scratch("plan-39-full-fixture");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         let recipe = crate::core::osinstall::recipe::amigaos_39().unwrap();
@@ -3715,7 +3718,7 @@ mod tests {
         use crate::core::volume::write::{FileMeta, VolumeWriter};
         use crate::core::volume::{DosType, VolumeGeometry};
 
-        let dir = fixtures::scratch("apply-no-sidecar");
+        let (_guard, dir) = fixtures::scratch("apply-no-sidecar");
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         let image = fixtures::media(&folder, "Plain", "plain.adf", &[]);
@@ -3786,7 +3789,7 @@ mod tests {
     /// uses for the identical question.
     #[test]
     fn the_manifest_records_the_real_size_written_not_the_plans_estimate() {
-        let (mut plan, dir) = planned();
+        let (_guard, mut plan, dir) = planned();
         plan.items[0].bytes = 999; // b"cmd" is really 3 bytes.
         let root = dir.join("dist");
         apply(&plan, &root, &NoProgress).unwrap();
@@ -3811,7 +3814,7 @@ mod tests {
     /// failing later.
     #[test]
     fn an_existing_destination_with_anything_in_it_is_refused_never_written_into() {
-        let (plan, dir) = planned();
+        let (_guard, plan, dir) = planned();
         let root = dir.join("dist");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("someone-elses-work.txt"), b"do not touch").unwrap();
@@ -3840,7 +3843,7 @@ mod tests {
     /// screen at all.
     #[test]
     fn an_existing_empty_destination_is_accepted() {
-        let (plan, dir) = planned();
+        let (_guard, plan, dir) = planned();
         let root = dir.join("dist");
         std::fs::create_dir_all(&root).unwrap();
 
@@ -3855,7 +3858,7 @@ mod tests {
     /// nothing at all, not "nothing that looks important".
     #[test]
     fn a_destination_holding_only_a_hidden_file_is_still_refused() {
-        let (plan, dir) = planned();
+        let (_guard, plan, dir) = planned();
         let root = dir.join("dist");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join(".hidden"), b"x").unwrap();
@@ -3868,7 +3871,7 @@ mod tests {
     /// case and the one every other test in this file relies on.
     #[test]
     fn a_destination_that_does_not_exist_is_created() {
-        let (plan, dir) = planned();
+        let (_guard, plan, dir) = planned();
         let root = dir.join("brand-new");
         apply(&plan, &root, &NoProgress).unwrap();
         assert!(root.join(MANIFEST_FILE_NAME).is_file());
@@ -3879,7 +3882,7 @@ mod tests {
     /// problems it is.
     #[test]
     fn a_destination_that_is_a_file_is_refused() {
-        let (plan, dir) = planned();
+        let (_guard, plan, dir) = planned();
         let root = dir.join("not-a-folder");
         std::fs::write(&root, b"i am a file").unwrap();
 
@@ -3895,7 +3898,7 @@ mod tests {
     /// wrote outside the staging root.
     #[test]
     fn a_destination_that_climbs_out_of_the_root_is_refused() {
-        let (mut plan, dir) = planned();
+        let (_guard, mut plan, dir) = planned();
         plan.items[0].to = "../escaped".into();
         let root = dir.join("dist");
         assert!(apply(&plan, &root, &NoProgress).is_err());
@@ -3904,7 +3907,7 @@ mod tests {
 
     #[test]
     fn the_media_is_byte_for_byte_unchanged_afterwards() {
-        let (plan, dir) = planned();
+        let (_guard, plan, dir) = planned();
         let before = fixtures::digest_of_folder(&media_folder(&dir));
         apply(&plan, &dir.join("dist"), &NoProgress).unwrap();
         assert_eq!(fixtures::digest_of_folder(&media_folder(&dir)), before);
@@ -3919,7 +3922,7 @@ mod tests {
     /// disk.
     #[test]
     fn a_cancelled_apply_stops_between_files_and_says_how_many_landed() {
-        let (plan, dir) = planned();
+        let (_guard, plan, dir) = planned();
         let root = dir.join("dist");
         let sink = fixtures::CancelAfter::new(1);
 
@@ -3941,7 +3944,7 @@ mod tests {
     /// falls back to — there is no count worth a sentence about.
     #[test]
     fn a_cancellation_before_any_file_lands_reports_plain_cancelled() {
-        let (plan, dir) = planned();
+        let (_guard, plan, dir) = planned();
         let root = dir.join("dist");
         let sink = fixtures::CancelAfter::new(0);
 
@@ -3956,7 +3959,7 @@ mod tests {
     /// claim of completeness, and a half-built tree must never make it.
     #[test]
     fn a_cancelled_run_leaves_no_manifest_behind() {
-        let (plan, dir) = planned();
+        let (_guard, plan, dir) = planned();
         let root = dir.join("dist");
         let sink = fixtures::CancelAfter::new(1);
 
@@ -3974,7 +3977,7 @@ mod tests {
     /// case (decision 3): the drawer has to be created from nothing.
     #[test]
     fn a_contribution_composes_the_file_and_creates_a_missing_s_drawer() {
-        let (mut plan, dir) = planned();
+        let (_guard, mut plan, dir) = planned();
         plan.user_startup = vec![UserStartupContribution {
             component: "modules-a1200".into(),
             lines: vec!["Assign Foo: SYS:".into()],
@@ -4006,7 +4009,7 @@ mod tests {
     /// at all (it is not a `PlanItem`).
     #[test]
     fn the_manifest_names_the_contributing_component_with_no_media() {
-        let (mut plan, dir) = planned();
+        let (_guard, mut plan, dir) = planned();
         plan.user_startup = vec![UserStartupContribution {
             component: "modules-a1200".into(),
             lines: vec!["Assign Foo: SYS:".into()],
@@ -4042,7 +4045,7 @@ mod tests {
     /// fails.
     #[test]
     fn two_contributions_both_land_and_both_get_a_manifest_record() {
-        let (mut plan, dir) = planned();
+        let (_guard, mut plan, dir) = planned();
         plan.user_startup = vec![
             UserStartupContribution {
                 component: "modules-a1200".into(),
@@ -4099,7 +4102,7 @@ mod tests {
     /// stale manifest record with the pre-merge sha256/bytes.
     #[test]
     fn a_media_provided_starter_file_is_merged_into_not_discarded() {
-        let (mut plan, dir) = planned();
+        let (_guard, mut plan, dir) = planned();
         let folder = media_folder(&dir);
         let starter = b"; the release's own starter file\n".as_slice();
         fixtures::media(
@@ -4173,7 +4176,7 @@ mod tests {
     /// `S/User-Startup` nor `distribution.json` behind.
     #[test]
     fn cancelling_at_the_user_startup_step_writes_nothing_and_reports_two_files() {
-        let (mut plan, dir) = planned();
+        let (_guard, mut plan, dir) = planned();
         plan.user_startup = vec![UserStartupContribution {
             component: "modules-a1200".into(),
             lines: vec!["Assign Foo: SYS:".into()],
@@ -4205,7 +4208,7 @@ mod tests {
     /// test above, since none of them check for the file's *absence*.
     #[test]
     fn no_contributions_means_the_file_is_never_touched_at_all() {
-        let (plan, dir) = planned();
+        let (_guard, plan, dir) = planned();
         assert!(plan.user_startup.is_empty(), "sanity");
         let root = dir.join("dist");
 
@@ -4224,7 +4227,7 @@ mod tests {
     /// as `ç` — this must not fail at all.
     #[test]
     fn a_latin1_starter_file_does_not_fail_the_install() {
-        let (mut plan, dir) = planned();
+        let (_guard, mut plan, dir) = planned();
         let folder = media_folder(&dir);
         let starter: &[u8] = b"; caf\xE7 comment\n";
         fixtures::media(
@@ -5909,16 +5912,16 @@ mod tests {
 
     /// A media folder and a package folder, the two kept apart the way the
     /// owner keeps them apart.
-    fn package_dirs(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+    fn package_dirs(tag: &str) -> (crate::core::ScratchDir, PathBuf, PathBuf, PathBuf) {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = fixtures::scratch(&format!("apply-packages-{tag}-{n}"));
+        let (_guard, dir) = fixtures::scratch(&format!("apply-packages-{tag}-{n}"));
         let media = dir.join("media");
         let packages = dir.join("packages");
         std::fs::create_dir(&media).unwrap();
         std::fs::create_dir(&packages).unwrap();
         fixtures::package_test_media(&media);
-        (dir, media, packages)
+        (_guard, dir, media, packages)
     }
 
     fn install_request(
@@ -6019,7 +6022,7 @@ mod tests {
     /// about the case the whole round is about.
     #[test]
     fn producing_with_a_package_equals_adding_it_afterwards() {
-        let (dir, media, packages) = package_dirs("equivalence");
+        let (_guard, dir, media, packages) = package_dirs("equivalence");
         let archive = fixtures::package_test_archive(&packages, "pack.zip");
         let left = dir.join("produced");
         let right = dir.join("added");
@@ -6068,7 +6071,7 @@ mod tests {
     /// would pass while proving nothing.
     #[test]
     fn producing_with_two_packages_equals_adding_the_second_afterwards() {
-        let (dir, media, packages) = package_dirs("equivalence-two");
+        let (_guard, dir, media, packages) = package_dirs("equivalence-two");
         fixtures::package_test_archive(&packages, "pack.zip");
         let second = fixtures::package_test_archive_two(&packages, "pack2.zip");
         let left = dir.join("produced");
@@ -6140,7 +6143,7 @@ mod tests {
     /// trees.
     #[test]
     fn a_package_replaces_what_it_carries_and_leaves_the_rest_alone() {
-        let (dir, media, packages) = package_dirs("replaces");
+        let (_guard, dir, media, packages) = package_dirs("replaces");
         let archive = fixtures::package_test_archive(&packages, "pack.zip");
         let root = dir.join("dist");
 
@@ -6189,7 +6192,7 @@ mod tests {
     /// overwritten file records the package **and** what it displaced.
     #[test]
     fn the_manifest_records_the_package_and_what_it_overwrote() {
-        let (dir, media, packages) = package_dirs("overwrote");
+        let (_guard, dir, media, packages) = package_dirs("overwrote");
         let archive = fixtures::package_test_archive(&packages, "pack.zip");
         let root = dir.join("dist");
 
@@ -6240,7 +6243,7 @@ mod tests {
     /// whole preview rests on knowing.
     #[test]
     fn adding_a_package_to_a_tree_with_no_manifest_is_refused() {
-        let (dir, media, packages) = package_dirs("no-manifest");
+        let (_guard, dir, media, packages) = package_dirs("no-manifest");
         let archive = fixtures::package_test_archive(&packages, "pack.zip");
         let root = dir.join("dist");
 
@@ -6271,7 +6274,7 @@ mod tests {
     /// than from its name.
     #[test]
     fn adding_a_package_from_an_archive_that_is_not_its_own_is_refused() {
-        let (dir, media, packages) = package_dirs("wrong-archive");
+        let (_guard, dir, media, packages) = package_dirs("wrong-archive");
         let root = dir.join("dist");
 
         let base_only = install_request(&media, &packages, &root, &[]);
@@ -6374,7 +6377,7 @@ mod tests {
     /// archive must both land.
     #[test]
     fn two_components_sharing_one_medium_are_both_accepted_when_the_archive_is_the_same() {
-        let (dir, media, packages) = package_dirs("shared-medium-same-archive");
+        let (_guard, dir, media, packages) = package_dirs("shared-medium-same-archive");
         let root = dir.join("dist");
 
         let base_only = install_request(&media, &packages, &root, &[]);
@@ -6420,7 +6423,7 @@ mod tests {
     /// component-identity story is exactly the wrong explanation here.
     #[test]
     fn a_second_archive_under_the_same_medium_name_is_refused_and_names_both_hashes() {
-        let (dir, media, packages) = package_dirs("shared-medium-different-archive");
+        let (_guard, dir, media, packages) = package_dirs("shared-medium-different-archive");
         let root = dir.join("dist");
 
         let base_only = install_request(&media, &packages, &root, &[]);
@@ -6479,7 +6482,7 @@ mod tests {
     /// manifest that still describes the old one.
     #[test]
     fn a_package_whose_rule_does_not_resolve_is_refused_before_anything_lands() {
-        let (dir, media, packages) = package_dirs("bad-rule");
+        let (_guard, dir, media, packages) = package_dirs("bad-rule");
         let root = dir.join("dist");
 
         let base_only = install_request(&media, &packages, &root, &[]);
@@ -6526,7 +6529,7 @@ mod tests {
     /// is written before the cancellation is reported.
     #[test]
     fn a_cancelled_add_leaves_the_manifest_describing_what_actually_landed() {
-        let (dir, media, packages) = package_dirs("cancel");
+        let (_guard, dir, media, packages) = package_dirs("cancel");
         let archive = fixtures::package_test_archive(&packages, "pack.zip");
         let root = dir.join("dist");
 
@@ -6589,7 +6592,7 @@ mod tests {
     /// it, on both paths at once, and asserts they reach the same verdict.
     #[test]
     fn a_package_that_never_declared_the_override_is_refused_by_both_paths() {
-        let (dir, media, packages) = package_dirs("undeclared-add");
+        let (_guard, dir, media, packages) = package_dirs("undeclared-add");
         let archive = fixtures::package_test_archive(&packages, "pack.zip");
         let root = dir.join("dist");
 
@@ -6635,7 +6638,7 @@ mod tests {
     /// where writing over it silently would be worst.
     #[test]
     fn a_package_landing_on_a_file_the_manifest_never_recorded_is_refused() {
-        let (dir, media, packages) = package_dirs("unrecorded");
+        let (_guard, dir, media, packages) = package_dirs("unrecorded");
         let archive = fixtures::package_test_archive(&packages, "pack.zip");
         let root = dir.join("dist");
 
@@ -6702,10 +6705,10 @@ mod tests {
     /// overwrites *despite* the declared `overrides`, and Produce wrote them
     /// silently and left a manifest naming a file whose `sha256` matched
     /// nothing on disk.
-    fn case_dirs(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+    fn case_dirs(tag: &str) -> (crate::core::ScratchDir, PathBuf, PathBuf, PathBuf) {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = fixtures::scratch(&format!("apply-case-{tag}-{n}"));
+        let (_guard, dir) = fixtures::scratch(&format!("apply-case-{tag}-{n}"));
         let media = dir.join("media");
         let packages = dir.join("packages");
         std::fs::create_dir(&media).unwrap();
@@ -6729,12 +6732,12 @@ mod tests {
             ]),
         )
         .unwrap();
-        (dir, media, packages)
+        (_guard, dir, media, packages)
     }
 
     #[test]
     fn a_destination_spelled_in_another_case_is_the_same_destination_to_both_paths() {
-        let (dir, media, packages) = case_dirs("both");
+        let (_guard, dir, media, packages) = case_dirs("both");
         let archive = packages.join("pack.zip");
         let left = dir.join("produced");
         let right = dir.join("added");
@@ -6802,7 +6805,7 @@ mod tests {
     /// find the right owner.
     #[test]
     fn a_differently_cased_destination_is_still_refused_when_undeclared() {
-        let (dir, media, packages) = case_dirs("undeclared");
+        let (_guard, dir, media, packages) = case_dirs("undeclared");
         let archive = packages.join("pack.zip");
         let root = dir.join("dist");
 
@@ -6836,7 +6839,7 @@ mod tests {
     /// rearranges the match arms.
     #[test]
     fn adding_the_same_package_twice_replaces_its_own_files_rather_than_refusing() {
-        let (dir, media, packages) = package_dirs("re-add");
+        let (_guard, dir, media, packages) = package_dirs("re-add");
         let archive = fixtures::package_test_archive(&packages, "pack.zip");
         let root = dir.join("dist");
 
@@ -6889,7 +6892,7 @@ mod tests {
     /// A refusal about a real BoingBag would otherwise print 211 paths.
     #[test]
     fn a_refusal_names_a_few_paths_and_then_counts_the_rest() {
-        let (dir, media, packages) = package_dirs("many");
+        let (_guard, dir, media, packages) = package_dirs("many");
         let root = dir.join("dist");
 
         // Eight files the base tree does not have, written straight into the
@@ -6957,7 +6960,7 @@ mod tests {
     /// `Startup-Sequence` runs `Resident C:Assign PURE`.
     #[test]
     fn an_overwritten_files_sidecar_and_manifest_agree_about_its_protection() {
-        let (dir, media, packages) = package_dirs("sidecar");
+        let (_guard, dir, media, packages) = package_dirs("sidecar");
         let archive = fixtures::package_test_archive(&packages, "pack.zip");
         let left = dir.join("produced");
         let right = dir.join("added");
@@ -7006,7 +7009,7 @@ mod tests {
     /// medium that does state metadata overwrites whatever stood there.
     #[test]
     fn a_medium_that_states_metadata_overwrites_the_previous_sidecar() {
-        let (dir, media, packages) = package_dirs("sidecar-wins");
+        let (_guard, dir, media, packages) = package_dirs("sidecar-wins");
         let root = dir.join("dist");
         let base_only = install_request(&media, &packages, &root, &[]);
         apply(&planned_over(&base_only), &root, &NoProgress).unwrap();
@@ -7360,7 +7363,7 @@ mod tests {
             // PREVIEW, against the tree as it actually stands right now —
             // before this package is written, and after every earlier one
             // already was.
-            let scratch = fixtures::scratch(&format!("real-package-{id}"));
+            let (_guard, scratch) = fixtures::scratch(&format!("real-package-{id}"));
             let extracted = match extract_for_preview(package, &archive, &scratch) {
                 Ok(extracted) => extracted,
                 Err(err) => {
@@ -7842,14 +7845,17 @@ mod tests {
     /// The other half of the same fixture: `base` is never chosen, so
     /// nothing ever placed `Tools/X` — a legitimate build, not a failed one
     /// (see the test this exists for).
-    fn request_without_the_base_component() -> crate::core::osinstall::plan::InstallRequest {
+    fn request_without_the_base_component() -> (
+        crate::core::ScratchDir,
+        crate::core::osinstall::plan::InstallRequest,
+    ) {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = fixtures::scratch(&format!("apply-removes-no-base-{n}"));
+        let (_guard, dir) = fixtures::scratch(&format!("apply-removes-no-base-{n}"));
         let folder = dir.join("media");
         std::fs::create_dir_all(&folder).unwrap();
         media_for_removal_recipe(&folder, false);
-        crate::core::osinstall::plan::InstallRequest {
+        let request = crate::core::osinstall::plan::InstallRequest {
             packages: Vec::new(),
             package_folder: None,
             release: "Test OS".to_string(),
@@ -7862,7 +7868,8 @@ mod tests {
             excluded: Vec::new(),
             destination: dir.join("tree"),
             scan_cache: Default::default(),
-        }
+        };
+        (_guard, request)
     }
 
     /// `plan()` then `apply()`, in one call — every test in this section
@@ -7877,7 +7884,7 @@ mod tests {
 
     #[test]
     fn a_component_removes_a_path_an_overridden_component_placed() {
-        let dir = fixtures::scratch("apply-removes");
+        let (_guard, dir) = fixtures::scratch("apply-removes");
         let tree = dir.join("tree");
         let report = apply_with(&recipe_with_removal(), &request_for_scratch(&dir, &tree)).unwrap();
 
@@ -7906,10 +7913,8 @@ mod tests {
     fn a_removal_of_something_that_is_not_there_is_an_outcome_not_a_failure() {
         // The base component is off, so nothing placed Tools/X. That is a
         // legitimate build, not a failed one.
-        let report = apply_with(
-            &recipe_with_removal(),
-            &request_without_the_base_component(),
-        );
+        let (_guard, request) = request_without_the_base_component();
+        let report = apply_with(&recipe_with_removal(), &request);
         let report = report.unwrap();
         let verdict = report.removed.iter().find(|r| r.to == "Tools/X").unwrap();
         assert!(
@@ -7929,7 +7934,7 @@ mod tests {
     /// never meant to exist.
     #[test]
     fn every_planned_removal_gets_its_own_verdict() {
-        let dir = fixtures::scratch("apply-removes-verdict-count");
+        let (_guard, dir) = fixtures::scratch("apply-removes-verdict-count");
         let tree = dir.join("tree");
         let report = apply_with(&recipe_with_removal(), &request_for_scratch(&dir, &tree)).unwrap();
         assert_eq!(
@@ -7959,7 +7964,7 @@ mod tests {
 
     #[test]
     fn a_removal_also_takes_its_uaem_sidecar() {
-        let dir = fixtures::scratch("apply-removal-sidecar");
+        let (_guard, dir) = fixtures::scratch("apply-removal-sidecar");
         std::fs::create_dir_all(dir.join("Tools")).unwrap();
         let target = dir.join("Tools").join("X");
         std::fs::write(&target, b"the file").unwrap();
@@ -7989,7 +7994,7 @@ mod tests {
 
     #[test]
     fn a_removal_of_a_file_with_no_sidecar_still_reports_removed() {
-        let dir = fixtures::scratch("apply-removal-no-sidecar");
+        let (_guard, dir) = fixtures::scratch("apply-removal-no-sidecar");
         std::fs::create_dir_all(dir.join("Tools")).unwrap();
         let target = dir.join("Tools").join("X");
         std::fs::write(&target, b"the file").unwrap();
@@ -8016,7 +8021,7 @@ mod tests {
 
     #[test]
     fn a_removal_reports_failed_when_its_sidecar_will_not_go() {
-        let dir = fixtures::scratch("apply-removal-sidecar-stuck");
+        let (_guard, dir) = fixtures::scratch("apply-removal-sidecar-stuck");
         std::fs::create_dir_all(dir.join("Tools")).unwrap();
         let target = dir.join("Tools").join("X");
         std::fs::write(&target, b"the file").unwrap();
@@ -8216,15 +8221,17 @@ mod tests {
     /// The other half of the same fixture: `base` is never chosen, so
     /// nothing ever placed `Tools/IconEdit.info` — a legitimate build, not a
     /// failed one (see the test this exists for).
-    fn request_without_the_component_that_places_the_icon(
-    ) -> crate::core::osinstall::plan::InstallRequest {
+    fn request_without_the_component_that_places_the_icon() -> (
+        crate::core::ScratchDir,
+        crate::core::osinstall::plan::InstallRequest,
+    ) {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = fixtures::scratch(&format!("apply-icon-no-base-{n}"));
+        let (_guard, dir) = fixtures::scratch(&format!("apply-icon-no-base-{n}"));
         let folder = dir.join("media");
         std::fs::create_dir_all(&folder).unwrap();
         media_for_icon_recipe(&folder, false);
-        crate::core::osinstall::plan::InstallRequest {
+        let request = crate::core::osinstall::plan::InstallRequest {
             packages: Vec::new(),
             package_folder: None,
             release: "Test OS".to_string(),
@@ -8237,12 +8244,13 @@ mod tests {
             excluded: Vec::new(),
             destination: dir.join("tree"),
             scan_cache: Default::default(),
-        }
+        };
+        (_guard, request)
     }
 
     #[test]
     fn an_icon_rule_merges_into_the_icon_already_in_the_tree() {
-        let dir = fixtures::scratch("apply-icon-rule");
+        let (_guard, dir) = fixtures::scratch("apply-icon-rule");
         let tree = dir.join("tree");
         apply_with(
             &recipe_with_icon_rule(),
@@ -8261,11 +8269,8 @@ mod tests {
 
     #[test]
     fn an_icon_rule_whose_destination_is_absent_is_skipped_and_says_so() {
-        let report = apply_with(
-            &recipe_with_icon_rule(),
-            &request_without_the_component_that_places_the_icon(),
-        )
-        .unwrap();
+        let (_guard, request) = request_without_the_component_that_places_the_icon();
+        let report = apply_with(&recipe_with_icon_rule(), &request).unwrap();
         let verdict = report
             .icons
             .iter()
@@ -8302,8 +8307,8 @@ mod tests {
     /// `plan()` then `apply()` against [`layered_recipe`], reading the
     /// finished tree's own `distribution.json` back — the round trip
     /// `the_manifest_records_which_folder_each_layer_came_from` needs.
-    fn apply_a_layered_build() -> DistributionManifest {
-        let dir = fixtures::scratch("apply-layers");
+    fn apply_a_layered_build() -> (crate::core::ScratchDir, DistributionManifest) {
+        let (_guard, dir) = fixtures::scratch("apply-layers");
         let base_folder = dir.join("base-media");
         let update_folder = dir.join("update-media");
         std::fs::create_dir_all(&base_folder).unwrap();
@@ -8347,7 +8352,7 @@ mod tests {
         );
         apply(&plan, &request.destination, &NoProgress)
             .unwrap_or_else(|err| panic!("the layered fixture failed to build: {err}"));
-        read_manifest(&request.destination)
+        (_guard, read_manifest(&request.destination))
     }
 
     /// **The point of Task 9's manifest half.** `distribution.json` names
@@ -8356,7 +8361,7 @@ mod tests {
     /// read it out of, and AmigaOS 3.2.2 always reads from more than one.
     #[test]
     fn the_manifest_records_which_folder_each_layer_came_from() {
-        let manifest = apply_a_layered_build();
+        let (_guard, manifest) = apply_a_layered_build();
         let ids: Vec<&str> = manifest.layers.iter().map(|l| l.id.as_str()).collect();
         assert_eq!(ids, vec!["base", "update-3.2.2"]);
         assert!(manifest.layers.iter().all(|l| l.folder.is_absolute()));
@@ -8480,7 +8485,7 @@ mod tests {
     /// order.
     #[test]
     fn a_locked_payload_its_gated_second_unit_and_the_after_steps_all_land() {
-        let (dir, _media, packages) = package_dirs("host-boingbag");
+        let (_guard, dir, _media, packages) = package_dirs("host-boingbag");
         let archive = locked_wrapper(&packages, "Locked.lha", "93ABDF11");
         let root = dir.join("tree");
         std::fs::create_dir_all(&root).unwrap();
@@ -8550,7 +8555,7 @@ mod tests {
     /// absent row reads as "never considered", which is a different thing.
     #[test]
     fn the_gated_unit_is_skipped_when_the_tree_already_states_the_version() {
-        let (dir, _media, packages) = package_dirs("host-boingbag-gate");
+        let (_guard, dir, _media, packages) = package_dirs("host-boingbag-gate");
         let archive = locked_wrapper(&packages, "Locked.lha", "93ABDF11");
         let root = dir.join("tree");
         std::fs::create_dir_all(&root).unwrap();
@@ -8596,7 +8601,7 @@ mod tests {
     /// and saying it did would be claiming what it did not do.
     #[test]
     fn a_gate_whose_file_is_absent_is_reported_as_unchecked_and_the_unit_runs() {
-        let (dir, _media, packages) = package_dirs("host-boingbag-nogate");
+        let (_guard, dir, _media, packages) = package_dirs("host-boingbag-nogate");
         let archive = locked_wrapper(&packages, "Locked.lha", "93ABDF11");
         let root = dir.join("tree");
         std::fs::create_dir_all(&root).unwrap();
@@ -8636,7 +8641,7 @@ mod tests {
     /// worse than a refusal.
     #[test]
     fn a_wrong_key_refuses_add_package_and_writes_nothing() {
-        let (dir, _media, packages) = package_dirs("host-boingbag-badkey");
+        let (_guard, dir, _media, packages) = package_dirs("host-boingbag-badkey");
         let archive = locked_wrapper(&packages, "Locked.lha", "93ABDF11");
         let root = dir.join("tree");
         std::fs::create_dir_all(&root).unwrap();

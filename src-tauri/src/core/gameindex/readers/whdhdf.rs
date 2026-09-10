@@ -316,13 +316,8 @@ mod tests {
     /// fixture is the real collection's size rather than a round one.
     const TOTAL_BLOCKS: u32 = 1843;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-whdhdf-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-whdhdf", tag)
     }
 
     fn empty_volume(dir: &Path, name: &str) -> PathBuf {
@@ -394,7 +389,7 @@ mod tests {
     /// game, and only the slave knows that.
     #[test]
     fn a_bootable_hardfile_names_the_game_from_its_slave() {
-        let dir = scratch("read");
+        let (_guard, dir) = scratch("read");
         let slave = build_slave("Lotus 3", "1992 Gremlin", 16);
         let image = build_hardfile(&dir, "Lotus3HD", "Lotus3", &slave, None);
 
@@ -412,7 +407,7 @@ mod tests {
     /// an empty name.
     #[test]
     fn a_hardfile_with_no_slave_is_refused() {
-        let dir = scratch("empty");
+        let (_guard, dir) = scratch("empty");
         let image = empty_volume(&dir, "nothing");
 
         let err = read_whdload_hardfile(&image).unwrap_err();
@@ -426,7 +421,7 @@ mod tests {
     /// collection's shape and not a hypothetical.
     #[test]
     fn an_installer_slave_is_not_mistaken_for_the_game() {
-        let dir = scratch("islave");
+        let (_guard, dir) = scratch("islave");
         let slave = build_slave("Lotus 3", "1992 Gremlin", 16);
         let image = build_hardfile(
             &dir,
@@ -453,7 +448,7 @@ mod tests {
     /// of them.
     #[test]
     fn a_name_truncated_by_amigados_is_still_a_slave() {
-        let dir = scratch("truncated");
+        let (_guard, dir) = scratch("truncated");
         let slave = build_slave("20000 Leagues Under The Sea", "1988 Coktel Vision", 16);
 
         // The name below is exactly thirty characters, as AmigaDOS left it.
@@ -491,7 +486,7 @@ mod tests {
     /// a slave.
     #[test]
     fn a_truncated_name_without_a_slave_inside_is_not_a_game() {
-        let dir = scratch("pretender");
+        let (_guard, dir) = scratch("pretender");
         let stem = "SomethingWithAVeryLongName";
         let pretender = format!("{stem}.Sla");
         let image = empty_volume(&dir, "Pretend");
@@ -513,7 +508,7 @@ mod tests {
     /// An image is untrusted input and `byte_size` in a header is a claim.
     #[test]
     fn a_slave_claiming_an_absurd_size_is_refused() {
-        let dir = scratch("huge");
+        let (_guard, dir) = scratch("huge");
         let slave = build_slave("Fine", "1992 Someone", 16);
         let image = build_hardfile(&dir, "Big", "Big", &slave, None);
 

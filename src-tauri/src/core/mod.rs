@@ -127,13 +127,73 @@ impl ScratchDir {
     pub fn join(&self, tail: impl AsRef<std::path::Path>) -> std::path::PathBuf {
         self.0.join(tail)
     }
+
+    /// The guard and the path it guards, for the one-line local helpers every
+    /// test module carries (ART-281): `let (_guard, dir) = scratch("x")` keeps
+    /// the directory until the test's scope ends and leaves `dir` the plain
+    /// `PathBuf` the body already used. `_guard` — never `_`, which drops at
+    /// once and is the leak back in one character.
+    pub fn pair(prefix: &str, tag: &str) -> (Self, std::path::PathBuf) {
+        let guard = Self::new(prefix, tag);
+        let dir = guard.0.clone();
+        (guard, dir)
+    }
 }
 
 #[cfg(test)]
 impl Drop for ScratchDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        // Said, not swallowed (ART-281): on Windows `remove_dir_all` fails
+        // while any handle in the tree is still open, and a scratch that
+        // survives silently is how 763 GB accumulated. A panic here would
+        // abort a panicking test twice; stderr is the honest middle.
+        //
+        // `writeln!` and not `eprintln!`, whose macro panics if the write to
+        // stderr fails — which would be exactly the double-abort the line
+        // above rejects. A closed stderr is theoretical; a `Drop` that can
+        // panic is not worth keeping for a shorter line.
+        if let Err(err) = std::fs::remove_dir_all(&self.0) {
+            if self.0.exists() {
+                use std::io::Write as _;
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "ScratchDir: {} not removed: {err}",
+                    self.0.display()
+                );
+            }
+        }
     }
+}
+
+/// ART-281: the guard hands out its path, and the path stops existing when the
+/// guard does. Both halves are asserted — a `Drop` that never ran and a `Drop`
+/// that ran too early are different defects, and only the pair of tests tells
+/// them apart.
+#[cfg(test)]
+#[test]
+fn scratch_pair_removes_its_directory_when_the_guard_drops() {
+    let (guard, dir) = ScratchDir::pair("art-core", "pair");
+    assert!(dir.is_dir(), "pair must create the directory it hands back");
+    drop(guard);
+    assert!(
+        !dir.exists(),
+        "the directory must be gone once the guard is dropped: {}",
+        dir.display()
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn scratch_pair_keeps_the_directory_while_the_guard_lives() {
+    let (_guard, dir) = ScratchDir::pair("art-core", "pair-live");
+    let file = dir.join("kept.txt");
+    std::fs::write(&file, b"kept").unwrap();
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        b"kept",
+        "the scratch must still hold what the test wrote while `_guard` is in scope"
+    );
+    assert!(dir.is_dir(), "the directory must outlive the write");
 }
 
 /// ART-274: `core/` may declare a trait for something platform-specific, but

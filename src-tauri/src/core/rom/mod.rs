@@ -992,12 +992,8 @@ mod tests {
         path
     }
 
-    fn scratch(tag: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("art-rom-{tag}-{}", crate::core::test_scratch_id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-rom", tag)
     }
 
     /// **A Kickstart says what it is.** From 2.0 onwards the version and
@@ -1020,7 +1016,7 @@ mod tests {
     /// version and revision, so it is named from those.
     #[test]
     fn a_dump_art_has_not_catalogued_is_named_from_the_revision_it_states() {
-        let dir = scratch("uncatalogued");
+        let (_guard, dir) = scratch("uncatalogued");
         let path = write(&dir, "mystery.rom", &rom_stating(40, 68, 524_288));
 
         let info = identify_rom(&path).unwrap();
@@ -1049,7 +1045,7 @@ mod tests {
     /// A1200, and `rom_suits` would then call a perfectly good ROM wrong.
     #[test]
     fn a_rom_named_from_its_revision_claims_no_machine() {
-        let dir = scratch("no-machine");
+        let (_guard, dir) = scratch("no-machine");
         let path = write(&dir, "mystery.rom", &rom_stating(40, 68, 524_288));
 
         let info = identify_rom(&path).unwrap();
@@ -1082,7 +1078,7 @@ mod tests {
     /// different values, which is exactly the distinction that was missing.
     #[test]
     fn a_catalogued_dump_is_named_and_placed_by_the_checksum_it_stores() {
-        let dir = scratch("stored-checksum");
+        let (_guard, dir) = scratch("stored-checksum");
 
         // The two real 40.68 builds, by the values the database holds for
         // them. Nothing else about these fixtures differs — same size, same
@@ -1113,7 +1109,7 @@ mod tests {
     /// "suits nothing" (`rom_suits` reads it as the former).
     #[test]
     fn an_entry_that_names_no_machine_claims_none() {
-        let dir = scratch("no-machine-claim");
+        let (_guard, dir) = scratch("no-machine-claim");
         let path = write(&dir, "af.rom", &rom_with_stored_checksum(0x44C3_115E));
 
         let info = identify_rom(&path).unwrap();
@@ -1133,7 +1129,7 @@ mod tests {
     /// stands.
     #[test]
     fn a_rom_that_states_no_version_is_not_guessed_at() {
-        let dir = scratch("silent");
+        let (_guard, dir) = scratch("silent");
         let path = write(&dir, "old.rom", &rom_stating(0xFFFF, 0xFFFF, 524_288));
 
         assert_eq!(stated_version(&rom_stating(0xFFFF, 0xFFFF, 524_288)), None);
@@ -1156,7 +1152,7 @@ mod tests {
     /// ROM said what it is, and saying so beats a shrug.
     #[test]
     fn an_unknown_revision_is_still_reported_as_what_it_says() {
-        let dir = scratch("unknown-rev");
+        let (_guard, dir) = scratch("unknown-rev");
         let path = write(&dir, "future.rom", &rom_stating(52, 3, 524_288));
 
         let info = identify_rom(&path).unwrap();
@@ -1211,7 +1207,7 @@ mod tests {
     /// decryption produced the original bytes and not merely different ones.
     #[test]
     fn a_cloanto_rom_is_decoded_with_the_key_beside_it_and_then_identified() {
-        let dir = scratch("cloanto-keyed");
+        let (_guard, dir) = scratch("cloanto-keyed");
         let plain = rom_with_stored_checksum(0x87BA_7A3E);
         let key = b"a rom key of no particular length".to_vec();
         std::fs::write(dir.join("rom.key"), &key).unwrap();
@@ -1245,7 +1241,7 @@ mod tests {
     /// will not boot anything as it stands".
     #[test]
     fn a_cloanto_rom_with_no_key_is_named_as_one_rather_than_guessed_at() {
-        let dir = scratch("cloanto-keyless");
+        let (_guard, dir) = scratch("cloanto-keyless");
         let key = b"whatever".to_vec();
         let path = write(
             &dir,
@@ -1281,7 +1277,7 @@ mod tests {
 
     #[test]
     fn a_size_names_the_shape_and_not_the_machine() {
-        let dir = scratch("size-only");
+        let (_guard, dir) = scratch("size-only");
         // 256 KB, shaped like a Kickstart, stating no version and matching
         // nothing catalogued.
         let path = write(&dir, "odd.rom", &kickstart_shaped(262_144));
@@ -1305,7 +1301,7 @@ mod tests {
     /// screen labelled `CRC ERR`.
     #[test]
     fn a_rom_that_is_not_a_kickstart_is_not_accused_of_a_bad_checksum() {
-        let dir = scratch("not-a-kickstart");
+        let (_guard, dir) = scratch("not-a-kickstart");
         let mut bytes = vec![0u8; 32_768];
         bytes[0..4].copy_from_slice(&[0x13, 0xF9, 0xF8, 0x60]);
         let path = write(&dir, "A2630_390282-06.bin", &bytes);
@@ -1330,7 +1326,7 @@ mod tests {
     /// still says so.
     #[test]
     fn a_kickstart_whose_body_changed_still_reports_a_bad_checksum() {
-        let dir = scratch("damaged-kickstart");
+        let (_guard, dir) = scratch("damaged-kickstart");
         let sound = kickstart_that_sums(262_144);
         assert_eq!(checksum_verdict(&sound), RomChecksum::Valid);
 
@@ -1376,7 +1372,7 @@ mod tests {
     /// a reason to fail it (ART-138 meeting ART-128).
     #[test]
     fn an_encrypted_rom_with_no_key_says_nothing_about_its_checksum() {
-        let dir = scratch("cloanto-checksum");
+        let (_guard, dir) = scratch("cloanto-checksum");
         let path = write(
             &dir,
             "amiga-os-310-a1200.rom",

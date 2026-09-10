@@ -1487,7 +1487,7 @@ mod tests {
     /// real update wrote states its own release — read back, not asserted.
     #[test]
     fn a_tree_states_its_own_release_from_the_file_the_release_wrote() {
-        let dir = crate::core::osinstall::fixtures::scratch("release-marker");
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("release-marker");
         let root = dir.join("tree");
         std::fs::create_dir_all(root.join("Prefs/Env-Archive/Versions")).unwrap();
         std::fs::write(
@@ -1505,7 +1505,7 @@ mod tests {
     /// 11 bytes) — trimming must not depend on one being there.
     #[test]
     fn the_base_disks_own_marker_with_no_trailing_newline_reads_back_too() {
-        let dir = crate::core::osinstall::fixtures::scratch("release-marker-base");
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("release-marker-base");
         let root = dir.join("tree");
         std::fs::create_dir_all(root.join("Prefs/Env-Archive/Versions")).unwrap();
         std::fs::write(
@@ -1524,7 +1524,7 @@ mod tests {
     /// exactly the AmigaOS-3.5-shipped-as-3.9 defect, moved one level down.
     #[test]
     fn a_tree_with_no_marker_says_so_rather_than_guessing() {
-        let dir = crate::core::osinstall::fixtures::scratch("release-marker-absent");
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("release-marker-absent");
         let root = dir.join("tree");
         std::fs::create_dir_all(&root).unwrap();
         assert_eq!(release_of_tree(&root).unwrap(), None);
@@ -1535,7 +1535,7 @@ mod tests {
     /// confident-wrong-sentence shape this function exists to avoid.
     #[test]
     fn a_marker_far_larger_than_any_real_one_is_refused_not_truncated() {
-        let dir = crate::core::osinstall::fixtures::scratch("release-marker-oversized");
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("release-marker-oversized");
         let root = dir.join("tree");
         std::fs::create_dir_all(root.join("Prefs/Env-Archive/Versions")).unwrap();
         std::fs::write(
@@ -1552,7 +1552,7 @@ mod tests {
 
     #[test]
     fn stated_release_confirms_a_matching_marker() {
-        let dir = crate::core::osinstall::fixtures::scratch("stated-release-confirmed");
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("stated-release-confirmed");
         let root = dir.join("tree");
         std::fs::create_dir_all(root.join("Prefs/Env-Archive/Versions")).unwrap();
         std::fs::write(
@@ -1571,7 +1571,7 @@ mod tests {
     /// The sentence naming both sides — never just "this looks wrong".
     #[test]
     fn stated_release_names_both_sides_of_a_mismatch() {
-        let dir = crate::core::osinstall::fixtures::scratch("stated-release-mismatch");
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("stated-release-mismatch");
         let root = dir.join("tree");
         std::fs::create_dir_all(root.join("Prefs/Env-Archive/Versions")).unwrap();
         std::fs::write(
@@ -1597,7 +1597,8 @@ mod tests {
     /// be told it is wrong for a formula nobody has checked.
     #[test]
     fn stated_release_reports_a_differing_marker_as_expected_unknown_for_an_unmeasured_release() {
-        let dir = crate::core::osinstall::fixtures::scratch("stated-release-expected-unknown");
+        let (_guard, dir) =
+            crate::core::osinstall::fixtures::scratch("stated-release-expected-unknown");
         let root = dir.join("tree");
         std::fs::create_dir_all(root.join("Prefs/Env-Archive/Versions")).unwrap();
         std::fs::write(
@@ -1617,7 +1618,7 @@ mod tests {
 
     #[test]
     fn stated_release_is_unstated_for_a_tree_with_no_marker() {
-        let dir = crate::core::osinstall::fixtures::scratch("stated-release-unstated");
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("stated-release-unstated");
         let root = dir.join("tree");
         std::fs::create_dir_all(&root).unwrap();
         assert_eq!(
@@ -1639,7 +1640,7 @@ mod tests {
     /// passed against that defect exactly as happily as against the fix.
     #[test]
     fn stated_release_is_unreadable_not_unstated_when_the_marker_cannot_be_read() {
-        let dir = crate::core::osinstall::fixtures::scratch("stated-release-unreadable");
+        let (_guard, dir) = crate::core::osinstall::fixtures::scratch("stated-release-unreadable");
         let root = dir.join("tree");
         std::fs::create_dir_all(root.join("Prefs/Env-Archive/Versions")).unwrap();
         std::fs::write(

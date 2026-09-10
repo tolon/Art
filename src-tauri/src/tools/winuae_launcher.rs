@@ -245,7 +245,21 @@ mod real_boot_hook {
         println!("--- config ---\n{config}\n--- end ---");
 
         if let Ok(winuae) = std::env::var("ART_WINUAE") {
-            let pid = launch_winuae(&PathBuf::from(&winuae), &config, &std::env::temp_dir())
+            // ART-281: the launcher's scratch root here is the folder beside
+            // the tree this hook already wrote `art-boot-39.uae` into two
+            // lines up — **not** a `ScratchDir` and not the platform root.
+            // `launch_winuae` `release`s the child: WinUAE outlives this test
+            // and opens the generated `.uae` after the function has returned,
+            // so a guarded root would be removed between the spawn and that
+            // read, and the emulator would fail to start for a reason that
+            // has nothing to do with what is being measured. The directory
+            // above is the owner's own, proven writable by the `write` on the
+            // line before, and it keeps the launcher's copy where the copy
+            // this hook prints already is. `ask_a_tree_its_version_when_asked`
+            // below does take a guarded root, because it `terminate()`s the
+            // process before it returns.
+            let uae_root = PathBuf::from(&tree).join("..");
+            let pid = launch_winuae(&PathBuf::from(&winuae), &config, &uae_root)
                 .expect("WinUAE must start");
             println!("WinUAE started, pid {pid}");
         }
@@ -392,6 +406,7 @@ mod real_version_hook {
     #[test]
     #[ignore = "opens WinUAE against the owner's own tree and ROM; run explicitly"]
     fn ask_a_tree_its_version_when_asked() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-winuae-root", "ask-version");
         let (Ok(tree), Ok(rom), Ok(winuae)) = (
             std::env::var("ART_BOOT_TREE"),
             std::env::var("ART_BOOT_ROM"),
@@ -450,8 +465,7 @@ mod real_version_hook {
         };
 
         let config = generate_uae_config(&AmigaProfile::a1200_aga(), &media).unwrap();
-        let mut process =
-            launch_winuae_process(&PathBuf::from(&winuae), &config, &std::env::temp_dir()).unwrap();
+        let mut process = launch_winuae_process(&PathBuf::from(&winuae), &config, &root).unwrap();
         println!("WinUAE pid {}", process.pid());
 
         let started = Instant::now();

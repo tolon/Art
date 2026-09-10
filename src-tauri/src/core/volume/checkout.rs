@@ -320,14 +320,8 @@ pub fn renamed_icon(new_name: &str) -> String {
 mod tests {
     use super::*;
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-checkout-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-checkout", name)
     }
 
     fn checkout_at(path: &Path, contents: &[u8]) -> Checkout {
@@ -352,7 +346,7 @@ mod tests {
     /// disk image.
     #[test]
     fn an_unedited_file_reads_as_unchanged_even_after_being_touched() {
-        let dir = scratch("unchanged");
+        let (_guard, dir) = scratch("unchanged");
         let path = dir.join("Startup-Sequence");
         let checkout = checkout_at(&path, b"echo hello\n");
 
@@ -365,7 +359,7 @@ mod tests {
 
     #[test]
     fn an_edited_file_reads_as_modified_with_its_new_size() {
-        let dir = scratch("modified");
+        let (_guard, dir) = scratch("modified");
         let path = dir.join("Startup-Sequence");
         let checkout = checkout_at(&path, b"echo hello\n");
 
@@ -385,7 +379,7 @@ mod tests {
     /// behaves on a real Amiga. Detected and offered — never converted unasked.
     #[test]
     fn crlf_arriving_in_a_text_file_that_had_none_is_flagged() {
-        let dir = scratch("crlf");
+        let (_guard, dir) = scratch("crlf");
         let path = dir.join("Startup-Sequence");
         let checkout = checkout_at(&path, b"echo hello\n");
 
@@ -405,7 +399,7 @@ mod tests {
     /// warning about it would be noise.
     #[test]
     fn a_file_that_already_had_crlf_is_not_flagged_for_keeping_it() {
-        let dir = scratch("crlf-already");
+        let (_guard, dir) = scratch("crlf-already");
         let path = dir.join("Readme.txt");
         let checkout = checkout_at(&path, b"line one\r\n");
         assert!(!checkout.was_lf_only);
@@ -422,7 +416,7 @@ mod tests {
     /// An icon full of 0x0D 0x0A pairs is not a text file with CRLF.
     #[test]
     fn a_binary_file_never_gets_the_line_ending_warning() {
-        let dir = scratch("binary");
+        let (_guard, dir) = scratch("binary");
         let path = dir.join("Game.info");
         let checkout = checkout_at(&path, b"\xE3\x10\x00\x01\x0D\x0A\x00");
         assert!(checkout.is_binary);
@@ -438,7 +432,7 @@ mod tests {
 
     #[test]
     fn a_temp_file_that_has_gone_is_reported_not_forgotten() {
-        let dir = scratch("missing");
+        let (_guard, dir) = scratch("missing");
         let path = dir.join("Gone.txt");
         let checkout = checkout_at(&path, b"x");
         std::fs::remove_file(&path).unwrap();
@@ -502,7 +496,7 @@ mod tests {
 
     #[test]
     fn the_manifest_survives_a_reload() {
-        let dir = scratch("manifest");
+        let (_guard, dir) = scratch("manifest");
         let file = dir.join("checkouts.jsonl");
         let temp = dir.join("Startup-Sequence");
 
@@ -527,7 +521,7 @@ mod tests {
 
     #[test]
     fn checking_the_same_file_out_twice_keeps_one_entry() {
-        let dir = scratch("manifest-replace");
+        let (_guard, dir) = scratch("manifest-replace");
         let file = dir.join("checkouts.jsonl");
         let temp = dir.join("Startup-Sequence");
 

@@ -1020,21 +1020,21 @@ pub fn sources_install_volume(
 mod tests {
     use super::*;
 
-    fn temp_root(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-sources-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    /// The guard first, the path second (ART-281): bindings drop
+    /// right-to-left, so `let (_guard, dir) = temp_root(..)` keeps the
+    /// directory alive for the whole test and removes it on every exit —
+    /// the panicking one included, which a trailing `remove_dir_all` is
+    /// exactly what skips. The prefix stays `art-sources-` so residue from
+    /// an older run is still attributable by name.
+    fn temp_root(name: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-sources", name)
     }
 
     /// This runs inside Tauri's `setup`, so anything that can panic here takes
     /// the whole application down before a window appears.
     #[test]
     fn starting_with_no_catalogue_is_the_normal_case() {
-        let root = temp_root("fresh");
+        let (_guard, root) = temp_root("fresh");
         let state = SourcesState::new(root.join("sources"), root.join("downloads"));
 
         assert_eq!(state.catalog.stats().unwrap().total, 0);
@@ -1049,7 +1049,7 @@ mod tests {
     /// somewhere else forever.
     #[test]
     fn an_unreadable_catalogue_still_starts_and_keeps_its_path() {
-        let root = temp_root("unreadable");
+        let (_guard, root) = temp_root("unreadable");
         let sources = root.join("sources");
         std::fs::create_dir_all(&sources).unwrap();
 
@@ -1068,7 +1068,7 @@ mod tests {
 
     #[test]
     fn the_provider_description_reaches_the_ui_intact() {
-        let root = temp_root("describe");
+        let (_guard, root) = temp_root("describe");
         let state = SourcesState::new(root.join("sources"), root.join("downloads"));
 
         let info = describe(&state.provider(), &state.cache);
@@ -1107,12 +1107,13 @@ mod tests {
     /// same disk contents, because they are the same operation.
     #[test]
     fn installing_into_an_adf_uses_the_volume_writer() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-sources-root", "install-adf");
         use crate::core::jobs::NoProgress;
         use crate::core::lha::tests::make_lha_with;
         use crate::core::volume::fixture::ffs_volume;
         use crate::core::volume::DosType;
 
-        let dir = temp_root("install-adf");
+        let (_guard, dir) = temp_root("install-adf");
         let archive = dir.join("Pack.lha");
         std::fs::write(
             &archive,
@@ -1124,12 +1125,9 @@ mod tests {
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         std::fs::write(&image, &bytes).unwrap();
 
-        let (scratch, _) = crate::core::sources::install::unpack_for_install(
-            &archive,
-            &std::env::temp_dir(),
-            &NoProgress,
-        )
-        .unwrap();
+        let (scratch, _) =
+            crate::core::sources::install::unpack_for_install(&archive, &root, &NoProgress)
+                .unwrap();
         let folder = crate::core::volume::write::copy::HostFolder::new(scratch.path(), true);
         let (report, backup) = crate::commands::volume_write::run_copy_in_folder(
             &image,
@@ -1156,12 +1154,14 @@ mod tests {
     /// proved against the volume writer instead.
     #[test]
     fn installing_recreates_nested_folders_once() {
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-sources-root", "install-nested");
         use crate::core::jobs::NoProgress;
         use crate::core::lha::tests::make_lha_with;
         use crate::core::volume::fixture::ffs_volume;
         use crate::core::volume::DosType;
 
-        let dir = temp_root("install-nested");
+        let (_guard, dir) = temp_root("install-nested");
         let archive = dir.join("Pack.lha");
         std::fs::write(
             &archive,
@@ -1173,12 +1173,9 @@ mod tests {
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         std::fs::write(&image, &bytes).unwrap();
 
-        let (scratch, _) = crate::core::sources::install::unpack_for_install(
-            &archive,
-            &std::env::temp_dir(),
-            &NoProgress,
-        )
-        .unwrap();
+        let (scratch, _) =
+            crate::core::sources::install::unpack_for_install(&archive, &root, &NoProgress)
+                .unwrap();
         let folder = crate::core::volume::write::copy::HostFolder::new(scratch.path(), true);
         let (report, _) = crate::commands::volume_write::run_copy_in_folder(
             &image,
@@ -1212,12 +1209,14 @@ mod tests {
     /// leaving it trivially green.
     #[test]
     fn installing_a_package_that_does_not_fit_is_refused_without_touching_the_image() {
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-sources-root", "install-toobig");
         use crate::core::jobs::NoProgress;
         use crate::core::lha::tests::make_lha_with;
         use crate::core::volume::fixture::ffs_volume;
         use crate::core::volume::DosType;
 
-        let dir = temp_root("install-toobig");
+        let (_guard, dir) = temp_root("install-toobig");
         let archive = dir.join("Pack.lha");
         let small = b"fits easily".to_vec();
         let big = vec![b'x'; 900 * 1024];
@@ -1238,7 +1237,7 @@ mod tests {
             0,
             0,
             crate::core::lha::OverwritePolicy::Skip,
-            &std::env::temp_dir(),
+            &root,
             &NoProgress,
         )
         .expect_err("a package larger than the floppy must be refused");
@@ -1270,6 +1269,8 @@ mod tests {
     /// the file.
     #[test]
     fn a_cancelled_install_writes_nothing_and_does_not_report_success() {
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-sources-root", "install-cancel");
         use crate::core::jobs::ProgressSink;
         use crate::core::lha::tests::make_lha_with;
         use crate::core::volume::fixture::ffs_volume;
@@ -1295,7 +1296,7 @@ mod tests {
             }
         }
 
-        let dir = temp_root("install-cancel");
+        let (_guard, dir) = temp_root("install-cancel");
         let archive = dir.join("Pack.lha");
         let files: Vec<(String, Vec<u8>)> = (0..10)
             .map(|index| (format!("File{index}.txt"), vec![b'a' + index as u8; 64]))
@@ -1318,7 +1319,7 @@ mod tests {
             0,
             0,
             crate::core::lha::OverwritePolicy::Skip,
-            &std::env::temp_dir(),
+            &root,
             &sink,
         )
         .expect_err("a cancelled install must not come back as a successful one");
@@ -1341,12 +1342,13 @@ mod tests {
     /// package that genuinely fits still has to install completely.
     #[test]
     fn installing_a_package_that_fits_installs_completely() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-sources-root", "install-fits");
         use crate::core::jobs::NoProgress;
         use crate::core::lha::tests::make_lha_with;
         use crate::core::volume::fixture::ffs_volume;
         use crate::core::volume::DosType;
 
-        let dir = temp_root("install-fits");
+        let (_guard, dir) = temp_root("install-fits");
         let archive = dir.join("Pack.lha");
         std::fs::write(
             &archive,
@@ -1358,12 +1360,9 @@ mod tests {
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         std::fs::write(&image, &bytes).unwrap();
 
-        let (scratch, _) = crate::core::sources::install::unpack_for_install(
-            &archive,
-            &std::env::temp_dir(),
-            &NoProgress,
-        )
-        .unwrap();
+        let (scratch, _) =
+            crate::core::sources::install::unpack_for_install(&archive, &root, &NoProgress)
+                .unwrap();
         let folder = crate::core::volume::write::copy::HostFolder::new(scratch.path(), true);
 
         let plan =

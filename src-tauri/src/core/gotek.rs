@@ -549,9 +549,7 @@ ejected-on-startup = yes
 
     #[test]
     fn saving_backs_up_the_previous_config() {
-        let dir =
-            std::env::temp_dir().join(format!("art-gotek-save-{}", crate::core::test_scratch_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-gotek-save", "backup");
         let ff = dir.join("FF.CFG");
         std::fs::write(&ff, "pin02 = nrdy\nstep-volume = 40\n").unwrap();
 

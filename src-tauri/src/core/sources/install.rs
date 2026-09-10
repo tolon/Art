@@ -145,14 +145,8 @@ mod tests {
     use super::*;
     use crate::core::jobs::NoProgress;
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-install-t-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-install-t", name)
     }
 
     fn archive_with(files: &[(&str, &[u8])]) -> Vec<u8> {
@@ -164,11 +158,12 @@ mod tests {
     /// destinations share this unpack, so it only needs testing once.
     #[test]
     fn an_archive_with_no_files_is_an_honest_error() {
-        let dir = scratch("empty");
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-install-root", "empty");
+        let (_guard, dir) = scratch("empty");
         let archive = dir.join("pkg.lha");
         std::fs::write(&archive, archive_with(&[])).unwrap();
 
-        let err = unpack_for_install(&archive, &std::env::temp_dir(), &NoProgress).unwrap_err();
+        let err = unpack_for_install(&archive, &root, &NoProgress).unwrap_err();
         assert_eq!(err.code(), "ART-FORMAT-MALFORMED");
 
         std::fs::remove_dir_all(&dir).ok();
@@ -178,7 +173,8 @@ mod tests {
     /// this is the shape both destinations copy from.
     #[test]
     fn unpacking_recreates_the_archive_s_tree() {
-        let dir = scratch("unpack");
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-install-root", "unpack");
+        let (_guard, dir) = scratch("unpack");
         let archive = dir.join("pkg.lha");
         std::fs::write(
             &archive,
@@ -186,8 +182,7 @@ mod tests {
         )
         .unwrap();
 
-        let (scratch_dir, skipped) =
-            unpack_for_install(&archive, &std::env::temp_dir(), &NoProgress).unwrap();
+        let (scratch_dir, skipped) = unpack_for_install(&archive, &root, &NoProgress).unwrap();
         assert!(skipped.is_empty());
         assert_eq!(
             std::fs::read(scratch_dir.path().join("Docs/readme.txt")).unwrap(),
@@ -203,6 +198,7 @@ mod tests {
 
     #[test]
     fn cancelling_unpacks_nothing() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-install-root", "cancel");
         struct Cancelled;
         impl ProgressSink for Cancelled {
             fn report(&self, _: u64, _: Option<u64>, _: &str) {}
@@ -211,11 +207,11 @@ mod tests {
             }
         }
 
-        let dir = scratch("cancel");
+        let (_guard, dir) = scratch("cancel");
         let archive = dir.join("pkg.lha");
         std::fs::write(&archive, archive_with(&[("hello.txt", b"hi")])).unwrap();
 
-        let err = unpack_for_install(&archive, &std::env::temp_dir(), &Cancelled).unwrap_err();
+        let err = unpack_for_install(&archive, &root, &Cancelled).unwrap_err();
         assert_eq!(err.code(), "ART-CANCELLED");
 
         std::fs::remove_dir_all(&dir).ok();

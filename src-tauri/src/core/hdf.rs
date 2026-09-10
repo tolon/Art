@@ -308,8 +308,7 @@ mod tests {
 
     #[test]
     fn create_and_open_rdb_hdf() {
-        let dir = std::env::temp_dir().join(format!("art-hdf-{}", crate::core::test_scratch_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-hdf", "create-open");
         let hdf_path = dir.join("System.hdf");
 
         let specs = vec![PartitionSpec {
@@ -330,18 +329,15 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    fn scratch(tag: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("art-hdf-{tag}-{}", crate::core::test_scratch_id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-hdf", tag)
     }
 
     /// An HDF can hold a user's entire Workbench install. Creating one must
     /// never land on top of an existing file.
     #[test]
     fn create_refuses_to_replace_an_existing_image() {
-        let dir = scratch("exists");
+        let (_guard, dir) = scratch("exists");
         let target = dir.join("Workbench.hdf");
         std::fs::write(&target, b"irreplaceable user data").unwrap();
 
@@ -361,7 +357,7 @@ mod tests {
     /// `Vec` before a single byte reached the disk.
     #[test]
     fn large_images_are_created_sparsely() {
-        let dir = scratch("sparse");
+        let (_guard, dir) = scratch("sparse");
         let target = dir.join("Big.hdf");
 
         let specs = vec![PartitionSpec {
@@ -385,7 +381,7 @@ mod tests {
     /// shorter buffer and abort the whole application.
     #[test]
     fn absurdly_small_sizes_error_rather_than_panic() {
-        let dir = scratch("tiny");
+        let (_guard, dir) = scratch("tiny");
 
         let err = create_hdf(&dir.join("a.hdf"), 2, false, &[], &[]).unwrap_err();
         assert!(matches!(err, CoreError::InvalidInput(_)), "got {err:?}");
@@ -401,7 +397,7 @@ mod tests {
     /// been correct for.
     #[test]
     fn detect_shape_of_a_bare_dos_image() {
-        let dir = scratch("shape-bare");
+        let (_guard, dir) = scratch("shape-bare");
         let target = dir.join("Bare.hdf");
         let mut image = vec![0u8; BLOCK_SIZE * 4];
         image[0..4].copy_from_slice(b"DOS\x03");
@@ -416,7 +412,7 @@ mod tests {
     /// the only bare signature ART already knows.
     #[test]
     fn detect_shape_of_a_bare_pds3_image() {
-        let dir = scratch("shape-pds3");
+        let (_guard, dir) = scratch("shape-pds3");
         let target = dir.join("Bare.hdf");
         let mut image = vec![0u8; BLOCK_SIZE * 4];
         image[0..4].copy_from_slice(b"PDS\x03");
@@ -431,7 +427,7 @@ mod tests {
     /// blocks it falls, must be read as an RDB image rather than a bare one.
     #[test]
     fn detect_shape_of_an_rdb_image() {
-        let dir = scratch("shape-rdb");
+        let (_guard, dir) = scratch("shape-rdb");
         let target = dir.join("Rdb.hdf");
         let mut image = vec![0u8; BLOCK_SIZE * 16];
         image[0..4].copy_from_slice(&IDNAME_RDSK.to_be_bytes());
@@ -450,7 +446,7 @@ mod tests {
     /// what produced "Not a DOS disk in unit 0".
     #[test]
     fn detect_shape_of_a_vhd_image_is_unknown() {
-        let dir = scratch("shape-vhd");
+        let (_guard, dir) = scratch("shape-vhd");
         let target = dir.join("AmiKit.hdf");
         let mut image = vec![0u8; BLOCK_SIZE * 16];
         image[0..8].copy_from_slice(b"conectix");

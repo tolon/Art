@@ -111,6 +111,15 @@ jobs:
       - name: Check every staging site goes through the scratch root
         run: python scripts/scratch-root-sweep.py
 
+      # ART-281: the same fix pointing at the test suite. Sixty-three fixture
+      # helpers returned a bare path nothing removed, and 763 GB accumulated
+      # under one scratch root before anybody looked. This fails on a helper
+      # that returns a bare path, a call site bound without its guard, a
+      # scratch path built by hand, and a test that hands the platform temp
+      # directory to product code as its root.
+      - name: Check every test scratch hands out its guard
+        run: python scripts/scratch-guard-sweep.py
+
       # The palette is a measurement, not a preference (ART-140). The light
       # theme once shipped 2.20:1 text inside its own success badge because it
       # had been judged by eye. This reads theme.css and fails below the

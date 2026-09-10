@@ -354,15 +354,7 @@ mod tests {
     /// and the fallback the other way round.
     #[test]
     fn a_tree_with_escaped_names_is_refused_before_the_tool_runs() {
-        let dir = std::env::temp_dir().join(format!(
-            "art-hst-escaped-{}-{}",
-            crate::core::test_scratch_id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-hst-escaped", "refused");
         std::fs::write(
             dir.join("distribution.json"),
             br#"{"release":"AmigaOS 3.9","builtFrom":[],"files":[

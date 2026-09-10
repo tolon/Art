@@ -1809,29 +1809,17 @@ pub(crate) mod tests {
     /// an accented volume name against a different fixture's, which is two
     /// discs meeting in one directory (ART-164). The counter is what makes
     /// the name unique; the stamp only makes it readable.
-    fn tmp() -> PathBuf {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let d = std::env::temp_dir().join(format!(
-            "art-iso-{}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&d).unwrap();
-        d
+    fn tmp() -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-iso", "d")
     }
 
     /// Write an image to a temp file and return (dir, path). The dir is kept
     /// alive by the caller so the file survives until the test ends.
-    fn write_image(bytes: &[u8]) -> (PathBuf, PathBuf) {
-        let d = tmp();
+    fn write_image(bytes: &[u8]) -> (crate::core::ScratchDir, PathBuf, PathBuf) {
+        let (guard, d) = tmp();
         let p = d.join("disc.iso");
         fs::write(&p, bytes).unwrap();
-        (d, p)
+        (guard, d, p)
     }
 
     /// A small disc: two files at the root and one subdirectory holding one.
@@ -1945,7 +1933,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_rock_ridge_disc_reads_its_real_names_not_its_8_3_ones() {
-        let (d, p) = write_image(&amiga_rock_ridge_builder().build());
+        let (_guard, d, p) = write_image(&amiga_rock_ridge_builder().build());
         let iso = IsoImage::open(&p).unwrap();
         let (extent, length) = iso.root();
         let names: Vec<String> = iso
@@ -1965,7 +1953,7 @@ pub(crate) mod tests {
     #[test]
     fn a_rock_ridge_disc_carries_its_amiga_protection_bits_and_comment() {
         use crate::core::volume::write::uaem::format_bits;
-        let (d, p) = write_image(&amiga_rock_ridge_builder().build());
+        let (_guard, d, p) = write_image(&amiga_rock_ridge_builder().build());
         let iso = IsoImage::open(&p).unwrap();
         let (extent, length) = iso.root();
         let entries = iso.list(extent, length).unwrap();
@@ -1984,7 +1972,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_name_and_comment_split_across_a_ce_continuation_are_joined() {
-        let (d, p) = write_image(&amiga_rock_ridge_builder().build());
+        let (_guard, d, p) = write_image(&amiga_rock_ridge_builder().build());
         let iso = IsoImage::open(&p).unwrap();
         let (extent, length) = iso.root();
         let games = iso
@@ -2019,7 +2007,7 @@ pub(crate) mod tests {
                 }
             }
         }
-        let (d, p) = write_image(&builder.build());
+        let (_guard, d, p) = write_image(&builder.build());
         let iso = IsoImage::open(&p).unwrap();
         let (extent, length) = iso.root();
         let entries = iso.list(extent, length).unwrap();
@@ -2045,7 +2033,7 @@ pub(crate) mod tests {
         // and no protection bits.
         let mut builder = amiga_rock_ridge_builder();
         builder.rock_ridge = false;
-        let (d, p) = write_image(&builder.build());
+        let (_guard, d, p) = write_image(&builder.build());
         let iso = IsoImage::open(&p).unwrap();
         let (extent, length) = iso.root();
         let entries = iso.list(extent, length).unwrap();
@@ -2068,7 +2056,7 @@ pub(crate) mod tests {
         // would catch.
         let mut builder = amiga_rock_ridge_builder();
         builder.susp_skip = 4;
-        let (d, p) = write_image(&builder.build());
+        let (_guard, d, p) = write_image(&builder.build());
         let iso = IsoImage::open(&p).unwrap();
         let (extent, length) = iso.root();
         let entries = iso.list(extent, length).unwrap();
@@ -2080,7 +2068,7 @@ pub(crate) mod tests {
     #[test]
     fn a_disc_sourced_file_carries_its_bits_into_a_uaem_sidecar() {
         use crate::core::jobs::NoProgress;
-        let (d, p) = write_image(&amiga_rock_ridge_builder().build());
+        let (_guard, d, p) = write_image(&amiga_rock_ridge_builder().build());
         let iso = IsoImage::open(&p).unwrap();
         let (extent, length) = iso.root();
         let out = d.join("out");
@@ -2101,7 +2089,7 @@ pub(crate) mod tests {
     #[test]
     fn a_disc_sourced_file_carries_its_bits_into_an_amiga_volume() {
         use crate::core::volume::write::copy::CopySource;
-        let (d, p) = write_image(&amiga_rock_ridge_builder().build());
+        let (_guard, d, p) = write_image(&amiga_rock_ridge_builder().build());
         let iso = IsoImage::open(&p).unwrap();
         let (extent, length) = iso.root();
         let source = IsoSource::new(iso, extent, length).unwrap();
@@ -2125,7 +2113,7 @@ pub(crate) mod tests {
         // The fixture gives every record a date, so this also pins that a
         // date alone is not treated as Amiga metadata worth a sidecar.
         use crate::core::jobs::NoProgress;
-        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let (_guard, d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
         let iso = IsoImage::open(&p).unwrap();
         let (extent, length) = iso.root();
         let out = d.join("out");
@@ -2139,7 +2127,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_minimal_iso_reports_its_volume_name_and_root() {
-        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let (_guard, d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
         let iso = IsoImage::open(&p).unwrap();
         assert_eq!(iso.volume_name(), "AMIGA_TEST");
         assert_eq!(iso.layout(), SectorLayout::Cooked);
@@ -2152,7 +2140,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_directory_lists_its_entries_without_dot_and_dotdot() {
-        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let (_guard, d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
         let iso = IsoImage::open(&p).unwrap();
         let (extent, length) = iso.root();
         let entries = iso.list(extent, length).unwrap();
@@ -2187,7 +2175,7 @@ pub(crate) mod tests {
             ],
             ..Default::default()
         };
-        let (d, p) = write_image(&builder.build());
+        let (_guard, d, p) = write_image(&builder.build());
         let iso = IsoImage::open(&p).unwrap();
         let (extent, length) = iso.root();
         let entries = iso.list(extent, length).unwrap();
@@ -2203,7 +2191,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_joliet_disc_prefers_its_unicode_names() {
-        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, true).build());
+        let (_guard, d, p) = write_image(&sample_builder(SectorLayout::Cooked, true).build());
         let iso = IsoImage::open(&p).unwrap();
         assert!(iso.is_joliet());
         // The volume name comes from the Joliet descriptor too, and the
@@ -2242,8 +2230,10 @@ pub(crate) mod tests {
 
     #[test]
     fn a_raw_2352_byte_image_reads_the_same_as_a_2048_byte_one() {
-        let (d1, cooked_path) = write_image(&sample_builder(SectorLayout::Cooked, true).build());
-        let (d2, raw_path) = write_image(&sample_builder(SectorLayout::Raw2352, true).build());
+        let (_guard1, d1, cooked_path) =
+            write_image(&sample_builder(SectorLayout::Cooked, true).build());
+        let (_guard2, d2, raw_path) =
+            write_image(&sample_builder(SectorLayout::Raw2352, true).build());
 
         let cooked = IsoImage::open(&cooked_path).unwrap();
         let raw = IsoImage::open(&raw_path).unwrap();
@@ -2280,7 +2270,7 @@ pub(crate) mod tests {
             split_root: true,
             ..sample_builder(SectorLayout::Cooked, false)
         };
-        let (d, p) = write_image(&builder.build());
+        let (_guard, d, p) = write_image(&builder.build());
         let iso = IsoImage::open(&p).unwrap();
         let (extent, length) = iso.root();
         assert_eq!(length, 2 * LOGICAL_SECTOR_SIZE as u32);
@@ -2297,7 +2287,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_directory_claiming_a_length_past_the_end_of_the_file_is_an_error() {
-        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let (_guard, d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
         let image_len = fs::metadata(&p).unwrap().len();
         let iso = IsoImage::open(&p).unwrap();
         let (extent, _) = iso.root();
@@ -2335,7 +2325,7 @@ pub(crate) mod tests {
             children: vec![node],
             ..Default::default()
         };
-        let (d, p) = write_image(&builder.build());
+        let (_guard, d, p) = write_image(&builder.build());
         let iso = IsoImage::open(&p).unwrap();
 
         let walk = iso.walk().unwrap();
@@ -2358,7 +2348,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_walk_finds_every_nested_entry_of_a_shallow_disc() {
-        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let (_guard, d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
         let iso = IsoImage::open(&p).unwrap();
         let walk = iso.walk().unwrap();
         assert!(!walk.depth_limited);
@@ -2373,9 +2363,9 @@ pub(crate) mod tests {
     fn extract_tree_writes_the_disc_out_to_a_host_folder() {
         use crate::core::jobs::NoProgress;
 
-        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let (_guard, d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
         let iso = IsoImage::open(&p).unwrap();
-        let dest = tmp();
+        let (_guard_dest, dest) = tmp();
         let (extent, length) = iso.root();
 
         let report = iso
@@ -2401,9 +2391,9 @@ pub(crate) mod tests {
     fn extract_tree_reports_a_bad_extent_instead_of_panicking() {
         use crate::core::jobs::NoProgress;
 
-        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let (_guard, d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
         let iso = IsoImage::open(&p).unwrap();
-        let dest = tmp();
+        let (_guard_dest, dest) = tmp();
 
         let err = iso
             .extract_tree(
@@ -2428,9 +2418,9 @@ pub(crate) mod tests {
     fn extract_tree_honours_the_users_overwrite_policy() {
         use crate::core::jobs::NoProgress;
 
-        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let (_guard, d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
         let iso = IsoImage::open(&p).unwrap();
-        let dest = tmp();
+        let (_guard_dest, dest) = tmp();
         let (extent, length) = iso.root();
 
         // Something already standing where README.TXT wants to go.
@@ -2504,9 +2494,9 @@ pub(crate) mod tests {
             .expect("the fixture should contain a SUB record");
         bytes[root_at + sub + 2..root_at + sub + 6].copy_from_slice(&root_lba.to_le_bytes());
 
-        let (d, p) = write_image(&bytes);
+        let (_guard, d, p) = write_image(&bytes);
         let iso = IsoImage::open(&p).unwrap();
-        let dest = tmp();
+        let (_guard_dest, dest) = tmp();
         let (extent, length) = iso.root();
 
         let report = iso
@@ -2542,7 +2532,7 @@ pub(crate) mod tests {
     /// line named a single file while all of it went across).
     #[test]
     fn a_single_file_source_carries_exactly_that_one_file() {
-        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let (_guard, d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
         let iso = IsoImage::open(&p).unwrap();
         let (extent, length) = iso.root();
         let readme = iso
@@ -2589,12 +2579,12 @@ pub(crate) mod tests {
         use crate::core::volume::write::VolumeWriter;
         use crate::core::volume::DosType;
 
-        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let (_guard, d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
         let iso = IsoImage::open(&p).unwrap();
         let (extent, length) = iso.root();
         let source = IsoSource::new(iso, extent, length).unwrap();
 
-        let vol_dir = tmp();
+        let (_guard_vol_dir, vol_dir) = tmp();
         let image_path = vol_dir.join("disk.adf");
         let (bytes, geometry) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         fs::write(&image_path, &bytes).unwrap();
@@ -2637,7 +2627,7 @@ pub(crate) mod tests {
             .expect("the fixture should contain a SUB record");
         bytes[root_at + sub + 2..root_at + sub + 6].copy_from_slice(&root_lba.to_le_bytes());
 
-        let (d, p) = write_image(&bytes);
+        let (_guard, d, p) = write_image(&bytes);
         let iso = IsoImage::open(&p).unwrap();
         let walk = iso.walk().unwrap();
         // The cycle is cut by the visited set, so the walk returns rather
@@ -2667,7 +2657,7 @@ pub(crate) mod tests {
 
     #[test]
     fn an_extent_outside_the_image_is_an_error_not_a_read_of_garbage() {
-        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let (_guard, d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
         let iso = IsoImage::open(&p).unwrap();
         let err = iso.list(900_000, LOGICAL_SECTOR_SIZE as u32).unwrap_err();
         assert!(
@@ -2681,7 +2671,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_directory_larger_than_art_reads_is_refused() {
-        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let (_guard, d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
         let iso = IsoImage::open(&p).unwrap();
         let err = iso.list(20, u32::MAX).unwrap_err();
         assert!(err.to_string().contains("ART reads at most"), "{err}");
@@ -2692,7 +2682,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_file_that_is_not_a_disc_is_rejected_with_a_sentence() {
-        let d = tmp();
+        let (_guard_d, d) = tmp();
         let p = d.join("notadisc.iso");
         fs::write(&p, vec![0u8; 200_000]).unwrap();
         let err = IsoImage::open(&p).unwrap_err();
@@ -2719,7 +2709,7 @@ pub(crate) mod tests {
             bytes[at] = 0;
             bytes[at + 1..at + 6].copy_from_slice(b"CD001");
         }
-        let (d, p) = write_image(&bytes);
+        let (_guard, d, p) = write_image(&bytes);
         let err = IsoImage::open(&p).unwrap_err();
         assert!(err.to_string().contains("without a terminator"), "{err}");
         fs::remove_dir_all(&d).ok();
@@ -2732,7 +2722,7 @@ pub(crate) mod tests {
         // something that is not a descriptor at all.
         let at = 17 * LOGICAL_SECTOR_SIZE;
         bytes[at + 1..at + 6].copy_from_slice(b"XXXXX");
-        let (d, p) = write_image(&bytes);
+        let (_guard, d, p) = write_image(&bytes);
         let err = IsoImage::open(&p).unwrap_err();
         assert!(err.to_string().contains("CD001"), "{err}");
         fs::remove_dir_all(&d).ok();
@@ -2740,7 +2730,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_disc_with_no_joliet_falls_back_to_the_primary_names() {
-        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let (_guard, d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
         let iso = IsoImage::open(&p).unwrap();
         assert!(!iso.is_joliet());
         assert_eq!(iso.volume_name(), "AMIGA_TEST");
@@ -2754,8 +2744,9 @@ pub(crate) mod tests {
     /// show you. CD32 and mixed-mode discs are written this way.
     #[test]
     fn an_xa_form1_disc_reads_exactly_as_a_mode1_one_does() {
-        let (d1, mode1) = write_image(&sample_builder(SectorLayout::Raw2352, true).build());
-        let (d2, xa) = write_image(&sample_builder(SectorLayout::Raw2352Xa, true).build());
+        let (_guard1, d1, mode1) =
+            write_image(&sample_builder(SectorLayout::Raw2352, true).build());
+        let (_guard2, d2, xa) = write_image(&sample_builder(SectorLayout::Raw2352Xa, true).build());
 
         let a = IsoImage::open(&mode1).unwrap();
         let b = IsoImage::open(&xa).unwrap();
@@ -2794,7 +2785,7 @@ pub(crate) mod tests {
         let submode = 16 * 2352 + descriptor::XA_SUBMODE_OFFSET;
         bytes[submode] |= descriptor::XA_SUBMODE_FORM2;
 
-        let (d, p) = write_image(&bytes);
+        let (_guard, d, p) = write_image(&bytes);
         let err = IsoImage::open(&p).unwrap_err();
         assert_eq!(err.code(), "ART-FORMAT-UNSUPPORTED", "{err}");
         assert!(err.to_string().contains("Form 2"), "{err}");
@@ -2814,7 +2805,7 @@ pub(crate) mod tests {
             SectorLayout::Raw2352,
             SectorLayout::Raw2352Xa,
         ] {
-            let (d, p) = write_image(&sample_builder(layout, false).build());
+            let (_guard, d, p) = write_image(&sample_builder(layout, false).build());
             let probed = IsoImage::open(&p).unwrap();
             let told = IsoImage::open_with_layout(&p, layout).unwrap();
             assert_eq!(probed.layout(), told.layout());
@@ -2833,7 +2824,7 @@ pub(crate) mod tests {
             (SectorLayout::Raw2352, "iso9660-raw"),
             (SectorLayout::Raw2352Xa, "iso9660-raw-xa"),
         ] {
-            let (d, p) = write_image(&sample_builder(layout, false).build());
+            let (_guard, d, p) = write_image(&sample_builder(layout, false).build());
             let detection = crate::core::detect::detect(&p).unwrap();
             assert_eq!(detection.format_hint, hint);
             let from_hint = SectorLayout::from_format_hint(&detection.format_hint).unwrap();

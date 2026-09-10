@@ -409,14 +409,8 @@ mod tests {
         }
     }
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-hostfs-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-hostfs", tag)
     }
 
     fn file(dir: &Path, name: &str) -> PathBuf {
@@ -427,7 +421,7 @@ mod tests {
 
     #[test]
     fn every_named_entry_goes_and_the_destination_is_reported() {
-        let dir = scratch("all-go");
+        let (_guard, dir) = scratch("all-go");
         file(&dir, "a.adf");
         file(&dir, "b.adf");
 
@@ -452,7 +446,7 @@ mod tests {
     /// "one of three failed" is not something a user can act on.
     #[test]
     fn a_partial_failure_says_exactly_what_went_and_what_did_not() {
-        let dir = scratch("partial");
+        let (_guard, dir) = scratch("partial");
         file(&dir, "a.adf");
         file(&dir, "locked.adf");
         file(&dir, "c.adf");
@@ -499,7 +493,7 @@ mod tests {
     /// anything.
     #[test]
     fn a_recycler_that_claims_success_and_leaves_the_file_is_not_believed() {
-        let dir = scratch("liar");
+        let (_guard, dir) = scratch("liar");
         file(&dir, "a.adf");
 
         let bin = FakeBin {
@@ -522,7 +516,7 @@ mod tests {
     /// ART cannot account for is not one to act on partially.
     #[test]
     fn a_name_that_escapes_the_folder_refuses_the_whole_pass() {
-        let dir = scratch("escape");
+        let (_guard, dir) = scratch("escape");
         let inside = file(&dir, "a.adf");
         let outside = dir.parent().unwrap().join("art-hostfs-escape-target.adf");
         std::fs::write(&outside, b"NOT YOURS").unwrap();
@@ -566,7 +560,7 @@ mod tests {
     /// outright.
     #[test]
     fn an_absolute_path_is_refused_the_same_way() {
-        let dir = scratch("absolute");
+        let (_guard, dir) = scratch("absolute");
         file(&dir, "a.adf");
 
         let bin = FakeBin::new();
@@ -594,7 +588,7 @@ mod tests {
     /// common mistakes are reported before anything irreversible starts.
     #[test]
     fn a_name_that_is_not_there_refuses_before_anything_is_touched() {
-        let dir = scratch("missing");
+        let (_guard, dir) = scratch("missing");
         file(&dir, "a.adf");
 
         let bin = FakeBin::new();
@@ -632,7 +626,7 @@ mod tests {
             }
         }
 
-        let dir = scratch("cancel");
+        let (_guard, dir) = scratch("cancel");
         file(&dir, "a.adf");
         file(&dir, "b.adf");
 
@@ -672,7 +666,7 @@ mod tests {
     /// every pass look partial.
     #[test]
     fn a_pass_that_removed_everything_is_complete() {
-        let dir = scratch("complete");
+        let (_guard, dir) = scratch("complete");
         file(&dir, "a.adf");
         file(&dir, "b.adf");
 
@@ -695,7 +689,7 @@ mod tests {
     /// — `complete()` is about the whole request, not about having tried.
     #[test]
     fn a_pass_that_reached_everything_and_failed_one_is_not_complete() {
-        let dir = scratch("incomplete");
+        let (_guard, dir) = scratch("incomplete");
         file(&dir, "a.adf");
         file(&dir, "locked.adf");
 
@@ -789,7 +783,7 @@ mod tests {
     /// must not be reported as having gone somewhere.
     #[test]
     fn nothing_removed_names_nowhere() {
-        let dir = scratch("nowhere");
+        let (_guard, dir) = scratch("nowhere");
         let bin = FakeBin::new();
         let outcome = recycle_many(&bin, &dir, &[], &NoProgress).unwrap();
         assert_eq!(outcome.rows, vec![]);

@@ -159,19 +159,13 @@ mod tests {
         path
     }
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-launch-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-launch", tag)
     }
 
     #[test]
     fn the_disks_come_out_in_the_order_the_manifest_gave() {
-        let dir = scratch("unpack");
+        let (_guard, dir) = scratch("unpack");
         let pkg = package(
             &dir,
             "Dune2.rp9",
@@ -190,7 +184,7 @@ mod tests {
 
     #[test]
     fn an_entry_that_escapes_the_destination_is_refused() {
-        let dir = scratch("unpack-traversal");
+        let (_guard, dir) = scratch("unpack-traversal");
         let pkg = package(&dir, "Evil.rp9", &[("../../evil.adf", b"NOPE")]);
 
         // **The destination is two levels down on purpose (ART-144 #5).**
@@ -231,7 +225,7 @@ mod tests {
 
     #[test]
     fn a_disk_the_package_does_not_carry_is_an_error_not_a_gap() {
-        let dir = scratch("unpack-missing");
+        let (_guard, dir) = scratch("unpack-missing");
         let pkg = package(&dir, "Half.rp9", &[("a.adf", b"FIRST")]);
 
         assert!(
@@ -245,7 +239,7 @@ mod tests {
     /// floppy set's entries are — the bug was mounting the zip itself.
     #[test]
     fn the_hardfile_comes_out_from_under_its_entry_name() {
-        let dir = scratch("unpack-hardfile");
+        let (_guard, dir) = scratch("unpack-hardfile");
         let pkg = package(
             &dir,
             "Enzo.rp9",
@@ -265,7 +259,7 @@ mod tests {
 
     #[test]
     fn a_hardfile_the_package_does_not_carry_is_an_error() {
-        let dir = scratch("unpack-hardfile-missing");
+        let (_guard, dir) = scratch("unpack-hardfile-missing");
         let pkg = package(&dir, "Empty.rp9", &[("readme.txt", b"nothing here")]);
 
         let err = unpack_hardfile(&pkg, "af-application.hdf", &dir.join("out")).unwrap_err();
@@ -282,7 +276,7 @@ mod tests {
     /// a launcher").
     #[test]
     fn a_second_extraction_reuses_the_copy_already_there_instead_of_overwriting_it() {
-        let dir = scratch("unpack-hardfile-reuse");
+        let (_guard, dir) = scratch("unpack-hardfile-reuse");
         let pkg = package(&dir, "Enzo.rp9", &[("af-application.hdf", b"PRISTINE")]);
         let out = dir.join("out");
 
@@ -305,7 +299,7 @@ mod tests {
 
     #[test]
     fn a_hardfile_larger_than_a_floppy_ceiling_still_unpacks() {
-        let dir = scratch("unpack-hardfile-large");
+        let (_guard, dir) = scratch("unpack-hardfile-large");
         let big = vec![0x42u8; (MAX_FLOPPY_BYTES + 1) as usize];
         let pkg = package(&dir, "Big.rp9", &[("game.hdf", &big)]);
 

@@ -478,14 +478,8 @@ mod tests {
     use super::*;
     use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-preload-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-preload", tag)
     }
 
     /// A card with one partition of `fs`, and no filesystem driver in its RDB.
@@ -521,7 +515,7 @@ mod tests {
     /// FFS needs nothing in the RDB, so a plan for it is one step.
     #[test]
     fn a_plan_formats_the_partition_it_was_asked_for() {
-        let dir = scratch("ffs");
+        let (_guard, dir) = scratch("ffs");
         let image = card(&dir, AmigaHardDiskFs::FfsStandard);
 
         let made = plan(&PreloadRequest {
@@ -551,7 +545,7 @@ mod tests {
     /// every step reports success.
     #[test]
     fn formatting_pfs3_with_no_driver_anywhere_is_refused() {
-        let dir = scratch("no-driver");
+        let (_guard, dir) = scratch("no-driver");
         let image = card(&dir, AmigaHardDiskFs::Pfs3Standard);
 
         let err = plan(&PreloadRequest {
@@ -576,7 +570,7 @@ mod tests {
     /// chosen: which of the two a card wants is a fact about the card.
     #[test]
     fn a_supplied_driver_is_imported_before_the_format() {
-        let dir = scratch("driver");
+        let (_guard, dir) = scratch("driver");
         let image = card(&dir, AmigaHardDiskFs::Pfs3Standard);
         let driver = dir.join("pfs3aio.lha");
         std::fs::write(&driver, b"driver").unwrap();
@@ -609,7 +603,7 @@ mod tests {
     /// Two PFS3 partitions need the driver once, not twice.
     #[test]
     fn the_driver_is_imported_once_for_a_whole_card() {
-        let dir = scratch("twice");
+        let (_guard, dir) = scratch("twice");
         let image = dir.join("two.hdf");
         crate::core::hdf::create_hdf(
             &image,
@@ -676,7 +670,7 @@ mod tests {
     /// Content is copied after its own partition's format, never before it.
     #[test]
     fn content_is_copied_after_the_format_that_makes_room_for_it() {
-        let dir = scratch("content");
+        let (_guard, dir) = scratch("content");
         let image = card(&dir, AmigaHardDiskFs::FfsStandard);
         let tree = dir.join("tree");
         std::fs::create_dir_all(&tree).unwrap();
@@ -712,7 +706,7 @@ mod tests {
     /// before anything is run.
     #[test]
     fn a_partition_that_is_not_there_is_refused() {
-        let dir = scratch("missing");
+        let (_guard, dir) = scratch("missing");
         let image = card(&dir, AmigaHardDiskFs::FfsStandard);
 
         for index in [0, 2, 99] {
@@ -887,7 +881,7 @@ mod tests {
 
     #[test]
     fn content_that_is_not_a_folder_is_refused() {
-        let dir = scratch("not-folder");
+        let (_guard, dir) = scratch("not-folder");
         let image = card(&dir, AmigaHardDiskFs::FfsStandard);
         let file = dir.join("a-file");
         std::fs::write(&file, b"x").unwrap();

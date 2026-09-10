@@ -280,13 +280,8 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-igamewrite-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-igamewrite", tag)
     }
 
     /// A minimal real drawer: one slave, no icon, nothing ambiguous.
@@ -368,7 +363,7 @@ mod tests {
 
     #[test]
     fn every_drawer_gets_its_own_verdict() {
-        let root = scratch("many");
+        let (_guard, root) = scratch("many");
         let a = synthetic_drawer(&root, "One", "One.slave");
         let b = synthetic_drawer(&root, "Two", "Two.slave");
         let outcome = apply(&plan(&[drawer_record(&a), drawer_record(&b)]), &NoProgress);
@@ -386,7 +381,7 @@ mod tests {
 
     #[test]
     fn a_backup_is_taken_before_an_existing_file_is_changed() {
-        let root = scratch("backup");
+        let (_guard, root) = scratch("backup");
         let dir = synthetic_drawer(&root, "Kept", "Kept.slave");
         std::fs::write(dir.join(igame::FILE_NAME), "favourite=yes\n").unwrap();
         let outcome = apply(&plan(&[drawer_record(&dir)]), &NoProgress);
@@ -412,7 +407,7 @@ mod tests {
     /// `atomic_write`'s own final step fail.
     #[test]
     fn a_failed_write_after_a_successful_backup_still_reports_it() {
-        let root = scratch("failed-after-backup");
+        let (_guard, root) = scratch("failed-after-backup");
         let dir = synthetic_drawer(&root, "Kept", "Kept.slave");
         let igame_path = dir.join(igame::FILE_NAME);
         std::fs::write(&igame_path, "title=Old\n").unwrap();
@@ -446,7 +441,7 @@ mod tests {
     fn one_failure_does_not_stop_the_rest() {
         // A host filesystem has no journal: nine written and one failed is
         // nine completed operations, and the report says so per entry.
-        let root = scratch("partial");
+        let (_guard, root) = scratch("partial");
         let ok = synthetic_drawer(&root, "Fine", "Fine.slave");
         let bad = unwritable_drawer(&root, "Locked", "Locked.slave");
         let outcome = apply(
@@ -472,7 +467,7 @@ mod tests {
     /// failure mutant never reaches the entry that comes after it.
     #[test]
     fn a_failure_before_a_later_success_does_not_stop_that_one_either() {
-        let root = scratch("partial-reversed");
+        let (_guard, root) = scratch("partial-reversed");
         let bad = unwritable_drawer(&root, "Locked", "Locked.slave");
         let ok = synthetic_drawer(&root, "Fine", "Fine.slave");
         let outcome = apply(
@@ -504,7 +499,7 @@ mod tests {
     /// a false "worked".
     #[test]
     fn a_second_run_with_nothing_new_is_skipped_not_merged_and_nothing_is_touched() {
-        let root = scratch("idempotent");
+        let (_guard, root) = scratch("idempotent");
         let dir = synthetic_drawer(&root, "Twice", "Twice.slave");
         let record = drawer_record(&dir);
 
@@ -536,7 +531,7 @@ mod tests {
     /// "always skips".
     #[test]
     fn a_real_change_after_a_skip_is_still_applied() {
-        let root = scratch("skip-then-change");
+        let (_guard, root) = scratch("skip-then-change");
         let dir = synthetic_drawer(&root, "Changes", "Changes.slave");
         let mut record = drawer_record(&dir);
         apply(&plan(std::slice::from_ref(&record)), &NoProgress);
@@ -559,7 +554,7 @@ mod tests {
     /// not fit, and never let `igame.data` appear on disk with nothing in it.
     #[test]
     fn a_title_that_does_not_fit_is_skipped_and_writes_no_file() {
-        let root = scratch("nothing-fits");
+        let (_guard, root) = scratch("nothing-fits");
         let dir = synthetic_drawer(&root, "Long", "Long.slave");
         let mut record = drawer_record(&dir);
         record.title = Fact::new("x".repeat(200), Provenance::UserEdit);
@@ -638,7 +633,7 @@ mod tests {
 
     #[test]
     fn stopping_leaves_the_untouched_entries_untouched_and_says_so() {
-        let root = scratch("cancel");
+        let (_guard, root) = scratch("cancel");
         let a = synthetic_drawer(&root, "First", "First.slave");
         let b = synthetic_drawer(&root, "Second", "Second.slave");
         let sink = CancelAfterOne {

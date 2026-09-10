@@ -309,14 +309,8 @@ mod tests {
     use crate::core::pistorm::hardware::{AmigaTarget, PistormVariant};
     use crate::core::pistorm::options::Emu68Options;
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-payload-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-payload", name)
     }
 
     /// A zip with the shape the real Emu68 release has: files at the root, a
@@ -365,7 +359,7 @@ mod tests {
 
     #[test]
     fn every_file_in_the_archive_reaches_the_card() {
-        let dir = scratch("all-files");
+        let (_guard, dir) = scratch("all-files");
         let archive = emu68_zip(&dir, "Emu68-pistorm.zip");
 
         let files = emu68_payload(&archive, &spec(classic(), Emu68Line::Stable))
@@ -390,7 +384,7 @@ mod tests {
     /// ART knows nothing about has to come out the other side.
     #[test]
     fn the_pis_own_config_settings_survive() {
-        let dir = scratch("config-merge");
+        let (_guard, dir) = scratch("config-merge");
         let archive = emu68_zip(&dir, "Emu68-pistorm.zip");
 
         let files = emu68_payload(&archive, &spec(classic(), Emu68Line::Stable))
@@ -418,7 +412,7 @@ mod tests {
     /// before the card is written.
     #[test]
     fn the_payload_says_which_file_the_card_boots() {
-        let dir = scratch("kernel-answer");
+        let (_guard, dir) = scratch("kernel-answer");
         let archive = emu68_zip(&dir, "Emu68-pistorm.zip");
 
         let payload = emu68_payload(&archive, &spec(classic(), Emu68Line::Stable)).unwrap();
@@ -443,7 +437,7 @@ mod tests {
     /// [`emu68_payload`] passes [`MAX_TOTAL_BYTES`], which the next test pins.
     #[test]
     fn an_archive_that_expands_past_the_budget_is_refused() {
-        let dir = scratch("budget");
+        let (_guard, dir) = scratch("budget");
         let archive = emu68_zip(&dir, "Emu68-pistorm.zip");
 
         let err = payload_within(&archive, &spec(classic(), Emu68Line::Stable), 8).unwrap_err();
@@ -474,7 +468,7 @@ mod tests {
     fn the_kernel_the_release_names_is_the_one_the_card_boots() {
         use std::io::Write as _;
 
-        let dir = scratch("kernel-name");
+        let (_guard, dir) = scratch("kernel-name");
         let path = dir.join("Emu68-pistorm.zip");
         let file = std::fs::File::create(&path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
@@ -514,7 +508,7 @@ mod tests {
     fn a_config_naming_a_kernel_that_is_not_there_is_refused() {
         use std::io::Write as _;
 
-        let dir = scratch("kernel-missing");
+        let (_guard, dir) = scratch("kernel-missing");
         let path = dir.join("Emu68-pistorm.zip");
         let file = std::fs::File::create(&path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
@@ -542,7 +536,7 @@ mod tests {
     /// two cannot disagree about what the ROM is called.
     #[test]
     fn the_kickstart_is_named_what_the_config_asks_for() {
-        let dir = scratch("rom-name");
+        let (_guard, dir) = scratch("rom-name");
         let archive = emu68_zip(&dir, "Emu68-pistorm.zip");
 
         let mut wanted = spec(classic(), Emu68Line::Stable);
@@ -565,7 +559,7 @@ mod tests {
     /// decide, and a mismatch is refused with both names in the sentence.
     #[test]
     fn an_archive_for_another_board_is_refused_by_name() {
-        let dir = scratch("wrong-board");
+        let (_guard, dir) = scratch("wrong-board");
         let archive = emu68_zip(&dir, "Emu68-pistorm32lite.zip");
 
         let err = emu68_payload(&archive, &spec(classic(), Emu68Line::Stable)).unwrap_err();
@@ -580,7 +574,7 @@ mod tests {
     /// listing as the right one.
     #[test]
     fn the_raspi_build_is_refused_for_what_it_is() {
-        let dir = scratch("raspi");
+        let (_guard, dir) = scratch("raspi");
         let archive = emu68_zip(&dir, "Emu68-raspi.zip");
 
         let err = emu68_payload(&archive, &spec(classic(), Emu68Line::Stable)).unwrap_err();
@@ -596,7 +590,7 @@ mod tests {
     /// the alpha's name is the one that would have been accepted by mistake.
     #[test]
     fn the_release_line_decides_what_the_name_means() {
-        let dir = scratch("lines");
+        let (_guard, dir) = scratch("lines");
 
         let stable = emu68_zip(&dir, "Emu68-pistorm.zip");
         let alpha = emu68_zip(&dir, "Emu68-pistorm-classic.zip");
@@ -615,7 +609,7 @@ mod tests {
     /// rather than by inventing one.
     #[test]
     fn no_kickstart_means_no_rom_on_the_card() {
-        let dir = scratch("no-rom");
+        let (_guard, dir) = scratch("no-rom");
         let archive = emu68_zip(&dir, "Emu68-pistorm.zip");
 
         let mut wanted = spec(classic(), Emu68Line::Stable);

@@ -64,16 +64,13 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let s = crate::core::test_scratch_id();
-        let dir = std::env::temp_dir().join(format!("art-guarded-{tag}-{s}"));
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-guarded", tag)
     }
 
     #[test]
     fn a_removal_backs_up_before_it_deletes() {
-        let dir = scratch("remove");
+        let (_guard, dir) = scratch("remove");
         let target = dir.join("thing.uaem");
         fs::write(
             &target,
@@ -98,7 +95,7 @@ mod tests {
 
     #[test]
     fn removing_what_is_not_there_is_not_an_error() {
-        let dir = scratch("remove-absent");
+        let (_guard, dir) = scratch("remove-absent");
         assert!(
             guarded_remove(&dir.join("never-existed"), BackupPolicy::CONFIG)
                 .unwrap()
@@ -109,7 +106,7 @@ mod tests {
 
     #[test]
     fn backs_up_then_replaces() {
-        let dir = scratch("both");
+        let (_guard, dir) = scratch("both");
         let target = dir.join("disk.adf");
         fs::write(&target, b"version one").unwrap();
 
@@ -124,7 +121,7 @@ mod tests {
 
     #[test]
     fn first_write_has_nothing_to_back_up() {
-        let dir = scratch("first");
+        let (_guard, dir) = scratch("first");
         let target = dir.join("brand-new.adf");
 
         let backup = guarded_write(&target, b"fresh", BackupPolicy::DISK_IMAGE).unwrap();

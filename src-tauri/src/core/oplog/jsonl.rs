@@ -127,13 +127,8 @@ mod tests {
     use crate::core::error::CoreError;
     use crate::core::oplog::{OperationOrigin, OperationOutcome};
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-oplog-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-oplog", tag)
     }
 
     fn entry(name: &str) -> OperationRecord {
@@ -142,7 +137,7 @@ mod tests {
 
     #[test]
     fn records_survive_a_round_trip() {
-        let dir = scratch("roundtrip");
+        let (_guard, dir) = scratch("roundtrip");
         let log = JsonlOperationLog::new(dir.join("operations.jsonl"));
 
         log.record(
@@ -165,7 +160,7 @@ mod tests {
 
     #[test]
     fn creates_the_log_directory_on_first_write() {
-        let dir = scratch("mkdir");
+        let (_guard, dir) = scratch("mkdir");
         let log = JsonlOperationLog::new(dir.join("nested").join("deeper").join("ops.jsonl"));
 
         log.record(&entry("First")).unwrap();
@@ -177,7 +172,7 @@ mod tests {
     /// A half-written line from a crash must not hide the rest of the history.
     #[test]
     fn a_corrupt_line_does_not_hide_the_others() {
-        let dir = scratch("corrupt");
+        let (_guard, dir) = scratch("corrupt");
         let path = dir.join("operations.jsonl");
         let log = JsonlOperationLog::new(&path);
 
@@ -196,7 +191,7 @@ mod tests {
 
     #[test]
     fn failures_are_recorded_with_their_error_id() {
-        let dir = scratch("failure");
+        let (_guard, dir) = scratch("failure");
         let log = JsonlOperationLog::new(dir.join("operations.jsonl"));
 
         let err = CoreError::Malformed {
@@ -218,7 +213,7 @@ mod tests {
 
     #[test]
     fn reading_an_absent_log_is_not_an_error() {
-        let dir = scratch("absent");
+        let (_guard, dir) = scratch("absent");
         let log = JsonlOperationLog::new(dir.join("never-written.jsonl"));
 
         assert!(log.recent(10).unwrap().is_empty());
@@ -227,7 +222,7 @@ mod tests {
 
     #[test]
     fn rotation_keeps_the_newest_entries() {
-        let dir = scratch("rotate");
+        let (_guard, dir) = scratch("rotate");
         let path = dir.join("operations.jsonl");
         let log = JsonlOperationLog::new(&path);
 

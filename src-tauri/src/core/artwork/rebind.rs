@@ -246,14 +246,8 @@ mod tests {
     use super::*;
     use crate::core::jobs::NoProgress;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-rebind-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-rebind", tag)
     }
 
     fn binding(dir: &Path, id: &str, title: &str, file: &str, bytes: &[u8]) -> Binding {
@@ -271,7 +265,7 @@ mod tests {
     /// come back from the files the overrides still name.
     #[test]
     fn a_deleted_cache_is_rebuilt_from_the_files_the_user_chose() {
-        let root = scratch("deleted-cache");
+        let (_guard, root) = scratch("deleted-cache");
         let cache_dir = root.join("artwork");
         let want = binding(&root, "id-1", "Turrican II", "cover.png", b"PNGDATA");
 
@@ -314,7 +308,7 @@ mod tests {
     /// (leading article, case, doubled spaces).
     #[test]
     fn the_picture_lands_under_the_key_the_screen_reads_by() {
-        let root = scratch("normalised-key");
+        let (_guard, root) = scratch("normalised-key");
         let cache_dir = root.join("artwork");
         let raw = "The  Settlers ";
         let want = binding(&root, "id-1", raw, "cover.png", b"PNGDATA");
@@ -342,7 +336,7 @@ mod tests {
     /// load acceptable.
     #[test]
     fn an_intact_binding_is_left_exactly_as_it_was() {
-        let root = scratch("intact");
+        let (_guard, root) = scratch("intact");
         let cache_dir = root.join("artwork");
         let want = binding(&root, "id-1", "Turrican II", "cover.png", b"ORIGINAL");
 
@@ -376,7 +370,7 @@ mod tests {
     /// manager.
     #[test]
     fn a_row_whose_file_has_gone_is_rebuilt_too() {
-        let root = scratch("row-without-file");
+        let (_guard, root) = scratch("row-without-file");
         let cache_dir = root.join("artwork");
         let want = binding(&root, "id-1", "Turrican II", "cover.png", b"PNGDATA");
 
@@ -402,7 +396,7 @@ mod tests {
     /// plugged in.
     #[test]
     fn one_missing_source_does_not_stop_the_others() {
-        let root = scratch("missing-source");
+        let (_guard, root) = scratch("missing-source");
         let cache_dir = root.join("artwork");
         let good = binding(&root, "id-1", "Turrican II", "cover.png", b"PNGDATA");
         let gone = Binding {
@@ -427,7 +421,7 @@ mod tests {
     /// refused on its **metadata**, not after being read into memory.
     #[test]
     fn an_oversized_source_is_refused_by_its_size() {
-        let root = scratch("oversized");
+        let (_guard, root) = scratch("oversized");
         let cache_dir = root.join("artwork");
         let want = binding(
             &root,
@@ -458,7 +452,7 @@ mod tests {
     /// and then failing to render.
     #[test]
     fn a_source_that_is_not_a_drawable_picture_is_refused() {
-        let root = scratch("not-a-picture");
+        let (_guard, root) = scratch("not-a-picture");
         let cache_dir = root.join("artwork");
         let want = binding(&root, "id-1", "Turrican II", "cover.iff", b"FORM....ILBM");
 
@@ -493,7 +487,7 @@ mod tests {
             }
         }
 
-        let root = scratch("cancel");
+        let (_guard, root) = scratch("cancel");
         let cache_dir = root.join("artwork");
         let first = binding(&root, "id-1", "Turrican II", "a.png", b"FIRST");
         let second = binding(&root, "id-2", "Lotus", "b.png", b"SECOND");

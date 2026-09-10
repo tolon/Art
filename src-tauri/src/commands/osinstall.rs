@@ -3102,7 +3102,7 @@ mod tests {
     /// not just the fields a hand-written JSON blob happened to include.
     #[test]
     fn the_plan_the_frontend_sends_back_deserialises_into_an_apply_request() {
-        let (plan, _dir) = crate::core::osinstall::fixtures::planned_with(
+        let (_guard, plan, _dir) = crate::core::osinstall::fixtures::planned_with(
             &["workbench-base"],
             &["Workbench3.2"],
             Some(47),
@@ -3118,14 +3118,8 @@ mod tests {
         assert_eq!(request.destination, PathBuf::from("E:\\dist"));
     }
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-osinstall-cmd-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-osinstall-cmd", tag)
     }
 
     // -------------------------------------------------------------------
@@ -3236,7 +3230,7 @@ mod tests {
     /// cannot keep."
     #[test]
     fn osinstall_packages_reports_whether_each_archive_was_actually_found() {
-        let dir = scratch("packages-availability");
+        let (_guard, dir) = scratch("packages-availability");
         let folder = dir.join("packages");
         std::fs::create_dir_all(&folder).unwrap();
         write_locale_turkish_archive(&folder, "turkish.lha", b"catalog bytes");
@@ -3282,7 +3276,7 @@ mod tests {
     /// questions that used to have one answer.
     #[test]
     fn osinstall_packages_offers_no_update_package_for_amigaos_32() {
-        let dir = scratch("packages-release-scope");
+        let (_guard, dir) = scratch("packages-release-scope");
         let folder = dir.join("packages");
         std::fs::create_dir_all(&folder).unwrap();
         write_locale_turkish_archive(&folder, "turkish.lha", b"catalog bytes");
@@ -3303,7 +3297,7 @@ mod tests {
 
     #[test]
     fn osinstall_packages_says_which_packages_can_be_run_on_the_amiga() {
-        let dir = scratch("packages-amiga-installable");
+        let (_guard, dir) = scratch("packages-amiga-installable");
         let folder = dir.join("packages");
         std::fs::create_dir_all(&folder).unwrap();
 
@@ -3338,7 +3332,7 @@ mod tests {
     /// checklist itself must still render.
     #[test]
     fn osinstall_packages_over_a_missing_folder_lists_nothing_as_available() {
-        let dir = scratch("packages-missing-folder");
+        let (_guard, dir) = scratch("packages-missing-folder");
         let missing = dir.join("does-not-exist");
 
         let summaries = osinstall_packages(missing, "AmigaOS 3.9".to_string()).unwrap();
@@ -3353,7 +3347,8 @@ mod tests {
     /// component `distribution.json` records as this file's owner.
     #[test]
     fn osinstall_collisions_previews_a_real_package_against_an_existing_tree() {
-        let dir = scratch("collisions-preview");
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-osinstall-root", "collisions");
+        let (_guard, dir) = scratch("collisions-preview");
         let tree = dir.join("tree");
         let drawer = tree
             .join("Locale")
@@ -3394,7 +3389,7 @@ mod tests {
             &ordered,
             &catalogue,
             ArchiveEvidence::default(),
-            &std::env::temp_dir(),
+            &root,
             &NoProgress,
         )
         .unwrap();
@@ -3430,8 +3425,8 @@ mod tests {
         overrider: &str,
         base_bytes: &[u8],
         overlay_bytes: &[u8],
-    ) -> (PathBuf, InstallPlan) {
-        let dir = scratch(tag);
+    ) -> (crate::core::ScratchDir, PathBuf, InstallPlan) {
+        let (_guard, dir) = scratch(tag);
         let folder = dir.join("media");
         std::fs::create_dir_all(&folder).unwrap();
 
@@ -3501,7 +3496,7 @@ mod tests {
             removals: Vec::new(),
             layers: Vec::new(),
         };
-        (dir, plan)
+        (_guard, dir, plan)
     }
 
     /// **The issue itself.** `collide::preview` could already answer for a
@@ -3517,20 +3512,17 @@ mod tests {
     /// same on screen.
     #[test]
     fn switching_a_component_on_previews_what_it_would_replace() {
-        let (dir, plan) = plan_over_two_media(
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-osinstall-root", "switch-on");
+        let (_guard, dir, plan) = plan_over_two_media(
             "component-preview",
             "workbench-39",
             b"$VER: format 44.5 (1.1.99)",
             b"$VER: format 45.1 (1.1.00)",
         );
 
-        let preview = preview_component_collisions(
-            &plan,
-            &["workbench-39".to_string()],
-            &std::env::temp_dir(),
-            &NoProgress,
-        )
-        .unwrap();
+        let preview =
+            preview_component_collisions(&plan, &["workbench-39".to_string()], &root, &NoProgress)
+                .unwrap();
 
         assert_eq!(preview.placed, 2, "both of the overlay's files are placed");
         assert_eq!(preview.reports.len(), 1, "{:?}", preview.reports);
@@ -3562,17 +3554,14 @@ mod tests {
     /// two hooks comparable.
     #[test]
     fn an_identical_file_counts_as_unchanged_and_never_as_new() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-osinstall-root", "identical");
         let same = b"$VER: format 44.5 (1.1.99)";
-        let (dir, plan) =
+        let (_guard, dir, plan) =
             plan_over_two_media("component-preview-counts", "workbench-39", same, same);
 
-        let preview = preview_component_collisions(
-            &plan,
-            &["workbench-39".to_string()],
-            &std::env::temp_dir(),
-            &NoProgress,
-        )
-        .unwrap();
+        let preview =
+            preview_component_collisions(&plan, &["workbench-39".to_string()], &root, &NoProgress)
+                .unwrap();
 
         // Two files placed: `C/Format` lands on `workbench-base`'s identical
         // copy, `C/New` lands on nothing.
@@ -3604,6 +3593,7 @@ mod tests {
     /// census asserts and the screen renders.
     #[test]
     fn the_three_counts_always_add_up_to_what_was_placed() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-osinstall-root", "counts");
         for (base, overlay) in [
             (
                 &b"$VER: format 44.5 (1.1.99)"[..],
@@ -3618,12 +3608,12 @@ mod tests {
                 &b"none here either, and longer"[..],
             ),
         ] {
-            let (dir, plan) =
+            let (_guard, dir, plan) =
                 plan_over_two_media("component-preview-partition", "workbench-39", base, overlay);
             let preview = preview_component_collisions(
                 &plan,
                 &["workbench-39".to_string()],
-                &std::env::temp_dir(),
+                &root,
                 &NoProgress,
             )
             .unwrap();
@@ -3657,7 +3647,8 @@ mod tests {
     /// as a smoke check that concurrent previews work at all.
     #[test]
     fn two_concurrent_previews_of_the_same_components_both_answer() {
-        let (dir, plan) = plan_over_two_media(
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-osinstall-root", "concurrent");
+        let (_guard, dir, plan) = plan_over_two_media(
             "component-preview-concurrent",
             "workbench-39",
             b"$VER: format 44.5 (1.1.99)",
@@ -3668,11 +3659,12 @@ mod tests {
         let handles: Vec<_> = (0..2)
             .map(|_| {
                 let plan = std::sync::Arc::clone(&plan);
+                let root = root.clone();
                 std::thread::spawn(move || {
                     preview_component_collisions(
                         &plan,
                         &["workbench-39".to_string()],
-                        &std::env::temp_dir(),
+                        &root,
                         &NoProgress,
                     )
                 })
@@ -3748,7 +3740,9 @@ mod tests {
 
     #[test]
     fn staging_is_removed_however_the_preview_ends() {
-        fn staging_dirs() -> Vec<PathBuf> {
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-osinstall-root", "staging-gone");
+        fn staging_dirs(root: &Path) -> Vec<PathBuf> {
             // Keyed on this thread as well as the process, or the count picks
             // up the other tests running beside this one (ART-182).
             use std::hash::{Hash, Hasher};
@@ -3759,7 +3753,7 @@ mod tests {
                 std::process::id(),
                 hasher.finish() as u32
             );
-            std::fs::read_dir(std::env::temp_dir())
+            std::fs::read_dir(root)
                 .into_iter()
                 .flatten()
                 .flatten()
@@ -3780,35 +3774,25 @@ mod tests {
             }
         }
 
-        let (dir, plan) = plan_over_two_media(
+        let (_guard, dir, plan) = plan_over_two_media(
             "component-preview-cleanup",
             "workbench-39",
             b"$VER: format 44.5 (1.1.99)",
             b"$VER: format 45.1 (1.1.00)",
         );
 
-        let before = staging_dirs().len();
-        preview_component_collisions(
-            &plan,
-            &["workbench-39".to_string()],
-            &std::env::temp_dir(),
-            &NoProgress,
-        )
-        .unwrap();
+        let before = staging_dirs(&root).len();
+        preview_component_collisions(&plan, &["workbench-39".to_string()], &root, &NoProgress)
+            .unwrap();
         assert_eq!(
-            staging_dirs().len(),
+            staging_dirs(&root).len(),
             before,
             "nothing left behind on success"
         );
 
-        let _ = preview_component_collisions(
-            &plan,
-            &["workbench-39".to_string()],
-            &std::env::temp_dir(),
-            &Stopped,
-        );
+        let _ = preview_component_collisions(&plan, &["workbench-39".to_string()], &root, &Stopped);
         assert_eq!(
-            staging_dirs().len(),
+            staging_dirs(&root).len(),
             before,
             "nor on the exit a bottom-of-function cleanup never reaches"
         );
@@ -3824,20 +3808,18 @@ mod tests {
     /// reassuring a user about a component ART cannot vouch for.
     #[test]
     fn a_component_that_declared_no_override_cannot_be_reported_as_declaring_one() {
-        let (dir, plan) = plan_over_two_media(
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-osinstall-root", "no-override");
+        let (_guard, dir, plan) = plan_over_two_media(
             "component-preview-undeclared",
             "locale-base",
             b"$VER: format 44.5 (1.1.99)",
             b"$VER: format 45.1 (1.1.00)",
         );
 
-        let preview = preview_component_collisions(
-            &plan,
-            &["locale-base".to_string()],
-            &std::env::temp_dir(),
-            &NoProgress,
-        )
-        .unwrap();
+        let preview =
+            preview_component_collisions(&plan, &["locale-base".to_string()], &root, &NoProgress)
+                .unwrap();
 
         assert_eq!(preview.reports.len(), 1, "{:?}", preview.reports);
         assert!(
@@ -3855,16 +3837,14 @@ mod tests {
     /// nothing.
     #[test]
     fn a_component_that_replaces_a_file_with_the_same_bytes_reports_nothing() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-osinstall-root", "same-bytes");
         let same = b"$VER: format 44.5 (1.1.99)";
-        let (dir, plan) = plan_over_two_media("component-preview-same", "workbench-39", same, same);
+        let (_guard, dir, plan) =
+            plan_over_two_media("component-preview-same", "workbench-39", same, same);
 
-        let preview = preview_component_collisions(
-            &plan,
-            &["workbench-39".to_string()],
-            &std::env::temp_dir(),
-            &NoProgress,
-        )
-        .unwrap();
+        let preview =
+            preview_component_collisions(&plan, &["workbench-39".to_string()], &root, &NoProgress)
+                .unwrap();
 
         assert_eq!(preview.reports, Vec::new(), "{:?}", preview.reports);
         assert_eq!(
@@ -3880,7 +3860,8 @@ mod tests {
     /// every release whose recipe has no layering component at all.
     #[test]
     fn previewing_no_components_opens_no_media() {
-        let dir = scratch("component-preview-empty");
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-osinstall-root", "no-media");
+        let (_guard, dir) = scratch("component-preview-empty");
         let plan = InstallPlan {
             release: "AmigaOS 3.2".to_string(),
             items: Vec::new(),
@@ -3904,8 +3885,7 @@ mod tests {
             layers: Vec::new(),
         };
 
-        let preview =
-            preview_component_collisions(&plan, &[], &std::env::temp_dir(), &NoProgress).unwrap();
+        let preview = preview_component_collisions(&plan, &[], &root, &NoProgress).unwrap();
         assert_eq!(preview.placed, 0);
         assert_eq!(preview.reports, Vec::new());
 
@@ -3928,20 +3908,17 @@ mod tests {
     /// load-bearing rather than tidy.
     #[test]
     fn a_later_component_is_not_what_is_being_replaced() {
-        let (dir, plan) = plan_over_two_media(
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-osinstall-root", "later-comp");
+        let (_guard, dir, plan) = plan_over_two_media(
             "component-preview-restage",
             "workbench-39",
             b"$VER: format 44.5 (1.1.99)",
             b"$VER: format 45.1 (1.1.00)",
         );
 
-        let first = preview_component_collisions(
-            &plan,
-            &["workbench-39".to_string()],
-            &std::env::temp_dir(),
-            &NoProgress,
-        )
-        .unwrap();
+        let first =
+            preview_component_collisions(&plan, &["workbench-39".to_string()], &root, &NoProgress)
+                .unwrap();
         assert_eq!(first.reports.len(), 1);
 
         // Now preview the *base* component instead. Nothing precedes it, so
@@ -3950,7 +3927,7 @@ mod tests {
         let second = preview_component_collisions(
             &plan,
             &["workbench-base".to_string()],
-            &std::env::temp_dir(),
+            &root,
             &NoProgress,
         )
         .unwrap();
@@ -3964,13 +3941,9 @@ mod tests {
 
         // And the same selection again answers the same way, from a root it
         // re-staged rather than one it accumulated into.
-        let again = preview_component_collisions(
-            &plan,
-            &["workbench-39".to_string()],
-            &std::env::temp_dir(),
-            &NoProgress,
-        )
-        .unwrap();
+        let again =
+            preview_component_collisions(&plan, &["workbench-39".to_string()], &root, &NoProgress)
+                .unwrap();
         assert_eq!(again.reports.len(), 1, "{:?}", again.reports);
         assert_eq!(again.placed, 2);
 
@@ -3982,6 +3955,8 @@ mod tests {
     /// files.
     #[test]
     fn a_cancelled_component_preview_stops() {
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-osinstall-root", "cancel-preview");
         use crate::core::jobs::ProgressSink;
 
         struct Stopped;
@@ -3992,20 +3967,16 @@ mod tests {
             }
         }
 
-        let (dir, plan) = plan_over_two_media(
+        let (_guard, dir, plan) = plan_over_two_media(
             "component-preview-cancel",
             "workbench-39",
             b"$VER: format 44.5 (1.1.99)",
             b"$VER: format 45.1 (1.1.00)",
         );
 
-        let err = preview_component_collisions(
-            &plan,
-            &["workbench-39".to_string()],
-            &std::env::temp_dir(),
-            &Stopped,
-        )
-        .unwrap_err();
+        let err =
+            preview_component_collisions(&plan, &["workbench-39".to_string()], &root, &Stopped)
+                .unwrap_err();
         assert!(matches!(err, CoreError::Cancelled), "{err:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -4391,6 +4362,7 @@ mod tests {
     #[test]
     #[ignore = "needs the user's own AmigaOS media; set ART_OSINSTALL_MEDIA and ART_OSINSTALL_ROM"]
     fn census_the_overlay_against_the_users_own_media_when_asked() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-osinstall-root", "census");
         let (Ok(media), Ok(rom)) = (
             std::env::var("ART_OSINSTALL_MEDIA"),
             std::env::var("ART_OSINSTALL_ROM"),
@@ -4427,7 +4399,7 @@ mod tests {
             excluded: Vec::new(),
             // Never created: `plan()` does not touch it, and nothing here
             // calls `apply()`.
-            destination: std::env::temp_dir().join("art-overlay-census-no-such-tree"),
+            destination: root.join("art-overlay-census-no-such-tree"),
             scan_cache: Default::default(),
         };
 
@@ -4459,13 +4431,9 @@ mod tests {
         );
 
         for id in &layering {
-            let preview = preview_component_collisions(
-                &plan,
-                std::slice::from_ref(id),
-                &std::env::temp_dir(),
-                &NoProgress,
-            )
-            .expect("the preview");
+            let preview =
+                preview_component_collisions(&plan, std::slice::from_ref(id), &root, &NoProgress)
+                    .expect("the preview");
             let mut upgrades = 0usize;
             let mut downgrades = 0usize;
             let mut same = 0usize;
@@ -4533,7 +4501,9 @@ mod tests {
     /// the panel loads before a checkbox is ticked.
     #[test]
     fn osinstall_collisions_with_nothing_chosen_is_empty() {
-        let dir = scratch("collisions-empty");
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-osinstall-root", "nothing-chosen");
+        let (_guard, dir) = scratch("collisions-empty");
         let tree = dir.join("does-not-exist-tree");
         let packages_dir = dir.join("does-not-exist-packages");
 
@@ -4544,7 +4514,7 @@ mod tests {
             &[],
             &catalogue,
             ArchiveEvidence::default(),
-            &std::env::temp_dir(),
+            &root,
             &NoProgress,
         )
         .unwrap();
@@ -4558,7 +4528,9 @@ mod tests {
     /// missing) file on disk.
     #[test]
     fn extract_package_items_reuses_a_cached_extraction_without_rereading_the_archive() {
-        let dir = scratch("preview-cache-reuse");
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-osinstall-root", "extract-cached");
+        let (_guard, dir) = scratch("preview-cache-reuse");
         let packages_dir = dir.join("packages");
         std::fs::create_dir_all(&packages_dir).unwrap();
         write_locale_turkish_archive(&packages_dir, "turkish.lha", b"catalog bytes");
@@ -4570,15 +4542,9 @@ mod tests {
 
         let mut files = 0usize;
         let mut bytes = 0u64;
-        let first = extract_package_items(
-            package,
-            archive,
-            &mut files,
-            &mut bytes,
-            &std::env::temp_dir(),
-            &NoProgress,
-        )
-        .unwrap();
+        let first =
+            extract_package_items(package, archive, &mut files, &mut bytes, &root, &NoProgress)
+                .unwrap();
         assert_eq!(first.len(), 1);
         assert!(first[0].2.is_file());
 
@@ -4617,7 +4583,7 @@ mod tests {
             archive,
             &mut files2,
             &mut bytes2,
-            &std::env::temp_dir(),
+            &root,
             &NoProgress,
         )
         .unwrap();
@@ -4630,7 +4596,9 @@ mod tests {
     /// threaded through unused — and that nothing is written before it is.
     #[test]
     fn extract_package_items_stops_at_the_first_cancellation_check() {
-        let dir = scratch("preview-cancel-file-level");
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-osinstall-root", "extract-cancel");
+        let (_guard, dir) = scratch("preview-cancel-file-level");
         let packages_dir = dir.join("packages");
         std::fs::create_dir_all(&packages_dir).unwrap();
         write_locale_turkish_archive(&packages_dir, "turkish.lha", b"catalog bytes");
@@ -4643,15 +4611,8 @@ mod tests {
         let mut files = 0usize;
         let mut bytes = 0u64;
         let cancel = crate::core::osinstall::fixtures::CancelAfter::new(0);
-        let err = extract_package_items(
-            package,
-            archive,
-            &mut files,
-            &mut bytes,
-            &std::env::temp_dir(),
-            &cancel,
-        )
-        .unwrap_err();
+        let err = extract_package_items(package, archive, &mut files, &mut bytes, &root, &cancel)
+            .unwrap_err();
         assert!(matches!(err, CoreError::Cancelled), "{err}");
     }
 
@@ -4660,7 +4621,9 @@ mod tests {
     /// a package already being read.
     #[test]
     fn extract_incoming_for_preview_stops_before_opening_the_first_package() {
-        let dir = scratch("preview-cancel-package-level");
+        let (_root_guard, root) =
+            crate::core::ScratchDir::pair("art-osinstall-root", "incoming-cancel");
+        let (_guard, dir) = scratch("preview-cancel-package-level");
         let packages_dir = dir.join("packages");
         std::fs::create_dir_all(&packages_dir).unwrap();
         write_locale_turkish_archive(&packages_dir, "turkish.lha", b"catalog bytes");
@@ -4672,7 +4635,7 @@ mod tests {
             &["locale-turkish".to_string()],
             &catalogue,
             ArchiveEvidence::default(),
-            &std::env::temp_dir(),
+            &root,
             &cancel,
         )
         .unwrap_err();
@@ -4772,7 +4735,7 @@ mod tests {
     /// command needs a live Tauri `AppHandle`/`State` this test has none of.
     #[test]
     fn resolve_packages_for_add_refuses_locale_turkish_without_locale_base() {
-        let dir = scratch("add-missing-component");
+        let (_guard, dir) = scratch("add-missing-component");
         let tree = dir.join("tree");
         std::fs::create_dir_all(&tree).unwrap();
         // A manifest that names no `locale-base` component at all.
@@ -4833,7 +4796,7 @@ mod tests {
     ///    hash" rule written one rank too high would get wrong.
     #[test]
     fn resolve_packages_for_add_settles_two_builds_of_one_package_art_288() {
-        let dir = scratch("add-two-builds");
+        let (_guard, dir) = scratch("add-two-builds");
         let tree = dir.join("tree");
         std::fs::create_dir_all(&tree).unwrap();
         write_test_manifest(&tree, Vec::new());
@@ -4919,7 +4882,7 @@ mod tests {
     /// resolves to exactly one package, ready for `add_package` to place.
     #[test]
     fn resolve_packages_for_add_resolves_locale_turkish_once_locale_base_is_on_the_tree() {
-        let dir = scratch("add-component-present");
+        let (_guard, dir) = scratch("add-component-present");
         let tree = dir.join("tree");
         std::fs::create_dir_all(&tree).unwrap();
         write_test_manifest_with_runs(
@@ -4957,7 +4920,7 @@ mod tests {
     /// the other test, so both are here.
     #[test]
     fn a_requirement_the_tree_already_carries_is_met_and_one_it_does_not_is_refused() {
-        let dir = scratch("add-requires-from-tree");
+        let (_guard, dir) = scratch("add-requires-from-tree");
         let packages_dir = dir.join("packages");
         std::fs::create_dir_all(&packages_dir).unwrap();
         write_locale_turkish_archive(&packages_dir, "turkish.lha", b"catalog bytes");
@@ -5039,7 +5002,7 @@ mod tests {
     /// discover partway through a job.
     #[test]
     fn resolve_packages_for_add_refuses_a_missing_archive() {
-        let dir = scratch("add-missing-archive");
+        let (_guard, dir) = scratch("add-missing-archive");
         let tree = dir.join("tree");
         std::fs::create_dir_all(&tree).unwrap();
         write_test_manifest(
@@ -5089,7 +5052,7 @@ mod tests {
     /// the raw `order_over_with_installed` sentence, and never bare ids.
     #[test]
     fn ordered_packages_for_collisions_refuses_locale_turkish_without_boingbag_by_name() {
-        let dir = scratch("collisions-requires-amiga-run");
+        let (_guard, dir) = scratch("collisions-requires-amiga-run");
         let tree = dir.join("tree");
         std::fs::create_dir_all(&tree).unwrap();
         write_test_manifest(
@@ -5164,7 +5127,7 @@ mod tests {
     /// `find_media`'s own English `CoreError` sentence.
     #[test]
     fn scanning_a_missing_folder_is_a_typed_refusal_not_a_sentence() {
-        let dir = scratch("scan-missing");
+        let (_guard, dir) = scratch("scan-missing");
         let missing = dir.join("does-not-exist");
 
         let result = osinstall_scan_media(missing.clone()).unwrap();
@@ -5179,7 +5142,7 @@ mod tests {
 
     #[test]
     fn scanning_a_real_folder_finds_its_media() {
-        let dir = scratch("scan-real");
+        let (_guard, dir) = scratch("scan-real");
         crate::core::osinstall::fixtures::workbench(&dir);
 
         let result = osinstall_scan_media(dir).unwrap();
@@ -5198,7 +5161,7 @@ mod tests {
     /// screen's own "preview" step, as through a separate scan call.
     #[test]
     fn planning_against_a_missing_folder_is_a_typed_refusal_not_a_sentence() {
-        let dir = scratch("plan-missing");
+        let (_guard, dir) = scratch("plan-missing");
         let missing = dir.join("does-not-exist");
 
         let result = osinstall_plan(InstallRequest {
@@ -5227,7 +5190,7 @@ mod tests {
 
     #[test]
     fn planning_against_a_real_folder_returns_the_plan() {
-        let dir = scratch("plan-real");
+        let (_guard, dir) = scratch("plan-real");
         crate::core::osinstall::fixtures::workbench(&dir);
 
         let result = osinstall_plan(InstallRequest {
@@ -5343,7 +5306,7 @@ mod tests {
         use crate::core::osinstall::apply::{FileRecord, MediaRecord};
         use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
 
-        let dir = scratch("verify-not-checked");
+        let (_guard, dir) = scratch("verify-not-checked");
         let image = dir.join("card.hdf");
         create_hdf(
             &image,
@@ -5633,7 +5596,7 @@ mod tests {
         fn one_unreadable_material_folder_does_not_empty_the_others() {
             use crate::core::osinstall::fixtures;
 
-            let dir = fixtures::scratch("slots-unreadable-folder");
+            let (_guard, dir) = fixtures::scratch("slots-unreadable-folder");
             fixtures::media(
                 &dir,
                 "AmigaOS3.9",
@@ -6120,7 +6083,7 @@ mod tests {
 
         #[test]
         fn install_plan_top_level_keys_are_camelcase() {
-            let (plan, _dir) = crate::core::osinstall::fixtures::planned_with(
+            let (_guard, plan, _dir) = crate::core::osinstall::fixtures::planned_with(
                 &["workbench-base"],
                 &["Workbench3.2"],
                 Some(47),
@@ -6214,7 +6177,7 @@ mod tests {
 
         #[test]
         fn plan_result_tag_and_field_spellings() {
-            let (plan, _dir) = crate::core::osinstall::fixtures::planned_with(
+            let (_guard, plan, _dir) = crate::core::osinstall::fixtures::planned_with(
                 &["workbench-base"],
                 &["Workbench3.2"],
                 Some(47),
@@ -6247,7 +6210,7 @@ mod tests {
         /// only renamed one container's field would still be caught here.
         #[test]
         fn paired_rom_nested_inside_a_plan_or_a_manifest_serialises_with_camelcase_keys() {
-            let (plan, _dir) = crate::core::osinstall::fixtures::planned_with(
+            let (_guard, plan, _dir) = crate::core::osinstall::fixtures::planned_with(
                 &["workbench-base"],
                 &["Workbench3.2"],
                 Some(47),
@@ -6546,7 +6509,7 @@ mod tests {
     /// guide is the composed text rather than a stub.
     #[test]
     fn the_guide_is_written_into_the_folder_the_click_named() {
-        let dir = scratch("guide-write");
+        let (_guard, dir) = scratch("guide-write");
         let outcome = write_material_guide(&dir, "AmigaOS 3.9", "en").unwrap();
 
         let GuideOutcome::Written { path } = &outcome else {
@@ -6577,7 +6540,7 @@ mod tests {
     /// wrote themselves, is not ART's to replace.
     #[test]
     fn a_guide_already_in_the_folder_is_never_replaced() {
-        let dir = scratch("guide-exists");
+        let (_guard, dir) = scratch("guide-exists");
         let path = dir.join("ART - what goes here.txt");
         std::fs::write(&path, b"the owner's own notes").unwrap();
 
@@ -6600,7 +6563,7 @@ mod tests {
     /// language and no filename at all.
     #[test]
     fn the_turkish_guide_has_its_own_name_and_its_own_words() {
-        let dir = scratch("guide-tr");
+        let (_guard, dir) = scratch("guide-tr");
         let outcome = write_material_guide(&dir, "AmigaOS 3.9", "tr").unwrap();
         let GuideOutcome::Written { path } = &outcome else {
             panic!("expected a written guide, got {outcome:?}");
@@ -6628,7 +6591,7 @@ mod tests {
     /// there.
     #[test]
     fn a_folder_of_more_archives_than_art_opens_is_bounded_and_says_so() {
-        let dir = scratch("slots-crowded");
+        let (_guard, dir) = scratch("slots-crowded");
         // Two past the bound, so the truncation is real rather than exact.
         for n in 0..(scan::MAX_MATERIAL_ARCHIVES + 2) {
             std::fs::write(dir.join(format!("f{n:04}.txt")), b"not an archive").unwrap();
@@ -6655,7 +6618,7 @@ mod tests {
     /// crowded, so the sentence means something when it appears.
     #[test]
     fn an_ordinary_folder_is_never_reported_as_crowded() {
-        let dir = scratch("slots-not-crowded");
+        let (_guard, dir) = scratch("slots-not-crowded");
         write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
 
         let report = osinstall_slots(
@@ -6692,7 +6655,7 @@ mod tests {
     /// destination name is different would name the wrong thing.
     #[test]
     fn the_contribution_archive_places_its_drawer_beside_the_discs_own() {
-        let dir = scratch("contribution-place");
+        let (_guard, dir) = scratch("contribution-place");
         let tree = dir.join("tree");
         std::fs::create_dir_all(&tree).unwrap();
         write_test_manifest_with_runs(
@@ -6797,7 +6760,7 @@ mod tests {
     /// resolves for the same folder, in the same call shape.
     #[test]
     fn the_chain_answers_over_the_same_folders_the_readout_does() {
-        let dir = scratch("chain-command");
+        let (_guard, dir) = scratch("chain-command");
         write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
 
         let report = osinstall_chain(
@@ -6852,7 +6815,7 @@ mod tests {
     /// row rendering as its fallback, silently.
     #[test]
     fn a_chain_report_serializes_with_the_keys_this_test_pins() {
-        let dir = scratch("chain-wire");
+        let (_guard, dir) = scratch("chain-wire");
         write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
         let report = osinstall_chain(
             "AmigaOS 3.9".to_string(),
@@ -6999,7 +6962,7 @@ mod tests {
     /// user has just pointed at the folder.
     #[test]
     fn the_chain_refuses_a_folder_that_is_not_a_tree() {
-        let dir = scratch("chain-not-a-tree");
+        let (_guard, dir) = scratch("chain-not-a-tree");
         let err = osinstall_chain(
             "AmigaOS 3.9".to_string(),
             vec![],
@@ -7026,7 +6989,7 @@ mod tests {
     fn a_real_disc_missing_a_directory_is_matched_but_incomplete() {
         use crate::core::iso::fixture::{dir as iso_dir, IsoBuilder};
 
-        let dir = scratch("slots-incomplete-disc");
+        let (_guard, dir) = scratch("slots-incomplete-disc");
         // `Contribution` deliberately absent.
         let bytes = IsoBuilder {
             volume: "AmigaOS3.9".to_string(),
@@ -7082,7 +7045,7 @@ mod tests {
     fn only_a_disc_the_recipe_names_is_opened_and_listed() {
         use crate::core::iso::fixture::{dir as iso_dir, IsoBuilder};
 
-        let dir = scratch("slots-foreign-disc");
+        let (_guard, dir) = scratch("slots-foreign-disc");
         let disc = |volume: &str, child: &str| {
             IsoBuilder {
                 volume: volume.to_string(),
@@ -7139,7 +7102,7 @@ mod tests {
     /// back `Chosen`.
     #[test]
     fn an_override_on_the_wire_fills_the_slot_it_names() {
-        let dir = scratch("slots-override");
+        let (_guard, dir) = scratch("slots-override");
         write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
         let mine = dir.join("my-own-copy.lha");
         std::fs::write(&mine, b"whatever the user says it is").unwrap();
@@ -7241,7 +7204,7 @@ mod tests {
     /// `BoingBag3.9-2`, and only the first carries `AmigaOS-Update`.
     #[test]
     fn a_second_archive_sharing_a_packages_identity_is_narrowed_by_what_it_carries() {
-        let dir = scratch("slots-distinguished");
+        let (_guard, dir) = scratch("slots-distinguished");
         write_bb2_archive(&dir, "BoingBag39-2.lha", "AmigaOS-Update");
         write_bb2_archive(&dir, "BoingBag39-2-Contribution.lha", "Contribution/readme");
 
@@ -7288,7 +7251,7 @@ mod tests {
     /// archive the recipes have never heard of is what that rank reports on.
     #[test]
     fn an_archive_no_package_claims_survives_the_narrowing() {
-        let dir = scratch("slots-unclaimed");
+        let (_guard, dir) = scratch("slots-unclaimed");
         std::fs::write(
             dir.join("SomethingElse.lha"),
             crate::core::lha::tests::make_lha_with_raw_names(&[(

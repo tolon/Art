@@ -1311,14 +1311,8 @@ mod tests {
     use crate::core::volume::fixture::ffs_volume;
     use crate::core::volume::DosType;
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-copy-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-copy", name)
     }
 
     struct Fixture {
@@ -1326,11 +1320,15 @@ mod tests {
         image: PathBuf,
         source: PathBuf,
         geometry: VolumeGeometry,
+        /// Last on purpose (ART-281): struct fields drop in declaration
+        /// order, so a field holding an open handle must drop before the
+        /// guard removes the directory underneath it.
+        _guard: crate::core::ScratchDir,
     }
 
     impl Fixture {
         fn new(name: &str) -> Self {
-            let dir = scratch(name);
+            let (_guard, dir) = scratch(name);
             let image = dir.join("disk.adf");
             let source = dir.join("source");
             std::fs::create_dir_all(&source).unwrap();
@@ -1343,6 +1341,7 @@ mod tests {
                 image,
                 source,
                 geometry,
+                _guard,
             }
         }
 
@@ -1390,12 +1389,6 @@ mod tests {
             let device = self.device();
             let set = BlockSet::new(512);
             super::super::file::read_file(&device, &set, &self.geometry, block).unwrap()
-        }
-    }
-
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.dir);
         }
     }
 
@@ -1834,7 +1827,7 @@ mod tests {
     /// twelve entries out of a cap of six. It must not.
     #[test]
     fn a_selection_obeys_the_entry_cap_across_all_roots_not_per_root() {
-        let dir = scratch("selection-cap");
+        let (_guard, dir) = scratch("selection-cap");
         let root_a = dir.join("A");
         let root_b = dir.join("B");
         std::fs::create_dir_all(&root_a).unwrap();
@@ -1864,7 +1857,7 @@ mod tests {
 
     #[test]
     fn two_roots_with_the_same_base_name_are_refused_rather_than_silently_merged() {
-        let dir = scratch("selection-collision");
+        let (_guard, dir) = scratch("selection-collision");
         let a = dir.join("a").join("Docs");
         let b = dir.join("b").join("Docs");
         std::fs::create_dir_all(&a).unwrap();
@@ -1894,7 +1887,7 @@ mod tests {
     /// clear "rename one of these" became a pile of unexplained skips.
     #[test]
     fn two_roots_differing_only_in_case_are_refused_too() {
-        let dir = scratch("selection-collision-case");
+        let (_guard, dir) = scratch("selection-collision-case");
         let a = dir.join("a").join("Docs");
         let b = dir.join("b").join("docs");
         std::fs::create_dir_all(&a).unwrap();
@@ -1919,7 +1912,7 @@ mod tests {
     /// and every signal available to the screen said it worked.
     #[test]
     fn a_selection_of_nothing_but_shortcuts_says_so_rather_than_reporting_success() {
-        let dir = scratch("selection-symlinks");
+        let (_guard, dir) = scratch("selection-symlinks");
         let target = dir.join("real.txt");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&target, b"not selected").unwrap();
@@ -1959,7 +1952,7 @@ mod tests {
     fn a_selection_of_ordinary_files_declines_nothing() {
         // The other half: `skipped_sources` must stay empty for a normal
         // pick, or every copy would report a skip it did not make.
-        let dir = scratch("selection-no-skips");
+        let (_guard, dir) = scratch("selection-no-skips");
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("Readme.txt");
         std::fs::write(&file, b"x").unwrap();
@@ -1978,7 +1971,7 @@ mod tests {
 
     #[test]
     fn a_root_that_does_not_exist_is_reported_rather_than_silently_skipped() {
-        let dir = scratch("selection-missing");
+        let (_guard, dir) = scratch("selection-missing");
         let missing = dir.join("Nope");
 
         let selection = HostSelection::new(vec![missing], true);

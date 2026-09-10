@@ -446,14 +446,8 @@ mod tests {
     use crate::core::jobs::NoProgress;
     use crate::core::layout::{ItemKind, LayoutItem, LayoutPlan, Placement};
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-layout-apply-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-layout-apply", tag)
     }
 
     fn plan_of(root: &Path, items: Vec<LayoutItem>) -> LayoutPlan {
@@ -471,7 +465,7 @@ mod tests {
 
     #[test]
     fn a_file_lands_at_its_destination_and_the_source_is_untouched() {
-        let dir = scratch("file");
+        let (_guard, dir) = scratch("file");
         let root = dir.join("staging");
         let source = dir.join("Disk.adf");
         std::fs::write(&source, b"disk bytes").unwrap();
@@ -514,7 +508,7 @@ mod tests {
 
     #[test]
     fn a_drawer_lands_with_its_whole_tree() {
-        let dir = scratch("tree");
+        let (_guard, dir) = scratch("tree");
         let root = dir.join("staging");
         let game = dir.join("Zool");
         std::fs::create_dir_all(game.join("data")).unwrap();
@@ -556,7 +550,7 @@ mod tests {
     /// — the exact failure this module exists to prevent.
     #[test]
     fn a_tree_deeper_than_the_scan_limit_is_refused_not_truncated() {
-        let dir = scratch("too-deep");
+        let (_guard, dir) = scratch("too-deep");
         let root = dir.join("staging");
         let game = dir.join("Deep");
         std::fs::create_dir_all(&game).unwrap();
@@ -596,7 +590,7 @@ mod tests {
     /// refuses rather than replacing the user's file.
     #[test]
     fn an_existing_destination_is_refused_and_left_alone() {
-        let dir = scratch("exists");
+        let (_guard, dir) = scratch("exists");
         let root = dir.join("staging");
         std::fs::create_dir_all(root.join("Floppies")).unwrap();
         std::fs::write(root.join("Floppies").join("Disk.adf"), b"already here").unwrap();
@@ -631,7 +625,7 @@ mod tests {
     /// archive entry name, and goes through the same gate.
     #[test]
     fn a_destination_that_escapes_the_root_is_refused() {
-        let dir = scratch("escape");
+        let (_guard, dir) = scratch("escape");
         let root = dir.join("staging");
         let source = dir.join("Disk.adf");
         std::fs::write(&source, b"x").unwrap();
@@ -707,7 +701,7 @@ mod tests {
     /// nothing landed when one file did.
     #[test]
     fn stopping_leaves_the_finished_item_whole_and_reports_how_many_landed() {
-        let dir = scratch("cancel-partway");
+        let (_guard, dir) = scratch("cancel-partway");
         let root = dir.join("staging");
         let plan = two_item_plan(&dir, &root);
 
@@ -738,7 +732,7 @@ mod tests {
     /// — there is no count to report.
     #[test]
     fn stopping_before_the_first_item_reports_plain_cancelled() {
-        let dir = scratch("cancel-before-any");
+        let (_guard, dir) = scratch("cancel-before-any");
         let root = dir.join("staging");
         let plan = two_item_plan(&dir, &root);
 
@@ -826,7 +820,7 @@ mod tests {
     /// game on the disk and leave it invisible on Workbench.
     #[test]
     fn a_whdload_archive_unpacks_to_a_drawer_with_its_icon_beside_it() {
-        let dir = scratch("unpack");
+        let (_guard, dir) = scratch("unpack");
         let root = dir.join("staging");
         let archive = dir.join("Turrican.zip");
         whdload_zip(&archive);
@@ -879,7 +873,7 @@ mod tests {
     /// beside it. The icon belongs beside the drawer only.
     #[test]
     fn a_wrapperless_whdload_archive_still_keeps_its_icon_outside_the_drawer() {
-        let dir = scratch("unpack-no-wrapper");
+        let (_guard, dir) = scratch("unpack-no-wrapper");
         let root = dir.join("staging");
         let archive = dir.join("Turrican.zip");
         whdload_zip_no_wrapper(&archive);
@@ -931,7 +925,7 @@ mod tests {
     /// in ART — but it cannot be placed as a drawer, so it is refused by name.
     #[test]
     fn an_archive_with_no_slave_is_refused_rather_than_half_placed() {
-        let dir = scratch("nopack");
+        let (_guard, dir) = scratch("nopack");
         let root = dir.join("staging");
         let archive = dir.join("Plain.zip");
         {
@@ -971,7 +965,7 @@ mod tests {
     /// lands outside the staging tree.
     #[test]
     fn a_traversing_entry_never_escapes_the_staging_tree() {
-        let dir = scratch("hostile");
+        let (_guard, dir) = scratch("hostile");
         let root = dir.join("staging");
         let archive = dir.join("Evil.zip");
         {
@@ -1018,7 +1012,7 @@ mod tests {
     /// call it a success. It must not.
     #[test]
     fn a_refused_entry_inside_the_drawer_blocks_the_whole_pack() {
-        let dir = scratch("hostile-inside");
+        let (_guard, dir) = scratch("hostile-inside");
         let root = dir.join("staging");
         let archive = dir.join("Turrican.zip");
         {
@@ -1067,7 +1061,7 @@ mod tests {
     /// archive.
     #[test]
     fn an_archive_needing_an_installer_is_refused_not_placed_as_a_game() {
-        let dir = scratch("needs-installer");
+        let (_guard, dir) = scratch("needs-installer");
         let root = dir.join("staging");
         let archive = dir.join("Game.zip");
         {
@@ -1120,7 +1114,7 @@ mod tests {
     /// fix, `apply.rs` never looked at `aborted` at all.
     #[test]
     fn an_aborted_extraction_is_refused_not_placed_as_a_success() {
-        let dir = scratch("aborted");
+        let (_guard, dir) = scratch("aborted");
         let root = dir.join("staging");
         let archive = dir.join("Big.zip");
         {
@@ -1171,7 +1165,7 @@ mod tests {
     /// beside the pack lands nowhere at all.
     #[test]
     fn a_file_outside_the_pack_is_dropped_rather_than_landing_in_the_drawer() {
-        let dir = scratch("outside");
+        let (_guard, dir) = scratch("outside");
         let root = dir.join("staging");
         let archive = dir.join("Turrican.zip");
         {
@@ -1259,7 +1253,7 @@ mod tests {
     fn a_level_one_lha_pack_plans_and_applies_under_one_name() {
         use crate::core::layout::{plan, policy::Policy};
 
-        let dir = scratch("lha-level1");
+        let (_guard, dir) = scratch("lha-level1");
         let root = dir.join("staging");
         let archive = dir.join("Turrican.lha");
         std::fs::write(
@@ -1299,7 +1293,7 @@ mod tests {
     fn an_lha_whdload_pack_plans_and_applies_under_one_name() {
         use crate::core::layout::{plan, policy::Policy};
 
-        let dir = scratch("lha-plan-apply");
+        let (_guard, dir) = scratch("lha-plan-apply");
         let root = dir.join("staging");
         let archive = dir.join("Turrican.lha");
         whdload_lha(&archive);
@@ -1350,7 +1344,7 @@ mod tests {
     fn a_retargeted_whdload_row_takes_its_icon_with_it() {
         use crate::core::layout::{plan, policy::Policy};
 
-        let dir = scratch("lha-retarget");
+        let (_guard, dir) = scratch("lha-retarget");
         let root = dir.join("staging");
         let archive = dir.join("Turrican.lha");
         whdload_lha(&archive);
@@ -1384,7 +1378,7 @@ mod tests {
     /// Cancelling has reported its count since ART-058; failing now matches.
     #[test]
     fn a_run_that_fails_partway_says_how_much_of_it_landed() {
-        let dir = scratch("partial");
+        let (_guard, dir) = scratch("partial");
         let root = dir.join("staging");
         let good = dir.join("Good.adf");
         let missing = dir.join("Missing.adf");
@@ -1435,7 +1429,7 @@ mod tests {
     /// partial apply the user has to go and clean up.
     #[test]
     fn a_run_that_fails_on_its_first_item_reports_the_plain_reason() {
-        let dir = scratch("partial-first");
+        let (_guard, dir) = scratch("partial-first");
         let root = dir.join("staging");
         let plan = plan_of(
             &root,
@@ -1462,7 +1456,7 @@ mod tests {
     fn re_running_a_half_finished_plan_finishes_it() {
         use crate::core::layout::{plan, policy::Policy};
 
-        let dir = scratch("resume");
+        let (_guard, dir) = scratch("resume");
         let root = dir.join("staging");
         let first = dir.join("First.adf");
         let second = dir.join("Second.adf");
@@ -1518,7 +1512,7 @@ mod tests {
     fn a_resumed_apply_restores_an_icon_the_first_run_never_wrote() {
         use crate::core::layout::{plan, policy::Policy};
 
-        let dir = scratch("resume-icon");
+        let (_guard, dir) = scratch("resume-icon");
         let root = dir.join("staging");
         let archive = dir.join("Turrican.lha");
         whdload_lha(&archive);
@@ -1566,7 +1560,7 @@ mod tests {
     /// overwrite: a destination holding something **else** is still refused.
     #[test]
     fn a_destination_holding_something_else_is_still_refused() {
-        let dir = scratch("resume-different");
+        let (_guard, dir) = scratch("resume-different");
         let root = dir.join("staging");
         let source = dir.join("Disk.adf");
         std::fs::write(&source, b"the real one").unwrap();

@@ -171,16 +171,13 @@ pub fn atomic_create_new(path: &Path, bytes: &[u8]) -> CoreResult<Created> {
 mod tests {
     use super::*;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let stamp = crate::core::test_scratch_id();
-        let dir = std::env::temp_dir().join(format!("art-atomic-{tag}-{stamp}"));
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-atomic", tag)
     }
 
     #[test]
     fn writes_a_new_file() {
-        let dir = scratch("new");
+        let (_guard, dir) = scratch("new");
         let target = dir.join("fresh.adf");
 
         atomic_write(&target, b"hello amiga").unwrap();
@@ -191,7 +188,7 @@ mod tests {
 
     #[test]
     fn replaces_an_existing_file() {
-        let dir = scratch("replace");
+        let (_guard, dir) = scratch("replace");
         let target = dir.join("existing.adf");
         fs::write(&target, b"old contents").unwrap();
 
@@ -203,7 +200,7 @@ mod tests {
 
     #[test]
     fn leaves_no_temp_files_behind() {
-        let dir = scratch("cleanup");
+        let (_guard, dir) = scratch("cleanup");
         let target = dir.join("disk.adf");
 
         atomic_write(&target, b"payload").unwrap();
@@ -223,7 +220,7 @@ mod tests {
 
     #[test]
     fn create_new_writes_a_file_that_is_not_there() {
-        let dir = scratch("create-new");
+        let (_guard, dir) = scratch("create-new");
         let target = dir.join("ART - what goes here.txt");
 
         assert_eq!(
@@ -251,7 +248,7 @@ mod tests {
     /// rather than being an error.
     #[test]
     fn create_new_never_replaces_what_is_already_there() {
-        let dir = scratch("create-new-exists");
+        let (_guard, dir) = scratch("create-new-exists");
         let target = dir.join("ART - what goes here.txt");
         fs::write(&target, b"the owner's own notes").unwrap();
 
@@ -271,7 +268,7 @@ mod tests {
     /// call has to see the first call's real bytes and nothing else.
     #[test]
     fn the_reservation_is_replaced_by_the_real_bytes_not_left_empty() {
-        let dir = scratch("create-new-twice");
+        let (_guard, dir) = scratch("create-new-twice");
         let target = dir.join("guide.txt");
 
         assert_eq!(atomic_create_new(&target, b"one").unwrap(), Created::Yes);
@@ -290,7 +287,7 @@ mod tests {
     /// success. Nothing is created.
     #[test]
     fn a_destination_in_a_missing_directory_is_an_error_and_creates_nothing() {
-        let dir = scratch("create-new-nodir");
+        let (_guard, dir) = scratch("create-new-nodir");
         let target = dir.join("not-here").join("guide.txt");
 
         assert!(atomic_create_new(&target, b"the guide").is_err());
@@ -337,7 +334,7 @@ mod tests {
         //
         // Each writer's payload is a distinct byte repeated, so a mix is
         // detectable: a correct result is entirely one byte.
-        let dir = scratch("concurrent");
+        let (_guard, dir) = scratch("concurrent");
         let target = dir.join("contested.adf");
         const WRITERS: usize = 16;
         const LEN: usize = 64 * 1024;
@@ -377,7 +374,7 @@ mod tests {
 
     #[test]
     fn failed_write_preserves_the_original() {
-        let dir = scratch("preserve");
+        let (_guard, dir) = scratch("preserve");
         let target = dir.join("precious.adf");
         fs::write(&target, b"irreplaceable").unwrap();
 

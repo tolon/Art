@@ -1083,6 +1083,7 @@ mod tests {
     /// against the real session.
     #[test]
     fn a_whdload_archive_installs_onto_a_disk_and_reads_back() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-whdload-root", "e2e");
         let (_scratch, dir) = scratch("e2e");
         let archive = dir.join("Turrican.lha");
         whdload_archive(&archive);
@@ -1093,7 +1094,7 @@ mod tests {
         let before = std::fs::read(&image).unwrap();
 
         // ---- the plan, which must write nothing ----
-        let plan = build_plan(&archive, &image, 0, 0, &std::env::temp_dir()).unwrap();
+        let plan = build_plan(&archive, &image, 0, 0, &root).unwrap();
         assert_eq!(
             std::fs::read(&image).unwrap(),
             before,
@@ -1119,8 +1120,8 @@ mod tests {
             &image,
             0,
             0,
-            &std::env::temp_dir(),
-            &std::env::temp_dir(),
+            &root,
+            &root,
             &TestVolumeSession,
             &NoProgress,
         )
@@ -1233,6 +1234,7 @@ mod tests {
     /// them, not a second read of the slave.
     #[test]
     fn a_catalogued_pack_gets_its_igame_data_from_the_catalogue_record() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-whdload-root", "igame-cat");
         use crate::core::gameindex::readers::drawer::read_drawer;
         use crate::core::gameindex::record::{ChipsetRequirement, Fact, Provenance};
         use crate::core::gameindex::store::{CachedEntry, CatalogueRoot, CATALOGUE_SCHEMA};
@@ -1300,7 +1302,7 @@ mod tests {
             &image,
             0,
             0,
-            &std::env::temp_dir(),
+            &root,
             &catalogue_dir,
             &TestVolumeSession,
             &NoProgress,
@@ -1346,6 +1348,7 @@ mod tests {
     /// what ART actually knows about it.
     #[test]
     fn an_uncatalogued_pack_still_gets_a_title_only_igame_data() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-whdload-root", "igame-title");
         let (_scratch, dir) = scratch("igame-no-catalogue");
         let archive = dir.join("Tag.lha");
         let slave = crate::core::gameindex::readers::slave::tests_support::build_slave(
@@ -1372,7 +1375,7 @@ mod tests {
             &image,
             0,
             0,
-            &std::env::temp_dir(),
+            &root,
             &catalogue_dir,
             &TestVolumeSession,
             &NoProgress,
@@ -1386,6 +1389,7 @@ mod tests {
     /// `igame.data` counted as a written, verified file.
     #[test]
     fn a_catalogued_title_too_long_for_igame_writes_no_empty_file() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-whdload-root", "igame-long");
         use crate::core::gameindex::readers::drawer::read_drawer;
         use crate::core::gameindex::record::{Fact, Provenance};
         use crate::core::gameindex::store::{CachedEntry, CatalogueRoot, CATALOGUE_SCHEMA};
@@ -1446,7 +1450,7 @@ mod tests {
             &image,
             0,
             0,
-            &std::env::temp_dir(),
+            &root,
             &catalogue_dir,
             &TestVolumeSession,
             &NoProgress,
@@ -1469,6 +1473,7 @@ mod tests {
     /// it is given: an archive with no slave never reaches `session` at all.
     #[test]
     fn a_non_whdload_pack_is_refused_before_any_write() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-whdload-root", "not-whd");
         use crate::core::lha::tests::make_lha_with;
 
         let (_scratch, dir) = scratch("e2e-not-whd");
@@ -1486,7 +1491,7 @@ mod tests {
 
         // Not a fault: the plan builds fine and reports why ART will not
         // install it.
-        let plan = build_plan(&archive, &image, 0, 0, &std::env::temp_dir()).unwrap();
+        let plan = build_plan(&archive, &image, 0, 0, &root).unwrap();
         assert!(
             plan.refusal.is_some(),
             "an archive with no slave must be refused, not errored"
@@ -1496,8 +1501,8 @@ mod tests {
             &image,
             0,
             0,
-            &std::env::temp_dir(),
-            &std::env::temp_dir(),
+            &root,
+            &root,
             &TestVolumeSession,
             &NoProgress
         )
@@ -1514,6 +1519,7 @@ mod tests {
     /// archive ART genuinely cannot read is a fault (`Err`, with one).
     #[test]
     fn a_missing_pack_is_a_refusal_and_a_broken_archive_is_still_an_error() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-whdload-root", "missing-pack");
         let (_scratch, dir) = scratch("split");
 
         let ordinary = dir.join("Docs.lha");
@@ -1527,7 +1533,7 @@ mod tests {
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         std::fs::write(&image, &bytes).unwrap();
 
-        let plan = build_plan(&ordinary, &image, 0, 0, &std::env::temp_dir())
+        let plan = build_plan(&ordinary, &image, 0, 0, &root)
             .expect("a plan without a pack is still a plan, not an error");
         let refusal = plan
             .refusal
@@ -1545,7 +1551,7 @@ mod tests {
         let broken = dir.join("Broken.lha");
         std::fs::write(&broken, b"not an lha file at all").unwrap();
 
-        let err = build_plan(&broken, &image, 0, 0, &std::env::temp_dir())
+        let err = build_plan(&broken, &image, 0, 0, &root)
             .expect_err("an unreadable archive must still be a real error");
         assert!(
             matches!(err, CoreError::Malformed { .. }),
@@ -1557,6 +1563,7 @@ mod tests {
     /// is touched.
     #[test]
     fn a_pack_too_big_for_the_disk_is_refused_with_the_numbers() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-whdload-root", "too-big");
         use crate::core::lha::tests::make_lha_with;
 
         let (_scratch, dir) = scratch("e2e-toobig");
@@ -1577,7 +1584,7 @@ mod tests {
         std::fs::write(&image, &bytes).unwrap();
         let before = std::fs::read(&image).unwrap();
 
-        let plan = build_plan(&archive, &image, 0, 0, &std::env::temp_dir()).unwrap();
+        let plan = build_plan(&archive, &image, 0, 0, &root).unwrap();
         let refusal = plan
             .refusal
             .expect("a pack that does not fit must be refused");
@@ -1589,8 +1596,8 @@ mod tests {
             &image,
             0,
             0,
-            &std::env::temp_dir(),
-            &std::env::temp_dir(),
+            &root,
+            &root,
             &TestVolumeSession,
             &NoProgress
         )
@@ -1601,10 +1608,10 @@ mod tests {
     /// The pack's own block cost, **without** the fix's +2 reservation —
     /// mirrors `build_plan` up to (not including) the line under test, so it
     /// gives an answer that does not move when that line is mutated away.
-    fn raw_pack_cost(archive: &Path, image: &Path) -> CopyPlan {
+    fn raw_pack_cost(archive: &Path, image: &Path, scratch_root: &Path) -> CopyPlan {
         let info = open_archive(archive).unwrap();
         let _ = detect_whdload(&info.entries);
-        let (scratch, _) = unpack_for_install(archive, &std::env::temp_dir(), &NoProgress).unwrap();
+        let (scratch, _) = unpack_for_install(archive, scratch_root, &NoProgress).unwrap();
         let entries = walk(scratch.path()).unwrap();
         let layout = analyse(&entries).unwrap();
         let pack_root = if layout.root.is_empty() {
@@ -1640,6 +1647,7 @@ mod tests {
     /// still refuses it.
     #[test]
     fn the_free_space_check_reserves_room_for_igame_data_too() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-whdload-root", "reserve");
         let (_scratch, dir) = scratch("m2-margin");
         let archive = dir.join("Turrican.lha");
         whdload_archive(&archive);
@@ -1647,12 +1655,12 @@ mod tests {
 
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         std::fs::write(&image, &bytes).unwrap();
-        let raw_needed = raw_pack_cost(&archive, &image).blocks_needed;
+        let raw_needed = raw_pack_cost(&archive, &image, &root).blocks_needed;
 
         let plan_at = |total_blocks: u32| -> WhdloadPlan {
             let (bytes, _) = ffs_volume(total_blocks, DosType::new(*b"DOS\x01"));
             std::fs::write(&image, &bytes).unwrap();
-            build_plan(&archive, &image, 0, 0, &std::env::temp_dir()).unwrap()
+            build_plan(&archive, &image, 0, 0, &root).unwrap()
         };
 
         let (mut lo, mut hi) = (8u32, 1760u32);
@@ -1682,6 +1690,7 @@ mod tests {
     /// one — and the refusal has to arrive before anything is touched.
     #[test]
     fn installing_the_same_pack_twice_is_refused_and_changes_nothing() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-whdload-root", "twice");
         let (_scratch, dir) = scratch("e2e-twice");
         let archive = dir.join("Turrican.lha");
         whdload_archive(&archive);
@@ -1695,8 +1704,8 @@ mod tests {
             &image,
             0,
             0,
-            &std::env::temp_dir(),
-            &std::env::temp_dir(),
+            &root,
+            &root,
             &TestVolumeSession,
             &NoProgress,
         )
@@ -1708,8 +1717,8 @@ mod tests {
             &image,
             0,
             0,
-            &std::env::temp_dir(),
-            &std::env::temp_dir(),
+            &root,
+            &root,
             &TestVolumeSession,
             &NoProgress,
         )
@@ -1748,6 +1757,7 @@ mod tests {
     /// assertion fall.
     #[test]
     fn install_pack_unpacks_the_archive_exactly_once() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-whdload-root", "unpack-once");
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         struct CountUnpacks(AtomicUsize);
@@ -1776,8 +1786,8 @@ mod tests {
             &image,
             0,
             0,
-            &std::env::temp_dir(),
-            &std::env::temp_dir(),
+            &root,
+            &root,
             &TestVolumeSession,
             &sink,
         )
@@ -1851,6 +1861,7 @@ mod tests {
     /// moving where the cancel lands.
     #[test]
     fn a_cancelled_install_writes_nothing_and_does_not_report_success() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-whdload-root", "cancelled");
         use crate::core::lha::tests::make_lha_with;
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -1928,8 +1939,8 @@ mod tests {
             &image,
             0,
             0,
-            &std::env::temp_dir(),
-            &std::env::temp_dir(),
+            &root,
+            &root,
             &TestVolumeSession,
             &sink,
         )
@@ -1957,6 +1968,7 @@ mod tests {
     /// Install a pack and leave the disk for `scripts/oracle-check.py`.
     #[test]
     fn export_whdload_install_for_oracle_when_asked() {
+        let (_root_guard, root) = crate::core::ScratchDir::pair("art-whdload-root", "oracle");
         let Ok(dest) = std::env::var("ART_WHD_OUT") else {
             return;
         };
@@ -1976,8 +1988,8 @@ mod tests {
             &dest,
             0,
             0,
-            &std::env::temp_dir(),
-            &std::env::temp_dir(),
+            &root,
+            &root,
             &TestVolumeSession,
             &NoProgress,
         )

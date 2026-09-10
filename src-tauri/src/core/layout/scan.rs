@@ -271,20 +271,14 @@ fn file(path: &Path) -> CoreResult<Found> {
 mod tests {
     use super::*;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-layout-scan-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-layout-scan", tag)
     }
 
     /// A folder is walked and every file in it becomes a `Found`, at any depth.
     #[test]
     fn a_folder_is_walked_and_its_files_are_found() {
-        let dir = scratch("walk");
+        let (_guard, dir) = scratch("walk");
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::write(dir.join("a.adf"), vec![0u8; 10]).unwrap();
         std::fs::write(dir.join("sub").join("b.lha"), vec![0u8; 20]).unwrap();
@@ -306,7 +300,7 @@ mod tests {
     /// dropping a folder of 400 files scatters the insides of every game.
     #[test]
     fn a_whdload_drawer_is_returned_whole_and_never_walked_into() {
-        let dir = scratch("drawer");
+        let (_guard, dir) = scratch("drawer");
         let game = dir.join("TurricanII");
         std::fs::create_dir_all(game.join("data")).unwrap();
         std::fs::write(game.join("TurricanII.slave"), vec![0u8; 4]).unwrap();
@@ -329,7 +323,7 @@ mod tests {
     /// A folder of games gives one entry per game, not one entry for the folder.
     #[test]
     fn a_folder_of_drawers_gives_one_entry_per_drawer() {
-        let dir = scratch("many");
+        let (_guard, dir) = scratch("many");
         for name in ["TurricanII", "Zool"] {
             let game = dir.join(name);
             std::fs::create_dir_all(&game).unwrap();
@@ -346,7 +340,7 @@ mod tests {
     /// A file given directly is found as itself, folder or not.
     #[test]
     fn a_file_named_directly_is_found_as_itself() {
-        let dir = scratch("direct");
+        let (_guard, dir) = scratch("direct");
         let file = dir.join("one.adf");
         std::fs::write(&file, vec![0u8; 7]).unwrap();
 
@@ -362,7 +356,7 @@ mod tests {
     /// *child* holds a slave is a folder of games, not a game.
     #[test]
     fn only_a_slave_directly_inside_makes_a_drawer() {
-        let dir = scratch("depth");
+        let (_guard, dir) = scratch("depth");
         let outer = dir.join("Games");
         let inner = outer.join("Zool");
         std::fs::create_dir_all(&inner).unwrap();
@@ -380,7 +374,7 @@ mod tests {
     /// `core::collection`'s `scanning_stops_at_the_depth_limit`.
     #[test]
     fn scanning_stops_at_the_depth_limit() {
-        let root = scratch("deep");
+        let (_guard, root) = scratch("deep");
 
         // Build a tree twice as deep as the limit, with a file at the bottom.
         let mut deep = root.clone();
@@ -416,7 +410,7 @@ mod tests {
     /// letting the user decide against a number that is quietly wrong.
     #[test]
     fn a_drawer_deeper_than_the_cap_says_its_size_is_short() {
-        let root = scratch("deep-drawer");
+        let (_guard, root) = scratch("deep-drawer");
         let game = root.join("TurricanII");
         std::fs::create_dir_all(&game).unwrap();
         std::fs::write(game.join("TurricanII.slave"), vec![0u8; 4]).unwrap();
@@ -449,7 +443,7 @@ mod tests {
     /// way out was to remove one of the sources.
     #[test]
     fn a_file_inside_a_folder_that_was_also_added_is_kept_once() {
-        let root = scratch("overlap");
+        let (_guard, root) = scratch("overlap");
         let games = root.join("Games");
         std::fs::create_dir_all(&games).unwrap();
         let one = games.join("Turrican.lha");
@@ -474,7 +468,7 @@ mod tests {
     /// dedupe that only worked one way round would pass the test above.
     #[test]
     fn the_same_overlap_the_other_way_round_is_also_kept_once() {
-        let root = scratch("overlap-reversed");
+        let (_guard, root) = scratch("overlap-reversed");
         let games = root.join("Games");
         std::fs::create_dir_all(&games).unwrap();
         let one = games.join("Turrican.lha");
@@ -493,7 +487,7 @@ mod tests {
     /// not start showing a "some things were dropped" panel to everyone.
     #[test]
     fn an_ordinary_scan_reports_nothing_dropped() {
-        let dir = scratch("clean");
+        let (_guard, dir) = scratch("clean");
         std::fs::write(dir.join("a.adf"), vec![0u8; 10]).unwrap();
 
         let scanned = gather(std::slice::from_ref(&dir)).unwrap();
@@ -522,7 +516,7 @@ mod tests {
     /// keeps recursing through plain directories until it meets one.
     #[test]
     fn a_drawer_nested_two_levels_down_is_still_returned_whole() {
-        let root = scratch("nested-drawer");
+        let (_guard, root) = scratch("nested-drawer");
         let game = root.join("Games").join("TurricanII");
         std::fs::create_dir_all(game.join("data")).unwrap();
         std::fs::write(game.join("TurricanII.slave"), vec![0u8; 4]).unwrap();

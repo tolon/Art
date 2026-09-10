@@ -498,7 +498,7 @@ mod tests {
 
     #[test]
     fn a_source_reports_the_volume_name_from_inside_the_image() {
-        let dir = super::super::fixtures::scratch("source-volume-name");
+        let (_guard, dir) = super::super::fixtures::scratch("source-volume-name");
         // Deliberately a filename that says nothing, and a volume that is
         // not `Workbench3.2` — `fixtures::workbench` bakes that name in, and
         // this is the one test that needs to choose its own.
@@ -517,7 +517,7 @@ mod tests {
 
     #[test]
     fn an_entry_carries_the_protection_bits_the_media_holds() {
-        let dir = super::super::fixtures::scratch("source-protection");
+        let (_guard, dir) = super::super::fixtures::scratch("source-protection");
         let mut source = AdfSource::open(&super::super::fixtures::workbench(&dir)).unwrap();
 
         let load_module = source.entry("C/LoadModule").unwrap().unwrap();
@@ -546,14 +546,14 @@ mod tests {
 
     #[test]
     fn a_missing_path_is_none_rather_than_an_error() {
-        let dir = super::super::fixtures::scratch("source-missing");
+        let (_guard, dir) = super::super::fixtures::scratch("source-missing");
         let mut source = AdfSource::open(&super::super::fixtures::workbench(&dir)).unwrap();
         assert!(source.entry("LIBS/Modules").unwrap().is_none());
     }
 
     #[test]
     fn walk_returns_a_subtree_with_paths_relative_to_the_media_root() {
-        let dir = super::super::fixtures::scratch("source-walk");
+        let (_guard, dir) = super::super::fixtures::scratch("source-walk");
         let mut source = AdfSource::open(&super::super::fixtures::workbench(&dir)).unwrap();
         let found = source.walk("C").unwrap();
         assert!(found.iter().any(|e| e.path == "C/LoadModule"));
@@ -561,7 +561,7 @@ mod tests {
 
     #[test]
     fn read_returns_the_bytes() {
-        let dir = super::super::fixtures::scratch("source-read");
+        let (_guard, dir) = super::super::fixtures::scratch("source-read");
         let mut source = AdfSource::open(&super::super::fixtures::workbench(&dir)).unwrap();
         assert_eq!(source.read("S/Startup-sequence").unwrap(), b"; test\n");
     }
@@ -578,7 +578,7 @@ mod tests {
     /// it.
     #[test]
     fn an_entry_carries_its_size_date_and_comment() {
-        let dir = super::super::fixtures::scratch("source-size-date-comment");
+        let (_guard, dir) = super::super::fixtures::scratch("source-size-date-comment");
         let image = super::super::fixtures::media(&dir, "Meta", "meta.adf", &[]);
         let geometry = dd_geometry();
 
@@ -626,7 +626,7 @@ mod tests {
     /// in the root.
     #[test]
     fn walking_the_empty_path_returns_the_whole_media() {
-        let dir = super::super::fixtures::scratch("source-root-walk");
+        let (_guard, dir) = super::super::fixtures::scratch("source-root-walk");
         let image = super::super::fixtures::media(
             &dir,
             "Fonts",
@@ -654,7 +654,7 @@ mod tests {
     /// without erroring on the root block's different layout.
     #[test]
     fn an_empty_path_entry_resolves_to_the_root_directory() {
-        let dir = super::super::fixtures::scratch("source-root-entry");
+        let (_guard, dir) = super::super::fixtures::scratch("source-root-entry");
         let mut source = AdfSource::open(&super::super::fixtures::workbench(&dir)).unwrap();
 
         let entry = source.entry("").unwrap().unwrap();
@@ -674,7 +674,7 @@ mod tests {
     /// version of `entry_at` this test used to go through.
     #[test]
     fn an_empty_path_entry_does_not_read_the_root_blocks_own_fields_as_metadata() {
-        let dir = super::super::fixtures::scratch("source-root-no-fabrication");
+        let (_guard, dir) = super::super::fixtures::scratch("source-root-no-fabrication");
         let image = super::super::fixtures::workbench(&dir);
         let geometry = dd_geometry();
         let root_offset = geometry.root_block as usize * geometry.block_size;
@@ -744,7 +744,7 @@ mod tests {
     /// immediately, regardless of how many children it has.
     #[test]
     fn a_directory_that_branches_into_itself_is_refused_not_exploded() {
-        let dir = super::super::fixtures::scratch("source-branch-cycle");
+        let (_guard, dir) = super::super::fixtures::scratch("source-branch-cycle");
         let image = super::super::fixtures::media(&dir, "Loop", "loop.adf", &[]);
         let geometry = dd_geometry();
         let root_offset = geometry.root_block as usize * geometry.block_size;
@@ -785,7 +785,7 @@ mod tests {
     /// bucket ever loops and no directory is ever revisited.
     #[test]
     fn a_bucket_that_loops_on_itself_is_refused_by_the_chain_step_limit() {
-        let dir = super::super::fixtures::scratch("source-bucket-loop");
+        let (_guard, dir) = super::super::fixtures::scratch("source-bucket-loop");
         let image = super::super::fixtures::media(
             &dir,
             "Bucket",
@@ -833,7 +833,7 @@ mod tests {
     /// check from `MediaSource::walk`.
     #[test]
     fn the_total_entry_cap_refuses_one_more_entry_once_out_is_already_full() {
-        let dir = super::super::fixtures::scratch("source-total-entry-cap");
+        let (_guard, dir) = super::super::fixtures::scratch("source-total-entry-cap");
         let image = super::super::fixtures::workbench(&dir);
         let source = AdfSource::open(&image).unwrap();
 
@@ -856,7 +856,7 @@ mod tests {
     /// dropped in favour of "the visited set catches everything now".
     #[test]
     fn a_real_directory_chain_deeper_than_the_cap_is_refused() {
-        let dir = super::super::fixtures::scratch("source-depth-cap-real");
+        let (_guard, dir) = super::super::fixtures::scratch("source-depth-cap-real");
         let image = super::super::fixtures::media(&dir, "Deep", "deep.adf", &[]);
         let geometry = dd_geometry();
         {
@@ -885,7 +885,7 @@ mod tests {
     /// pointer list.
     #[test]
     fn walk_refuses_a_path_that_names_a_file() {
-        let dir = super::super::fixtures::scratch("source-walk-wrong-kind");
+        let (_guard, dir) = super::super::fixtures::scratch("source-walk-wrong-kind");
         let mut source = AdfSource::open(&super::super::fixtures::workbench(&dir)).unwrap();
 
         let err = source.walk("C/LoadModule").unwrap_err();
@@ -899,7 +899,7 @@ mod tests {
     /// not produce a file nobody asked for.
     #[test]
     fn read_refuses_a_path_that_names_a_drawer() {
-        let dir = super::super::fixtures::scratch("source-read-wrong-kind");
+        let (_guard, dir) = super::super::fixtures::scratch("source-read-wrong-kind");
         let mut source = AdfSource::open(&super::super::fixtures::workbench(&dir)).unwrap();
 
         let err = source.read("C").unwrap_err();
@@ -915,7 +915,7 @@ mod tests {
     /// as "the" volume.
     #[test]
     fn open_refuses_a_partitioned_image() {
-        let dir = super::super::fixtures::scratch("source-refuses-rdb");
+        let (_guard, dir) = super::super::fixtures::scratch("source-refuses-rdb");
         let path = dir.join("disk.hdf");
         create_hdf(
             &path,

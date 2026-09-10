@@ -47,11 +47,8 @@ mod tests {
     use crate::core::lha::tests::make_minimal_lha;
     use std::path::PathBuf;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("art-lha-{tag}-{}", crate::core::test_scratch_id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-lha", tag)
     }
 
     fn make_traversal_lha() -> Vec<u8> {
@@ -84,7 +81,7 @@ mod tests {
 
     #[test]
     fn extract_minimal_lha() {
-        let dir = scratch("extract");
+        let (_guard, dir) = scratch("extract");
         let archive = dir.join("test.lha");
         std::fs::write(&archive, make_minimal_lha()).unwrap();
         let dest = dir.join("out");
@@ -101,7 +98,7 @@ mod tests {
 
     #[test]
     fn traversal_entry_is_rejected_not_extracted() {
-        let dir = scratch("trav");
+        let (_guard, dir) = scratch("trav");
         let archive = dir.join("bad.lha");
         std::fs::write(&archive, make_traversal_lha()).unwrap();
         let dest = dir.join("out");
@@ -117,7 +114,7 @@ mod tests {
 
     #[test]
     fn existing_files_are_skipped_by_default() {
-        let dir = scratch("skip");
+        let (_guard, dir) = scratch("skip");
         let archive = dir.join("test.lha");
         std::fs::write(&archive, make_minimal_lha()).unwrap();
         let dest = dir.join("out");
@@ -140,7 +137,7 @@ mod tests {
 
     #[test]
     fn overwrite_policy_replaces_when_asked() {
-        let dir = scratch("over");
+        let (_guard, dir) = scratch("over");
         let archive = dir.join("test.lha");
         std::fs::write(&archive, make_minimal_lha()).unwrap();
         let dest = dir.join("out");
@@ -158,7 +155,7 @@ mod tests {
 
     #[test]
     fn rename_policy_keeps_both_copies() {
-        let dir = scratch("rename");
+        let (_guard, dir) = scratch("rename");
         let archive = dir.join("test.lha");
         std::fs::write(&archive, make_minimal_lha()).unwrap();
         let dest = dir.join("out");
@@ -176,7 +173,7 @@ mod tests {
 
     #[test]
     fn next_free_path_walks_past_taken_names() {
-        let dir = scratch("free");
+        let (_guard, dir) = scratch("free");
         let base = dir.join("Game.exe");
         assert_eq!(next_free_path(&base).unwrap(), base);
 

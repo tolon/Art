@@ -592,9 +592,7 @@ mod tests {
 
     #[test]
     fn recording_the_same_package_twice_keeps_one_row() {
-        let dir = std::env::temp_dir().join("art-records-replace");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-records-replace", "twice");
         let file = dir.join("downloads.jsonl");
 
         let store = JsonlDownloadRecords::load(&file).unwrap();
@@ -615,9 +613,7 @@ mod tests {
 
     #[test]
     fn a_damaged_line_costs_one_record_not_the_file() {
-        let dir = std::env::temp_dir().join("art-records-damaged");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-records-damaged", "one-record");
         let file = dir.join("downloads.jsonl");
 
         let store = JsonlDownloadRecords::load(&file).unwrap();

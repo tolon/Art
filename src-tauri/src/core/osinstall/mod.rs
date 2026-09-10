@@ -1242,14 +1242,8 @@ pub(crate) mod fixtures {
     /// The repository's own convention (`core/archive/extract.rs::scratch`,
     /// `core/layout/apply.rs::scratch`) — deliberately not `tempfile`, which
     /// is not a dependency of this project.
-    pub fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-osinstall-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    pub fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-osinstall", tag)
     }
 
     /// Split a `/`-separated path into its directory segments and file name.
@@ -1519,10 +1513,14 @@ pub(crate) mod fixtures {
         chosen: &[&str],
         present: &[&str],
         rom_major: Option<u16>,
-    ) -> (crate::core::osinstall::plan::InstallPlan, PathBuf) {
+    ) -> (
+        crate::core::ScratchDir,
+        crate::core::osinstall::plan::InstallPlan,
+        PathBuf,
+    ) {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = scratch(&format!("planned-with-{n}"));
+        let (_guard, dir) = scratch(&format!("planned-with-{n}"));
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
 
@@ -1555,7 +1553,7 @@ pub(crate) mod fixtures {
         };
 
         let plan = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
-        (plan, dir)
+        (_guard, plan, dir)
     }
 
     // -----------------------------------------------------------------
@@ -1781,13 +1779,13 @@ pub(crate) mod fixtures {
         /// worth pinning is that two calls cannot collide.
         #[test]
         fn scratch_gives_every_call_its_own_empty_directory() {
-            let dir = scratch("fixture-scratch");
+            let (_guard, dir) = scratch("fixture-scratch");
             assert!(dir.is_dir());
             assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
 
             std::fs::write(dir.join("leftover"), b"from another test").unwrap();
 
-            let dir_again = scratch("fixture-scratch");
+            let (_guard, dir_again) = scratch("fixture-scratch");
             assert_ne!(
                 dir, dir_again,
                 "the same tag twice must not name the same directory"
@@ -1808,7 +1806,7 @@ pub(crate) mod fixtures {
         /// `media()` was asked to store, not just that the bytes exist.
         #[test]
         fn media_writes_the_protection_bits_it_was_asked_for() {
-            let dir = scratch("media-protection");
+            let (_guard, dir) = scratch("media-protection");
             let image = media(
                 &dir,
                 "Test",
@@ -1844,7 +1842,7 @@ pub(crate) mod fixtures {
 
         #[test]
         fn workbench_carries_the_two_files_every_test_in_this_plan_leans_on() {
-            let dir = scratch("workbench-fixture");
+            let (_guard, dir) = scratch("workbench-fixture");
             let image = workbench(&dir);
 
             let parsed =
@@ -1867,7 +1865,7 @@ pub(crate) mod fixtures {
 
         #[test]
         fn fake_rom_states_the_major_it_was_asked_for() {
-            let dir = scratch("fake-rom");
+            let (_guard, dir) = scratch("fake-rom");
             let rom = fake_rom(&dir, 45);
             let bytes = std::fs::read(&rom).unwrap();
             assert_eq!(crate::core::rom::stated_version(&bytes), Some((45, 68)));
@@ -1892,7 +1890,7 @@ pub(crate) mod fixtures {
         /// identically — and a single changed byte must not.
         #[test]
         fn digest_of_folder_does_not_depend_on_where_the_tree_is_rooted() {
-            let dir = scratch("digest-portable");
+            let (_guard, dir) = scratch("digest-portable");
             let left = dir.join("left");
             let right = dir.join("right");
             std::fs::create_dir_all(left.join("sub")).unwrap();

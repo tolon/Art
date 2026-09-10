@@ -247,22 +247,13 @@ pub mod tests {
             .into_inner()
     }
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-7z-{tag}-{}-{}",
-            crate::core::test_scratch_id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-7z", tag)
     }
 
     #[test]
     fn it_lists_and_reads_an_archive() {
-        let dir = scratch("list");
+        let (_guard, dir) = scratch("list");
         let archive = dir.join("test.7z");
         std::fs::write(
             &archive,
@@ -288,7 +279,7 @@ pub mod tests {
     /// arrives, in listing order, and nothing else does.
     #[test]
     fn a_selective_pass_delivers_exactly_what_was_asked_for() {
-        let dir = scratch("selective");
+        let (_guard, dir) = scratch("selective");
         let archive = dir.join("test.7z");
         std::fs::write(
             &archive,
@@ -324,7 +315,7 @@ pub mod tests {
     /// 7-Zip application wrote.
     #[test]
     fn an_archive_with_a_directory_still_reads_each_file_as_itself() {
-        let dir = scratch("dir-drift");
+        let (_guard, dir) = scratch("dir-drift");
         let archive = dir.join("mixed.7z");
         std::fs::write(
             &archive,
@@ -374,7 +365,7 @@ pub mod tests {
     /// defect was found. This test holds the shape so the plumbing cannot rot.
     #[test]
     fn a_partial_selection_delivers_only_what_was_asked_for_and_gets_it_right() {
-        let dir = scratch("partial");
+        let (_guard, dir) = scratch("partial");
         let archive = dir.join("some.7z");
         std::fs::write(
             &archive,
@@ -418,7 +409,7 @@ pub mod tests {
 
     #[test]
     fn a_file_that_is_not_a_7z_fails_at_open() {
-        let dir = scratch("not-7z");
+        let (_guard, dir) = scratch("not-7z");
         let bogus = dir.join("plain.7z");
         std::fs::write(&bogus, vec![0u8; 512]).unwrap();
 

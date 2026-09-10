@@ -1721,14 +1721,8 @@ mod tests {
     // `AppHandle` for exactly this reason: none of the cases below need a
     // running Tauri app.
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-launch-cmd-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-launch-cmd", tag)
     }
 
     /// A `.rp9`-shaped zip, the same fixture shape `core/launch/extract.rs`'s
@@ -1765,7 +1759,7 @@ mod tests {
     /// `images` entry (the file's own name) is not even consulted.
     #[test]
     fn a_plain_floppy_mounts_the_catalogued_path_directly() {
-        let dir = scratch("floppy-plain");
+        let (_guard, dir) = scratch("floppy-plain");
         let adf = dir.join("Game.adf");
         std::fs::write(&adf, b"DISK").unwrap();
 
@@ -1793,7 +1787,7 @@ mod tests {
     /// WinUAE can mount them.
     #[test]
     fn rp9_floppies_are_extracted_into_the_launch_directory() {
-        let dir = scratch("floppy-rp9");
+        let (_guard, dir) = scratch("floppy-rp9");
         let pkg = zip_package(
             &dir,
             "Dune2.rp9",
@@ -1834,7 +1828,7 @@ mod tests {
     /// finding from the whole-branch review).
     #[test]
     fn a_plain_hardfile_mounts_the_catalogued_path_directly_and_read_only() {
-        let dir = scratch("hardfile-plain");
+        let (_guard, dir) = scratch("hardfile-plain");
         let hdf = dir.join("Game.hdf");
         std::fs::write(&hdf, b"HARDFILE").unwrap();
 
@@ -1869,7 +1863,7 @@ mod tests {
     /// use) must come out `HardfileShape::Rdb`.
     #[test]
     fn a_plain_hardfile_shape_is_detected_from_its_own_bytes() {
-        let dir = scratch("hardfile-shape-rdb");
+        let (_guard, dir) = scratch("hardfile-shape-rdb");
         let hdf = dir.join("Rdb.hdf");
         let mut image = vec![0u8; 512 * 4];
         image[0..4].copy_from_slice(b"RDSK");
@@ -1900,7 +1894,7 @@ mod tests {
     /// already had.
     #[test]
     fn an_rp9_hardfile_is_extracted_not_the_package_itself() {
-        let dir = scratch("hardfile-rp9");
+        let (_guard, dir) = scratch("hardfile-rp9");
         let pkg = zip_package(
             &dir,
             "Enzo.rp9",
@@ -1946,7 +1940,7 @@ mod tests {
     /// where read-only silently loses the game's saves.
     #[test]
     fn a_whdload_hardfile_mounts_read_only_by_default() {
-        let dir = scratch("whdload-hardfile-default");
+        let (_guard, dir) = scratch("whdload-hardfile-default");
         let hdf = dir.join("1000 Miglia.hdf");
         std::fs::write(&hdf, b"HARDFILE").unwrap();
 
@@ -1980,7 +1974,7 @@ mod tests {
     /// writable, so a save WHDLoad writes back into the image survives.
     #[test]
     fn a_whdload_hardfile_mounts_writable_when_the_user_allows_it() {
-        let dir = scratch("whdload-hardfile-allow-write");
+        let (_guard, dir) = scratch("whdload-hardfile-allow-write");
         let hdf = dir.join("1000 Miglia.hdf");
         std::fs::write(&hdf, b"HARDFILE").unwrap();
 
@@ -2014,7 +2008,7 @@ mod tests {
     /// would mean for it.
     #[test]
     fn allow_write_is_ignored_for_a_plain_hardfile() {
-        let dir = scratch("hardfile-allow-write-ignored");
+        let (_guard, dir) = scratch("hardfile-allow-write-ignored");
         let hdf = dir.join("Game.hdf");
         std::fs::write(&hdf, b"HARDFILE").unwrap();
 
@@ -2059,7 +2053,7 @@ mod tests {
     /// outranks both.
     #[test]
     fn whdload_one_click_writes_the_boot_directory_and_outranks_everything() {
-        let dir = scratch("whdload-y2");
+        let (_guard, dir) = scratch("whdload-y2");
         let system = dir.join("System.hdf");
         std::fs::write(&system, b"SYSTEM").unwrap();
         let drawer = dir.join("Turrican");
@@ -2125,7 +2119,7 @@ mod tests {
     /// geometry over it, which is what produced "Not a DOS disk in unit 0".
     #[test]
     fn a_whdload_systems_vhd_shape_is_detected() {
-        let dir = scratch("whdload-shape-vhd");
+        let (_guard, dir) = scratch("whdload-shape-vhd");
         let system = dir.join("AmiKit.hdf");
         let mut image = vec![0u8; 512 * 4];
         image[0..8].copy_from_slice(b"conectix");
@@ -2153,7 +2147,7 @@ mod tests {
     /// itself boots to Workbench, and the user starts WHDLoad by hand.
     #[test]
     fn whdload_mount_and_hand_over_writes_no_boot_directory() {
-        let dir = scratch("whdload-y1");
+        let (_guard, dir) = scratch("whdload-y1");
         let system = dir.join("System.hdf");
         std::fs::write(&system, b"SYSTEM").unwrap();
         let drawer = dir.join("Turrican");
@@ -2196,7 +2190,7 @@ mod tests {
     /// refuses rather than handing WinUAE a path that is not there.
     #[test]
     fn a_missing_whdload_system_refuses() {
-        let dir = scratch("whdload-missing-system");
+        let (_guard, dir) = scratch("whdload-missing-system");
         let drawer = dir.join("Turrican");
         std::fs::create_dir_all(&drawer).unwrap();
 

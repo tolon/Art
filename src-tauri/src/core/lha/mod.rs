@@ -350,12 +350,8 @@ pub mod tests {
 
     /// A scratch directory nothing else in the process will pick — see
     /// [`crate::core::test_scratch_id`] for why the counter is load-bearing.
-    fn tmp(tag: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("art-{tag}-{}", crate::core::test_scratch_id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn tmp(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art", tag)
     }
 
     /// A stored (-lh0-) level-0 archive holding the given files.
@@ -608,9 +604,7 @@ pub mod tests {
     /// with "empty entry name". Found by fetching a real AmiSSL release.
     #[test]
     fn a_level_two_header_is_read_from_its_extended_header() {
-        let dir = std::env::temp_dir().join(format!("art-lha2-{}", crate::core::test_scratch_id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-lha2", "level2");
         let archive = dir.join("level2.lha");
         std::fs::write(&archive, make_level2_lha("readme.txt", b"hello")).unwrap();
 
@@ -628,9 +622,7 @@ pub mod tests {
     /// right charset itself (ART-168).
     #[test]
     fn a_level_zero_name_still_comes_from_the_raw_field() {
-        let dir = std::env::temp_dir().join(format!("art-lha0-{}", crate::core::test_scratch_id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-lha0", "raw-field");
         let archive = dir.join("level0.lha");
         std::fs::write(&archive, make_minimal_lha()).unwrap();
 
@@ -649,15 +641,7 @@ pub mod tests {
     /// `t\u{FC}rk\u{E7}e` is what a user and AmigaDOS both mean by it.
     #[test]
     fn a_level_zero_name_s_high_bit_bytes_decode_as_latin1() {
-        let dir = std::env::temp_dir().join(format!(
-            "art-lha-latin1-{}-{}",
-            crate::core::test_scratch_id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-lha-latin1", "decode");
         let archive = dir.join("turkce.lha");
 
         // `LocaleUpdate/locale/catalogs/türkçe/sys.catalog`, Latin-1.
@@ -705,7 +689,7 @@ pub mod tests {
     /// name, so an extraction would have piled them all into the root.
     #[test]
     fn a_level_one_entry_keeps_the_drawer_from_its_extension_header() {
-        let dir = tmp("lha1");
+        let (_guard, dir) = tmp("lha1");
         let archive = dir.join("level1.lha");
         // `doc/ansi2knr.1` — the real shape from `doc.lha`, whose 0x02 header
         // stores `doc` with a trailing 0xFF separator.
@@ -725,7 +709,7 @@ pub mod tests {
     /// fixes have to compose, not merely coexist.
     #[test]
     fn a_level_one_drawer_is_split_on_0xff_and_decoded_as_latin1() {
-        let dir = tmp("lha1-intl");
+        let (_guard, dir) = tmp("lha1-intl");
         let archive = dir.join("level1.lha");
         // `Locale/Catalogs/türkçe/sys.catalog`, separators 0xFF.
         let mut directory: Vec<u8> = b"Locale\xFFCatalogs\xFF".to_vec();
@@ -754,7 +738,7 @@ pub mod tests {
     /// this, so a refusal here would break real archives.
     #[test]
     fn a_level_one_entry_with_no_directory_header_sits_at_the_root() {
-        let dir = tmp("lha1-root");
+        let (_guard, dir) = tmp("lha1-root");
         let archive = dir.join("level1.lha");
         std::fs::write(&archive, make_level1_lha(b"", b"readme.txt", b"hi")).unwrap();
 
@@ -772,7 +756,7 @@ pub mod tests {
     /// back as a bare base name in the archive root.
     #[test]
     fn a_level_one_header_with_a_damaged_extension_area_is_refused() {
-        let dir = tmp("lha1-damaged");
+        let (_guard, dir) = tmp("lha1-damaged");
         let archive = dir.join("damaged.lha");
         let mut bytes = make_level1_lha(b"doc\xFF", b"ansi2knr.1", b"manual");
         // `next ext size` is the last two bytes of the base header.
@@ -797,7 +781,7 @@ pub mod tests {
     /// in the owner's collection do this, e.g. `…\spatch` + `6.50 (26.8.93)`.
     #[test]
     fn a_name_carrying_an_amiga_comment_is_split_at_the_nul() {
-        let dir = tmp("lha-comment");
+        let (_guard, dir) = tmp("lha-comment");
         let archive = dir.join("commented.lha");
         std::fs::write(
             &archive,
@@ -821,7 +805,7 @@ pub mod tests {
     /// A comment can itself be Latin-1 — 9 of the 126 are.
     #[test]
     fn an_amiga_comment_is_latin1_too() {
-        let dir = tmp("lha-comment-intl");
+        let (_guard, dir) = tmp("lha-comment-intl");
         let archive = dir.join("commented.lha");
         let mut name: Vec<u8> = b"Docs/liesmich\x00Gr".to_vec();
         name.push(0xFC); // ü
@@ -843,7 +827,7 @@ pub mod tests {
     /// something. The overwhelming majority of entries are this.
     #[test]
     fn an_ordinary_entry_carries_no_comment() {
-        let dir = tmp("lha-nocomment");
+        let (_guard, dir) = tmp("lha-nocomment");
         let archive = dir.join("plain.lha");
         std::fs::write(&archive, make_minimal_lha()).unwrap();
 
@@ -864,7 +848,7 @@ pub mod tests {
     /// security boundary decides.
     #[test]
     fn a_traversal_component_survives_assembly_for_safe_join_to_refuse() {
-        let dir = tmp("lha-trav");
+        let (_guard, dir) = tmp("lha-trav");
         let archive = dir.join("trav.lha");
         std::fs::write(
             &archive,
@@ -885,7 +869,7 @@ pub mod tests {
     /// of its three expected refusals.
     #[test]
     fn an_absolute_name_survives_assembly_too() {
-        let dir = tmp("lha-abs");
+        let (_guard, dir) = tmp("lha-abs");
         let archive = dir.join("abs.lha");
         std::fs::write(
             &archive,
@@ -907,8 +891,7 @@ pub mod tests {
 
     #[test]
     fn open_minimal_lha_lists_one_entry() {
-        let dir = std::env::temp_dir().join(format!("art-lha-{}", crate::core::test_scratch_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-lha", "minimal");
         let archive = dir.join("test.lha");
         std::fs::write(&archive, make_minimal_lha()).unwrap();
 
@@ -922,9 +905,7 @@ pub mod tests {
 
     #[test]
     fn rejects_non_archive() {
-        let dir =
-            std::env::temp_dir().join(format!("art-lha-err-{}", crate::core::test_scratch_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-lha-err", "non-archive");
         let bad = dir.join("bad.lha");
         std::fs::write(&bad, b"not an lha").unwrap();
 

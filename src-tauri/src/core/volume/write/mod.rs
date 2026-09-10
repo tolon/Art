@@ -1176,33 +1176,30 @@ mod tests {
     use crate::core::volume::journal::{find_journal, journal_path_for};
     use crate::core::volume::DosType;
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-writer-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-writer", name)
     }
 
     /// A real volume in a real file, which is what the journal needs.
     struct Disk {
-        dir: PathBuf,
         path: PathBuf,
         geometry: VolumeGeometry,
+        /// Last on purpose (ART-281): struct fields drop in declaration
+        /// order, so a field holding an open handle must drop before the
+        /// guard removes the directory underneath it.
+        _guard: crate::core::ScratchDir,
     }
 
     impl Disk {
         fn new(name: &str, total_blocks: u32, dos: [u8; 4]) -> Self {
-            let dir = scratch(name);
+            let (_guard, dir) = scratch(name);
             let path = dir.join("disk.adf");
             let (bytes, geometry) = ffs_volume(total_blocks, DosType::new(dos));
             std::fs::write(&path, &bytes).unwrap();
             Self {
-                dir,
                 path,
                 geometry,
+                _guard,
             }
         }
 
@@ -1218,12 +1215,6 @@ mod tests {
 
         fn bytes(&self) -> Vec<u8> {
             std::fs::read(&self.path).unwrap()
-        }
-    }
-
-    impl Drop for Disk {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.dir);
         }
     }
 
@@ -1271,7 +1262,7 @@ mod tests {
     /// confusing refusal at the door.
     #[test]
     fn a_blank_bootblock_is_not_treated_as_a_contradiction() {
-        let dir = scratch("dostype-blank");
+        let (_guard, dir) = scratch("dostype-blank");
         let path = dir.join("blank.adf");
         let geometry = VolumeGeometry::floppy_dd(DosType::new(*b"DOS\x01"));
         std::fs::write(&path, vec![0u8; geometry.total_bytes() as usize]).unwrap();
@@ -1297,7 +1288,7 @@ mod tests {
     fn all_bytes_refuses_a_volume_too_large_to_hold_in_memory() {
         use crate::core::volume::{SECTOR_BYTES, WHOLE_FILE_LIMIT_BYTES};
 
-        let dir = scratch("all-bytes-huge");
+        let (_guard, dir) = scratch("all-bytes-huge");
         let path = dir.join("big.hdf");
 
         // One block past the whole-file threshold: the smallest volume that

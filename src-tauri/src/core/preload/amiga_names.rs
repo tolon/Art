@@ -146,15 +146,7 @@ mod tests {
 
     #[test]
     fn a_folder_without_a_manifest_renames_nothing() {
-        let dir = std::env::temp_dir().join(format!(
-            "art-amiganames-none-{}-{}",
-            crate::core::test_scratch_id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-amiganames-none", "no-manifest");
         let names = AmigaNames::read(&dir);
         assert!(names.is_empty());
         assert_eq!(names.name_for("Storage/_AUX"), None);
@@ -163,15 +155,7 @@ mod tests {
 
     #[test]
     fn a_manifest_that_is_not_json_renames_nothing() {
-        let dir = std::env::temp_dir().join(format!(
-            "art-amiganames-bad-{}-{}",
-            crate::core::test_scratch_id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-amiganames-bad", "not-json");
         std::fs::write(dir.join(MANIFEST_FILE_NAME), b"{ not json").unwrap();
         assert!(AmigaNames::read(&dir).is_empty());
         std::fs::remove_dir_all(&dir).ok();

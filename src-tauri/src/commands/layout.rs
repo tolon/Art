@@ -198,11 +198,7 @@ mod tests {
     fn layout_recheck_finds_a_destination_that_now_exists_on_disk() {
         use crate::core::layout::{ItemKind, LayoutItem, Placement};
 
-        let dir = std::env::temp_dir().join(format!(
-            "art-layout-recheck-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-layout-recheck", "destination");
         let root = dir.join("staging");
         std::fs::create_dir_all(root.join("Floppies")).unwrap();
         std::fs::write(root.join("Floppies").join("Disk.adf"), b"already here").unwrap();

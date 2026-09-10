@@ -165,20 +165,14 @@ mod tests {
     use super::*;
     use crate::core::sources::PROVIDER_AMINET;
 
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-catalog-{name}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn temp_dir(name: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-catalog", name)
     }
 
     /// The normal state before a first sync. Not an error, not an empty file.
     #[test]
     fn a_missing_catalog_loads_as_an_empty_one() {
-        let dir = temp_dir("missing");
+        let (_guard, dir) = temp_dir("missing");
         let (store, report) = JsonlCatalogStore::load(dir.join("catalog.jsonl")).unwrap();
 
         assert_eq!(report, LoadReport::default());
@@ -190,7 +184,7 @@ mod tests {
 
     #[test]
     fn a_synced_catalog_survives_a_restart() {
-        let dir = temp_dir("roundtrip");
+        let (_guard, dir) = temp_dir("roundtrip");
         let path = dir.join("catalog.jsonl");
 
         {
@@ -216,7 +210,7 @@ mod tests {
     /// packages do not exist. One damaged line must not cost the rest.
     #[test]
     fn a_damaged_line_costs_one_entry_not_the_catalog() {
-        let dir = temp_dir("damaged");
+        let (_guard, dir) = temp_dir("damaged");
         let path = dir.join("catalog.jsonl");
 
         {
@@ -241,7 +235,7 @@ mod tests {
 
     #[test]
     fn an_oversized_catalog_file_is_refused_rather_than_read() {
-        let dir = temp_dir("oversized");
+        let (_guard, dir) = temp_dir("oversized");
         let path = dir.join("catalog.jsonl");
 
         let file = std::fs::File::create(&path).unwrap();
@@ -256,7 +250,7 @@ mod tests {
 
     #[test]
     fn a_second_sync_replaces_rather_than_appends() {
-        let dir = temp_dir("resync");
+        let (_guard, dir) = temp_dir("resync");
         let path = dir.join("catalog.jsonl");
 
         let (store, _) = JsonlCatalogStore::load(&path).unwrap();

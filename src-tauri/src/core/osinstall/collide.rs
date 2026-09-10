@@ -829,7 +829,7 @@ mod tests {
 
     #[test]
     fn an_item_landing_on_nothing_is_absent_from_the_report() {
-        let dir = fixtures::scratch("collide-lands-on-nothing");
+        let (_guard, dir) = fixtures::scratch("collide-lands-on-nothing");
         let tree = dir.join("tree");
         std::fs::create_dir_all(&tree).unwrap();
 
@@ -844,7 +844,7 @@ mod tests {
 
     #[test]
     fn an_item_landing_on_identical_bytes_is_absent_from_the_report() {
-        let dir = fixtures::scratch("collide-lands-identical");
+        let (_guard, dir) = fixtures::scratch("collide-lands-identical");
         let tree = dir.join("tree");
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C").join("Same"), b"identical content").unwrap();
@@ -862,7 +862,7 @@ mod tests {
 
     #[test]
     fn an_older_incoming_version_is_reported_as_a_downgrade() {
-        let dir = fixtures::scratch("collide-downgrade");
+        let (_guard, dir) = fixtures::scratch("collide-downgrade");
         let tree = dir.join("tree");
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C").join("Assign"), b"$VER: assign 45.9 (1.1.99)").unwrap();
@@ -891,7 +891,7 @@ mod tests {
     /// collision this package never said it may write over.
     #[test]
     fn a_collision_the_recipe_did_not_declare_is_marked_undeclared() {
-        let dir = fixtures::scratch("collide-undeclared");
+        let (_guard, dir) = fixtures::scratch("collide-undeclared");
         let tree = dir.join("tree");
         std::fs::create_dir_all(tree.join("Locale")).unwrap();
         std::fs::write(tree.join("Locale").join("Catalog"), b"old catalog bytes").unwrap();
@@ -912,7 +912,7 @@ mod tests {
     /// so a file that component owns is a declared collision.
     #[test]
     fn a_collision_the_recipe_did_declare_is_marked_declared() {
-        let dir = fixtures::scratch("collide-declared");
+        let (_guard, dir) = fixtures::scratch("collide-declared");
         let tree = dir.join("tree");
         std::fs::create_dir_all(tree.join("Libs")).unwrap();
         std::fs::write(tree.join("Libs").join("x.library"), b"old library bytes").unwrap();
@@ -945,7 +945,7 @@ mod tests {
     /// call returned `Err`.
     #[test]
     fn a_release_recipes_own_component_can_be_asked_about_too() {
-        let dir = fixtures::scratch("collide-recipe-component");
+        let (_guard, dir) = fixtures::scratch("collide-recipe-component");
         let tree = dir.join("tree");
         std::fs::create_dir_all(tree.join("Libs")).unwrap();
         std::fs::write(tree.join("Libs").join("x.library"), b"old library bytes").unwrap();
@@ -984,7 +984,7 @@ mod tests {
     /// whatever built the item rather than a fact about the file.
     #[test]
     fn an_unresolvable_component_id_is_refused_rather_than_read_as_undeclared() {
-        let dir = fixtures::scratch("collide-unresolvable-component");
+        let (_guard, dir) = fixtures::scratch("collide-unresolvable-component");
         let tree = dir.join("tree");
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C").join("Foo"), b"old bytes").unwrap();
@@ -1008,7 +1008,7 @@ mod tests {
     /// really keyed on `to` and really keeps the last result.
     #[test]
     fn the_last_of_two_entries_landing_on_the_same_destination_wins() {
-        let dir = fixtures::scratch("collide-dedup-last-wins");
+        let (_guard, dir) = fixtures::scratch("collide-dedup-last-wins");
         let tree = dir.join("tree");
         std::fs::create_dir_all(tree.join("C")).unwrap();
         let existing_bytes: &[u8] = b"$VER: assign 45.9 (1.1.99)";
@@ -1041,7 +1041,7 @@ mod tests {
     /// climbs out of the tree root is refused, never read.
     #[test]
     fn a_destination_that_climbs_out_of_the_root_is_refused() {
-        let dir = fixtures::scratch("collide-traversal");
+        let (_guard, dir) = fixtures::scratch("collide-traversal");
         let tree = dir.join("tree");
         std::fs::create_dir_all(&tree).unwrap();
 

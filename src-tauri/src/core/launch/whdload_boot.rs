@@ -123,14 +123,8 @@ pub fn write_boot_dir(
 mod tests {
     use super::*;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-launch-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-launch", tag)
     }
 
     /// Pins the complete text, not a substring of it — a substring check
@@ -210,7 +204,7 @@ mod tests {
 
     #[test]
     fn the_boot_directory_is_written_where_art_owns_it() {
-        let dir = scratch("boot");
+        let (_guard, dir) = scratch("boot");
         let written = write_boot_dir(&dir, "Turrican.slave", "DH0", "DH1").unwrap();
 
         assert!(written.ends_with("Startup-Sequence"));

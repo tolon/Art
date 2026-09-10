@@ -586,11 +586,8 @@ mod tests {
     use crate::core::jobs::CancelToken;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("art-scan-{tag}-{}", crate::core::test_scratch_id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
+        crate::core::ScratchDir::pair("art-scan", tag)
     }
 
     fn write_loose_adf(dir: &Path, name: &str) -> PathBuf {
@@ -660,7 +657,7 @@ mod tests {
     /// one producer, and neither is the hardfile reader.
     #[test]
     fn the_hardfile_reader_produces_neither_drawer_variant() {
-        let dir = scratch("producer-discipline");
+        let (_guard, dir) = scratch("producer-discipline");
         let image = write_hardfile_game(&dir, "1000MigliaHD", "1000Miglia", "1000 Miglia");
 
         let record = read_one(&image).unwrap().expect("this is a title");
@@ -678,7 +675,7 @@ mod tests {
     /// each record names the source that produced it.
     #[test]
     fn a_mixed_folder_yields_one_record_per_title() {
-        let dir = scratch("mixed");
+        let (_guard, dir) = scratch("mixed");
         write_hardfile_game(&dir, "Lotus3HD", "Lotus3", "Lotus 3");
         write_rp9_game(&dir, "Aerial Racers");
         write_loose_adf(&dir, "Zool (1992)(Gremlin)(AGA).adf");
@@ -712,7 +709,7 @@ mod tests {
     /// `WhdloadArchive`, not silently merged into the unpacked one.
     #[test]
     fn a_folder_with_all_three_whdload_shapes_yields_one_record_each() {
-        let dir = scratch("all-shapes");
+        let (_guard, dir) = scratch("all-shapes");
         write_loose_adf(&dir, "Zool (1992)(Gremlin).adf");
         let drawer = dir.join("Turrican");
         std::fs::create_dir_all(&drawer).unwrap();
@@ -762,7 +759,7 @@ mod tests {
     /// One bad file in 1697 must not lose the other 1696.
     #[test]
     fn an_unreadable_file_does_not_stop_the_scan() {
-        let dir = scratch("bad");
+        let (_guard, dir) = scratch("bad");
         write_loose_adf(&dir, "Fine (1992)(Someone).adf");
         std::fs::write(dir.join("broken.hdf"), b"not an image").unwrap();
         std::fs::write(dir.join("broken.rp9"), b"not a zip").unwrap();
@@ -802,7 +799,7 @@ mod tests {
             }
         }
 
-        let dir = scratch("cancel");
+        let (_guard, dir) = scratch("cancel");
         for n in 0..6 {
             write_loose_adf(&dir, &format!("Game {n} (1992)(Someone).adf"));
         }
@@ -829,7 +826,7 @@ mod tests {
     /// the same crash behind a suite that no longer looked for it.
     #[test]
     fn the_walk_stops_at_the_depth_limit() {
-        let dir = scratch("deep");
+        let (_guard, dir) = scratch("deep");
 
         // Twice as deep as the limit, with a title at the bottom.
         let mut deep = dir.clone();
@@ -852,7 +849,7 @@ mod tests {
     /// not passing by refusing everything.
     #[test]
     fn the_walk_finds_titles_within_the_limit() {
-        let dir = scratch("nested");
+        let (_guard, dir) = scratch("nested");
         let nested = dir.join("Games").join("Puzzle");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(nested.join("Lemmings (1991)(Psygnosis).adf"), b"x").unwrap();
@@ -873,7 +870,7 @@ mod tests {
     /// for the first time, and what made a finished-looking bar sit at 100%.
     #[test]
     fn a_file_too_large_for_a_title_is_skipped_without_being_read() {
-        let dir = scratch("too-big");
+        let (_guard, dir) = scratch("too-big");
         let path = dir.join("Card.img");
 
         // Sparse: `set_len` costs nothing to create and everything to hash, so
@@ -904,7 +901,7 @@ mod tests {
     /// sits in two folders is the bug that prevents.
     #[test]
     fn identical_bytes_collapse_to_one_record() {
-        let dir = scratch("dupe");
+        let (_guard, dir) = scratch("dupe");
         let original = write_loose_adf(&dir, "Zool (1992)(Gremlin).adf");
         std::fs::create_dir_all(dir.join("backup")).unwrap();
         std::fs::copy(&original, dir.join("backup/Zool (1992)(Gremlin).adf")).unwrap();
@@ -923,7 +920,7 @@ mod tests {
     /// offered — but a slave that *does* set it wins outright.
     #[test]
     fn a_stated_chipset_beats_a_guessed_one() {
-        let dir = scratch("chipset");
+        let (_guard, dir) = scratch("chipset");
         let image = write_hardfile_game(&dir, "AgassiTennis", "Agassi", "Agassi Tennis");
         let found = scan_titles(&dir).unwrap();
 
