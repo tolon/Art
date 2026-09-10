@@ -197,12 +197,18 @@ production — ART has no `tests/` directory today.
 
 Rules 2 and 3 have three blind spots of their own, all under-reporting:
 
-  - **A guard source in another module reached by a longer path.** Resolution
-    covers this file, `super::`/`fixtures::` into the directory's `mod.rs`,
-    and `Type::`/`Self::` for associated functions. A helper imported by
-    `use crate::core::x::tests::helper;` and then called bare resolves to
-    nothing, so its call sites are not checked. Nothing in the tree does that
-    today (every fixture helper is same-file or `fixtures::`).
+  - **A guard source reached through a glob import.** Resolution covers this
+    file, `super::`/`fixtures::` into the directory's `mod.rs`,
+    `Type::`/`Self::` for associated functions, and — since the re-review's
+    N1 — every **named** `use` inside the test region, grouped or aliased,
+    followed to the module it names (`mod x;` to `x.rs` or `x/mod.rs`, an
+    inline `mod x {` to the file it is written in). A `use super::*;` is not
+    followed: a glob names nothing, so a helper reachable only that way is
+    not checked. The claim that stood here before — that nothing in the tree
+    imported a helper and called it bare — was **false**:
+    `core/osinstall/scan.rs` (32 calls) and `core/osinstall/source_archive.rs`
+    (24) do exactly that, and 56 call sites sat outside the sweep until the
+    `use` lines were read.
   - **A guard that leaves a helper inside a type the sweep cannot read** — an
     `InstallPlan` or a `Box<dyn MediaSource>` holding a scratch path. Rule 3
     asks the *shape* of the return type, so only a path-shaped one or a
@@ -234,9 +240,12 @@ path whose *literal* contains the word "assert" that must be, an
 `assert!`-wrapped product call that must be, the `JoinHandle::join()` line
 that must not, `let (_, dir, _n) = helper("x")`, `let dir = pair(..).1`, a
 non-`scratch` helper returning a path from a guard it drops, a carrier struct
-and a `for`-destructured collection that must both pass, and the header's own
-exemption paragraph checked against `ALLOWED_HAND_BUILT`. It is the probe a
-reader can re-run instead of trusting this paragraph.
+and a `for`-destructured collection that must both pass, a helper reached
+through a grouped, a relative and an aliased `use`, and a summary asked to
+print an offender kind no dictionary knew about. The last two are the
+re-review's N1 and N2; the header's own exemption paragraph is checked against
+`ALLOWED_HAND_BUILT` in the same run. It is the probe a reader can re-run
+instead of trusting this paragraph.
 
 Deliberately a script and not a Rust test, matching the two sweeps beside it:
 a test that reads the source of the crate it is compiled into is a strange
@@ -767,7 +776,122 @@ IMPL_RE = re.compile(r"^\s*impl(?:<[^>]*>)?\s+(?:.+\s+for\s+)?([A-Za-z_]\w*)")
 MOD_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+")
 
 
-def make_resolver(own: dict, theirs: dict, carriers: set[str]):
+USE_START = re.compile(r"^(\s*)use\s+(.*)$")
+
+
+def import_map(lines: list[str], mask: list[bool]) -> dict[str, tuple[list[str], str, bool]]:
+    """`local name -> (module segments, the name in that module, nested)`, for
+    every `use` inside the test region.
+
+    Two files in ART import a fixture helper and then call it bare —
+    `core/osinstall/scan.rs` (`use crate::core::osinstall::fixtures::{media,
+    scratch, write_test_iso};`, 32 calls) and `core/osinstall/source_archive.rs`
+    (`use super::super::fixtures::scratch;`, 24) — and the fix wave's
+    "an unqualified call reaches this file only" dropped all 56 out of the
+    sweep, which the re-review measured with a planted defect (N1). Grouped
+    braces and `as` aliases are handled; a glob (`use super::*;`) is not, and
+    is disclosed in the header.
+
+    `nested` records whether the `use` sits inside a block, because that is
+    what `super` counts from: inside `mod tests`, `super` is the file's own
+    module."""
+    out: dict[str, tuple[list[str], str, bool]] = {}
+    i = 0
+    while i < len(lines):
+        m = USE_START.match(lines[i]) if mask[i] else None
+        if not m:
+            i += 1
+            continue
+        nested = len(m.group(1)) > 0
+        text = m.group(2)
+        while ";" not in text and i + 1 < len(lines):
+            i += 1
+            text += " " + lines[i].strip()
+        text = text.split(";", 1)[0].strip()
+        i += 1
+
+        if "{" in text:
+            head, group = text.split("{", 1)
+            items = split_top_level(group.rsplit("}", 1)[0])
+        else:
+            head, items = text.rsplit("::", 1)[0] + "::", [text.rsplit("::", 1)[-1]]
+        segs = [seg for seg in head.strip().split("::") if seg]
+        for item in items:
+            item = item.strip()
+            if not item or "*" in item or "{" in item:
+                continue
+            if " as " in item:
+                name, alias = (part.strip() for part in item.split(" as ", 1))
+            else:
+                name = alias = item.rsplit("::", 1)[-1].strip()
+            prefix = item.rsplit("::", 1)[0].split(" as ")[0].strip() if "::" in item else ""
+            full = segs + [seg for seg in prefix.split("::") if seg]
+            out[alias] = (full, name, nested)
+    return out
+
+
+def module_file(path: Path, segs: list[str], nested: bool, source_lines: dict) -> Path | None:
+    """The file a module path names, walked the way Rust walks it: `mod x;`
+    goes to `x.rs` or `x/mod.rs`, and an inline `mod x {` stays in the file it
+    is written in (`core::osinstall::fixtures` is inline in that module's own
+    `mod.rs`)."""
+    segs = list(segs)
+    if not segs:
+        return None
+    if segs[0] == "crate":
+        segs.pop(0)
+        current = ROOT / "lib.rs"
+    elif segs[0] in ("super", "self"):
+        current = path
+        if segs[0] == "self":
+            segs.pop(0)
+        else:
+            # Inside `mod tests`, the first `super` is the file's own module.
+            if nested:
+                segs.pop(0)
+            while segs and segs[0] == "super":
+                segs.pop(0)
+                current = (current.parent.parent if current.name == "mod.rs"
+                           else current.parent) / "mod.rs"
+    else:
+        return None
+
+    for seg in segs:
+        lines = source_lines.get(current)
+        if lines is None:
+            return None
+        inline = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+" + re.escape(seg) + r"\s*\{")
+        declared = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+" + re.escape(seg) + r"\s*;")
+        if any(inline.match(line) for line in lines):
+            continue  # an inline module lives in the same file
+        if any(declared.match(line) for line in lines):
+            folder = current.parent if current.name in ("mod.rs", "lib.rs") else current.parent
+            for candidate in (folder / seg / "mod.rs", folder / f"{seg}.rs"):
+                if candidate in source_lines:
+                    current = candidate
+                    break
+            else:
+                return None
+            continue
+        return None
+    return current
+
+
+def imported_sources(path: Path, lines: list[str], mask: list[bool],
+                     source_lines: dict, sources_of: dict) -> dict:
+    """`local name -> shape` for the guard sources this file imports."""
+    out: dict = {}
+    for alias, (segs, name, nested) in import_map(lines, mask).items():
+        target = module_file(path, segs, nested, source_lines)
+        if target is None:
+            continue
+        shape = sources_of.get(target, {}).get(name)
+        if shape is not None:
+            out[alias] = shape
+    return out
+
+
+def make_resolver(own: dict, theirs: dict, carriers: set[str], imported: dict | None = None):
     """`(name, qualifier, owner) -> shape | None`, looked up the way Rust
     would. Shared by `main` and by `--self-test` rather than written twice: a
     probe that resolves differently from the sweep proves nothing about the
@@ -782,7 +906,7 @@ def make_resolver(own: dict, theirs: dict, carriers: set[str]):
         if qualifier is not None and qualifier[:1].isupper():
             return own.get((qualifier, name))
         if qualifier is None:
-            return own.get(name)
+            return own.get(name) or (imported or {}).get(name)
         if qualifier not in near:
             return None
         return own.get(name) or theirs.get(name)
@@ -791,7 +915,7 @@ def make_resolver(own: dict, theirs: dict, carriers: set[str]):
 
 
 def analyse_guards(rel: str, lines: list[str], whole_file: bool = False,
-                   theirs: dict | None = None):
+                   theirs: dict | None = None, imported: dict | None = None):
     """Everything rules 2 and 3 need for one file, in one call."""
     mask = test_region_mask(lines, whole_file)
     carriers = carrier_structs(lines, mask)
@@ -799,7 +923,7 @@ def analyse_guards(rel: str, lines: list[str], whole_file: bool = False,
                ((i, STRUCT_DEF.match(line)) for i, line in enumerate(lines))
                if m and mask[i]}
     sources = guard_sources(lines, mask, carriers)
-    resolve = make_resolver(sources, theirs or {}, carriers)
+    resolve = make_resolver(sources, theirs or {}, carriers, imported)
     return guard_rules(rel, lines, mask, resolve, carriers, structs, sources)
 
 
@@ -1188,11 +1312,76 @@ mod tests {
 ]
 
 
+# The two files that import a fixture helper and call it bare, as the sweep
+# sees them: a module that owns the helper, and a consumer of it. The consumer
+# is checked against the owner exactly as `main` checks
+# `core/osinstall/scan.rs` against `core/osinstall/mod.rs`.
+
+IMPORT_OWNER = """#[cfg(test)]
+pub(crate) mod fixtures {
+    pub fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
+        crate::core::ScratchDir::pair("art-osinstall", tag)
+    }
+}
+"""
+
+IMPORT_CASES: list[tuple[str, str, set[int]]] = [
+    (
+        "a grouped `use crate::…::fixtures::{media, scratch, …}` then a bare "
+        "call: the guard still has to be held (re-review N1)",
+        """#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::osinstall::fixtures::{media, scratch, write_test_iso};
+
+    #[test]
+    fn t() {
+        let (_guard, kept) = scratch("ok");
+        let (_, dropped) = scratch("bad");
+    }
+}
+""",
+        {9},
+    ),
+    (
+        "`use super::super::fixtures::scratch;` — the relative path, from "
+        "inside `mod tests`, where the first `super` is the file's own module",
+        """#[cfg(test)]
+mod tests {
+    use super::super::fixtures::scratch;
+    use super::*;
+
+    #[test]
+    fn t() {
+        let (_guard, kept) = scratch("ok");
+        let dir = scratch("bad");
+    }
+}
+""",
+        {9},
+    ),
+    (
+        "an `as` alias is followed to the helper it renames",
+        """#[cfg(test)]
+mod tests {
+    use crate::core::osinstall::fixtures::scratch as fixture_dir;
+
+    #[test]
+    fn t() {
+        let (_, dropped) = fixture_dir("bad");
+    }
+}
+""",
+        {7},
+    ),
+]
+
+
 def self_test() -> int:
     """Run rules 4 and 5 over the synthetic cases above, plus the header's
     agreement with `ALLOWED_HAND_BUILT`. No repository file is touched."""
     failures = 0
-    total = len(SELF_TEST_CASES) + len(GUARD_TEST_CASES) + 1
+    total = len(SELF_TEST_CASES) + len(GUARD_TEST_CASES) + len(IMPORT_CASES) + 2
 
     def check(name, found, expected):
         nonlocal failures
@@ -1214,6 +1403,50 @@ def self_test() -> int:
     for name, src, expected in GUARD_TEST_CASES:
         found, _ = analyse_guards("src-tauri/src/probe.rs", src.splitlines())
         check(name, found, expected)
+
+    # The imported helper lives in another "file", resolved through the `use`
+    # line exactly as `main` resolves it.
+    owner_lines = IMPORT_OWNER.splitlines()
+    owner_mask = test_region_mask(owner_lines, whole_file=False)
+    owner = guard_sources(owner_lines, owner_mask, carrier_structs(owner_lines, owner_mask))
+    for name, src, expected in IMPORT_CASES:
+        lines = src.splitlines()
+        mask = test_region_mask(lines, whole_file=False)
+        imported = {}
+        for alias, (_segs, item, _nested) in import_map(lines, mask).items():
+            shape = owner.get(item)
+            if shape is not None:
+                imported[alias] = shape
+        found, _ = analyse_guards("src-tauri/src/probe.rs", lines, imported=imported)
+        check(name, found, expected)
+
+    # N2: the summary is built from the offenders it is handed, so a kind the
+    # rules learn later cannot turn a report into a traceback.
+    kinds = [
+        ("src-tauri/src/probe.rs", 5, "guard discarded by a field access"),
+        ("src-tauri/src/probe.rs", 9, "guard discarded by a field access (the guard is element 1)"),
+        ("src-tauri/src/probe.rs", 12, "a kind no dictionary knows about"),
+    ]
+    import io
+    import contextlib
+    buffer = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buffer):
+            code = report(kinds, 0, 0, 0, 0, 0, 0, 0, 0)
+        printed = buffer.getvalue()
+        tally = [line.strip() for line in printed.splitlines()]
+        ok = (code == 1
+              and "guard discarded by a field access: 2" in tally
+              and any(line.startswith("a kind no dictionary knows about")
+                      for line in tally))
+    except Exception as err:  # the defect this case exists for
+        ok = False
+        printed = f"{type(err).__name__}: {err}"
+    failures += 0 if ok else 1
+    print(f"  {'PASS' if ok else 'FAIL'}  every offender kind reaches the summary, "
+          f"including one the rules learned later (N2)")
+    if not ok:
+        print("        " + printed.strip().replace("\n", "\n        "))
 
     # The header paragraph and the exemption table must agree (I3): the prose
     # once said "the four sites" and named a file the table did not hold.
@@ -1241,11 +1474,6 @@ def main() -> int:
     offenders: list[tuple[str, int, str]] = []
     helpers = guarded_helpers = 0
     calls = accepted_calls = 0
-    rule_counts = {"returns a bare path": 0, "bound without its guard": 0,
-                   "guard dropped at once": 0, "used without binding its guard": 0,
-                   "returns a path whose guard it drops": 0,
-                   "builds a scratch path by hand": 0,
-                   "hands the platform root to product code": 0}
     hand_built = exempted = root_args = 0
     guard_sources_found = 0
     rule3_seen: set[tuple[str, int]] = set()
@@ -1264,6 +1492,7 @@ def main() -> int:
         for p in files
     }
     sources_of = {p: guard_sources(src[p], masks[p], carriers_of[p]) for p in files}
+    imports_of = {p: imported_sources(p, src[p], masks[p], src, sources_of) for p in files}
 
     def resolve_for(path: Path):
         """`(name, qualifier) -> shape | None`, looked up the way Rust
@@ -1279,6 +1508,7 @@ def main() -> int:
             sources_of.get(path, {}),
             sources_of.get(parent, {}) if parent != path else {},
             carriers_of.get(path, set()),
+            imports_of.get(path, {}),
         )
 
     for path in files:
@@ -1301,8 +1531,6 @@ def main() -> int:
         # Rules 4 and 5: the two shapes that carry no `scratch(` call at all.
         found, counted = temp_dir_rules(rel, lines, in_test)
         offenders.extend(found)
-        for _, _, why in found:
-            rule_counts[why] += 1
         hand_built += counted[0]
         root_args += counted[1]
         exempted += counted[2]
@@ -1314,8 +1542,6 @@ def main() -> int:
                                      carriers_of[path], structs_of[path],
                                      sources_of[path])
         offenders.extend(found)
-        for _, _, why in found:
-            rule_counts[why.split(" (")[0]] += 1
         calls += counted[0]
         accepted_calls += counted[1]
 
@@ -1329,15 +1555,33 @@ def main() -> int:
                 guarded_helpers += 1
             elif PATH_SHAPED.search(ret):
                 offenders.append((rel, i + 1, "returns a bare path"))
-                rule_counts["returns a bare path"] += 1
+    if offenders:
+        return report(offenders, guard_sources_found, helpers, guarded_helpers,
+                      calls, accepted_calls, hand_built, root_args, exempted)
+
+    print(f"scratch-guard sweep: clean — {guard_sources_found} guard sources "
+          f"(by return type), {calls} call sites, {hand_built} hand-built "
+          f"paths, {root_args} platform-root arguments ({exempted} exempt)")
+    return 0
+
+
+def report(offenders, guard_sources_found, helpers, guarded_helpers,
+           calls, accepted_calls, hand_built, root_args, exempted) -> int:
+    """Print every offender and the totals, and answer 1.
+
+    The per-kind tally is built **from the offenders themselves**, not from a
+    dictionary of kinds written down in advance: the fix wave added
+    "guard discarded by a field access" and forgot to add its key, so the one
+    shape that wave existed to catch was the one whose report the script could
+    not print — a `KeyError` and no offender lines at all (re-review N2). A
+    kind added later cannot crash this."""
     for rel, line, why in sorted(offenders):
         print(f"{rel}:{line}: {why}")
 
-    if not offenders:
-        print(f"scratch-guard sweep: clean — {guard_sources_found} guard sources "
-              f"(by return type), {calls} call sites, {hand_built} hand-built "
-              f"paths, {root_args} platform-root arguments ({exempted} exempt)")
-        return 0
+    counts: dict[str, int] = {}
+    for _, _, why in offenders:
+        kind = why.split(" (")[0]
+        counts[kind] = counts.get(kind, 0) + 1
 
     print()
     print(f"guard sources (by return type)     : {guard_sources_found}")
@@ -1348,9 +1592,8 @@ def main() -> int:
     print(f"hand-built paths                   : {hand_built}")
     print(f"platform-root arguments            : {root_args}")
     print(f"exempt, with a reason              : {exempted}")
-    for why, n in rule_counts.items():
-        if n:
-            print(f"  {why:33s}: {n}")
+    for why, n in sorted(counts.items()):
+        print(f"  {why:33s}: {n}")
     print(f"offenders                          : {len(offenders)}")
     return 1
 
