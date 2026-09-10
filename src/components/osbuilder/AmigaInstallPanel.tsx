@@ -1122,6 +1122,10 @@ export function AmigaInstallPanel() {
       true;
 
   const request: AmigaInstallRequest | null =
+    // The third tree-driven ask, gated like the chain and the slots: a
+    // preview composed against the session tree during the destination
+    // check would be a preview of the wrong tree.
+    treeSettled &&
     treeRoot &&
     activePackageId &&
     packageBelongsHere &&

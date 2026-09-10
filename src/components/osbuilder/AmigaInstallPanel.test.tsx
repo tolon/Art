@@ -2841,4 +2841,28 @@ describe("the tree, while ART is still looking at the destination", () => {
     await waitFor(() => expect(slotsMock).toHaveBeenCalledTimes(1));
     expect(slotsMock.mock.calls[0][2]).toBe("D:/amiga/session-tree");
   });
+
+  // **The third tree-driven ask** (the fix wave's re-review, finding 1). A
+  // remembered package, archive and Kickstart compose a preview request the
+  // moment `treeRoot` exists — and while the chain is unanswered, the
+  // "runs on the Amiga" and "ready" gates take their permissive defaults,
+  // so the preview would run against the session's tree during the wait
+  // and against the destination after it. Gated on `treeSettled` like the
+  // other two; the control arm shows the preview does still run, once,
+  // about the tree that won.
+  it("previews nothing during the wait, then once about the destination", async () => {
+    withChoices();
+    const answer = heldTree();
+    renderPending();
+    await screen.findByTestId("amiga-tree-checking");
+    expect(previewMock).not.toHaveBeenCalled();
+
+    answer(A_TREE);
+
+    await screen.findByTestId("amiga-tree-from-destination");
+    await waitFor(() => expect(previewMock).toHaveBeenCalled());
+    for (const call of previewMock.mock.calls) {
+      expect(call[0].tree).toBe("D:/amiga/os39");
+    }
+  });
 });
