@@ -335,6 +335,25 @@ pub enum PlanResult {
 /// milliseconds, not a second scan of the disk.
 #[tauri::command]
 pub fn osinstall_plan(request: InstallRequest) -> AppResult<PlanResult> {
+    plan_with_root(request, crate::scratch::root)
+}
+
+/// The body of [`osinstall_plan`], with the scratch root as a **resolver**
+/// rather than a value (ART-293).
+///
+/// A resolver and not a `&Path`, so the order of the refusals stays exactly
+/// what it was: an unreadable media folder first, then a release ART ships no
+/// recipe for, and only then a chosen root that has gone away. Resolving the
+/// root up front in the command would have let a missing root outrank a
+/// missing folder — a different sentence for the same state.
+///
+/// The command passes `crate::scratch::root`; a test passes a closure over its
+/// own guarded scratch, which is how the scan cache stops accumulating under
+/// the platform's temp folder one file per suite run.
+fn plan_with_root(
+    request: InstallRequest,
+    root: impl FnOnce() -> AppResult<PathBuf>,
+) -> AppResult<PlanResult> {
     // The same folder `plan()` would open through `find_media` — checked
     // here first so a bad path reaches the screen as a value it can
     // translate, never as `find_media`'s own English sentence. See the
@@ -368,7 +387,7 @@ pub fn osinstall_plan(request: InstallRequest) -> AppResult<PlanResult> {
     // ART-196: the cache and any nested package payload both stage under the
     // root the user chose, and a root that has gone away refuses here rather
     // than writing to the system drive behind their back.
-    let scratch_root = crate::scratch::root()?;
+    let scratch_root = root()?;
     let cache = scan_cache_for(request.scan_cache, &scratch_root);
     cache.sweep();
     Ok(PlanResult::Planned {
@@ -5199,25 +5218,82 @@ mod tests {
         }
     }
 
+    /// ART-293: `osinstall_plan` resolves its scratch root itself, and a test
+    /// cannot choose one without writing `crate::scratch`'s crate-wide lock
+    /// while the rest of the suite reads it (ART-182). The body takes the
+    /// resolver, so a test hands it its own guarded scratch — and nothing
+    /// production-side exists only so a test need not name a root.
+    fn plan_in(request: InstallRequest, root: &Path) -> AppResult<PlanResult> {
+        plan_with_root(request, || Ok(root.to_path_buf()))
+    }
+
+    /// ART-293: the plan's scan cache lands under the root it is given and
+    /// nowhere else. Measured before: every whole-suite run left one
+    /// `art-osinstall-scan-<hash>.json` under the platform's temp folder,
+    /// a new name each run, because the hash keys on a media folder whose
+    /// name carries the run's own id.
+    #[test]
+    fn the_plan_writes_its_scan_cache_under_the_root_it_is_given() {
+        let (_guard, dir) = scratch("plan-root");
+        crate::core::osinstall::fixtures::workbench(&dir);
+        let root = dir.join("root");
+        std::fs::create_dir(&root).unwrap();
+
+        let result = plan_in(
+            InstallRequest {
+                packages: Vec::new(),
+                package_folder: None,
+                release: "AmigaOS 3.2".to_string(),
+                media_folder: dir.clone(),
+                extra_media_folders: Vec::new(),
+                media_folders: BTreeMap::new(),
+                keymap: None,
+                rom: None,
+                chosen: vec!["workbench-base".to_string()],
+                excluded: Vec::new(),
+                destination: dir.join("dist"),
+                scan_cache: Default::default(),
+            },
+            &root,
+        )
+        .unwrap();
+        assert!(matches!(result, PlanResult::Planned { .. }), "{result:?}");
+
+        let cached: Vec<String> = std::fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("art-osinstall-scan-"))
+            .collect();
+        assert_eq!(
+            cached.len(),
+            1,
+            "one scan-cache file, under the root the plan was given: {cached:?}"
+        );
+    }
+
     #[test]
     fn planning_against_a_real_folder_returns_the_plan() {
         let (_guard, dir) = scratch("plan-real");
         crate::core::osinstall::fixtures::workbench(&dir);
 
-        let result = osinstall_plan(InstallRequest {
-            packages: Vec::new(),
-            package_folder: None,
-            release: "AmigaOS 3.2".to_string(),
-            media_folder: dir.clone(),
-            extra_media_folders: Vec::new(),
-            media_folders: BTreeMap::new(),
-            keymap: None,
-            rom: None,
-            chosen: vec!["workbench-base".to_string()],
-            excluded: Vec::new(),
-            destination: dir.join("dist"),
-            scan_cache: Default::default(),
-        })
+        let result = plan_in(
+            InstallRequest {
+                packages: Vec::new(),
+                package_folder: None,
+                release: "AmigaOS 3.2".to_string(),
+                media_folder: dir.clone(),
+                extra_media_folders: Vec::new(),
+                media_folders: BTreeMap::new(),
+                keymap: None,
+                rom: None,
+                chosen: vec!["workbench-base".to_string()],
+                excluded: Vec::new(),
+                destination: dir.join("dist"),
+                scan_cache: Default::default(),
+            },
+            &dir,
+        )
         .unwrap();
 
         match result {
