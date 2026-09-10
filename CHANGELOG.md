@@ -66,6 +66,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **BoingBag 3.9-2 Contribution goes on after BoingBag 3.9-2.** Both archives
+  carry the same top-level name, `BoingBag3.9-2`, so ART took the second for a
+  different copy of the first and refused it — Build stopped on that row with
+  *"came from a different archive"*. ART now tells the two apart the way it
+  already did when finding them in the folder, including in a tree built
+  before this fix.
 - **Build waits when a ticked update has more than one candidate file.** With
   two different copies of BoingBag 3.9-1 in a folder, ART ran BoingBag 3.9-2
   without it and the update was refused. Build now says which update is

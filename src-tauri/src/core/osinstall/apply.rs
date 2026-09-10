@@ -187,6 +187,16 @@ use crate::core::volume::write::uaem::{render, sidecar_path};
 pub struct MediaRecord {
     pub volume_name: String,
     pub sha256: String,
+    /// The second half of a package archive's identity — the package's own
+    /// [`distinguished_by`](super::package::Package::distinguished_by) —
+    /// because the name alone does not say which archive this was (ART-304):
+    /// `BoingBag39-2.lha` and `BoingBag39-2-Contribution.lha` both carry the
+    /// top-level `BoingBag3.9-2`, and a tree holding both needs one record for
+    /// each. `None` for every medium that is not such a package, and for a
+    /// record an older ART wrote — see [`backfill_record_identities`].
+    /// Skipped when `None`, so a floppy's record is written exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distinguished_by: Option<String>,
 }
 
 /// One file in the finished tree, and where it came from.
@@ -1313,6 +1323,7 @@ pub fn apply_staging_in(
         built_from.push(MediaRecord {
             volume_name: volume.clone(),
             sha256,
+            distinguished_by: None,
         });
         sources.insert(volume.clone(), super::scan::open_media(&identified)?);
     }
@@ -1340,6 +1351,7 @@ pub fn apply_staging_in(
         built_from.push(MediaRecord {
             volume_name: media.clone(),
             sha256,
+            distinguished_by: None,
         });
         if sources.insert(media.clone(), opened).is_some() {
             // A package whose top-level directory happens to be spelled
@@ -1786,6 +1798,51 @@ pub fn add_package(
     add_package_staging_in(tree_root, package, archive, &std::env::temp_dir(), sink)
 }
 
+/// Whether `record` can be the archive of a package whose identity's second
+/// half is `identity` (ART-304). A record whose identity is still unknown
+/// answers yes to every identity — the conservative reading, and exactly what
+/// the check did before `MediaRecord` carried the field.
+fn same_identity(record: &MediaRecord, identity: Option<&str>) -> bool {
+    record.distinguished_by.is_none() || record.distinguished_by.as_deref() == identity
+}
+
+/// Give a record an older ART wrote the `distinguished_by` it would carry
+/// today (ART-304), from the only fact such a tree kept: which components
+/// placed files from that medium. When every one of them that is a package
+/// in `catalogue` agrees on a single `Some` distinguisher, that is the
+/// record's identity — the owner's `BoingBag3.9-2` record was placed by
+/// `boingbag-39-2` alone, so it is `AmigaOS-Update`. Anything else — no
+/// package among them, packages with no distinguisher (`locale-39` and
+/// `locale-39-turkish` sharing `Locale3.9`), or two that disagree — leaves
+/// the record unknown, which [`same_identity`] treats as every identity.
+fn backfill_record_identities(
+    manifest: &mut DistributionManifest,
+    catalogue: &[super::package::Package],
+) {
+    let files = &manifest.files;
+    for record in manifest
+        .built_from
+        .iter_mut()
+        .filter(|record| record.distinguished_by.is_none())
+    {
+        let mut claimed: Vec<Option<&str>> = files
+            .iter()
+            .filter(|file| file.media == record.volume_name)
+            .filter_map(|file| {
+                catalogue
+                    .iter()
+                    .find(|package| package.component.id == file.component)
+            })
+            .map(|package| package.distinguished_by.as_deref())
+            .collect();
+        claimed.sort_unstable();
+        claimed.dedup();
+        if let [Some(one)] = claimed.as_slice() {
+            record.distinguished_by = Some((*one).to_string());
+        }
+    }
+}
+
 /// [`add_package`], unpacking a nested payload under `scratch_root` (ART-196).
 pub fn add_package_staging_in(
     tree_root: &Path,
@@ -1846,11 +1903,22 @@ pub fn add_package_staging_in(
     // never `manifest.files` (whose `component` differs by design
     // whenever a second package legitimately shares the first one's
     // medium).
+    //
+    // **ART-304: a name is not an identity.** `boingbag-39-2` and
+    // `boingbag-39-2-contribution` both declare `"media": "BoingBag3.9-2"`,
+    // because both archives carry that top-level directory, and are told
+    // apart by `distinguished_by` — two packages, two archives, never two
+    // copies of one. So a record is looked up by the pair, and a record an
+    // older ART wrote without the second half is first given it from the
+    // components that placed from it.
+    let catalogue = super::package::packages_for(&manifest.release).unwrap_or_default();
+    backfill_record_identities(&mut manifest, &catalogue);
+    let identity = package.distinguished_by.as_deref();
     let sha256 = sha256_file(archive)?;
     if let Some(clash) = manifest
         .built_from
         .iter()
-        .find(|record| record.volume_name == package.media)
+        .find(|record| record.volume_name == package.media && same_identity(record, identity))
     {
         if clash.sha256 != sha256 {
             // ART-277 re-review, L6: a hash the user cannot map back to a
@@ -1860,11 +1928,26 @@ pub fn add_package_staging_in(
             // sorted: two components can legitimately share one medium
             // (the very fact this whole check exists to allow, ART-276),
             // and every one of them came from the archive being named here.
+            // ART-304: only the components of the clashing identity — a
+            // tree holding both BoingBag 3.9-2 and its Contribution has both
+            // components under one name, and only one of them came out of
+            // the archive this sentence is about. A component that is no
+            // package in the catalogue cannot be ruled out, so it stays.
+            let clash_identity = clash.distinguished_by.as_deref();
             let mut placed_by: Vec<&str> = manifest
                 .files
                 .iter()
                 .filter(|file| file.media == package.media)
                 .map(|file| file.component.as_str())
+                .filter(|component| {
+                    clash_identity.is_none()
+                        || catalogue
+                            .iter()
+                            .find(|package| package.component.id == *component)
+                            .is_none_or(|package| {
+                                package.distinguished_by.as_deref() == clash_identity
+                            })
+                })
                 .collect();
             placed_by.sort_unstable();
             placed_by.dedup();
@@ -2021,14 +2104,18 @@ pub fn add_package_staging_in(
     // Re-added in place when this archive is already recorded (adding the
     // same package twice), appended otherwise — so `built_from`'s order is
     // the order media first contributed to the tree, in both entry points.
+    // Keyed by the same pair the clash check asked (ART-304), so a second
+    // identity under one name gets its own record rather than overwriting
+    // the first one's hash.
     let record = MediaRecord {
         volume_name: package.media.clone(),
         sha256,
+        distinguished_by: package.distinguished_by.clone(),
     };
     match manifest
         .built_from
         .iter_mut()
-        .find(|m| m.volume_name == package.media)
+        .find(|m| m.volume_name == package.media && same_identity(m, identity))
     {
         Some(existing) => *existing = record,
         None => manifest.built_from.push(record),
@@ -6487,6 +6574,205 @@ mod tests {
 
         // Refused before anything is written for this second archive.
         assert!(!root.join("B").join("File2").is_file());
+    }
+
+    /// [`shared_medium_package`] with the second half of an identity: the
+    /// package is only the one whose archive carries `<from>/<from>Only`,
+    /// the way `boingbag-39-2` is only the `BoingBag3.9-2` archive carrying
+    /// `AmigaOS-Update` and `boingbag-39-2-contribution` only the one
+    /// carrying `Contribution/ClassAction/ClassAction`.
+    fn told_apart_package(id: &str, from: &str) -> crate::core::osinstall::package::Package {
+        let mut package = shared_medium_package(id, from);
+        package.distinguished_by = Some(format!("{from}/{from}Only"));
+        package
+    }
+
+    /// An archive under `SharedMedium` carrying only `<from>/<from>Only`,
+    /// with `bytes` as its content — two of these with different `from` are
+    /// two different packages' archives, the owner's two `BoingBag3.9-2`
+    /// archives in miniature.
+    fn told_apart_archive(folder: &Path, file_name: &str, from: &str, bytes: &[u8]) -> PathBuf {
+        let path = folder.join(file_name);
+        std::fs::write(
+            &path,
+            crate::core::archive::zip::tests::make_zip_with(&[(
+                &format!("SharedMedium/{from}/{from}Only"),
+                bytes,
+            )]),
+        )
+        .unwrap();
+        path
+    }
+
+    /// **ART-304.** The owner's build stopped on its sixth row:
+    /// `BoingBag39-2-Contribution.lha` was refused because `BoingBag3.9-2`
+    /// "in this tree came from a different archive" — `BoingBag39-2.lha`,
+    /// which is a different *package*, not a different copy of this one. Both
+    /// archives carry the top-level `BoingBag3.9-2`, and the recipes tell
+    /// them apart by `distinguished_by`; the ART-276 check asked the name
+    /// alone. Two packages told apart that way are two identities, and a tree
+    /// holding both keeps one `built_from` record for each.
+    #[test]
+    fn two_packages_sharing_a_top_level_name_but_told_apart_inside_are_both_accepted() {
+        let (_guard, dir, media, packages) = package_dirs("shared-top-told-apart");
+        let root = dir.join("dist");
+
+        let base_only = install_request(&media, &packages, &root, &[]);
+        apply(&planned_over(&base_only), &root, &NoProgress).unwrap();
+
+        let first = told_apart_archive(&packages, "first.zip", "A", b"first package");
+        let second = told_apart_archive(&packages, "second.zip", "B", b"second package");
+        add_package(
+            &root,
+            &told_apart_package("told-a", "A"),
+            &first,
+            &NoProgress,
+        )
+        .unwrap();
+        add_package(
+            &root,
+            &told_apart_package("told-b", "B"),
+            &second,
+            &NoProgress,
+        )
+        .expect(
+            "an archive told apart by its own distinguished_by is another package, not a clash",
+        );
+
+        assert!(root.join("A").join("AOnly").is_file());
+        assert!(root.join("B").join("BOnly").is_file());
+
+        let first_sha = sha256_file(&first).unwrap();
+        let second_sha = sha256_file(&second).unwrap();
+        let manifest = read_manifest(&root);
+        let mut shared: Vec<(Option<&str>, &str)> = manifest
+            .built_from
+            .iter()
+            .filter(|record| record.volume_name == "SharedMedium")
+            .map(|record| (record.distinguished_by.as_deref(), record.sha256.as_str()))
+            .collect();
+        shared.sort();
+        assert_eq!(
+            shared,
+            vec![
+                (Some("A/AOnly"), first_sha.as_str()),
+                (Some("B/BOnly"), second_sha.as_str()),
+            ],
+            "one record per identity, each carrying its own archive's hash"
+        );
+    }
+
+    /// The control for the test above: telling identities apart must not
+    /// turn the ART-276 refusal off. The *same* told-apart package from a
+    /// different archive is still one name meaning two files, and is still
+    /// refused before a byte of it is written.
+    #[test]
+    fn the_same_told_apart_package_from_a_different_archive_is_still_refused() {
+        let (_guard, dir, media, packages) = package_dirs("shared-top-same-identity");
+        let root = dir.join("dist");
+
+        let base_only = install_request(&media, &packages, &root, &[]);
+        apply(&planned_over(&base_only), &root, &NoProgress).unwrap();
+
+        let first = told_apart_archive(&packages, "first.zip", "A", b"first copy");
+        let other = told_apart_archive(&packages, "other.zip", "A", b"another copy");
+        add_package(
+            &root,
+            &told_apart_package("told-a", "A"),
+            &first,
+            &NoProgress,
+        )
+        .unwrap();
+
+        let err = add_package(
+            &root,
+            &told_apart_package("told-a", "A"),
+            &other,
+            &NoProgress,
+        )
+        .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidInput(_)), "got {err:?}");
+        let first_sha = sha256_file(&first).unwrap();
+        assert!(err.to_string().contains(&first_sha[..12]), "{err}");
+        assert_eq!(
+            std::fs::read(root.join("A").join("AOnly")).unwrap(),
+            b"first copy",
+            "refused before a byte of the other copy was written"
+        );
+    }
+
+    /// A tree an older ART wrote: one `SharedMedium` record with no
+    /// identity, and one file placed by each of `components`.
+    fn manifest_placed_by(components: &[&str]) -> DistributionManifest {
+        DistributionManifest {
+            release: "Test OS".to_string(),
+            built_from: vec![MediaRecord {
+                volume_name: "SharedMedium".to_string(),
+                sha256: "0".repeat(64),
+                distinguished_by: None,
+            }],
+            files: components
+                .iter()
+                .map(|component| FileRecord {
+                    path: format!("{component}/File"),
+                    host_path: None,
+                    component: (*component).to_string(),
+                    media: "SharedMedium".to_string(),
+                    sha256: "0".repeat(64),
+                    bytes: 0,
+                    protection: None,
+                    overwrote: None,
+                })
+                .collect(),
+            paired_rom: None,
+            amiga_installed: Vec::new(),
+            layers: Vec::new(),
+        }
+    }
+
+    /// The attribution [`backfill_record_identities`] exists for: every
+    /// component that placed from the record is one package with one
+    /// distinguisher, so that is the record's identity.
+    #[test]
+    fn a_record_placed_by_one_identity_is_attributed_to_it() {
+        let mut manifest = manifest_placed_by(&["told-a"]);
+        backfill_record_identities(&mut manifest, &[told_apart_package("told-a", "A")]);
+        assert_eq!(
+            manifest.built_from[0].distinguished_by.as_deref(),
+            Some("A/AOnly")
+        );
+    }
+
+    /// Two identities under one unknown record: which archive the hash is
+    /// is exactly what nobody can say, so it stays unknown — and unknown
+    /// matches every identity, the old refusal, rather than a guess.
+    #[test]
+    fn a_record_placed_by_two_identities_is_left_unknown() {
+        let mut manifest = manifest_placed_by(&["told-a", "told-b"]);
+        backfill_record_identities(
+            &mut manifest,
+            &[
+                told_apart_package("told-a", "A"),
+                told_apart_package("told-b", "B"),
+            ],
+        );
+        assert_eq!(manifest.built_from[0].distinguished_by, None);
+    }
+
+    /// `locale-39` and `locale-39-turkish` share `Locale3.9` and declare no
+    /// distinguisher: nothing to attribute, and ART-276's one-record-per-
+    /// archive behaviour is what remains.
+    #[test]
+    fn a_record_placed_by_packages_without_a_distinguisher_is_left_unknown() {
+        let mut manifest = manifest_placed_by(&["shared-a", "shared-b"]);
+        backfill_record_identities(
+            &mut manifest,
+            &[
+                shared_medium_package("shared-a", "A"),
+                shared_medium_package("shared-b", "B"),
+            ],
+        );
+        assert_eq!(manifest.built_from[0].distinguished_by, None);
     }
 
     /// A rule the archive cannot satisfy is refused before a byte is

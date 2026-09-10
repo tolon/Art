@@ -3227,6 +3227,7 @@ mod tests {
             built_from: vec![crate::core::osinstall::apply::MediaRecord {
                 volume_name: "OS-Version3.9".into(),
                 sha256: "0".repeat(64),
+                distinguished_by: None,
             }],
             files,
             paired_rom: None,
@@ -5766,6 +5767,7 @@ mod tests {
             built_from: vec![MediaRecord {
                 volume_name: "Workbench3.2".into(),
                 sha256: "0".repeat(64),
+                distinguished_by: None,
             }],
             files: vec![FileRecord {
                 path: "C/LoadModule".into(),
@@ -7180,6 +7182,240 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A Contribution archive shaped like the owner's own, with
+    /// `program` as the ClassAction binary so two copies can differ.
+    fn write_contribution_archive(folder: &Path, file_name: &str, program: &[u8]) -> PathBuf {
+        std::fs::create_dir_all(folder).unwrap();
+        let entries: Vec<(&[u8], &[u8])> = vec![
+            (
+                b"BoingBag3.9-2\\Contribution\\ClassAction\\ClassAction",
+                program,
+            ),
+            (b"BoingBag3.9-2\\Readme", b"read me first"),
+        ];
+        let path = folder.join(file_name);
+        std::fs::write(
+            &path,
+            crate::core::lha::tests::make_lha_with_raw_names(&entries),
+        )
+        .unwrap();
+        path
+    }
+
+    /// The prefix of the owner's own `BoingBag39-2.lha` SHA-256, padded —
+    /// what their tree's `built_from` recorded on 2026-09-10.
+    const OWNERS_BB2_SHA_PREFIX: &str = "4b2a777a2895";
+
+    /// A tree exactly as an ART before ART-304 left it after BoingBag 3.9-2:
+    /// one `BoingBag3.9-2` record with **no** `distinguishedBy`, and files
+    /// whose component is `boingbag-39-2`. The owner's own
+    /// `E:\amiga\Amigatolon\sonuclar\distribution.json` has this shape.
+    fn legacy_boingbag_two_tree(dir: &Path) -> PathBuf {
+        use crate::core::osinstall::apply::{FileRecord, MediaRecord};
+        let tree = dir.join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        let manifest = DistributionManifest {
+            release: "AmigaOS 3.9".into(),
+            built_from: vec![MediaRecord {
+                volume_name: "BoingBag3.9-2".into(),
+                sha256: format!("{OWNERS_BB2_SHA_PREFIX}{}", "0".repeat(52)),
+                distinguished_by: None,
+            }],
+            files: vec![FileRecord {
+                path: "Libs/workbench.library".into(),
+                component: "boingbag-39-2".into(),
+                media: "BoingBag3.9-2".into(),
+                sha256: "0".repeat(64),
+                bytes: 0,
+                protection: None,
+                overwrote: None,
+                host_path: None,
+            }],
+            paired_rom: None,
+            amiga_installed: Vec::new(),
+            layers: Vec::new(),
+        };
+        let json = serde_json::to_string_pretty(&manifest).unwrap();
+        assert!(
+            !json.contains("distinguishedBy"),
+            "the fixture must be shaped like a tree an older ART wrote: {json}"
+        );
+        std::fs::write(tree.join(MANIFEST_FILE_NAME), json).unwrap();
+        tree
+    }
+
+    /// **ART-304 — the owner's build, 2026-09-11.** BoingBag 3.9-2 went on,
+    /// then Contribution was refused: "'BoingBag3.9-2' in this tree came from
+    /// a different archive (sha256 4b2a777a2895…, which placed boingbag-39-2)".
+    /// Both archives carry the top-level `BoingBag3.9-2`; they are two
+    /// packages, told apart by `distinguished_by`. Through the shipped
+    /// catalogue, onto a tree whose record predates the field — so the old
+    /// record has to be attributed to BoingBag 3.9-2 by the component that
+    /// placed from it, or the owner's own tree still refuses.
+    #[test]
+    fn contribution_goes_on_a_tree_whose_boingbag_two_record_predates_identity() {
+        let (_guard, dir) = scratch("contribution-legacy-bb2");
+        let tree = legacy_boingbag_two_tree(&dir);
+        let archive = write_contribution_archive(
+            &dir.join("packages"),
+            "BoingBag39-2-Contribution.lha",
+            b"the ClassAction program",
+        );
+        let package = crate::core::osinstall::package::by_id("boingbag-39-2-contribution").unwrap();
+
+        crate::core::osinstall::apply::add_package_staging_in(
+            &tree,
+            &package,
+            &archive,
+            dir.as_path(),
+            &NoProgress,
+        )
+        .expect("Contribution is not another copy of BoingBag 3.9-2's archive");
+
+        assert!(tree
+            .join("Contribution")
+            .join("BoingBag3.9-2")
+            .join("ClassAction")
+            .join("ClassAction")
+            .is_file());
+
+        let contribution_sha = crate::core::hashing::sha256_file(&archive).unwrap();
+        let manifest = chain::read_manifest(&tree).unwrap();
+        let records: Vec<(&str, Option<&str>, &str)> = manifest
+            .built_from
+            .iter()
+            .map(|record| {
+                (
+                    record.volume_name.as_str(),
+                    record.distinguished_by.as_deref(),
+                    &record.sha256[..12],
+                )
+            })
+            .collect();
+        assert_eq!(
+            records,
+            vec![
+                (
+                    "BoingBag3.9-2",
+                    Some("AmigaOS-Update"),
+                    OWNERS_BB2_SHA_PREFIX
+                ),
+                (
+                    "BoingBag3.9-2",
+                    Some("Contribution/ClassAction/ClassAction"),
+                    &contribution_sha[..12]
+                ),
+            ],
+            "the old record is attributed to BoingBag 3.9-2 and kept; Contribution gets its own"
+        );
+    }
+
+    /// The other half of ART-304, and the one that keeps the refusal honest:
+    /// with both packages in the tree, a *different* Contribution archive is
+    /// still refused — and the sentence names the component that archive
+    /// placed, not BoingBag 3.9-2, whose files came out of another file
+    /// entirely ("the screen may not out-claim the core").
+    #[test]
+    fn a_second_contribution_archive_is_refused_naming_only_what_the_first_placed() {
+        let (_guard, dir) = scratch("contribution-second-copy");
+        let tree = legacy_boingbag_two_tree(&dir);
+        let package = crate::core::osinstall::package::by_id("boingbag-39-2-contribution").unwrap();
+        let first = write_contribution_archive(&dir.join("packages"), "first.lha", b"first");
+        crate::core::osinstall::apply::add_package_staging_in(
+            &tree,
+            &package,
+            &first,
+            dir.as_path(),
+            &NoProgress,
+        )
+        .unwrap();
+
+        let other = write_contribution_archive(&dir.join("packages"), "other.lha", b"other");
+        let err = crate::core::osinstall::apply::add_package_staging_in(
+            &tree,
+            &package,
+            &other,
+            dir.as_path(),
+            &NoProgress,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("which placed boingbag-39-2-contribution)"),
+            "must name only the component the clashing archive placed: {msg}"
+        );
+    }
+
+    /// **ART-304 on the owner's own material.** The two tests above are
+    /// shaped like the owner's tree; this one *is* it: their real
+    /// `distribution.json` (read, never written — it is copied into a
+    /// scratch tree first) and their real `BoingBag39-2-Contribution.lha`,
+    /// through the shipped catalogue.
+    ///
+    /// ```text
+    /// ART_304_MANIFEST=E:\amiga\Amigatolon\sonuclar\distribution.json
+    /// ART_304_CONTRIBUTION=E:\amiga\Amigatolon\paketler\BoingBag39-2-Contribution.lha
+    /// cargo test --lib -- --ignored --exact \
+    ///   commands::osinstall::tests::the_owners_contribution_goes_on_their_own_tree_when_asked
+    /// ```
+    ///
+    /// Proves the owner's record is attributed and the archive accepted; it
+    /// does not prove the files boot — that is the drive's.
+    #[test]
+    #[ignore = "needs the owner's own tree manifest and Contribution archive; set ART_304_MANIFEST and ART_304_CONTRIBUTION"]
+    fn the_owners_contribution_goes_on_their_own_tree_when_asked() {
+        let (Ok(manifest_path), Ok(contribution)) = (
+            std::env::var("ART_304_MANIFEST"),
+            std::env::var("ART_304_CONTRIBUTION"),
+        ) else {
+            eprintln!("skipped: set ART_304_MANIFEST and ART_304_CONTRIBUTION");
+            return;
+        };
+        let (_guard, dir) = scratch("art-304-owners-tree");
+        let tree = dir.join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::copy(&manifest_path, tree.join(MANIFEST_FILE_NAME)).unwrap();
+        let before = chain::read_manifest(&tree).unwrap();
+        let bb2_sha = before
+            .built_from
+            .iter()
+            .find(|record| record.volume_name == "BoingBag3.9-2")
+            .expect("the owner's tree records BoingBag 3.9-2")
+            .sha256
+            .clone();
+
+        let package = crate::core::osinstall::package::by_id("boingbag-39-2-contribution").unwrap();
+        let archive = PathBuf::from(&contribution);
+        let outcome = crate::core::osinstall::apply::add_package_staging_in(
+            &tree,
+            &package,
+            &archive,
+            dir.as_path(),
+            &NoProgress,
+        )
+        .expect("the owner's Contribution goes on their own tree");
+        eprintln!("placed {} files", outcome.files);
+
+        let contribution_sha = crate::core::hashing::sha256_file(&archive).unwrap();
+        let after = chain::read_manifest(&tree).unwrap();
+        let bb_records: Vec<(Option<&str>, &str)> = after
+            .built_from
+            .iter()
+            .filter(|record| record.volume_name == "BoingBag3.9-2")
+            .map(|record| (record.distinguished_by.as_deref(), record.sha256.as_str()))
+            .collect();
+        assert_eq!(
+            bb_records,
+            vec![
+                (Some("AmigaOS-Update"), bb2_sha.as_str()),
+                (
+                    Some("Contribution/ClassAction/ClassAction"),
+                    contribution_sha.as_str()
+                ),
+            ]
+        );
     }
 
     // -----------------------------------------------------------------

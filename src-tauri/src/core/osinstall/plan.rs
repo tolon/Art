@@ -1813,6 +1813,25 @@ fn plan_over_with_cache(
                         source.as_mut(),
                         &mut refusals,
                     )?);
+                    // ART-304: `package_media` holds one archive per name,
+                    // and two packages can share a top-level name while
+                    // being two different archives (`boingbag-39-2` and its
+                    // Contribution). Refused rather than letting the second
+                    // replace the first and `apply` read both packages'
+                    // files out of one file. Nothing on screen sends
+                    // packages through `plan()` today.
+                    if let Some(previous) = package_media.get(&package.media) {
+                        if previous.path != medium.path {
+                            return Err(CoreError::InvalidInput(format!(
+                                "'{}' and '{}' both carry the top-level '{}' and were chosen in \
+                                 one build — ART reads one archive per name in a single plan, so \
+                                 add these packages to the tree one at a time",
+                                previous.path.display(),
+                                medium.path.display(),
+                                package.media
+                            )));
+                        }
+                    }
                     package_media.insert(package.media.clone(), medium);
                     chosen_packages.push(package);
                 }
@@ -5395,6 +5414,41 @@ mod plan_tests {
             other => panic!("expected an ambiguity refusal, got {other:?}"),
         }
         assert!(plan.items.is_empty());
+    }
+
+    /// **ART-304, the second door.** `package_media` is keyed by `media`, so
+    /// two chosen packages whose archives share a top-level name — as
+    /// `boingbag-39-2` and `boingbag-39-2-contribution` do — would leave one
+    /// archive in the map and `apply` reading both packages' files out of
+    /// it. No screen sends packages through `plan()` today (the Build tab
+    /// adds them one at a time), so this is refused, never resolved silently.
+    #[test]
+    fn two_chosen_packages_sharing_a_top_level_name_are_refused_not_overwritten() {
+        let (_guard, dir, media, packages) = package_dirs("shared-top");
+        for (file, entry) in [
+            ("one.zip", "Shared/C/OneCmd"),
+            ("two.zip", "Shared/C/TwoCmd"),
+        ] {
+            std::fs::write(
+                packages.join(file),
+                crate::core::archive::zip::tests::make_zip_with(&[(entry, b"cmd" as &[u8])]),
+            )
+            .unwrap();
+        }
+        let mut one = extra_package("pack-one", "Shared", &[]);
+        one.distinguished_by = Some("C/OneCmd".to_string());
+        let mut two = extra_package("pack-two", "Shared", &[]);
+        two.distinguished_by = Some("C/TwoCmd".to_string());
+
+        let request = package_request(&dir, &media, Some(&packages), &["pack-one", "pack-two"]);
+        let err = plan_over(&request, &fixtures::package_test_recipe(), &[one, two]).unwrap_err();
+
+        assert!(
+            matches!(err, crate::core::CoreError::InvalidInput(_)),
+            "got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(msg.contains("one.zip") && msg.contains("two.zip"), "{msg}");
     }
 
     /// `package::order` refuses this too, with an English sentence. It has
