@@ -99,13 +99,21 @@ const EVERY_STATE: ChainRow[] = [
       components: [{ id: "locale-base", labelKey: "osinstall.components.name.os39.locale" }],
     },
   }),
+  // The owner's finding of 2026-09-10: a newer update already in the tree
+  // writes over this one, so adding it now would put older files over newer.
+  row({
+    packageId: "locale-39-turkish",
+    name: "Türkçe catalogs and fonts (Locale 3.9)",
+    sentenceFacts: { file: "Locale3_9.lha", runsOnAmiga: false },
+    state: { state: "overtaken-by", names: ["Türkçe catalogs (BoingBag 3.9-2)"] },
+  }),
 ];
 
 describe("chainLines", () => {
-  it("gives each of the eight endings its own kind and its own key", () => {
+  it("gives each of the nine endings its own kind and its own key", () => {
     const lines = chainLines(EVERY_STATE);
     const kinds = lines.map((line) => line.kind);
-    expect(new Set(kinds).size).toBe(8);
+    expect(new Set(kinds).size).toBe(9);
     expect(kinds).toEqual([
       "installed",
       "ready",
@@ -118,11 +126,12 @@ describe("chainLines", () => {
       // because the next step is somewhere else: every name in `blocked` is
       // another row on this screen, and a component is not.
       "blocked-component",
+      "overtaken",
     ] satisfies ChainLineKind[]);
 
     // Distinct keys, so no two endings can render the same sentence.
     const keys = lines.map((line) => line.phrase.key);
-    expect(new Set(keys).size).toBe(8);
+    expect(new Set(keys).size).toBe(9);
   });
 
   // **The Run button never lands on the CD row** (round 3 whole-branch
@@ -476,6 +485,15 @@ describe("choiceRowState", () => {
         sentenceFacts: { file: null, runsOnAmiga: false },
       })
     ).toEqual({ tick: "off", enabled: false, reason: "missing" });
+  });
+
+  it("refuses the tick for a row a newer update already in the tree writes over", () => {
+    expect(
+      stateOf({
+        state: { state: "overtaken-by", names: ["Türkçe catalogs (BoingBag 3.9-2)"] },
+        sentenceFacts: { file: "Locale3_9.lha", runsOnAmiga: false },
+      })
+    ).toEqual({ tick: "off", enabled: false, reason: "overtaken" });
   });
 
   it("refuses the tick for a row the material itself makes redundant", () => {

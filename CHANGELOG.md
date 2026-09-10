@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- OS Builder: the button in the bar under the tabs goes to the next tab and
+  names it, instead of jumping straight to Build.
 - OS Builder, source step: what ART found comes first, with the folder list
   beside it; with no folder chosen the step says what to do next instead of
   reporting nothing.
@@ -56,6 +58,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The OS Builder no longer freezes the window.** Moving between its tabs
+  re-read every install disc whose name repeats — about 90 seconds a
+  question on a large ISO folder — and did it on the window's own thread.
+  Discs of different sizes are no longer compared, a disc is read once per
+  session, and the questions a tab asks run in the background.
+- **Locale 3.9's Turkish catalogs and fonts go on before BoingBag 3.9-2's.**
+  In that order both now install. The other way round would put older
+  catalogs over newer ones, and the update list now says so on the row
+  instead of offering a tick that the run then refuses.
+- **The Build tab no longer says "no update ticked" while it is still
+  checking.** After a run it said so, with "replaces 0 files", and offered
+  Build over it; pressing it wrote only the first-boot files.
 - **Removing a folder from the OS Builder's list also forgets it as your
   archives folder.** A folder an older ART remembered as the place your
   update archives live kept steering the archive dialogs after you took it

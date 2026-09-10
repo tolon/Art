@@ -1,7 +1,8 @@
 // The bar under the install lane's tabs (four-tab design § 2).
 //
 // One place that answers "where is this going" on every tab, and one button
-// that takes the person to the build tab. **It only navigates**: a run
+// that takes the person to the next tab — the owner's 2026-09-10 ruling, it
+// went straight to Build and skipped the tabs between. **It only navigates**: a run
 // starts from tab 4's own button, once, knowingly (§ 10.4 — a button that
 // navigates on three tabs and runs on the fourth, under one label, is a
 // defect waiting to happen; so this button is absent on `derle`).
@@ -34,7 +35,7 @@ import { isTextOrNothing } from "@/lib/remembered";
 import { rememberedComponentKey } from "@/lib/osinstall";
 import { useRemembered } from "@/lib/useRemembered";
 import { useBuildSession } from "@/lib/useBuildSession";
-import { stepPath } from "@/lib/buildSteps";
+import { stepLabelKey, stepPath, stepsFor } from "@/lib/buildSteps";
 
 export function BuildBar() {
   const { t } = useTranslation();
@@ -60,6 +61,12 @@ export function BuildBar() {
   // way when the person may be about to choose a different kind entirely.
   if (location.pathname === stepPath("hedef") || location.pathname === "/os-builder") return null;
   const onBuildTab = location.pathname === stepPath("derle");
+  // The next tab in the lane's own order, or `null` on the last one. Read
+  // off `stepsFor`, the one list the strip draws, so the button and the
+  // tabs cannot disagree about what "next" is.
+  const lane = stepsFor(session.kind);
+  const here = lane.findIndex((step) => location.pathname === stepPath(step));
+  const next = here >= 0 && here + 1 < lane.length ? lane[here + 1] : null;
 
   return (
     <div
@@ -93,9 +100,9 @@ export function BuildBar() {
           })}
         </span>
       )}
-      {!onBuildTab && (
-        <button className="btn" data-testid="build-bar-go" onClick={() => navigate(stepPath("derle"))}>
-          {t("osBuilder.bar.goToBuild")}
+      {next && (
+        <button className="btn" data-testid="build-bar-go" onClick={() => navigate(stepPath(next))}>
+          {t("osBuilder.bar.next", { step: t(stepLabelKey(next)) })}
         </button>
       )}
     </div>

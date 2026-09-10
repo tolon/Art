@@ -225,7 +225,126 @@ re-audits them without reason:
 
 ---
 
+**ART-300** 🔵 **The refusal for an older package added over a newer one does not name the
+order** — *found 2026-09-10 fixing ART-298*
+`src-tauri/src/core/osinstall/apply.rs` (`add_package_staging_in`) · The chain row now says it
+([ART-298](#fixed)), so the screen no longer reaches this refusal; `osinstall_add_package` still can,
+and its sentence — *"would write over 32 file(s) it never declared it may replace … a package
+overwrites only what its own `overrides` names"* — reads as an instruction to edit a recipe rather
+than as *the newer package is already here*. The owners of the undeclared files are in
+`distribution.json`; naming a shipped package whose own `overrides` lists this one would make it
+actionable. Not done this round: the add-package tests run on fixture packages, and the name needs
+the shipped catalogue.
+
+**ART-301** 🔵 **The job bar's titles are English sentences composed in Rust** — *found 2026-09-10
+in the owner's screenshot*
+`src/components/JobBar.tsx` (`job.title`) · 34 `let title = format!(…)` sites across 18 command
+files. The owner saw *"Adding 1 package(s) to …"* twice on a Turkish screen. The two rows are **two
+runs**, not a double render — 21:22:08 and 21:23:04 in `operations.jsonl`. The refusal under each is
+the core's own sentence and English by design (ART-060); the title is not the core's sentence but
+the command layer's, and a job could carry a `Phrase` instead. A round of its own.
+
+**ART-302** 🔵 **The first tab question of a session still reads two same-size discs whole** —
+*found 2026-09-10 measuring ART-297*
+`src-tauri/src/core/osinstall/scan.rs` (`ShaMemo`) · On the owner's folders `AmigaOS3.9` repeats at
+one size — two identical 490 856 448-byte images — and proving them identical takes a full read:
+24.2 s for the first `osinstall_slots` after a start, off the window's thread since ART-297, then
+0.45 s warm. The memo lives in memory only; keeping the hash in the scan cache (`ScanCache` already
+stores md5s keyed by size and modification time) would let the next start pay nothing.
+
 ## Fixed
+
+**ART-297** 🔴 ✅ **The OS Builder froze the window: every tab question re-hashed whole install
+discs, on the thread the window answers on** — *found 2026-09-10 by the owner driving
+`main-f354f46`; fixed the same night on `art-owner-findings-0910`*
+`src-tauri/src/core/osinstall/scan.rs` (`dedupe_identical_disks`) · `src-tauri/src/commands/osinstall.rs`
+
+The owner: *"diski çok meşgul ediyor … derle kısmına vardım bayağı bilgisayar kasılıyor"*, the
+window titled *(Yanıt Vermiyor)*. Measured on the owner's own three material folders with three new
+`#[ignore]` harnesses (`measure_the_os_builder_commands_on_the_owners_material`,
+`measure_media_scan_and_dedupe_on_the_owners_folders`,
+`measure_archive_open_per_file_in_the_owners_folders`; the `ART_PERF_*` variables are in the first
+one's doc comment):
+
+| Command | Before, cold | Before, warm | After, cold | After, warm |
+|---|---|---|---|---|
+| `osinstall_slots` | 94.6 s | 93.5 s | 24.2 s | 0.45 s |
+| `osinstall_chain` | 91.2 s | 88.5 s | 0.49 s | 0.45 s |
+| `osinstall_plan` | 98.9 s | 91.4 s | 0.92 s | 0.69 s |
+
+Three causes, three fixes:
+
+1. **`dedupe_identical_disks` SHA-256'd every disc whose volume name repeats, on every call** —
+   3.55 GB per call on the owner's folders, 2.57 GB of it discs of *different sizes*, which cannot be
+   identical (`CD32` and `CAVIAR16_1` each repeat at two sizes). Now only a same-name, same-size group
+   is hashed, and a hash is remembered for the life of the process by path, size and modification
+   time (`ShaMemo`). Tests: `a_repeated_name_at_different_sizes_is_never_hashed`,
+   `only_a_same_name_same_size_group_is_hashed`, `a_hash_is_remembered_until_the_file_changes`.
+2. **173 of 174 commands are synchronous `#[tauri::command]`**, which tauri-macros 2.6.3 generates
+   as `ExecutionContext::Blocking` — answered on the window's own thread. The fourteen a tab asks are
+   now `#[tauri::command(async)]`, which Tauri 2.11.5 hands to `async_runtime::spawn`
+   (`ipc/mod.rs`, `respond_async_serialized_inner`). Test:
+   `the_commands_a_tab_asks_are_answered_off_the_window_thread`, reading the file's own text.
+3. **The Build tab planned in update mode**, where the run has no tree phase and reads no plan.
+   `useInstallPlan` takes `plan: false`, and tab 4 passes it in update mode and while the destination
+   check is out. Tests: *asks for no plan when the destination is already a tree*, with *still plans a
+   fresh tree once the destination has been looked at* as the control (`BuildTab.test.tsx`).
+
+Eliminated on the way, measured: `ArchiveSource::open` (0.55 s over every file in all three
+folders) and `find_media` (45 ms). Mutations: the size check off fails two tests; the memo lookup
+off, and the memo ignoring a changed file, fail one each; `osinstall_plan` put back to blocking is
+named by the guard; three plan-gate mutations each fail the update-mode test. What is left is
+[ART-302](#open).
+
+**ART-298** 🟠 ✅ **Locale 3.9's Turkish slice was refused on the owner's tree — and the tick list
+had offered it** — *found 2026-09-10 by the owner; fixed the same night on `art-owner-findings-0910`*
+`recipes/packages/locale-39-turkish.json` · `recipes/packages/locale-turkish.json` ·
+`src-tauri/src/core/osinstall/chain.rs`
+
+`operations.jsonl`, 21:22:08 and 21:23:04: *"'locale-39-turkish' would write over 82 file(s) it never
+declared it may replace"*. Asked of the owner's own archives and tree (7-Zip 26.02, `$VER:`,
+SHA-256): **50** of the 82 are the CD's own `special-locale-turkish` fonts, byte-identical to the
+slice's; **32** are BoingBag 3.9-2's Turkish catalogs (`locale-turkish`), which the tree already had —
+17 byte-identical, each of the other 15 the same version or newer in BB2. The slice is **not
+redundant**: `sys/ahi.catalog` and the `AmigaSans-iso9` and `helveticagr-ISO9` families are in
+nothing else, so *not needed* would have been a claim the material does not support.
+
+- `locale-39-turkish` now declares `special-locale-turkish`, and `locale-turkish` declares
+  `locale-39-turkish`: the chain's own order, 4 then 5, goes on.
+- The reverse — the older slice onto a tree that has the newer catalogs — stays refused, and the row
+  says so **before anybody ticks it**: a new chain state, `OvertakenBy { names }` (`overtaken-by` on
+  the wire, kind `overtaken`), not tickable, *"… {{names}} comes after it, is already here and
+  replaces its files, so adding it now would put older files over newer ones"*. Read from the newer
+  package's own `overrides` — the declaration `add_package` checks — so the row and the refusal cannot
+  disagree.
+
+Tests: `a_row_an_installed_later_package_writes_over_is_overtaken` (with its control);
+`chain.test.ts`'s nine endings and *refuses the tick for a row a newer update already in the tree
+writes over*; `the_turkish_slice_overrides_a_component_that_really_claims_its_destination`, extended
+and now checking the claim in both directions. **Real material**:
+`the_turkish_updates_go_on_in_chain_order_and_the_chain_says_why_not_the_other_way` (`#[ignore]`,
+`ART_TR_MEDIA`, `ART_TR_PACKAGES`, with `TMP`/`TEMP` off the system drive) — in order, 89 then 36 files
+placed; newer first, the row reads `OvertakenBy` and the slice is refused over the 32 catalogs. Both
+arms of the control measured: without the fonts declaration the slice is refused over 50 fonts;
+without the catalogs declaration BB2's catalogs are refused over 32. Mutation: the chain check off
+fails its test. The refusal's own sentence is [ART-300](#open).
+
+**ART-299** 🟠 ✅ **After a run the Build tab said "no update ticked" and "replaces 0 files" while it
+was still finding out — and offered Build over that** — *found 2026-09-10 in the owner's screenshot;
+fixed the same night on `art-owner-findings-0910`*
+`src/components/osbuilder/buildSummary.ts` · `src/lib/buildRun.ts` ·
+`src/components/osbuilder/BuildTab.tsx`
+
+`useTickedUpdates` returns an empty list while the chain or the slot report is being read, and a
+finished run asks both again. The summary read the empty list as a fact — *"Hiçbir güncelleme
+işaretlenmedi"*, *"Güncellemeler ağaçtaki 0 dosyanın yerine geçer"* — directly under the report of a
+run that had just refused one, and the Build button stood over a sequence built from it: first boot
+alone. **That is what the owner's second press ran.** `operations.jsonl` has the first-boot files
+written at 21:22:29, 21 s after the refusal, and the only caller that writes them is `useBuildRun`,
+whose sequence stops at the first ending that is not a success. Now the line says
+`updatesChecking` (*"İşaretli güncellemeler denetleniyor…"*), the replaces line is pending, and the
+gate stands in the button's place. Test: *says it is looking rather than 'none ticked', and offers
+no button*. Mutations: the gate, the line and the pending arm, each taken out alone, fail it.
 
 **ART-291** 🔵 ✅ **A `packages.folder` seeded from an older ART steers the archive dialogs even
 after the folder leaves the material list** — *found 2026-09-10 during four-tabs round 5, task 2;

@@ -94,6 +94,17 @@ export interface InstallPlanInputs {
    * not be shown — and it *was* shown, which is the defect this closes.
    */
   previewCollisions?: boolean;
+  /**
+   * Whether to plan at all. Defaults to true.
+   *
+   * Tab 4 passes `false` in update mode and while the destination check is
+   * still out (the owner's finding of 2026-09-10): with the destination
+   * already a tree the run has no tree phase, `useBuildRun` reads the plan
+   * only for `osinstall_apply`, and the first summary line comes from the
+   * tree — yet one plan read 3.5 GB of the owner's discs. Off, the hook holds
+   * no plan, exactly as it does with no folder to read.
+   */
+  plan?: boolean;
 }
 
 export interface InstallPlanState {
@@ -139,6 +150,7 @@ export function useInstallPlan(inputs: InstallPlanInputs): InstallPlanState {
     components,
     setComponents,
     previewCollisions = true,
+    plan: planWanted = true,
   } = inputs;
   const { t } = useTranslation();
   const chosen = components.chosen;
@@ -324,7 +336,7 @@ export function useInstallPlan(inputs: InstallPlanInputs): InstallPlanState {
       layers.length > 0
         ? Object.keys(plannedFolders.mediaFolders).length > 0
         : !!plannedFolders.mediaFolder;
-    if (!hasMedia) {
+    if (!hasMedia || !planWanted) {
       setBasePlanResult(null);
       setEffectivePlanResult(null);
       setPlanError(null);
@@ -454,6 +466,7 @@ export function useInstallPlan(inputs: InstallPlanInputs): InstallPlanState {
     catalogue,
     reuseScan,
     rescanNonce,
+    planWanted,
   ]);
 
   /**

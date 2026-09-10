@@ -1724,6 +1724,9 @@ export type ChainState =
   | { state: "blocked-by-component"; components: BlockedComponent[] }
   | { state: "missing"; expected: string[] }
   | { state: "not-needed"; supersededBy: string }
+  /** A later package that writes over this one is already in the tree —
+   *  `chain::ChainState::OvertakenBy`. `names` are those packages' names. */
+  | { state: "overtaken-by"; names: string[] }
   | { state: "refused"; reason: RefusedBecause }
   | { state: "not-yet-runnable"; reason: NotYetRunnable };
 

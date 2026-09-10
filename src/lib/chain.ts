@@ -50,6 +50,7 @@ export type ChainLineKind =
   | "blocked-component"
   | "missing"
   | "not-needed"
+  | "overtaken"
   | "refused"
   | "not-yet-runnable";
 
@@ -221,6 +222,19 @@ export function chainLines(rows: ChainRow[]): ChainLine[] {
           },
         };
 
+      // The owner's finding of 2026-09-10: not *not needed* — the row carries
+      // files nothing else does — and not *ready*, because the newer update
+      // already in the tree would have its files written over.
+      case "overtaken-by":
+        return {
+          ...base,
+          kind: "overtaken" as const,
+          phrase: {
+            key: "osinstall.chain.overtaken",
+            params: { name, names: row.state.names.join(", ") },
+          },
+        };
+
       case "refused":
         return {
           ...base,
@@ -337,7 +351,13 @@ export type ChoiceRowState =
   | {
       tick: "off";
       enabled: false;
-      reason: "not-yet-runnable" | "not-placeable" | "runs-on-amiga" | "missing" | "not-needed";
+      reason:
+        | "not-yet-runnable"
+        | "not-placeable"
+        | "runs-on-amiga"
+        | "missing"
+        | "not-needed"
+        | "overtaken";
     }
   | { tick: "user"; enabled: true };
 
@@ -401,6 +421,11 @@ export function choiceRowState(line: ChainLine, row: ChainRow): ChoiceRowState {
   }
   if (line.kind === "not-needed") {
     return { tick: "off", enabled: false, reason: "not-needed" };
+  }
+  // Adding it would put older files over newer ones, and `add_package`
+  // refuses exactly that — so the box is not offered (2026-09-10).
+  if (line.kind === "overtaken") {
+    return { tick: "off", enabled: false, reason: "overtaken" };
   }
 
   // `ready`, `blocked` and `blocked-component` — and the ambiguous refusal.

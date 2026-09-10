@@ -171,7 +171,7 @@ pub enum MediaScanResult {
 /// folder that exists, so every destination a user could choose read as taken.
 /// One question, one implementation, so the screen and the engine cannot
 /// disagree about which destinations are usable.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn osinstall_destination_taken(destination: PathBuf) -> AppResult<bool> {
     Ok(refuse_unless_free(&destination).is_err())
 }
@@ -180,12 +180,12 @@ pub fn osinstall_destination_taken(destination: PathBuf) -> AppResult<bool> {
 ///
 /// Read-only, and it **never fails for a folder that is not a tree** — that is
 /// an answer, not an error. See `core::osinstall::chain::describe_tree`.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn osinstall_describe_tree(tree: PathBuf) -> AppResult<TreeSummary> {
     Ok(chain::describe_tree(&tree))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn osinstall_scan_media(folder: PathBuf) -> AppResult<MediaScanResult> {
     match find_media(&folder) {
         Ok(media) => Ok(MediaScanResult::Found { media }),
@@ -207,7 +207,7 @@ pub fn osinstall_scan_media(folder: PathBuf) -> AppResult<MediaScanResult> {
 /// A folder that cannot be read **is** an error here, unlike
 /// `osinstall_describe_tree`: the user has just pointed at it, so "that path
 /// is gone" is the true sentence and there is no folder to describe.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn osinstall_trees_in(folder: PathBuf) -> AppResult<Vec<FoundTree>> {
     Ok(chain::trees_in(&folder)?)
 }
@@ -220,7 +220,7 @@ pub fn osinstall_trees_in(folder: PathBuf) -> AppResult<Vec<FoundTree>> {
 /// Volume names, not a folder: the caller has already scanned, and re-reading
 /// thirty-five ADFs to answer a question about names already in hand would be
 /// a second 31 MB pass for nothing.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn osinstall_release_for_media(volume_names: Vec<String>) -> AppResult<Option<String>> {
     Ok(crate::core::osinstall::identify::release_holding(
         &volume_names,
@@ -231,7 +231,7 @@ pub fn osinstall_release_for_media(volume_names: Vec<String>) -> AppResult<Optio
 /// (ART-285) — so the folder column counts install disks, not every disc it
 /// could read a name from. Names, not a folder, for the same reason
 /// [`osinstall_release_for_media`] takes them.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn osinstall_install_media(volume_names: Vec<String>) -> AppResult<Vec<String>> {
     Ok(crate::core::osinstall::identify::install_media(
         &volume_names,
@@ -252,7 +252,7 @@ pub fn osinstall_install_media(volume_names: Vec<String>) -> AppResult<Vec<Strin
 /// [`osinstall_release_for_media`] takes them: the caller has already
 /// scanned, and re-reading thirty-five ADFs to answer a question about names
 /// already in hand would be a second pass for nothing.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn osinstall_media_evidence(
     release: String,
     volume_names: Vec<String>,
@@ -273,7 +273,7 @@ pub fn osinstall_media_evidence(
 /// `None` for an unlayered release (nothing to tell apart) and for a folder
 /// whose names do not distinguish one layer from another — see
 /// `identify::layer_holding`'s own doc comment.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn osinstall_layer_for_media(
     release: String,
     volume_names: Vec<String>,
@@ -333,7 +333,7 @@ pub enum PlanResult {
 /// (see `scan.rs`'s own module doc: the window *is* the whole file for
 /// anything ADF-sized) that a real media folder costs a second pass of a few
 /// milliseconds, not a second scan of the disk.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn osinstall_plan(request: InstallRequest) -> AppResult<PlanResult> {
     plan_with_root(request, crate::scratch::root)
 }
@@ -434,7 +434,7 @@ fn scan_cache_for(policy: ScanCachePolicy, scratch_root: &Path) -> ScanCache {
 ///
 /// Read-only with respect to the user's data — it removes only ART's own
 /// derived files, under this module's own prefix, inside `%TEMP%`.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn osinstall_rescan_media() -> AppResult<usize> {
     Ok(ScanCache::in_dir(crate::scratch::root()?).forget_all())
 }
@@ -617,7 +617,7 @@ impl From<&crate::core::osinstall::Component> for ComponentSummary {
 /// Read-only: parses shipped JSON, opens no media, writes nothing. An
 /// unknown release is refused by [`recipe::by_release`], never defaulted,
 /// for the reason that function's own doc comment gives.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn osinstall_components(release: String) -> AppResult<Vec<ComponentSummary>> {
     let recipe = recipe::by_release(&release)?;
     Ok(recipe
@@ -721,7 +721,7 @@ pub struct PackageSummary {
 /// folder and nothing else, so there was no release to scope by even in
 /// principle — see `package::Package::releases`. A release ART ships no
 /// packages for answers with an empty list, and the screen says so.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn osinstall_packages(
     package_folder: PathBuf,
     release: String,
@@ -846,7 +846,7 @@ pub struct SlotReport {
 /// *chosen*, which would be a sentence about a file that is not there, and not
 /// counted in `required_found`, which would turn the set line green on a build
 /// that cannot run.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn osinstall_slots(
     release: String,
     folders: Vec<PathBuf>,
@@ -1065,7 +1065,7 @@ pub struct ChainReport {
 /// choose between them"* and blocked the row. One resolver, two callers, one
 /// of them not handed the user's own decision. `Option`, defaulting to none,
 /// exactly as `osinstall_slots` takes it.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn osinstall_chain(
     release: String,
     folders: Vec<PathBuf>,
@@ -2962,6 +2962,48 @@ mod tests {
     use crate::core::jobs::NoProgress;
     use crate::core::osinstall::scan::open_package;
     use crate::core::ScratchDir;
+
+    /// **The owner's finding of 2026-09-10: the OS Builder froze the window.**
+    /// A plain `#[tauri::command]` on a synchronous fn is generated by
+    /// tauri-macros 2.6.3 as `ExecutionContext::Blocking` and answered on the
+    /// thread the IPC message arrived on — the window's own. With
+    /// `(async)` the same fn goes to `respond_async_serialized`, which
+    /// `async_runtime::spawn`s it (tauri 2.11.5, `ipc/mod.rs`), and the window
+    /// keeps answering while a disc is read. These are the commands a tab asks
+    /// as the user moves between steps, each of which reads the material
+    /// folders, a tree or an archive. Read from this file's own text: a table
+    /// of names beside the attributes would be a copy, and copies drift.
+    #[test]
+    fn the_commands_a_tab_asks_are_answered_off_the_window_thread() {
+        let source = include_str!("osinstall.rs");
+        let tab_commands = [
+            "osinstall_destination_taken",
+            "osinstall_describe_tree",
+            "osinstall_scan_media",
+            "osinstall_trees_in",
+            "osinstall_release_for_media",
+            "osinstall_install_media",
+            "osinstall_media_evidence",
+            "osinstall_layer_for_media",
+            "osinstall_plan",
+            "osinstall_rescan_media",
+            "osinstall_components",
+            "osinstall_packages",
+            "osinstall_slots",
+            "osinstall_chain",
+        ];
+        let blocking: Vec<&str> = tab_commands
+            .into_iter()
+            .filter(|name| {
+                let wanted = format!("#[tauri::command(async)]\npub fn {name}(");
+                !source.contains(&wanted)
+            })
+            .collect();
+        assert!(
+            blocking.is_empty(),
+            "answered on the window's thread: {blocking:?}"
+        );
+    }
 
     /// **ART-203.** The screen asks this while the folder is being picked, and
     /// a folder picker can only hand back a folder that exists. If an empty
@@ -5226,6 +5268,311 @@ mod tests {
     /// production-side exists only so a test need not name a root.
     fn plan_in(request: InstallRequest, root: &Path) -> AppResult<PlanResult> {
         plan_with_root(request, || Ok(root.to_path_buf()))
+    }
+
+    /// **The Turkish updates on the owner's own material, 2026-09-10.** The
+    /// owner ticked Locale 3.9's Turkish slice on a tree that already had
+    /// BoingBag 3.9-2's Turkish catalogs and the run refused it over 82 files.
+    /// Two arms, on trees built from the owner's own disc:
+    ///
+    /// - **The chain's order** — `locale-39-turkish` (rank 4), then
+    ///   `locale-turkish` (rank 5) — goes on. That needs both new
+    ///   declarations: the slice over the CD's own `special-locale-turkish`
+    ///   fonts, and the BoingBag catalogs over the slice's.
+    /// - **The owner's order** — the newer one first — is still refused,
+    ///   because it would put older catalogs over newer ones, and the chain
+    ///   row says so before anyone ticks it: `OvertakenBy`.
+    ///
+    /// `ART_TR_MEDIA` is the folder holding `AmigaOS39.iso`; `ART_TR_PACKAGES`
+    /// the one holding `Locale3_9.lha` and `BoingBag39-2-turkce.lha`. Read-only
+    /// against both; the trees go to this test's scratch, so point `TMP` and
+    /// `TEMP` off the system drive when running it.
+    #[test]
+    #[ignore = "needs the user's own AmigaOS 3.9 disc and Turkish archives; set ART_TR_MEDIA and ART_TR_PACKAGES"]
+    fn the_turkish_updates_go_on_in_chain_order_and_the_chain_says_why_not_the_other_way() {
+        let (Ok(media), Ok(packages)) = (
+            std::env::var("ART_TR_MEDIA"),
+            std::env::var("ART_TR_PACKAGES"),
+        ) else {
+            eprintln!("skipped: set ART_TR_MEDIA and ART_TR_PACKAGES");
+            return;
+        };
+        let packages = PathBuf::from(packages);
+        let (_guard, scratch_root) = scratch("turkish-order");
+        let recipe = recipe::by_release("AmigaOS 3.9").expect("the shipped 3.9 recipe");
+        let build = |name: &str| -> PathBuf {
+            let tree = scratch_root.join(name);
+            let request = InstallRequest {
+                packages: Vec::new(),
+                package_folder: None,
+                release: "AmigaOS 3.9".to_string(),
+                media_folder: PathBuf::from(&media),
+                extra_media_folders: Vec::new(),
+                media_folders: BTreeMap::new(),
+                keymap: None,
+                rom: None,
+                chosen: vec![
+                    "locale-base".to_string(),
+                    "special-locale-turkish".to_string(),
+                ],
+                excluded: Vec::new(),
+                destination: tree.clone(),
+                scan_cache: Default::default(),
+            };
+            let plan =
+                crate::core::osinstall::plan::plan(&request, &recipe).expect("plan the tree");
+            assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+            let outcome = crate::core::osinstall::apply::apply(&plan, &tree, &NoProgress)
+                .expect("build the tree");
+            println!("{name}: built, {} files", outcome.files);
+            tree
+        };
+        let slice = package::by_id("locale-39-turkish").unwrap();
+        let catalogs = package::by_id("locale-turkish").unwrap();
+        let slice_archive = packages.join("Locale3_9.lha");
+        let catalogs_archive = packages.join("BoingBag39-2-turkce.lha");
+        let add = |tree: &Path, package: &Package, archive: &Path| {
+            crate::core::osinstall::apply::add_package(tree, package, archive, &NoProgress)
+        };
+        let state_of = |tree: &Path, id: &str| {
+            let manifest = chain::read_manifest(tree).expect("the tree's manifest");
+            chain::rows_for("AmigaOS 3.9", Some(&manifest), &[])
+                .expect("the chain")
+                .into_iter()
+                .find(|row| row.package_id.as_deref() == Some(id))
+                .expect("the row")
+                .state
+        };
+
+        println!("-- the chain's order");
+        let tree = build("in-order");
+        let placed = add(&tree, &slice, &slice_archive).expect("the slice over the CD's fonts");
+        println!("locale-39-turkish: {} files", placed.files);
+        let placed =
+            add(&tree, &catalogs, &catalogs_archive).expect("the newer catalogs over the slice's");
+        println!("locale-turkish: {} files", placed.files);
+        assert!(matches!(
+            state_of(&tree, "locale-39-turkish"),
+            chain::ChainState::Installed { .. }
+        ));
+
+        println!("-- the owner's order");
+        let tree = build("newer-first");
+        let placed = add(&tree, &catalogs, &catalogs_archive).expect("the newer catalogs");
+        println!("locale-turkish: {} files", placed.files);
+        let state = state_of(&tree, "locale-39-turkish");
+        println!("locale-39-turkish row: {state:?}");
+        assert_eq!(
+            state,
+            chain::ChainState::OvertakenBy {
+                names: vec![catalogs.name.clone()]
+            }
+        );
+        let refused = add(&tree, &slice, &slice_archive).unwrap_err();
+        println!("locale-39-turkish added anyway: {refused}");
+        assert!(
+            matches!(refused, CoreError::SafetyRefused(_)),
+            "{refused:?}"
+        );
+    }
+
+    /// **The owner's finding of 2026-09-10, measured: "the OS Builder freezes
+    /// the PC".** Every command below is a synchronous `#[tauri::command]`,
+    /// and tauri-macros 2.6.3 generates those as `ExecutionContext::Blocking`,
+    /// run where the IPC message arrives; only `#[tauri::command(async)]` goes
+    /// to a thread pool ("sync_threadpool"). So a duration here is how long the
+    /// window could not answer. Read-only against the material: the plan's scan
+    /// cache goes to this test's own scratch, and nothing is added or applied.
+    ///
+    /// `ART_PERF_RELEASE`, `ART_PERF_FOLDERS` (the material list, separated by
+    /// semicolons), `ART_PERF_TREE`, `ART_PERF_ROM`, `ART_PERF_CHOSEN`
+    /// (component ids, semicolons). Each command runs twice: cold, then warm.
+    #[test]
+    #[ignore = "measures the owner's own material; set the ART_PERF_ variables in the doc comment"]
+    fn measure_the_os_builder_commands_on_the_owners_material() {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let (Some(release), Some(folders)) = (var("ART_PERF_RELEASE"), var("ART_PERF_FOLDERS"))
+        else {
+            eprintln!("skipped: set ART_PERF_RELEASE and ART_PERF_FOLDERS");
+            return;
+        };
+        let folders: Vec<PathBuf> = folders.split(';').map(PathBuf::from).collect();
+        let tree = var("ART_PERF_TREE").map(PathBuf::from);
+        let rom = var("ART_PERF_ROM").map(PathBuf::from);
+        let chosen: Vec<String> = var("ART_PERF_CHOSEN")
+            .map(|c| c.split(';').map(str::to_string).collect())
+            .unwrap_or_default();
+        let (_guard, scratch_root) = scratch("perf-owner");
+
+        fn time<T>(label: &str, f: impl FnOnce() -> T) -> T {
+            let started = std::time::Instant::now();
+            let out = f();
+            println!("{:>8} ms  {label}", started.elapsed().as_millis());
+            out
+        }
+
+        for pass in ["cold", "warm"] {
+            println!("-- {pass} --");
+            for folder in &folders {
+                let label = format!("osinstall_scan_media {}", folder.display());
+                let _ = time(&label, || osinstall_scan_media(folder.clone()));
+            }
+            if let Some(tree) = &tree {
+                let _ = time("osinstall_describe_tree", || {
+                    osinstall_describe_tree(tree.clone())
+                });
+            }
+            let _ = time("osinstall_components", || {
+                osinstall_components(release.clone())
+            });
+            if let Some(last) = folders.last() {
+                let label = format!("osinstall_packages {}", last.display());
+                let _ = time(&label, || osinstall_packages(last.clone(), release.clone()));
+            }
+            let _ = time("osinstall_slots", || {
+                osinstall_slots(
+                    release.clone(),
+                    folders.clone(),
+                    tree.clone(),
+                    rom.clone(),
+                    None,
+                )
+            });
+            let _ = time("osinstall_chain", || {
+                osinstall_chain(
+                    release.clone(),
+                    folders.clone(),
+                    tree.clone(),
+                    rom.clone(),
+                    None,
+                )
+            });
+            let request = InstallRequest {
+                packages: Vec::new(),
+                package_folder: None,
+                release: release.clone(),
+                media_folder: folders[0].clone(),
+                extra_media_folders: folders[1..].to_vec(),
+                media_folders: BTreeMap::new(),
+                keymap: None,
+                rom: rom.clone(),
+                chosen: chosen.clone(),
+                excluded: Vec::new(),
+                destination: tree.clone().unwrap_or_else(|| scratch_root.join("dist")),
+                scan_cache: Default::default(),
+            };
+            let _ = time("osinstall_plan", || plan_in(request, &scratch_root));
+        }
+    }
+
+    /// The per-file pass below eliminated `ArchiveSource::open`: every file in
+    /// the owner's three folders opened in under 40 ms, 0.55 s for all 55. What
+    /// `gather_facts` and `plan` share beyond it is the disk list —
+    /// `find_media` per folder, then `dedupe_identical_disks` over the lot.
+    /// Timed apart here. Read-only.
+    #[test]
+    #[ignore = "measures the owner's own material; set ART_PERF_FOLDERS"]
+    fn measure_media_scan_and_dedupe_on_the_owners_folders() {
+        let Some(folders) = std::env::var("ART_PERF_FOLDERS")
+            .ok()
+            .filter(|v| !v.is_empty())
+        else {
+            eprintln!("skipped: set ART_PERF_FOLDERS");
+            return;
+        };
+        let mut media = Vec::new();
+        for folder in folders.split(';') {
+            let started = std::time::Instant::now();
+            let found = find_media(Path::new(folder)).unwrap_or_default();
+            println!(
+                "{:>8} ms  find_media  {} disk(s)  {folder}",
+                started.elapsed().as_millis(),
+                found.len()
+            );
+            media.extend(found);
+        }
+        // Which names repeat, and at what sizes: two files of different sizes
+        // cannot be identical, so only a same-name, same-size group needs a
+        // hash at all.
+        let mut names: Vec<String> = media.iter().map(|m| m.volume_name.to_lowercase()).collect();
+        names.sort();
+        names.dedup();
+        for name in names {
+            let group: Vec<&FoundMedia> = media
+                .iter()
+                .filter(|m| m.volume_name.to_lowercase() == name)
+                .collect();
+            if group.len() < 2 {
+                continue;
+            }
+            let sizes: Vec<u64> = group
+                .iter()
+                .map(|m| std::fs::metadata(&m.path).map(|md| md.len()).unwrap_or(0))
+                .collect();
+            println!(
+                "repeated volume name {name:?}: {} disk(s), sizes {sizes:?}",
+                group.len()
+            );
+        }
+        let started = std::time::Instant::now();
+        let kept = scan::dedupe_identical_disks(media.clone());
+        println!(
+            "{:>8} ms  dedupe_identical_disks  {} in, {} out",
+            started.elapsed().as_millis(),
+            media.len(),
+            kept.len()
+        );
+    }
+
+    /// Which file makes `gather_facts` slow. `find_packages_bounded` calls
+    /// `ArchiveSource::open` on every regular file in every material folder,
+    /// and `ArchiveSource::open` lists every entry of whatever it opens. The
+    /// harness above measured `osinstall_slots` and `osinstall_chain` at about
+    /// 90 s each on the owner's folders, warm as well as cold. Timed here file
+    /// by file, the archive open and the entry listing apart. Read-only.
+    #[test]
+    #[ignore = "measures the owner's own material; set ART_PERF_FOLDERS"]
+    fn measure_archive_open_per_file_in_the_owners_folders() {
+        let Some(folders) = std::env::var("ART_PERF_FOLDERS")
+            .ok()
+            .filter(|v| !v.is_empty())
+        else {
+            eprintln!("skipped: set ART_PERF_FOLDERS");
+            return;
+        };
+        for folder in folders.split(';') {
+            println!("-- {folder}");
+            let mut entries: Vec<PathBuf> = std::fs::read_dir(folder)
+                .map(|it| it.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+                .unwrap_or_default();
+            entries.sort();
+            for path in entries.into_iter().filter(|p| p.is_file()) {
+                let started = std::time::Instant::now();
+                let opened = crate::core::archive::open(&path);
+                let open_ms = started.elapsed().as_millis();
+                let listed = match opened {
+                    Ok(mut backend) => {
+                        let listing = std::time::Instant::now();
+                        let n = backend.entries().map(|e| e.len()).ok();
+                        format!("entries {:?} in {} ms", n, listing.elapsed().as_millis())
+                    }
+                    Err(_) => "not an archive".to_string(),
+                };
+                let whole = std::time::Instant::now();
+                let as_package =
+                    crate::core::osinstall::source_archive::ArchiveSource::open(&path).is_ok();
+                println!(
+                    "{:>8} ms open  {:>8} ms ArchiveSource  package={}  {}  {}",
+                    open_ms,
+                    whole.elapsed().as_millis(),
+                    as_package,
+                    listed,
+                    path.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                );
+            }
+        }
     }
 
     /// ART-293: the plan's scan cache lands under the root it is given and

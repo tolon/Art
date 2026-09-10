@@ -529,6 +529,21 @@ pub enum ChainState {
     /// package the tree already has. The **name** of that package, not a
     /// sentence: the words belong in the catalogue (ART-060).
     NotNeeded { superseded_by: String },
+    /// A package that comes after this one and writes over it — it names
+    /// this package in its own `overrides` — is **already in the tree**.
+    /// `names` are those packages' own names, in chain order.
+    ///
+    /// **Not [`NotNeeded`](Self::NotNeeded)**, because it is not redundant:
+    /// the owner's case, measured 2026-09-10, is Locale 3.9's Turkish slice
+    /// under BoingBag 3.9-2's Turkish catalogs — 32 of its 33 catalogs are in
+    /// the newer package, the same version or older, but it also carries
+    /// `sys/ahi.catalog` and two font families nothing else does. *"Already
+    /// contains it"* would be a claim the material does not support. And
+    /// **not [`Ready`](Self::Ready)**: adding it now puts older files over
+    /// newer ones, which `add_package` refuses as undeclared overwrites — the
+    /// owner's run ticked it and was refused over 82 files. The row says so
+    /// before anybody ticks it.
+    OvertakenBy { names: Vec<String> },
     /// ART will not do this row, and says which of the reasons applies.
     Refused { reason: RefusedBecause },
     /// The recipe declares what installs this package and **nobody has run
@@ -836,6 +851,28 @@ fn package_state(
                     .unwrap_or_else(|| superseder.clone()),
             });
         }
+    }
+
+    // 2b — a later package that writes over this one is already in the
+    // tree. Below *not needed*, which is the stronger answer when both hold;
+    // above everything still to come, because none of those can be acted on
+    // for a row that cannot be added without putting older files over newer
+    // ones. Read from the newer package's own `overrides` — the declaration
+    // `add_package` checks — so the row and the refusal cannot disagree.
+    let overtaken: Vec<String> = all
+        .iter()
+        .filter(|other| {
+            have.contains(&other.id)
+                && other
+                    .component
+                    .overrides
+                    .iter()
+                    .any(|over| over == &package.id)
+        })
+        .map(|other| other.name.clone())
+        .collect();
+    if !overtaken.is_empty() {
+        return Ok(ChainState::OvertakenBy { names: overtaken });
     }
 
     // 3 — declared and never run. Above everything that is still to come,
@@ -2082,6 +2119,45 @@ mod tests {
             "the name, not the id — the words belong in the catalogue"
         );
         assert_eq!(summarize_chain("AmigaOS 3.9", &rows).not_needed, 1);
+    }
+
+    /// **The owner's finding of 2026-09-10.** Locale 3.9's Turkish slice was
+    /// ticked on a tree that already had BoingBag 3.9-2's Turkish catalogs,
+    /// and the run refused it — 82 files it would write over. Measured on the
+    /// owner's own archives the same day: 32 of its 33 catalogs are in the
+    /// newer package too, every one of them the same version or older. So
+    /// the row is not *not needed* (it carries `sys/ahi.catalog` and two font
+    /// families nothing else does) and it is not *ready*: a newer update that
+    /// writes over it, by its own `overrides`, is already in the tree, and
+    /// adding it now would put older files over newer ones. The control is
+    /// the same chain without that update, where it is an ordinary row.
+    #[test]
+    fn a_row_an_installed_later_package_writes_over_is_overtaken() {
+        let without = manifest(&[], &[], &[]);
+        let rows = rows_for(
+            "AmigaOS 3.9",
+            Some(&without),
+            &resolved(Some(&without), &[], &[]),
+        )
+        .unwrap();
+        assert!(
+            !matches!(
+                row(&rows, "locale-39-turkish").state,
+                ChainState::OvertakenBy { .. }
+            ),
+            "nothing newer is in the tree yet: {:?}",
+            row(&rows, "locale-39-turkish").state
+        );
+
+        let with = manifest(&[], &["locale-turkish"], &[]);
+        let rows = rows_for("AmigaOS 3.9", Some(&with), &resolved(Some(&with), &[], &[])).unwrap();
+        assert_eq!(
+            row(&rows, "locale-39-turkish").state,
+            ChainState::OvertakenBy {
+                names: vec![package::by_id("locale-turkish").unwrap().name]
+            },
+            "the newer package's name, not its id"
+        );
     }
 
     /// **An artefact ART cannot find names the files to go and get**, and a

@@ -2365,6 +2365,16 @@ mod tests {
     ///   separates a deliberate layer from a disk that took the easy route.
     ///   The same call ART-234's four locale components make for `Prefs`.
     ///
+    /// - **`special-locale-turkish` is required, measured 2026-09-10.** The
+    ///   paragraph above was right about the base families and silent about
+    ///   the CD's own Turkish ones: that component places
+    ///   `OS-VERSION3.9/SPECIAL-LOCALE/TÜRKÇE/FONTS` into `Fonts`, and 50 of
+    ///   this package's 56 font files land on its files — byte-identical,
+    ///   SHA-256 on both sides, against the owner's own archive and tree.
+    ///   Undeclared, the package refused on the owner's tree over them. Its
+    ///   rules place files *inside* this package's `Fonts` destination, so
+    ///   the claim is checked in both directions below.
+    ///
     /// An override that names nothing real is a licence to overwrite something
     /// nobody measured - ART-159's mistake - so the absences are as deliberate
     /// as the presence.
@@ -2387,6 +2397,15 @@ mod tests {
             "the CD's own Locale/Catalogs carries türkçe and this package replaces it: {:?}",
             package.component.overrides
         );
+        assert!(
+            package
+                .component
+                .overrides
+                .iter()
+                .any(|o| o == "special-locale-turkish"),
+            "the CD's own Turkish fonts are 50 of this package's files: {:?}",
+            package.component.overrides
+        );
 
         let recipe = super::super::recipe::by_release("AmigaOS 3.9")
             .expect("the shipped 3.9 recipe must parse");
@@ -2397,11 +2416,11 @@ mod tests {
                 .unwrap_or_else(|| panic!("'{overridden}' is not a component of AmigaOS 3.9"));
 
             let claims_one_of_ours = component.rules.iter().any(|r| {
-                package
-                    .component
-                    .rules
-                    .iter()
-                    .any(|rule| rule.to == r.to || rule.to.starts_with(&format!("{}/", r.to)))
+                package.component.rules.iter().any(|rule| {
+                    rule.to == r.to
+                        || rule.to.starts_with(&format!("{}/", r.to))
+                        || r.to.starts_with(&format!("{}/", rule.to))
+                })
             });
 
             assert!(

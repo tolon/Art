@@ -784,6 +784,33 @@ describe("pressing Build", () => {
     );
   });
 
+  // **The owner's finding of 2026-09-10: the tab froze the PC.** In update
+  // mode the run has no tree phase and reads no plan — `useBuildRun` needs
+  // one only for `osinstall_apply`, and the first summary line comes from
+  // the tree — yet the tab planned anyway, and on the owner's material one
+  // plan read 3.5 GB of discs. Update mode asks for no plan at all.
+  it("asks for no plan when the destination is already a tree", async () => {
+    describeTreeMock.mockResolvedValue(IS_A_TREE);
+    bothTicked();
+    renderTab();
+
+    await screen.findByTestId("build-run");
+    expect(summaryLines()[0]).toBe(
+      i18n.t("osBuilder.build.summary.treeExisting", { release: "AmigaOS 3.9", count: 4212 })
+    );
+    expect(planMock).not.toHaveBeenCalled();
+  });
+
+  // The control: a fresh tree still plans, once the destination has been
+  // looked at — the plan is the tree phase's own input.
+  it("still plans a fresh tree once the destination has been looked at", async () => {
+    bothTicked();
+    renderTab();
+
+    await screen.findByTestId("build-run");
+    await waitFor(() => expect(planMock).toHaveBeenCalled());
+  });
+
   it("carries the tree phase's own release verdict and the time it took", async () => {
     seed({ ...FIELDS, "buildSession.firstboot": { written: false, wanted: false } });
     renderTab();
@@ -999,6 +1026,31 @@ describe("before ART has looked at the destination", () => {
     expect(screen.queryByTestId("build-run")).toBeNull();
     expect(screen.getByTestId("build-blocker").textContent).toBe(
       i18n.t("osBuilder.build.summary.checking")
+    );
+  });
+});
+
+// **The owner's finding of 2026-09-10.** After a run the tab asks again which
+// updates are ticked, and until the answer lands the list is empty. The
+// summary read that as *"no update ticked"* and *"replaces 0 files"* under a
+// report of the run that had just refused one, and the Build button stood
+// over a sequence built from the empty list: the owner's second press wrote
+// the first-boot files alone (`operations.jsonl`, 21:22:29, 21 s after the
+// refusal). Held open rather than raced.
+describe("while ART is still finding out which updates are ticked", () => {
+  it("says it is looking rather than 'none ticked', and offers no button", async () => {
+    slotsMock.mockImplementation(() => new Promise(() => {}));
+    describeTreeMock.mockResolvedValue(IS_A_TREE);
+    bothTicked();
+    renderTab();
+
+    await waitFor(() =>
+      expect(summaryLines()[1]).toBe(i18n.t("osBuilder.build.summary.updatesChecking"))
+    );
+    expect(summaryLines()[3]).toBe(i18n.t("osBuilder.build.summary.replacesPending"));
+    expect(screen.queryByTestId("build-run")).toBeNull();
+    expect(screen.getByTestId("build-blocker").textContent).toBe(
+      i18n.t("osBuilder.build.summary.updatesChecking")
     );
   });
 });

@@ -411,8 +411,14 @@ pub fn media_for_layer<'a>(
 /// the update ships a newer DiskDoctor under the identical volume name, and
 /// which one somebody wants is not ART's to decide.
 ///
-/// Hashing only happens when a name repeats, so the ordinary scan pays
-/// nothing.
+/// Hashing only happens when a name repeats **at one size**, so the ordinary
+/// scan pays nothing, and neither does a name that repeats across discs of
+/// different sizes: two files that differ in length cannot be identical. That
+/// pre-check is the owner's folders, measured 2026-09-10 — `CD32` and
+/// `CAVIAR16_1` each repeat at two sizes, and hashing them read 2.57 GB of the
+/// 3.55 GB every slots, chain and plan call paid. What is hashed is
+/// remembered for the life of the process by path, size and modification
+/// time ([`ShaMemo`]), so the tab's questions in a row read a disc once.
 ///
 /// A file whose hash cannot be read is kept rather than dropped - an
 /// unreadable duplicate is not a proven duplicate - and that branch is
@@ -429,32 +435,52 @@ pub fn media_for_layer<'a>(
 /// applied across the result. Exported rather than reimplemented — a second
 /// answer to "is this one disk or two" is how the two would drift.
 pub fn dedupe_identical_disks(found: Vec<FoundMedia>) -> Vec<FoundMedia> {
-    let repeated: Vec<String> = found
+    let memo = ShaMemo::process();
+    dedupe_identical_disks_with(found, &mut |path: &Path| {
+        memo.get_or_hash(path, &mut file_sha256)
+    })
+}
+
+/// [`dedupe_identical_disks`] with the hash handed in, so a test can count
+/// which files it reads.
+///
+/// An entry is hashed only when another entry shares its volume name **and**
+/// its size. A size that cannot be read is treated as matching every size —
+/// the entry is hashed as before rather than kept unexamined on a guess.
+fn dedupe_identical_disks_with(
+    found: Vec<FoundMedia>,
+    hasher: &mut impl FnMut(&Path) -> Option<String>,
+) -> Vec<FoundMedia> {
+    let sizes: Vec<Option<u64>> = found
         .iter()
-        .map(|entry| entry.volume_name.clone())
-        .filter(|name| {
-            found
-                .iter()
-                .filter(|other| other.volume_name.eq_ignore_ascii_case(name))
-                .count()
-                > 1
+        .map(|entry| std::fs::metadata(&entry.path).ok().map(|meta| meta.len()))
+        .collect();
+    let needs_hash: Vec<bool> = (0..found.len())
+        .map(|i| {
+            (0..found.len()).any(|j| {
+                j != i
+                    && found[j]
+                        .volume_name
+                        .eq_ignore_ascii_case(&found[i].volume_name)
+                    && match (sizes[i], sizes[j]) {
+                        (Some(a), Some(b)) => a == b,
+                        _ => true,
+                    }
+            })
         })
         .collect();
-    if repeated.is_empty() {
+    if !needs_hash.contains(&true) {
         return found;
     }
 
     let mut kept: Vec<FoundMedia> = Vec::new();
     let mut hashes: Vec<(String, String)> = Vec::new();
-    for entry in found {
-        let repeats = repeated
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case(&entry.volume_name));
-        if !repeats {
+    for (entry, hash_it) in found.into_iter().zip(needs_hash) {
+        if !hash_it {
             kept.push(entry);
             continue;
         }
-        let Some(hash) = file_sha256(&entry.path) else {
+        let Some(hash) = hasher(&entry.path) else {
             kept.push(entry);
             continue;
         };
@@ -468,6 +494,58 @@ pub fn dedupe_identical_disks(found: Vec<FoundMedia>) -> Vec<FoundMedia> {
         kept.push(entry);
     }
     kept
+}
+
+/// The SHA-256s [`dedupe_identical_disks`] has already read, keyed by path and
+/// remembered only while the file's size and modification time are the ones
+/// it was hashed at. A changed file is a new file and is hashed again.
+///
+/// In memory and for the life of the process, not on disk: the questions
+/// that pay for a hash come in a burst — the slots, the chain and the plan of
+/// one tab — and a disc's hash is not worth a settings file. Only discs whose
+/// names repeat at one size ever reach it, so it holds a handful of strings.
+#[derive(Default)]
+pub(crate) struct ShaMemo {
+    entries: std::sync::Mutex<std::collections::HashMap<PathBuf, Remembered>>,
+}
+
+/// One remembered hash: the size and modification time the file had when
+/// it was read, and what it hashed to.
+type Remembered = (u64, Option<std::time::SystemTime>, String);
+
+impl ShaMemo {
+    /// The one memo the running process shares.
+    fn process() -> &'static ShaMemo {
+        static MEMO: std::sync::OnceLock<ShaMemo> = std::sync::OnceLock::new();
+        MEMO.get_or_init(ShaMemo::default)
+    }
+
+    /// `path`'s hash: remembered when the file is unchanged, otherwise read
+    /// through `hasher` and remembered. A file whose metadata cannot be read
+    /// is hashed and not remembered.
+    pub(crate) fn get_or_hash(
+        &self,
+        path: &Path,
+        hasher: &mut impl FnMut(&Path) -> Option<String>,
+    ) -> Option<String> {
+        let Ok(meta) = std::fs::metadata(path) else {
+            return hasher(path);
+        };
+        let size = meta.len();
+        let modified = meta.modified().ok();
+        if let Ok(entries) = self.entries.lock() {
+            if let Some((seen_size, seen_modified, hash)) = entries.get(path) {
+                if *seen_size == size && *seen_modified == modified {
+                    return Some(hash.clone());
+                }
+            }
+        }
+        let hash = hasher(path)?;
+        if let Ok(mut entries) = self.entries.lock() {
+            entries.insert(path.to_path_buf(), (size, modified, hash.clone()));
+        }
+        Some(hash)
+    }
 }
 
 fn file_sha256(path: &std::path::Path) -> Option<String> {
@@ -948,6 +1026,94 @@ mod tests {
             panic!("an exact copy is not a decision anybody has to make");
         };
         assert!(entry.path.starts_with(&one), "the first one named wins");
+    }
+
+    /// A disk on disk: `FoundMedia` pointing at a plain file of `size` bytes,
+    /// named `volume`. `dedupe_identical_disks` reads only the name, the size
+    /// and, when it must, the bytes, so a real image is not needed to ask it
+    /// which files it hashes. An ADF fixture could not ask this: every one is
+    /// 901 120 bytes.
+    fn disk_file(dir: &Path, file: &str, volume: &str, size: usize, fill: u8) -> FoundMedia {
+        let path = dir.join(file);
+        std::fs::write(&path, vec![fill; size]).unwrap();
+        FoundMedia {
+            path,
+            volume_name: volume.to_string(),
+            kind: MediaKind::Disc,
+            layer: None,
+        }
+    }
+
+    /// The owner's folders, measured 2026-09-10: three volume names repeat —
+    /// `AmigaOS3.9` at one size, `CD32` and `CAVIAR16_1` each at two sizes —
+    /// and hashing all six read 3.55 GB on every call, about 89 s, paid by
+    /// the slots, the chain and the plan alike. Two files of different sizes
+    /// cannot be identical, so they are kept without a hash.
+    #[test]
+    fn a_repeated_name_at_different_sizes_is_never_hashed() {
+        let (_guard, dir) = scratch("dedupe-sizes");
+        let found = vec![
+            disk_file(&dir, "a.iso", "CD32", 4096, 1),
+            disk_file(&dir, "b.iso", "cd32", 8192, 1),
+        ];
+        let mut hashed: Vec<PathBuf> = Vec::new();
+        let kept = dedupe_identical_disks_with(found, &mut |path: &Path| {
+            hashed.push(path.to_path_buf());
+            Some("same".to_string())
+        });
+        assert!(
+            hashed.is_empty(),
+            "no hash for files that differ in size: {hashed:?}"
+        );
+        assert_eq!(kept.len(), 2);
+    }
+
+    /// Same name and same size is the one group that still needs its bytes
+    /// compared — the DiskDoctor case, one size and two contents — and only
+    /// that group is hashed.
+    #[test]
+    fn only_a_same_name_same_size_group_is_hashed() {
+        let (_guard, dir) = scratch("dedupe-same-size");
+        let found = vec![
+            disk_file(&dir, "os39-a.iso", "AmigaOS3.9", 4096, 7),
+            disk_file(&dir, "os39-b.iso", "AmigaOS3.9", 4096, 7),
+            disk_file(&dir, "cd32-a.iso", "CD32", 4096, 1),
+            disk_file(&dir, "cd32-b.iso", "CD32", 8192, 1),
+        ];
+        let mut hashed: Vec<String> = Vec::new();
+        let kept = dedupe_identical_disks_with(found, &mut |path: &Path| {
+            hashed.push(path.file_name().unwrap().to_string_lossy().into_owned());
+            Some("identical".to_string())
+        });
+        hashed.sort();
+        assert_eq!(hashed, vec!["os39-a.iso", "os39-b.iso"]);
+        assert_eq!(kept.len(), 3, "the true copy goes, both CD32 discs stay");
+    }
+
+    /// A disk's hash is remembered for as long as the file is unchanged, so
+    /// the questions a tab asks in a row — the slots, the chain, the plan —
+    /// read an image once rather than once each. A new size is a new file and
+    /// is hashed again.
+    #[test]
+    fn a_hash_is_remembered_until_the_file_changes() {
+        let (_guard, dir) = scratch("dedupe-memo");
+        let path = dir.join("disk.iso");
+        std::fs::write(&path, vec![3u8; 4096]).unwrap();
+        let memo = ShaMemo::default();
+        let calls = std::cell::Cell::new(0u32);
+        let mut hasher = |p: &Path| {
+            calls.set(calls.get() + 1);
+            file_sha256(p)
+        };
+        let first = memo.get_or_hash(&path, &mut hasher);
+        let second = memo.get_or_hash(&path, &mut hasher);
+        assert_eq!(first, second);
+        assert_eq!(calls.get(), 1, "an unchanged file is hashed once");
+
+        std::fs::write(&path, vec![4u8; 8192]).unwrap();
+        let third = memo.get_or_hash(&path, &mut hasher);
+        assert_ne!(third, first);
+        assert_eq!(calls.get(), 2, "a changed file is hashed again");
     }
 
     /// One folder named twice is one folder. A user who picks their media

@@ -439,6 +439,13 @@ export interface RunSummaryArgs {
    * shortest-lived.
    */
   destinationChecked: boolean;
+  /**
+   * Whether ART has finished finding out which updates are ticked. `false`
+   * while the chain or the slot report is still being read — after a run
+   * too, when both are asked again — and the list is then empty for want of
+   * an answer, not because nothing is ticked. Omitted means settled.
+   */
+  updatesSettled?: boolean;
   /** The collision preview — see {@link ReplacesSummary}. */
   replaces: ReplacesSummary;
 }
@@ -492,7 +499,12 @@ export function runSummaryLines(args: RunSummaryArgs): Phrase[] {
   }
 
   lines.push(
-    args.updates.length === 0
+    args.updatesSettled === false
+      ? // The owner's finding of 2026-09-10: *"no update ticked"* over a
+        // list that was only still loading, under the report of a run that
+        // had just refused one.
+        { key: "osBuilder.build.summary.updatesChecking" }
+      : args.updates.length === 0
       ? { key: "osBuilder.build.summary.updatesNone" }
       : {
           key: "osBuilder.build.summary.updates",
