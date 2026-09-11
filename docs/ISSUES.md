@@ -81,9 +81,11 @@ formats, or formatting with hst-imager and filling with `libpfs3`, leaves the wr
 cap stays.
 **Not proven:** hst-imager is one independent implementation, not pfs3aio on an Amiga or in WinUAE; no
 size with 2048/4096-byte reserved blocks (> ~53 GB) was tried. **Owed:** mount a libpfs3-formatted
-partition under real pfs3aio in WinUAE; the owner's choice of fix — patch/vendor libpfs3's `format.rs`
-(write the `SB` level, mark anodes 0–4), repair the two structures in ART right after libpfs3 formats, or
-format with hst-imager and fill with libpfs3 (arm B: sound at both sizes).
+partition under real pfs3aio in WinUAE. **The owner chose the fix route on 2026-09-11: patch
+`libpfs3`'s format (write the `SB` level, mark anodes 0–4) and vendor the patched crate into ART, offering
+the patch upstream.** The two routes not taken: repairing the two structures in ART right after libpfs3
+formats, and formatting with hst-imager and filling with libpfs3 (arm B: sound at both sizes). Research
+before the design: `docs/superpowers/notes/2026-09-11-libpfs3-format-fix-research.md`.
 
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
