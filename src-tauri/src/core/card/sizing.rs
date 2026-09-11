@@ -39,6 +39,22 @@ const MAXBITMAPINDEX: u64 = 103;
 const MAXSMALLDISK: u64 = (MAXSMALLBITMAPINDEX + 1) * 253 * 253 * 32;
 const MAXNUMRESERVED: u32 = 4096 + 255 * 1024 * 8;
 
+// The real on-disk sizes the directory/anode model below is built from
+// (round-2 review, CRITICAL 1 — the plan's original "17 fixed bytes" guess
+// undercounted against the real writer and is superseded by these).
+/// `libpfs3` `ondisk/direntry.rs:36` — `DIR_BLOCK_HEADER_SIZE = 0x14`.
+const DIR_BLOCK_HEADER_SIZE: u64 = 20;
+/// `libpfs3` `ondisk/mod.rs:160` — `ANODE_BLOCK_HEADER_SIZE`.
+const ANODE_BLOCK_HEADER_SIZE: u64 = 16;
+/// `libpfs3` `ondisk/mod.rs:112` — one anode on disk: clustersize, blocknr,
+/// next, 4 bytes each.
+const ANODE_SIZE: u64 = 12;
+/// `libpfs3` `ondisk/mod.rs:80-81` — `ANODE_ROOTDIR = 5`, `ANODE_USERFIRST =
+/// 6`: the low anode numbers below `ANODE_USERFIRST` are reserved and are
+/// skipped by the allocator (`writer.rs:931`), all inside the very first
+/// anode block (seqnr 0).
+const ANODE_USERFIRST: u64 = 6;
+
 /// The size of one reserved block, from the partition's size.
 pub fn pfs3_reserved_block_bytes(total_blocks: u64) -> u32 {
     let mut size = 1024;
@@ -87,23 +103,30 @@ pub const HEADROOM_PER_MILLE: u64 = 1250;
 pub struct ContentMeasure {
     pub files: u64,
     pub directories: u64,
-    /// Every file rounded up to whole 512-byte blocks.
+    /// Every file rounded up to whole 512-byte blocks (at least one, even
+    /// for an empty file — `libpfs3` `writer.rs:148`, `.max(1)`).
     pub data_blocks: u64,
-    /// Directory entries: 17 fixed bytes, the name, a comment-length byte,
-    /// padded to even (pfs3aio `blocks.h:327-340`).
+    /// Directory entries, `libpfs3`'s own layout (see `entry_bytes` below).
     pub entry_bytes: u64,
 }
 
 fn entry_bytes(name: &str) -> u64 {
-    // Latin-1 on the Amiga side: one byte a character.
-    let raw = 17 + name.chars().count() as u64 + 1;
+    // `libpfs3` `writer.rs:1153-1194` `build_dir_entry`: an 18-byte fixed
+    // header, the name, a 1-byte comment-length byte (ART writes no
+    // comment), and a 2-byte flags field (4 only once a single file needs
+    // `MODE_LARGEFILE`'s `fsizex` extension, i.e. >= 4 GiB — out of scope
+    // for ART's content), padded up to even (`writer.rs:1166-1169`). This
+    // supersedes the plan's original "17 fixed bytes" guess, which measured
+    // 3 bytes an entry short against the real writer (round-2 review,
+    // CRITICAL 1). Latin-1 on the Amiga side: one byte a character.
+    let raw = 18 + name.chars().count() as u64 + 1 + 2;
     raw + raw % 2
 }
 
 impl ContentMeasure {
     pub fn add_file(&mut self, name: &str, bytes: u64) {
         self.files += 1;
-        self.data_blocks += bytes.div_ceil(PFS3_BLOCK);
+        self.data_blocks += bytes.div_ceil(PFS3_BLOCK).max(1);
         self.entry_bytes += entry_bytes(name);
     }
     pub fn add_directory(&mut self, name: &str) {
@@ -118,19 +141,84 @@ impl ContentMeasure {
     }
 }
 
-/// Reserved blocks the content needs beyond the format's own: directory
-/// blocks (at least one per directory, entries packed into 1 KB blocks with a
-/// 20-byte header), anode blocks (12 bytes an anode, one per file and
-/// directory), counted in 1 KB units and rounded to the reserved block size.
+/// Directory blocks `content` needs beyond the one guaranteed to root and to
+/// every directory, packed the way `add_dir_entry` really packs them:
+/// sequentially, a block taking one more entry only while `pos + entry_len <
+/// resblocksize` (`writer.rs:1115` — strictly less, so a block is never
+/// packed to its exact size; the `-1` below is that byte).
+/// `ContentMeasure` does not keep directories apart, so this sums
+/// `entry_bytes` across the whole tree and packs it as one pool — which is
+/// provably still safe: for directories 1..n with entry-byte totals `e_i`
+/// and a shared per-block capacity `C`, `sum(ceil(e_i/C)) <= n +
+/// ceil(sum(e_i)/C)` always (`ceil(x/C) < x/C + 1` for every `i`, summed).
+/// Real per-directory packing can only need *more* blocks than the pooled
+/// estimate, never fewer.
+fn dir_extra_blocks(total_blocks: u64, content: &ContentMeasure) -> u64 {
+    let capacity = u64::from(pfs3_reserved_block_bytes(total_blocks)) - DIR_BLOCK_HEADER_SIZE - 1;
+    content.entry_bytes.div_ceil(capacity)
+}
+
+/// Anodes `content` needs: one a file (`create_anode_chain`), one a
+/// directory (its own first dir block, `create_dir_in`, `writer.rs:167-169`),
+/// and one more for every directory block beyond a directory's guaranteed
+/// first (`extend_anode_chain`, `writer.rs:1126-1136` and `1196-1199`) —
+/// exactly `dir_extra_blocks` above. The plan's original
+/// `files + directories + 16` never charged an anode for directory overflow
+/// blocks at all, which is why it undercounted for large directories
+/// (round-2 review, CRITICAL 1).
+fn anode_count_needed(total_blocks: u64, content: &ContentMeasure) -> u64 {
+    content.files + content.directories + dir_extra_blocks(total_blocks, content)
+}
+
+/// Reserved blocks `content` needs beyond the format's own (bitmap, bitmap
+/// index, the format's own first anode block and its index block, root) —
+/// directory blocks and anode blocks, each always exactly one reserved
+/// block, whatever the reserved block size (`create_dir_in`,
+/// `alloc_anode_block`).
 fn reserved_needed(total_blocks: u64, content: &ContentMeasure) -> u64 {
-    let dir_blocks = (content.directories + 1) + content.entry_bytes.div_ceil(1024 - 20);
-    let anode_blocks = (content.files + content.directories + 16).div_ceil(80) + 1;
-    // The format's own use of the reserved area (bitmap, bitmap index, anode
-    // index, root) is already inside `pfs3_num_reserved`'s count, and what it
-    // leaves free is what this is checked against.
-    let ones_k = dir_blocks + anode_blocks;
-    let per = u64::from(pfs3_reserved_block_bytes(total_blocks)) / 1024;
-    ones_k.div_ceil(per)
+    let dir_blocks = (content.directories + 1) + dir_extra_blocks(total_blocks, content);
+    let resblocksize = u64::from(pfs3_reserved_block_bytes(total_blocks));
+    // `rootblock.rs:158-161` `anodes_per_block` — 84 at the 1024-byte
+    // reserved block size every size in ART's normal-mode range uses; the
+    // plan's original `80` over-counted this term on its own (safe by
+    // itself), but that safety margin was too small to cover the missing
+    // `dir_extra_blocks` anode charge above (round-2 review, CRITICAL 1).
+    let anodes_per_block = (resblocksize - ANODE_BLOCK_HEADER_SIZE) / ANODE_SIZE;
+    let anode_count = anode_count_needed(total_blocks, content);
+    // The format's own first anode block (seqnr 0, holding ANODE_ROOTDIR) is
+    // already inside `pfs3_num_reserved`'s count; it offers
+    // `anodes_per_block - ANODE_USERFIRST` slots to new content before a
+    // second anode block (a fresh reserved block) is needed.
+    let first_block_room = anodes_per_block.saturating_sub(ANODE_USERFIRST);
+    let anode_blocks = anode_count
+        .saturating_sub(first_block_room)
+        .div_ceil(anodes_per_block);
+    dir_blocks + anode_blocks
+}
+
+/// The most anodes `libpfs3`'s writer can ever serve below `MAXSMALLDISK`
+/// (small mode), independent of the partition's size (round-2 review,
+/// IMPORTANT 2). Format only ever pre-allocates ONE anode index block
+/// (`format.rs` "Write anode index block", registered as the single entry
+/// `rootblock.indexblocks[0]`), and small mode's own allocator refuses a
+/// second one outright rather than allocating one on demand the way large
+/// (SUPERINDEX) mode does: `alloc_anode_block`'s small-mode branch
+/// (`writer.rs:1014-1024`) returns `Err("no index block slot available")`
+/// the instant `indexblocks[idx_nr]` is unset, where the large-mode branch
+/// just above it (`writer.rs:991-1006`) allocates a fresh index block and
+/// registers it. One index block holds `index_per_block` anode-block
+/// pointers (`(resblocksize/4)-3`, `rootblock.rs:153-155` / `format.rs:113`
+/// — 253 at the 1024-byte reserved block size), each anode block holding
+/// `anodes_per_block` anodes (84 at that size) minus the `ANODE_USERFIRST`
+/// (6) reserved low anode numbers, all inside the very first one. Measured
+/// against the real writer: 25 000 small files failed after 20 382 at both
+/// a 17 MB and a 21.7 MB small-mode partition — consistent with this cap
+/// (253 × 84 - 6 = 21 246) once directory overhead is subtracted.
+fn pfs3_small_mode_anode_cap(total_blocks: u64) -> u64 {
+    let resblocksize = u64::from(pfs3_reserved_block_bytes(total_blocks));
+    let index_per_block = (resblocksize / 4).saturating_sub(3);
+    let anodes_per_block = (resblocksize - ANODE_BLOCK_HEADER_SIZE) / ANODE_SIZE;
+    (index_per_block * anodes_per_block).saturating_sub(ANODE_USERFIRST)
 }
 
 /// Whether `content` fits a fresh PFS3 partition of `total_blocks`, keeping
@@ -142,7 +230,21 @@ pub fn pfs3_fits(total_blocks: u64, content: &ContentMeasure) -> bool {
     // data/(253×32) blocks. Leave that and a margin of 8 before counting ours.
     let format_own = data.div_ceil(253 * 32) + 8;
     let reserved_free = u64::from(pfs3_num_reserved(total_blocks)).saturating_sub(format_own);
-    content.data_blocks <= usable && reserved_needed(total_blocks, content) <= reserved_free
+    if content.data_blocks > usable || reserved_needed(total_blocks, content) > reserved_free {
+        return false;
+    }
+    // Below MAXSMALLDISK, the writer's own anode-space ceiling
+    // (`pfs3_small_mode_anode_cap`) does not grow with `total_blocks` — a
+    // size that otherwise fits must still be refused once content needs
+    // more anodes than that, so `pfs3_fit_bytes`'s bisection sizes up past
+    // MAXSMALLDISK instead of settling on a small-mode size the real writer
+    // would refuse.
+    if total_blocks <= MAXSMALLDISK
+        && anode_count_needed(total_blocks, content) > pfs3_small_mode_anode_cap(total_blocks)
+    {
+        return false;
+    }
+    true
 }
 
 /// The smallest whole-cylinder PFS3 partition `content` fits — `None` past
@@ -355,6 +457,35 @@ mod tests {
         (dir_names, files, measure)
     }
 
+    /// Like `profile`, but with `name_len`-character names (`MODE_LONGFN`
+    /// allows up to 107, `writer.rs:1162`) — round-2 review's large-directory
+    /// / long-name profiles need names longer than `profile`'s fixed 12
+    /// characters to exercise `entry_bytes`'s real per-entry cost.
+    fn profile_named(
+        dirs: usize,
+        per_dir: usize,
+        name_len: usize,
+        size_of: impl Fn(usize) -> usize,
+    ) -> (Vec<String>, Vec<(String, usize)>, ContentMeasure) {
+        let width = name_len.saturating_sub(1);
+        let mut measure = ContentMeasure::default();
+        let mut dir_names = Vec::new();
+        let mut files = Vec::new();
+        for d in 0..dirs {
+            let dir = format!("D{d:0width$}");
+            measure.add_directory(&dir);
+            for f in 0..per_dir {
+                let idx = d * per_dir + f;
+                let name = format!("F{idx:0width$}");
+                let size = size_of(idx);
+                measure.add_file(&name, size as u64);
+                files.push((format!("{dir}/{name}"), size));
+            }
+            dir_names.push(dir);
+        }
+        (dir_names, files, measure)
+    }
+
     /// Fill a partition of exactly the estimated size and require that it
     /// holds everything **and** keeps the twentieth pfs3aio holds back — the
     /// Amiga's handler refuses new files below it (`allocation.c:158`), and
@@ -403,8 +534,12 @@ mod tests {
             return;
         }
         match fill(smaller_total, dirs, files) {
-            Err(e) => println!(
-                "{label}: one cylinder smaller ({smaller_total} blocks) the writer refused it: {e}"
+            Err(libpfs3::error::Error::DiskFull(msg)) => println!(
+                "{label}: one cylinder smaller ({smaller_total} blocks) the writer refused it: {msg}"
+            ),
+            Err(other) => panic!(
+                "{label}: one cylinder smaller ({smaller_total} blocks) failed with an \
+                 unexpected error (not DiskFull): {other}"
             ),
             Ok((smaller_free, smaller_data)) => {
                 assert!(
@@ -444,21 +579,85 @@ mod tests {
     /// 21-cylinder floor; 13 700 is the smallest count whose *estimate*
     /// crosses PFS3's reserved-area step (`pfs3_num_reserved` 736 -> 1408 at
     /// 32 768 blocks — cylinders 22 through 32 all fail `reserved_needed <=
-    /// reserved_free` by a handful of blocks, cylinder 33 is the next that
-    /// fits) — but measured against the real writer, 13 700 files at one
-    /// cylinder smaller (32 256 blocks, `reserved_needed` = 727 against 724
-    /// free) still held everything: the model's own directory/anode rounding
-    /// overshoots the writer's true reserved-block use by a few blocks right
-    /// at that edge, so 13 700 is *not* proof the estimate is minimal — it is
-    /// proof the model is a few blocks more conservative than the writer
-    /// needs at that exact count, which is a safe direction to be wrong in,
-    /// not a defect worth chasing here. 14 000 (`profile(140, 100, ..)`) is
-    /// the next round count past that edge, and one cylinder smaller for it
-    /// genuinely runs the writer out of reserved blocks.
+    /// reserved_free`, cylinder 33 is the next that fits: 33 264 blocks,
+    /// 17 031 168 bytes).
+    ///
+    /// **Corrected (round-2 review, IMPORTANT 3):** the round-1 report
+    /// mischaracterized this. `assert_estimate_holds` only checks *one*
+    /// cylinder smaller than the estimate, and at cylinder 32 that one probe
+    /// found a near miss (`reserved_needed` a few blocks over what cylinder
+    /// 32 had free) — but a probe one cylinder down is a *local* check, not
+    /// a search for the true minimum, and reading "near miss one cylinder
+    /// down" as "close to minimal" does not follow from it. Measured
+    /// directly: 13 700 files hold at PFS3_MIN_BYTES itself (cylinder 21,
+    /// 10 838 016 bytes) — free 5 306 of 19 006 data blocks, nowhere near
+    /// the always-free twentieth (950). The 33-cylinder estimate was 57 %
+    /// over the size that actually held this content, not "a few blocks
+    /// conservative". 14 000 (`profile(140, 100, ..)`) is the smallest round
+    /// count past the reserved-area step whose one-cylinder-smaller probe is
+    /// itself decisive: verified unchanged after the round-2 model fix (its
+    /// estimate is still 33 264 blocks, and one cylinder smaller still runs
+    /// the writer out of reserved blocks) — see the calibration lines this
+    /// test prints.
     #[test]
     fn many_small_files_do_not_run_out_of_reserved_blocks() {
         let (dirs, files, m) = profile(140, 100, |_| 200);
         assert_estimate_holds("14 000 small files", &dirs, &files, &m);
+    }
+
+    /// CRITICAL 1 (round-2 review): ten drawers holding 1 600 files each,
+    /// with 100-character names (`MODE_LONGFN` allows up to 107,
+    /// `writer.rs:1162`) — the shape that broke the old directory/anode
+    /// model. Measured directly against the old model before this fix: at
+    /// its 10.8 MB estimate (cylinder 21) *and* its 13.9 MB content
+    /// partition (cylinder 27), the real writer ran out of reserved blocks.
+    #[test]
+    fn large_directories_with_long_names_fit_their_estimate() {
+        let (dirs, files, m) = profile_named(10, 1_600, 100, |_| 200);
+        assert_estimate_holds("10 large drawers, 100-char names", &dirs, &files, &m);
+    }
+
+    /// IMPORTANT 2 (round-2 review): below `MAXSMALLDISK`, `libpfs3`'s
+    /// writer can never allocate a second anode index block ("no index
+    /// block slot available", `writer.rs:1014-1024`) — small mode's entire
+    /// anode space is one index block's worth, `pfs3_small_mode_anode_cap`
+    /// blocks regardless of the partition's size (measured against the real
+    /// writer: 25 000 files failed after 20 382 at both a 17 MB and a
+    /// 21.7 MB small-mode partition). `pfs3_fits` must refuse every
+    /// small-mode size once content needs more anodes than that, so
+    /// `pfs3_fit_bytes`'s bisection sizes up past `MAXSMALLDISK`.
+    ///
+    /// This only proves the size crosses the mode boundary, not that the
+    /// content can be written there: filling this content at the returned
+    /// estimate is **not** attempted here. A direct experiment against
+    /// `libpfs3` 0.1.3's SUPERINDEX (large) mode — formatting a volume well
+    /// past `MAXSMALLDISK` and calling `create_dir` on it once — fails
+    /// immediately with `"anode 5 not found"` (`ANODE_ROOTDIR = 5`) at every
+    /// size tried, including far past `MAXSMALLDISK`. Traced to a mismatch
+    /// between `format.rs`'s "Write anode index block" step (which registers
+    /// the *index* block directly as `superindex[0]`, a 2-level structure)
+    /// and `resolve_anode_block`'s large-mode path (`anode.rs:110-125`,
+    /// which expects a 3-level `superindex -> index -> anode` structure and
+    /// so misreads the index block's own first entry as if it were a
+    /// further index pointer) — a `libpfs3` 0.1.3 defect, not an estimate
+    /// question, reported to the round rather than worked around here. Filling
+    /// AGS scale (~140 000 files) — and SUPERINDEX mode generally — is
+    /// round 5's concern per the review's own ruling; this test proves only
+    /// what it can honestly prove today.
+    #[test]
+    fn many_files_cross_into_superindex_mode() {
+        let (_dirs, _files, m) = profile(250, 100, |_| 200); // 25 000 files
+        let bytes = pfs3_fit_bytes(&m).expect("within PFS3's range");
+        let total_blocks = bytes / PFS3_BLOCK;
+        assert!(
+            total_blocks > MAXSMALLDISK,
+            "25 000 files: estimate {bytes} bytes ({total_blocks} blocks) is still small-mode \
+             (MAXSMALLDISK={MAXSMALLDISK} blocks) — the anode cap should have pushed this past it"
+        );
+        println!(
+            "25 000 files: {bytes} bytes ({total_blocks} blocks, MAXSMALLDISK={MAXSMALLDISK} \
+             blocks) — estimate crosses into SUPERINDEX mode, not filled (see doc comment)"
+        );
     }
 
     #[test]
