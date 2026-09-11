@@ -22,6 +22,7 @@ pub mod manifest;
 pub mod multiboot;
 pub mod payload;
 pub mod propose;
+pub mod sizing;
 
 use std::path::Path;
 
