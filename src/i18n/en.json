@@ -2039,7 +2039,8 @@
       "firstGets": "The first AmigaOS keeps {{gb}} GB. The second becomes {{drive}}.",
       "blocked": {
         "noSize": "Say how much of the card the second AmigaOS gets.",
-        "tooLarge": "That leaves the first AmigaOS less than its own {{mb}} MB system partition. Make the second one smaller, or the card larger."
+        "tooLarge": "That leaves the first AmigaOS less than its own {{mb}} MB system partition. Make the second one smaller, or the card larger.",
+        "sizeUnknown": "The card's own size has not come back from ART yet. Wait a moment, or try again."
       }
     },
     "propose": {

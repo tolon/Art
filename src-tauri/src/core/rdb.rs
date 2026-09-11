@@ -797,7 +797,10 @@ pub fn create_rdb_layout(
     let sectors = 63u32;
     let cyl_blocks = heads * sectors;
     let bytes_per_cyl = (cyl_blocks as u64) * (BLOCK_SIZE as u64);
-    let cylinders = u32::try_from(total_bytes.div_ceil(bytes_per_cyl)).map_err(|_| {
+    // **Rounded down (ART-309).** The geometry may describe less than the area
+    // — under one cylinder is lost — but never more: a cylinder the device does
+    // not have is one the Amiga will write past the end of.
+    let cylinders = u32::try_from(total_bytes / bytes_per_cyl).map_err(|_| {
         CoreError::InvalidInput("Hard disk image size is too large to describe in an RDB".into())
     })?;
 
@@ -1303,6 +1306,63 @@ mod dosenv_layout {
 
 #[cfg(test)]
 mod tests {
+    /// **ART-309.** A card's Amiga area is almost never a whole number of
+    /// cylinders. The cylinder count used to be rounded **up**, so the last
+    /// partition — "whatever is left" — ended past the area: 90 112 bytes past
+    /// the end of the owner's own `1card.img`. Asserted by reading the partition
+    /// block back, never by recomputing the writer's arithmetic.
+    #[test]
+    fn the_last_partition_ends_inside_an_area_that_is_not_whole_cylinders() {
+        let bytes_per_cyl = 16u64 * 63 * 512;
+        // The owner's card's area, to the byte.
+        let total = 67_540_877_312u64;
+        assert_ne!(
+            total % bytes_per_cyl,
+            0,
+            "the fixture must not be whole cylinders"
+        );
+
+        let layout = create_rdb_layout(
+            total,
+            &[
+                PartitionSpec {
+                    drive_name: "SDH0".into(),
+                    fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
+                    size_mb: 512,
+                    bootable: true,
+                    boot_priority: 0,
+                    num_buffers: 0,
+                },
+                PartitionSpec {
+                    drive_name: "SDH1".into(),
+                    fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
+                    size_mb: 0,
+                    bootable: false,
+                    boot_priority: 0,
+                    num_buffers: 0,
+                },
+            ],
+            &[],
+        )
+        .unwrap();
+
+        let (_, last_high) = read_partition_extent(&layout.blocks, 2);
+        let ends_at = (u64::from(last_high) + 1) * bytes_per_cyl;
+        assert!(
+            ends_at <= total,
+            "the last partition ends at {ends_at}, past the area's {total} bytes"
+        );
+        assert!(
+            layout.total_size <= total,
+            "the geometry describes {} bytes",
+            layout.total_size
+        );
+        assert!(
+            total - ends_at < bytes_per_cyl,
+            "and it loses less than one cylinder"
+        );
+    }
+
     /// **`size_mb: 0` means the rest, and the rest is all of it.**
     ///
     /// Both of the real PiStorm cards carry `SDH0` and `SDH1`, which is the
@@ -1349,7 +1409,8 @@ mod tests {
         // partition that claims a cylinder the image does not have is one an
         // Amiga will read past the end of.
         let bytes_per_cyl = (16u64 * 63) * 512;
-        let cylinders = total.div_ceil(bytes_per_cyl) as u32;
+        // ART-309: whole cylinders only — the round-up this used to pin is the defect.
+        let cylinders = (total / bytes_per_cyl) as u32;
         assert_eq!(
             second.1,
             cylinders - 1,
@@ -1418,7 +1479,8 @@ mod tests {
         .unwrap();
 
         let bytes_per_cyl = (16u64 * 63) * 512;
-        let cylinders = total.div_ceil(bytes_per_cyl) as u32;
+        // ART-309: whole cylinders only — the round-up this used to pin is the defect.
+        let cylinders = (total / bytes_per_cyl) as u32;
         let (low, high) = read_partition_extent(&image.blocks, 1);
         assert_eq!(low, RESERVED_CYLINDERS);
         assert_eq!(high, cylinders - 1);
@@ -2004,7 +2066,9 @@ mod tests {
         ];
 
         let layout = create_rdb_layout(200 * 1024 * 1024, &partitions, &[]).unwrap();
-        assert!(layout.total_size >= 200 * 1024 * 1024);
+        // ART-309: never more than asked, and less by under one cylinder.
+        let asked = 200 * 1024 * 1024;
+        assert!(layout.total_size <= asked && asked - layout.total_size < 16 * 63 * 512);
         // Only the RDSK block plus one PART block per partition are materialised.
         assert_eq!(layout.blocks.len(), 3 * BLOCK_SIZE);
 

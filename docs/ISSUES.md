@@ -26,6 +26,65 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-310** 🔴 **`libpfs3` 0.1.3's format is wrong: a PFS3 partition over ~4.88 GiB is unmountable, and
+at every size anodes 0–4 are left unreserved** — *found 2026-09-11 in round 1 of the one-button card:
+Task 4's fill tests could not write past MAXSMALLDISK; a controlled experiment located the defect*
+`libpfs3-0.1.3/src/format.rs` (a dependency) · reached through `src-tauri/src/core/preload/native.rs`
+(`NativeFormatter::format_partition`), ART's default PFS3 formatter since SD-2 · **The experiment**
+(out of the repository, `E:\amiga\ProjeART\build\tmp\pfs3-large-exp\` — `mkimg.py`, `src\main.rs`,
+`cmp.py`, `patch.py`, `run_e.py`; images sparse and deleted afterwards): RDB images built by hst-imager
+1.6.616 with the owner's pfs3aio driver as `PDS3`; one variable per arm — who formats — at 1 GiB
+(2 097 648 blocks, control) and 6 GiB (12 583 872 blocks, SUPERINDEX mode):
+
+| Arm | 1 GiB | 6 GiB |
+|---|---|---|
+| libpfs3 formats, hst-imager reads | `fs dir` OK; `fs mkdir` → `ERROR_DISK_FULL at Pfs3.Directory.NewDir` | `fs dir` and `mkdir` → `NullReferenceException at Pfs3.anodes.MakeAnodeBitmap` (not mountable) |
+| hst-imager formats, libpfs3 reads + writes | all OK, and hst lists libpfs3's writes | all OK |
+| libpfs3 formats, libpfs3 writes | OK; hst lists the files, then its `mkdir` → `ERROR_DISK_FULL` | listing the root → `anode 5 not found` |
+
+**Two defects, each confirmed by a one-variable patch.** (1) Large mode: hst's format is three levels
+(`rext.superindex[0]` → an `SB` block → an `IB` → the `AB` holding anode 5); libpfs3's is two
+(`superindex[0]` is an `IB`, `format.rs:230`), while libpfs3's own reader (`anode.rs:110-125`) and writer
+(`writer.rs:966-1013`) expect three. Inserting only the `SB` block makes the volume mount in hst-imager and
+read/write in libpfs3; the control (only the anode markers, no `SB`) still crashes. (2) All sizes:
+libpfs3 leaves anodes 0–4 zero where hst-imager's format marks them reserved (`blocknr = 0xFFFFFFFF`);
+hst's allocator — a C# port of pfs3aio's — then hands out anode 0, its failure value (the first `mkdir`
+fails `DISK_FULL`), and after that the reserved numbers 1–4. Marking anodes 0–4 fixes it; libpfs3's own
+writer skips anodes below 6 (`writer.rs:931`), which is why ART's own writes never showed it.
+**This is the root cause ART-122 worked around** ("`hst-imager`'s first write into a volume
+`NativeFormatter` formatted fails" — answered then by pairing format and fill on one tool).
+**Consequences:** every PFS3 partition ART formatted natively above 10 241 440 blocks is very likely
+unmountable; every smaller one mounts and reads, but an Amiga-side handler that allocates like
+hst-imager's port of pfs3aio may fail its first new directory or hand reserved anode numbers to files.
+**The card planner lands in the affected mode by design** (added by the round's final review, I3).
+MAXSMALLDISK is 10 241 440 blocks (5 243 617 280 bytes). With no content partition,
+`core::card::sizing::plan_card_image` plans Work past it on every label from 8 GB up. On the flow's
+16 · 32 · 64 · 128 GB cards Work is about 13.2, 28.4, 58.8 and 2 × 59.8 GB. Every content partition over
+~5.24 GB is past it too. Work drops below it only on labels of 7 GB or less, or when content partitions
+leave it under ~5.24 GB (arithmetic of the fixed planner, `E:\amiga\ProjeART\build\tmp\final-fix\work-sizes.py`).
+**So round 3, the first round that formats a planned card, must route every volume past MAXSMALLDISK
+through a formatter that is right, never `NativeFormatter`, while this entry is open.** Until now that
+writer-selection rule was recorded only in the round-1 ledger, which is git-ignored.
+`plan_card_image`'s doc now says the same.
+**A third limit, in `libpfs3`'s writer rather than in PFS3.** In small mode, `alloc_anode_block`
+never allocates a second anode index block. It returns `Err(DiskFull("no index block slot available"))`
+as soon as `rootblock.indexblocks[idx_nr]` is unset (`writer.rs:1024`, in the small-mode branch
+`writer.rs:1014-1025`). Its large-mode branch just above allocates index blocks on demand. A small-mode
+volume written by `libpfs3` therefore holds one index block's worth of anodes, 253 × 84 − 6 = 21 246,
+whatever its size. PFS3's small-mode rootblock itself has 99 index-block slots: `MAXSMALLINDEXNR = 98`
+(`libpfs3` `ondisk/mod.rs:71`), read back as a 99-entry array (`ondisk/rootblock.rs:114`). That was
+checked in `libpfs3` 0.1.3's own source, not in pfs3aio's `blocks.h`. ART's sizing models
+`libpfs3`'s cap (`pfs3_small_mode_anode_cap`), so content of more than ~21 000 files is sized past
+MAXSMALLDISK, to at least ~5.24 GB. **This bears on the fix route.** Patching or vendoring `libpfs3`
+could lift this writer limit too and retire that floor. Repairing the two structures after `libpfs3`
+formats, or formatting with hst-imager and filling with `libpfs3`, leaves the writer unchanged, so the
+cap stays.
+**Not proven:** hst-imager is one independent implementation, not pfs3aio on an Amiga or in WinUAE; no
+size with 2048/4096-byte reserved blocks (> ~53 GB) was tried. **Owed:** mount a libpfs3-formatted
+partition under real pfs3aio in WinUAE; the owner's choice of fix — patch/vendor libpfs3's `format.rs`
+(write the `SB` level, mark anodes 0–4), repair the two structures in ART right after libpfs3 formats, or
+format with hst-imager and fill with libpfs3 (arm B: sound at both sizes).
+
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
 the crash itself is still unresolved** — *found 2026-08-15/16, Task 13's
@@ -280,6 +339,89 @@ existing `rom_suitability_is_an_opinion_and_only_where_there_is_one` unchanged a
 the A1200 clause renamed away, the test fails. Full `cargo test --lib` twice `3225 passed; 0 failed;
 58 ignored`; clippy, fmt and the four sweeps clean; `pnpm lint` clean, Vitest `109` / `1655`. Not
 covered by a test: the card plan's sentence itself, which only changed wording.
+
+**ART-309** 🔴 **The last partition of an RDB ART writes can end past the area it lives in** —
+*found 2026-09-11 in a read-only survey of ART's card code for the one-button card design, then
+confirmed against the owner's own card; fixed 2026-09-11 in round 1 of the one-button card work
+(task 1), on `art-one-button-card`*
+`src-tauri/src/core/rdb.rs` (`create_rdb_layout`) · The geometry is fixed at 16 heads × 63 sectors
+(516 096 bytes a cylinder) and the cylinder count was rounded **up**:
+`cylinders = total_bytes.div_ceil(bytes_per_cyl)`; a partition sized `0` ("the rest") ends at
+`cylinders - 1`. When the area is not a whole number of cylinders — and a card area almost never is
+— the last partition's last cylinder lay partly outside the area. The owner's
+`E:/amiga/Amigatolon/Kartlar/1card.img`: the `0x76` area is 67 540 877 312 bytes; ART's own reader
+and the RDB said 130 869 cylinders, SDH1 cylinders 1043–130868, 130 869 × 516 096 =
+67 540 967 424 bytes — **90 112 bytes past the end of the area, which on this card is the end of the
+file**. The Amiga believed that space existed; a write to it would land outside the partition
+table's area, past the end of the card.
+
+**The fix.** The cylinder count rounds **down** —
+`u32::try_from(total_bytes / bytes_per_cyl)` — so the geometry never describes more than the area,
+at the cost of losing under one cylinder. Test:
+`the_last_partition_ends_inside_an_area_that_is_not_whole_cylinders` (red before the fix: *"the last
+partition ends at 67540967424, past the area's 67540877312 bytes"*; green after). Three pinned tests
+that had computed their own expected cylinder count with the same `div_ceil` were corrected to the
+new floor-based arithmetic: `the_last_partition_can_ask_for_whatever_is_left`,
+`a_lone_partition_asking_for_the_rest_takes_the_whole_disk` (`core/rdb.rs`) and
+`large_images_are_created_sparsely` (`core/hdf.rs`, which reads `layout.total_size` as the file
+size) — each now asserts the built size is at or under what was asked, short by less than one
+cylinder, never over. Mutation (task 7, round 1): `total_bytes / bytes_per_cyl` back to
+`total_bytes.div_ceil(bytes_per_cyl)` — killed, the same failing assertion the original RED
+produced. Commit `6b2849f`.
+
+**ART-308** 🔴 **A card image was bigger than the card it is named for: "64" built 64 GiB, and a
+64 GB card holds about 64 × 10⁹ bytes** — *found 2026-09-11 while measuring real distributions for
+the one-button card design; fixed 2026-09-11 in round 1 of the one-button card work (tasks 2 and 6),
+on `art-one-button-card`*
+`src-tauri/src/core/card/sizing.rs` (`image_bytes_for_label`) ·
+`src-tauri/src/commands/card.rs` (`CardBuildRequest.card_gb`, `card_spec`, `card_propose_table`,
+`card_image_bytes`) · `src/components/osbuilder/CardBuilder.tsx` · `src/lib/cardBuild.ts` · The size
+picker offered 2 … 256 and multiplied by `GIB` (2³⁰). The owner's
+`E:/amiga/Amigatolon/Kartlar/1card.img` is 68 719 476 736 bytes, its `0x76` area ending at the
+file's last byte. Card makers state capacity in decimal gigabytes, and every real distribution image
+measured stayed under the decimal figure: CaffeineOS for a 64 GB card is 63 864 569 856 bytes; Zeb's
+WHDLoad pack for a 32 GB card is 31 104 958 464 bytes; MultibootOS for 128 GB is 127 999 672 320
+bytes. ART's "64" image was ~4.7 × 10⁹ bytes past any 64 GB card.
+
+**The fix is wider than the first measurement: nothing that sizes a card image multiplies the
+label by 2³⁰ any more, on either side of the frontier.** *Corrected by the round's final review.*
+This entry used to say the label is "never multiplied by 2³⁰ anywhere in ART", and two sites still
+do it. Neither sizes an image, and both are harmless:
+- `src/pages/OsBuilder.tsx:295` sends `cardGb × 2³⁰` to `distro_check_card`, and
+  `core/distro/mod.rs:173` divides by 2³⁰ again. `cardGb` is a whole number from 1 to 2048, so the
+  round trip is exact, and the check compares the label with the profile's `min_card_gb`. It was
+  left in place deliberately (plan task 6).
+- `src/lib/osBuilder.ts:115` `minCardBytes` returns `min_card_gb × 2³⁰`. That value is passed as the
+  `bytes` parameter of `osBuilder.card.hint`, and neither catalogue's string has a `{{bytes}}`
+  placeholder, so the number is never shown.
+
+`core::card::sizing::image_bytes_for_label(card_gb)` now
+returns `card_gb × 1 000 000 × 950` — 95 % of the decimal label, emu68hatcher's own rule (*"95% of
+decimal GB for SD card safety"*, `config/partition_helpers.py:34-36`, MIT), a margin measured
+against real cards that differ by up to ~2 % under the same label. `CardBuildRequest` carries
+`card_gb: Option<u32>`; when set, `card_spec` computes `total_bytes` from it and ignores the
+two-field pair; `card_propose_table` takes `card_gb: u32` and multiplies internally.
+`CardBuilder.tsx` sends `card_gb: cardGb, total_bytes: 0`, so the card builder no longer multiplies
+a card size by 2³⁰. Its `secondSystemGb * GIB` is the second system's own partition size, not a card
+label. **The second-system split carried the same defect on its own path**, found by task 6's
+review: `secondSystem()` was still fed `cardGb * GIB`, ~7.9 GB larger than the card Rust actually
+builds, so an 8 GB second system silently came out at ~0.67 GB. Fixed by a new
+`card_image_bytes(card_gb)` command returning `image_bytes_for_label` directly — the single source
+of truth, never copied into TypeScript — fetched before the split is computed; the build is blocked,
+not silently split against a guess, while that value is still unknown.
+
+Tests: `a_card_image_is_ninety_five_percent_of_the_decimal_label`,
+`a_card_image_fits_the_smallest_real_card_of_its_label` (every label against the smallest real card
+measured for it — 32/64/128 GB), `a_card_named_by_its_label_is_ninety_five_percent_of_it` (the Rust
+wiring), `card_image_bytes_is_the_labels_ninety_five_percent`; frontend, in
+`CardBuilder.test.tsx`: *"sends the label, not the multiplied bytes (ART-308, wired)"* and *"splits
+from the image Rust actually builds, not the label times 2^30 (ART-308, fix round 1)"*. Mutations
+(task 7, round 1): `* 1_000_000 * CARD_MARGIN_PER_MILLE` → `* 1024 * 1024 * 1024` — killed
+(*"32 GB: 34359738368 > 31914983424"*); `request.card_gb.map(...)` →
+`.map(|gb: u32| u64::from(gb) * 1024 * 1024 * 1024)` — killed (`left: 68719476736 right:
+60800000000`); the frontend's `card_gb: cardGb` request line and the `secondSystem(...)` call's
+first argument — both killed. Commits `089909c`, `3a226fb`, `6ec1ae1`. A card image built by ART
+before this fix needs a card one label larger than the one it was made for.
 
 **ART-306** 🟠 ✅ **Two card-plan warnings reached the screen with their names as `undefined`, and one
 took the wrong sentence** — *found 2026-09-11 while adding ART-305's warning; fixed on the same

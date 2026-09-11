@@ -114,6 +114,13 @@ pub struct CardBuildRequest {
     /// Where the image goes. `SAFE_CREATE`: an existing file is refused.
     pub dest: String,
     pub total_bytes: u64,
+    /// The card's printed size, when the screen chose one by label. The bytes
+    /// are then [`crate::core::card::sizing::image_bytes_for_label`]'s —
+    /// decimal gigabytes, 95 % of them — and `total_bytes` is ignored
+    /// (ART-308: the screen used to multiply by 2³⁰ itself, and "64" was past
+    /// any 64 GB card).
+    #[serde(default)]
+    pub card_gb: Option<u32>,
     /// `0` for the 1.10 GiB measured off both real cards.
     #[serde(default)]
     pub boot_bytes: u64,
@@ -343,7 +350,10 @@ fn card_spec(
     let file_systems = crate::commands::hdf::read_file_systems(&request.file_systems)?;
 
     Ok(CardSpec {
-        total_bytes: request.total_bytes,
+        total_bytes: request
+            .card_gb
+            .map(crate::core::card::sizing::image_bytes_for_label)
+            .unwrap_or(request.total_bytes),
         boot_bytes: request.boot_bytes,
         label: request.label.clone(),
         boot_files,
@@ -450,10 +460,11 @@ fn payload_for(request: &CardBuildRequest) -> CoreResult<crate::core::card::payl
 /// a ROM file would put a second reader beside `core::rom` for one number.
 #[tauri::command]
 pub fn card_propose_table(
-    card_bytes: u64,
+    card_gb: u32,
     fs_type: crate::core::rdb::AmigaHardDiskFs,
     rom_major: Option<u16>,
 ) -> AppResult<crate::core::card::propose::ProposedTable> {
+    let card_bytes = crate::core::card::sizing::image_bytes_for_label(card_gb);
     crate::core::card::propose::propose(card_bytes, fs_type, rom_major)
         .map_err(|refusal| match refusal {
             crate::core::card::propose::ProposalRefusal::CardTooSmall {
@@ -464,6 +475,17 @@ pub fn card_propose_table(
             )),
         })
         .map_err(Into::into)
+}
+
+/// The bytes a card sold as `card_gb` gigabytes gets built at (ART-308).
+///
+/// The single source of truth for a label's size — [`crate::core::card::sizing::image_bytes_for_label`]
+/// — so a screen computing the second system's split, or anything else that
+/// needs the number the image will actually be, asks Rust rather than
+/// carrying `950_000_000` into TypeScript a second time.
+#[tauri::command]
+pub fn card_image_bytes(card_gb: u32) -> u64 {
+    crate::core::card::sizing::image_bytes_for_label(card_gb)
 }
 
 /// What building this card would do. Writes nothing (§92's PREVIEW step).
@@ -1075,6 +1097,7 @@ mod tests {
             kickstart: None,
             dest: dest.display().to_string(),
             total_bytes: 2 * GIB,
+            card_gb: None,
             boot_bytes: 0,
             label: "ART CARD".into(),
             file_systems: Vec::new(),
@@ -1444,6 +1467,27 @@ mod tests {
         assert_eq!(spec.areas[0].partitions[0].drive_name, "SDH0");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **ART-308, wired.** The screen sends the label; the bytes are Rust's.
+    #[test]
+    fn a_card_named_by_its_label_is_ninety_five_percent_of_it() {
+        let (_guard, dir) = scratch("card-label");
+        let mut req = request(&emu68_zip(&dir), &dir.join("card.img"));
+        req.card_gb = Some(64);
+        req.total_bytes = 64 * 1024 * 1024 * 1024; // what the screen used to send
+        let spec = card_spec(&req, Vec::new()).unwrap();
+        assert_eq!(spec.total_bytes, 60_800_000_000);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **ART-308, fix round 1.** The second-system split asked the screen's
+    /// own `cardGb * 2^30` for this number until this command existed, which
+    /// put the split ~7.9 GB past where Rust actually builds a 64 GB card.
+    #[test]
+    fn card_image_bytes_is_the_labels_ninety_five_percent() {
+        assert_eq!(card_image_bytes(64), 60_800_000_000);
     }
 
     /// `SAFE_CREATE` is the build's answer, and it is a bad one to discover

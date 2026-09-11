@@ -1,0 +1,1367 @@
+//! How big a card image and its partitions are — the one-button card
+//! design's § 4 (`docs/superpowers/specs/2026-09-11-one-button-card-design.md`).
+//!
+//! Every number here is measured or read from the code of a project that
+//! works; the sources are in `docs/superpowers/notes/2026-09-11-card-layout-research.md`.
+
+/// The share of a card's printed capacity an image may use, per mille.
+///
+/// **95 %, emu68hatcher's rule** — *"95% of decimal GB for SD card safety"*
+/// (`rootrootde/emu68hatcher`, MIT, `config/partition_helpers.py:34-36`).
+/// Cards carrying one label differ by up to ~2 %: two real "64 GB" cards
+/// expose 62 534 975 488 and 63 864 569 856 bytes, and an image has to fit the
+/// smaller. MultibootOS's last partition ends at 121.60 × 10⁹ on a 128 GB card
+/// — exactly 95 %.
+pub const CARD_MARGIN_PER_MILLE: u64 = 950;
+
+/// The image size for a card sold as `card_gb` gigabytes — **decimal**, the
+/// way every card maker counts (ART-308: this used to be `card_gb × 2³⁰`, and
+/// ART's "64" was 4.7 × 10⁹ bytes past any 64 GB card).
+pub fn image_bytes_for_label(card_gb: u32) -> u64 {
+    u64::from(card_gb) * 1_000_000 * CARD_MARGIN_PER_MILLE
+}
+
+/// One PFS3 block on a card: the partition's own block size.
+pub const PFS3_BLOCK: u64 = 512;
+/// The smallest PFS3 partition worth making (Emu68-Imager's own floor,
+/// `Get-MinimumPartitionSizes.ps1`).
+pub const PFS3_MIN_BYTES: u64 = 10 * 1024 * 1024;
+/// The largest partition PFS3 supports in its normal mode — pfs3aio
+/// `blocks.h:106-120`, *"normaldisk = 213.021.952 blocks of 512 byte"*. Past it
+/// the format is experimental; both established imagers cap at 101 GiB.
+pub const PFS3_MAX_BLOCKS: u64 = 213_021_952;
+pub const PFS3_MAX_BYTES: u64 = PFS3_MAX_BLOCKS * PFS3_BLOCK;
+
+/// The largest MB value a partition may ask `core::rdb::create_rdb_layout`
+/// for and still be built inside PFS3's normal mode — derived, not typed in:
+/// the largest `size_mb` whose whole-cylinder round-up ([`built_bytes`]) is
+/// still at most [`PFS3_MAX_BYTES`]. A cylinder (516 096 B) and a megabyte do
+/// not divide evenly, so not every cylinder count is reachable from an MB
+/// value, and `PFS3_MAX_BYTES` itself is not a whole number of cylinders.
+pub const PFS3_CEILING_MB: u32 = {
+    let mut mb = PFS3_MAX_BYTES / MIB;
+    while built_bytes(mb as u32) > PFS3_MAX_BYTES {
+        mb -= 1;
+    }
+    mb as u32
+};
+/// The largest partition ART plans: what [`PFS3_CEILING_MB`] really builds —
+/// whole cylinders, at most [`PFS3_MAX_BLOCKS`] blocks. The spec's "at most
+/// 101 GiB" (§ 4) is this number, and every partition `plan_card_image`
+/// plans is at most this.
+pub const PFS3_CEILING_BYTES: u64 = built_bytes(PFS3_CEILING_MB);
+const MIB: u64 = 1024 * 1024;
+
+// Ported from `libpfs3` 0.1.3 `format.rs` (itself pfs3aio's `format.c`), and
+// held to it by `the_ported_reserved_area_matches_libpfs3s_own_format`.
+const MAXSMALLBITMAPINDEX: u64 = 4;
+const MAXBITMAPINDEX: u64 = 103;
+const MAXSMALLDISK: u64 = (MAXSMALLBITMAPINDEX + 1) * 253 * 253 * 32;
+const MAXNUMRESERVED: u32 = 4096 + 255 * 1024 * 8;
+
+// The real on-disk sizes the directory/anode model below is built from
+// (round-2 review, CRITICAL 1 — the plan's original "17 fixed bytes" guess
+// undercounted against the real writer and is superseded by these).
+/// `libpfs3` `ondisk/direntry.rs:36` — `DIR_BLOCK_HEADER_SIZE = 0x14`.
+const DIR_BLOCK_HEADER_SIZE: u64 = 20;
+/// `libpfs3` `ondisk/mod.rs:160` — `ANODE_BLOCK_HEADER_SIZE`.
+const ANODE_BLOCK_HEADER_SIZE: u64 = 16;
+/// `libpfs3` `ondisk/mod.rs:112` — one anode on disk: clustersize, blocknr,
+/// next, 4 bytes each.
+const ANODE_SIZE: u64 = 12;
+/// `libpfs3` `ondisk/mod.rs:80-81` — `ANODE_ROOTDIR = 5`, `ANODE_USERFIRST =
+/// 6`: the low anode numbers below `ANODE_USERFIRST` are reserved and are
+/// skipped by the allocator (`writer.rs:931`), all inside the very first
+/// anode block (seqnr 0).
+const ANODE_USERFIRST: u64 = 6;
+
+/// The size of one reserved block, from the partition's size.
+pub fn pfs3_reserved_block_bytes(total_blocks: u64) -> u32 {
+    let mut size = 1024;
+    if total_blocks > MAXSMALLDISK {
+        if total_blocks > (MAXBITMAPINDEX + 1) * 253 * 253 * 32 {
+            size = 2048;
+        }
+        if total_blocks > (MAXBITMAPINDEX + 1) * 509 * 509 * 32 {
+            size = 4096;
+        }
+    }
+    size
+}
+
+/// How many reserved blocks a format sets aside — `calc_num_reserved`.
+pub fn pfs3_num_reserved(total_blocks: u64) -> u32 {
+    let resblocksize = pfs3_reserved_block_bytes(total_blocks);
+    let mut taken: u32 = 32;
+    let mut i: u64 = 2048;
+    while i > 0 && i / 2 < total_blocks {
+        let m: u32 = if i >= 512 * 2048 { 10 } else { 14 };
+        taken += taken * m / 16;
+        i = i.checked_shl(1).unwrap_or(0);
+    }
+    taken /= resblocksize / 1024;
+    taken = taken.saturating_sub(1).min(MAXNUMRESERVED);
+    taken = (taken + 31) & !0x1F;
+    taken.max(32)
+}
+
+/// The blocks a fresh format leaves for file data.
+pub fn pfs3_data_blocks(total_blocks: u64) -> u64 {
+    let rescluster = u64::from(pfs3_reserved_block_bytes(total_blocks)) / PFS3_BLOCK;
+    let reserved_area = rescluster * u64::from(pfs3_num_reserved(total_blocks)) + 2;
+    total_blocks.saturating_sub(reserved_area)
+}
+
+/// Bytes a cylinder holds in ART's fixed RDB geometry (`core::rdb`).
+pub const BYTES_PER_CYLINDER: u64 = 16 * 63 * 512;
+/// A content partition's room to grow, per mille of its fit — MultibootOS's
+/// game partitions are 76-80 % full (research note § 5).
+pub const HEADROOM_PER_MILLE: u64 = 1250;
+
+/// What host content will cost on PFS3, counted the way PFS3 spends it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContentMeasure {
+    pub files: u64,
+    pub directories: u64,
+    /// Every file rounded up to whole 512-byte blocks (at least one, even
+    /// for an empty file — `libpfs3` `writer.rs:148`, `.max(1)`).
+    pub data_blocks: u64,
+    /// Directory entries, `libpfs3`'s own layout (see `entry_bytes` below).
+    pub entry_bytes: u64,
+}
+
+fn entry_bytes(name: &str) -> u64 {
+    // `libpfs3` `writer.rs:1153-1194` `build_dir_entry`: an 18-byte fixed
+    // header, the name, a 1-byte comment-length byte (ART writes no
+    // comment), and a 2-byte flags field (4 only once a single file needs
+    // `MODE_LARGEFILE`'s `fsizex` extension, i.e. >= 4 GiB — out of scope
+    // for ART's content), padded up to even (`writer.rs:1166-1169`). This
+    // supersedes the plan's original "17 fixed bytes" guess, which measured
+    // 3 bytes an entry short against the real writer (round-2 review,
+    // CRITICAL 1). Latin-1 on the Amiga side: one byte a character.
+    let raw = 18 + name.chars().count() as u64 + 1 + 2;
+    raw + raw % 2
+}
+
+impl ContentMeasure {
+    pub fn add_file(&mut self, name: &str, bytes: u64) {
+        self.files += 1;
+        self.data_blocks += bytes.div_ceil(PFS3_BLOCK).max(1);
+        self.entry_bytes += entry_bytes(name);
+    }
+    pub fn add_directory(&mut self, name: &str) {
+        self.directories += 1;
+        self.entry_bytes += entry_bytes(name);
+    }
+    pub fn merge(&mut self, other: &ContentMeasure) {
+        self.files += other.files;
+        self.directories += other.directories;
+        self.data_blocks += other.data_blocks;
+        self.entry_bytes += other.entry_bytes;
+    }
+}
+
+/// Directory blocks `content` needs beyond the one guaranteed to root and to
+/// every directory, packed the way `add_dir_entry` really packs them:
+/// sequentially, a block taking one more entry only while `pos + entry_len <
+/// resblocksize` (`writer.rs:1115` — strictly less, so a block is never
+/// packed to its exact size; the `-1` below is that byte).
+/// `ContentMeasure` does not keep directories apart, so this sums
+/// `entry_bytes` across the whole tree and packs it as one pool — which is
+/// provably still safe: for directories 1..n with entry-byte totals `e_i`
+/// and a shared per-block capacity `C`, `sum(ceil(e_i/C)) <= n +
+/// ceil(sum(e_i)/C)` always (`ceil(x/C) < x/C + 1` for every `i`, summed).
+/// Real per-directory packing can only need *more* blocks than the pooled
+/// estimate, never fewer.
+fn dir_extra_blocks(total_blocks: u64, content: &ContentMeasure) -> u64 {
+    let capacity = u64::from(pfs3_reserved_block_bytes(total_blocks)) - DIR_BLOCK_HEADER_SIZE - 1;
+    content.entry_bytes.div_ceil(capacity)
+}
+
+/// Anodes `content` needs: one a file (`create_anode_chain`), one a
+/// directory (its own first dir block, `create_dir_in`, `writer.rs:167-169`),
+/// and one more for every directory block beyond a directory's guaranteed
+/// first (`extend_anode_chain`, `writer.rs:1126-1136` and `1196-1199`) —
+/// exactly `dir_extra_blocks` above. The plan's original
+/// `files + directories + 16` never charged an anode for directory overflow
+/// blocks at all, which is why it undercounted for large directories
+/// (round-2 review, CRITICAL 1).
+fn anode_count_needed(total_blocks: u64, content: &ContentMeasure) -> u64 {
+    content.files + content.directories + dir_extra_blocks(total_blocks, content)
+}
+
+/// Reserved blocks `content` needs beyond the format's own (bitmap, bitmap
+/// index, the format's own first anode block and its index block, root) —
+/// directory blocks and anode blocks, each always exactly one reserved
+/// block, whatever the reserved block size (`create_dir_in`,
+/// `alloc_anode_block`).
+fn reserved_needed(total_blocks: u64, content: &ContentMeasure) -> u64 {
+    let dir_blocks = (content.directories + 1) + dir_extra_blocks(total_blocks, content);
+    let resblocksize = u64::from(pfs3_reserved_block_bytes(total_blocks));
+    // `rootblock.rs:158-161` `anodes_per_block` — 84 at the 1024-byte
+    // reserved block size every size in ART's normal-mode range uses; the
+    // plan's original `80` over-counted this term on its own (safe by
+    // itself), but that safety margin was too small to cover the missing
+    // `dir_extra_blocks` anode charge above (round-2 review, CRITICAL 1).
+    let anodes_per_block = (resblocksize - ANODE_BLOCK_HEADER_SIZE) / ANODE_SIZE;
+    let anode_count = anode_count_needed(total_blocks, content);
+    // The format's own first anode block (seqnr 0, holding ANODE_ROOTDIR) is
+    // already inside `pfs3_num_reserved`'s count; it offers
+    // `anodes_per_block - ANODE_USERFIRST` slots to new content before a
+    // second anode block (a fresh reserved block) is needed.
+    let first_block_room = anodes_per_block.saturating_sub(ANODE_USERFIRST);
+    let anode_blocks = anode_count
+        .saturating_sub(first_block_room)
+        .div_ceil(anodes_per_block);
+    dir_blocks + anode_blocks
+}
+
+/// The most anodes `libpfs3`'s writer can ever serve below `MAXSMALLDISK`
+/// (small mode), independent of the partition's size (round-2 review,
+/// IMPORTANT 2). Format only ever pre-allocates ONE anode index block
+/// (`format.rs` "Write anode index block", registered as the single entry
+/// `rootblock.indexblocks[0]`), and small mode's own allocator refuses a
+/// second one outright rather than allocating one on demand the way large
+/// (SUPERINDEX) mode does: `alloc_anode_block`'s small-mode branch
+/// (`writer.rs:1014-1024`) returns `Err("no index block slot available")`
+/// the instant `indexblocks[idx_nr]` is unset, where the large-mode branch
+/// just above it (`writer.rs:991-1006`) allocates a fresh index block and
+/// registers it. One index block holds `index_per_block` anode-block
+/// pointers (`(resblocksize/4)-3`, `rootblock.rs:153-155` / `format.rs:113`
+/// — 253 at the 1024-byte reserved block size), each anode block holding
+/// `anodes_per_block` anodes (84 at that size) minus the `ANODE_USERFIRST`
+/// (6) reserved low anode numbers, all inside the very first one. Measured
+/// against the real writer: 25 000 small files failed after 20 382 at both
+/// a 17 MB and a 21.7 MB small-mode partition — consistent with this cap
+/// (253 × 84 - 6 = 21 246) once directory overhead is subtracted.
+fn pfs3_small_mode_anode_cap(total_blocks: u64) -> u64 {
+    let resblocksize = u64::from(pfs3_reserved_block_bytes(total_blocks));
+    let index_per_block = (resblocksize / 4).saturating_sub(3);
+    let anodes_per_block = (resblocksize - ANODE_BLOCK_HEADER_SIZE) / ANODE_SIZE;
+    (index_per_block * anodes_per_block).saturating_sub(ANODE_USERFIRST)
+}
+
+/// Whether `content` fits a fresh PFS3 partition of `total_blocks`, keeping
+/// the always-free twentieth pfs3aio holds back on the Amiga.
+pub fn pfs3_fits(total_blocks: u64, content: &ContentMeasure) -> bool {
+    let data = pfs3_data_blocks(total_blocks);
+    let usable = data - data / 20;
+    // The format itself spends part of the reserved area; the bitmap alone is
+    // data/(253×32) blocks. Leave that and a margin of 8 before counting ours.
+    let format_own = data.div_ceil(253 * 32) + 8;
+    let reserved_free = u64::from(pfs3_num_reserved(total_blocks)).saturating_sub(format_own);
+    if content.data_blocks > usable || reserved_needed(total_blocks, content) > reserved_free {
+        return false;
+    }
+    // Below MAXSMALLDISK, the writer's own anode-space ceiling
+    // (`pfs3_small_mode_anode_cap`) does not grow with `total_blocks` — a
+    // size that otherwise fits must still be refused once content needs
+    // more anodes than that, so `pfs3_fit_bytes`'s bisection sizes up past
+    // MAXSMALLDISK instead of settling on a small-mode size the real writer
+    // would refuse.
+    if total_blocks <= MAXSMALLDISK
+        && anode_count_needed(total_blocks, content) > pfs3_small_mode_anode_cap(total_blocks)
+    {
+        return false;
+    }
+    true
+}
+
+/// The smallest whole-cylinder PFS3 partition `content` fits — `None` when
+/// it does not fit even [`PFS3_CEILING_BYTES`], the largest partition ART
+/// plans. `Some` therefore also means `content` fits at the ceiling itself.
+pub fn pfs3_fit_bytes(content: &ContentMeasure) -> Option<u64> {
+    let blocks_per_cyl = BYTES_PER_CYLINDER / PFS3_BLOCK;
+    let min_cyl = PFS3_MIN_BYTES.div_ceil(BYTES_PER_CYLINDER);
+    let max_cyl = PFS3_CEILING_BYTES / BYTES_PER_CYLINDER;
+    if !pfs3_fits(max_cyl * blocks_per_cyl, content) {
+        return None;
+    }
+    // Fitting does NOT only grow with size: at a reserved-area step
+    // `pfs3_data_blocks` drops (32 cylinders hold 30 782 data blocks, 33 hold
+    // 30 446, 34 hold 31 454), and `reserved_free` shrinks slowly between
+    // steps. The bisection over whole cylinders is still safe — `hi` only
+    // ever holds a size `pfs3_fits` accepted, and the top was checked above,
+    // so the answer always fits — but it is minimal only locally: just past a
+    // step it can pass over a smaller size that also fits, by a few
+    // cylinders at most (round 1 final review, Minor 2).
+    let (mut lo, mut hi) = (min_cyl, max_cyl);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if pfs3_fits(mid * blocks_per_cyl, content) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    Some(lo * BYTES_PER_CYLINDER)
+}
+
+/// A content partition's size: its fit, a quarter again, whole cylinders —
+/// and **at most [`PFS3_CEILING_BYTES`]**: the spec's "at most 101 GiB" is a
+/// clamp, so headroom that would run past the ceiling is cut to it (round 1
+/// final review, I2). `None` only when the bare fit itself is past the
+/// ceiling; a `Some` from [`pfs3_fit_bytes`] means the content fits at the
+/// ceiling, so the clamped size always holds it.
+pub fn content_partition_bytes(content: &ContentMeasure) -> Option<u64> {
+    let fit = pfs3_fit_bytes(content)?;
+    let wanted = (fit * HEADROOM_PER_MILLE / 1000).max(PFS3_MIN_BYTES);
+    let bytes = wanted.div_ceil(BYTES_PER_CYLINDER) * BYTES_PER_CYLINDER;
+    Some(bytes.min(PFS3_CEILING_BYTES))
+}
+
+/// One of the user's own partitions, requested between System and Work.
+///
+/// `content: None` is a partition with nothing measured for it yet: it is
+/// sized by `floor_bytes` alone, and never below `PFS3_MIN_BYTES`.
+pub struct RequestedPartition {
+    pub volume_name: String,
+    pub content: Option<ContentMeasure>,
+    /// The Advanced override, in bytes — `0` for none.
+    pub floor_bytes: u64,
+}
+
+/// Why [`plan_card_image`] could not build a plan.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(
+    tag = "refusal",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum SizingRefusal {
+    DoesNotFit { needed: u64, available: u64 },
+    PartitionTooLarge { volume_name: String, bytes: u64 },
+    CardTooSmall { card_gb: u32 },
+}
+
+/// One partition of the plan, ready for `core::rdb::create_rdb_layout`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PlannedPartition {
+    pub drive_name: String,
+    pub volume_name: String,
+    pub bytes: u64,
+    pub spec: PartitionSpec,
+}
+
+/// A whole card image, laid out: System, the user's partitions, Work.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CardImagePlan {
+    pub image_bytes: u64,
+    pub area_bytes: u64,
+    pub partitions: Vec<PlannedPartition>,
+}
+
+use super::propose::{MEASURED_BOOT_BYTES, MEASURED_BUFFERS, MEASURED_SYSTEM_MB};
+use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
+
+/// Two cylinders at the front of the area hold the RDB (`core::rdb`).
+const RDB_RESERVED_BYTES: u64 = 2 * BYTES_PER_CYLINDER;
+
+/// The bytes `core::rdb::create_rdb_layout` will actually build for a
+/// partition asked for `size_mb` megabytes — MB rounds up to whole
+/// cylinders there (`req_cyls`, `rdb.rs`). This **is** a second copy of that
+/// rounding (round 1 final review, Minor 1); it is held to the writer by
+/// `built_bytes_is_what_the_rdb_writer_builds`, which builds each MB value
+/// through `create_rdb_layout` and reads it back.
+const fn built_bytes(size_mb: u32) -> u64 {
+    (size_mb as u64 * MIB).div_ceil(BYTES_PER_CYLINDER) * BYTES_PER_CYLINDER
+}
+
+/// The MB `spec()` should ask for to build (at least) `wanted` bytes, and
+/// the bytes `core::rdb` will actually build from that MB value.
+///
+/// MB rounds **up** here (round-1 review, I3): `spec()` used to floor
+/// `bytes` to whole MB while `create_rdb_layout` rounds MB up to whole
+/// cylinders — for about half of all cylinder counts `N` (whenever
+/// `N·63 mod 128 >= 63`) that combination silently built one cylinder
+/// *short* of the plan. Rounding up instead makes the built size never
+/// smaller than `wanted` — but because a cylinder (516 096 B) and a
+/// megabyte (1 048 576 B) do not divide evenly, it can land up to three
+/// cylinders *larger* (three when `wanted` is `N` cylinders with `N ≡ 63 mod
+/// 128`: 63 cylinders ask 32 MB, which builds 66). Every caller below uses
+/// the value this returns, not `wanted`, as the partition's real size from
+/// here on, so that slack is never lost track of.
+///
+/// **Nothing past the ceiling.** `wanted` is at most [`PFS3_CEILING_BYTES`]
+/// (every caller clamps first); when the round-up would carry it past, the
+/// answer is the ceiling's own MB value, which still builds at least
+/// `wanted` (round 1 final review, Minor 3: a floor of `PFS3_MAX_BYTES` used
+/// to build 1 712 blocks past `PFS3_MAX_BLOCKS`).
+fn mb_and_built_bytes(wanted: u64) -> (u32, u64) {
+    debug_assert!(wanted <= PFS3_CEILING_BYTES);
+    let size_mb = u32::try_from(wanted.div_ceil(MIB)).unwrap_or(u32::MAX);
+    let built = built_bytes(size_mb);
+    if built > PFS3_CEILING_BYTES {
+        (PFS3_CEILING_MB, PFS3_CEILING_BYTES)
+    } else {
+        (size_mb, built)
+    }
+}
+
+fn spec(drive: &str, size_mb: u32, rest: bool, bootable: bool) -> PartitionSpec {
+    PartitionSpec {
+        drive_name: drive.to_string(),
+        fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
+        size_mb: if rest { 0 } else { size_mb },
+        bootable,
+        boot_priority: 0,
+        num_buffers: MEASURED_BUFFERS,
+    }
+}
+
+/// Work: `rest` (whole cylinders) as `(name, size_mb, built bytes)` pieces,
+/// `None` for the last one — `create_rdb_layout`'s `size_mb: 0`, "the rest".
+///
+/// Split into `n = ceil(rest / PFS3_CEILING_BYTES)` EQUAL pieces once it
+/// would otherwise exceed the ceiling (I2, round-1 review, replacing the old
+/// "PFS3_MAX_BYTES pieces, whatever is left over" split whose leftover piece
+/// had no `PFS3_MIN_BYTES` floor). `rest` is `R` cylinders, and `R <= n ·
+/// ceiling` by `n`'s definition. Each of the first `n - 1` pieces asks for
+/// `ceil(R / n)` cylinders — at most the ceiling, since the ceiling is whole
+/// cylinders — and `mb_and_built_bytes` builds at least that and never past
+/// the ceiling (round 1 final review, Minor 3). Rounding the pieces *up* is
+/// what keeps the last one inside too: it takes `R - (n - 1) · built <= R /
+/// n <= ceiling`. Rounded down instead, the last piece is past the ceiling
+/// for some `R` from `n = 5` on (one rest value at `n = 5`, two at `n = 6`;
+/// `every_work_split_stays_between_the_minimum_and_the_ceiling`). And it
+/// stays far above `PFS3_MIN_BYTES`: `R / n` is over half a ceiling for
+/// every `n >= 2`, and the pieces' round-up takes at most three cylinders
+/// each.
+fn split_work(rest: u64) -> Vec<(String, Option<u32>, u64)> {
+    let n = rest.div_ceil(PFS3_CEILING_BYTES).max(1);
+    let mut work: Vec<(String, Option<u32>, u64)> = Vec::new();
+    if n <= 1 {
+        work.push(("Work".to_string(), None, rest));
+    } else {
+        let piece_target = (rest / BYTES_PER_CYLINDER).div_ceil(n) * BYTES_PER_CYLINDER;
+        let mut remaining = rest;
+        for j in 0..n - 1 {
+            let name = if j == 0 {
+                "Work".to_string()
+            } else {
+                format!("Work_{j}")
+            };
+            let (mb, built) = mb_and_built_bytes(piece_target);
+            work.push((name, Some(mb), built));
+            remaining -= built;
+        }
+        work.push((format!("Work_{}", n - 1), None, remaining));
+    }
+    work
+}
+
+/// Plan a whole card image: System first, `content` in order, then Work —
+/// split at PFS3's largest partition if what is left does not fit one.
+/// No partition it plans is larger than [`PFS3_CEILING_BYTES`].
+///
+/// **ART-310:** every Work partition this plans, on every card size, is past
+/// MAXSMALLDISK (10 241 440 blocks), where `libpfs3` 0.1.3's format is wrong
+/// — a caller must not hand one to `NativeFormatter` while ART-310 is open.
+pub fn plan_card_image(
+    card_gb: u32,
+    content: &[RequestedPartition],
+) -> Result<CardImagePlan, SizingRefusal> {
+    let image_bytes = image_bytes_for_label(card_gb);
+    let area_bytes = image_bytes
+        .checked_sub(MEASURED_BOOT_BYTES)
+        .ok_or(SizingRefusal::CardTooSmall { card_gb })?;
+    let usable = ((area_bytes / BYTES_PER_CYLINDER) * BYTES_PER_CYLINDER)
+        .checked_sub(RDB_RESERVED_BYTES)
+        .ok_or(SizingRefusal::CardTooSmall { card_gb })?;
+
+    // System, then the caller's own partitions, each carried as
+    // `(name, size_mb, built_bytes)` — `built_bytes` (I3) is what
+    // `create_rdb_layout` will actually give it, so the sum below (fed into
+    // the fit check) reflects the real committed size, not the pre-rounding
+    // one.
+    let system_wanted = (u64::from(MEASURED_SYSTEM_MB) * 1024 * 1024).div_ceil(BYTES_PER_CYLINDER)
+        * BYTES_PER_CYLINDER;
+    let (sys_mb, sys_built) = mb_and_built_bytes(system_wanted);
+    let mut committed = vec![("System".to_string(), sys_mb, sys_built)];
+    for part in content {
+        // I1 (round-1 review): an Advanced override past PFS3's own ceiling
+        // is refused by name — `from_content.max(floor_bytes)` alone has no
+        // upper bound, and a large override on a large card would otherwise
+        // plan a PFS3 volume past what PFS3 can format.
+        if part.floor_bytes > PFS3_MAX_BYTES {
+            return Err(SizingRefusal::PartitionTooLarge {
+                volume_name: part.volume_name.clone(),
+                bytes: part.floor_bytes,
+            });
+        }
+        let from_content = match &part.content {
+            Some(m) => {
+                content_partition_bytes(m).ok_or_else(|| SizingRefusal::PartitionTooLarge {
+                    volume_name: part.volume_name.clone(),
+                    bytes: m.data_blocks * PFS3_BLOCK,
+                })?
+            }
+            None => PFS3_MIN_BYTES,
+        };
+        // Clamped at the ceiling (round 1 final review, Minor 3).
+        // `from_content` is already at most the ceiling, so this only ever
+        // bites on a floor in `(PFS3_CEILING_BYTES, PFS3_MAX_BYTES]` — under
+        // one cylinder (304 blocks) past what the RDB writer can build inside
+        // PFS3's normal mode. That floor is met at the ceiling: it asked for
+        // PFS3's largest partition, and this is PFS3's largest partition in
+        // whole cylinders. A floor past `PFS3_MAX_BYTES` is refused above.
+        let wanted = (from_content
+            .max(part.floor_bytes)
+            .div_ceil(BYTES_PER_CYLINDER)
+            * BYTES_PER_CYLINDER)
+            .min(PFS3_CEILING_BYTES);
+        let (mb, built) = mb_and_built_bytes(wanted);
+        committed.push((part.volume_name.clone(), mb, built));
+    }
+
+    let committed_bytes: u64 = committed.iter().map(|(_, _, b)| b).sum();
+    let needed = committed_bytes + PFS3_MIN_BYTES;
+    if needed > usable {
+        return Err(SizingRefusal::DoesNotFit {
+            needed,
+            available: usable,
+        });
+    }
+    let rest = usable - committed_bytes;
+    let work = split_work(rest);
+
+    let mut partitions = Vec::with_capacity(committed.len() + work.len());
+    for (i, (name, mb, bytes)) in committed.into_iter().enumerate() {
+        let drive = format!("SDH{i}");
+        partitions.push(PlannedPartition {
+            spec: spec(&drive, mb, false, i == 0),
+            drive_name: drive,
+            volume_name: name,
+            bytes,
+        });
+    }
+    let work_len = work.len();
+    for (j, (name, mb, bytes)) in work.into_iter().enumerate() {
+        let i = partitions.len();
+        let drive = format!("SDH{i}");
+        let is_last = j + 1 == work_len;
+        partitions.push(PlannedPartition {
+            spec: spec(&drive, mb.unwrap_or(0), is_last, false),
+            drive_name: drive,
+            volume_name: name,
+            bytes,
+        });
+    }
+    Ok(CardImagePlan {
+        image_bytes,
+        area_bytes,
+        partitions,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::rdb::{create_rdb_layout, parse_rdb};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    /// The smallest real card measured for each label (fdisk output in the
+    /// threads the research note cites). An image for that label must fit it.
+    const SMALLEST_MEASURED: [(u32, u64); 3] = [
+        (32, 31_914_983_424),
+        (64, 62_534_975_488),
+        (128, 127_865_454_592),
+    ];
+
+    #[test]
+    fn a_card_image_is_ninety_five_percent_of_the_decimal_label() {
+        assert_eq!(image_bytes_for_label(16), 15_200_000_000);
+        assert_eq!(image_bytes_for_label(32), 30_400_000_000);
+        assert_eq!(image_bytes_for_label(64), 60_800_000_000);
+        assert_eq!(image_bytes_for_label(128), 121_600_000_000);
+    }
+
+    /// **ART-308.** The image for a label fits the smallest card of that label
+    /// measured anywhere — and is no longer 64 GiB for "64".
+    #[test]
+    fn a_card_image_fits_the_smallest_real_card_of_its_label() {
+        for (label, smallest) in SMALLEST_MEASURED {
+            assert!(
+                image_bytes_for_label(label) <= smallest,
+                "{label} GB: {} > {smallest}",
+                image_bytes_for_label(label)
+            );
+        }
+        assert!(image_bytes_for_label(64) < 64 * 1024 * 1024 * 1024);
+    }
+
+    /// An empty file still costs one PFS3 block, not zero (`libpfs3`
+    /// `writer.rs:148`, `.max(1)`) — the doc comment on `data_blocks` states
+    /// this, but nothing had asserted it (Task 7, M10).
+    #[test]
+    fn an_empty_file_still_takes_one_block() {
+        let mut m = ContentMeasure::default();
+        m.add_file("Empty", 0);
+        assert_eq!(m.data_blocks, 1);
+    }
+
+    /// A block device that keeps only the blocks written to it — so a
+    /// 100 GiB PFS3 format costs the reserved area in memory, not 100 GiB of
+    /// disk. `libpfs3`'s own trait, `libpfs3::io::BlockDevice`.
+    #[derive(Default)]
+    struct MemDevice {
+        blocks: Mutex<HashMap<u64, Vec<u8>>>,
+    }
+
+    impl libpfs3::io::BlockDevice for MemDevice {
+        fn read_block(&self, block: u64, buf: &mut [u8]) -> libpfs3::error::Result<()> {
+            match self.blocks.lock().unwrap().get(&block) {
+                Some(data) => buf.copy_from_slice(data),
+                None => buf.fill(0),
+            }
+            Ok(())
+        }
+        fn read_blocks(
+            &self,
+            block: u64,
+            count: u32,
+            buf: &mut [u8],
+        ) -> libpfs3::error::Result<()> {
+            for i in 0..count as usize {
+                self.read_block(block + i as u64, &mut buf[i * 512..(i + 1) * 512])?;
+            }
+            Ok(())
+        }
+        fn block_size(&self) -> u32 {
+            512
+        }
+        fn write_block(&self, block: u64, data: &[u8]) -> libpfs3::error::Result<()> {
+            self.blocks
+                .lock()
+                .unwrap()
+                .insert(block, data[..512].to_vec());
+            Ok(())
+        }
+        fn write_blocks(&self, block: u64, count: u32, data: &[u8]) -> libpfs3::error::Result<()> {
+            for i in 0..count as usize {
+                self.write_block(block + i as u64, &data[i * 512..(i + 1) * 512])?;
+            }
+            Ok(())
+        }
+        fn flush(&self) -> libpfs3::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn format_in_memory(total_blocks: u64) -> (MemDevice, libpfs3::format::FormatResult) {
+        let dev = MemDevice::default();
+        let result = libpfs3::format::format_with_size(
+            &dev,
+            total_blocks,
+            &libpfs3::format::FormatOptions {
+                volume_name: "Test".into(),
+                enable_deldir: false,
+            },
+        )
+        .unwrap();
+        (dev, result)
+    }
+
+    /// The port is `libpfs3`'s own arithmetic or it is nothing: every size
+    /// from the smallest PFS3 partition to the largest normal-mode one,
+    /// formatted for real, and compared to the block.
+    #[test]
+    fn the_ported_reserved_area_matches_libpfs3s_own_format() {
+        for total_blocks in [
+            20_480u64,       // 10 MiB, the minimum
+            204_800,         // 100 MiB
+            2_097_152,       // 1 GiB
+            8_388_608,       // 4 GiB
+            10_485_760,      // 5 GiB, around the SUPERINDEX switch
+            33_554_432,      // 16 GiB
+            125_829_120,     // 60 GiB
+            PFS3_MAX_BLOCKS, // 101.58 GiB
+        ] {
+            let (_dev, result) = format_in_memory(total_blocks);
+            assert_eq!(
+                pfs3_num_reserved(total_blocks),
+                result.num_reserved,
+                "{total_blocks} blocks"
+            );
+            assert_eq!(
+                pfs3_reserved_block_bytes(total_blocks),
+                result.reserved_blksize,
+                "{total_blocks} blocks"
+            );
+            assert_eq!(
+                pfs3_data_blocks(total_blocks),
+                result.data_blocks,
+                "{total_blocks} blocks"
+            );
+        }
+    }
+
+    /// Write `files` into a PFS3 partition of `total_blocks` in memory with
+    /// `libpfs3`'s own writer, and return the free blocks left and the data
+    /// blocks the format made — or the writer's own error.
+    fn fill(
+        total_blocks: u64,
+        dirs: &[String],
+        files: &[(String, usize)],
+    ) -> Result<(u64, u64), libpfs3::error::Error> {
+        let (dev, result) = format_in_memory(total_blocks);
+        let vol = libpfs3::volume::Volume::from_device(Box::new(dev))?;
+        let mut writer = libpfs3::writer::Writer::open(vol)?;
+        for dir in dirs {
+            writer.create_dir(dir)?;
+        }
+        for (path, size) in files {
+            writer.write_file(path, &vec![0x5A; *size])?;
+        }
+        let vol = writer.into_volume();
+        Ok((u64::from(vol.free_blocks()), result.data_blocks))
+    }
+
+    /// A content profile: `dirs` directories, `per_dir` files each, sized by
+    /// `size_of(i)`, names 12 characters — measured into a `ContentMeasure`
+    /// exactly as round 2's walker will measure host files.
+    fn profile(
+        dirs: usize,
+        per_dir: usize,
+        size_of: impl Fn(usize) -> usize,
+    ) -> (Vec<String>, Vec<(String, usize)>, ContentMeasure) {
+        let mut measure = ContentMeasure::default();
+        let mut dir_names = Vec::new();
+        let mut files = Vec::new();
+        for d in 0..dirs {
+            let dir = format!("Drawer{d:06}");
+            measure.add_directory(&dir);
+            for f in 0..per_dir {
+                let name = format!("File{:08}", d * per_dir + f);
+                let size = size_of(d * per_dir + f);
+                measure.add_file(&name, size as u64);
+                files.push((format!("{dir}/{name}"), size));
+            }
+            dir_names.push(dir);
+        }
+        (dir_names, files, measure)
+    }
+
+    /// Like `profile`, but with `name_len`-character names (`MODE_LONGFN`
+    /// allows up to 107, `writer.rs:1162`) — round-2 review's large-directory
+    /// / long-name profiles need names longer than `profile`'s fixed 12
+    /// characters to exercise `entry_bytes`'s real per-entry cost.
+    fn profile_named(
+        dirs: usize,
+        per_dir: usize,
+        name_len: usize,
+        size_of: impl Fn(usize) -> usize,
+    ) -> (Vec<String>, Vec<(String, usize)>, ContentMeasure) {
+        let width = name_len.saturating_sub(1);
+        let mut measure = ContentMeasure::default();
+        let mut dir_names = Vec::new();
+        let mut files = Vec::new();
+        for d in 0..dirs {
+            let dir = format!("D{d:0width$}");
+            measure.add_directory(&dir);
+            for f in 0..per_dir {
+                let idx = d * per_dir + f;
+                let name = format!("F{idx:0width$}");
+                let size = size_of(idx);
+                measure.add_file(&name, size as u64);
+                files.push((format!("{dir}/{name}"), size));
+            }
+            dir_names.push(dir);
+        }
+        (dir_names, files, measure)
+    }
+
+    /// Fill a partition of exactly the estimated size and require that it
+    /// holds everything **and** keeps the twentieth pfs3aio holds back — the
+    /// Amiga's handler refuses new files below it (`allocation.c:158`), and
+    /// `libpfs3`'s writer does not (so the check is ours to make).
+    ///
+    /// "Not wasteful" is **minimality, measured on the real writer**, not a
+    /// byte bound over the fit's free blocks. PFS3's own reserved area is a
+    /// step function of `total_blocks` — `pfs3_num_reserved` jumps 736 -> 1408
+    /// at exactly 32 768 blocks, a threshold inside pfs3aio's own doubling
+    /// series in `calc_num_reserved` — so the smallest whole-cylinder size
+    /// that fits can step past such a boundary and legitimately carry large
+    /// data-block slack (measured: 8924 blocks, ~4.4 MB of a ~16.25 MB
+    /// partition, for 20 000 small files at cylinder 33 vs. cylinder 32 just
+    /// short of the step). No byte bound over that slack is both safe and
+    /// tight, because the slack a step produces is not proportional to the
+    /// content. Minimality asks the question a byte bound cannot: does the
+    /// estimate need every cylinder it has — does one cylinder less fail on
+    /// the real writer, either by refusing the write outright or by breaching
+    /// the always-free twentieth?
+    fn assert_estimate_holds(
+        label: &str,
+        dirs: &[String],
+        files: &[(String, usize)],
+        m: &ContentMeasure,
+    ) {
+        let bytes = pfs3_fit_bytes(m).expect("within PFS3's range");
+        let total_blocks = bytes / PFS3_BLOCK;
+        let (free, data) = fill(total_blocks, dirs, files).unwrap_or_else(|e| {
+            panic!("{label}: the estimated {bytes} bytes did not hold it: {e}")
+        });
+        assert!(
+            free >= data / 20,
+            "{label}: {free} free of {data}, under the always-free twentieth"
+        );
+        // Still the calibration record, even though it no longer gates a bound.
+        let slack = free - data / 20;
+        println!("{label}: {bytes} bytes, {free} free blocks, {slack} blocks past the reserve");
+
+        let cyl_blocks = BYTES_PER_CYLINDER / PFS3_BLOCK;
+        let min_blocks = PFS3_MIN_BYTES / PFS3_BLOCK;
+        let smaller_total = total_blocks.saturating_sub(cyl_blocks);
+        if smaller_total < min_blocks {
+            println!(
+                "{label}: {bytes} bytes is already PFS3_MIN_BYTES, the estimate's floor — no smaller size to check minimality against"
+            );
+            return;
+        }
+        match fill(smaller_total, dirs, files) {
+            Err(libpfs3::error::Error::DiskFull(msg)) => println!(
+                "{label}: one cylinder smaller ({smaller_total} blocks) the writer refused it: {msg}"
+            ),
+            Err(other) => panic!(
+                "{label}: one cylinder smaller ({smaller_total} blocks) failed with an \
+                 unexpected error (not DiskFull): {other}"
+            ),
+            Ok((smaller_free, smaller_data)) => {
+                assert!(
+                    smaller_free < smaller_data / 20,
+                    "{label}: one cylinder smaller ({smaller_total} blocks) still held everything \
+                     with {smaller_free} free of {smaller_data} (>= the always-free twentieth) — \
+                     the estimate is not minimal"
+                );
+                println!(
+                    "{label}: one cylinder smaller ({smaller_total} blocks) the always-free \
+                     twentieth was breached: {smaller_free} free of {smaller_data}"
+                );
+            }
+        }
+    }
+
+    /// The owner's 3.9 tree: 4 599 files, median 521 bytes, half of them 512
+    /// or less (research note § 5). Synthetic, same shape.
+    #[test]
+    fn a_tree_shaped_like_the_owners_fits_its_estimate() {
+        let (dirs, files, m) = profile(277, 17, |i| match i % 4 {
+            0 | 1 => 400,
+            2 => 2_000,
+            _ => 18_000,
+        });
+        assert_estimate_holds("3.9-shaped tree", &dirs, &files, &m);
+    }
+
+    /// AGS1 carries 140 602 files at 23 KB average; directory space comes out
+    /// of PFS3's reserved area, so many small files are what could run it out.
+    ///
+    /// 10 000 files (`profile(100, 100, ..)`) never crosses out of
+    /// `PFS3_MIN_BYTES` — its fit stays at the 21-cylinder floor, so
+    /// `assert_estimate_holds`'s one-cylinder-smaller check has nothing below
+    /// the floor to try and is skipped, proving nothing about reserved-area
+    /// exhaustion. Every count from 10 000 through 13 600 fits the same
+    /// 21-cylinder floor; 13 700 is the smallest count whose *estimate*
+    /// crosses PFS3's reserved-area step (`pfs3_num_reserved` 736 -> 1408 at
+    /// 32 768 blocks — cylinders 22 through 32 all fail `reserved_needed <=
+    /// reserved_free`, cylinder 33 is the next that fits: 33 264 blocks,
+    /// 17 031 168 bytes).
+    ///
+    /// **Corrected (round-2 review, IMPORTANT 3):** the round-1 report
+    /// mischaracterized this. `assert_estimate_holds` only checks *one*
+    /// cylinder smaller than the estimate, and at cylinder 32 that one probe
+    /// found a near miss (`reserved_needed` a few blocks over what cylinder
+    /// 32 had free) — but a probe one cylinder down is a *local* check, not
+    /// a search for the true minimum, and reading "near miss one cylinder
+    /// down" as "close to minimal" does not follow from it. Measured
+    /// directly: 13 700 files hold at PFS3_MIN_BYTES itself (cylinder 21,
+    /// 10 838 016 bytes) — free 5 306 of 19 006 data blocks, nowhere near
+    /// the always-free twentieth (950). The 33-cylinder estimate was 57 %
+    /// over the size that actually held this content, not "a few blocks
+    /// conservative". 14 000 (`profile(140, 100, ..)`) is the smallest round
+    /// count past the reserved-area step whose one-cylinder-smaller probe is
+    /// itself decisive: verified unchanged after the round-2 model fix (its
+    /// estimate is still 33 264 blocks, and one cylinder smaller still runs
+    /// the writer out of reserved blocks) — see the calibration lines this
+    /// test prints.
+    #[test]
+    fn many_small_files_do_not_run_out_of_reserved_blocks() {
+        let (dirs, files, m) = profile(140, 100, |_| 200);
+        assert_estimate_holds("14 000 small files", &dirs, &files, &m);
+    }
+
+    /// CRITICAL 1 (round-2 review): ten drawers holding 1 600 files each,
+    /// with 100-character names (`MODE_LONGFN` allows up to 107,
+    /// `writer.rs:1162`) — the shape that broke the old directory/anode
+    /// model. Measured directly against the old model before this fix: at
+    /// its 10.8 MB estimate (cylinder 21) *and* its 13.9 MB content
+    /// partition (cylinder 27), the real writer ran out of reserved blocks.
+    #[test]
+    fn large_directories_with_long_names_fit_their_estimate() {
+        let (dirs, files, m) = profile_named(10, 1_600, 100, |_| 200);
+        assert_estimate_holds("10 large drawers, 100-char names", &dirs, &files, &m);
+    }
+
+    /// IMPORTANT 2 (round-2 review): below `MAXSMALLDISK`, `libpfs3`'s
+    /// writer can never allocate a second anode index block ("no index
+    /// block slot available", `writer.rs:1014-1024`) — small mode's entire
+    /// anode space is one index block's worth, `pfs3_small_mode_anode_cap`
+    /// blocks regardless of the partition's size (measured against the real
+    /// writer: 25 000 files failed after 20 382 at both a 17 MB and a
+    /// 21.7 MB small-mode partition). `pfs3_fits` must refuse every
+    /// small-mode size once content needs more anodes than that, so
+    /// `pfs3_fit_bytes`'s bisection sizes up past `MAXSMALLDISK`.
+    ///
+    /// This only proves the size crosses the mode boundary, not that the
+    /// content can be written there: filling this content at the returned
+    /// estimate is **not** attempted here. A direct experiment against
+    /// `libpfs3` 0.1.3's SUPERINDEX (large) mode — formatting a volume well
+    /// past `MAXSMALLDISK` and calling `create_dir` on it once — fails
+    /// immediately with `"anode 5 not found"` (`ANODE_ROOTDIR = 5`) at every
+    /// size tried, including far past `MAXSMALLDISK`. Traced to a mismatch
+    /// between `format.rs`'s "Write anode index block" step (which registers
+    /// the *index* block directly as `superindex[0]`, a 2-level structure)
+    /// and `resolve_anode_block`'s large-mode path (`anode.rs:110-125`,
+    /// which expects a 3-level `superindex -> index -> anode` structure and
+    /// so misreads the index block's own first entry as if it were a
+    /// further index pointer) — a `libpfs3` 0.1.3 defect, not an estimate
+    /// question, reported to the round rather than worked around here. Filling
+    /// AGS scale (~140 000 files) — and SUPERINDEX mode generally — is
+    /// round 5's concern per the review's own ruling; this test proves only
+    /// what it can honestly prove today.
+    #[test]
+    fn many_files_cross_into_superindex_mode() {
+        let (_dirs, _files, m) = profile(250, 100, |_| 200); // 25 000 files
+        let bytes = pfs3_fit_bytes(&m).expect("within PFS3's range");
+        let total_blocks = bytes / PFS3_BLOCK;
+        assert!(
+            total_blocks > MAXSMALLDISK,
+            "25 000 files: estimate {bytes} bytes ({total_blocks} blocks) is still small-mode \
+             (MAXSMALLDISK={MAXSMALLDISK} blocks) — the anode cap should have pushed this past it"
+        );
+        println!(
+            "25 000 files: {bytes} bytes ({total_blocks} blocks, MAXSMALLDISK={MAXSMALLDISK} \
+             blocks) — estimate crosses into SUPERINDEX mode, not filled (see doc comment)"
+        );
+    }
+
+    #[test]
+    fn a_few_large_files_fit_their_estimate() {
+        let (dirs, files, m) = profile(2, 10, |_| 4 * 1024 * 1024);
+        assert_estimate_holds("20 large files", &dirs, &files, &m);
+    }
+
+    #[test]
+    fn a_content_partition_is_a_quarter_larger_than_its_fit_and_whole_cylinders() {
+        let (_, _, m) = profile(277, 17, |_| 2_000);
+        let fit = pfs3_fit_bytes(&m).unwrap();
+        let part = content_partition_bytes(&m).unwrap();
+        assert_eq!(part % BYTES_PER_CYLINDER, 0);
+        assert!(part >= fit * HEADROOM_PER_MILLE / 1000);
+        assert!(part >= PFS3_MIN_BYTES);
+        assert!(part < fit * HEADROOM_PER_MILLE / 1000 + BYTES_PER_CYLINDER);
+    }
+
+    #[test]
+    fn content_past_pfs3s_largest_partition_has_no_size() {
+        let mut m = ContentMeasure::default();
+        m.add_file("Huge", PFS3_MAX_BYTES);
+        assert_eq!(pfs3_fit_bytes(&m), None);
+        assert_eq!(content_partition_bytes(&m), None);
+    }
+
+    fn games(mb: u64) -> RequestedPartition {
+        let mut m = ContentMeasure::default();
+        m.add_file("Game", mb * 1024 * 1024);
+        RequestedPartition {
+            volume_name: "Games".into(),
+            content: Some(m),
+            floor_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn a_card_is_system_then_the_users_partitions_then_work() {
+        let plan = plan_card_image(64, &[games(4000)]).unwrap();
+        let names: Vec<&str> = plan
+            .partitions
+            .iter()
+            .map(|p| p.volume_name.as_str())
+            .collect();
+        assert_eq!(names, ["System", "Games", "Work"]);
+        let drives: Vec<&str> = plan
+            .partitions
+            .iter()
+            .map(|p| p.drive_name.as_str())
+            .collect();
+        assert_eq!(drives, ["SDH0", "SDH1", "SDH2"]);
+        assert!(plan.partitions[0].spec.bootable && !plan.partitions[1].spec.bootable);
+        // `PlannedPartition::bytes` is the size `core::rdb` will actually
+        // build (round-1 review, I3) — the whole-cylinder amount MB asked
+        // for rounds *up*, never down, so this can be (and here is) larger
+        // than `MEASURED_SYSTEM_MB` rounded to whole cylinders on its own.
+        let system_wanted = (u64::from(MEASURED_SYSTEM_MB) * 1024 * 1024)
+            .div_ceil(BYTES_PER_CYLINDER)
+            * BYTES_PER_CYLINDER;
+        let (_, system_built) = mb_and_built_bytes(system_wanted);
+        assert_eq!(plan.partitions[0].bytes, system_built);
+        assert!(system_built >= system_wanted);
+        assert_eq!(plan.image_bytes, image_bytes_for_label(64));
+    }
+
+    /// The plan is only a plan if the RDB writer really builds it that way:
+    /// every **non-last** partition, read back from the built RDB, is
+    /// exactly `PlannedPartition::bytes` (never merely "no smaller than the
+    /// area total") and is itself never smaller than what the planner asked
+    /// for before MB rounding; the last partition (`size_mb: 0`, "whatever
+    /// is left") ends inside the area.
+    ///
+    /// `Extra`'s 1627-cylinder floor is deliberately a cylinder count `N`
+    /// with `N·63 mod 128 = 101 >= 63` (1627·63 = 102 501, 102 501 mod 128 =
+    /// 101): under the old floor-to-MB `spec()` this built one cylinder
+    /// short — 1626, not 1627 (round-1 review, I3) — which is exactly the
+    /// defect this test now guards.
+    #[test]
+    fn the_plan_is_one_the_rdb_writer_builds_inside_its_area() {
+        let g4000 = games(4000);
+        let g900 = games(900);
+        let m4000 = g4000.content.unwrap();
+        let m900 = g900.content.unwrap();
+        let extra = RequestedPartition {
+            volume_name: "Extra".into(),
+            content: None,
+            floor_bytes: 1627 * BYTES_PER_CYLINDER,
+        };
+
+        let plan = plan_card_image(32, &[g4000, g900, extra]).unwrap();
+        let specs: Vec<PartitionSpec> = plan.partitions.iter().map(|p| p.spec.clone()).collect();
+        let layout = create_rdb_layout(plan.area_bytes, &specs, &[]).unwrap();
+        assert!(layout.total_size <= plan.area_bytes);
+        assert!(MEASURED_BOOT_BYTES + plan.area_bytes <= plan.image_bytes);
+
+        let parsed = parse_rdb(&layout.blocks).unwrap();
+        assert_eq!(parsed.partitions.len(), plan.partitions.len());
+
+        let wanted_before_rounding = [
+            (u64::from(MEASURED_SYSTEM_MB) * 1024 * 1024).div_ceil(BYTES_PER_CYLINDER)
+                * BYTES_PER_CYLINDER,
+            content_partition_bytes(&m4000).unwrap(),
+            content_partition_bytes(&m900).unwrap(),
+            1627 * BYTES_PER_CYLINDER,
+        ];
+
+        for (i, parsed_part) in parsed.partitions.iter().enumerate() {
+            let planned = &plan.partitions[i];
+            assert_eq!(parsed_part.drive_name, planned.drive_name);
+            let built = parsed_part.byte_length().unwrap();
+            if i + 1 < plan.partitions.len() {
+                assert_eq!(
+                    built, planned.bytes,
+                    "{}: the RDB writer built a different size than the plan said",
+                    planned.volume_name
+                );
+                assert!(
+                    built >= wanted_before_rounding[i],
+                    "{}: built {built} is less than the {} the planner required before rounding",
+                    planned.volume_name,
+                    wanted_before_rounding[i]
+                );
+            } else {
+                let end = parsed_part.byte_offset().unwrap() + built;
+                assert!(
+                    end <= plan.area_bytes,
+                    "the last partition ends at {end}, past the {} byte area",
+                    plan.area_bytes
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn content_that_does_not_fit_is_refused_with_both_numbers() {
+        let err = plan_card_image(16, &[games(20_000)]).unwrap_err();
+        let SizingRefusal::DoesNotFit { needed, available } = err else {
+            panic!("{err:?}")
+        };
+        assert!(needed > available);
+    }
+
+    #[test]
+    fn work_past_pfs3s_largest_partition_is_split() {
+        let plan = plan_card_image(128, &[]).unwrap();
+        let names: Vec<&str> = plan
+            .partitions
+            .iter()
+            .map(|p| p.volume_name.as_str())
+            .collect();
+        assert_eq!(names, ["System", "Work", "Work_1"]);
+        assert!(plan.partitions.iter().all(|p| p.bytes <= PFS3_MAX_BYTES));
+        assert!(plan
+            .partitions
+            .iter()
+            .skip(1)
+            .all(|p| p.bytes >= PFS3_MIN_BYTES));
+    }
+
+    /// A floor chosen so the *old* "`PFS3_MAX_BYTES` pieces, whatever is
+    /// left over" split would have made a final Work piece under
+    /// `PFS3_MIN_BYTES` — computed from the planner's own constants
+    /// (round-1 review, I2), not a hand-picked byte count. The fixed split
+    /// (equal pieces, `n = rest.div_ceil(PFS3_MAX_BYTES)`) keeps every
+    /// piece inside `[PFS3_MIN_BYTES, PFS3_MAX_BYTES]`.
+    #[test]
+    fn work_past_pfs3s_largest_partition_splits_evenly_never_under_the_floor() {
+        let system_wanted = (u64::from(MEASURED_SYSTEM_MB) * 1024 * 1024)
+            .div_ceil(BYTES_PER_CYLINDER)
+            * BYTES_PER_CYLINDER;
+        let usable = (image_bytes_for_label(128) - MEASURED_BOOT_BYTES) / BYTES_PER_CYLINDER
+            * BYTES_PER_CYLINDER
+            - RDB_RESERVED_BYTES;
+        let old_piece = (PFS3_MAX_BYTES / BYTES_PER_CYLINDER) * BYTES_PER_CYLINDER;
+        let old_rest_with_no_content = usable - system_wanted;
+        let old_leftover = old_rest_with_no_content - old_piece;
+        // 5 cylinders: comfortably under PFS3_MIN_BYTES (~20.3 cylinders,
+        // 10 485 760 / 516 096) and comfortably above zero — checked before
+        // the subtraction so an unsigned underflow panics here, loudly,
+        // rather than silently wrapping into a huge `content_wanted`.
+        assert!(old_leftover > 5 * BYTES_PER_CYLINDER);
+        let content_wanted = old_leftover - 5 * BYTES_PER_CYLINDER;
+
+        let mut g = games(1);
+        g.floor_bytes = content_wanted;
+
+        let plan = plan_card_image(128, &[g]).unwrap();
+        let work: Vec<&PlannedPartition> = plan
+            .partitions
+            .iter()
+            .filter(|p| p.volume_name.starts_with("Work"))
+            .collect();
+        assert!(
+            work.len() >= 2,
+            "this scenario is only interesting once Work actually splits"
+        );
+        for p in &work {
+            assert!(
+                p.bytes >= PFS3_MIN_BYTES,
+                "{}: {} is under PFS3_MIN_BYTES",
+                p.volume_name,
+                p.bytes
+            );
+            assert!(
+                p.bytes <= PFS3_MAX_BYTES,
+                "{}: {} is over PFS3_MAX_BYTES",
+                p.volume_name,
+                p.bytes
+            );
+        }
+    }
+
+    #[test]
+    fn an_override_is_a_floor_never_a_way_past_the_card() {
+        let mut g = games(100);
+        g.floor_bytes = 5 * 1024 * 1024 * 1024;
+        let plan = plan_card_image(16, &[g]).unwrap();
+        assert!(plan.partitions[1].bytes >= 5 * 1024 * 1024 * 1024);
+        let mut huge = games(100);
+        huge.floor_bytes = 40 * 1000 * 1000 * 1000;
+        assert!(matches!(
+            plan_card_image(16, &[huge]),
+            Err(SizingRefusal::DoesNotFit { .. })
+        ));
+    }
+
+    /// I1 (round-1 review): a `floor_bytes` past PFS3's own ceiling is
+    /// refused by name, never silently planned past the format's limit —
+    /// `from_content.max(floor_bytes)` alone has no upper bound.
+    #[test]
+    fn an_override_past_pfs3s_own_ceiling_is_refused_by_name() {
+        let mut g = games(100);
+        // Comfortably under the 128 GB card's own usable capacity — the
+        // refusal must come from PFS3's own ceiling, not from the card
+        // running out of room.
+        g.floor_bytes = PFS3_MAX_BYTES + 1024 * 1024 * 1024;
+        let err = plan_card_image(128, &[g]).unwrap_err();
+        let SizingRefusal::PartitionTooLarge { volume_name, bytes } = err else {
+            panic!("{err:?}")
+        };
+        assert_eq!(volume_name, "Games");
+        assert_eq!(bytes, PFS3_MAX_BYTES + 1024 * 1024 * 1024);
+    }
+
+    /// Build `plan` through the real RDB writer, read it back, and require
+    /// that **every** partition — the last one (`size_mb: 0`) included — is
+    /// exactly `PlannedPartition::bytes` and inside PFS3's normal mode.
+    fn assert_built_as_planned(plan: &CardImagePlan) {
+        let specs: Vec<PartitionSpec> = plan.partitions.iter().map(|p| p.spec.clone()).collect();
+        let layout = create_rdb_layout(plan.area_bytes, &specs, &[]).unwrap();
+        assert!(layout.total_size <= plan.area_bytes);
+        let parsed = parse_rdb(&layout.blocks).unwrap();
+        assert_eq!(parsed.partitions.len(), plan.partitions.len());
+        for (read_back, planned) in parsed.partitions.iter().zip(&plan.partitions) {
+            let built = read_back.byte_length().unwrap();
+            assert!(
+                built / PFS3_BLOCK <= PFS3_MAX_BLOCKS,
+                "{}: the RDB writer built {} blocks, past PFS3's normal-mode {PFS3_MAX_BLOCKS}",
+                planned.volume_name,
+                built / PFS3_BLOCK
+            );
+            assert_eq!(
+                built, planned.bytes,
+                "{}: the RDB writer built a different size than the plan said",
+                planned.volume_name
+            );
+        }
+    }
+
+    /// `built_bytes` restates `create_rdb_layout`'s MB-to-cylinder rounding
+    /// (round 1 final review, Minor 1) — so it is held to the writer here, at
+    /// the ceiling and on the cylinder counts where the rounding is widest
+    /// (`N ≡ 63 mod 128`, where asking for `N` cylinders' MB builds `N + 3`).
+    #[test]
+    fn built_bytes_is_what_the_rdb_writer_builds() {
+        let area = 4 * PFS3_MAX_BYTES;
+        for mb in [
+            1u32,
+            31,
+            32,
+            MEASURED_SYSTEM_MB,
+            PFS3_CEILING_MB - 1,
+            PFS3_CEILING_MB,
+            PFS3_CEILING_MB + 1,
+        ] {
+            let specs = [spec("SDH0", mb, false, true), spec("SDH1", 0, true, false)];
+            let layout = create_rdb_layout(area, &specs, &[]).unwrap();
+            let parsed = parse_rdb(&layout.blocks).unwrap();
+            assert_eq!(
+                parsed.partitions[0].byte_length().unwrap(),
+                built_bytes(mb),
+                "{mb} MB"
+            );
+        }
+    }
+
+    /// The ceiling is what it claims: the RDB writer builds it inside PFS3's
+    /// normal mode, and one MB more is already past it.
+    #[test]
+    fn the_ceiling_is_the_largest_size_the_rdb_writer_builds_inside_pfs3s_normal_mode() {
+        assert_eq!(PFS3_CEILING_BYTES % BYTES_PER_CYLINDER, 0);
+        const { assert!(PFS3_CEILING_BYTES / PFS3_BLOCK <= PFS3_MAX_BLOCKS) };
+        assert!(built_bytes(PFS3_CEILING_MB + 1) / PFS3_BLOCK > PFS3_MAX_BLOCKS);
+    }
+
+    /// Minor 3 (round 1 final review), every split rather than a sample:
+    /// each whole-cylinder `rest` that splits into 2 to 6 pieces, one by one
+    /// (211 331 values of `rest` for each `n`). Every piece stays between
+    /// `PFS3_MIN_BYTES` and the ceiling, the pieces add up to `rest`, and
+    /// only the last is "the rest". Rounding the pieces down instead of up
+    /// passes `n` = 2..4 and fails at 5 and 6 — the mutation this closes.
+    #[test]
+    fn every_work_split_stays_between_the_minimum_and_the_ceiling() {
+        let ceiling_cyl = PFS3_CEILING_BYTES / BYTES_PER_CYLINDER;
+        for n in 2..=6u64 {
+            for r in (n - 1) * ceiling_cyl + 1..=n * ceiling_cyl {
+                let rest = r * BYTES_PER_CYLINDER;
+                let work = split_work(rest);
+                assert_eq!(work.len() as u64, n, "{r} cylinders");
+                assert_eq!(work.iter().map(|(_, _, b)| b).sum::<u64>(), rest);
+                for (i, (name, mb, bytes)) in work.iter().enumerate() {
+                    assert!(
+                        (PFS3_MIN_BYTES..=PFS3_CEILING_BYTES).contains(bytes),
+                        "{r} cylinders in {n}: {name} is {bytes} bytes"
+                    );
+                    assert_eq!(mb.is_none(), i + 1 == work.len(), "{name}");
+                }
+            }
+        }
+    }
+
+    /// I2 (round 1 final review): the spec's "at most 101 GiB" is a clamp.
+    /// Content whose bare fit is inside the ceiling but whose quarter of
+    /// headroom is not gets exactly the ceiling — never a refusal.
+    #[test]
+    fn a_content_partition_clamps_its_headroom_at_the_ceiling_rather_than_refusing() {
+        let mut m = ContentMeasure::default();
+        m.add_file("Big", 85 * 1024 * 1024 * 1024);
+        let fit = pfs3_fit_bytes(&m).expect("85 GiB fits one PFS3 partition");
+        assert!(fit <= PFS3_CEILING_BYTES);
+        assert!(
+            fit * HEADROOM_PER_MILLE / 1000 > PFS3_CEILING_BYTES,
+            "the scenario needs the headroom past the ceiling"
+        );
+        assert_eq!(content_partition_bytes(&m), Some(PFS3_CEILING_BYTES));
+
+        let plan = plan_card_image(
+            128,
+            &[RequestedPartition {
+                volume_name: "Games".into(),
+                content: Some(m),
+                floor_bytes: 0,
+            }],
+        )
+        .unwrap();
+        assert_eq!(plan.partitions[1].bytes, PFS3_CEILING_BYTES);
+        assert_built_as_planned(&plan);
+    }
+
+    /// Minor 3 (round 1 final review): a floor of exactly `PFS3_MAX_BYTES`
+    /// is planned, not refused — and the partition the RDB writer builds
+    /// from it stays inside PFS3's normal mode (it used to build 211 333
+    /// cylinders, 1 712 blocks past `PFS3_MAX_BLOCKS`).
+    #[test]
+    fn a_floor_at_pfs3s_maximum_builds_inside_pfs3s_normal_mode() {
+        let mut g = games(1);
+        g.floor_bytes = PFS3_MAX_BYTES;
+        let plan = plan_card_image(128, &[g]).unwrap();
+        assert_built_as_planned(&plan);
+        assert_eq!(plan.partitions[1].bytes, PFS3_CEILING_BYTES);
+    }
+
+    /// Minor 3 (round 1 final review): a Work split whose pieces sit at the
+    /// ceiling stays within it. A 256 GB card and a floor that leaves Work
+    /// within 300 cylinders either side of two ceilings — every plan, every
+    /// piece, read back through the RDB writer. At `d484273` two of these
+    /// plans built a Work piece at 211 333 cylinders.
+    #[test]
+    fn a_work_split_at_the_ceiling_stays_within_it() {
+        let (_, system_built) = mb_and_built_bytes(
+            (u64::from(MEASURED_SYSTEM_MB) * 1024 * 1024).div_ceil(BYTES_PER_CYLINDER)
+                * BYTES_PER_CYLINDER,
+        );
+        let usable = (image_bytes_for_label(256) - MEASURED_BOOT_BYTES) / BYTES_PER_CYLINDER
+            * BYTES_PER_CYLINDER
+            - RDB_RESERVED_BYTES;
+        let floor_for_two_ceilings = usable - system_built - 2 * PFS3_CEILING_BYTES;
+        let mut at_the_ceiling = 0;
+        for k in 0..=600u64 {
+            let floor = floor_for_two_ceilings + k * BYTES_PER_CYLINDER - 300 * BYTES_PER_CYLINDER;
+            let plan = plan_card_image(
+                256,
+                &[RequestedPartition {
+                    volume_name: "Extra".into(),
+                    content: None,
+                    floor_bytes: floor,
+                }],
+            )
+            .unwrap();
+            assert!(
+                plan.partitions
+                    .iter()
+                    .filter(|p| p.volume_name.starts_with("Work"))
+                    .count()
+                    >= 2,
+                "every plan in the sweep splits Work"
+            );
+            assert_built_as_planned(&plan);
+            at_the_ceiling += plan
+                .partitions
+                .iter()
+                .filter(|p| p.volume_name.starts_with("Work") && p.bytes == PFS3_CEILING_BYTES)
+                .count();
+        }
+        assert!(
+            at_the_ceiling > 0,
+            "the sweep never put a Work piece at the ceiling, so it proved nothing"
+        );
+    }
+}

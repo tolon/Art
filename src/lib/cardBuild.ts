@@ -44,6 +44,9 @@ export interface CardBuildRequest {
   /** Where the image goes. SAFE_CREATE: an existing file is refused. */
   dest: string;
   total_bytes: number;
+  /** The card's printed size, when the screen chose one by label. Rust does
+   *  the multiplying (ART-308) — when set, `total_bytes` is ignored. */
+  card_gb?: number | null;
   /** 0 for the 1.10 GiB measured off both real cards. */
   boot_bytes: number;
   label: string;
@@ -422,15 +425,27 @@ export function findingPhrase(finding: ManifestFinding): Phrase {
  * call whenever the size or the filesystem changes.
  */
 export async function cardProposeTable(
-  cardBytes: number,
+  cardGb: number,
   fsType: AmigaHardDiskFs,
   romMajor: number | null
 ): Promise<ProposedTable> {
   return invoke<ProposedTable>("card_propose_table", {
-    cardBytes,
+    cardGb,
     fsType,
     romMajor,
   });
+}
+
+/**
+ * The bytes a card sold as `cardGb` gigabytes gets built at (ART-308).
+ *
+ * The single source of truth for a label's size is Rust's
+ * `image_bytes_for_label` - anything that needs the number the image will
+ * actually be (the second-system split, in particular) asks here rather than
+ * carrying the 95%-of-decimal-GB arithmetic into TypeScript a second time.
+ */
+export async function cardImageBytes(cardGb: number): Promise<number> {
+  return invoke<number>("card_image_bytes", { cardGb });
 }
 
 export async function cardPlanBuild(request: CardBuildRequest): Promise<CardBuildPlan> {

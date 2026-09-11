@@ -47,6 +47,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 
 const planBuildMock = vi.hoisted(() => vi.fn());
 const proposeMock = vi.hoisted(() => vi.fn());
+const imageBytesMock = vi.hoisted(() => vi.fn());
 const buildMock = vi.hoisted(() => vi.fn());
 const checkImageMock = vi.hoisted(() => vi.fn());
 const intakeMock = vi.hoisted(() => vi.fn());
@@ -60,6 +61,7 @@ vi.mock("@/lib/cardBuild", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/cardBuild")>()),
   cardPlanBuild: planBuildMock,
   cardProposeTable: proposeMock,
+  cardImageBytes: imageBytesMock,
   cardBuild: buildMock,
   cardCheckImage: checkImageMock,
   cardIntake: intakeMock,
@@ -95,6 +97,11 @@ const { DEFAULT_SETTINGS } = await import("@/lib/settings");
 
 beforeEach(() => {
   useSettingsStore.setState({ loaded: false, settings: DEFAULT_SETTINGS });
+  // The real command's own arithmetic (`image_bytes_for_label`), so a test
+  // that does not care about the fetch still gets the number Rust would
+  // actually build - not a fixed stand-in that would hide ART-308 coming
+  // back on this path. A test that cares overrides this before `mount()`.
+  imageBytesMock.mockImplementation((cardGb: number) => Promise.resolve(cardGb * 950_000_000));
 });
 
 afterEach(async () => {
@@ -394,6 +401,53 @@ describe("a second AmigaOS on the same card (SD-3 G16)", () => {
     const request = planBuildMock.mock.calls.at(-1)?.[0];
     expect(request?.extra_disks).toBeUndefined();
   });
+
+  it("splits from the image Rust actually builds, not the label times 2^30 (ART-308, fix round 1)", async () => {
+    // A 64 GB card builds at 60 800 000 000 bytes (`image_bytes_for_label`) -
+    // 4.7 GB short of 64 * 2^30. The old `cardGb * GIB` put the split there
+    // instead, which is ~7.9 GB past where Rust actually cuts the card for an
+    // 8 GB second system.
+    seedTwoSystems({ "cardBuilder.cardGb": 64, "cardBuilder.secondSystemGb": 8 });
+    planBuildMock.mockResolvedValue(planWith(false));
+    mount();
+
+    const preview = await screen.findByRole("button", { name: /preview/i });
+    await waitFor(() => expect((preview as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(preview);
+
+    await waitFor(() => expect(planBuildMock).toHaveBeenCalled());
+    const request = planBuildMock.mock.calls.at(-1)?.[0];
+
+    expect(imageBytesMock).toHaveBeenCalledWith(64);
+    // No boot partition override in this test: 0 MiB, the measured default.
+    expect(request.first_disk_bytes).toBe(60_800_000_000 - 8 * 1024 ** 3);
+  });
+
+  it("blocks the build rather than split against a guess while the card's real size is still unknown", async () => {
+    seedTwoSystems({ "cardBuilder.cardGb": 64, "cardBuilder.secondSystemGb": 8 });
+    // Never resolves - the fetch is still in flight for the whole test.
+    imageBytesMock.mockImplementation(() => new Promise<number>(() => {}));
+    planBuildMock.mockResolvedValue(planWith(false));
+    mount();
+
+    const preview = await screen.findByRole("button", { name: /preview/i });
+    await waitFor(() => expect((preview as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(preview);
+    await waitFor(() => expect(planBuildMock).toHaveBeenCalled());
+
+    // Blocked, not silently planned as one disk and not split against a
+    // guess: the plan itself still succeeds (one disk, same as a refused
+    // split), and Build is disabled for the same reason a refused split
+    // disables it.
+    const request = planBuildMock.mock.calls.at(-1)?.[0];
+    expect(request.extra_disks).toBeUndefined();
+    expect(request.first_disk_bytes).toBeUndefined();
+    const build = screen.getByRole("button", { name: /build/i });
+    expect(
+      (build as HTMLButtonElement).disabled,
+      "a card asked for with two systems must not be built with one while the split is unresolved"
+    ).toBe(true);
+  });
 });
 
 describe("a proposed volume table (SD-5 G13)", () => {
@@ -490,5 +544,33 @@ describe("a proposed volume table (SD-5 G13)", () => {
     const request = planBuildMock.mock.calls.at(-1)?.[0];
     expect(request.partitions[0].drive_name).toBe("SDH0");
     expect(request.partitions[0].size_mb).toBe(512);
+  });
+
+  it("sends the label, not the multiplied bytes (ART-308, wired)", async () => {
+    useSettingsStore.setState({
+      loaded: true,
+      settings: {
+        ...DEFAULT_SETTINGS,
+        uxMode: "power",
+        remembered: { ...ANSWERED, "cardBuilder.useProposed": true, "cardBuilder.cardGb": 64 },
+      },
+    });
+    proposeMock.mockResolvedValue(SPLIT);
+    planBuildMock.mockResolvedValue(planWith(false));
+    mount();
+
+    // The proposal itself is asked for with the label - Rust does the
+    // multiplying (ART-308), so the screen must never send 64 * 2^30 again.
+    await waitFor(() => expect(proposeMock).toHaveBeenCalled());
+    expect(proposeMock.mock.calls.at(-1)?.[0]).toBe(64);
+
+    const preview = await screen.findByRole("button", { name: /preview/i });
+    await waitFor(() => expect((preview as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(preview);
+    await waitFor(() => expect(planBuildMock).toHaveBeenCalled());
+
+    const request = planBuildMock.mock.calls.at(-1)?.[0];
+    expect(request.card_gb).toBe(64);
+    expect(request.total_bytes).toBe(0);
   });
 });
