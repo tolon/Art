@@ -491,4 +491,32 @@ describe("a proposed volume table (SD-5 G13)", () => {
     expect(request.partitions[0].drive_name).toBe("SDH0");
     expect(request.partitions[0].size_mb).toBe(512);
   });
+
+  it("sends the label, not the multiplied bytes (ART-308, wired)", async () => {
+    useSettingsStore.setState({
+      loaded: true,
+      settings: {
+        ...DEFAULT_SETTINGS,
+        uxMode: "power",
+        remembered: { ...ANSWERED, "cardBuilder.useProposed": true, "cardBuilder.cardGb": 64 },
+      },
+    });
+    proposeMock.mockResolvedValue(SPLIT);
+    planBuildMock.mockResolvedValue(planWith(false));
+    mount();
+
+    // The proposal itself is asked for with the label - Rust does the
+    // multiplying (ART-308), so the screen must never send 64 * 2^30 again.
+    await waitFor(() => expect(proposeMock).toHaveBeenCalled());
+    expect(proposeMock.mock.calls.at(-1)?.[0]).toBe(64);
+
+    const preview = await screen.findByRole("button", { name: /preview/i });
+    await waitFor(() => expect((preview as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(preview);
+    await waitFor(() => expect(planBuildMock).toHaveBeenCalled());
+
+    const request = planBuildMock.mock.calls.at(-1)?.[0];
+    expect(request.card_gb).toBe(64);
+    expect(request.total_bytes).toBe(0);
+  });
 });

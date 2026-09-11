@@ -321,7 +321,7 @@ export function CardBuilder() {
     let current = true;
     void (async () => {
       try {
-        const table = await cardProposeTable(cardGb * GIB, fsType, romMajor);
+        const table = await cardProposeTable(cardGb, fsType, romMajor);
         if (current) {
           setProposed(table);
           setProposeError(null);
@@ -345,7 +345,8 @@ export function CardBuilder() {
     file_systems: fileSystemInputsFor(fsType, fsDriver),
     kickstart,
     dest: dest ?? "",
-    total_bytes: cardGb * GIB,
+    total_bytes: 0,
+    card_gb: cardGb,
     boot_bytes: bootMib * 1024 * 1024,
     label,
     hardware,
