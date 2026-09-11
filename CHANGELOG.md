@@ -162,6 +162,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   separate "archives folder" setting. The folder the file came from joins the
   one folder list the whole build uses, where it is visible on the Amiga files
   tab and can be removed there.
+- **Card images fit the card they are named for.** A card picked as "64" used
+  to build a 64 GiB image — about 4.7 GB bigger than any real 64 GB card, and
+  large enough to fail or get silently truncated when written. ART now sizes
+  the image the way card makers state capacity, in decimal gigabytes, with
+  the same safety margin the established card-writing projects use — and this
+  is never done twice against two different sizes: building a second AmigaOS
+  on the same card now splits it from the same size Rust actually built,
+  where before it split against the old, too-large figure and could make the
+  second system far smaller than asked. ([ART-308](docs/ISSUES.md))
+- **The last partition of a card no longer ends past the card.** A card's
+  usable area is almost never a whole number of cylinders, and the last
+  partition — "whatever is left" — used to round up to a cylinder the card
+  does not have. It now rounds down, losing under one cylinder rather than
+  claiming space that is not there. ([ART-309](docs/ISSUES.md))
 
 ## [0.9.1] - 2026-09-08
 

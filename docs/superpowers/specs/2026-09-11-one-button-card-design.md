@@ -95,8 +95,15 @@ All figures are sourced in the research note; the table is the rule.
 | Work | the rest; over 101 GiB it is split into Work, Work_1 … | Emu68-Imager, emu68hatcher |
 | Area end | the last partition ends inside its `0x76` area | ART-309 |
 
-**`estimate_pfs3`** — for a set of host files: every file rounded up to whole 512-byte blocks, plus
-directory entries (17 bytes + name, in 1 KB directory blocks) and anodes, plus the format's reserved
+**`estimate_pfs3`** — for a set of host files: every file rounded up to whole 512-byte blocks (an empty
+file still one), plus directory blocks and anodes **as `libpfs3` 0.1.3's writer actually spends them**
+(corrected in round 1's task review, 2026-09-11: an entry is `18 + name + 1 + 2` bytes padded to even,
+never split across a 1 KB directory block, and each extra directory block costs an anode —
+`writer.rs:1115, 1166-1189`; the "17 bytes + name" first written here was pfs3aio's struct, not what
+ART's writer lays down, and a reviewer's measurement showed 16 000 files in 10 directories refused at the
+estimate), plus — below `MAXSMALLDISK` (10 241 440 blocks, ~4.88 GiB) — `libpfs3`'s small-mode ceiling
+of one anode index block (~21 252 anodes, `writer.rs:1014-1024`), past which the estimate sizes the
+partition up into SUPERINDEX mode rather than certify content the writer refuses; plus the format's reserved
 area (`CalcNumReserved`, 0.75–2.5 %), plus pfs3aio's **always-free 5 %** (`format.c:466`). The formula
 comes from pfs3aio's code and **is not trusted until it is measured** against ART's own `libpfs3`
 (§8.1).
