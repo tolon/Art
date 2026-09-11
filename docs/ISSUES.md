@@ -26,6 +26,40 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-309** 🔴 **The last partition of an RDB ART writes can end past the area it lives in** —
+*found 2026-09-11 in a read-only survey of ART's card code for the one-button card design, then
+confirmed against the owner's own card*
+`src-tauri/src/core/rdb.rs` (`create_rdb_layout`) · The geometry is fixed at 16 heads × 63 sectors
+(516 096 bytes a cylinder) and the cylinder count is rounded **up**:
+`cylinders = total_bytes.div_ceil(bytes_per_cyl)` (`rdb.rs:800`); a partition sized `0` ("the rest")
+ends at `cylinders - 1` (`rdb.rs:946-947`). When the area is not a whole number of cylinders — and a
+card area almost never is — the last partition's last cylinder lies partly outside the area. The
+owner's `E:/amiga/Amigatolon/Kartlar/1card.img`: the `0x76` area is 67 540 877 312 bytes; ART's own
+reader and the RDB say 130 869 cylinders, SDH1 cylinders 1043–130868, which is 130 869 × 516 096 =
+67 540 967 424 bytes — **90 112 bytes past the end of the area, which on this card is the end of the
+file**. The Amiga believes that space exists; a write to it lands outside the partition table's area,
+past the end of the card. Nothing tests the last partition's end against the area's size. **Fix
+owed:** round the cylinder count down (the space lost is under one cylinder), with a test that builds
+an area whose size is not a multiple of a cylinder and asserts the last partition ends inside it.
+
+**ART-308** 🔴 **A card image is bigger than the card it is named for: "64" builds 64 GiB, and a
+64 GB card holds about 64 × 10⁹ bytes** — *found 2026-09-11 while measuring real distributions for
+the one-button card design*
+`src/components/osbuilder/CardBuilder.tsx` (`CARD_SIZES_GB`, `total_bytes: cardGb * GIB`) · The size
+picker offers 2 … 256 and multiplies by `GIB` (2³⁰). The owner's `E:/amiga/Amigatolon/Kartlar/1card.img`
+is 68 719 476 736 bytes, its `0x76` area ending at the file's last byte. Card makers state capacity in
+decimal gigabytes, and every real distribution image measured the same day stays under the decimal
+figure: CaffeineOS for a 64 GB card is 63 864 569 856 bytes with its last partition ending at
+61 714 989 056; Zeb's WHDLoad pack for a 32 GB card is 31 104 958 464 bytes, last partition ending at
+30 657 216 512; MultibootOS for 128 GB is 127 999 672 320 bytes (MBR read byte by byte, RDBs by ART's
+own reader). So ART's "64" image is ~4.7 × 10⁹ bytes past any 64 GB card: an imager either refuses it
+or writes it truncated, and a truncated card's partition table and RDB describe space the card does
+not have — the Amiga's last partition runs off the end. Nothing tests the size against a real card's
+capacity. **Fix owed:** size in decimal gigabytes with a margin taken from measured cards and the
+established projects (research in progress for the one-button card design); a card image already built
+by ART needs a card one label larger until then. The owner has been told not to write `1card.img` to a
+64 GB card.
+
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
 the crash itself is still unresolved** — *found 2026-08-15/16, Task 13's
