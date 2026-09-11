@@ -354,15 +354,20 @@ pub struct RomCopyOutcome {
 /// A **note**, never a block: people boot 1.3 on an A1200 on purpose, and an
 /// unrecognised ROM has no opinion attached at all. `compatible_models` is a
 /// list of names from `core/rom`'s table, so this is a name match and says so.
+///
+/// **Except the A1200's, which suits every PiStorm Amiga (ART-307).** This is
+/// asked only on the PiStorm screens, where Emu68 loads the Kickstart itself,
+/// and there the A1200 ROM is the one recommended "regardless of the Amiga
+/// model" (Emu68-Imager's own docs), boots an A2000 "without issue" (Emu68
+/// issue #148) and the owner's A500 (2026-09-11). Sources and what they do not
+/// cover: `docs/superpowers/notes/2026-09-11-pistorm-kickstart-and-4gb.md`.
 pub fn rom_suits(info: &RomInfo, amiga: hardware::AmigaTarget) -> Option<bool> {
     if info.compatible_models.is_empty() || info.version == "Custom" {
         return None;
     }
-    if info
-        .compatible_models
-        .iter()
-        .any(|model| model.eq_ignore_ascii_case("All Models"))
-    {
+    if info.compatible_models.iter().any(|model| {
+        model.eq_ignore_ascii_case("All Models") || model.eq_ignore_ascii_case("A1200")
+    }) {
         return Some(true);
     }
     let wanted = match amiga {
@@ -927,6 +932,51 @@ initramfs kick31.rom
             None,
             "an unrecognised ROM has no opinion attached"
         );
+    }
+
+    /// **ART-307.** On a PiStorm, Emu68 loads the Kickstart itself and the A1200's
+    /// is the one its guides recommend on every model — the owner's own A500
+    /// boots it (2026-09-11), the Emu68-Imager docs say so "regardless of the
+    /// Amiga model", and an A2000 in Emu68 issue #148 runs it "without issue".
+    /// The name match said otherwise and the card plan turned that into "a
+    /// machine that does not come up".
+    #[test]
+    fn the_a1200_kickstart_suits_every_pistorm_amiga() {
+        use hardware::AmigaTarget;
+
+        let a1200 = RomInfo {
+            name: "Kickstart 3.1".into(),
+            version: "3.1".into(),
+            revision: "40.68".into(),
+            size_bytes: 512 * 1024,
+            sha256: String::new(),
+            crc32: String::new(),
+            is_cloanto: false,
+            key_available: false,
+            is_aros: false,
+            checksum: crate::core::rom::RomChecksum::Valid,
+            compatible_models: vec!["A1200".into()],
+            file_path: String::new(),
+            major: Some(40),
+            whdload_crc16: None,
+        };
+        for amiga in [
+            AmigaTarget::A500,
+            AmigaTarget::A1000,
+            AmigaTarget::A2000,
+            AmigaTarget::A600,
+            AmigaTarget::A1200,
+        ] {
+            assert_eq!(rom_suits(&a1200, amiga), Some(true), "{amiga:?}");
+        }
+
+        // The rest of the name match is unchanged: the Emu68-Imager FAQ is
+        // explicit that an A4000 ROM is not the one to use.
+        let a4000 = RomInfo {
+            compatible_models: vec!["A4000".into()],
+            ..a1200
+        };
+        assert_eq!(rom_suits(&a4000, AmigaTarget::A500), Some(false));
     }
 
     // ---- F3: named firmware sets ------------------------------------------
