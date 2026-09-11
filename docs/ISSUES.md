@@ -56,6 +56,29 @@ writer skips anodes below 6 (`writer.rs:931`), which is why ART's own writes nev
 **Consequences:** every PFS3 partition ART formatted natively above 10 241 440 blocks is very likely
 unmountable; every smaller one mounts and reads, but an Amiga-side handler that allocates like
 hst-imager's port of pfs3aio may fail its first new directory or hand reserved anode numbers to files.
+**The card planner lands in the affected mode by design** (added by the round's final review, I3).
+MAXSMALLDISK is 10 241 440 blocks (5 243 617 280 bytes). With no content partition,
+`core::card::sizing::plan_card_image` plans Work past it on every label from 8 GB up. On the flow's
+16 · 32 · 64 · 128 GB cards Work is about 13.2, 28.4, 58.8 and 2 × 59.8 GB. Every content partition over
+~5.24 GB is past it too. Work drops below it only on labels of 7 GB or less, or when content partitions
+leave it under ~5.24 GB (arithmetic of the fixed planner, `E:\amiga\ProjeART\build\tmp\final-fix\work-sizes.py`).
+**So round 3, the first round that formats a planned card, must route every volume past MAXSMALLDISK
+through a formatter that is right, never `NativeFormatter`, while this entry is open.** Until now that
+writer-selection rule was recorded only in the round-1 ledger, which is git-ignored.
+`plan_card_image`'s doc now says the same.
+**A third limit, in `libpfs3`'s writer rather than in PFS3.** In small mode, `alloc_anode_block`
+never allocates a second anode index block. It returns `Err(DiskFull("no index block slot available"))`
+as soon as `rootblock.indexblocks[idx_nr]` is unset (`writer.rs:1024`, in the small-mode branch
+`writer.rs:1014-1025`). Its large-mode branch just above allocates index blocks on demand. A small-mode
+volume written by `libpfs3` therefore holds one index block's worth of anodes, 253 × 84 − 6 = 21 246,
+whatever its size. PFS3's small-mode rootblock itself has 99 index-block slots: `MAXSMALLINDEXNR = 98`
+(`libpfs3` `ondisk/mod.rs:71`), read back as a 99-entry array (`ondisk/rootblock.rs:114`). That was
+checked in `libpfs3` 0.1.3's own source, not in pfs3aio's `blocks.h`. ART's sizing models
+`libpfs3`'s cap (`pfs3_small_mode_anode_cap`), so content of more than ~21 000 files is sized past
+MAXSMALLDISK, to at least ~5.24 GB. **This bears on the fix route.** Patching or vendoring `libpfs3`
+could lift this writer limit too and retire that floor. Repairing the two structures after `libpfs3`
+formats, or formatting with hst-imager and filling with `libpfs3`, leaves the writer unchanged, so the
+cap stays.
 **Not proven:** hst-imager is one independent implementation, not pfs3aio on an Amiga or in WinUAE; no
 size with 2048/4096-byte reserved blocks (> ~53 GB) was tried. **Owed:** mount a libpfs3-formatted
 partition under real pfs3aio in WinUAE; the owner's choice of fix — patch/vendor libpfs3's `format.rs`
@@ -360,15 +383,27 @@ measured stayed under the decimal figure: CaffeineOS for a 64 GB card is 63 864 
 WHDLoad pack for a 32 GB card is 31 104 958 464 bytes; MultibootOS for 128 GB is 127 999 672 320
 bytes. ART's "64" image was ~4.7 × 10⁹ bytes past any 64 GB card.
 
-**The fix is wider than the first measurement: the label is never multiplied by 2³⁰ anywhere in
-ART, on either side of the frontier.** `core::card::sizing::image_bytes_for_label(card_gb)` now
+**The fix is wider than the first measurement: nothing that sizes a card image multiplies the
+label by 2³⁰ any more, on either side of the frontier.** *Corrected by the round's final review.*
+This entry used to say the label is "never multiplied by 2³⁰ anywhere in ART", and two sites still
+do it. Neither sizes an image, and both are harmless:
+- `src/pages/OsBuilder.tsx:295` sends `cardGb × 2³⁰` to `distro_check_card`, and
+  `core/distro/mod.rs:173` divides by 2³⁰ again. `cardGb` is a whole number from 1 to 2048, so the
+  round trip is exact, and the check compares the label with the profile's `min_card_gb`. It was
+  left in place deliberately (plan task 6).
+- `src/lib/osBuilder.ts:115` `minCardBytes` returns `min_card_gb × 2³⁰`. That value is passed as the
+  `bytes` parameter of `osBuilder.card.hint`, and neither catalogue's string has a `{{bytes}}`
+  placeholder, so the number is never shown.
+
+`core::card::sizing::image_bytes_for_label(card_gb)` now
 returns `card_gb × 1 000 000 × 950` — 95 % of the decimal label, emu68hatcher's own rule (*"95% of
 decimal GB for SD card safety"*, `config/partition_helpers.py:34-36`, MIT), a margin measured
 against real cards that differ by up to ~2 % under the same label. `CardBuildRequest` carries
 `card_gb: Option<u32>`; when set, `card_spec` computes `total_bytes` from it and ignores the
 two-field pair; `card_propose_table` takes `card_gb: u32` and multiplies internally.
-`CardBuilder.tsx` sends `card_gb: cardGb, total_bytes: 0` — the frontend never multiplies a card
-size by 2³⁰. **The second-system split carried the same defect on its own path**, found by task 6's
+`CardBuilder.tsx` sends `card_gb: cardGb, total_bytes: 0`, so the card builder no longer multiplies
+a card size by 2³⁰. Its `secondSystemGb * GIB` is the second system's own partition size, not a card
+label. **The second-system split carried the same defect on its own path**, found by task 6's
 review: `secondSystem()` was still fed `cardGb * GIB`, ~7.9 GB larger than the card Rust actually
 builds, so an 8 GB second system silently came out at ~0.67 GB. Fixed by a new
 `card_image_bytes(card_gb)` command returning `image_bytes_for_label` directly — the single source
