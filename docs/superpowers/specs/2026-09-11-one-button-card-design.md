@@ -90,7 +90,7 @@ All figures are sourced in the research note; the table is the rule.
 |---|---|---|
 | Image total | **95 % of the card's decimal gigabytes** (16 → 15.2 × 10⁹, 32 → 30.4, 64 → 60.8, 128 → 121.6) | emu68hatcher `partition_helpers.py:34-36` (MIT, attributed); real same-label cards up to ~2 % apart (62.53 / 63.86 × 10⁹ for 64 GB); MultibootOS's last partition ends at 121.60 × 10⁹ |
 | FAT32 boot | 1.10 GiB (2 299 904 sectors at LBA 2048), unchanged | `core/mbr.rs:214`; CaffeineOS, MultibootOS, both of the owner's cards |
-| System | 1 GiB | Emu68-Imager's default on ≥ 16 GB cards; MultibootOS SDH0 800 MB at 45 % used; the owner's 3.9 tree is 23.5 MB |
+| System | **800 MiB** — `core::card::propose::MEASURED_SYSTEM_MB`, not a second constant | measured off both real cards and deliberately not scaled (CaffeineOS 801 MiB, MultibootOS 800 MiB, 45 % used); the owner's 3.9 tree is 23.5 MB. *Corrected while planning:* the approved table said 1 GiB (Emu68-Imager's default); ART already carries a measured answer to the same question, and two constants for one fact is how two answers start |
 | Content partition | `estimate_pfs3(content) × 1.25`, rounded up to whole cylinders, never below PFS3's own 10 MiB minimum (Emu68-Imager `Get-MinimumPartitionSizes.ps1`), at most 101 GiB | MultibootOS game partitions 76–80 % full; pfs3aio normal-mode limit 109 067 239 424 bytes (`blocks.h:106-120`); both imagers cap at 101 GiB |
 | Work | the rest; over 101 GiB it is split into Work, Work_1 … | Emu68-Imager, emu68hatcher |
 | Area end | the last partition ends inside its `0x76` area | ART-309 |
@@ -99,8 +99,15 @@ All figures are sourced in the research note; the table is the rule.
 directory entries (17 bytes + name, in 1 KB directory blocks) and anodes, plus the format's reserved
 area (`CalcNumReserved`, 0.75–2.5 %), plus pfs3aio's **always-free 5 %** (`format.c:466`). The formula
 comes from pfs3aio's code and **is not trusted until it is measured** against ART's own `libpfs3`
-(§8.1): if `libpfs3` does not keep the 5 % back, the estimate follows `libpfs3`, not the C original,
-and says why.
+(§8.1).
+
+**The 5 % stays in the estimate even though ART's writer does not enforce it** (corrected while
+planning, 2026-09-11). `libpfs3` 0.1.3 writes `alwaysfree = data_blocks / 20` into the rootblock
+(`format.rs:181`) but its writer never reads the field (`writer.rs` has no reference to it), so ART
+could fill a partition to the last block. The handler that runs the card afterwards is the Amiga's
+own pfs3aio, which holds that twentieth back on every write (`allocation.c:158`): a partition ART
+filled past 95 % would mount and read, and refuse every new file. The estimate follows the handler
+that will run the card, not the writer that built it.
 
 A partition's content that does not fit is refused before anything is written, naming the partition
 and the bytes. An override in *Advanced* is a floor, never a way past the card's total.
