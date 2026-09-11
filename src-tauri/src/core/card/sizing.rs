@@ -32,6 +32,26 @@ pub const PFS3_MIN_BYTES: u64 = 10 * 1024 * 1024;
 pub const PFS3_MAX_BLOCKS: u64 = 213_021_952;
 pub const PFS3_MAX_BYTES: u64 = PFS3_MAX_BLOCKS * PFS3_BLOCK;
 
+/// The largest MB value a partition may ask `core::rdb::create_rdb_layout`
+/// for and still be built inside PFS3's normal mode — derived, not typed in:
+/// the largest `size_mb` whose whole-cylinder round-up ([`built_bytes`]) is
+/// still at most [`PFS3_MAX_BYTES`]. A cylinder (516 096 B) and a megabyte do
+/// not divide evenly, so not every cylinder count is reachable from an MB
+/// value, and `PFS3_MAX_BYTES` itself is not a whole number of cylinders.
+pub const PFS3_CEILING_MB: u32 = {
+    let mut mb = PFS3_MAX_BYTES / MIB;
+    while built_bytes(mb as u32) > PFS3_MAX_BYTES {
+        mb -= 1;
+    }
+    mb as u32
+};
+/// The largest partition ART plans: what [`PFS3_CEILING_MB`] really builds —
+/// whole cylinders, at most [`PFS3_MAX_BLOCKS`] blocks. The spec's "at most
+/// 101 GiB" (§ 4) is this number, and every partition `plan_card_image`
+/// plans is at most this.
+pub const PFS3_CEILING_BYTES: u64 = built_bytes(PFS3_CEILING_MB);
+const MIB: u64 = 1024 * 1024;
+
 // Ported from `libpfs3` 0.1.3 `format.rs` (itself pfs3aio's `format.c`), and
 // held to it by `the_ported_reserved_area_matches_libpfs3s_own_format`.
 const MAXSMALLBITMAPINDEX: u64 = 4;
@@ -247,17 +267,24 @@ pub fn pfs3_fits(total_blocks: u64, content: &ContentMeasure) -> bool {
     true
 }
 
-/// The smallest whole-cylinder PFS3 partition `content` fits — `None` past
-/// PFS3's normal-mode maximum.
+/// The smallest whole-cylinder PFS3 partition `content` fits — `None` when
+/// it does not fit even [`PFS3_CEILING_BYTES`], the largest partition ART
+/// plans. `Some` therefore also means `content` fits at the ceiling itself.
 pub fn pfs3_fit_bytes(content: &ContentMeasure) -> Option<u64> {
     let blocks_per_cyl = BYTES_PER_CYLINDER / PFS3_BLOCK;
     let min_cyl = PFS3_MIN_BYTES.div_ceil(BYTES_PER_CYLINDER);
-    let max_cyl = PFS3_MAX_BYTES / BYTES_PER_CYLINDER;
+    let max_cyl = PFS3_CEILING_BYTES / BYTES_PER_CYLINDER;
     if !pfs3_fits(max_cyl * blocks_per_cyl, content) {
         return None;
     }
-    // Fitting only grows with size, so the first size that fits is found by
-    // bisection over whole cylinders.
+    // Fitting does NOT only grow with size: at a reserved-area step
+    // `pfs3_data_blocks` drops (32 cylinders hold 30 782 data blocks, 33 hold
+    // 30 446, 34 hold 31 454), and `reserved_free` shrinks slowly between
+    // steps. The bisection over whole cylinders is still safe — `hi` only
+    // ever holds a size `pfs3_fits` accepted, and the top was checked above,
+    // so the answer always fits — but it is minimal only locally: just past a
+    // step it can pass over a smaller size that also fits, by a few
+    // cylinders at most (round 1 final review, Minor 2).
     let (mut lo, mut hi) = (min_cyl, max_cyl);
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
@@ -270,18 +297,23 @@ pub fn pfs3_fit_bytes(content: &ContentMeasure) -> Option<u64> {
     Some(lo * BYTES_PER_CYLINDER)
 }
 
-/// A content partition's size: its fit, a quarter again, whole cylinders.
+/// A content partition's size: its fit, a quarter again, whole cylinders —
+/// and **at most [`PFS3_CEILING_BYTES`]**: the spec's "at most 101 GiB" is a
+/// clamp, so headroom that would run past the ceiling is cut to it (round 1
+/// final review, I2). `None` only when the bare fit itself is past the
+/// ceiling; a `Some` from [`pfs3_fit_bytes`] means the content fits at the
+/// ceiling, so the clamped size always holds it.
 pub fn content_partition_bytes(content: &ContentMeasure) -> Option<u64> {
     let fit = pfs3_fit_bytes(content)?;
     let wanted = (fit * HEADROOM_PER_MILLE / 1000).max(PFS3_MIN_BYTES);
     let bytes = wanted.div_ceil(BYTES_PER_CYLINDER) * BYTES_PER_CYLINDER;
-    (bytes <= PFS3_MAX_BYTES).then_some(bytes)
+    Some(bytes.min(PFS3_CEILING_BYTES))
 }
 
 /// One of the user's own partitions, requested between System and Work.
 ///
-/// `content: None` is reserved for the planner's own System (first) and Work
-/// (last) entries — a caller's requested partition always carries content.
+/// `content: None` is a partition with nothing measured for it yet: it is
+/// sized by `floor_bytes` alone, and never below `PFS3_MIN_BYTES`.
 pub struct RequestedPartition {
     pub volume_name: String,
     pub content: Option<ContentMeasure>,
@@ -308,7 +340,7 @@ pub struct PlannedPartition {
     pub drive_name: String,
     pub volume_name: String,
     pub bytes: u64,
-    pub spec: crate::core::rdb::PartitionSpec,
+    pub spec: PartitionSpec,
 }
 
 /// A whole card image, laid out: System, the user's partitions, Work.
@@ -327,11 +359,12 @@ const RDB_RESERVED_BYTES: u64 = 2 * BYTES_PER_CYLINDER;
 
 /// The bytes `core::rdb::create_rdb_layout` will actually build for a
 /// partition asked for `size_mb` megabytes — MB rounds up to whole
-/// cylinders there (`req_cyls`, `rdb.rs`), mirrored here exactly so a
-/// caller never has to recompute the formula (spec §89 — never a second
-/// copy of the rounding).
-fn built_bytes(size_mb: u32) -> u64 {
-    (u64::from(size_mb) * 1024 * 1024).div_ceil(BYTES_PER_CYLINDER) * BYTES_PER_CYLINDER
+/// cylinders there (`req_cyls`, `rdb.rs`). This **is** a second copy of that
+/// rounding (round 1 final review, Minor 1); it is held to the writer by
+/// `built_bytes_is_what_the_rdb_writer_builds`, which builds each MB value
+/// through `create_rdb_layout` and reads it back.
+const fn built_bytes(size_mb: u32) -> u64 {
+    (size_mb as u64 * MIB).div_ceil(BYTES_PER_CYLINDER) * BYTES_PER_CYLINDER
 }
 
 /// The MB `spec()` should ask for to build (at least) `wanted` bytes, and
@@ -343,13 +376,26 @@ fn built_bytes(size_mb: u32) -> u64 {
 /// `N·63 mod 128 >= 63`) that combination silently built one cylinder
 /// *short* of the plan. Rounding up instead makes the built size never
 /// smaller than `wanted` — but because a cylinder (516 096 B) and a
-/// megabyte (1 048 576 B) do not divide evenly, it can land one or two
-/// cylinders *larger*. Every caller below uses the value this returns, not
-/// `wanted`, as the partition's real size from here on, so that slack is
-/// never lost track of.
+/// megabyte (1 048 576 B) do not divide evenly, it can land up to three
+/// cylinders *larger* (three when `wanted` is `N` cylinders with `N ≡ 63 mod
+/// 128`: 63 cylinders ask 32 MB, which builds 66). Every caller below uses
+/// the value this returns, not `wanted`, as the partition's real size from
+/// here on, so that slack is never lost track of.
+///
+/// **Nothing past the ceiling.** `wanted` is at most [`PFS3_CEILING_BYTES`]
+/// (every caller clamps first); when the round-up would carry it past, the
+/// answer is the ceiling's own MB value, which still builds at least
+/// `wanted` (round 1 final review, Minor 3: a floor of `PFS3_MAX_BYTES` used
+/// to build 1 712 blocks past `PFS3_MAX_BLOCKS`).
 fn mb_and_built_bytes(wanted: u64) -> (u32, u64) {
-    let size_mb = u32::try_from(wanted.div_ceil(1024 * 1024)).unwrap_or(u32::MAX);
-    (size_mb, built_bytes(size_mb))
+    debug_assert!(wanted <= PFS3_CEILING_BYTES);
+    let size_mb = u32::try_from(wanted.div_ceil(MIB)).unwrap_or(u32::MAX);
+    let built = built_bytes(size_mb);
+    if built > PFS3_CEILING_BYTES {
+        (PFS3_CEILING_MB, PFS3_CEILING_BYTES)
+    } else {
+        (size_mb, built)
+    }
 }
 
 fn spec(drive: &str, size_mb: u32, rest: bool, bootable: bool) -> PartitionSpec {
@@ -363,8 +409,54 @@ fn spec(drive: &str, size_mb: u32, rest: bool, bootable: bool) -> PartitionSpec 
     }
 }
 
+/// Work: `rest` (whole cylinders) as `(name, size_mb, built bytes)` pieces,
+/// `None` for the last one — `create_rdb_layout`'s `size_mb: 0`, "the rest".
+///
+/// Split into `n = ceil(rest / PFS3_CEILING_BYTES)` EQUAL pieces once it
+/// would otherwise exceed the ceiling (I2, round-1 review, replacing the old
+/// "PFS3_MAX_BYTES pieces, whatever is left over" split whose leftover piece
+/// had no `PFS3_MIN_BYTES` floor). `rest` is `R` cylinders, and `R <= n ·
+/// ceiling` by `n`'s definition. Each of the first `n - 1` pieces asks for
+/// `ceil(R / n)` cylinders — at most the ceiling, since the ceiling is whole
+/// cylinders — and `mb_and_built_bytes` builds at least that and never past
+/// the ceiling (round 1 final review, Minor 3). Rounding the pieces *up* is
+/// what keeps the last one inside too: it takes `R - (n - 1) · built <= R /
+/// n <= ceiling`. Rounded down instead, the last piece is past the ceiling
+/// for some `R` from `n = 5` on (one rest value at `n = 5`, two at `n = 6`;
+/// `every_work_split_stays_between_the_minimum_and_the_ceiling`). And it
+/// stays far above `PFS3_MIN_BYTES`: `R / n` is over half a ceiling for
+/// every `n >= 2`, and the pieces' round-up takes at most three cylinders
+/// each.
+fn split_work(rest: u64) -> Vec<(String, Option<u32>, u64)> {
+    let n = rest.div_ceil(PFS3_CEILING_BYTES).max(1);
+    let mut work: Vec<(String, Option<u32>, u64)> = Vec::new();
+    if n <= 1 {
+        work.push(("Work".to_string(), None, rest));
+    } else {
+        let piece_target = (rest / BYTES_PER_CYLINDER).div_ceil(n) * BYTES_PER_CYLINDER;
+        let mut remaining = rest;
+        for j in 0..n - 1 {
+            let name = if j == 0 {
+                "Work".to_string()
+            } else {
+                format!("Work_{j}")
+            };
+            let (mb, built) = mb_and_built_bytes(piece_target);
+            work.push((name, Some(mb), built));
+            remaining -= built;
+        }
+        work.push((format!("Work_{}", n - 1), None, remaining));
+    }
+    work
+}
+
 /// Plan a whole card image: System first, `content` in order, then Work —
 /// split at PFS3's largest partition if what is left does not fit one.
+/// No partition it plans is larger than [`PFS3_CEILING_BYTES`].
+///
+/// **ART-310:** every Work partition this plans, on every card size, is past
+/// MAXSMALLDISK (10 241 440 blocks), where `libpfs3` 0.1.3's format is wrong
+/// — a caller must not hand one to `NativeFormatter` while ART-310 is open.
 pub fn plan_card_image(
     card_gb: u32,
     content: &[RequestedPartition],
@@ -373,7 +465,9 @@ pub fn plan_card_image(
     let area_bytes = image_bytes
         .checked_sub(MEASURED_BOOT_BYTES)
         .ok_or(SizingRefusal::CardTooSmall { card_gb })?;
-    let usable = (area_bytes / BYTES_PER_CYLINDER) * BYTES_PER_CYLINDER - RDB_RESERVED_BYTES;
+    let usable = ((area_bytes / BYTES_PER_CYLINDER) * BYTES_PER_CYLINDER)
+        .checked_sub(RDB_RESERVED_BYTES)
+        .ok_or(SizingRefusal::CardTooSmall { card_gb })?;
 
     // System, then the caller's own partitions, each carried as
     // `(name, size_mb, built_bytes)` — `built_bytes` (I3) is what
@@ -404,10 +498,18 @@ pub fn plan_card_image(
             }
             None => PFS3_MIN_BYTES,
         };
-        let wanted = from_content
+        // Clamped at the ceiling (round 1 final review, Minor 3).
+        // `from_content` is already at most the ceiling, so this only ever
+        // bites on a floor in `(PFS3_CEILING_BYTES, PFS3_MAX_BYTES]` — under
+        // one cylinder (304 blocks) past what the RDB writer can build inside
+        // PFS3's normal mode. That floor is met at the ceiling: it asked for
+        // PFS3's largest partition, and this is PFS3's largest partition in
+        // whole cylinders. A floor past `PFS3_MAX_BYTES` is refused above.
+        let wanted = (from_content
             .max(part.floor_bytes)
             .div_ceil(BYTES_PER_CYLINDER)
-            * BYTES_PER_CYLINDER;
+            * BYTES_PER_CYLINDER)
+            .min(PFS3_CEILING_BYTES);
         let (mb, built) = mb_and_built_bytes(wanted);
         committed.push((part.volume_name.clone(), mb, built));
     }
@@ -421,39 +523,7 @@ pub fn plan_card_image(
         });
     }
     let rest = usable - committed_bytes;
-
-    // Work: the rest, split into `n = ceil(rest / PFS3_MAX_BYTES)` EQUAL
-    // pieces once it would otherwise exceed PFS3's normal-mode ceiling (I2,
-    // round-1 review, replacing the old "PFS3_MAX_BYTES pieces, whatever is
-    // left over" split whose leftover piece had no `PFS3_MIN_BYTES` floor).
-    // Each of the first `n - 1` pieces is `rest / n` rounded down to whole
-    // cylinders: `rest / n <= PFS3_MAX_BYTES` follows from `n`'s own
-    // definition, and rounding down only shrinks it further, so every one
-    // of these (after I3's own MB round-up, applied like every other
-    // partition here) stays comfortably inside `PFS3_MAX_BYTES` — the
-    // round-up adds at most two cylinders (a few MB), against pieces that
-    // are tens of gigabytes for any card size this planner produces. The
-    // last piece takes whatever remains — still `>= PFS3_MIN_BYTES` for the
-    // same reason — and is still the plan's own `size_mb: 0` partition.
-    let n = rest.div_ceil(PFS3_MAX_BYTES).max(1);
-    let mut work: Vec<(String, Option<u32>, u64)> = Vec::new();
-    if n <= 1 {
-        work.push(("Work".to_string(), None, rest));
-    } else {
-        let piece_target = (rest / n / BYTES_PER_CYLINDER) * BYTES_PER_CYLINDER;
-        let mut remaining = rest;
-        for j in 0..n - 1 {
-            let name = if j == 0 {
-                "Work".to_string()
-            } else {
-                format!("Work_{j}")
-            };
-            let (mb, built) = mb_and_built_bytes(piece_target);
-            work.push((name, Some(mb), built));
-            remaining -= built;
-        }
-        work.push((format!("Work_{}", n - 1), None, remaining));
-    }
+    let work = split_work(rest);
 
     let mut partitions = Vec::with_capacity(committed.len() + work.len());
     for (i, (name, mb, bytes)) in committed.into_iter().enumerate() {
@@ -488,6 +558,8 @@ pub fn plan_card_image(
 mod tests {
     use super::*;
     use crate::core::rdb::{create_rdb_layout, parse_rdb};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
 
     /// The smallest real card measured for each label (fdisk output in the
     /// threads the research note cites). An image for that label must fit it.
@@ -528,9 +600,6 @@ mod tests {
         m.add_file("Empty", 0);
         assert_eq!(m.data_blocks, 1);
     }
-
-    use std::collections::HashMap;
-    use std::sync::Mutex;
 
     /// A block device that keeps only the blocks written to it — so a
     /// 100 GiB PFS3 format costs the reserved area in memory, not 100 GiB of
@@ -1118,5 +1187,181 @@ mod tests {
         };
         assert_eq!(volume_name, "Games");
         assert_eq!(bytes, PFS3_MAX_BYTES + 1024 * 1024 * 1024);
+    }
+
+    /// Build `plan` through the real RDB writer, read it back, and require
+    /// that **every** partition — the last one (`size_mb: 0`) included — is
+    /// exactly `PlannedPartition::bytes` and inside PFS3's normal mode.
+    fn assert_built_as_planned(plan: &CardImagePlan) {
+        let specs: Vec<PartitionSpec> = plan.partitions.iter().map(|p| p.spec.clone()).collect();
+        let layout = create_rdb_layout(plan.area_bytes, &specs, &[]).unwrap();
+        assert!(layout.total_size <= plan.area_bytes);
+        let parsed = parse_rdb(&layout.blocks).unwrap();
+        assert_eq!(parsed.partitions.len(), plan.partitions.len());
+        for (read_back, planned) in parsed.partitions.iter().zip(&plan.partitions) {
+            let built = read_back.byte_length().unwrap();
+            assert!(
+                built / PFS3_BLOCK <= PFS3_MAX_BLOCKS,
+                "{}: the RDB writer built {} blocks, past PFS3's normal-mode {PFS3_MAX_BLOCKS}",
+                planned.volume_name,
+                built / PFS3_BLOCK
+            );
+            assert_eq!(
+                built, planned.bytes,
+                "{}: the RDB writer built a different size than the plan said",
+                planned.volume_name
+            );
+        }
+    }
+
+    /// `built_bytes` restates `create_rdb_layout`'s MB-to-cylinder rounding
+    /// (round 1 final review, Minor 1) — so it is held to the writer here, at
+    /// the ceiling and on the cylinder counts where the rounding is widest
+    /// (`N ≡ 63 mod 128`, where asking for `N` cylinders' MB builds `N + 3`).
+    #[test]
+    fn built_bytes_is_what_the_rdb_writer_builds() {
+        let area = 4 * PFS3_MAX_BYTES;
+        for mb in [
+            1u32,
+            31,
+            32,
+            MEASURED_SYSTEM_MB,
+            PFS3_CEILING_MB - 1,
+            PFS3_CEILING_MB,
+            PFS3_CEILING_MB + 1,
+        ] {
+            let specs = [spec("SDH0", mb, false, true), spec("SDH1", 0, true, false)];
+            let layout = create_rdb_layout(area, &specs, &[]).unwrap();
+            let parsed = parse_rdb(&layout.blocks).unwrap();
+            assert_eq!(
+                parsed.partitions[0].byte_length().unwrap(),
+                built_bytes(mb),
+                "{mb} MB"
+            );
+        }
+    }
+
+    /// The ceiling is what it claims: the RDB writer builds it inside PFS3's
+    /// normal mode, and one MB more is already past it.
+    #[test]
+    fn the_ceiling_is_the_largest_size_the_rdb_writer_builds_inside_pfs3s_normal_mode() {
+        assert_eq!(PFS3_CEILING_BYTES % BYTES_PER_CYLINDER, 0);
+        const { assert!(PFS3_CEILING_BYTES / PFS3_BLOCK <= PFS3_MAX_BLOCKS) };
+        assert!(built_bytes(PFS3_CEILING_MB + 1) / PFS3_BLOCK > PFS3_MAX_BLOCKS);
+    }
+
+    /// Minor 3 (round 1 final review), every split rather than a sample:
+    /// each whole-cylinder `rest` that splits into 2 to 6 pieces, one by one
+    /// (211 331 values of `rest` for each `n`). Every piece stays between
+    /// `PFS3_MIN_BYTES` and the ceiling, the pieces add up to `rest`, and
+    /// only the last is "the rest". Rounding the pieces down instead of up
+    /// passes `n` = 2..4 and fails at 5 and 6 — the mutation this closes.
+    #[test]
+    fn every_work_split_stays_between_the_minimum_and_the_ceiling() {
+        let ceiling_cyl = PFS3_CEILING_BYTES / BYTES_PER_CYLINDER;
+        for n in 2..=6u64 {
+            for r in (n - 1) * ceiling_cyl + 1..=n * ceiling_cyl {
+                let rest = r * BYTES_PER_CYLINDER;
+                let work = split_work(rest);
+                assert_eq!(work.len() as u64, n, "{r} cylinders");
+                assert_eq!(work.iter().map(|(_, _, b)| b).sum::<u64>(), rest);
+                for (i, (name, mb, bytes)) in work.iter().enumerate() {
+                    assert!(
+                        (PFS3_MIN_BYTES..=PFS3_CEILING_BYTES).contains(bytes),
+                        "{r} cylinders in {n}: {name} is {bytes} bytes"
+                    );
+                    assert_eq!(mb.is_none(), i + 1 == work.len(), "{name}");
+                }
+            }
+        }
+    }
+
+    /// I2 (round 1 final review): the spec's "at most 101 GiB" is a clamp.
+    /// Content whose bare fit is inside the ceiling but whose quarter of
+    /// headroom is not gets exactly the ceiling — never a refusal.
+    #[test]
+    fn a_content_partition_clamps_its_headroom_at_the_ceiling_rather_than_refusing() {
+        let mut m = ContentMeasure::default();
+        m.add_file("Big", 85 * 1024 * 1024 * 1024);
+        let fit = pfs3_fit_bytes(&m).expect("85 GiB fits one PFS3 partition");
+        assert!(fit <= PFS3_CEILING_BYTES);
+        assert!(
+            fit * HEADROOM_PER_MILLE / 1000 > PFS3_CEILING_BYTES,
+            "the scenario needs the headroom past the ceiling"
+        );
+        assert_eq!(content_partition_bytes(&m), Some(PFS3_CEILING_BYTES));
+
+        let plan = plan_card_image(
+            128,
+            &[RequestedPartition {
+                volume_name: "Games".into(),
+                content: Some(m),
+                floor_bytes: 0,
+            }],
+        )
+        .unwrap();
+        assert_eq!(plan.partitions[1].bytes, PFS3_CEILING_BYTES);
+        assert_built_as_planned(&plan);
+    }
+
+    /// Minor 3 (round 1 final review): a floor of exactly `PFS3_MAX_BYTES`
+    /// is planned, not refused — and the partition the RDB writer builds
+    /// from it stays inside PFS3's normal mode (it used to build 211 333
+    /// cylinders, 1 712 blocks past `PFS3_MAX_BLOCKS`).
+    #[test]
+    fn a_floor_at_pfs3s_maximum_builds_inside_pfs3s_normal_mode() {
+        let mut g = games(1);
+        g.floor_bytes = PFS3_MAX_BYTES;
+        let plan = plan_card_image(128, &[g]).unwrap();
+        assert_built_as_planned(&plan);
+        assert_eq!(plan.partitions[1].bytes, PFS3_CEILING_BYTES);
+    }
+
+    /// Minor 3 (round 1 final review): a Work split whose pieces sit at the
+    /// ceiling stays within it. A 256 GB card and a floor that leaves Work
+    /// within 300 cylinders either side of two ceilings — every plan, every
+    /// piece, read back through the RDB writer. At `d484273` two of these
+    /// plans built a Work piece at 211 333 cylinders.
+    #[test]
+    fn a_work_split_at_the_ceiling_stays_within_it() {
+        let (_, system_built) = mb_and_built_bytes(
+            (u64::from(MEASURED_SYSTEM_MB) * 1024 * 1024).div_ceil(BYTES_PER_CYLINDER)
+                * BYTES_PER_CYLINDER,
+        );
+        let usable = (image_bytes_for_label(256) - MEASURED_BOOT_BYTES) / BYTES_PER_CYLINDER
+            * BYTES_PER_CYLINDER
+            - RDB_RESERVED_BYTES;
+        let floor_for_two_ceilings = usable - system_built - 2 * PFS3_CEILING_BYTES;
+        let mut at_the_ceiling = 0;
+        for k in 0..=600u64 {
+            let floor = floor_for_two_ceilings + k * BYTES_PER_CYLINDER - 300 * BYTES_PER_CYLINDER;
+            let plan = plan_card_image(
+                256,
+                &[RequestedPartition {
+                    volume_name: "Extra".into(),
+                    content: None,
+                    floor_bytes: floor,
+                }],
+            )
+            .unwrap();
+            assert!(
+                plan.partitions
+                    .iter()
+                    .filter(|p| p.volume_name.starts_with("Work"))
+                    .count()
+                    >= 2,
+                "every plan in the sweep splits Work"
+            );
+            assert_built_as_planned(&plan);
+            at_the_ceiling += plan
+                .partitions
+                .iter()
+                .filter(|p| p.volume_name.starts_with("Work") && p.bytes == PFS3_CEILING_BYTES)
+                .count();
+        }
+        assert!(
+            at_the_ceiling > 0,
+            "the sweep never put a Work piece at the ceiling, so it proved nothing"
+        );
     }
 }
