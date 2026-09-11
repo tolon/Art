@@ -278,9 +278,157 @@ pub fn content_partition_bytes(content: &ContentMeasure) -> Option<u64> {
     (bytes <= PFS3_MAX_BYTES).then_some(bytes)
 }
 
+/// One of the user's own partitions, requested between System and Work.
+///
+/// `content: None` is reserved for the planner's own System (first) and Work
+/// (last) entries — a caller's requested partition always carries content.
+pub struct RequestedPartition {
+    pub volume_name: String,
+    pub content: Option<ContentMeasure>,
+    /// The Advanced override, in bytes — `0` for none.
+    pub floor_bytes: u64,
+}
+
+/// Why [`plan_card_image`] could not build a plan.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(
+    tag = "refusal",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum SizingRefusal {
+    DoesNotFit { needed: u64, available: u64 },
+    PartitionTooLarge { volume_name: String, bytes: u64 },
+    CardTooSmall { card_gb: u32 },
+}
+
+/// One partition of the plan, ready for `core::rdb::create_rdb_layout`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PlannedPartition {
+    pub drive_name: String,
+    pub volume_name: String,
+    pub bytes: u64,
+    pub spec: crate::core::rdb::PartitionSpec,
+}
+
+/// A whole card image, laid out: System, the user's partitions, Work.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CardImagePlan {
+    pub image_bytes: u64,
+    pub area_bytes: u64,
+    pub partitions: Vec<PlannedPartition>,
+}
+
+use super::propose::{MEASURED_BOOT_BYTES, MEASURED_BUFFERS, MEASURED_SYSTEM_MB};
+use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
+
+/// Two cylinders at the front of the area hold the RDB (`core::rdb`).
+const RDB_RESERVED_BYTES: u64 = 2 * BYTES_PER_CYLINDER;
+
+fn spec(drive: &str, bytes: u64, rest: bool, bootable: bool) -> PartitionSpec {
+    PartitionSpec {
+        drive_name: drive.to_string(),
+        fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
+        // `core::rdb` rounds MB up to cylinders; floor here so the writer's
+        // round-up lands on (never past) the cylinders planned.
+        size_mb: if rest {
+            0
+        } else {
+            u32::try_from(bytes / (1024 * 1024)).unwrap_or(u32::MAX)
+        },
+        bootable,
+        boot_priority: 0,
+        num_buffers: MEASURED_BUFFERS,
+    }
+}
+
+/// Plan a whole card image: System first, `content` in order, then Work —
+/// split at PFS3's largest partition if what is left does not fit one.
+pub fn plan_card_image(
+    card_gb: u32,
+    content: &[RequestedPartition],
+) -> Result<CardImagePlan, SizingRefusal> {
+    let image_bytes = image_bytes_for_label(card_gb);
+    let area_bytes = image_bytes
+        .checked_sub(MEASURED_BOOT_BYTES)
+        .ok_or(SizingRefusal::CardTooSmall { card_gb })?;
+    let usable = (area_bytes / BYTES_PER_CYLINDER) * BYTES_PER_CYLINDER - RDB_RESERVED_BYTES;
+
+    let system = (u64::from(MEASURED_SYSTEM_MB) * 1024 * 1024).div_ceil(BYTES_PER_CYLINDER)
+        * BYTES_PER_CYLINDER;
+    let mut sized = vec![("System".to_string(), system)];
+    for part in content {
+        let from_content = match &part.content {
+            Some(m) => {
+                content_partition_bytes(m).ok_or_else(|| SizingRefusal::PartitionTooLarge {
+                    volume_name: part.volume_name.clone(),
+                    bytes: m.data_blocks * PFS3_BLOCK,
+                })?
+            }
+            None => PFS3_MIN_BYTES,
+        };
+        let bytes = from_content
+            .max(part.floor_bytes)
+            .div_ceil(BYTES_PER_CYLINDER)
+            * BYTES_PER_CYLINDER;
+        sized.push((part.volume_name.clone(), bytes));
+    }
+
+    let needed: u64 = sized.iter().map(|(_, b)| b).sum::<u64>() + PFS3_MIN_BYTES;
+    if needed > usable {
+        return Err(SizingRefusal::DoesNotFit {
+            needed,
+            available: usable,
+        });
+    }
+
+    // Work: the rest, split every `PFS3_MAX_BYTES` like both imagers.
+    let mut rest = usable - (needed - PFS3_MIN_BYTES);
+    let mut works = Vec::new();
+    while rest > PFS3_MAX_BYTES {
+        let piece = (PFS3_MAX_BYTES / BYTES_PER_CYLINDER) * BYTES_PER_CYLINDER;
+        works.push(piece);
+        rest -= piece;
+    }
+    works.push(rest);
+
+    let count = sized.len() + works.len();
+    let mut partitions = Vec::with_capacity(count);
+    for (i, (name, bytes)) in sized.into_iter().enumerate() {
+        let drive = format!("SDH{i}");
+        partitions.push(PlannedPartition {
+            spec: spec(&drive, bytes, false, i == 0),
+            drive_name: drive,
+            volume_name: name,
+            bytes,
+        });
+    }
+    for (j, bytes) in works.into_iter().enumerate() {
+        let i = partitions.len();
+        let drive = format!("SDH{i}");
+        let name = if j == 0 {
+            "Work".to_string()
+        } else {
+            format!("Work_{j}")
+        };
+        partitions.push(PlannedPartition {
+            spec: spec(&drive, bytes, i + 1 == count, false),
+            drive_name: drive,
+            volume_name: name,
+            bytes,
+        });
+    }
+    Ok(CardImagePlan {
+        image_bytes,
+        area_bytes,
+        partitions,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::rdb::create_rdb_layout;
 
     /// The smallest real card measured for each label (fdisk output in the
     /// threads the research note cites). An image for that label must fit it.
@@ -683,5 +831,85 @@ mod tests {
         m.add_file("Huge", PFS3_MAX_BYTES);
         assert_eq!(pfs3_fit_bytes(&m), None);
         assert_eq!(content_partition_bytes(&m), None);
+    }
+
+    fn games(mb: u64) -> RequestedPartition {
+        let mut m = ContentMeasure::default();
+        m.add_file("Game", mb * 1024 * 1024);
+        RequestedPartition {
+            volume_name: "Games".into(),
+            content: Some(m),
+            floor_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn a_card_is_system_then_the_users_partitions_then_work() {
+        let plan = plan_card_image(64, &[games(4000)]).unwrap();
+        let names: Vec<&str> = plan
+            .partitions
+            .iter()
+            .map(|p| p.volume_name.as_str())
+            .collect();
+        assert_eq!(names, ["System", "Games", "Work"]);
+        let drives: Vec<&str> = plan
+            .partitions
+            .iter()
+            .map(|p| p.drive_name.as_str())
+            .collect();
+        assert_eq!(drives, ["SDH0", "SDH1", "SDH2"]);
+        assert!(plan.partitions[0].spec.bootable && !plan.partitions[1].spec.bootable);
+        assert_eq!(
+            plan.partitions[0].bytes,
+            (u64::from(MEASURED_SYSTEM_MB) * 1024 * 1024).div_ceil(BYTES_PER_CYLINDER)
+                * BYTES_PER_CYLINDER
+        );
+        assert_eq!(plan.image_bytes, image_bytes_for_label(64));
+    }
+
+    /// The plan is only a plan if the RDB writer builds it: every partition
+    /// lands at its size or larger, and the last ends inside the area.
+    #[test]
+    fn the_plan_is_one_the_rdb_writer_builds_inside_its_area() {
+        let plan = plan_card_image(32, &[games(4000), games(900)]).unwrap();
+        let specs: Vec<PartitionSpec> = plan.partitions.iter().map(|p| p.spec.clone()).collect();
+        let layout = create_rdb_layout(plan.area_bytes, &specs, &[]).unwrap();
+        assert!(layout.total_size <= plan.area_bytes);
+        assert!(MEASURED_BOOT_BYTES + plan.area_bytes <= plan.image_bytes);
+    }
+
+    #[test]
+    fn content_that_does_not_fit_is_refused_with_both_numbers() {
+        let err = plan_card_image(16, &[games(20_000)]).unwrap_err();
+        let SizingRefusal::DoesNotFit { needed, available } = err else {
+            panic!("{err:?}")
+        };
+        assert!(needed > available);
+    }
+
+    #[test]
+    fn work_past_pfs3s_largest_partition_is_split() {
+        let plan = plan_card_image(128, &[]).unwrap();
+        let names: Vec<&str> = plan
+            .partitions
+            .iter()
+            .map(|p| p.volume_name.as_str())
+            .collect();
+        assert_eq!(names, ["System", "Work", "Work_1"]);
+        assert!(plan.partitions.iter().all(|p| p.bytes <= PFS3_MAX_BYTES));
+    }
+
+    #[test]
+    fn an_override_is_a_floor_never_a_way_past_the_card() {
+        let mut g = games(100);
+        g.floor_bytes = 5 * 1024 * 1024 * 1024;
+        let plan = plan_card_image(16, &[g]).unwrap();
+        assert!(plan.partitions[1].bytes >= 5 * 1024 * 1024 * 1024);
+        let mut huge = games(100);
+        huge.floor_bytes = 40 * 1000 * 1000 * 1000;
+        assert!(matches!(
+            plan_card_image(16, &[huge]),
+            Err(SizingRefusal::DoesNotFit { .. })
+        ));
     }
 }
