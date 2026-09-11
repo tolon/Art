@@ -22,11 +22,13 @@ import { useBuildSession } from "@/lib/useBuildSession";
 
 import {
   buildBlocker,
+  cardImageBytes,
   cardProposeTable,
   proposalPhrase,
   secondSystem,
   SECOND_SYSTEM_DRIVE,
   type ProposedTable,
+  type SecondSystem,
   cardBuild,
   cardPlanBuild,
   cardCheckImage,
@@ -199,6 +201,17 @@ export function CardBuilder() {
   const [proposeError, setProposeError] = useState<string | null>(null);
 
   /**
+   * The bytes Rust will actually build this card's label at (ART-308).
+   *
+   * `null` until the fetch below resolves - and while it is `null`, nothing
+   * may compute a second system's split from a guess, which is how the
+   * screen's own `cardGb * 2^30` got ~7.9 GB past a 64 GB card's real image
+   * in the first place.
+   */
+  const [imageBytes, setImageBytes] = useState<number | null>(null);
+  const [imageBytesError, setImageBytesError] = useState<string | null>(null);
+
+  /**
    * A second complete AmigaOS on the same card (SD-3 G16).
    *
    * Off by default: one system is what a card is for, and the reference
@@ -288,6 +301,27 @@ export function CardBuilder() {
     if (typeof picked === "string") setFsDriver(picked);
   }
 
+  // The label's real bytes, fetched from Rust once per `cardGb` (ART-308).
+  // The same `current`-flag shape as the proposal effect below: it reads
+  // nothing and writes nothing, but it is still a round trip, and a stale one
+  // from a `cardGb` the user has since changed must never land.
+  useEffect(() => {
+    let current = true;
+    setImageBytes(null);
+    setImageBytesError(null);
+    void (async () => {
+      try {
+        const bytes = await cardImageBytes(cardGb);
+        if (current) setImageBytes(bytes);
+      } catch (e) {
+        if (current) setImageBytesError(errorText(t, e));
+      }
+    })();
+    return () => {
+      current = false;
+    };
+  }, [cardGb, t]);
+
   /**
    * The split, when a second system was asked for.
    *
@@ -296,16 +330,17 @@ export function CardBuilder() {
    * beside the control *and* blocks the button. A card that quietly came back
    * with one disk after the user asked for two is the confident wrong outcome
    * this project keeps naming.
+   *
+   * **The split waits for the card's real bytes** (ART-308, fix round 1).
+   * `imageBytes` is `null` until `cardImageBytes` resolves — and while it is,
+   * a second system stays blocked rather than split against `cardGb * 2^30`,
+   * which put the split ~7.9 GB past where Rust actually builds a 64 GB card.
    */
-  const second = secondSystemOn
-    ? secondSystem(
-        cardGb * GIB,
-        bootMib * 1024 * 1024,
-        secondSystemGb * GIB,
-        fsType,
-        partitionMb
-      )
-    : null;
+  const second: SecondSystem | null = !secondSystemOn
+    ? null
+    : imageBytes === null
+      ? { ok: false, why: { key: "cardBuilder.second.blocked.sizeUnknown" } }
+      : secondSystem(imageBytes, bootMib * 1024 * 1024, secondSystemGb * GIB, fsType, partitionMb);
 
   // The proposal is recomputed whenever anything it depends on moves. It reads
   // nothing and writes nothing, so there is no job and no debounce to get
@@ -859,6 +894,18 @@ export function CardBuilder() {
                       style={{ display: "block", padding: "6px 12px", fontSize: 11 }}
                     >
                       {t(second.why.key, second.why.params)}
+                    </p>
+                  )}
+                  {/* The generic "not back yet" sentence above covers a slow
+                      fetch and a failed one alike; this is the failed one's
+                      own words, same as `proposeError` above (ART-308: a
+                      failed fetch must say so, not fall back to a guess). */}
+                  {imageBytesError && (
+                    <p
+                      className="badge badge-warn"
+                      style={{ display: "block", padding: "6px 12px", fontSize: 11 }}
+                    >
+                      {imageBytesError}
                     </p>
                   )}
                 </div>

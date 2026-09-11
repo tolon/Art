@@ -477,6 +477,17 @@ pub fn card_propose_table(
         .map_err(Into::into)
 }
 
+/// The bytes a card sold as `card_gb` gigabytes gets built at (ART-308).
+///
+/// The single source of truth for a label's size — [`crate::core::card::sizing::image_bytes_for_label`]
+/// — so a screen computing the second system's split, or anything else that
+/// needs the number the image will actually be, asks Rust rather than
+/// carrying `950_000_000` into TypeScript a second time.
+#[tauri::command]
+pub fn card_image_bytes(card_gb: u32) -> u64 {
+    crate::core::card::sizing::image_bytes_for_label(card_gb)
+}
+
 /// What building this card would do. Writes nothing (§92's PREVIEW step).
 ///
 /// Unpacking the release archive is what this costs, and it is one small
@@ -1469,6 +1480,14 @@ mod tests {
         assert_eq!(spec.total_bytes, 60_800_000_000);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **ART-308, fix round 1.** The second-system split asked the screen's
+    /// own `cardGb * 2^30` for this number until this command existed, which
+    /// put the split ~7.9 GB past where Rust actually builds a 64 GB card.
+    #[test]
+    fn card_image_bytes_is_the_labels_ninety_five_percent() {
+        assert_eq!(card_image_bytes(64), 60_800_000_000);
     }
 
     /// `SAFE_CREATE` is the build's answer, and it is a bad one to discover

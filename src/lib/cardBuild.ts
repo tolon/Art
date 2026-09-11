@@ -436,6 +436,18 @@ export async function cardProposeTable(
   });
 }
 
+/**
+ * The bytes a card sold as `cardGb` gigabytes gets built at (ART-308).
+ *
+ * The single source of truth for a label's size is Rust's
+ * `image_bytes_for_label` - anything that needs the number the image will
+ * actually be (the second-system split, in particular) asks here rather than
+ * carrying the 95%-of-decimal-GB arithmetic into TypeScript a second time.
+ */
+export async function cardImageBytes(cardGb: number): Promise<number> {
+  return invoke<number>("card_image_bytes", { cardGb });
+}
+
 export async function cardPlanBuild(request: CardBuildRequest): Promise<CardBuildPlan> {
   return invoke<CardBuildPlan>("card_plan_build", { request });
 }

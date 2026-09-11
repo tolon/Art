@@ -2039,7 +2039,8 @@
       "firstGets": "Birinci AmigaOS'a {{gb}} GB kalır. İkincisi {{drive}} olur.",
       "blocked": {
         "noSize": "İkinci AmigaOS'un karttan ne kadar alacağını belirtin.",
-        "tooLarge": "Bu, birinci AmigaOS'a kendi {{mb}} MB'lık sistem bölümü kadar bile yer bırakmıyor. İkincisini küçültün ya da kartı büyütün."
+        "tooLarge": "Bu, birinci AmigaOS'a kendi {{mb}} MB'lık sistem bölümü kadar bile yer bırakmıyor. İkincisini küçültün ya da kartı büyütün.",
+        "sizeUnknown": "Kartın kendi boyutu ART'tan henüz gelmedi. Biraz bekleyin ya da yeniden deneyin."
       }
     },
     "propose": {
