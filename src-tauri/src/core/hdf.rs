@@ -370,7 +370,9 @@ mod tests {
         }];
 
         let info = create_hdf(&target, 4 * 1024 * 1024 * 1024, true, &specs, &[]).unwrap();
-        assert!(info.total_bytes >= 4 * 1024 * 1024 * 1024);
+        // ART-309: an HDF is now a whole number of cylinders at or under the size asked for
+        let asked = 4 * 1024 * 1024 * 1024u64;
+        assert!(info.total_bytes <= asked && asked - info.total_bytes < 16 * 63 * 512);
         assert_eq!(info.partitions.len(), 1);
         assert!(info.rdb_checksum_valid);
 
