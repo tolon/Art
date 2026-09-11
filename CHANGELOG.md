@@ -72,6 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   you chose and what the table names, then the card is built from your choice.
   `Emu68-raspi.zip` — Emu68 for a bare Raspberry Pi, not PiStorm firmware — is
   still refused.
+- **PiStorm: the A1200's Kickstart is accepted for every Amiga.** Emu68 loads
+  the Kickstart itself and its guides recommend the A1200 ROM on every model;
+  the card plan and the PiStorm studio no longer call it wrong for an A500, and
+  no longer say a machine with another model's ROM will not come up.
 
 ### Fixed
 

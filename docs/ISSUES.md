@@ -254,6 +254,33 @@ stores md5s keyed by size and modification time) would let the next start pay no
 
 ## Fixed
 
+**ART-307** 🟡 ✅ **The PiStorm screens called the A1200 Kickstart wrong for an A500, and the card plan
+said such a machine "usually does not come up" — the ROM Emu68's guides recommend on every model** —
+*found 2026-09-11 by the owner ("pistrom o kickten boot eder"), after writing a card from
+`main-09d52fb`; fixed the same night on `art-307-pistorm-a1200-rom`*
+`src-tauri/src/core/pistorm/mod.rs` (`rom_suits`) · `src/i18n/*.json` (`cardBuilder.warning.romWrongMachine`)
+· `rom_suits` is a name match against `core/rom`'s table, asked only on the PiStorm screens (the card
+plan and the PiStorm studio), and the A1200's 3.1 lists `A1200` alone — so an A500 got
+`RomWrongMachine`, whose sentence claimed a machine that does not come up. The owner's A500 boots it,
+and so does the project's own record (`docs/superpowers/plans/2026-08-15-os-install-decisions.md`: *"the
+A1200 Kickstart the user's PiStorm A500 runs"*). **Checked from outside before the change**
+(`docs/superpowers/notes/2026-09-11-pistorm-kickstart-and-4gb.md`, sources and what they do not cover):
+Emu68-Imager recommends the A1200 ROM *"regardless of the Amiga model"*; an A2000 runs it *"without
+issue"* (Emu68 #148); edsa.uk runs it on an A500; the maintainer, closing #148 in 2022: *"Kickstarts from
+2.0 up … all of them were working"*; Emu68-Imager's FAQ, one source: *"MUST be from the A1200 and NOT
+the A4000"*.
+
+**The fix.** `rom_suits` treats a ROM listed for the A1200 as suiting every PiStorm Amiga; every other
+name match is unchanged, so an A4000-only ROM on an A500 is still noted. The card plan's sentence for
+that case no longer claims a machine that will not come up: it says Emu68 loads the Kickstart itself,
+that its guides recommend the A1200's on every model and that the A4000's is known not to suit.
+Test: `the_a1200_kickstart_suits_every_pistorm_amiga` (every PiStorm target with the A1200 3.1; an
+A4000-only ROM on an A500 still `Some(false)`) — red before (`A500: Some(false)`), green after; the
+existing `rom_suitability_is_an_opinion_and_only_where_there_is_one` unchanged and green. Mutation:
+the A1200 clause renamed away, the test fails. Full `cargo test --lib` twice `3225 passed; 0 failed;
+58 ignored`; clippy, fmt and the four sweeps clean; `pnpm lint` clean, Vitest `109` / `1655`. Not
+covered by a test: the card plan's sentence itself, which only changed wording.
+
 **ART-306** 🟠 ✅ **Two card-plan warnings reached the screen with their names as `undefined`, and one
 took the wrong sentence** — *found 2026-09-11 while adding ART-305's warning; fixed on the same
 branch*
