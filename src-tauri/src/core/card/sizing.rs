@@ -519,6 +519,16 @@ mod tests {
         assert!(image_bytes_for_label(64) < 64 * 1024 * 1024 * 1024);
     }
 
+    /// An empty file still costs one PFS3 block, not zero (`libpfs3`
+    /// `writer.rs:148`, `.max(1)`) — the doc comment on `data_blocks` states
+    /// this, but nothing had asserted it (Task 7, M10).
+    #[test]
+    fn an_empty_file_still_takes_one_block() {
+        let mut m = ContentMeasure::default();
+        m.add_file("Empty", 0);
+        assert_eq!(m.data_blocks, 1);
+    }
+
     use std::collections::HashMap;
     use std::sync::Mutex;
 
