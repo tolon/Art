@@ -1,0 +1,214 @@
+From 6eb44df6a6a3b1cebe351029967f19cc417395a2 Mon Sep 17 00:00:00 2001
+From: tolon <turkbug@gmail.com>
+Date: Sun, 13 Sep 2026 14:59:15 +0300
+Subject: [PATCH] fix(libpfs3): write the super index level and reserve anodes
+ 0-4 on format
+
+format_with_size pointed rootblock_ext.superindex[0] straight at the anode
+index block in SUPERINDEX mode. Every reader walks superindex -> SB -> IB -> AB
+(pfs3aio's GetSuperBlock rejects a block that is not SBLKID; this crate's own
+AnodeReader and writer expect the same), so a partition over MAXSMALLDISK
+formatted here could not be read back, by this crate ("anode 5 not found") or
+by hst-imager.
+
+It also left anodes 0-4 as (0, 0, 0). pfs3aio's format reserves them through
+AllocAnode (clustersize 0, blocknr 0xffffffff, next 0); an allocator ported from
+pfs3aio treats (0, 0, 0) as free, so hst-imager's first mkdir on such a volume
+fails ERROR_DISK_FULL and a later directory is given anode 1.
+
+The super index block is allocated before the anode index block, which is
+pfs3aio's order; reserved-area sizing and everything else are unchanged.
+---
+ crates/libpfs3/src/format.rs   | 38 ++++++++++++--
+ crates/libpfs3/tests/format.rs | 94 ++++++++++++++++++++++++++++++++++
+ 2 files changed, 127 insertions(+), 5 deletions(-)
+
+diff --git a/crates/libpfs3/src/format.rs b/crates/libpfs3/src/format.rs
+index 015fa90..5dfd1dd 100644
+--- a/crates/libpfs3/src/format.rs
++++ b/crates/libpfs3/src/format.rs
+@@ -9,7 +9,8 @@
+ //! 3. Build rootblock + reserved bitmap
+ //! 4. Allocate and write rootblock extension
+ //! 5. Allocate and write bitmap index + bitmap blocks
+-//! 6. Allocate and write anode index + anode block (with ANODE_ROOTDIR)
++//! 6. Allocate and write the super index block (SUPERINDEX mode only), the
++//!    anode index block and the anode block (anodes 0-4 reserved, ANODE_ROOTDIR)
+ //! 7. Write root directory block (empty)
+ 
+ use crate::error::{Error, Result};
+@@ -18,7 +19,7 @@ use crate::ondisk::{
+     ABLKID, ANODE_BLOCK_HEADER_SIZE, ANODE_ROOTDIR, ANODE_SIZE, BMBLKID, BMIBLKID, DBLKID,
+     EXTENSIONID, IBLKID, ID_PFS_DISK, MAXBITMAPINDEX, MAXSMALLBITMAPINDEX, MODE_DATESTAMP,
+     MODE_DIR_EXTENSION, MODE_EXTENSION, MODE_EXTROVING, MODE_HARDDISK, MODE_LONGFN, MODE_SIZEFIELD,
+-    MODE_SPLITTED_ANODES, MODE_SUPERINDEX, put_u16, put_u32, write_reserved_blocks,
++    MODE_SPLITTED_ANODES, MODE_SUPERINDEX, SBLKID, put_u16, put_u32, write_reserved_blocks,
+ };
+ use crate::util::current_amiga_datestamp;
+ 
+@@ -151,7 +152,14 @@ pub fn format_with_size(
+         bmi_blocknrs.push(firstreserved + idx * rescluster);
+     }
+ 
+-    // 4. Allocate anode index + anode block
++    // 4. Allocate the anode index path. In SUPERINDEX mode pfs3aio's first
++    //    AllocAnode goes through NewSuperBlock before NewIndexBlock, so the
++    //    super index block is allocated first.
++    let sb_blk = if supermode {
++        Some(firstreserved + alloc.alloc()? * rescluster)
++    } else {
++        None
++    };
+     let anidx_blk = firstreserved + alloc.alloc()? * rescluster;
+     let anode_blk = firstreserved + alloc.alloc()? * rescluster;
+ 
+@@ -231,8 +239,10 @@ pub fn format_with_size(
+     put_u16(&mut rext, 0x12, cmin);
+     put_u16(&mut rext, 0x14, ctick);
+     put_u16(&mut rext, 0x38, 32); // fnsize
+-    if supermode {
+-        put_u32(&mut rext, 0x40, anidx_blk); // superindex[0]
++    if let Some(sb_blk) = sb_blk {
++        // superindex[0] names the super index block, never the anode index
++        // block: every reader walks SB -> IB -> AB.
++        put_u32(&mut rext, 0x40, sb_blk); // superindex[0]
+     }
+     write_reserved_blocks(dev, rext_blk as u64, &rext, rescluster, bs)?;
+ 
+@@ -272,6 +282,17 @@ pub fn format_with_size(
+         write_reserved_blocks(dev, bm_blknr as u64, &bm, rescluster, bs)?;
+     }
+ 
++    // Write the super index block, as pfs3aio's NewSuperBlock leaves it:
++    // id SB, seqnr 0, index[0] = the anode index block.
++    if let Some(sb_blk) = sb_blk {
++        let mut sb = vec![0u8; resblocksize as usize];
++        put_u16(&mut sb, 0, SBLKID);
++        put_u32(&mut sb, 4, 1); // datestamp
++        put_u32(&mut sb, 8, 0); // seqnr
++        put_u32(&mut sb, 12, anidx_blk); // index[0] = anode index block
++        write_reserved_blocks(dev, sb_blk as u64, &sb, rescluster, bs)?;
++    }
++
+     // Write anode index block
+     let mut anidx = vec![0u8; resblocksize as usize];
+     put_u16(&mut anidx, 0, IBLKID);
+@@ -285,6 +306,13 @@ pub fn format_with_size(
+     put_u16(&mut an, 0, ABLKID);
+     put_u32(&mut an, 4, 1);
+     put_u32(&mut an, 8, 0); // seqnr
++    // Anodes 0..ANODE_ROOTDIR-1 are reserved, as pfs3aio's format leaves them
++    // (AllocAnode: clustersize 0, blocknr 0xffffffff, next 0). An allocator
++    // ported from pfs3aio hands out any anode that reads (0, 0, 0).
++    for nr in 0..ANODE_ROOTDIR as usize {
++        let off = ANODE_BLOCK_HEADER_SIZE + nr * ANODE_SIZE;
++        put_u32(&mut an, off + 4, 0xFFFF_FFFF);
++    }
+     let an_off = ANODE_BLOCK_HEADER_SIZE + ANODE_ROOTDIR as usize * ANODE_SIZE;
+     put_u32(&mut an, an_off, 1); // clustersize = 1
+     put_u32(&mut an, an_off + 4, rootdir_blk); // blocknr
+diff --git a/crates/libpfs3/tests/format.rs b/crates/libpfs3/tests/format.rs
+index ccc81d8..b802930 100644
+--- a/crates/libpfs3/tests/format.rs
++++ b/crates/libpfs3/tests/format.rs
+@@ -157,3 +157,97 @@ fn format_then_write_on_minimum_disk() {
+     assert_eq!(vol.read_file("tiny.txt").unwrap(), b"hi");
+     std::fs::remove_file(&path).ok();
+ }
++
++/// Reads `len` bytes of the image starting at 512-byte sector `sector`.
++fn sectors(path: &Path, sector: u32, len: usize) -> Vec<u8> {
++    use std::io::{Read, Seek, SeekFrom};
++    let mut f = std::fs::File::open(path).unwrap();
++    f.seek(SeekFrom::Start(u64::from(sector) * 512)).unwrap();
++    let mut buf = vec![0u8; len];
++    f.read_exact(&mut buf).unwrap();
++    buf
++}
++
++/// pfs3aio's format reserves anodes 0-4 by allocating them (`AllocAnode`
++/// leaves clustersize 0, blocknr 0xffffffff, next 0, `anodes.c`). An allocator
++/// ported from pfs3aio hands out any anode that reads (0, 0, 0): hst-imager's
++/// first `mkdir` on such a volume fails ERROR_DISK_FULL, and a later directory
++/// is given reserved anode 1.
++#[test]
++fn format_reserves_anodes_below_rootdir() {
++    // Small mode, and past MAXSMALLDISK (10 241 440 blocks): SUPERINDEX mode.
++    for blocks in [8192u64, 10_444_896] {
++        let (path, dev) = temp_image(blocks);
++        format::format_with_size(&dev, blocks, &FormatOptions::default()).unwrap();
++        drop(dev);
++        let vol = reopen(&path);
++        let rbs = usize::from(vol.rootblock.reserved_blksize);
++        let first = if vol.rootblock.options & MODE_SUPERINDEX != 0 {
++            let sb = sectors(
++                &path,
++                vol.rootblock_ext.as_ref().unwrap().superindex[0],
++                rbs,
++            );
++            u32::from_be_bytes(sb[12..16].try_into().unwrap())
++        } else {
++            vol.rootblock.indexblocks[0]
++        };
++        let ib = sectors(&path, first, rbs);
++        let ab = sectors(
++            &path,
++            u32::from_be_bytes(ib[12..16].try_into().unwrap()),
++            rbs,
++        );
++        assert_eq!(
++            u16::from_be_bytes([ab[0], ab[1]]),
++            ABLKID,
++            "{blocks} blocks"
++        );
++        for nr in 0..ANODE_ROOTDIR as usize {
++            let at = ANODE_BLOCK_HEADER_SIZE + nr * ANODE_SIZE;
++            let anode: Vec<u32> = (0..3)
++                .map(|k| u32::from_be_bytes(ab[at + 4 * k..at + 4 * k + 4].try_into().unwrap()))
++                .collect();
++            assert_eq!(anode, [0, 0xFFFF_FFFF, 0], "{blocks} blocks, anode {nr}");
++        }
++        std::fs::remove_file(&path).ok();
++    }
++}
++
++/// In SUPERINDEX mode every reader walks superindex[0] -> SB -> IB -> AB:
++/// pfs3aio's GetSuperBlock rejects anything that is not SBLKID, and this
++/// crate's own AnodeReader expects the same three levels. A format that points
++/// superindex[0] at the index block leaves a volume nothing can read.
++#[test]
++fn format_superindex_mode_writes_the_sb_level_and_accepts_writes() {
++    let blocks = 10_444_896u64;
++    let (path, dev) = temp_image(blocks);
++    format::format_with_size(&dev, blocks, &FormatOptions::default()).unwrap();
++    drop(dev);
++
++    let vol = reopen(&path);
++    assert_ne!(vol.rootblock.options & MODE_SUPERINDEX, 0);
++    let rbs = usize::from(vol.rootblock.reserved_blksize);
++    let sb = sectors(
++        &path,
++        vol.rootblock_ext.as_ref().unwrap().superindex[0],
++        rbs,
++    );
++    assert_eq!(u16::from_be_bytes([sb[0], sb[1]]), SBLKID);
++    let ib = sectors(
++        &path,
++        u32::from_be_bytes(sb[12..16].try_into().unwrap()),
++        rbs,
++    );
++    assert_eq!(u16::from_be_bytes([ib[0], ib[1]]), IBLKID);
++
++    drop(vol);
++    // `reopen` is read-only; the writer needs a read-write volume.
++    let mut w = libpfs3::writer::Writer::open(Volume::open_rw(&path, 0).unwrap()).unwrap();
++    w.create_dir("Dir").unwrap();
++    w.write_file("Dir/File", b"hello").unwrap();
++    drop(w);
++    let mut vol = reopen(&path);
++    assert_eq!(vol.read_file("Dir/File").unwrap(), b"hello");
++    std::fs::remove_file(&path).ok();
++}
+-- 
+2.55.0
+
