@@ -440,6 +440,9 @@ def check_art_writes_hst_reads(
         (int(l[len("anode="):]) for l in asked.stdout.splitlines() if l.startswith("anode=")),
         None,
     )
+    if asked.returncode != 0 or anode is None:
+        print(asked.stdout[-3000:])
+        print(asked.stderr[-2000:])
     checks.append(
         (
             anode is not None and anode > 4,
