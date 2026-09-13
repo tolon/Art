@@ -223,12 +223,11 @@ every Amiga disk. **PFS3 and FFS volumes are formatted and filled by ART
 itself** — no external tool required, though one can be configured as a
 fallback for two named gaps. 0.9.2 corrected how ART formats PFS3: a partition
 over about 4.9 GB could not be mounted, and the Amiga's first new drawer could
-fail ([ART-310](docs/ISSUES.md#fixed)). **Two limits on filling PFS3 remain,
-said here rather than discovered later:** ART's PFS3 writer can, rarely, give a
-file another block's contents with no error
-([ART-312](docs/ISSUES.md#open) — measured at 3 files in 22 000, the fix found
-but not yet in a release), and a partition it fills holds at most about 21 500
-files and drawers ([ART-311](docs/ISSUES.md#open)).
+fail ([ART-310](docs/ISSUES.md#fixed)). **One limit on filling PFS3 remains,
+said here rather than discovered later:** a partition ART fills holds at most
+about 21 500 files and drawers ([ART-311](docs/ISSUES.md#open)). A writer defect
+that could, rarely, give a file another block's contents with no error is fixed
+after 0.9.2 ([ART-312](docs/ISSUES.md#fixed)).
 
 The card can carry **more than one complete AmigaOS** — 3.1 for compatibility
 beside 3.2 for daily use, say. ART writes no boot menu, because AmigaOS already

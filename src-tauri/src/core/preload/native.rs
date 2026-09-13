@@ -16,10 +16,11 @@
 //! type — is refused by name; `NativeFormatter` does not guess.
 //!
 //! `libpfs3` here is ART's vendored copy, `src-tauri/vendor/libpfs3`
-//! (`0.1.3+art.1`): 0.1.3's format left out the super index level and left
-//! anodes 0–4 unreserved (ART-310), and only `format.rs` differs. Its writer is
-//! 0.1.3's, so the writer limits below (ART-113, ART-116), its anode
-//! ceiling (ART-311) and its double anode allocation (ART-312) still hold.
+//! (`0.1.3+art.2`): 0.1.3's format left out the super index level and left
+//! anodes 0–4 unreserved (ART-310), and its writer handed one anode number
+//! out twice in an operation that allocated twice (ART-312); `format.rs` and
+//! `writer.rs` differ. The writer's other limits below (ART-113, ART-116) and
+//! its anode ceiling (ART-311) still hold.
 //!
 //! ## `import_filesystem` refuses
 //!
@@ -117,14 +118,14 @@ use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
 
 /// The version of the `libpfs3` ART builds: the vendored copy in
 /// `src-tauri/vendor/libpfs3` (ART-310) — crates.io's 0.1.3 with ART's patch,
-/// `+art.1`. There is no `CARGO_PKG_VERSION`-style macro for a *dependency's*
+/// `+art.2`. There is no `CARGO_PKG_VERSION`-style macro for a *dependency's*
 /// version, so this is kept in sync by hand, the same trade-off ART already
 /// accepts for `ureq`'s exact `=3.2.1` pin (CLAUDE.md). `probe()` reports this
 /// constant as which implementation did the work, and
 /// `the_pinned_version_constant_matches_cargo_toml` (below) reads the pin, the
 /// `[patch.crates-io]` line and the vendored manifest, so the constant cannot
 /// drift from what was actually built.
-const LIBPFS3_VERSION: &str = "0.1.3+art.1";
+const LIBPFS3_VERSION: &str = "0.1.3+art.2";
 
 /// A [`VolumeFormatter`] backed by `libpfs3` and ART's own FFS writer.
 /// Launches nothing; see the module docs for what each method actually does.
@@ -1593,6 +1594,58 @@ mod tests {
         assert_eq!(vol.read_file("Readme").unwrap(), b"hello from ART\n");
     }
 
+    /// **ART-312.** One write that allocates two anodes — the file's own,
+    /// which starts a fresh anode block, and its directory's, because the new
+    /// entry spills the directory into a new block — must get two different
+    /// anode numbers. `libpfs3` 0.1.3's writer resolved the second allocation
+    /// through the device, where the first's index update was still only
+    /// pending, and handed the same number out twice: the file then read back
+    /// as its directory's continuation block, with no error anywhere.
+    ///
+    /// The layout is the one the Windows machine's ART-310 run measured the
+    /// collision with (10 directories of 200 files, first seen at
+    /// `D009/F00070`); `copy_in` makes the same `create_dir_in` /
+    /// `write_file_in` calls per entry. Every file's content is its own, and
+    /// every file is read back from a reopened volume, so a collision cannot
+    /// hide behind identical contents or an unchecked file.
+    #[test]
+    fn a_pfs3_write_that_allocates_two_anodes_gets_two_different_ones() {
+        let (_guard, image) = formatted_pds3_image_of(24);
+        let offset = partition_offset(&image);
+        let mut written = Vec::new();
+        {
+            let vol = libpfs3::volume::Volume::open_rw(&image, offset).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            for d in 0..10 {
+                let dir = format!("D{d:03}");
+                w.create_dir(&dir).unwrap();
+                for f in 0..200 {
+                    let name = format!("{dir}/F{f:05}");
+                    let content = format!("{name}-unique-content");
+                    w.write_file(&name, content.as_bytes())
+                        .unwrap_or_else(|e| panic!("{name}: {e}"));
+                    written.push((name, content));
+                }
+            }
+            drop(w.into_volume());
+        }
+
+        let mut vol = libpfs3::volume::Volume::open(&image, offset).unwrap();
+        let wrong: Vec<&str> = written
+            .iter()
+            .filter(|(name, content)| {
+                vol.read_file(name).ok().as_deref() != Some(content.as_bytes())
+            })
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "{} of {} files do not read back as their own content: {wrong:?}",
+            wrong.len(),
+            written.len()
+        );
+    }
+
     // ---- ART-113: a non-ASCII name is refused before anything is written ----
 
     /// The exact real-world shape ART-113 found: a file whose AmigaDOS name
@@ -2175,7 +2228,7 @@ mod tests {
     #[test]
     fn probe_names_libpfs3() {
         let probed = NativeFormatter.probe().unwrap();
-        assert_eq!(probed.raw, "libpfs3 0.1.3+art.1 (native, no external tool)");
+        assert_eq!(probed.raw, "libpfs3 0.1.3+art.2 (native, no external tool)");
     }
 
     /// `import_filesystem` refuses by name rather than pretend — see the

@@ -459,12 +459,11 @@ fn split_work(rest: u64) -> Vec<(String, Option<u32>, u64)> {
 ///
 /// Every Work partition this plans, on every card size, is past MAXSMALLDISK
 /// (10 241 440 blocks), in PFS3's SUPERINDEX mode. `libpfs3` 0.1.3's format
-/// wrote that mode wrong; ART builds the vendored `0.1.3+art.1`, which writes
+/// wrote that mode wrong; ART builds the vendored `0.1.3+art.2`, which writes
 /// it as pfs3aio does (ART-310, fixed), so the **format** `NativeFormatter`
-/// writes on these partitions is right. Filling them through `libpfs3`'s
-/// writer is not yet safe: it can hand one anode number out twice in one
-/// operation (ART-312), and it holds at most ~21 500 anodes in either mode
-/// (ART-311).
+/// writes on these partitions is right, and its writer no longer hands one
+/// anode number out twice (ART-312, fixed). Filling them is still bound by
+/// the writer's ceiling of ~21 500 anodes in either mode (ART-311).
 pub fn plan_card_image(
     card_gb: u32,
     content: &[RequestedPartition],
@@ -927,11 +926,11 @@ mod tests {
     /// against `libpfs3` 0.1.3, failed at once with `"anode 5 not found"`:
     /// 0.1.3's format pointed `superindex[0]` at the anode index block where
     /// every reader expects a super index block. That was ART-310, fixed in
-    /// the vendored `0.1.3+art.1`. `core::preload::native`'s
+    /// the vendored `0.1.3+art.2`. `core::preload::native`'s
     /// `a_large_pfs3_volume_takes_its_own_writes` shows a SUPERINDEX-mode
     /// volume taking a few writes inside its first anode block only; it does
     /// not reach a second anode block through the SB -> IB path, and the
-    /// writer's limits there are ART-311 and ART-312. Filling AGS scale
+    /// writer's ceiling there is ART-311. Filling AGS scale
     /// (~140 000 files) — and SUPERINDEX mode generally — is round 5's concern
     /// per the review's own ruling; this test proves only what it can honestly
     /// prove today.
