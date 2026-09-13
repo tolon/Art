@@ -2253,19 +2253,66 @@ mod tests {
         let Ok(target) = std::env::var("ART_PFS3_WRITE_OUT") else {
             return;
         };
-        let image = PathBuf::from(&target);
+        write_pfs3_volume_for_oracle(&PathBuf::from(&target), 220 * 1024 * 1024, 200);
+    }
+
+    /// **ART-310.** The same volume and the same JSON claim as
+    /// `build_pfs3_volume_for_oracle_when_asked`, on a partition past
+    /// MAXSMALLDISK (5 100 MiB, 10 444 896 blocks) — SUPERINDEX mode, the mode
+    /// `libpfs3` 0.1.3's format wrote wrong.
+    ///
+    /// ```text
+    /// ART_PFS3_WRITE_OUT_LARGE=... cargo test build_large_pfs3_volume_for_oracle_when_asked -- --nocapture
+    /// ```
+    #[test]
+    fn build_large_pfs3_volume_for_oracle_when_asked() {
+        let Ok(target) = std::env::var("ART_PFS3_WRITE_OUT_LARGE") else {
+            return;
+        };
+        write_pfs3_volume_for_oracle(&PathBuf::from(&target), 5_200 * 1024 * 1024, 5_100);
+    }
+
+    /// **ART-310, the oracle's anode question.** Prints the anode number of one
+    /// entry on a PFS3 volume, so `pfs3-oracle-check.py` can ask whether
+    /// hst-imager — whose allocator is a port of pfs3aio's — handed a new
+    /// directory one of the numbers pfs3aio reserves (0–4).
+    ///
+    /// ```text
+    /// ART_PFS3_ANODE_IN=<image> ART_PFS3_ANODE_PATH=<path> cargo test pfs3_anode_for_oracle_when_asked -- --nocapture
+    /// ```
+    #[test]
+    fn pfs3_anode_for_oracle_when_asked() {
+        let (Ok(source), Ok(path)) = (
+            std::env::var("ART_PFS3_ANODE_IN"),
+            std::env::var("ART_PFS3_ANODE_PATH"),
+        ) else {
+            return;
+        };
+        let image = PathBuf::from(&source);
+        let mut vol = libpfs3::volume::Volume::open(&image, partition_offset(&image)).unwrap();
+        let entry = vol
+            .lookup(&path)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{path} is not on the volume"));
+        println!("anode={}", entry.anode);
+    }
+
+    /// The body both write hooks share: an RDB image of `disk_bytes` with one
+    /// PDS\3 partition of `partition_mb`, formatted and filled through the same
+    /// two calls G5 makes, then the JSON of every entry it believes it wrote.
+    fn write_pfs3_volume_for_oracle(image: &Path, disk_bytes: u64, partition_mb: u32) {
         if let Some(parent) = image.parent() {
             std::fs::create_dir_all(parent).ok();
         }
 
         crate::core::hdf::create_hdf(
-            &image,
-            220 * 1024 * 1024,
+            image,
+            disk_bytes,
             true,
             &[PartitionSpec {
                 drive_name: "DH0".into(),
                 fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
-                size_mb: 200,
+                size_mb: partition_mb,
                 bootable: true,
                 boot_priority: 0,
                 num_buffers: 0,
@@ -2275,7 +2322,7 @@ mod tests {
         .unwrap();
 
         NativeFormatter
-            .format_partition(&image, None, 1, "Workbench", &NoProgress)
+            .format_partition(image, None, 1, "Workbench", &NoProgress)
             .unwrap();
 
         // The literal bytes are named once and reused for both the write and
@@ -2320,7 +2367,7 @@ mod tests {
         std::fs::write(tree.join("DOSDrivers/AUX"), aux).unwrap();
 
         NativeFormatter
-            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .copy_in(image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
         // What a real `hst-imager fs dir -r` is expected to show — verified
