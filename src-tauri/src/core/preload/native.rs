@@ -109,16 +109,16 @@ use crate::core::volume::device::FileRegionMut;
 use crate::core::volume::write::{dir, uaem, write_refusal, FileMeta, VolumeWriter};
 use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
 
-/// The version pinned in `Cargo.toml`. There is no `CARGO_PKG_VERSION`-style
-/// macro for a *dependency's* version, so this is kept in sync by hand — the
-/// same trade-off ART already accepts for `ureq`'s exact `=3.2.1` pin
-/// (CLAUDE.md). `libpfs3` is pinned exactly (`=0.1.3`) for the same reason:
-/// `probe()` reports this constant as which implementation did the work, and
-/// an unpinned `cargo update` drifting past it would make that report state
-/// a version nobody actually built. `the_pinned_version_constant_matches_cargo_toml`
-/// (below) is what turns "kept in sync by hand" into something a `cargo
-/// update` cannot get away with silently.
-const LIBPFS3_VERSION: &str = "0.1.3";
+/// The version of the `libpfs3` ART builds: the vendored copy in
+/// `src-tauri/vendor/libpfs3` (ART-310) — crates.io's 0.1.3 with ART's patch,
+/// `+art.1`. There is no `CARGO_PKG_VERSION`-style macro for a *dependency's*
+/// version, so this is kept in sync by hand, the same trade-off ART already
+/// accepts for `ureq`'s exact `=3.2.1` pin (CLAUDE.md). `probe()` reports this
+/// constant as which implementation did the work, and
+/// `the_pinned_version_constant_matches_cargo_toml` (below) reads the pin, the
+/// `[patch.crates-io]` line and the vendored manifest, so the constant cannot
+/// drift from what was actually built.
+const LIBPFS3_VERSION: &str = "0.1.3+art.1";
 
 /// A [`VolumeFormatter`] backed by `libpfs3` and ART's own FFS writer.
 /// Launches nothing; see the module docs for what each method actually does.
@@ -1745,16 +1745,30 @@ mod tests {
     }
 
     // ---- fix round 1, item 2: the version pin cannot silently drift ----
+    // ---- ART-310: and it names the vendored, patched copy ----
 
     #[test]
     fn the_pinned_version_constant_matches_cargo_toml() {
         let cargo_toml = include_str!("../../../Cargo.toml");
-        let expected = format!("libpfs3 = \"={LIBPFS3_VERSION}\"");
         assert!(
-            cargo_toml.contains(&expected),
-            "Cargo.toml's libpfs3 pin no longer matches LIBPFS3_VERSION \
-             ({LIBPFS3_VERSION}) — update the constant (and what probe() \
-             claims) together with the dependency bump"
+            cargo_toml.contains("libpfs3 = \"=0.1.3\""),
+            "Cargo.toml must still pin the crates.io release the vendored copy was taken from"
+        );
+        // Two separate checks, not one string with a newline in it: a Windows
+        // checkout may carry CRLF.
+        assert!(
+            cargo_toml.contains("[patch.crates-io]")
+                && cargo_toml.contains("libpfs3 = { path = \"vendor/libpfs3\" }"),
+            "Cargo.toml must patch libpfs3 to the vendored copy (ART-310) — without it the \
+             build silently goes back to 0.1.3's broken format"
+        );
+        let vendored = include_str!("../../../vendor/libpfs3/Cargo.toml");
+        let expected = format!("version = \"{LIBPFS3_VERSION}\"");
+        assert!(
+            vendored.contains(&expected),
+            "the vendored libpfs3's version no longer matches LIBPFS3_VERSION \
+             ({LIBPFS3_VERSION}) — update the constant (and what probe() claims) together \
+             with the vendored copy"
         );
     }
 
@@ -1980,7 +1994,7 @@ mod tests {
     #[test]
     fn probe_names_libpfs3() {
         let probed = NativeFormatter.probe().unwrap();
-        assert!(probed.raw.contains("libpfs3"), "{}", probed.raw);
+        assert_eq!(probed.raw, "libpfs3 0.1.3+art.1 (native, no external tool)");
     }
 
     /// `import_filesystem` refuses by name rather than pretend — see the
