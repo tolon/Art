@@ -26,20 +26,51 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-311** 🟡 **`libpfs3`'s writer cannot grow the anode index itself: a small-mode PFS3 volume ART
-writes holds at most 21 246 anodes whatever its size, and a SUPERINDEX-mode one cannot pass its first
-super index block** — *found 2026-09-11 as ART-310's "third limit"; filed 2026-09-13, when ART-310's
+**ART-312** 🔴 **`libpfs3`'s writer can hand one anode number out twice in one operation, and a file
+then silently reads another block's bytes** — *found 2026-09-11 by the task-5 review of the Windows
+machine's own ART-310 run (its C1); confirmed reachable on `art-310-libpfs3-format` by that branch's final
+whole-branch review, 2026-09-13, and filed then*
+`src-tauri/vendor/libpfs3/src/writer.rs` · `alloc_anode` (`writer.rs:899`) resolves an anode block through
+`get_anode_block_nr` (`writer.rs:1289`), which goes to the volume's cache and reads **the device**. A new
+anode block's index entry exists only in the writer's `pending_writes` (`write_reserved`,
+`writer.rs:1278-1287`) until `update_rootblock` flushes them. So when one operation allocates twice and the
+first allocation created a fresh anode block, the second sees the index entry as 0, creates the block again
+for the same seqnr and returns the same anode number: the first object's anode then points at the second
+object's block, and the first anode block is left marked used and unreferenced. `create_dir_in`
+(`writer.rs:167`, allocating at `:169`, flushing at `:179`) and `write_file_in` (`writer.rs:126`, flushing
+at `:137`) each allocate more than once before their flush when a directory spills into a new block; ART
+calls them per entry (`core/preload/native.rs:917`, `:932`), and `commands/preload.rs` uses
+`NativeFormatter`. SUPERINDEX mode has the same flaw one level up: a fresh index block is read back
+through the SB via the cache (`writer.rs:983`).
+**Measured on the Windows run's branch, not on this one:** 22 000 unique files, every file read back from
+a reopened volume — 3 mismatches in small mode and 3 in large, each reading a `DB` block; 0 with one
+variable changed (`write_reserved` writing through to the device); the same 3 files on 0.1.3's writer at
+18 000. The review is that machine's git-ignored
+`.superpowers/sdd/2026-09-11-art-310-libpfs3-format/task-5-review.md`; the fix is `9c7c845` on the local
+branch `art-310-windows`, not ported. This branch's writer is 0.1.3's, so the defect is here too.
+**How it hurts a user:** a volume ART fills natively can hold files whose contents are another block's
+bytes, with no error anywhere. Before ART-310's fix a SUPERINDEX-mode volume failed at its first write
+(`anode 5 not found`); now it takes writes, so this reaches large volumes too. `plan_card_image` has no
+production caller yet. **Next:** port `9c7c845` with a test that writes unique content across more than
+one anode block and reads every file back, seen red first.
+
+**ART-311** 🟡 **`libpfs3`'s writer caps the anodes a PFS3 volume can hold: at most 21 246 in small
+mode and 21 498 in SUPERINDEX mode, whatever the volume's size** — *found 2026-09-11 as ART-310's "third limit"; filed 2026-09-13, when ART-310's
 format fix left the writer untouched by the owner's decision*
-`src-tauri/vendor/libpfs3/src/writer.rs` (`alloc_anode_block`) · pfs3aio allocates index blocks on
+`src-tauri/vendor/libpfs3/src/writer.rs` (`alloc_anode`, `alloc_anode_block`) · pfs3aio allocates index blocks on
 demand (`NewIndexBlock`, `anodes.c:717-772`: up to `MAXSMALLINDEXNR` + 1 = 99 in small mode, through
 `NewSuperBlock` in SUPERINDEX mode). `libpfs3`'s writer does neither. In small mode it returns
 `DiskFull("no index block slot available")` as soon as `rootblock.indexblocks[idx_nr]` is unset
 (`writer.rs:1024`), so a volume keeps the one index block the format made: 253 × 84 − 6 = 21 246
 anodes. In SUPERINDEX mode it returns `DiskFull("no superindex slot available")` when
-`superindex[n]` is unset (`writer.rs:980`), which is reached only past 253² anode blocks.
-**How it hurts a user:** content of more than ~21 000 files cannot go on a PFS3 partition under
-~5.24 GB. `core::card::sizing::pfs3_small_mode_anode_cap` sizes such content up past MAXSMALLDISK, so a
-card spends gigabytes of Work on it. Measured 2026-09-13 with ART-310's format fix applied: 20 655 files
+`superindex[n]` is unset (`writer.rs:980`), but that is never reached: `alloc_anode` searches only
+anode blocks 0..256 (`writer.rs:901`) and then returns `DiskFull("no free anode slots")` (`:947`), so
+a SUPERINDEX-mode volume holds 256 × 84 − 6 = 21 498 anodes at 1024-byte reserved blocks. *Corrected
+2026-09-13 by the branch's final whole-branch review; this entry first said "only past 253² anode
+blocks".*
+**How it hurts a user:** content of more than ~21 000 files cannot go on a PFS3 partition ART fills,
+at any size. `core::card::sizing::pfs3_small_mode_anode_cap` sizes such content up past MAXSMALLDISK,
+which spends gigabytes of Work and does not lift the ceiling. Measured 2026-09-13 with ART-310's format fix applied: 20 655 files
 into one directory on a 1 GiB volume, then `disk full: no index block slot available`. Not scheduled;
 lifting it changes `core::card::sizing` and its tests, which is the owner's to schedule.
 **A small-mode fix already exists, unmerged and unpushed:** the Windows machine's earlier, independent
@@ -51,8 +82,7 @@ second allocation in one operation re-creates the same anode block and hands out
 twice. 3 of 22 000 files read back a directory block; 0 with one variable changed (`write_reserved`
 writing through); the same 3 files on 0.1.3's writer at 18 000 (fixed there in `9c7c845`; the review
 is that machine's git-ignored `.superpowers/sdd/2026-09-11-art-310-libpfs3-format/task-5-review.md`).
-This branch's writer is 0.1.3's, so it very likely carries that defect too — not measured here, and it
-needs its own entry. The owner chose on 2026-09-13 to finish this branch first and port that work
+This branch's writer is 0.1.3's, so it carries that defect too: ART-312. The owner chose on 2026-09-13 to finish this branch first and port that work
 afterwards.
 
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
@@ -393,8 +423,8 @@ volume. Design `docs/superpowers/specs/2026-09-13-art-310-libpfs3-format-fix-des
 - **`plan_card_image`'s rule** ("never `NativeFormatter` past MAXSMALLDISK while ART-310 is open") is
   removed from its doc comment. **Owed by a person:** mount a volume ART formatted past MAXSMALLDISK under
   real pfs3aio in WinUAE, `dir` it and make a drawer. The upstream pull request waits for this.
-  **Not in this fix:** the writer's index-block gaps, now ART-311, and the writer's double anode
-  allocation that ART-311 describes — this fix makes the format right, not the writer.
+  **Not in this fix:** the writer's anode ceiling, now ART-311, and its double anode allocation,
+  ART-312 — this fix makes the format right, not the writer.
 
 **ART-307** 🟡 ✅ **The PiStorm screens called the A1200 Kickstart wrong for an A500, and the card plan
 said such a machine "usually does not come up" — the ROM Emu68's guides recommend on every model** —

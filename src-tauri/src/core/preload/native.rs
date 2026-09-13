@@ -18,8 +18,8 @@
 //! `libpfs3` here is ART's vendored copy, `src-tauri/vendor/libpfs3`
 //! (`0.1.3+art.1`): 0.1.3's format left out the super index level and left
 //! anodes 0–4 unreserved (ART-310), and only `format.rs` differs. Its writer is
-//! 0.1.3's, so the writer limits below (ART-113, ART-116) and its two
-//! index-block gaps (ART-311) still hold.
+//! 0.1.3's, so the writer limits below (ART-113, ART-116), its anode
+//! ceiling (ART-311) and its double anode allocation (ART-312) still hold.
 //!
 //! ## `import_filesystem` refuses
 //!
