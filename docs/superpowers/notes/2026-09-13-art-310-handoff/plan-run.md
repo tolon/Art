@@ -325,3 +325,20 @@ predicted `NullReferenceException`.
 Restored with `git checkout -- src-tauri/Cargo.toml src-tauri/Cargo.lock`. `git status --short` afterward
 showed only `scripts/pfs3-oracle-check.py` and `src-tauri/src/core/preload/native.rs` modified — this
 task's two files.
+
+## Task 4 Windows
+
+The owner's Windows machine, 2026-09-13, on `art-310-libpfs3-format` at `e58abbb` with a clean tree (the
+branch fetched from `origin`; the machine's own older ART-310 branch was renamed `art-310-windows` first).
+From `src-tauri`, `TMP`/`TEMP` = `E:\amiga\ProjeART\build\tmp`, each step's output in
+`E:\amiga\ProjeART\build\tmp\art310-task4\`:
+
+| Step | Exit | Line |
+|---|---|---|
+| `cargo fmt --check` | 0 | — |
+| `cargo clippy --all-targets -- -D warnings` | 0 | — |
+| `cargo test --lib` (1) | 0 | `test result: ok. 3257 passed; 0 failed; 58 ignored; 0 measured; 0 filtered out; finished in 41.70s` |
+| `cargo test --lib` (2) | 0 | `test result: ok. 3257 passed; 0 failed; 58 ignored; 0 measured; 0 filtered out; finished in 37.14s` |
+| `cargo deny check` | 0 | `advisories ok, bans ok, licenses ok, sources ok` |
+
+3257 is the plan's prediction (3252 + 5). The Linux-only clippy errors of Ruling 5 did not appear here.

@@ -62,7 +62,8 @@ ART is built on the following open-source projects:
   (MIT / Unlicense) and `thiserror` (MIT / Apache-2.0) beneath it. The one
   weak-copyleft dependency inside `core/`, accepted deliberately in place of a
   second filesystem writer of ART's own — see `deny.toml`'s allow list for the
-  reasoning and its cost
+  reasoning and its cost. Vendored and patched as `0.1.3+art.1` in
+  `src-tauri/vendor/libpfs3` (ART-310; `ART-PATCH.md` there says what changed)
 - **trash** — sending a file on the user's own disk to the Windows Recycle
   Bin (MIT), with `urlencoding` (MIT) and the `windows` 0.56 family —
   `windows-core`, `windows-implement`, `windows-interface`, `windows-result`

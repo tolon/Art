@@ -454,9 +454,11 @@ fn split_work(rest: u64) -> Vec<(String, Option<u32>, u64)> {
 /// split at PFS3's largest partition if what is left does not fit one.
 /// No partition it plans is larger than [`PFS3_CEILING_BYTES`].
 ///
-/// **ART-310:** every Work partition this plans, on every card size, is past
-/// MAXSMALLDISK (10 241 440 blocks), where `libpfs3` 0.1.3's format is wrong
-/// — a caller must not hand one to `NativeFormatter` while ART-310 is open.
+/// Every Work partition this plans, on every card size, is past MAXSMALLDISK
+/// (10 241 440 blocks), in PFS3's SUPERINDEX mode. `libpfs3` 0.1.3's format
+/// wrote that mode wrong; ART builds the vendored `0.1.3+art.1`, which writes
+/// it as pfs3aio does (ART-310, fixed), so `NativeFormatter` may format these
+/// partitions.
 pub fn plan_card_image(
     card_gb: u32,
     content: &[RequestedPartition],
@@ -915,21 +917,16 @@ mod tests {
     ///
     /// This only proves the size crosses the mode boundary, not that the
     /// content can be written there: filling this content at the returned
-    /// estimate is **not** attempted here. A direct experiment against
-    /// `libpfs3` 0.1.3's SUPERINDEX (large) mode — formatting a volume well
-    /// past `MAXSMALLDISK` and calling `create_dir` on it once — fails
-    /// immediately with `"anode 5 not found"` (`ANODE_ROOTDIR = 5`) at every
-    /// size tried, including far past `MAXSMALLDISK`. Traced to a mismatch
-    /// between `format.rs`'s "Write anode index block" step (which registers
-    /// the *index* block directly as `superindex[0]`, a 2-level structure)
-    /// and `resolve_anode_block`'s large-mode path (`anode.rs:110-125`,
-    /// which expects a 3-level `superindex -> index -> anode` structure and
-    /// so misreads the index block's own first entry as if it were a
-    /// further index pointer) — a `libpfs3` 0.1.3 defect, not an estimate
-    /// question, reported to the round rather than worked around here. Filling
-    /// AGS scale (~140 000 files) — and SUPERINDEX mode generally — is
-    /// round 5's concern per the review's own ruling; this test proves only
-    /// what it can honestly prove today.
+    /// estimate is **not** attempted here. The first attempt at such a fill,
+    /// against `libpfs3` 0.1.3, failed at once with `"anode 5 not found"`:
+    /// 0.1.3's format pointed `superindex[0]` at the anode index block where
+    /// every reader expects a super index block. That was ART-310, fixed in
+    /// the vendored `0.1.3+art.1`; a SUPERINDEX-mode volume taking its own
+    /// writes is `core::preload::native`'s
+    /// `a_large_pfs3_volume_takes_its_own_writes`. Filling AGS scale
+    /// (~140 000 files) — and SUPERINDEX mode generally — is round 5's concern
+    /// per the review's own ruling; this test proves only what it can honestly
+    /// prove today.
     #[test]
     fn many_files_cross_into_superindex_mode() {
         let (_dirs, _files, m) = profile(250, 100, |_| 200); // 25 000 files

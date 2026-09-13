@@ -15,6 +15,12 @@
 //! writer (`core/volume/write`). Anything else — `SFS\0`, an unrecognised
 //! type — is refused by name; `NativeFormatter` does not guess.
 //!
+//! `libpfs3` here is ART's vendored copy, `src-tauri/vendor/libpfs3`
+//! (`0.1.3+art.1`): 0.1.3's format left out the super index level and left
+//! anodes 0–4 unreserved (ART-310), and only `format.rs` differs. Its writer is
+//! 0.1.3's, so the writer limits below (ART-113, ART-116) and its two
+//! index-block gaps (ART-311) still hold.
+//!
 //! ## `import_filesystem` refuses
 //!
 //! The trait method exists to embed a filesystem driver into an **already

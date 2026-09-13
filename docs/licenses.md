@@ -49,7 +49,7 @@ It is maintained manually and verified with `cargo deny check` (see
 | `quick-xml` | XML reading, for one file: `rp9-manifest.xml` inside an `.rp9` package, read through `core/archive`'s gate rather than from a path | MIT |
 | `fatfs` | FAT32 — the PiStorm card's boot partition, the one filesystem ART writes that is not an Amiga one (`chrono` off, so a build repeats byte for byte) | MIT |
 | `trash` | The Windows Recycle Bin — **outside `core/`**, in `tools/recycle_bin.rs`, because it calls `IFileOperation` | MIT |
-| `libpfs3` | PFS3 filesystem implementation — writes and reads the volumes AmigaOS install (SD-2 G5) puts on a PiStorm card | **LGPL-3.0-or-later** (weak copyleft; the one non-permissive dependency in `core/`, compatible with ART's GPL-3.0-or-later but noted deliberately — `core/` is meant to be promotable to a standalone crate, which is exactly the reuse the project otherwise avoids constraining) |
+| `libpfs3` | PFS3 filesystem implementation — writes and reads the volumes AmigaOS install (SD-2 G5) puts on a PiStorm card | **LGPL-3.0-or-later** (weak copyleft; the one non-permissive dependency in `core/`, compatible with ART's GPL-3.0-or-later but noted deliberately — `core/` is meant to be promotable to a standalone crate, which is exactly the reuse the project otherwise avoids constraining) **Vendored and patched** since ART-310: `src-tauri/vendor/libpfs3`, version `0.1.3+art.1`, only `src/format.rs` changed (its `ART-PATCH.md` says what and why); upstream's `LICENSE` and the full LGPL-3.0 text (`COPYING.LESSER`) travel with it. |
 
 (Transitive dependencies are audited via `cargo deny check licenses`.)
 
@@ -123,6 +123,13 @@ Two need care before any of their code is used:
 has been written — SD-2 G5 — through `libpfs3`, an independent crate
 (LGPL-3.0-or-later, see the Rust dependency table above), not by copying or
 linking pfs3aio itself.
+
+*Added 2026-09-13 (ART-310).* That copy is now patched in ART's tree, and `libpfs3`'s formatter says
+of itself that it is *"ported from pfs3aio/format.c"* — pfs3aio's licence is BSD-4-Clause (Michiel
+Pelt, 2011, with the advertising clause), which the FSF lists as incompatible with the GPL. ART's
+patch is written from the on-disk layout in `libpfs3`'s own idiom, not translated from pfs3aio or its
+ports (hst-amiga, AmigaDiskKit); what that lineage means for the crate as a whole is recorded in
+`docs/superpowers/notes/2026-09-11-libpfs3-format-fix-research.md` § 7 and not settled there.
 
 Permissively licensed candidates (`delharc` MIT/Apache-2.0, `lhasa` ISC,
 `xdms-rs`, `hunkfile`) pose no such problem.

@@ -26,66 +26,34 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-310** 🔴 **`libpfs3` 0.1.3's format is wrong: a PFS3 partition over ~4.88 GiB is unmountable, and
-at every size anodes 0–4 are left unreserved** — *found 2026-09-11 in round 1 of the one-button card:
-Task 4's fill tests could not write past MAXSMALLDISK; a controlled experiment located the defect*
-`libpfs3-0.1.3/src/format.rs` (a dependency) · reached through `src-tauri/src/core/preload/native.rs`
-(`NativeFormatter::format_partition`), ART's default PFS3 formatter since SD-2 · **The experiment**
-(out of the repository, `E:\amiga\ProjeART\build\tmp\pfs3-large-exp\` — `mkimg.py`, `src\main.rs`,
-`cmp.py`, `patch.py`, `run_e.py`; images sparse and deleted afterwards): RDB images built by hst-imager
-1.6.616 with the owner's pfs3aio driver as `PDS3`; one variable per arm — who formats — at 1 GiB
-(2 097 648 blocks, control) and 6 GiB (12 583 872 blocks, SUPERINDEX mode):
-
-| Arm | 1 GiB | 6 GiB |
-|---|---|---|
-| libpfs3 formats, hst-imager reads | `fs dir` OK; `fs mkdir` → `ERROR_DISK_FULL at Pfs3.Directory.NewDir` | `fs dir` and `mkdir` → `NullReferenceException at Pfs3.anodes.MakeAnodeBitmap` (not mountable) |
-| hst-imager formats, libpfs3 reads + writes | all OK, and hst lists libpfs3's writes | all OK |
-| libpfs3 formats, libpfs3 writes | OK; hst lists the files, then its `mkdir` → `ERROR_DISK_FULL` | listing the root → `anode 5 not found` |
-
-**Two defects, each confirmed by a one-variable patch.** (1) Large mode: hst's format is three levels
-(`rext.superindex[0]` → an `SB` block → an `IB` → the `AB` holding anode 5); libpfs3's is two
-(`superindex[0]` is an `IB`, `format.rs:230`), while libpfs3's own reader (`anode.rs:110-125`) and writer
-(`writer.rs:966-1013`) expect three. Inserting only the `SB` block makes the volume mount in hst-imager and
-read/write in libpfs3; the control (only the anode markers, no `SB`) still crashes. (2) All sizes:
-libpfs3 leaves anodes 0–4 zero where hst-imager's format marks them reserved (`blocknr = 0xFFFFFFFF`);
-hst's allocator — a C# port of pfs3aio's — then hands out anode 0, its failure value (the first `mkdir`
-fails `DISK_FULL`), and after that the reserved numbers 1–4. Marking anodes 0–4 fixes it; libpfs3's own
-writer skips anodes below 6 (`writer.rs:931`), which is why ART's own writes never showed it.
-**This is the root cause ART-122 worked around** ("`hst-imager`'s first write into a volume
-`NativeFormatter` formatted fails" — answered then by pairing format and fill on one tool).
-**Consequences:** every PFS3 partition ART formatted natively above 10 241 440 blocks is very likely
-unmountable; every smaller one mounts and reads, but an Amiga-side handler that allocates like
-hst-imager's port of pfs3aio may fail its first new directory or hand reserved anode numbers to files.
-**The card planner lands in the affected mode by design** (added by the round's final review, I3).
-MAXSMALLDISK is 10 241 440 blocks (5 243 617 280 bytes). With no content partition,
-`core::card::sizing::plan_card_image` plans Work past it on every label from 8 GB up. On the flow's
-16 · 32 · 64 · 128 GB cards Work is about 13.2, 28.4, 58.8 and 2 × 59.8 GB. Every content partition over
-~5.24 GB is past it too. Work drops below it only on labels of 7 GB or less, or when content partitions
-leave it under ~5.24 GB (arithmetic of the fixed planner, `E:\amiga\ProjeART\build\tmp\final-fix\work-sizes.py`).
-**So round 3, the first round that formats a planned card, must route every volume past MAXSMALLDISK
-through a formatter that is right, never `NativeFormatter`, while this entry is open.** Until now that
-writer-selection rule was recorded only in the round-1 ledger, which is git-ignored.
-`plan_card_image`'s doc now says the same.
-**A third limit, in `libpfs3`'s writer rather than in PFS3.** In small mode, `alloc_anode_block`
-never allocates a second anode index block. It returns `Err(DiskFull("no index block slot available"))`
-as soon as `rootblock.indexblocks[idx_nr]` is unset (`writer.rs:1024`, in the small-mode branch
-`writer.rs:1014-1025`). Its large-mode branch just above allocates index blocks on demand. A small-mode
-volume written by `libpfs3` therefore holds one index block's worth of anodes, 253 × 84 − 6 = 21 246,
-whatever its size. PFS3's small-mode rootblock itself has 99 index-block slots: `MAXSMALLINDEXNR = 98`
-(`libpfs3` `ondisk/mod.rs:71`), read back as a 99-entry array (`ondisk/rootblock.rs:114`). That was
-checked in `libpfs3` 0.1.3's own source, not in pfs3aio's `blocks.h`. ART's sizing models
-`libpfs3`'s cap (`pfs3_small_mode_anode_cap`), so content of more than ~21 000 files is sized past
-MAXSMALLDISK, to at least ~5.24 GB. **This bears on the fix route.** Patching or vendoring `libpfs3`
-could lift this writer limit too and retire that floor. Repairing the two structures after `libpfs3`
-formats, or formatting with hst-imager and filling with `libpfs3`, leaves the writer unchanged, so the
-cap stays.
-**Not proven:** hst-imager is one independent implementation, not pfs3aio on an Amiga or in WinUAE; no
-size with 2048/4096-byte reserved blocks (> ~53 GB) was tried. **Owed:** mount a libpfs3-formatted
-partition under real pfs3aio in WinUAE. **The owner chose the fix route on 2026-09-11: patch
-`libpfs3`'s format (write the `SB` level, mark anodes 0–4) and vendor the patched crate into ART, offering
-the patch upstream.** The two routes not taken: repairing the two structures in ART right after libpfs3
-formats, and formatting with hst-imager and filling with libpfs3 (arm B: sound at both sizes). Research
-before the design: `docs/superpowers/notes/2026-09-11-libpfs3-format-fix-research.md`.
+**ART-311** 🟡 **`libpfs3`'s writer cannot grow the anode index itself: a small-mode PFS3 volume ART
+writes holds at most 21 246 anodes whatever its size, and a SUPERINDEX-mode one cannot pass its first
+super index block** — *found 2026-09-11 as ART-310's "third limit"; filed 2026-09-13, when ART-310's
+format fix left the writer untouched by the owner's decision*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`alloc_anode_block`) · pfs3aio allocates index blocks on
+demand (`NewIndexBlock`, `anodes.c:717-772`: up to `MAXSMALLINDEXNR` + 1 = 99 in small mode, through
+`NewSuperBlock` in SUPERINDEX mode). `libpfs3`'s writer does neither. In small mode it returns
+`DiskFull("no index block slot available")` as soon as `rootblock.indexblocks[idx_nr]` is unset
+(`writer.rs:1024`), so a volume keeps the one index block the format made: 253 × 84 − 6 = 21 246
+anodes. In SUPERINDEX mode it returns `DiskFull("no superindex slot available")` when
+`superindex[n]` is unset (`writer.rs:980`), which is reached only past 253² anode blocks.
+**How it hurts a user:** content of more than ~21 000 files cannot go on a PFS3 partition under
+~5.24 GB. `core::card::sizing::pfs3_small_mode_anode_cap` sizes such content up past MAXSMALLDISK, so a
+card spends gigabytes of Work on it. Measured 2026-09-13 with ART-310's format fix applied: 20 655 files
+into one directory on a 1 GiB volume, then `disk full: no index block slot available`. Not scheduled;
+lifting it changes `core::card::sizing` and its tests, which is the owner's to schedule.
+**A small-mode fix already exists, unmerged and unpushed:** the Windows machine's earlier, independent
+ART-310 run (2026-09-11/12, branch `art-310-windows`, local only) allocates small-mode index blocks on
+demand up to `MAXSMALLINDEXNR` (`writer.rs:1140-1145` there, commit `de26e58`). That run's task-5 review
+also found a writer defect older than ART-310 that silently corrupts files: `alloc_anode` resolves an
+index entry through the cache, which reads the device and never the writer's `pending_writes`, so a
+second allocation in one operation re-creates the same anode block and hands out the same anode number
+twice. 3 of 22 000 files read back a directory block; 0 with one variable changed (`write_reserved`
+writing through); the same 3 files on 0.1.3's writer at 18 000 (fixed there in `9c7c845`; the review
+is that machine's git-ignored `.superpowers/sdd/2026-09-11-art-310-libpfs3-format/task-5-review.md`).
+This branch's writer is 0.1.3's, so it very likely carries that defect too — not measured here, and it
+needs its own entry. The owner chose on 2026-09-13 to finish this branch first and port that work
+afterwards.
 
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
@@ -314,6 +282,119 @@ one size — two identical 490 856 448-byte images — and proving them identica
 stores md5s keyed by size and modification time) would let the next start pay nothing.
 
 ## Fixed
+
+**ART-310** 🔴 ✅ **`libpfs3` 0.1.3's format is wrong: a PFS3 partition over ~4.88 GiB is unmountable, and
+at every size anodes 0–4 are left unreserved** — *found 2026-09-11 in round 1 of the one-button card:
+Task 4's fill tests could not write past MAXSMALLDISK; a controlled experiment located the defect; fixed 2026-09-13 on `art-310-libpfs3-format`*
+`libpfs3-0.1.3/src/format.rs` (a dependency) · reached through `src-tauri/src/core/preload/native.rs`
+(`NativeFormatter::format_partition`), ART's default PFS3 formatter since SD-2 · **The experiment**
+(out of the repository, `E:\amiga\ProjeART\build\tmp\pfs3-large-exp\` — `mkimg.py`, `src\main.rs`,
+`cmp.py`, `patch.py`, `run_e.py`; images sparse and deleted afterwards): RDB images built by hst-imager
+1.6.616 with the owner's pfs3aio driver as `PDS3`; one variable per arm — who formats — at 1 GiB
+(2 097 648 blocks, control) and 6 GiB (12 583 872 blocks, SUPERINDEX mode):
+
+| Arm | 1 GiB | 6 GiB |
+|---|---|---|
+| libpfs3 formats, hst-imager reads | `fs dir` OK; `fs mkdir` → `ERROR_DISK_FULL at Pfs3.Directory.NewDir` | `fs dir` and `mkdir` → `NullReferenceException at Pfs3.anodes.MakeAnodeBitmap` (not mountable) |
+| hst-imager formats, libpfs3 reads + writes | all OK, and hst lists libpfs3's writes | all OK |
+| libpfs3 formats, libpfs3 writes | OK; hst lists the files, then its `mkdir` → `ERROR_DISK_FULL` | listing the root → `anode 5 not found` |
+
+**Two defects, each confirmed by a one-variable patch.** (1) Large mode: hst's format is three levels
+(`rext.superindex[0]` → an `SB` block → an `IB` → the `AB` holding anode 5); libpfs3's is two
+(`superindex[0]` is an `IB`, `format.rs:230`), while libpfs3's own reader (`anode.rs:110-125`) and writer
+(`writer.rs:966-1013`) expect three. Inserting only the `SB` block makes the volume mount in hst-imager and
+read/write in libpfs3; the control (only the anode markers, no `SB`) still crashes. (2) All sizes:
+libpfs3 leaves anodes 0–4 zero where hst-imager's format marks them reserved (`blocknr = 0xFFFFFFFF`);
+hst's allocator — a C# port of pfs3aio's — then hands out anode 0, its failure value (the first `mkdir`
+fails `DISK_FULL`), and after that the reserved numbers 1–4. Marking anodes 0–4 fixes it; libpfs3's own
+writer skips anodes below 6 (`writer.rs:931`), which is why ART's own writes never showed it.
+**This is the root cause ART-122 worked around** ("`hst-imager`'s first write into a volume
+`NativeFormatter` formatted fails" — answered then by pairing format and fill on one tool).
+**Consequences:** every PFS3 partition ART formatted natively above 10 241 440 blocks is very likely
+unmountable; every smaller one mounts and reads, but an Amiga-side handler that allocates like
+hst-imager's port of pfs3aio may fail its first new directory or hand reserved anode numbers to files.
+**The card planner lands in the affected mode by design** (added by the round's final review, I3).
+MAXSMALLDISK is 10 241 440 blocks (5 243 617 280 bytes). With no content partition,
+`core::card::sizing::plan_card_image` plans Work past it on every label from 8 GB up. On the flow's
+16 · 32 · 64 · 128 GB cards Work is about 13.2, 28.4, 58.8 and 2 × 59.8 GB. Every content partition over
+~5.24 GB is past it too. Work drops below it only on labels of 7 GB or less, or when content partitions
+leave it under ~5.24 GB (arithmetic of the fixed planner, `E:\amiga\ProjeART\build\tmp\final-fix\work-sizes.py`).
+**So round 3, the first round that formats a planned card, must route every volume past MAXSMALLDISK
+through a formatter that is right, never `NativeFormatter`, while this entry is open.** Until now that
+writer-selection rule was recorded only in the round-1 ledger, which is git-ignored.
+`plan_card_image`'s doc now says the same.
+**A third limit, in `libpfs3`'s writer rather than in PFS3.** In small mode, `alloc_anode_block`
+never allocates a second anode index block. It returns `Err(DiskFull("no index block slot available"))`
+as soon as `rootblock.indexblocks[idx_nr]` is unset (`writer.rs:1024`, in the small-mode branch
+`writer.rs:1014-1025`). Its large-mode branch just above allocates index blocks on demand. A small-mode
+volume written by `libpfs3` therefore holds one index block's worth of anodes, 253 × 84 − 6 = 21 246,
+whatever its size. PFS3's small-mode rootblock itself has 99 index-block slots: `MAXSMALLINDEXNR = 98`
+(`libpfs3` `ondisk/mod.rs:71`), read back as a 99-entry array (`ondisk/rootblock.rs:114`). That was
+checked in `libpfs3` 0.1.3's own source, not in pfs3aio's `blocks.h`. ART's sizing models
+`libpfs3`'s cap (`pfs3_small_mode_anode_cap`), so content of more than ~21 000 files is sized past
+MAXSMALLDISK, to at least ~5.24 GB. **This bears on the fix route.** Patching or vendoring `libpfs3`
+could lift this writer limit too and retire that floor. Repairing the two structures after `libpfs3`
+formats, or formatting with hst-imager and filling with `libpfs3`, leaves the writer unchanged, so the
+cap stays.
+**Not proven:** hst-imager is one independent implementation, not pfs3aio on an Amiga or in WinUAE; no
+size with 2048/4096-byte reserved blocks (> ~53 GB) was tried. **Owed:** mount a libpfs3-formatted
+partition under real pfs3aio in WinUAE. **The owner chose the fix route on 2026-09-11: patch
+`libpfs3`'s format (write the `SB` level, mark anodes 0–4) and vendor the patched crate into ART, offering
+the patch upstream.** The two routes not taken: repairing the two structures in ART right after libpfs3
+formats, and formatting with hst-imager and filling with libpfs3 (arm B: sound at both sizes). Research
+before the design: `docs/superpowers/notes/2026-09-11-libpfs3-format-fix-research.md`.
+
+**The fix (route A), 2026-09-13.** Research
+`docs/superpowers/notes/2026-09-11-libpfs3-format-fix-research.md` re-ran this entry's experiment on
+Linux (hst-imager 1.6.616, pfs3aio 3.1): five arms, each fix its own variable, every cell as predicted.
+It also measured that hst-imager hands a directory made after `libpfs3`'s writes anode **1** on an unfixed
+volume. Design `docs/superpowers/specs/2026-09-13-art-310-libpfs3-format-fix-design.md`, plan
+`docs/superpowers/plans/2026-09-13-art-310-libpfs3-format-fix.md`; the run log, reports and rulings are in
+`docs/superpowers/notes/2026-09-13-art-310-handoff/`.
+
+- **What changed.** `libpfs3` 0.1.3 is vendored as `src-tauri/vendor/libpfs3` (`0.1.3+art.1`, through
+  `[patch.crates-io]`; `probe()` says so). Only `src/format.rs` differs: in SUPERINDEX mode a super index
+  block is allocated before the anode index block and `rext.superindex[0]` names it, and anodes 0–4 are
+  written `(0, 0xFFFFFFFF, 0)` at every size. Its `ART-PATCH.md` carries the diff. `libpfs3`'s own tests
+  are not vendored (GPL-3.0-only headers, 9.3 MB fixtures, `sevenz-rust` 0.6's advisories).
+- **Tests, each red on 0.1.3 first:**
+  - `a_small_pfs3_format_reserves_anodes_zero_to_four` (red: *anode 0 must be reserved the way pfs3aio's
+    AllocAnode leaves it*, `(0, 0, 0)` against `(0, 4294967295, 0)`)
+  - `a_large_pfs3_format_writes_the_superblock_level` (red: *superindex[0] must name a super index block,
+    not the anode index block* — the chain read `IB AB`, not `SB IB AB`)
+  - `a_large_pfs3_volume_takes_its_own_writes` (red: `Malformed { format: "pfs3", detail: "anode 5 not
+    found" }`)
+
+  Also `the_pinned_version_constant_matches_cargo_toml` and `probe_names_libpfs3`. The whole
+  `core::preload::native` module, both large tests included, took 0.70 s on Linux.
+- **Mutations, all four killed:**
+  - M1 anode 0 left free: the small and the large-format tests failed on anode 0; the writes test passed,
+    as predicted
+  - M2 `superindex[0]` back at the index block: the large-format test (`IB AB`) and the writes test
+    (`anode 5 not found`)
+  - M3 the super index block never written: the large-format test (the chain reached `\0\0`) and the
+    writes test (`anode 5 not found`)
+  - M4 `[patch]` removed: all three ART-310 tests and the pin test (*Cargo.toml must patch libpfs3 to the
+    vendored copy*)
+
+  M2 and M3 as written only failed to compile under 0.1.3's `#![deny(warnings)]`; for those two runs the
+  binding was renamed `_sb_blk` on the same line and reverted with the mutation.
+- **Oracle** (`scripts/pfs3-oracle-check.py`, now with a direction past MAXSMALLDISK and an anode check
+  at both sizes), on Linux:
+  - on the fix, every check ok, hst-imager's new directory at anode 15 at both sizes, the large image
+    5 452 554 240 bytes long and 1 335 296 bytes on disk;
+  - with `[patch]` removed, the small direction failed in hst-imager with `ERROR_DISK_FULL`, and the large
+    direction failed earlier than predicted: ART's own write hook stopped with `anode 5 not found` before
+    hst-imager read the volume. The hst-side crash on a 0.1.3 large volume is shown by the research note,
+    not by this oracle run.
+- **Windows, the owner's machine:** fmt and clippy clean; `cargo test --lib`
+  `test result: ok. 3257 passed; 0 failed; 58 ignored; 0 measured; 0 filtered out` twice (41.70 s, 37.14 s);
+  `cargo deny check` ok. CI run 34756185385 on `bfdedd6` was green before it.
+- **`plan_card_image`'s rule** ("never `NativeFormatter` past MAXSMALLDISK while ART-310 is open") is
+  removed from its doc comment. **Owed by a person:** mount a volume ART formatted past MAXSMALLDISK under
+  real pfs3aio in WinUAE, `dir` it and make a drawer. The upstream pull request waits for this.
+  **Not in this fix:** the writer's index-block gaps, now ART-311, and the writer's double anode
+  allocation that ART-311 describes — this fix makes the format right, not the writer.
 
 **ART-307** 🟡 ✅ **The PiStorm screens called the A1200 Kickstart wrong for an A500, and the card plan
 said such a machine "usually does not come up" — the ROM Emu68's guides recommend on every model** —
