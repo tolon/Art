@@ -149,6 +149,14 @@ def run_hst(exe: str, args: list[str], cwd: Path) -> subprocess.CompletedProcess
     )
 
 
+# hst-imager takes `<image>\rdb\dh0` on Windows and `<image>/rdb/dh0` on Linux.
+SEP = "\\" if os.name == "nt" else "/"
+
+
+def dh0(image: Path) -> str:
+    return f"{image.name}{SEP}rdb{SEP}dh0"
+
+
 def run_cargo_test(test: str, env: dict[str, str]) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["cargo", "test", "--quiet", test, "--", "--nocapture"],
@@ -285,7 +293,7 @@ def parse_dir_listing(text: str) -> dict[str, dict]:
 
 
 def check_art_writes_hst_reads(
-    hst: str, work: Path
+    hst: str, work: Path, hook: str, env_var: str, image_name: str
 ) -> tuple[list[tuple[bool, str]], list[str]]:
     """ART writes a PFS3 volume through `NativeFormatter`; `hst-imager` reads it.
 
@@ -306,17 +314,21 @@ def check_art_writes_hst_reads(
     """
     checks: list[tuple[bool, str]] = []
     skipped: list[str] = []
-    image = work / "art-write.hdf"
+    image = work / image_name
 
-    made = run_cargo_test(
-        "build_pfs3_volume_for_oracle_when_asked", {"ART_PFS3_WRITE_OUT": str(image)}
-    )
+    made = run_cargo_test(hook, {env_var: str(image)})
     if made.returncode != 0 or not image.exists():
         checks.append((False, "ART wrote a PFS3 volume"))
         print(made.stdout[-3000:])
         print(made.stderr[-2000:])
         return checks, skipped
     checks.append((True, "ART wrote a PFS3 volume"))
+    st = image.stat()
+    on_disk = getattr(st, "st_blocks", None)  # POSIX only
+    print(
+        f"  {image.name}: {st.st_size} bytes long"
+        + (f", {on_disk * 512} bytes on disk" if on_disk is not None else "")
+    )
 
     expected = None
     for line in made.stdout.splitlines():
@@ -328,7 +340,7 @@ def check_art_writes_hst_reads(
         print(made.stdout[-2000:])
         return checks, skipped
 
-    listing = run_hst(hst, ["fs", "dir", f"{image.name}\\rdb\\dh0", "-r"], work)
+    listing = run_hst(hst, ["fs", "dir", dh0(image), "-r"], work)
     if listing.returncode != 0:
         checks.append((False, "hst-imager could open the volume ART wrote"))
         print(listing.stdout[-3000:])
@@ -374,11 +386,11 @@ def check_art_writes_hst_reads(
     # prove ART agrees with itself again. `fs copy -r` refuses if the
     # destination directory does not already exist (confirmed by hand), so
     # it is created first.
-    extract_dir = work / "art-write-extract"
+    extract_dir = work / f"{image.stem}-extract"
     shutil.rmtree(extract_dir, ignore_errors=True)
     extract_dir.mkdir(parents=True)
     extracted = run_hst(
-        hst, ["fs", "copy", f"{image.name}\\rdb\\dh0", extract_dir.name, "-r"], work
+        hst, ["fs", "copy", dh0(image), extract_dir.name, "-r"], work
     )
     if extracted.returncode != 0:
         checks.append((False, "hst-imager extracted the volume ART wrote back to disk"))
@@ -411,6 +423,33 @@ def check_art_writes_hst_reads(
             )
         )
 
+    # ART-310: hst-imager's allocator is a port of pfs3aio's. On a volume whose
+    # anodes 0-4 are left unreserved it fails its first new directory
+    # (ERROR_DISK_FULL) or hands a later one a reserved number.
+    made = run_hst(hst, ["fs", "mkdir", f"{dh0(image)}{SEP}HstMade"], work)
+    checks.append((made.returncode == 0, "hst-imager made a directory on the volume ART formatted"))
+    if made.returncode != 0:
+        print(made.stdout[-1500:])
+        print(made.stderr[-500:])
+        return checks, skipped
+    asked = run_cargo_test(
+        "pfs3_anode_for_oracle_when_asked",
+        {"ART_PFS3_ANODE_IN": str(image), "ART_PFS3_ANODE_PATH": "HstMade"},
+    )
+    anode = next(
+        (int(l[len("anode="):]) for l in asked.stdout.splitlines() if l.startswith("anode=")),
+        None,
+    )
+    if asked.returncode != 0 or anode is None:
+        print(asked.stdout[-3000:])
+        print(asked.stderr[-2000:])
+    checks.append(
+        (
+            anode is not None and anode > 4,
+            f"hst-imager's new directory has an anode pfs3aio does not reserve "
+            f"(anode {anode}; 0-4 are reserved, ART-310)",
+        )
+    )
     return checks, skipped
 
 
@@ -451,7 +490,7 @@ def check_hst_writes_art_reads(
     )
     copied = run_hst(
         hst,
-        ["fs", "copy", "hst-src", f"{image.name}\\rdb\\dh0", "-r", "-uae", "UaeMetafile"],
+        ["fs", "copy", "hst-src", dh0(image), "-r", "-uae", "UaeMetafile"],
         work,
     )
     if (
@@ -547,8 +586,20 @@ def main() -> int:
         work = Path(tmp)
 
         print("ART writes, hst-imager reads:")
-        checks_a, skipped_a = check_art_writes_hst_reads(hst, work)
+        checks_a, skipped_a = check_art_writes_hst_reads(
+            hst, work, "build_pfs3_volume_for_oracle_when_asked", "ART_PFS3_WRITE_OUT",
+            "art-write.hdf",
+        )
         report(checks_a)
+
+        print("\nART writes past MAXSMALLDISK (SUPERINDEX mode), hst-imager reads:")
+        checks_l, skipped_l = check_art_writes_hst_reads(
+            hst, work, "build_large_pfs3_volume_for_oracle_when_asked",
+            "ART_PFS3_WRITE_OUT_LARGE", "art-write-large.hdf",
+        )
+        report(checks_l)
+        checks_a += checks_l
+        skipped_a += skipped_l
 
         print("\nhst-imager writes, ART reads:")
         checks_b = check_hst_writes_art_reads(hst, driver, work)

@@ -79,6 +79,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A PFS3 partition larger than about 4.9 GB that ART formatted could not be
+  mounted, and on a PFS3 partition of any size the Amiga's first new drawer
+  could fail with "disk full".** ART now formats PFS3 the way the PFS3 handler
+  itself does: large partitions get the index level they need, and the five
+  anode numbers the handler reserves are marked reserved. A PFS3 partition ART
+  formatted before this should be formatted again before the Amiga writes to it.
 - **BoingBag 3.9-2 Contribution goes on after BoingBag 3.9-2.** Both archives
   carry the same top-level name, `BoingBag3.9-2`, so ART took the second for a
   different copy of the first and refused it — Build stopped on that row with

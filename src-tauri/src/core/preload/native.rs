@@ -15,6 +15,12 @@
 //! writer (`core/volume/write`). Anything else — `SFS\0`, an unrecognised
 //! type — is refused by name; `NativeFormatter` does not guess.
 //!
+//! `libpfs3` here is ART's vendored copy, `src-tauri/vendor/libpfs3`
+//! (`0.1.3+art.1`): 0.1.3's format left out the super index level and left
+//! anodes 0–4 unreserved (ART-310), and only `format.rs` differs. Its writer is
+//! 0.1.3's, so the writer limits below (ART-113, ART-116), its anode
+//! ceiling (ART-311) and its double anode allocation (ART-312) still hold.
+//!
 //! ## `import_filesystem` refuses
 //!
 //! The trait method exists to embed a filesystem driver into an **already
@@ -109,16 +115,16 @@ use crate::core::volume::device::FileRegionMut;
 use crate::core::volume::write::{dir, uaem, write_refusal, FileMeta, VolumeWriter};
 use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
 
-/// The version pinned in `Cargo.toml`. There is no `CARGO_PKG_VERSION`-style
-/// macro for a *dependency's* version, so this is kept in sync by hand — the
-/// same trade-off ART already accepts for `ureq`'s exact `=3.2.1` pin
-/// (CLAUDE.md). `libpfs3` is pinned exactly (`=0.1.3`) for the same reason:
-/// `probe()` reports this constant as which implementation did the work, and
-/// an unpinned `cargo update` drifting past it would make that report state
-/// a version nobody actually built. `the_pinned_version_constant_matches_cargo_toml`
-/// (below) is what turns "kept in sync by hand" into something a `cargo
-/// update` cannot get away with silently.
-const LIBPFS3_VERSION: &str = "0.1.3";
+/// The version of the `libpfs3` ART builds: the vendored copy in
+/// `src-tauri/vendor/libpfs3` (ART-310) — crates.io's 0.1.3 with ART's patch,
+/// `+art.1`. There is no `CARGO_PKG_VERSION`-style macro for a *dependency's*
+/// version, so this is kept in sync by hand, the same trade-off ART already
+/// accepts for `ureq`'s exact `=3.2.1` pin (CLAUDE.md). `probe()` reports this
+/// constant as which implementation did the work, and
+/// `the_pinned_version_constant_matches_cargo_toml` (below) reads the pin, the
+/// `[patch.crates-io]` line and the vendored manifest, so the constant cannot
+/// drift from what was actually built.
+const LIBPFS3_VERSION: &str = "0.1.3+art.1";
 
 /// A [`VolumeFormatter`] backed by `libpfs3` and ART's own FFS writer.
 /// Launches nothing; see the module docs for what each method actually does.
@@ -1271,6 +1277,107 @@ mod tests {
         u64::from(vol.free_blocks()) * u64::from(vol.block_size())
     }
 
+    /// A PFS3 partition past MAXSMALLDISK (10 241 440 blocks), the size at which
+    /// a format selects SUPERINDEX mode: 5 100 MiB is 10 362 cylinders,
+    /// 10 444 896 blocks. The image is extended with `set_len` (`create_hdf`),
+    /// and the format writes only the reserved area near the partition's start.
+    fn formatted_large_pds3_image() -> (crate::core::ScratchDir, PathBuf) {
+        let (_guard, dir) = scratch("pds3-large");
+        let path = dir.join("card.hdf");
+        crate::core::hdf::create_hdf(
+            &path,
+            5_200 * 1024 * 1024,
+            true,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
+                size_mb: 5_100,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+            &[],
+        )
+        .unwrap();
+        NativeFormatter
+            .format_partition(&path, None, 1, "Work", &NoProgress)
+            .unwrap();
+        (_guard, path)
+    }
+
+    /// **ART-310.** What a PFS3 format left on disk, read straight off the
+    /// image — not through `libpfs3`'s reader, which shares a crate with the
+    /// writer under test. Follows the rootblock to the first anode block:
+    /// `rootblock.indexblocks[0]` in small mode, `rext.superindex[0]` in
+    /// SUPERINDEX mode.
+    struct AnodeChain {
+        /// `MODE_SUPERINDEX` (0x80) is set in the rootblock's options.
+        supermode: bool,
+        /// The two-byte id of every block from that pointer down to the first
+        /// `AB`, in order: `IB AB` in small mode, `SB IB AB` in SUPERINDEX mode.
+        ids: Vec<[u8; 2]>,
+        /// Anodes 0–5 of the first anode block, as `(clustersize, blocknr, next)`.
+        anodes: Vec<(u32, u32, u32)>,
+    }
+
+    fn anode_chain(image: &Path) -> AnodeChain {
+        use std::io::{Read, Seek, SeekFrom};
+        const MODE_SUPERINDEX: u32 = 0x80;
+        let offset = partition_offset(image);
+        let mut file = std::fs::File::open(image).unwrap();
+        let mut sectors = |sector: u32, len: usize| -> Vec<u8> {
+            file.seek(SeekFrom::Start(offset + u64::from(sector) * 512))
+                .unwrap();
+            let mut buf = vec![0u8; len];
+            file.read_exact(&mut buf).unwrap();
+            buf
+        };
+        let be16 = |b: &[u8], at: usize| u16::from_be_bytes([b[at], b[at + 1]]);
+        let be32 = |b: &[u8], at: usize| u32::from_be_bytes(b[at..at + 4].try_into().unwrap());
+
+        // Rootblock at sector 2: options 0x04, reserved_blksize 0x40,
+        // extension 0x58, and the index union from 0x60 (small mode:
+        // bitmapindex[0..=4], then indexblocks[0..]).
+        let root = sectors(2, 512);
+        let supermode = be32(&root, 0x04) & MODE_SUPERINDEX != 0;
+        let resblk = usize::from(be16(&root, 0x40));
+        let mut next = if supermode {
+            let ext = sectors(be32(&root, 0x58), resblk);
+            be32(&ext, 0x40) // rext.superindex[0]
+        } else {
+            be32(&root, 0x60 + 5 * 4) // rootblock.indexblocks[0]
+        };
+        let mut ids = Vec::new();
+        loop {
+            let block = sectors(next, resblk);
+            let id = [block[0], block[1]];
+            ids.push(id);
+            if &id == b"AB" {
+                // Anode block: a 16-byte header, then 12-byte anodes.
+                let anodes = (0..6)
+                    .map(|k| {
+                        let at = 16 + 12 * k;
+                        (be32(&block, at), be32(&block, at + 4), be32(&block, at + 8))
+                    })
+                    .collect();
+                return AnodeChain {
+                    supermode,
+                    ids,
+                    anodes,
+                };
+            }
+            assert!(
+                (&id == b"SB" || &id == b"IB") && ids.len() < 3,
+                "the anode pointer chain reached {:?} after {:?}",
+                String::from_utf8_lossy(&id),
+                ids.iter()
+                    .map(|i| String::from_utf8_lossy(i).into_owned())
+                    .collect::<Vec<_>>()
+            );
+            next = be32(&block, 12); // index[0], after a 12-byte header
+        }
+    }
+
     /// The pieces needed to reopen a formatted `DOS\3` partition's volume for
     /// verification, without going through `NativeFormatter` a second time.
     fn ffs_region(image: &Path) -> (FileRegionMut, VolumeGeometry, u64) {
@@ -1410,6 +1517,80 @@ mod tests {
             .unwrap();
         assert_eq!(summary.files, 1);
         assert_eq!(summary.directories, 1);
+    }
+
+    // ---- ART-310: the format writes what pfs3aio writes ----
+
+    /// **ART-310, every size.** pfs3aio's format reserves anodes 0–4 by
+    /// allocating them (`AllocAnode` leaves `clustersize 0, blocknr 0xffffffff,
+    /// next 0`); `libpfs3` 0.1.3 left them `(0, 0, 0)`, which every allocator
+    /// ported from pfs3aio reads as free — hst-imager's first new directory then
+    /// failed `ERROR_DISK_FULL`, and a later one was given reserved anode 1.
+    #[test]
+    fn a_small_pfs3_format_reserves_anodes_zero_to_four() {
+        let (_guard, image) = formatted_pds3_image();
+        let chain = anode_chain(&image);
+        assert!(!chain.supermode, "an 8 MB partition must be small mode");
+        assert_eq!(chain.ids, vec![*b"IB", *b"AB"]);
+        for (nr, anode) in chain.anodes.iter().take(5).enumerate() {
+            assert_eq!(
+                *anode,
+                (0, 0xFFFF_FFFF, 0),
+                "anode {nr} must be reserved the way pfs3aio's AllocAnode leaves it"
+            );
+        }
+        assert_eq!(
+            chain.anodes[5].0, 1,
+            "anode 5 is the root directory, one block"
+        );
+    }
+
+    /// **ART-310, SUPERINDEX mode.** Every reader — pfs3aio's `GetSuperBlock`,
+    /// hst-imager's port, `libpfs3`'s own `resolve_anode_block` — walks
+    /// `superindex[0] -> SB -> IB -> AB`. `libpfs3` 0.1.3 pointed
+    /// `superindex[0]` at the index block itself: hst-imager could not mount
+    /// the volume and `libpfs3` could not read its own root directory.
+    #[test]
+    fn a_large_pfs3_format_writes_the_superblock_level() {
+        let (_guard, image) = formatted_large_pds3_image();
+        let chain = anode_chain(&image);
+        assert!(
+            chain.supermode,
+            "a 5 100 MiB partition must be SUPERINDEX mode"
+        );
+        assert_eq!(
+            chain.ids,
+            vec![*b"SB", *b"IB", *b"AB"],
+            "superindex[0] must name a super index block, not the anode index block"
+        );
+        for (nr, anode) in chain.anodes.iter().take(5).enumerate() {
+            assert_eq!(
+                *anode,
+                (0, 0xFFFF_FFFF, 0),
+                "anode {nr} must be reserved in SUPERINDEX mode too"
+            );
+        }
+    }
+
+    /// **ART-310, the consequence.** A volume past MAXSMALLDISK that
+    /// `NativeFormatter` formatted takes `copy_in`'s writes and gives back the
+    /// same bytes. On 0.1.3 the first write failed `anode 5 not found`.
+    #[test]
+    fn a_large_pfs3_volume_takes_its_own_writes() {
+        let (_guard, image) = formatted_large_pds3_image();
+        let (_guard, tree) = fixtures::scratch("large-pfs3-writes");
+        std::fs::create_dir_all(tree.join("C")).unwrap();
+        std::fs::write(tree.join("C/Assign"), b"assign\n").unwrap();
+        std::fs::write(tree.join("Readme"), b"hello from ART\n").unwrap();
+
+        let summary = NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+        assert_eq!((summary.files, summary.directories), (2, 1));
+
+        let mut vol = libpfs3::volume::Volume::open(&image, partition_offset(&image)).unwrap();
+        assert_eq!(vol.read_file("C/Assign").unwrap(), b"assign\n");
+        assert_eq!(vol.read_file("Readme").unwrap(), b"hello from ART\n");
     }
 
     // ---- ART-113: a non-ASCII name is refused before anything is written ----
@@ -1745,16 +1926,30 @@ mod tests {
     }
 
     // ---- fix round 1, item 2: the version pin cannot silently drift ----
+    // ---- ART-310: and it names the vendored, patched copy ----
 
     #[test]
     fn the_pinned_version_constant_matches_cargo_toml() {
         let cargo_toml = include_str!("../../../Cargo.toml");
-        let expected = format!("libpfs3 = \"={LIBPFS3_VERSION}\"");
         assert!(
-            cargo_toml.contains(&expected),
-            "Cargo.toml's libpfs3 pin no longer matches LIBPFS3_VERSION \
-             ({LIBPFS3_VERSION}) — update the constant (and what probe() \
-             claims) together with the dependency bump"
+            cargo_toml.contains("libpfs3 = \"=0.1.3\""),
+            "Cargo.toml must still pin the crates.io release the vendored copy was taken from"
+        );
+        // Two separate checks, not one string with a newline in it: a Windows
+        // checkout may carry CRLF.
+        assert!(
+            cargo_toml.contains("[patch.crates-io]")
+                && cargo_toml.contains("libpfs3 = { path = \"vendor/libpfs3\" }"),
+            "Cargo.toml must patch libpfs3 to the vendored copy (ART-310) — without it the \
+             build silently goes back to 0.1.3's broken format"
+        );
+        let vendored = include_str!("../../../vendor/libpfs3/Cargo.toml");
+        let expected = format!("version = \"{LIBPFS3_VERSION}\"");
+        assert!(
+            vendored.contains(&expected),
+            "the vendored libpfs3's version no longer matches LIBPFS3_VERSION \
+             ({LIBPFS3_VERSION}) — update the constant (and what probe() claims) together \
+             with the vendored copy"
         );
     }
 
@@ -1980,7 +2175,7 @@ mod tests {
     #[test]
     fn probe_names_libpfs3() {
         let probed = NativeFormatter.probe().unwrap();
-        assert!(probed.raw.contains("libpfs3"), "{}", probed.raw);
+        assert_eq!(probed.raw, "libpfs3 0.1.3+art.1 (native, no external tool)");
     }
 
     /// `import_filesystem` refuses by name rather than pretend — see the
@@ -2064,19 +2259,66 @@ mod tests {
         let Ok(target) = std::env::var("ART_PFS3_WRITE_OUT") else {
             return;
         };
-        let image = PathBuf::from(&target);
+        write_pfs3_volume_for_oracle(&PathBuf::from(&target), 220 * 1024 * 1024, 200);
+    }
+
+    /// **ART-310.** The same volume and the same JSON claim as
+    /// `build_pfs3_volume_for_oracle_when_asked`, on a partition past
+    /// MAXSMALLDISK (5 100 MiB, 10 444 896 blocks) — SUPERINDEX mode, the mode
+    /// `libpfs3` 0.1.3's format wrote wrong.
+    ///
+    /// ```text
+    /// ART_PFS3_WRITE_OUT_LARGE=... cargo test build_large_pfs3_volume_for_oracle_when_asked -- --nocapture
+    /// ```
+    #[test]
+    fn build_large_pfs3_volume_for_oracle_when_asked() {
+        let Ok(target) = std::env::var("ART_PFS3_WRITE_OUT_LARGE") else {
+            return;
+        };
+        write_pfs3_volume_for_oracle(&PathBuf::from(&target), 5_200 * 1024 * 1024, 5_100);
+    }
+
+    /// **ART-310, the oracle's anode question.** Prints the anode number of one
+    /// entry on a PFS3 volume, so `pfs3-oracle-check.py` can ask whether
+    /// hst-imager — whose allocator is a port of pfs3aio's — handed a new
+    /// directory one of the numbers pfs3aio reserves (0–4).
+    ///
+    /// ```text
+    /// ART_PFS3_ANODE_IN=<image> ART_PFS3_ANODE_PATH=<path> cargo test pfs3_anode_for_oracle_when_asked -- --nocapture
+    /// ```
+    #[test]
+    fn pfs3_anode_for_oracle_when_asked() {
+        let (Ok(source), Ok(path)) = (
+            std::env::var("ART_PFS3_ANODE_IN"),
+            std::env::var("ART_PFS3_ANODE_PATH"),
+        ) else {
+            return;
+        };
+        let image = PathBuf::from(&source);
+        let mut vol = libpfs3::volume::Volume::open(&image, partition_offset(&image)).unwrap();
+        let entry = vol
+            .lookup(&path)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{path} is not on the volume"));
+        println!("anode={}", entry.anode);
+    }
+
+    /// The body both write hooks share: an RDB image of `disk_bytes` with one
+    /// PDS\3 partition of `partition_mb`, formatted and filled through the same
+    /// two calls G5 makes, then the JSON of every entry it believes it wrote.
+    fn write_pfs3_volume_for_oracle(image: &Path, disk_bytes: u64, partition_mb: u32) {
         if let Some(parent) = image.parent() {
             std::fs::create_dir_all(parent).ok();
         }
 
         crate::core::hdf::create_hdf(
-            &image,
-            220 * 1024 * 1024,
+            image,
+            disk_bytes,
             true,
             &[PartitionSpec {
                 drive_name: "DH0".into(),
                 fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
-                size_mb: 200,
+                size_mb: partition_mb,
                 bootable: true,
                 boot_priority: 0,
                 num_buffers: 0,
@@ -2086,7 +2328,7 @@ mod tests {
         .unwrap();
 
         NativeFormatter
-            .format_partition(&image, None, 1, "Workbench", &NoProgress)
+            .format_partition(image, None, 1, "Workbench", &NoProgress)
             .unwrap();
 
         // The literal bytes are named once and reused for both the write and
@@ -2131,7 +2373,7 @@ mod tests {
         std::fs::write(tree.join("DOSDrivers/AUX"), aux).unwrap();
 
         NativeFormatter
-            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .copy_in(image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
         // What a real `hst-imager fs dir -r` is expected to show — verified
