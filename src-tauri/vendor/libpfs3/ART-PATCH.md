@@ -34,8 +34,11 @@ any port of it. Reserved-area sizing, option flags, datestamps and everything el
 
 ## Upstream
 
-Not offered yet. The same change is prepared against `metaneutrons/pfs3` `main` for the owner to open,
-after a patched volume has been mounted under real pfs3aio.
+Prepared, not offered. Branch `fix/format-superindex-reserved-anodes` (`6eb44df`, on `main` at `05f50b0`) in
+a local clone of `metaneutrons/pfs3`: the same change to `crates/libpfs3/src/format.rs`, two tests in
+`tests/format.rs` (seen red on `main`, green on the change), upstream's fmt, clippy, test and deny checks
+clean, and a Conventional Commit with no AI attribution, as upstream's `CONTRIBUTING.md` requires. The
+owner opens the pull request after a patched volume has been mounted under real pfs3aio.
 
 ## Diff against 0.1.3
 
