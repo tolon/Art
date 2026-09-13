@@ -26,34 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-312** 🔴 **`libpfs3`'s writer can hand one anode number out twice in one operation, and a file
-then silently reads another block's bytes** — *found 2026-09-11 by the task-5 review of the Windows
-machine's own ART-310 run (its C1); confirmed reachable on `art-310-libpfs3-format` by that branch's final
-whole-branch review, 2026-09-13, and filed then*
-`src-tauri/vendor/libpfs3/src/writer.rs` · `alloc_anode` (`writer.rs:899`) resolves an anode block through
-`get_anode_block_nr` (`writer.rs:1289`), which goes to the volume's cache and reads **the device**. A new
-anode block's index entry exists only in the writer's `pending_writes` (`write_reserved`,
-`writer.rs:1278-1287`) until `update_rootblock` flushes them. So when one operation allocates twice and the
-first allocation created a fresh anode block, the second sees the index entry as 0, creates the block again
-for the same seqnr and returns the same anode number: the first object's anode then points at the second
-object's block, and the first anode block is left marked used and unreferenced. `create_dir_in`
-(`writer.rs:167`, allocating at `:169`, flushing at `:179`) and `write_file_in` (`writer.rs:126`, flushing
-at `:137`) each allocate more than once before their flush when a directory spills into a new block; ART
-calls them per entry (`core/preload/native.rs:917`, `:932`), and `commands/preload.rs` uses
-`NativeFormatter`. SUPERINDEX mode has the same flaw one level up: a fresh index block is read back
-through the SB via the cache (`writer.rs:983`).
-**Measured on the Windows run's branch, not on this one:** 22 000 unique files, every file read back from
-a reopened volume — 3 mismatches in small mode and 3 in large, each reading a `DB` block; 0 with one
-variable changed (`write_reserved` writing through to the device); the same 3 files on 0.1.3's writer at
-18 000. The review is that machine's git-ignored
-`.superpowers/sdd/2026-09-11-art-310-libpfs3-format/task-5-review.md`; the fix is `9c7c845` on the local
-branch `art-310-windows`, not ported. This branch's writer is 0.1.3's, so the defect is here too.
-**How it hurts a user:** a volume ART fills natively can hold files whose contents are another block's
-bytes, with no error anywhere. Before ART-310's fix a SUPERINDEX-mode volume failed at its first write
-(`anode 5 not found`); now it takes writes, so this reaches large volumes too. `plan_card_image` has no
-production caller yet. **Next:** port `9c7c845` with a test that writes unique content across more than
-one anode block and reads every file back, seen red first.
-
 **ART-311** 🟡 **`libpfs3`'s writer caps the anodes a PFS3 volume can hold: at most 21 246 in small
 mode and 21 498 in SUPERINDEX mode, whatever the volume's size** — *found 2026-09-11 as ART-310's "third limit"; filed 2026-09-13, when ART-310's
 format fix left the writer untouched by the owner's decision*
@@ -82,7 +54,7 @@ second allocation in one operation re-creates the same anode block and hands out
 twice. 3 of 22 000 files read back a directory block; 0 with one variable changed (`write_reserved`
 writing through); the same 3 files on 0.1.3's writer at 18 000 (fixed there in `9c7c845`; the review
 is that machine's git-ignored `.superpowers/sdd/2026-09-11-art-310-libpfs3-format/task-5-review.md`).
-This branch's writer is 0.1.3's, so it carries that defect too: ART-312. The owner chose on 2026-09-13 to finish this branch first and port that work
+That defect is ART-312, fixed 2026-09-13 on `art-312-anode-reuse`. The owner chose on 2026-09-13 to finish this branch first and port that work
 afterwards.
 
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
@@ -312,6 +284,52 @@ one size — two identical 490 856 448-byte images — and proving them identica
 stores md5s keyed by size and modification time) would let the next start pay nothing.
 
 ## Fixed
+
+**ART-312** 🔴 ✅ **`libpfs3`'s writer can hand one anode number out twice in one operation, and a file
+then silently reads another block's bytes** — *found 2026-09-11 by the task-5 review of the Windows
+machine's own ART-310 run (its C1); confirmed reachable on `art-310-libpfs3-format` by that branch's final
+whole-branch review, 2026-09-13, and filed then; fixed 2026-09-13 on `art-312-anode-reuse`*
+`src-tauri/vendor/libpfs3/src/writer.rs` · `alloc_anode` (`writer.rs:899`) resolves an anode block through
+`get_anode_block_nr` (`writer.rs:1289`), which goes to the volume's cache and reads **the device**. A new
+anode block's index entry exists only in the writer's `pending_writes` (`write_reserved`,
+`writer.rs:1278-1287`) until `update_rootblock` flushes them. So when one operation allocates twice and the
+first allocation created a fresh anode block, the second sees the index entry as 0, creates the block again
+for the same seqnr and returns the same anode number: the first object's anode then points at the second
+object's block, and the first anode block is left marked used and unreferenced. `create_dir_in`
+(`writer.rs:167`, allocating at `:169`, flushing at `:179`) and `write_file_in` (`writer.rs:126`, flushing
+at `:137`) each allocate more than once before their flush when a directory spills into a new block; ART
+calls them per entry (`core/preload/native.rs:917`, `:932`), and `commands/preload.rs` uses
+`NativeFormatter`. SUPERINDEX mode has the same flaw one level up: a fresh index block is read back
+through the SB via the cache (`writer.rs:983`).
+**Measured on the Windows run's branch, not on this one:** 22 000 unique files, every file read back from
+a reopened volume — 3 mismatches in small mode and 3 in large, each reading a `DB` block; 0 with one
+variable changed (`write_reserved` writing through to the device); the same 3 files on 0.1.3's writer at
+18 000. The review is that machine's git-ignored
+`.superpowers/sdd/2026-09-11-art-310-libpfs3-format/task-5-review.md`; the fix is `9c7c845` on the local
+branch `art-310-windows`, not ported. This branch's writer is 0.1.3's, so the defect is here too.
+**How it hurts a user:** a volume ART fills natively can hold files whose contents are another block's
+bytes, with no error anywhere. Before ART-310's fix a SUPERINDEX-mode volume failed at its first write
+(`anode 5 not found`); now it takes writes, so this reaches large volumes too. `plan_card_image` has no
+production caller yet. **The fix, 2026-09-13, on `art-312-anode-reuse`.** `Writer::get_anode_block_nr`
+(`src-tauri/vendor/libpfs3/src/writer.rs`) resolves an anode block through the writer's own
+`read_reserved_raw` — `rootblock.indexblocks` or `rext.superindex`, then (SB, then) IB, then the entry —
+so an index entry set earlier in the same, still-uncommitted operation is seen. Written from the review's
+stated cause, not copied from `9c7c845`; `pending_writes` and the commit order are unchanged. The
+vendored crate is now `0.1.3+art.2`, and `ART-PATCH.md` carries both changes.
+
+- **Test:** `core::preload::native::a_pfs3_write_that_allocates_two_anodes_gets_two_different_ones` —
+  10 directories × 200 files, each with its own content, written through `libpfs3`'s `Writer` into a
+  24 MB small-mode volume, and every file read back from the reopened image. Red on 0.1.3's writer:
+  `1 of 2000 files do not read back as their own content: ["D009/F00070"]` — the file the Windows review
+  named.
+- **Mutations, both killed:** M1 the index resolved through the cache again — the test red with that same
+  line; M2 SUPERINDEX mode skipping the SB level — `a_large_pfs3_volume_takes_its_own_writes` red with
+  `NotFound("C/Assign")`. The file was restored from an absolute-path backup and hashed back.
+- **Suite:** `cd src-tauri && cargo test --lib` `test result: ok. 3258 passed; 0 failed; 58 ignored; 0 measured; 0 filtered out` twice; clippy clean.
+- **Not covered:** `alloc_anode_block` still reads the SB through the cache when it registers a new index
+  block in SUPERINDEX mode; that matters only when one operation allocates two new index blocks, about
+  21 000 anodes into a volume, which no test reaches. The Windows run's 22 000-file experiment was not
+  re-run, and no volume filled this way has been read by a real Amiga.
 
 **ART-310** 🔴 ✅ **`libpfs3` 0.1.3's format is wrong: a PFS3 partition over ~4.88 GiB is unmountable, and
 at every size anodes 0–4 are left unreserved** — *found 2026-09-11 in round 1 of the one-button card:

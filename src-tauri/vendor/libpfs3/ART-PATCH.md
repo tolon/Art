@@ -1,4 +1,4 @@
-# `libpfs3` 0.1.3+art.1 — ART's vendored copy
+# `libpfs3` 0.1.3+art.2 — ART's vendored copy
 
 This directory is `libpfs3` 0.1.3 as published on crates.io, vendored into ART for
 [ART-310](../../../docs/ISSUES.md). ART's build uses it through `[patch.crates-io]` in
@@ -9,13 +9,13 @@ This directory is `libpfs3` 0.1.3 as published on crates.io, vendored into ART f
 | Original | `https://static.crates.io/crates/libpfs3/libpfs3-0.1.3.crate`, SHA-256 `02f457ef99a09ddebf56e454c6a25dc3a6860a602c878489f132a4ca3eed4317` |
 | Upstream source | `metaneutrons/pfs3` commit `33e9ff6ba8462cc4e434dfb6e2783d91b7dd5b14`, `crates/libpfs3` (the crate's `.cargo_vcs_info.json`) |
 | Licence | LGPL-3.0-or-later. `LICENSE` is upstream's own file at that commit, unchanged; the full LGPL-3.0 text is `COPYING.LESSER`; the GPL-3.0 text it builds on is ART's `LICENSE` |
-| Modified | 2026-09-13, by ART, for ART-310: `src/format.rs` only, and its header says so |
-| Carried | `src/`, `README.md`, `Cargo.toml` (from `Cargo.toml.orig`: version `0.1.3+art.1`, `[dev-dependencies]` removed), `LICENSE`, `COPYING.LESSER` |
+| Modified | 2026-09-13, by ART: `src/format.rs` for ART-310 and `src/writer.rs` for ART-312; each file's header says so |
+| Carried | `src/`, `README.md`, `Cargo.toml` (from `Cargo.toml.orig`: version `0.1.3+art.2`, `[dev-dependencies]` removed), `LICENSE`, `COPYING.LESSER` |
 | Not carried | `tests/`: `GPL-3.0-only` headers, 9.3 MB of fixtures, and a dev-dependency (`sevenz-rust` 0.6) with RUSTSEC-2026-0245 and RUSTSEC-2026-0246. ART's own tests prove the patch (`src-tauri/src/core/preload/native.rs`) |
 
 ## Changes against 0.1.3
 
-**`src/format.rs` only** ([ART-310](../../../docs/ISSUES.md); research
+**`src/format.rs`** ([ART-310](../../../docs/ISSUES.md); research
 `docs/superpowers/notes/2026-09-11-libpfs3-format-fix-research.md`, design
 `docs/superpowers/specs/2026-09-13-art-310-libpfs3-format-fix-design.md`):
 
@@ -31,8 +31,19 @@ This directory is `libpfs3` 0.1.3 as published on crates.io, vendored into ART f
 Written in this crate's own idiom from the on-disk layout, not translated from pfs3aio (BSD-4-Clause) or
 any port of it. Reserved-area sizing, option flags, datestamps and everything else are 0.1.3's.
 
-**The writer is 0.1.3's, unchanged.** Its anode ceiling is ART-311 and its double anode allocation is
-ART-312; neither is fixed here.
+**`src/writer.rs`** ([ART-312](../../../docs/ISSUES.md)):
+
+3. **An operation that allocates two anodes gets two different ones.** `get_anode_block_nr` resolves an
+   anode block through the writer's own `read_reserved_raw` — `rootblock.indexblocks` or
+   `rext.superindex`, then (SB, then) IB, then the entry — instead of through the volume's cache, which
+   read the device. An index entry the same, still-uncommitted operation had set lived only in
+   `pending_writes`, so 0.1.3 saw 0, created the anode block again and handed out the same anode number
+   twice; the file then read back as its directory's continuation block, with no error.
+   `pending_writes` and the commit order are unchanged. The SB read in `alloc_anode_block` still goes
+   through the cache; it matters only when one operation allocates two new index blocks in SUPERINDEX
+   mode.
+
+Everything else in the writer is 0.1.3's, including its anode ceiling (ART-311).
 
 ## Re-vendoring
 
@@ -47,7 +58,8 @@ Prepared, not offered. Branch `fix/format-superindex-reserved-anodes` (`6eb44df`
 a local clone of `metaneutrons/pfs3`: the same change to `crates/libpfs3/src/format.rs`, two tests in
 `tests/format.rs` (seen red on `main`, green on the change), upstream's fmt, clippy, test and deny checks
 clean, and a Conventional Commit with no AI attribution, as upstream's `CONTRIBUTING.md` requires. The
-owner opens the pull request after a patched volume has been mounted under real pfs3aio.
+owner opens the pull request after a patched volume has been mounted under real pfs3aio. That branch
+carries the format change only; the writer change (ART-312) is not prepared for upstream yet.
 
 ## Diff against 0.1.3
 
@@ -134,4 +146,64 @@ owner opens the pull request after a patched volume has been mounted under real 
      let an_off = ANODE_BLOCK_HEADER_SIZE + ANODE_ROOTDIR as usize * ANODE_SIZE;
      put_u32(&mut an, an_off, 1); // clustersize = 1
      put_u32(&mut an, an_off + 4, rootdir_blk); // blocknr
+--- a/src/writer.rs
++++ b/src/writer.rs
+@@ -6,6 +6,9 @@
+ //! - Anode allocation and chain building
+ //! - Directory entry creation and removal
+ //! - Rootblock update
++//!
++//! Modified by ART on 2026-09-13 (ART-312): `get_anode_block_nr` sees this
++//! writer's own pending writes. `ART-PATCH.md` in this crate's root says what and why.
+ 
+ use crate::error::{Error, Result};
+ use crate::ondisk::*;
+@@ -1286,10 +1289,44 @@ impl Writer {
+         Ok(())
+     }
+ 
++    /// The anode block at `seqnr`, or 0 when none is allocated yet.
++    ///
++    /// ART-312: resolved through `read_reserved_raw`, so an index entry this
++    /// writer set earlier in the same, still-uncommitted operation is seen.
++    /// Going through the volume's cache read the device, where that entry is
++    /// still 0 until `update_rootblock` flushes `pending_writes` — a second
++    /// allocation in one operation then created the same anode block again
++    /// and handed out the same anode number twice.
+     fn get_anode_block_nr(&mut self, seqnr: u32) -> Result<u32> {
+-        self.vol
+-            .anodes
+-            .resolve_anode_block(seqnr, self.vol.dev.as_ref(), &mut self.vol.cache)
++        let ipb = self.index_per_block;
++        let entry = |data: &[u8], nr: u32| -> u32 {
++            let off = INDEX_BLOCK_HEADER_SIZE + nr as usize * 4;
++            data.get(off..off + 4)
++                .map_or(0, |b| u32::from_be_bytes(b.try_into().unwrap()))
++        };
++        let idx_blk = if self.vol.rootblock.is_large() {
++            let super_blk = self
++                .vol
++                .rootblock_ext
++                .as_ref()
++                .and_then(|e| e.superindex.get((seqnr / (ipb * ipb)) as usize).copied())
++                .unwrap_or(0);
++            if super_blk == 0 {
++                return Ok(0);
++            }
++            entry(&self.read_reserved_raw(super_blk)?, (seqnr % (ipb * ipb)) / ipb)
++        } else {
++            self.vol
++                .rootblock
++                .indexblocks
++                .get((seqnr / ipb) as usize)
++                .copied()
++                .unwrap_or(0)
++        };
++        if idx_blk == 0 {
++            return Ok(0);
++        }
++        Ok(entry(&self.read_reserved_raw(idx_blk)?, seqnr % ipb))
+     }
+ 
+     fn get_bitmap_block_nr(&mut self, seqnr: u32) -> Result<Option<u32>> {
 ```

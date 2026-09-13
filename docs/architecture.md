@@ -122,12 +122,12 @@ is the PFS3 implementation — the volume format `core/preload` (G3 route
 native) writes and reads on a PiStorm card, with SD-2's OS install engine
 (G5) as its newest and largest consumer — and the one LGPL-3.0-or-later
 dependency inside `core/`. Since ART-310 it is **ART's own patched copy**,
-`src-tauri/vendor/libpfs3` (`0.1.3+art.1`, reached through `[patch.crates-io]`
-while `Cargo.toml` still pins `=0.1.3`): only `src/format.rs` differs from the
+`src-tauri/vendor/libpfs3` (`0.1.3+art.2`, reached through `[patch.crates-io]`
+while `Cargo.toml` still pins `=0.1.3`): only `src/format.rs` (ART-310) and `src/writer.rs` (ART-312) differ from the
 release, and `ART-PATCH.md` beside it says what, why and how to re-vendor
 (`cargo update -p libpfs3 --precise`, which Cargo does not do on its own). A
 change there is a change to ART's tree and updates `ART-PATCH.md` in the same
-commit. Its writer is still 0.1.3's, with the limits ART-311 and ART-312 record.
+commit. Its writer is 0.1.3's apart from ART-312's fix, with the anode ceiling ART-311 records.
 It is weak copyleft, compatible with ART's own GPL-3.0-or-later, but noted
 deliberately against the project's preference for permissive dependencies,
 because `core/` is meant to be promotable to a standalone crate. It never

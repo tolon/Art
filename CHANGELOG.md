@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Filling a PFS3 partition no longer gives a file another block's contents.**
+  ART's PFS3 writer could hand out one internal number twice when a drawer
+  grew into a new block while a file or drawer was being written, and the
+  file then read back as part of its drawer, with no error. 0.9.2 listed this
+  under Known issues. A PFS3 partition ART filled before this fix is worth
+  filling again.
+
 ## [0.9.2] - 2026-09-13
 
 ### Added
