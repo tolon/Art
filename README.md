@@ -15,7 +15,7 @@ drag-and-drop-driven application.
 
 > **DROP IT INTO ART.**
 
-**0.9.2 is out, and it is asking for testers.**
+**0.9.3 is out, and it is asking for testers.**
 [Download it](https://github.com/tolon/Art/releases/latest), try it on your own
 Amiga files, and tell it what it got wrong — the thirteen things that still need
 someone other than the author are listed under
@@ -160,9 +160,9 @@ directory in it.
 
 ## Status
 
-**0.9.2**, measured on `main` on **2026-09-13**: **3257** Rust tests and
+**0.9.3**, measured on **2026-09-13**: **3258** Rust tests and
 **1658** frontend tests passing (the Rust suite run twice), **2215** interface strings in
-each language, **9** open defects — ART-062, 117, 118, 250, 300, 301, 302, 311 and 312.
+each language, **8** open defects — ART-062, 117, 118, 250, 300, 301, 302 and 311.
 Every one of those numbers, and the command that produced it, is in
 [docs/STATUS.md](docs/STATUS.md) — count them there rather than trusting this paragraph.
 
@@ -227,7 +227,7 @@ fail ([ART-310](docs/ISSUES.md#fixed)). **One limit on filling PFS3 remains,
 said here rather than discovered later:** a partition ART fills holds at most
 about 21 500 files and drawers ([ART-311](docs/ISSUES.md#open)). A writer defect
 that could, rarely, give a file another block's contents with no error is fixed
-after 0.9.2 ([ART-312](docs/ISSUES.md#fixed)).
+in 0.9.3 ([ART-312](docs/ISSUES.md#fixed)).
 
 The card can carry **more than one complete AmigaOS** — 3.1 for compatibility
 beside 3.2 for daily use, say. ART writes no boot menu, because AmigaOS already
@@ -738,8 +738,8 @@ Build output:
 
 ```
 src-tauri/target/release/bundle/
-├── msi/   Amiga Retro Toolkit_0.9.2_x64_en-US.msi
-└── nsis/  Amiga Retro Toolkit_0.9.2_x64-setup.exe
+├── msi/   Amiga Retro Toolkit_0.9.3_x64_en-US.msi
+└── nsis/  Amiga Retro Toolkit_0.9.3_x64-setup.exe
 ```
 
 ## Architecture
