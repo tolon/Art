@@ -1,7 +1,7 @@
 {
   "name": "amiga-retro-toolkit",
   "private": true,
-  "version": "0.9.1",
+  "version": "0.9.2",
   "type": "module",
   "description": "ART — The Swiss Army Knife for Amiga Files",
   "author": "tolon",

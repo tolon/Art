@@ -121,7 +121,14 @@ one: the FAT32 partition a PiStorm card's Raspberry Pi boots from. `libpfs3`
 is the PFS3 implementation — the volume format `core/preload` (G3 route
 native) writes and reads on a PiStorm card, with SD-2's OS install engine
 (G5) as its newest and largest consumer — and the one LGPL-3.0-or-later
-dependency inside `core/`: weak copyleft, compatible with ART's own GPL-3.0-or-later, but noted
+dependency inside `core/`. Since ART-310 it is **ART's own patched copy**,
+`src-tauri/vendor/libpfs3` (`0.1.3+art.1`, reached through `[patch.crates-io]`
+while `Cargo.toml` still pins `=0.1.3`): only `src/format.rs` differs from the
+release, and `ART-PATCH.md` beside it says what, why and how to re-vendor
+(`cargo update -p libpfs3 --precise`, which Cargo does not do on its own). A
+change there is a change to ART's tree and updates `ART-PATCH.md` in the same
+commit. Its writer is still 0.1.3's, with the limits ART-311 and ART-312 record.
+It is weak copyleft, compatible with ART's own GPL-3.0-or-later, but noted
 deliberately against the project's preference for permissive dependencies,
 because `core/` is meant to be promotable to a standalone crate. It never
 imports `tauri`, never calls Windows APIs, never touches the network.

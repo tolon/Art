@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-09-13
+
 ### Added
 
 - **The Files screen's columns can be resized and hidden, and ART remembers
@@ -63,9 +65,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ART created it because there was none.
 - OS Builder, Build tab: after a run has succeeded the button says **Build
   again**, not Build.
-
-### Changed
-
 - **Card builder: any Emu68 archive can go on the card.** A prerelease, a
   nightly or another board's build is no longer refused because ART's table
   names a different file for your board and release line; the plan says what
@@ -76,6 +75,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Kickstart itself and its guides recommend the A1200 ROM on every model;
   the card plan and the PiStorm studio no longer call it wrong for an A500, and
   no longer say a machine with another model's ROM will not come up.
+
+### Known issues
+
+- **Filling a PFS3 partition can, rarely, give a file another block's
+  contents, with no error** ([ART-312](docs/ISSUES.md)). ART's PFS3 writer can
+  hand out one internal number twice when a drawer grows into a new block
+  while a file or drawer is being written; it was measured at 3 files in
+  22 000, and it was already present in 0.9.1. It is found and its fix exists,
+  but the fix is not in this release.
+- **A PFS3 partition ART fills holds at most about 21 500 files and drawers,
+  whatever its size** ([ART-311](docs/ISSUES.md)).
 
 ### Fixed
 

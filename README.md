@@ -15,7 +15,7 @@ drag-and-drop-driven application.
 
 > **DROP IT INTO ART.**
 
-**0.9.1 is out, and it is asking for testers.**
+**0.9.2 is out, and it is asking for testers.**
 [Download it](https://github.com/tolon/Art/releases/latest), try it on your own
 Amiga files, and tell it what it got wrong — the thirteen things that still need
 someone other than the author are listed under
@@ -43,7 +43,7 @@ Commander look on purpose, because that is what that screen is. Application Size
 is unchanged and so is everything you had set. Where a Fluent value did not meet
 the contrast rule it was moved one step along Fluent's own ramp and the measured
 ratio recorded beside it: every colour pair in both themes is still checked
-against WCAG in CI, **105 of them**, counted 2026-09-09.
+against WCAG in CI, **105 of them**, counted 2026-09-13.
 
 ## What it looks like
 
@@ -160,9 +160,9 @@ directory in it.
 
 ## Status
 
-**0.9.1**, measured on the release branch on **2026-09-09**: **3181** Rust tests and
-**1386** frontend tests passing (the Rust suite run twice), **2169** interface strings in
-each language, **9** open defects — ART-062, 117, 118, 250, 278, 279, 281, 283 and 285.
+**0.9.2**, measured on `main` on **2026-09-13**: **3257** Rust tests and
+**1658** frontend tests passing (the Rust suite run twice), **2215** interface strings in
+each language, **9** open defects — ART-062, 117, 118, 250, 300, 301, 302, 311 and 312.
 Every one of those numbers, and the command that produced it, is in
 [docs/STATUS.md](docs/STATUS.md) — count them there rather than trusting this paragraph.
 
@@ -221,7 +221,14 @@ It can also **build one**: the partition table, a FAT32 boot partition carrying
 your own Emu68 release and Kickstart, and a partition table at the start of
 every Amiga disk. **PFS3 and FFS volumes are formatted and filled by ART
 itself** — no external tool required, though one can be configured as a
-fallback for two named gaps.
+fallback for two named gaps. 0.9.2 corrected how ART formats PFS3: a partition
+over about 4.9 GB could not be mounted, and the Amiga's first new drawer could
+fail ([ART-310](docs/ISSUES.md#fixed)). **Two limits on filling PFS3 remain,
+said here rather than discovered later:** ART's PFS3 writer can, rarely, give a
+file another block's contents with no error
+([ART-312](docs/ISSUES.md#open) — measured at 3 files in 22 000, the fix found
+but not yet in a release), and a partition it fills holds at most about 21 500
+files and drawers ([ART-311](docs/ISSUES.md#open)).
 
 The card can carry **more than one complete AmigaOS** — 3.1 for compatibility
 beside 3.2 for daily use, say. ART writes no boot menu, because AmigaOS already
@@ -452,8 +459,8 @@ title on the A1200 profile is the claim** — not every OCS title in a
 collection. And a **Turkish** sentence has finally
 been read on a running screen by someone who speaks it: the new WHDLoad
 Kickstart refusal, judged clear, and the launch then worked
-([ART-062](docs/ISSUES.md#open)). That is one sentence out of 2169 (counted
-2026-09-09), so the language as a whole is still unseen — but it is no longer
+([ART-062](docs/ISSUES.md#open)). That is one sentence out of 2215 (counted
+2026-09-13), so the language as a whole is still unseen — but it is no longer
 zero.
 
 ### How to report what you find
@@ -732,8 +739,8 @@ Build output:
 
 ```
 src-tauri/target/release/bundle/
-├── msi/   Amiga Retro Toolkit_0.9.1_x64_en-US.msi
-└── nsis/  Amiga Retro Toolkit_0.9.1_x64-setup.exe
+├── msi/   Amiga Retro Toolkit_0.9.2_x64_en-US.msi
+└── nsis/  Amiga Retro Toolkit_0.9.2_x64-setup.exe
 ```
 
 ## Architecture
@@ -790,7 +797,10 @@ ART's dependencies are permissively licensed (MIT / Apache-2.0 / Zlib / CDLA)
 with **one deliberate exception**: `libpfs3`, the PFS3 implementation ART writes
 real PiStorm cards with, is **LGPL-3.0-or-later**. Weak copyleft, compatible
 with ART's own licence, and taken in preference to writing a second filesystem
-writer from scratch. All of them are listed in
+writer from scratch. ART carries it as a patched copy in
+`src-tauri/vendor/libpfs3` — only its formatter changed
+([ART-310](docs/ISSUES.md#fixed)) — with its licence texts and a record of what
+was changed beside it. All of them are listed in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and checked on every push by
 `cargo deny`. ART itself distributes **no** Amiga ROMs, no AmigaOS files and no
 copyrighted software — see [docs/licenses.md](docs/licenses.md).
