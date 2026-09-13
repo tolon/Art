@@ -1271,6 +1271,107 @@ mod tests {
         u64::from(vol.free_blocks()) * u64::from(vol.block_size())
     }
 
+    /// A PFS3 partition past MAXSMALLDISK (10 241 440 blocks), the size at which
+    /// a format selects SUPERINDEX mode: 5 100 MiB is 10 362 cylinders,
+    /// 10 444 896 blocks. The image is extended with `set_len` (`create_hdf`),
+    /// and the format writes only the reserved area near the partition's start.
+    fn formatted_large_pds3_image() -> (crate::core::ScratchDir, PathBuf) {
+        let (_guard, dir) = scratch("pds3-large");
+        let path = dir.join("card.hdf");
+        crate::core::hdf::create_hdf(
+            &path,
+            5_200 * 1024 * 1024,
+            true,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
+                size_mb: 5_100,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+            &[],
+        )
+        .unwrap();
+        NativeFormatter
+            .format_partition(&path, None, 1, "Work", &NoProgress)
+            .unwrap();
+        (_guard, path)
+    }
+
+    /// **ART-310.** What a PFS3 format left on disk, read straight off the
+    /// image — not through `libpfs3`'s reader, which shares a crate with the
+    /// writer under test. Follows the rootblock to the first anode block:
+    /// `rootblock.indexblocks[0]` in small mode, `rext.superindex[0]` in
+    /// SUPERINDEX mode.
+    struct AnodeChain {
+        /// `MODE_SUPERINDEX` (0x80) is set in the rootblock's options.
+        supermode: bool,
+        /// The two-byte id of every block from that pointer down to the first
+        /// `AB`, in order: `IB AB` in small mode, `SB IB AB` in SUPERINDEX mode.
+        ids: Vec<[u8; 2]>,
+        /// Anodes 0–5 of the first anode block, as `(clustersize, blocknr, next)`.
+        anodes: Vec<(u32, u32, u32)>,
+    }
+
+    fn anode_chain(image: &Path) -> AnodeChain {
+        use std::io::{Read, Seek, SeekFrom};
+        const MODE_SUPERINDEX: u32 = 0x80;
+        let offset = partition_offset(image);
+        let mut file = std::fs::File::open(image).unwrap();
+        let mut sectors = |sector: u32, len: usize| -> Vec<u8> {
+            file.seek(SeekFrom::Start(offset + u64::from(sector) * 512))
+                .unwrap();
+            let mut buf = vec![0u8; len];
+            file.read_exact(&mut buf).unwrap();
+            buf
+        };
+        let be16 = |b: &[u8], at: usize| u16::from_be_bytes([b[at], b[at + 1]]);
+        let be32 = |b: &[u8], at: usize| u32::from_be_bytes(b[at..at + 4].try_into().unwrap());
+
+        // Rootblock at sector 2: options 0x04, reserved_blksize 0x40,
+        // extension 0x58, and the index union from 0x60 (small mode:
+        // bitmapindex[0..=4], then indexblocks[0..]).
+        let root = sectors(2, 512);
+        let supermode = be32(&root, 0x04) & MODE_SUPERINDEX != 0;
+        let resblk = usize::from(be16(&root, 0x40));
+        let mut next = if supermode {
+            let ext = sectors(be32(&root, 0x58), resblk);
+            be32(&ext, 0x40) // rext.superindex[0]
+        } else {
+            be32(&root, 0x60 + 5 * 4) // rootblock.indexblocks[0]
+        };
+        let mut ids = Vec::new();
+        loop {
+            let block = sectors(next, resblk);
+            let id = [block[0], block[1]];
+            ids.push(id);
+            if &id == b"AB" {
+                // Anode block: a 16-byte header, then 12-byte anodes.
+                let anodes = (0..6)
+                    .map(|k| {
+                        let at = 16 + 12 * k;
+                        (be32(&block, at), be32(&block, at + 4), be32(&block, at + 8))
+                    })
+                    .collect();
+                return AnodeChain {
+                    supermode,
+                    ids,
+                    anodes,
+                };
+            }
+            assert!(
+                (&id == b"SB" || &id == b"IB") && ids.len() < 3,
+                "the anode pointer chain reached {:?} after {:?}",
+                String::from_utf8_lossy(&id),
+                ids.iter()
+                    .map(|i| String::from_utf8_lossy(i).into_owned())
+                    .collect::<Vec<_>>()
+            );
+            next = be32(&block, 12); // index[0], after a 12-byte header
+        }
+    }
+
     /// The pieces needed to reopen a formatted `DOS\3` partition's volume for
     /// verification, without going through `NativeFormatter` a second time.
     fn ffs_region(image: &Path) -> (FileRegionMut, VolumeGeometry, u64) {
@@ -1410,6 +1511,80 @@ mod tests {
             .unwrap();
         assert_eq!(summary.files, 1);
         assert_eq!(summary.directories, 1);
+    }
+
+    // ---- ART-310: the format writes what pfs3aio writes ----
+
+    /// **ART-310, every size.** pfs3aio's format reserves anodes 0–4 by
+    /// allocating them (`AllocAnode` leaves `clustersize 0, blocknr 0xffffffff,
+    /// next 0`); `libpfs3` 0.1.3 left them `(0, 0, 0)`, which every allocator
+    /// ported from pfs3aio reads as free — hst-imager's first new directory then
+    /// failed `ERROR_DISK_FULL`, and a later one was given reserved anode 1.
+    #[test]
+    fn a_small_pfs3_format_reserves_anodes_zero_to_four() {
+        let (_guard, image) = formatted_pds3_image();
+        let chain = anode_chain(&image);
+        assert!(!chain.supermode, "an 8 MB partition must be small mode");
+        assert_eq!(chain.ids, vec![*b"IB", *b"AB"]);
+        for (nr, anode) in chain.anodes.iter().take(5).enumerate() {
+            assert_eq!(
+                *anode,
+                (0, 0xFFFF_FFFF, 0),
+                "anode {nr} must be reserved the way pfs3aio's AllocAnode leaves it"
+            );
+        }
+        assert_eq!(
+            chain.anodes[5].0, 1,
+            "anode 5 is the root directory, one block"
+        );
+    }
+
+    /// **ART-310, SUPERINDEX mode.** Every reader — pfs3aio's `GetSuperBlock`,
+    /// hst-imager's port, `libpfs3`'s own `resolve_anode_block` — walks
+    /// `superindex[0] -> SB -> IB -> AB`. `libpfs3` 0.1.3 pointed
+    /// `superindex[0]` at the index block itself: hst-imager could not mount
+    /// the volume and `libpfs3` could not read its own root directory.
+    #[test]
+    fn a_large_pfs3_format_writes_the_superblock_level() {
+        let (_guard, image) = formatted_large_pds3_image();
+        let chain = anode_chain(&image);
+        assert!(
+            chain.supermode,
+            "a 5 100 MiB partition must be SUPERINDEX mode"
+        );
+        assert_eq!(
+            chain.ids,
+            vec![*b"SB", *b"IB", *b"AB"],
+            "superindex[0] must name a super index block, not the anode index block"
+        );
+        for (nr, anode) in chain.anodes.iter().take(5).enumerate() {
+            assert_eq!(
+                *anode,
+                (0, 0xFFFF_FFFF, 0),
+                "anode {nr} must be reserved in SUPERINDEX mode too"
+            );
+        }
+    }
+
+    /// **ART-310, the consequence.** A volume past MAXSMALLDISK that
+    /// `NativeFormatter` formatted takes `copy_in`'s writes and gives back the
+    /// same bytes. On 0.1.3 the first write failed `anode 5 not found`.
+    #[test]
+    fn a_large_pfs3_volume_takes_its_own_writes() {
+        let (_guard, image) = formatted_large_pds3_image();
+        let (_guard, tree) = fixtures::scratch("large-pfs3-writes");
+        std::fs::create_dir_all(tree.join("C")).unwrap();
+        std::fs::write(tree.join("C/Assign"), b"assign\n").unwrap();
+        std::fs::write(tree.join("Readme"), b"hello from ART\n").unwrap();
+
+        let summary = NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+        assert_eq!((summary.files, summary.directories), (2, 1));
+
+        let mut vol = libpfs3::volume::Volume::open(&image, partition_offset(&image)).unwrap();
+        assert_eq!(vol.read_file("C/Assign").unwrap(), b"assign\n");
+        assert_eq!(vol.read_file("Readme").unwrap(), b"hello from ART\n");
     }
 
     // ---- ART-113: a non-ASCII name is refused before anything is written ----
