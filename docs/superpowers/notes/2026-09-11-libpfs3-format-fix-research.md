@@ -224,7 +224,9 @@ Measured or read here, for the design to decide from, not decided.
 - **Upstream's rules**, for when the patch is offered (`CONTRIBUTING.md` at `05f50b06c3cd`):
   - branch `fix/<topic>`
   - Conventional Commits, and the squash-merged PR title decides the version
-  - toolchain from `rust-toolchain.toml` (1.94.1)
+  - toolchain from `rust-toolchain.toml`, which pins channel **1.98.1**. *Corrected 2026-09-13:* this
+    line first said 1.94.1, which is the crate's `rust-version` (its MSRV), not the toolchain the
+    repository builds with
   - lefthook + gitleaks
   - **"No AI attribution trailers, in commits or in the pull request body."**
 
