@@ -26,29 +26,15 @@
 //! a commit itself fails part-way (ART-319); `ART-PATCH.md`
 //! there lists each. The writer's other limits below (ART-113, ART-116) still hold.
 //!
-//! ## `import_filesystem` refuses
+//! ## Embedding a driver is not a formatter's job (ART-117)
 //!
-//! The trait method exists to embed a filesystem driver into an **already
-//! built** card's RDB, in place, without disturbing the partitions already on
-//! it. `core::card::build::create_rdb_layout` cannot do that: it builds an
-//! RDB **from scratch**, laying out every partition's cylinders in order from
-//! a `size_mb` figure. Reconstructing an existing area's boundaries from
-//! `ParsedPartition` and feeding them back in is not just fragile — for many
-//! `size_mb` values it is impossible. `create_rdb_layout`'s cylinder count is
-//! `ceil(size_mb * 1_048_576 / bytes_per_cyl)`, where `bytes_per_cyl` is
-//! `516_096`. Consecutive integer `size_mb` values step the resulting
-//! cylinder count by roughly 2.03, so **most integer cylinder counts have no
-//! `size_mb` that reproduces them** — there is no lossless round trip from
-//! "this partition currently spans N cylinders" back to a whole-megabyte
-//! request that regenerates exactly N. Rebuilding the RDB with a
-//! reconstruction that lands even one cylinder off would silently move every
-//! partition after the first, which is only harmless the moment nothing has
-//! been formatted or filled yet on that area — a card returned to for a
-//! second partition is exactly the case where it would not be. So this method
-//! refuses, by name, rather than produce a plausible-looking corruption. A
-//! card built with its filesystem driver already embedded
-//! (`core/card/build.rs::AreaSpec::file_systems`), or `hst-imager`'s own
-//! `import_filesystem`, are the paths that actually serve this case.
+//! Until 2026-09-14 `import_filesystem` sat on this trait and refused every
+//! card, because the only RDB writer ART had rebuilt a table from scratch on
+//! 16/63 geometry — true of a rebuild, and not of an edit that never touches a
+//! PART block or a cylinder number. Appending or replacing a driver in a card's
+//! existing RDB is `core::preload::embed` now: a strict walk, block selection
+//! above everything live, a user-chosen backup, four journalled stages and a
+//! read-back. It launches nothing and needs no formatter.
 //!
 //! ## `copy_in`: progress and cancellation
 //!
@@ -164,25 +150,6 @@ impl VolumeFormatter for NativeFormatter {
         Ok(ToolVersion {
             raw: format!("libpfs3 {LIBPFS3_VERSION} (native, no external tool)"),
         })
-    }
-
-    /// See the module docs: this cannot be done safely with
-    /// `create_rdb_layout`'s shape, so it refuses rather than guess.
-    fn import_filesystem(
-        &self,
-        _image: &Path,
-        _slot: Option<usize>,
-        _driver: &Path,
-        _dostype: &str,
-        _name: &str,
-        _sink: &dyn ProgressSink,
-    ) -> CoreResult<()> {
-        // ART-117, and the hook `commands/preload.rs`'s formatter choice
-        // hangs on: a dedicated variant, not `NotImplemented`, so a caller can
-        // tell "known capability gap, safe to retry with hst-imager" apart
-        // from "nobody has built this yet". See `CoreError::
-        // ForeignRdbEmbedNotSupported`'s own doc comment.
-        Err(CoreError::ForeignRdbEmbedNotSupported)
     }
 
     fn format_partition(
@@ -3190,36 +3157,6 @@ mod tests {
     fn probe_names_libpfs3() {
         let probed = NativeFormatter::UTC.probe().unwrap();
         assert_eq!(probed.raw, "libpfs3 0.1.3+art.5 (native, no external tool)");
-    }
-
-    /// `import_filesystem` refuses by name rather than pretend — see the
-    /// module docs for why `create_rdb_layout` cannot serve this case.
-    ///
-    /// **The exact variant matters, not just the code.** ART-120's fallback
-    /// choice (`commands/preload.rs::FallbackReason::from_native_error`)
-    /// matches on `CoreError::ForeignRdbEmbedNotSupported` specifically to
-    /// decide "safe to retry with hst-imager" — a regression back to the
-    /// generic `NotImplemented` would silently stop that fallback from firing
-    /// while this assertion, checking only the string `.code()` used to
-    /// return, kept passing.
-    #[test]
-    fn import_filesystem_refuses_rather_than_guess() {
-        let (_guard, image) = rdb_image_with_one_pds3_partition();
-        let err = NativeFormatter::UTC
-            .import_filesystem(
-                &image,
-                None,
-                Path::new("pfs3aio.lha"),
-                "PDS3",
-                "pfs3aio",
-                &NoProgress,
-            )
-            .unwrap_err();
-        assert!(
-            matches!(err, CoreError::ForeignRdbEmbedNotSupported),
-            "{err:?}"
-        );
-        assert_eq!(err.code(), "ART-NATIVE-EMBED-UNSUPPORTED", "{err}");
     }
 
     /// A DosType neither family claims — ART refuses rather than guessing.

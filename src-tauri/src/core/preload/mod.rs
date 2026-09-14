@@ -55,8 +55,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::core::card::read_card;
-use crate::core::error::{CoreError, CoreResult};
+use crate::core::error::{CoreError, CoreResult, RdbEditRefusal};
 use crate::core::jobs::ProgressSink;
+use embed::{DriverVersion, EmbedMode, EmbedReport, EmbedTarget, Prepared};
 
 /// What a formatter reports about itself.
 ///
@@ -135,17 +136,6 @@ impl CopySummary {
 pub trait VolumeFormatter {
     fn probe(&self) -> CoreResult<ToolVersion>;
 
-    /// Embed a filesystem driver in the image's RDB.
-    fn import_filesystem(
-        &self,
-        image: &Path,
-        slot: Option<usize>,
-        driver: &Path,
-        dostype: &str,
-        name: &str,
-        sink: &dyn ProgressSink,
-    ) -> CoreResult<()>;
-
     /// Format one partition. **Destructive**: whatever was in it is gone.
     fn format_partition(
         &self,
@@ -216,16 +206,23 @@ pub struct PreloadPartition {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreloadRequest {
     pub image: PathBuf,
-    /// A filesystem driver to embed first, if the card does not carry one for
-    /// the DosType its partitions name.
+    /// A filesystem driver to embed first when the card carries none for the
+    /// DosType its partitions name, or to replace the card's own with when it
+    /// is a newer copy of the same driver (ART-117).
     pub driver: Option<PathBuf>,
     pub partitions: Vec<PreloadPartition>,
+    /// Where the RDB area is copied before an embed or replace step writes a
+    /// block (ART-117, decision 7). Chosen for each run, never remembered: the
+    /// next run would meet the file this one made.
+    #[serde(default)]
+    pub rdb_backup: Option<PathBuf>,
 }
 
 /// One thing that will be run, in order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "step", rename_all = "kebab-case")]
 pub enum PreloadStep {
+    /// Append a driver for a DosType the card does not carry (ART-117).
     ImportFilesystem {
         /// Which MBR slot holds the Amiga disk, or `None` for a plain image
         /// whose RDB is at offset zero. **This is what a card needs and a
@@ -236,6 +233,23 @@ pub enum PreloadStep {
         driver: PathBuf,
         dostype: String,
         name: String,
+        /// What the driver's own `$VER:` says.
+        file_version: DriverVersion,
+        /// `[first, last]` RDB blocks the edit writes.
+        blocks: [u32; 2],
+        /// `[before, after]` when `RDBBlocksHi` is raised (decision 12).
+        rdb_blocks_hi_raised: Option<[u32; 2]>,
+    },
+    /// Replace the card's driver with a newer one (ART-117, decision 1).
+    ReplaceFilesystem {
+        slot: Option<usize>,
+        driver: PathBuf,
+        dostype: String,
+        name: String,
+        card_version: DriverVersion,
+        file_version: DriverVersion,
+        blocks: [u32; 2],
+        rdb_blocks_hi_raised: Option<[u32; 2]>,
     },
     /// **Destructive.** Named as its own step so a preview can say so.
     FormatPartition {
@@ -251,11 +265,79 @@ pub enum PreloadStep {
     },
 }
 
+impl PreloadStep {
+    /// The RDB edit this step is, if it is one.
+    pub fn embed_target<'a>(&'a self, image: &'a Path) -> Option<EmbedTarget<'a>> {
+        match self {
+            Self::ImportFilesystem {
+                slot,
+                driver,
+                dostype,
+                ..
+            } => Some(EmbedTarget {
+                image,
+                slot: *slot,
+                dostype,
+                mode: EmbedMode::Append,
+                driver,
+            }),
+            Self::ReplaceFilesystem {
+                slot,
+                driver,
+                dostype,
+                ..
+            } => Some(EmbedTarget {
+                image,
+                slot: *slot,
+                dostype,
+                mode: EmbedMode::Replace,
+                driver,
+            }),
+            Self::FormatPartition { .. } | Self::CopyIn { .. } => None,
+        }
+    }
+}
+
+/// Something the preview must say that is not a step (ART-117). A value, never
+/// a sentence (ART-060): `src/lib/preload.ts::notePhrase` renders it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "note", rename_all = "kebab-case")]
+pub enum PlanNote {
+    /// The card's driver is not older than the chosen file's.
+    DriverKept {
+        dostype: String,
+        card_version: DriverVersion,
+        file_version: Option<DriverVersion>,
+    },
+    /// A replace ART refused; the card's own driver stays and still mounts.
+    ReplaceRefused {
+        dostype: String,
+        card_version: DriverVersion,
+        code: String,
+        detail: String,
+    },
+    /// The card's driver and the chosen file name different programs, or the
+    /// card's names none (spec decision 13). hst-imager can replace it.
+    DifferentDriver {
+        dostype: String,
+        card_version: DriverVersion,
+        card_name: Option<String>,
+        file_name: String,
+    },
+    /// Another DosType's driver was not looked at: one RDB edit per run.
+    SecondEditSkipped { dostype: String },
+}
+
 /// What a preload would do, before any of it is done (§92's PREVIEW).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreloadPlan {
     pub image: PathBuf,
     pub steps: Vec<PreloadStep>,
+    #[serde(default)]
+    pub notes: Vec<PlanNote>,
+    /// The request's backup path, echoed so the run needs nothing else.
+    #[serde(default)]
+    pub rdb_backup: Option<PathBuf>,
 }
 
 impl PreloadPlan {
@@ -265,6 +347,30 @@ impl PreloadPlan {
             .iter()
             .filter(|step| matches!(step, PreloadStep::FormatPartition { .. }))
             .count()
+    }
+
+    /// Whether this plan writes into an RDB.
+    pub fn edits_rdb(&self) -> bool {
+        self.steps
+            .iter()
+            .any(|step| step.embed_target(&self.image).is_some())
+    }
+
+    /// Decision 6's run-time refusals, asked before a job starts and again by
+    /// `run`, so the engine does not depend on a screen having asked.
+    pub fn ready_to_run(&self) -> CoreResult<()> {
+        if !self.edits_rdb() {
+            return Ok(());
+        }
+        let Some(backup) = &self.rdb_backup else {
+            return Err(CoreError::RdbEditRefused(RdbEditRefusal::NoBackup));
+        };
+        if backup.exists() {
+            return Err(CoreError::RdbEditRefused(RdbEditRefusal::BackupExists {
+                path: backup.clone(),
+            }));
+        }
+        Ok(())
     }
 }
 
@@ -282,7 +388,12 @@ pub fn plan(request: &PreloadRequest) -> CoreResult<PreloadPlan> {
 
     let card = read_card(&request.image)?;
     let mut steps = Vec::new();
-    let mut imported = false;
+    // One RDB edit per run (decision 1): the DosType it is for, once made.
+    let mut edited: Option<u32> = None;
+    // DosTypes already asked about for a replace, so two partitions of one
+    // DosType produce one note, not two.
+    let mut considered: Vec<u32> = Vec::new();
+    let mut notes = Vec::new();
 
     for wanted in &request.partitions {
         let Some(area) = wanted
@@ -318,18 +429,28 @@ pub fn plan(request: &PreloadRequest) -> CoreResult<PreloadPlan> {
         // on a card that carries no PFS3 driver produces a volume an Amiga
         // ignores in silence — the format would succeed and the card would
         // come up without it.
-        if !card.provides_file_system(part.dostype) && !kickstart_carries(part.dostype) {
-            match (&request.driver, imported) {
-                (Some(driver), false) => {
-                    steps.push(PreloadStep::ImportFilesystem {
-                        slot,
-                        driver: driver.clone(),
-                        dostype: part.dostype_str.clone(),
-                        name: driver_name(driver),
-                    });
-                    imported = true;
+        let provided = card.provides_file_system(part.dostype);
+        if !provided && !kickstart_carries(part.dostype) {
+            match (&request.driver, edited) {
+                (Some(driver), None) => {
+                    let ready =
+                        embed::prepare_append(&request.image, slot, &part.dostype_str, driver)?;
+                    steps.push(embed_step(slot, driver, &part.dostype_str, &ready));
+                    edited = Some(part.dostype);
                 }
-                (Some(_), true) => {}
+                (Some(_), Some(done)) if done == part.dostype => {}
+                (Some(_), Some(done)) => {
+                    return Err(CoreError::InvalidInput(format!(
+                        concat!(
+                            "partition {} is {} and nothing on this card provides it, but this ",
+                            "run already embeds a {} driver — ART makes one RDB edit per run, so ",
+                            "prepare this partition in a second run"
+                        ),
+                        wanted.index,
+                        part.dostype_str,
+                        crate::core::rdb::dos_type_string(done)
+                    )));
+                }
                 (None, _) => {
                     return Err(CoreError::InvalidInput(format!(
                         concat!(
@@ -339,6 +460,79 @@ pub fn plan(request: &PreloadRequest) -> CoreResult<PreloadPlan> {
                         ),
                         wanted.index, part.dostype_str
                     )));
+                }
+            }
+        } else if let (true, Some(driver)) = (provided, &request.driver) {
+            if !considered.contains(&part.dostype) {
+                considered.push(part.dostype);
+                match edited {
+                    Some(_) => notes.push(PlanNote::SecondEditSkipped {
+                        dostype: part.dostype_str.clone(),
+                    }),
+                    None => {
+                        // The first area carrying the DosType — the record the
+                        // gate above read (decision 1).
+                        let target_slot = card
+                            .areas
+                            .iter()
+                            .position(|area| area.rdb.provides_file_system(part.dostype))
+                            .and_then(|index| mbr_slot_of(&card, index));
+                        let card_version = card
+                            .file_systems()
+                            .iter()
+                            .find(|fs| fs.dos_type == part.dostype)
+                            .map(|fs| DriverVersion {
+                                version: fs.version,
+                                revision: fs.revision,
+                            })
+                            .unwrap_or(DriverVersion {
+                                version: 0,
+                                revision: 0,
+                            });
+                        match embed::prepare_replace(
+                            &request.image,
+                            target_slot,
+                            &part.dostype_str,
+                            driver,
+                        ) {
+                            Ok(Prepared::Edit(ready)) => {
+                                steps.push(embed_step(
+                                    target_slot,
+                                    driver,
+                                    &part.dostype_str,
+                                    &ready,
+                                ));
+                                edited = Some(part.dostype);
+                            }
+                            Ok(Prepared::Keep { card, file }) => notes.push(PlanNote::DriverKept {
+                                dostype: part.dostype_str.clone(),
+                                card_version: card,
+                                file_version: file,
+                            }),
+                            // Spec decision 13: a different program has a note
+                            // of its own, naming both.
+                            Err(CoreError::RdbEditRefused(RdbEditRefusal::DifferentDriver {
+                                card,
+                                file,
+                            })) => notes.push(PlanNote::DifferentDriver {
+                                dostype: part.dostype_str.clone(),
+                                card_version,
+                                card_name: card,
+                                file_name: file,
+                            }),
+                            // Spec decision 6 (pre-flight F5): every other way a
+                            // replace cannot go ahead is a note too — a refusal,
+                            // a remembered driver file that has gone, an area
+                            // ART cannot read. The card's own driver still
+                            // mounts, and a remembered path is not intent.
+                            Err(err) => notes.push(PlanNote::ReplaceRefused {
+                                dostype: part.dostype_str.clone(),
+                                card_version,
+                                code: err.code().to_string(),
+                                detail: err.to_string(),
+                            }),
+                        }
+                    }
                 }
             }
         }
@@ -368,7 +562,45 @@ pub fn plan(request: &PreloadRequest) -> CoreResult<PreloadPlan> {
     Ok(PreloadPlan {
         image: request.image.clone(),
         steps,
+        notes,
+        rdb_backup: request.rdb_backup.clone(),
     })
+}
+
+/// The step a planned edit shows: its versions, its blocks, and a raise.
+fn embed_step(
+    slot: Option<usize>,
+    driver: &Path,
+    dostype: &str,
+    ready: &embed::EditReady,
+) -> PreloadStep {
+    let allocation = &ready.plan.allocation;
+    let blocks = [allocation.fshd_block, allocation.last_block];
+    let rdb_blocks_hi_raised = allocation
+        .raised_from
+        .map(|from| [from, allocation.rdb_blocks_hi]);
+    let file_version = DriverVersion::from(ready.plan.file_version);
+    match ready.plan.card_version {
+        Some(card) => PreloadStep::ReplaceFilesystem {
+            slot,
+            driver: driver.to_path_buf(),
+            dostype: dostype.to_string(),
+            name: driver_name(driver),
+            card_version: card.into(),
+            file_version,
+            blocks,
+            rdb_blocks_hi_raised,
+        },
+        None => PreloadStep::ImportFilesystem {
+            slot,
+            driver: driver.to_path_buf(),
+            dostype: dostype.to_string(),
+            name: driver_name(driver),
+            file_version,
+            blocks,
+            rdb_blocks_hi_raised,
+        },
+    }
 }
 
 /// What a finished preload did.
@@ -378,6 +610,9 @@ pub struct PreloadOutcome {
     pub copied: CopySummary,
     /// What the formatter reported itself to be, for the manifest and the log.
     pub tool: Option<ToolVersion>,
+    /// The RDB edit, when the plan made one (ART-117).
+    #[serde(default)]
+    pub embedded: Option<EmbedReport>,
 }
 
 /// Run a plan.
@@ -391,6 +626,7 @@ pub fn run(
     formatter: &dyn VolumeFormatter,
     sink: &dyn ProgressSink,
 ) -> CoreResult<PreloadOutcome> {
+    plan.ready_to_run()?;
     let mut outcome = PreloadOutcome {
         tool: formatter.probe().ok(),
         ..Default::default()
@@ -404,12 +640,11 @@ pub fn run(
         sink.report(done as u64, Some(total), &step_label(step));
 
         match step {
-            PreloadStep::ImportFilesystem {
-                slot,
-                driver,
-                dostype,
-                name,
-            } => formatter.import_filesystem(&plan.image, *slot, driver, dostype, name, sink)?,
+            PreloadStep::ImportFilesystem { .. } | PreloadStep::ReplaceFilesystem { .. } => {
+                if let Some(target) = step.embed_target(&plan.image) {
+                    outcome.embedded = Some(embed::run(target, plan.rdb_backup.as_deref(), sink)?);
+                }
+            }
             PreloadStep::FormatPartition {
                 slot,
                 index,
@@ -441,6 +676,7 @@ pub fn run(
 pub(crate) fn step_label(step: &PreloadStep) -> String {
     match step {
         PreloadStep::ImportFilesystem { name, .. } => format!("Embedding {name}"),
+        PreloadStep::ReplaceFilesystem { name, .. } => format!("Replacing the driver with {name}"),
         PreloadStep::FormatPartition {
             drive_name,
             volume_name,
@@ -479,7 +715,9 @@ fn driver_name(driver: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
+    use crate::core::preload::embed::DriverVersion;
+    use crate::core::rdb::{AmigaHardDiskFs, FileSystemSpec, PartitionSpec};
+    use crate::core::rdbedit::fixtures::{hunk_driver, named_driver};
 
     fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
         crate::core::ScratchDir::pair("art-preload", tag)
@@ -515,6 +753,318 @@ mod tests {
         }]
     }
 
+    fn driver(dir: &Path, version: &str) -> PathBuf {
+        let path = dir.join("pfs3aio");
+        std::fs::write(&path, hunk_driver(62_604, version)).unwrap();
+        path
+    }
+
+    fn lha(dir: &Path) -> PathBuf {
+        let path = dir.join("pfs3aio.lha");
+        let mut bytes = vec![0u8; 1024];
+        bytes[..7].copy_from_slice(b"\x2a\x00-lh5-");
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// A card ART built with a `PDS\3` partition and that driver in its RDB
+    /// (`RDBBlocksHi` 130).
+    fn card_with_pds3_driver(dir: &Path, version: (u16, u16)) -> PathBuf {
+        let path = dir.join("card.hdf");
+        crate::core::hdf::create_hdf(
+            &path,
+            32 * 1024 * 1024,
+            true,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
+                size_mb: 10,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+            &[FileSystemSpec {
+                dos_type: 0x5044_5303,
+                version: version.0,
+                revision: version.1,
+                data: hunk_driver(62_604, &format!("{}.{}", version.0, version.1)),
+            }],
+        )
+        .unwrap();
+        path
+    }
+
+    fn request(image: PathBuf, driver: Option<PathBuf>) -> PreloadRequest {
+        PreloadRequest {
+            image,
+            driver,
+            partitions: one(1, "Work", None),
+            rdb_backup: None,
+        }
+    }
+
+    /// Decision 1: a newer file replaces the card's driver, and the step says
+    /// both versions and the blocks — here with decision 12's raise.
+    #[test]
+    fn a_newer_driver_replaces_the_cards_own_before_the_format() {
+        let (_guard, dir) = scratch("replace");
+        let image = card_with_pds3_driver(&dir, (19, 2));
+        let file = driver(&dir, "19.3");
+        let made = plan(&request(image, Some(file.clone()))).unwrap();
+        assert_eq!(
+            made.steps[0],
+            PreloadStep::ReplaceFilesystem {
+                slot: None,
+                driver: file,
+                dostype: "PDS3".into(),
+                name: "pfs3aio".into(),
+                card_version: DriverVersion {
+                    version: 19,
+                    revision: 2
+                },
+                file_version: DriverVersion {
+                    version: 19,
+                    revision: 3
+                },
+                blocks: [131, 259],
+                rdb_blocks_hi_raised: Some([130, 259]),
+            }
+        );
+        assert!(matches!(made.steps[1], PreloadStep::FormatPartition { .. }));
+        assert!(made.notes.is_empty(), "{:?}", made.notes);
+    }
+
+    /// "An ignored driver is never silent."
+    #[test]
+    fn a_driver_that_is_not_newer_plans_no_edit_and_says_so() {
+        let (_guard, dir) = scratch("keep");
+        let image = card_with_pds3_driver(&dir, (19, 2));
+        let made = plan(&request(image, Some(driver(&dir, "19.2")))).unwrap();
+        assert!(
+            matches!(made.steps.as_slice(), [PreloadStep::FormatPartition { .. }]),
+            "{:?}",
+            made.steps
+        );
+        assert_eq!(
+            made.notes,
+            vec![PlanNote::DriverKept {
+                dostype: "PDS3".into(),
+                card_version: DriverVersion {
+                    version: 19,
+                    revision: 2
+                },
+                file_version: Some(DriverVersion {
+                    version: 19,
+                    revision: 2
+                }),
+            }]
+        );
+    }
+
+    /// Decision 6: a replace refusal is a note — the card's driver still mounts.
+    #[test]
+    fn a_replace_the_card_cannot_take_is_a_note_and_the_format_still_plans() {
+        let (_guard, dir) = scratch("replace-refused");
+        let image = card_with_pds3_driver(&dir, (19, 2));
+        let made = plan(&request(image, Some(lha(&dir)))).unwrap();
+        assert!(matches!(
+            made.steps.as_slice(),
+            [PreloadStep::FormatPartition { .. }]
+        ));
+        match made.notes.as_slice() {
+            [PlanNote::ReplaceRefused {
+                dostype,
+                code,
+                detail,
+                ..
+            }] => {
+                assert_eq!(
+                    (dostype.as_str(), code.as_str()),
+                    ("PDS3", "ART-RDB-EDIT-NOT-EXECUTABLE")
+                );
+                assert!(detail.contains("unpacked first"), "{detail}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Spec decision 13: a different program on the card is a note naming
+    /// both, and the format still plans.
+    #[test]
+    fn a_replace_across_different_drivers_is_a_note_naming_both() {
+        let (_guard, dir) = scratch("different-driver");
+        let image = dir.join("card.hdf");
+        crate::core::hdf::create_hdf(
+            &image,
+            32 * 1024 * 1024,
+            true,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
+                size_mb: 10,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+            &[FileSystemSpec {
+                dos_type: 0x5044_5303,
+                version: 1,
+                revision: 293,
+                data: named_driver(62_604, "SmartFilesystem", "1.293"),
+            }],
+        )
+        .unwrap();
+        let made = plan(&request(image, Some(driver(&dir, "19.3")))).unwrap();
+        assert!(
+            matches!(made.steps.as_slice(), [PreloadStep::FormatPartition { .. }]),
+            "{:?}",
+            made.steps
+        );
+        assert_eq!(
+            made.notes,
+            vec![PlanNote::DifferentDriver {
+                dostype: "PDS3".into(),
+                card_version: DriverVersion {
+                    version: 1,
+                    revision: 293
+                },
+                card_name: Some("SmartFilesystem".into()),
+                file_name: "pfs3aio".into(),
+            }]
+        );
+    }
+
+    /// Spec decision 6 (pre-flight F5): a remembered driver file that has gone
+    /// is a note, not a failed preview, on a card that already carries its
+    /// driver.
+    #[test]
+    fn a_missing_remembered_driver_file_is_a_note_and_the_plan_still_formats() {
+        let (_guard, dir) = scratch("driver-gone");
+        let image = card_with_pds3_driver(&dir, (19, 2));
+        let made = plan(&request(image, Some(dir.join("gone")))).unwrap();
+        assert!(
+            matches!(made.steps.as_slice(), [PreloadStep::FormatPartition { .. }]),
+            "{:?}",
+            made.steps
+        );
+        match made.notes.as_slice() {
+            [PlanNote::ReplaceRefused { code, .. }] => assert_eq!(code, "ART-IO"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Decision 6: an append refusal fails the plan — formatting on would make
+    /// a volume an Amiga ignores.
+    #[test]
+    fn an_append_the_card_cannot_take_fails_the_plan() {
+        let (_guard, dir) = scratch("append-refused");
+        let image = card(&dir, AmigaHardDiskFs::Pfs3Standard);
+        let err = plan(&request(image, Some(lha(&dir)))).unwrap_err();
+        assert_eq!(err.code(), "ART-RDB-EDIT-NOT-EXECUTABLE", "{err}");
+    }
+
+    #[test]
+    fn a_second_append_for_another_dostype_fails_the_plan_by_name() {
+        let (_guard, dir) = scratch("second-append");
+        let image = dir.join("two.hdf");
+        let part = |name: &str, fs| PartitionSpec {
+            drive_name: name.into(),
+            fs_type: fs,
+            size_mb: 10,
+            bootable: false,
+            boot_priority: 0,
+            num_buffers: 0,
+        };
+        crate::core::hdf::create_hdf(
+            &image,
+            64 * 1024 * 1024,
+            true,
+            &[
+                part("DH0", AmigaHardDiskFs::Pfs3Standard),
+                part("DH1", AmigaHardDiskFs::Pfs3DirectScsi),
+            ],
+            &[],
+        )
+        .unwrap();
+        let mut asked = request(image, Some(driver(&dir, "19.3")));
+        asked.partitions = vec![
+            PreloadPartition {
+                area: 1,
+                index: 1,
+                volume_name: "Work".into(),
+                content: None,
+            },
+            PreloadPartition {
+                area: 1,
+                index: 2,
+                volume_name: "Games".into(),
+                content: None,
+            },
+        ];
+        let err = plan(&asked).unwrap_err();
+        assert_eq!(err.code(), "ART-INPUT-INVALID");
+        assert!(err.to_string().contains("one RDB edit per run"), "{err}");
+    }
+
+    #[test]
+    fn ready_to_run_asks_for_a_new_backup_file_only_when_the_plan_edits_the_rdb() {
+        let (_guard, dir) = scratch("ready");
+        let image = card(&dir, AmigaHardDiskFs::Pfs3Standard);
+        let mut made = plan(&request(image, Some(driver(&dir, "19.3")))).unwrap();
+        assert!(made.edits_rdb());
+
+        let err = made.ready_to_run().unwrap_err();
+        assert_eq!(err.code(), "ART-RDB-EDIT-NO-BACKUP");
+
+        let taken = dir.join("taken.bin");
+        std::fs::write(&taken, b"x").unwrap();
+        made.rdb_backup = Some(taken);
+        assert_eq!(
+            made.ready_to_run().unwrap_err().code(),
+            "ART-RDB-EDIT-BACKUP-EXISTS"
+        );
+
+        made.rdb_backup = Some(dir.join("fresh.bin"));
+        made.ready_to_run().unwrap();
+
+        let formats_only = plan_of(vec![PreloadStep::FormatPartition {
+            slot: None,
+            index: 1,
+            drive_name: "DH0".into(),
+            volume_name: "Work".into(),
+        }]);
+        assert!(!formats_only.edits_rdb());
+        formats_only.ready_to_run().unwrap();
+    }
+
+    #[test]
+    fn run_embeds_before_the_format_and_reports_it() {
+        let (_guard, dir) = scratch("run-embed");
+        let image = card(&dir, AmigaHardDiskFs::Pfs3Standard);
+        let backup = dir.join("card-rdb-backup.bin");
+        let mut asked = request(image.clone(), Some(driver(&dir, "19.3")));
+        asked.rdb_backup = Some(backup.clone());
+        let made = plan(&asked).unwrap();
+        assert_eq!(
+            made.rdb_backup,
+            Some(backup.clone()),
+            "the plan echoes the request"
+        );
+
+        let recorder = Recorder::default();
+        let outcome = run(&made, &recorder, &crate::core::jobs::NoProgress).unwrap();
+
+        assert_eq!(*recorder.calls.borrow(), vec!["format 1 Work"]);
+        let embedded = outcome.embedded.expect("the embed is reported");
+        assert_eq!(
+            (embedded.first_block, embedded.last_block, embedded.backup),
+            (2, 130, backup)
+        );
+        assert!(crate::core::card::read_card(&image)
+            .unwrap()
+            .provides_file_system(0x5046_5303));
+    }
+
     /// FFS needs nothing in the RDB, so a plan for it is one step.
     #[test]
     fn a_plan_formats_the_partition_it_was_asked_for() {
@@ -525,6 +1075,7 @@ mod tests {
             image: image.clone(),
             driver: None,
             partitions: one(1, "Work", None),
+            rdb_backup: None,
         })
         .unwrap();
 
@@ -555,6 +1106,7 @@ mod tests {
             image,
             driver: None,
             partitions: one(1, "Work", None),
+            rdb_backup: None,
         })
         .unwrap_err();
 
@@ -575,13 +1127,13 @@ mod tests {
     fn a_supplied_driver_is_imported_before_the_format() {
         let (_guard, dir) = scratch("driver");
         let image = card(&dir, AmigaHardDiskFs::Pfs3Standard);
-        let driver = dir.join("pfs3aio.lha");
-        std::fs::write(&driver, b"driver").unwrap();
+        let driver = driver(&dir, "19.3");
 
         let made = plan(&PreloadRequest {
             image,
             driver: Some(driver.clone()),
             partitions: one(1, "Work", None),
+            rdb_backup: None,
         })
         .unwrap();
 
@@ -594,6 +1146,12 @@ mod tests {
                 driver,
                 dostype: "PFS3".into(),
                 name: "pfs3aio".into(),
+                file_version: DriverVersion {
+                    version: 19,
+                    revision: 3,
+                },
+                blocks: [2, 130],
+                rdb_blocks_hi_raised: Some([1, 130]),
             },
             "{:?}",
             made.steps
@@ -633,8 +1191,7 @@ mod tests {
             &[],
         )
         .unwrap();
-        let driver = dir.join("pfs3aio.lha");
-        std::fs::write(&driver, b"driver").unwrap();
+        let driver = driver(&dir, "19.3");
 
         let made = plan(&PreloadRequest {
             image,
@@ -653,6 +1210,7 @@ mod tests {
                     content: None,
                 },
             ],
+            rdb_backup: None,
         })
         .unwrap();
 
@@ -682,6 +1240,7 @@ mod tests {
             image,
             driver: None,
             partitions: one(1, "Work", Some(tree.clone())),
+            rdb_backup: None,
         })
         .unwrap();
 
@@ -717,6 +1276,7 @@ mod tests {
                 image: image.clone(),
                 driver: None,
                 partitions: one(index, "Work", None),
+                rdb_backup: None,
             })
             .unwrap_err();
             assert!(
@@ -747,17 +1307,6 @@ mod tests {
             Ok(ToolVersion {
                 raw: "test-double".into(),
             })
-        }
-        fn import_filesystem(
-            &self,
-            _i: &Path,
-            _slot: Option<usize>,
-            _d: &Path,
-            dostype: &str,
-            name: &str,
-            _s: &dyn ProgressSink,
-        ) -> CoreResult<()> {
-            self.record(format!("import {name} {dostype}"))
         }
         fn format_partition(
             &self,
@@ -805,6 +1354,8 @@ mod tests {
         PreloadPlan {
             image: PathBuf::from("card.img"),
             steps,
+            notes: Vec::new(),
+            rdb_backup: None,
         }
     }
 
@@ -814,12 +1365,6 @@ mod tests {
     fn a_plan_runs_in_order_and_reports_what_it_did() {
         let recorder = Recorder::default();
         let plan = plan_of(vec![
-            PreloadStep::ImportFilesystem {
-                slot: None,
-                driver: PathBuf::from("pfs3aio.lha"),
-                dostype: "PDS3".into(),
-                name: "pfs3aio".into(),
-            },
             PreloadStep::FormatPartition {
                 slot: None,
                 index: 1,
@@ -835,10 +1380,7 @@ mod tests {
 
         let outcome = run(&plan, &recorder, &crate::core::jobs::NoProgress).unwrap();
 
-        assert_eq!(
-            *recorder.calls.borrow(),
-            vec!["import pfs3aio PDS3", "format 1 Work", "copy DH0"]
-        );
+        assert_eq!(*recorder.calls.borrow(), vec!["format 1 Work", "copy DH0"]);
         assert_eq!(outcome.formatted, vec!["DH0"]);
         assert_eq!(outcome.copied.files, 2);
         assert_eq!(outcome.tool.unwrap().raw, "test-double");
@@ -893,6 +1435,7 @@ mod tests {
             image,
             driver: None,
             partitions: one(1, "Work", Some(file)),
+            rdb_backup: None,
         })
         .unwrap_err();
 

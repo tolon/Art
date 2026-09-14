@@ -334,28 +334,6 @@ pub enum CoreError {
         max_bytes: usize,
     },
 
-    /// `NativeFormatter::import_filesystem` cannot embed a driver into an
-    /// existing card's RDB in place (ART-117) — see `core/preload/native.rs`'s
-    /// module docs for why `create_rdb_layout` cannot be reused for this.
-    ///
-    /// Deliberately its own variant rather than the generic
-    /// [`NotImplemented`](Self::NotImplemented): `commands/preload.rs`'s
-    /// formatter choice matches on this one to decide whether `hst-imager` is
-    /// a safe fallback, and it needs a signal that means *only* "this is a
-    /// known capability gap, nothing was touched, retry with the other tool"
-    /// — not "some other corner of the engine has no implementation yet",
-    /// which is what `NotImplemented` means everywhere else it is used.
-    /// `NativeFormatter::import_filesystem` returns this unconditionally, for
-    /// every card, before opening anything.
-    #[error(
-        "NativeFormatter cannot embed a filesystem driver into an existing card's RDB in \
-         place — create_rdb_layout only builds a partition table from scratch, and there is \
-         no whole-megabyte size that reproduces every existing partition's cylinder \
-         boundaries exactly. Build the card with the driver already embedded, or use \
-         hst-imager's import_filesystem."
-    )]
-    ForeignRdbEmbedNotSupported,
-
     /// A distribution tree whose `distribution.json` records at least one file
     /// stored under an escaped host name (`Storage/DOSDrivers/AUX` → `_AUX`)
     /// cannot be copied in by an external tool, because the tool copies the
@@ -363,9 +341,9 @@ pub enum CoreError {
     /// AmigaDOS name is (ART-160).
     ///
     /// `NativeFormatter` handles this case — it reads the manifest and puts
-    /// the AmigaDOS name back — so this is a capability gap in exactly the
-    /// same sense as [`ForeignRdbEmbedNotSupported`](Self::ForeignRdbEmbedNotSupported),
-    /// only in the other direction: the *fallback* is the one that cannot,
+    /// the AmigaDOS name back — so this is a capability gap in the same sense
+    /// as [`NonAsciiPfs3Names`](Self::NonAsciiPfs3Names), only in the other
+    /// direction: the *fallback* is the one that cannot,
     /// and the default can. Its own variant for the same reason that one has
     /// one — `commands/preload.rs` matches on it to say which tool ran a step
     /// and why — and raised before a single byte is written, never partway.
@@ -579,7 +557,6 @@ impl CoreError {
             Self::PartiallyApplied { .. } => "ART-APPLY-PARTIAL",
             Self::NonAsciiPfs3Names { .. } => "ART-PFS3-NON-ASCII-NAME",
             Self::Pfs3NamesTooLong { .. } => "ART-PFS3-NAME-TOO-LONG",
-            Self::ForeignRdbEmbedNotSupported => "ART-NATIVE-EMBED-UNSUPPORTED",
             Self::EscapedNamesNeedNativeCopy { .. } => "ART-ESCAPED-NAME-NEEDS-NATIVE",
             Self::FirstBootHookUnreachable { .. } => "ART-FIRSTBOOT-HOOK-UNREACHABLE",
             Self::FirstBootNotATree { .. } => "ART-FIRSTBOOT-NOT-A-TREE",
@@ -717,7 +694,6 @@ mod tests {
                 more: 0,
                 max_bytes: 106,
             },
-            CoreError::ForeignRdbEmbedNotSupported,
             CoreError::EscapedNamesNeedNativeCopy {
                 pairs: vec![("Storage/DOSDrivers/_AUX".into(), "AUX".into())],
             },
