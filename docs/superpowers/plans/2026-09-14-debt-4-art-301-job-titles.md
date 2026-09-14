@@ -50,6 +50,7 @@
    - Task 7 deletes the bridge, so the compiler proves no site was missed.
    - **Between Task 1 and Task 7 the branch is not shippable.** A bridged title reaches the bar as a "key" that is an English sentence, and i18next may mangle one that contains `:`. No package is built from an intermediate commit.
 6. **One key per sentence, shared by sites that say the same thing.** For example, `copyOutOf` serves four "Copying out of …" sites. This gives 36 keys for 40 sites. Eleven of them count, so each catalogue gains 47 leaves.
+7. **The English sentences keep today's wording, with two exceptions.** Counts become real plurals instead of `(s)`. `Syncing the Aminet catalog` becomes `Syncing the Aminet catalogue`, matching `Refreshing the catalogue`: the owner's ruling of 2026-09-14. The Turkish `Aminet kataloğu eşitleniyor` needs no change. A grep of the repository on 2026-09-14 found the old title quoted only in `src-tauri/src/commands/sources.rs:488`, which C1 replaces, and in this plan. No test and no file under `docs/` quotes it. `docs/FEATURES.md:399`'s "Aminet catalog sync / search / fetch" is a feature name, not the job title, and stays.
 
 ## The 40 sites and their keys
 
@@ -80,7 +81,7 @@ Every key is `components.jobBar.title.<key>`. `Today` is the exact English the s
 | B8 | `commands/appearance.rs:328` (fixed) | `Applying appearance to distribution tree` | `applyAppearance` | — |
 | B9 | `commands/preload.rs:607` | `Preparing {n} volume(s) on {image}` | `preparePartitions` | `count` = `made.formats()`, `target` = `image` |
 | B10 | `commands/card.rs:808` | `Building {dest}` | `buildCard` | `target` = `dest` |
-| C1 | `commands/sources.rs:488` (fixed) | `Syncing the Aminet catalog` | `syncAminet` | — |
+| C1 | `commands/sources.rs:488` (fixed) | `Syncing the Aminet catalog` | `syncAminet` | — (the English sentence becomes `Syncing the Aminet catalogue`, Decision 7) |
 | C2 | `commands/sources.rs:552` | `Downloading {meta.name}` | `downloadPackage` | `name` = `meta.name` |
 | C3 | `commands/sources.rs:726` | `Installing {file name}` | `installArchive` | `name` = the file name expression |
 | C4 | `commands/sources.rs:812` | `Reading {meta.name}` | `readReadme` | `name` = `meta.name` |
@@ -946,7 +947,7 @@ Replace that with:
         "refreshCatalogue": "Refreshing the catalogue",
         "rehearseFirstBoot": "Rehearsing the first boot on {{machine}}",
         "restorePictures": "Restoring your own pictures",
-        "syncAminet": "Syncing the Aminet catalog",
+        "syncAminet": "Syncing the Aminet catalogue",
         "writeIgameData_one": "Writing igame.data for {{count}} title",
         "writeIgameData_other": "Writing igame.data for {{count}} titles"
       }
@@ -1990,7 +1991,12 @@ with
     // 40 on 2026-09-14: 33 titles that were `format!` and 7 that were fixed
     // strings, in 19 command files. A new job moves this number on purpose.
     // A moved folder or a renamed type moves it to 0.
-    expect(RUST.sites.length).toBe(40);
+    expect(
+      RUST.sites.length,
+      "The number of JobTitle::new(…) sites in src-tauri/src changed. If you added or removed a " +
+        "background job on purpose, change 40 here and in the comment above in the same commit, " +
+        "with its key in JOB_TITLE_KEYS and both catalogues. If you did not, a site was lost."
+    ).toBe(40);
   });
 
   it("leaves no listed key without a Rust site", () => {
