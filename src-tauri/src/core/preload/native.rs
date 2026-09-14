@@ -2182,6 +2182,96 @@ mod tests {
         assert_eq!(dev.refused(), Vec::<u64>::new());
     }
 
+    /// **ART-316.** `enable_deldir` makes the deldir pfs3aio's format makes:
+    /// `MODE_DELDIR | MODE_SUPERDELDIR` (`format.c:249-255`); two `DD` blocks
+    /// with seqnr 0 and 1, protection `DELENTRY_PROT` 5 at 0x16 and the
+    /// rootblock's creation date at 0x1A (`directory.c:4466-4479`,
+    /// `blocks.h:381-396`), named by `rext.deldir[0..2]` at 0x90, `deldirsize`
+    /// 2 at 0x36 and `deldirroving` 0 at 0x34 (`directory.c:4627-4633`,
+    /// `blocks.h:431-456`), both taken out of the reserved area. Without the
+    /// option the format is unchanged. Both modes.
+    #[test]
+    fn a_pfs3_format_with_the_deldir_makes_pfs3aios_two_deldir_blocks() {
+        for total in [48_000u64, 10_444_896] {
+            let format = |deldir: bool| {
+                let dev = MemDevice::with_end(total);
+                libpfs3::format::format_with_size(
+                    &dev,
+                    total,
+                    &libpfs3::format::FormatOptions {
+                        volume_name: "Work".into(),
+                        enable_deldir: deldir,
+                    },
+                )
+                .unwrap();
+                dev
+            };
+            let (off, on) = (format(false), format(true));
+            let (root_off, root) = (off.read(2, 512), on.read(2, 512));
+            let resblk = usize::from(be16(&root, 0x40));
+            let (ext_off, ext) = (
+                off.read(u64::from(be32(&root_off, 0x58)), resblk),
+                on.read(u64::from(be32(&root, 0x58)), resblk),
+            );
+
+            assert_eq!(
+                be32(&root_off, 0x04) & (8 | 256),
+                0,
+                "{total}: off, no deldir flags"
+            );
+            assert_eq!(
+                (be16(&ext_off, 0x36), be32(&ext_off, 0x90)),
+                (0, 0),
+                "{total}: off, no deldir"
+            );
+            assert_eq!(
+                be32(&root, 0x04) & (8 | 256),
+                8 | 256,
+                "{total}: MODE_DELDIR | MODE_SUPERDELDIR"
+            );
+            assert_eq!(
+                be32(&root, 0x3C) + 2,
+                be32(&root_off, 0x3C),
+                "{total}: the deldir takes two reserved blocks"
+            );
+            assert_eq!(
+                (be16(&ext, 0x34), be16(&ext, 0x36), be32(&ext, 0x98)),
+                (0, 2, 0),
+                "{total}: deldirroving, deldirsize, deldir[2]"
+            );
+            let firstreserved = be32(&root, 0x38);
+            let cluster = on.read(2, usize::from(be16(&root, 0x42)) * 512);
+            for seq in 0..2u32 {
+                let blk = be32(&ext, 0x90 + seq as usize * 4);
+                assert_ne!(blk, 0, "{total}: deldir[{seq}]");
+                let dd = on.read(u64::from(blk), resblk);
+                assert_eq!(&dd[0..2], b"DD", "{total}: deldir[{seq}] id");
+                assert_eq!(
+                    (be32(&dd, 0x08), be32(&dd, 0x16)),
+                    (seq, 5),
+                    "{total}: deldir[{seq}] seqnr, protection"
+                );
+                assert_eq!(
+                    &dd[0x1A..0x20],
+                    &root[0x0C..0x12],
+                    "{total}: deldir[{seq}] creation date is the rootblock's"
+                );
+                let idx = (blk - firstreserved) / (resblk as u32 / 512);
+                assert_eq!(
+                    be32(&cluster, 512 + 12 + (idx / 32) as usize * 4)
+                        & (0x8000_0000 >> (idx % 32)),
+                    0,
+                    "{total}: deldir[{seq}] must be marked used in the reserved bitmap"
+                );
+            }
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(on.clone())).unwrap();
+            assert!(
+                vol.list_deldir().unwrap().is_empty(),
+                "{total}: an empty deldir"
+            );
+        }
+    }
+
     // ---- ART-113: a non-ASCII name is refused before anything is written ----
 
     /// The exact real-world shape ART-113 found: a file whose AmigaDOS name

@@ -79,6 +79,11 @@ Everything else in the writer is 0.1.3's, including its anode ceiling (ART-311).
    anode block it last allocated from, skipping blocks it found full (in memory only), starting over from 0
    before it makes a new block; freeing an anode makes its block searchable again. The roving start is not
    written to `rext.curranseqnr`.
+9. **`FormatOptions::enable_deldir` makes pfs3aio's deldir ([ART-316](../../../docs/ISSUES.md)).** Two reserved
+   blocks after the root directory, each `DD` with its seqnr, protection 5 and the rootblock's creation date;
+   `rext.deldir[0..2]`, `deldirsize` 2, `deldirroving` 0; `MODE_DELDIR | MODE_SUPERDELDIR` (pfs3aio `format.c:249-255`,
+   `directory.c:4442-4480,4572-4637`). 0.1.3 ignored the option. The writer's deldir path is fixed in item 10,
+   and only then does ART format with the option on.
 
 ## Re-vendoring
 
@@ -118,13 +123,13 @@ carries the format change only; the writer change (ART-312) is not prepared for 
  
 --- a/src/format.rs
 +++ b/src/format.rs
-@@ -3,13 +3,19 @@
+@@ -3,14 +3,21 @@
  //! Creates a new PFS3 filesystem on a block device.
  //! Ported from pfs3aio/format.c and amitools PFSFormat.py.
  //!
 +//! Modified by ART on 2026-09-13 (ART-310): the super index level and the
 +//! reserved anodes 0-4; on 2026-09-14 (ART-313): the root directory's parent,
-+//! (ART-314) names — `rext.fnsize` writes 107, not 32.
++//! (ART-314) names — `rext.fnsize` writes 107, not 32, (ART-316) the deldir.
 +//! `ART-PATCH.md` in this crate's root says what and why.
 +//!
  //! Format sequence:
@@ -137,9 +142,11 @@ carries the format change only; the writer change (ART-312) is not prepared for 
 +//! 6. Allocate and write the super index block (SUPERINDEX mode only), the
 +//!    anode index block and the anode block (anodes 0-4 reserved, ANODE_ROOTDIR)
  //! 7. Write root directory block (empty)
++//! 8. Write the two deldir blocks (enable_deldir only)
  
  use crate::error::{Error, Result};
-@@ -32,6 +38,12 @@ impl Default for FormatOptions {
+ use crate::io::BlockDevice;
+@@ -32,6 +39,12 @@ impl Default for FormatOptions {
      }
  }
  
@@ -152,7 +159,19 @@ carries the format change only; the writer change (ART-312) is not prepared for 
  /// Result of a successful format operation.
  #[derive(Debug)]
  pub struct FormatResult {
-@@ -146,7 +158,14 @@ pub fn format_with_size(
+@@ -105,6 +118,11 @@ pub fn format_with_size(
+     if supermode {
+         options |= MODE_SUPERINDEX;
+     }
++    // ART-316: pfs3aio's format turns the deldir on after making it
++    // (`format.c:249-255`, `MODE_DELDIR | MODE_SUPERDELDIR`).
++    if opts.enable_deldir {
++        options |= MODE_DELDIR | MODE_SUPERDELDIR;
++    }
+ 
+     // Timestamp (current time as Amiga datestamp)
+     let (cday, cmin, ctick) = current_amiga_datestamp();
+@@ -146,13 +164,31 @@ pub fn format_with_size(
          bmi_blocknrs.push(firstreserved + idx * rescluster);
      }
  
@@ -168,7 +187,24 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      let anidx_blk = firstreserved + alloc.alloc()? * rescluster;
      let anode_blk = firstreserved + alloc.alloc()? * rescluster;
  
-@@ -225,9 +244,11 @@ pub fn format_with_size(
+     // 5. Allocate root directory block
+     let rootdir_blk = firstreserved + alloc.alloc()? * rescluster;
+ 
++    // 5b. ART-316: the deldir's two blocks, allocated after the root directory
++    //     as pfs3aio's SetDeldir(2) does (`format.c:249-253`, `directory.c:4614-4622`).
++    let deldir_blks: Vec<u32> = if opts.enable_deldir {
++        vec![
++            firstreserved + alloc.alloc()? * rescluster,
++            firstreserved + alloc.alloc()? * rescluster,
++        ]
++    } else {
++        Vec::new()
++    };
++
+     // Build rootblock + reserved bitmap
+     let rb_size = rblkcluster as usize * bs;
+     let mut rb_data = vec![0u8; rb_size];
+@@ -225,9 +261,21 @@ pub fn format_with_size(
      put_u16(&mut rext, 0x10, cday);
      put_u16(&mut rext, 0x12, cmin);
      put_u16(&mut rext, 0x14, ctick);
@@ -180,10 +216,20 @@ carries the format change only; the writer change (ART-312) is not prepared for 
 +        // superindex[0] names the super index block, never the anode index
 +        // block: every reader walks SB -> IB -> AB.
 +        put_u32(&mut rext, 0x40, sb_blk); // superindex[0]
++    }
++    // ART-316: pfs3aio's SetDeldir — deldirroving = old size × 31 = 0,
++    // deldirsize = 2, deldir[seqnr] = each block (`directory.c:4467,4627-4633`;
++    // offsets `blocks.h:444-456`).
++    if !deldir_blks.is_empty() {
++        put_u16(&mut rext, 0x34, 0); // deldirroving
++        put_u16(&mut rext, 0x36, deldir_blks.len() as u16); // deldirsize
++        for (seq, &blk) in deldir_blks.iter().enumerate() {
++            put_u32(&mut rext, 0x90 + seq * 4, blk); // deldir[seq]
++        }
      }
      write_reserved_blocks(dev, rext_blk as u64, &rext, rescluster, bs)?;
  
-@@ -267,6 +288,17 @@ pub fn format_with_size(
+@@ -267,6 +315,17 @@ pub fn format_with_size(
          write_reserved_blocks(dev, bm_blknr as u64, &bm, rescluster, bs)?;
      }
  
@@ -201,7 +247,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      // Write anode index block
      let mut anidx = vec![0u8; resblocksize as usize];
      put_u16(&mut anidx, 0, IBLKID);
-@@ -280,18 +312,27 @@ pub fn format_with_size(
+@@ -280,20 +339,44 @@ pub fn format_with_size(
      put_u16(&mut an, 0, ABLKID);
      put_u32(&mut an, 4, 1);
      put_u32(&mut an, 8, 0); // seqnr
@@ -230,7 +276,24 @@ carries the format change only; the writer change (ART-312) is not prepared for 
 +    put_u32(&mut dir, 0x10, 0); // parent: none, this is the root
      write_reserved_blocks(dev, rootdir_blk as u64, &dir, rescluster, bs)?;
  
++    // ART-316: each deldir block as pfs3aio's NewDeldirBlock leaves it
++    // (`directory.c:4466-4479`, layout `blocks.h:381-396`): id DD, seqnr,
++    // protection DELENTRY_PROT (5, `blocks.h:607`), the rootblock's creation date.
++    for (seq, &blk) in deldir_blks.iter().enumerate() {
++        let mut dd = vec![0u8; resblocksize as usize];
++        put_u16(&mut dd, 0x00, DELDIRID);
++        put_u32(&mut dd, 0x04, 1); // datestamp
++        put_u32(&mut dd, 0x08, seq as u32); // seqnr
++        put_u32(&mut dd, 0x16, 5); // protection
++        put_u16(&mut dd, 0x1A, cday);
++        put_u16(&mut dd, 0x1C, cmin);
++        put_u16(&mut dd, 0x1E, ctick);
++        write_reserved_blocks(dev, blk as u64, &dd, rescluster, bs)?;
++    }
++
      dev.flush()?;
+ 
+     Ok(FormatResult {
 --- a/src/writer.rs
 +++ b/src/writer.rs
 @@ -6,6 +6,14 @@
