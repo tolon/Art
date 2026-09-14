@@ -2488,6 +2488,18 @@ mod tests {
         );
     }
 
+    /// **ART-318.** A deldir block holds pfs3aio's 31 entries at every reserved
+    /// block size (`blocks.h:611`). Every test volume here has 1024-byte
+    /// reserved blocks, where the computed count is 31 anyway, so this is what
+    /// guards 2048 and 4096 (0.1.3 computed 63 and 127).
+    #[test]
+    fn a_pfs3_deldir_block_holds_31_entries_at_every_reserved_block_size() {
+        assert_eq!(
+            [1024u16, 2048, 4096].map(libpfs3::ondisk::deldir_entries_per_block),
+            [31, 31, 31]
+        );
+    }
+
     // ---- ART-113: a non-ASCII name is refused before anything is written ----
 
     /// The exact real-world shape ART-113 found: a file whose AmigaDOS name
