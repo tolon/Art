@@ -1448,7 +1448,7 @@
       "newFolder": "Yeni Klasör"
     },
     "pane": {
-      "nothingOpen": "Hiçbir şey açık değil",
+      "nothingOpen": "Açık bir şey yok",
       "truncated": "Bu klasör ART'ın listeleyeceğinden daha fazlasını içeriyor — yalnızca ilk girdiler gösteriliyor.",
       "empty": "Burada hiçbir şey yok.",
       "filterNoMatch": "“{{mask}}” ile eşleşen dosya yok.",
