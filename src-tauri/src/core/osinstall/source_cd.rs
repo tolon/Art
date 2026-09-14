@@ -55,10 +55,10 @@
 use std::path::Path;
 
 use crate::core::adf::bcpl::AmigaDate;
+use crate::core::clock::amiga_from_wall as amiga_from_unix;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::iso::{IsoImage, IsoWalkEntry, MAX_WALK_DEPTH, MAX_WALK_ENTRIES};
 use crate::core::volume::write::file::default_protection;
-use crate::core::volume::write::layout::amiga_from_unix;
 
 use super::source::{starts_with_ignoring_case, MediaEntry, MediaSource};
 

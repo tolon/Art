@@ -170,7 +170,10 @@ fn volume_walk(
     // the same "partial, not failed" answer a locked host folder gets: the
     // rest of the tree is still worth counting, and the flag says the number
     // is a floor.
-    let Ok(entries) = crate::core::adf::fs::list_directory_on(device, dir_block) else {
+    // counts only; no date is read
+    let Ok(entries) =
+        crate::core::adf::fs::list_directory_on(device, dir_block, &crate::core::clock::UtcClock)
+    else {
         total.partial = true;
         return Ok(());
     };

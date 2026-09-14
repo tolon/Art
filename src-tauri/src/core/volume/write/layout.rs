@@ -96,17 +96,6 @@ pub fn payload_per_block(block_size: usize, ofs: bool) -> usize {
 /// The header OFS puts on every data block.
 pub const OFS_DATA_HEADER: usize = 24;
 
-/// Convert a Unix timestamp to the Amiga triplet, clamping anything before
-/// 1978 to the epoch (§4.1).
-pub fn amiga_from_unix(unix: i64) -> AmigaDate {
-    let since = (unix - crate::core::adf::bcpl::AMIGA_EPOCH_UNIX).max(0);
-    AmigaDate {
-        days: (since / 86_400) as u32,
-        mins: ((since % 86_400) / 60) as u32,
-        ticks: (((since % 86_400) % 60) * 50) as u32,
-    }
-}
-
 /// The blocks one operation is assembling, none of them written yet.
 ///
 /// Everything an operation changes goes in here first. That is what lets the
@@ -411,7 +400,7 @@ mod tests {
     /// displays as a date far in the future on a real Amiga.
     #[test]
     fn a_date_before_the_amiga_epoch_clamps_to_it() {
-        let date = amiga_from_unix(0); // 1970
+        let date = crate::core::clock::amiga_from_wall(0); // 1970
         assert_eq!(date.days, 0);
         assert_eq!(date.mins, 0);
         assert_eq!(date.ticks, 0);
@@ -420,11 +409,11 @@ mod tests {
     #[test]
     fn a_date_after_the_epoch_converts_and_converts_back() {
         let unix = crate::core::adf::bcpl::AMIGA_EPOCH_UNIX + 86_400 * 100 + 3600 + 42;
-        let date = amiga_from_unix(unix);
+        let date = crate::core::clock::amiga_from_wall(unix);
         assert_eq!(date.days, 100);
         assert_eq!(date.mins, 60);
         assert_eq!(date.ticks, 42 * 50);
-        assert_eq!(date.to_unix(), unix);
+        assert_eq!(date.to_wall_seconds(), unix);
     }
 
     /// `----RWED`: the low four bits are inverted, so zero grants everything.

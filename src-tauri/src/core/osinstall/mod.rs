@@ -1819,11 +1819,11 @@ pub(crate) mod fixtures {
 
             let parsed =
                 crate::core::adf::AdfImage::from_bytes(std::fs::read(&image).unwrap()).unwrap();
-            let root = parsed.list_root().unwrap();
+            let root = parsed.list_root(&crate::core::clock::UtcClock).unwrap();
 
             let c_dir = root.iter().find(|e| e.name == "C").unwrap();
             let load_module = parsed
-                .list_dir(c_dir.header_block)
+                .list_dir(c_dir.header_block, &crate::core::clock::UtcClock)
                 .unwrap()
                 .into_iter()
                 .find(|e| e.name == "LoadModule")
@@ -1832,7 +1832,7 @@ pub(crate) mod fixtures {
 
             let s_dir = root.iter().find(|e| e.name == "S").unwrap();
             let startup = parsed
-                .list_dir(s_dir.header_block)
+                .list_dir(s_dir.header_block, &crate::core::clock::UtcClock)
                 .unwrap()
                 .into_iter()
                 .find(|e| e.name == "Startup-sequence")
@@ -1847,17 +1847,17 @@ pub(crate) mod fixtures {
 
             let parsed =
                 crate::core::adf::AdfImage::from_bytes(std::fs::read(&image).unwrap()).unwrap();
-            let root = parsed.list_root().unwrap();
+            let root = parsed.list_root(&crate::core::clock::UtcClock).unwrap();
             let c_dir = root.iter().find(|e| e.name == "C").unwrap();
             let s_dir = root.iter().find(|e| e.name == "S").unwrap();
 
             assert!(parsed
-                .list_dir(c_dir.header_block)
+                .list_dir(c_dir.header_block, &crate::core::clock::UtcClock)
                 .unwrap()
                 .iter()
                 .any(|e| e.name == "LoadModule"));
             assert!(parsed
-                .list_dir(s_dir.header_block)
+                .list_dir(s_dir.header_block, &crate::core::clock::UtcClock)
                 .unwrap()
                 .iter()
                 .any(|e| e.name == "Startup-sequence"));

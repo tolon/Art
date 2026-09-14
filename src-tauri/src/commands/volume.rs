@@ -63,7 +63,8 @@ pub fn volume_list(
     let (device, geometry) = mount(&image, &entry)?;
 
     let dir_block = dir_block.unwrap_or(geometry.root_block);
-    let entries = adf_fs::list_directory_on(&device, dir_block)?;
+    let entries =
+        adf_fs::list_directory_on(&device, dir_block, &crate::tools::local_time::LOCAL_TIME)?;
 
     let volume_name = read_volume_name(&device, &geometry).unwrap_or_else(|| entry.name.clone());
 

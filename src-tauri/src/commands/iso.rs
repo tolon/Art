@@ -30,6 +30,7 @@ use super::volume_write::{
     folder_destination, run_copy_in_folder_with, CopyOptions, OnCancel, VolumeWriteResult,
     VOLUME_WRITE_EVENT,
 };
+use crate::core::clock::AmigaClock;
 use crate::core::error::CoreResult;
 use crate::core::iso::{IsoImage, IsoSource, SectorLayout};
 use crate::core::jobs::{JobId, JobTitle, ProgressSink};
@@ -172,7 +173,7 @@ fn extract_file(
                 e.protection
                     .unwrap_or_else(crate::core::volume::write::file::default_protection),
                 e.date
-                    .map(crate::core::volume::write::layout::amiga_from_unix)
+                    .map(|unix| crate::tools::local_time::LOCAL_TIME.amiga_from_unix(unix))
                     .unwrap_or_default(),
                 e.comment.as_deref().unwrap_or_default(),
             )
@@ -259,7 +260,14 @@ fn copy_out_tree(
     let destination = folder_destination(dest_dir, name)?;
 
     let image = IsoImage::open(iso_path)?;
-    image.extract_tree(extent, length, &destination, policy, progress)
+    image.extract_tree(
+        extent,
+        length,
+        &destination,
+        policy,
+        &crate::tools::local_time::LOCAL_TIME,
+        progress,
+    )
 }
 
 /// F5 out of a disc, to a local folder — a job because a disc's directory

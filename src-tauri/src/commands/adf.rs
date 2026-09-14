@@ -134,8 +134,8 @@ pub fn adf_open(path: String) -> AppResult<AdfInfo> {
 pub fn adf_list(path: String, dir_block: Option<u32>) -> AppResult<Vec<FileEntry>> {
     let img = AdfImage::open(&PathBuf::from(&path))?;
     match dir_block {
-        Some(0) | None => Ok(img.list_root()?),
-        Some(b) => Ok(img.list_dir(b)?),
+        Some(0) | None => Ok(img.list_root(&crate::tools::local_time::LOCAL_TIME)?),
+        Some(b) => Ok(img.list_dir(b, &crate::tools::local_time::LOCAL_TIME)?),
     }
 }
 

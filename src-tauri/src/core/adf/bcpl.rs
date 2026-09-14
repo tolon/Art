@@ -84,13 +84,6 @@ impl AmigaDate {
             + (self.ticks as i64) / TICKS_PER_SEC
     }
 
-    pub fn to_unix(self) -> i64 {
-        AMIGA_EPOCH_UNIX
-            + (self.days as i64) * 86_400
-            + (self.mins as i64) * 60
-            + (self.ticks as i64) / TICKS_PER_SEC
-    }
-
     /// A zero/empty date (used when a file has no date set).
     pub fn zero() -> Self {
         Self {
@@ -144,7 +137,7 @@ mod tests {
     fn amiga_date_to_unix() {
         // 1978-01-01 00:00:00 → exactly the Amiga epoch.
         let d = AmigaDate::zero();
-        assert_eq!(d.to_unix(), AMIGA_EPOCH_UNIX);
+        assert_eq!(d.to_wall_seconds(), AMIGA_EPOCH_UNIX);
 
         // One day later.
         let d = AmigaDate {
@@ -152,7 +145,7 @@ mod tests {
             mins: 0,
             ticks: 0,
         };
-        assert_eq!(d.to_unix(), AMIGA_EPOCH_UNIX + 86_400);
+        assert_eq!(d.to_wall_seconds(), AMIGA_EPOCH_UNIX + 86_400);
 
         // 1978-01-02 00:01:00 → +1 day +1 min.
         let d = AmigaDate {
@@ -160,7 +153,7 @@ mod tests {
             mins: 1,
             ticks: 0,
         };
-        assert_eq!(d.to_unix(), AMIGA_EPOCH_UNIX + 86_400 + 60);
+        assert_eq!(d.to_wall_seconds(), AMIGA_EPOCH_UNIX + 86_400 + 60);
     }
 
     #[test]
