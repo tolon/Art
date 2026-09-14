@@ -192,6 +192,12 @@ impl<'a> Journalled<'a> {
         self.device.total_blocks()
     }
 
+    /// Push the writes so far to durable storage without ending the
+    /// operation. An RDB edit syncs once per stage (ART-117, decision 3).
+    pub fn sync(&mut self) -> CoreResult<()> {
+        self.device.sync()
+    }
+
     /// Write a block whose previous contents this journal holds.
     ///
     /// A block that was not declared to [`begin`](Journalled::begin) is

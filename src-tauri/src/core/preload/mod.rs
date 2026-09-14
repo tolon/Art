@@ -44,6 +44,7 @@
 //! a blanket `not-checked` in G8's report.
 
 pub mod amiga_names;
+pub mod embed;
 pub mod native;
 #[cfg(test)]
 pub(crate) mod pfs3_test_device;

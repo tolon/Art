@@ -15,8 +15,8 @@ use std::collections::BTreeSet;
 
 use crate::core::error::{PartitionBound, RaiseRefused, RdbEditRefusal};
 use crate::core::rdb::{
-    dos_type_string, verify_rdb_block_checksum, BLOCK_SIZE, IDNAME_FSHD, IDNAME_LSEG, IDNAME_PART,
-    IDNAME_RDSK, LSEG_DATA_BYTES, NO_BLOCK,
+    build_fshd_block, build_lseg_chain, dos_type_string, verify_rdb_block_checksum, BLOCK_SIZE,
+    IDNAME_FSHD, IDNAME_LSEG, IDNAME_PART, IDNAME_RDSK, LSEG_DATA_BYTES, NO_BLOCK,
 };
 
 /// What ART reads of an Amiga disk to edit its RDB — the same 8 MiB
@@ -651,6 +651,136 @@ pub fn check_same_driver(card_payload: &[u8], file: &[u8]) -> Result<(), RdbEdit
     }
 }
 
+/// Decision 3's four stages, each followed by a sync.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Stage {
+    /// S1: the LSEGs. Nothing references them.
+    Data,
+    /// S2: the FSHD. Still unreferenced.
+    Header,
+    /// S3: the RDSK with `HighRDSKBlock` (and a raised `RDBBlocksHi`).
+    HighRdsk,
+    /// S4: the one sector that links the driver in — the commit.
+    Link,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditKind {
+    Append,
+    Replace,
+}
+
+/// Everything an edit will write, in order, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditPlan {
+    pub kind: EditKind,
+    pub dos_type: u32,
+    pub file_version: (u16, u16),
+    /// The replaced FSHD's version; `None` for an append.
+    pub card_version: Option<(u16, u16)>,
+    pub replaced_fshd: Option<u32>,
+    pub allocation: Allocation,
+    pub stages: Vec<(Stage, Vec<BlockWrite>)>,
+}
+
+impl EditPlan {
+    /// Every block the edit writes, sorted, once each — what the journal saves.
+    pub fn blocks(&self) -> Vec<u32> {
+        let set: BTreeSet<u32> = self
+            .stages
+            .iter()
+            .flat_map(|(_, writes)| writes.iter().map(|w| w.block))
+            .collect();
+        set.into_iter().collect()
+    }
+}
+
+/// The RDSK as S3 writes it.
+fn raise_rdsk(rdsk: &[u8; BLOCK_SIZE], allocation: &Allocation) -> [u8; BLOCK_SIZE] {
+    let raised = with_long(rdsk, RDSK_HIGH_RDSK_BLOCK, allocation.last_block);
+    match allocation.raised_from {
+        Some(_) => with_long(&raised, RDSK_RDB_BLOCKS_HI, allocation.rdb_blocks_hi),
+        None => raised,
+    }
+}
+
+fn missing(block: u32) -> RdbEditRefusal {
+    unaccounted(block, format!("the image ends before block {block}"))
+}
+
+/// Append a driver for a DosType this RDB does not carry (decision 1).
+pub fn plan_append(
+    range: &[u8],
+    walk: &StrictRdb,
+    dos_type: u32,
+    file_version: (u16, u16),
+    driver: &[u8],
+) -> Result<EditPlan, RdbEditRefusal> {
+    check_driver_bytes(driver)?;
+    if let Some(present) = walk.fshds.iter().find(|f| f.dos_type == dos_type) {
+        return Err(unaccounted(
+            present.block,
+            format!(
+                "this RDB already carries a {} driver",
+                dos_type_string(dos_type)
+            ),
+        ));
+    }
+    let allocation = allocate(range, walk, driver.len())?;
+    let k = allocation.fshd_block;
+
+    let data: Vec<BlockWrite> = build_lseg_chain(driver, k + 1)
+        .into_iter()
+        .enumerate()
+        .map(|(index, bytes)| BlockWrite {
+            block: k + 1 + index as u32,
+            bytes,
+        })
+        .collect();
+    let header = BlockWrite {
+        block: k,
+        bytes: build_fshd_block(dos_type, file_version.0, file_version.1, NO_BLOCK, k + 1),
+    };
+    let rdsk_block = walk.rdsk.block;
+    let rdsk = block_array(range, rdsk_block).ok_or_else(|| missing(rdsk_block))?;
+    let raised = raise_rdsk(&rdsk, &allocation);
+    let link = match walk.fshds.last() {
+        None => BlockWrite {
+            block: rdsk_block,
+            bytes: with_long(&raised, RDSK_FILE_SYS_HEADER_LIST, k),
+        },
+        Some(last) => BlockWrite {
+            block: last.block,
+            bytes: with_long(
+                &block_array(range, last.block).ok_or_else(|| missing(last.block))?,
+                NEXT,
+                k,
+            ),
+        },
+    };
+
+    Ok(EditPlan {
+        kind: EditKind::Append,
+        dos_type,
+        file_version,
+        card_version: None,
+        replaced_fshd: None,
+        allocation,
+        stages: vec![
+            (Stage::Data, data),
+            (Stage::Header, vec![header]),
+            (
+                Stage::HighRdsk,
+                vec![BlockWrite {
+                    block: rdsk_block,
+                    bytes: raised,
+                }],
+            ),
+            (Stage::Link, vec![link]),
+        ],
+    })
+}
+
 #[cfg(test)]
 pub(crate) mod fixtures {
     //! Card shapes built byte by byte in the test. Nothing here is Amiga
@@ -978,6 +1108,29 @@ pub(crate) mod fixtures {
         file.seek(SeekFrom::Start(8192 * 512)).unwrap();
         file.write_all(range).unwrap();
         path
+    }
+
+    /// The owner's geometry with a non-empty filesystem list: a `DOS\3`
+    /// driver at FSHD 3 (LSEG 4–12), no `PDS\3`, `HighRDSKBlock` 12. An append
+    /// here links through that FSHD's `Next`, not through the RDSK.
+    pub fn dos3_first() -> Vec<u8> {
+        build(&Shape {
+            cylinders: 38_488,
+            heads: 12,
+            sectors: 256,
+            rdb_blocks_hi: 6143,
+            lo_cylinder: 2,
+            parts: vec![("SDH0", 2, 535, PDS3), ("SDH1", 536, 36_194, PDS3)],
+            fshds: vec![FshdSpec {
+                dos_type: DOS3,
+                version: (45, 1),
+                driver: hunk_driver(4096, "45.1"),
+                name: None,
+                summed_longs: 64,
+            }],
+            high_rdsk_block: None,
+            total_blocks: WINDOW_BLOCKS,
+        })
     }
 }
 
@@ -1695,5 +1848,102 @@ mod driver_tests {
         let mut silent = hunk_driver(62_604, "19.3");
         silent[64..69].copy_from_slice(b"$XXX:");
         assert_eq!(check_same_driver(&card, &silent), Ok(()));
+    }
+}
+
+#[cfg(test)]
+mod append_plan_tests {
+    use super::fixtures::*;
+    use super::*;
+
+    fn stage(plan: &EditPlan, name: Stage) -> &[BlockWrite] {
+        &plan.stages.iter().find(|(s, _)| *s == name).unwrap().1
+    }
+
+    /// Decision 3's order, and each stage's blocks, on an empty list.
+    #[test]
+    fn an_append_is_data_then_header_then_high_rdsk_then_one_link_sector() {
+        let range = caffeine_like(false);
+        let driver = hunk_driver(62_604, "19.3");
+        let plan = plan_append(
+            &range,
+            &walk_strict(&range).unwrap(),
+            PDS3,
+            (19, 3),
+            &driver,
+        )
+        .unwrap();
+        let order: Vec<Stage> = plan.stages.iter().map(|(s, _)| *s).collect();
+        assert_eq!(
+            order,
+            vec![Stage::Data, Stage::Header, Stage::HighRdsk, Stage::Link]
+        );
+
+        let data: Vec<u32> = stage(&plan, Stage::Data).iter().map(|w| w.block).collect();
+        assert_eq!(data, (133..=260).collect::<Vec<u32>>());
+        let header = &stage(&plan, Stage::Header)[0];
+        assert_eq!(header.block, 132);
+        assert_eq!(long(&header.bytes, NEXT), NO_BLOCK);
+        assert_eq!(long(&header.bytes, FSHD_SEG_LIST_BLOCKS), 133);
+        assert_eq!(long(&header.bytes, FSHD_VERSION), (19 << 16) | 3);
+
+        let high = &stage(&plan, Stage::HighRdsk)[0];
+        assert_eq!(high.block, 0);
+        assert_eq!(long(&high.bytes, RDSK_HIGH_RDSK_BLOCK), 260);
+        assert_eq!(
+            long(&high.bytes, RDSK_FILE_SYS_HEADER_LIST),
+            NO_BLOCK,
+            "S3 does not link"
+        );
+        assert_eq!(long(&high.bytes, RDSK_RDB_BLOCKS_HI), 6143);
+
+        let link = &stage(&plan, Stage::Link)[0];
+        assert_eq!(link.block, 0);
+        assert_eq!(long(&link.bytes, RDSK_FILE_SYS_HEADER_LIST), 132);
+        assert_eq!(
+            long(&link.bytes, RDSK_HIGH_RDSK_BLOCK),
+            260,
+            "the link keeps S3's raise"
+        );
+        assert_eq!(
+            plan.blocks(),
+            std::iter::once(0).chain(132..=260).collect::<Vec<u32>>()
+        );
+    }
+
+    #[test]
+    fn a_non_empty_list_is_linked_through_its_last_fshd() {
+        let range = dos3_first();
+        let driver = hunk_driver(62_604, "19.3");
+        let plan = plan_append(
+            &range,
+            &walk_strict(&range).unwrap(),
+            PDS3,
+            (19, 3),
+            &driver,
+        )
+        .unwrap();
+        let link = &stage(&plan, Stage::Link)[0];
+        assert_eq!(link.block, 3);
+        assert_eq!(long(&link.bytes, NEXT), 13);
+        assert!(crate::core::rdb::verify_rdb_block_checksum(&link.bytes));
+    }
+
+    /// Decision 12: the raise rides in S3, with `HighRDSKBlock`.
+    #[test]
+    fn a_raise_is_written_in_the_high_rdsk_stage() {
+        let range = art_like(false);
+        let driver = hunk_driver(62_604, "19.3");
+        let plan = plan_append(
+            &range,
+            &walk_strict(&range).unwrap(),
+            PDS3,
+            (19, 3),
+            &driver,
+        )
+        .unwrap();
+        let high = &stage(&plan, Stage::HighRdsk)[0];
+        assert_eq!(long(&high.bytes, RDSK_RDB_BLOCKS_HI), 130);
+        assert_eq!(long(&high.bytes, RDSK_HIGH_RDSK_BLOCK), 130);
     }
 }
