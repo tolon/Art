@@ -2092,6 +2092,96 @@ mod tests {
         assert_eq!(dev.refused(), Vec::<u64>::new());
     }
 
+    /// **ART-311, a second super block.** At 1024-byte reserved blocks one
+    /// super block addresses 253² = 64 009 anode blocks, so the 16-bit anode
+    /// block range reaches `superindex[1]`. Filling that many is not a test, so
+    /// the volume is made to look full: the format's super block names its one
+    /// index block 253 times, that index block names its one anode block 253
+    /// times, and anodes 6–83 are taken. The next allocation must make super
+    /// block 1 (pfs3aio `NewSuperBlock`, `anodes.c:844-870`) holding an index
+    /// block numbered 253 across the volume (`anodes.c:592-595,767`), and name
+    /// it in the rootblock extension (`blocks.h:448`, `update.c:240-256`). The
+    /// free reserved blocks it takes hold stale bytes first, as on a used
+    /// volume, so a super block read from the device rather than from the
+    /// writer's own pending write cannot pass.
+    #[test]
+    fn a_superindex_pfs3_volume_makes_its_second_super_block() {
+        const TOTAL: u64 = 10_444_896;
+        let dev = MemDevice::with_end(TOTAL);
+        formatted_in_memory(&dev, TOTAL);
+        let root = dev.read(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        let rescluster = (resblk / 512) as u64;
+        let ext_blk = u64::from(be32(&root, 0x58));
+        let sb0 = u64::from(be32(&dev.read(ext_blk, resblk), 0x40));
+        let mut sb = dev.read(sb0, resblk);
+        let ib0 = be32(&sb, 12);
+        let mut ib = dev.read(u64::from(ib0), resblk);
+        let ab0 = be32(&ib, 12);
+        let mut ab = dev.read(u64::from(ab0), resblk);
+        for k in 6..84 {
+            let at = 16 + k * 12;
+            ab[at..at + 4].copy_from_slice(&1u32.to_be_bytes());
+            ab[at + 4..at + 8].copy_from_slice(&0xFFFF_FFFFu32.to_be_bytes());
+        }
+        for i in 0..253 {
+            sb[12 + i * 4..16 + i * 4].copy_from_slice(&ib0.to_be_bytes());
+            ib[12 + i * 4..16 + i * 4].copy_from_slice(&ab0.to_be_bytes());
+        }
+        dev.patch(u64::from(ab0), &ab);
+        dev.patch(u64::from(ib0), &ib);
+        dev.patch(sb0, &sb);
+        // Stale bytes in the first eight free reserved blocks, the ones
+        // `alloc_reserved_block` hands out next (it scans the bitmap from 0).
+        let firstreserved = u64::from(be32(&root, 0x38));
+        let cluster = dev.read(2, usize::from(be16(&root, 0x42)) * 512);
+        let (mut stale, mut idx) = (0, 0u64);
+        while stale < 8 {
+            let word = be32(&cluster, 512 + 12 + (idx / 32) as usize * 4);
+            if word & (0x8000_0000 >> (idx % 32)) != 0 {
+                dev.patch(firstreserved + idx * rescluster, &vec![0xEEu8; resblk]);
+                stale += 1;
+            }
+            idx += 1;
+            assert!(idx < 1 << 20, "no free reserved blocks found");
+        }
+
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.write_file("Past64009", b"in the second super block")
+                .unwrap();
+        }
+
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let entry = vol.lookup("Past64009").unwrap().unwrap();
+        assert_eq!(
+            entry.anode >> 16,
+            64_009,
+            "the file's anode is in anode block 64 009"
+        );
+        assert_eq!(
+            vol.read_file("Past64009").unwrap(),
+            b"in the second super block"
+        );
+        let ext = dev.read(ext_blk, resblk);
+        let sb1 = be32(&ext, 0x44);
+        assert_ne!(sb1, 0, "rext.superindex[1] must name the new super block");
+        let sb1 = dev.read(u64::from(sb1), resblk);
+        assert_eq!(
+            (&sb1[0..2], be32(&sb1, 8)),
+            (&b"SB"[..], 1),
+            "super block 1: id, seqnr"
+        );
+        let ib1 = dev.read(u64::from(be32(&sb1, 12)), resblk);
+        assert_eq!(
+            (&ib1[0..2], be32(&ib1, 8)),
+            (&b"IB"[..], 253),
+            "its index block: id, seqnr across the volume"
+        );
+        assert_eq!(dev.refused(), Vec::<u64>::new());
+    }
+
     // ---- ART-113: a non-ASCII name is refused before anything is written ----
 
     /// The exact real-world shape ART-113 found: a file whose AmigaDOS name

@@ -11,7 +11,8 @@
 //! writer's own pending writes; on 2026-09-14 (ART-313): a continuation directory
 //! block's parent; (ART-315) the data bitmap's bounds; (ART-314) names — a name
 //! longer than `fnsize - 1` bytes is refused before anything is allocated;
-//! (ART-311) the anode search range, index blocks on demand.
+//! (ART-311) the anode search range, index blocks on demand, super blocks,
+//! the rootblock extension, the roving anode search.
 //! `ART-PATCH.md` in this crate's root says what and why.
 
 use crate::error::{Error, Result};
@@ -37,6 +38,16 @@ pub struct Writer {
     data_bm: Vec<(u32, Vec<u32>)>, // (blk_num, longs)
     /// Pending reserved block writes, flushed atomically before rootblock update.
     pending_writes: Vec<(u32, Vec<u8>)>,
+    /// ART-311: per anode block, whether a search found no free anode in it —
+    /// pfs3aio's in-memory `anblkbitmap` (`anodes.c:949-960`), inverted. Never on disk.
+    anode_block_full: Vec<bool>,
+    /// ART-311: the anode block the last allocation came from — pfs3aio's
+    /// `curranseqnr` (`anodes.c:465`). In memory only: pfs3aio also saves it in
+    /// the rootblock extension (`update.c:247`) as a hint it recovers from
+    /// (`anodes.c:436-443`); this writer starts each session at 0.
+    anode_roving: u32,
+    /// ART-311: `rootblock_ext.superindex` changed; `update_rootblock` writes the extension.
+    rext_dirty: bool,
 }
 
 impl Writer {
@@ -64,6 +75,9 @@ impl Writer {
             res_bitmap: Vec::new(),
             data_bm: Vec::new(),
             pending_writes: Vec::new(),
+            anode_block_full: Vec::new(),
+            anode_roving: 0,
+            rext_dirty: false,
             vol,
         };
         w.load_reserved_bitmap()?;
@@ -499,7 +513,18 @@ impl Writer {
 
     /// Clear a single anode slot (set all 3 fields to 0).
     fn clear_single_anode(&mut self, anodenr: u32) -> Result<()> {
-        self.write_anode_fields(anodenr, 0, 0, 0)
+        self.write_anode_fields(anodenr, 0, 0, 0)?;
+        // ART-311: its block has a free anode again — pfs3aio's FreeAnode sets
+        // the block's bit (`anodes.c:495-500`).
+        let seqnr = if self.vol.rootblock.is_splitted_anodes() {
+            anodenr >> 16
+        } else {
+            anodenr / self.anodes_per_block
+        };
+        if let Some(full) = self.anode_block_full.get_mut(seqnr as usize) {
+            *full = false;
+        }
+        Ok(())
     }
 
     /// Find a directory entry by name, returning (block_number, block_data, entry_offset).
@@ -939,55 +964,83 @@ impl Writer {
 
     // ---- Anode allocation ----
 
+    /// ART-311: pfs3aio's `AllocAnode` (`anodes.c:366-471`). The search starts
+    /// at the bitmap word holding the anode block the last allocation came from
+    /// (`:389`) and skips blocks already found full (`:395-416`). A missing
+    /// anode block is made where the search meets it — but a search that did
+    /// not start at 0 starts over from 0 first (`:418-419,436-450`). 0.1.3
+    /// rescanned 256 blocks from 0 for every anode.
     fn alloc_anode(&mut self, clustersize: u32, blocknr: u32, next: u32) -> Result<u32> {
         let split = self.vol.rootblock.is_splitted_anodes();
-        for seqnr in 0..self.anode_block_limit() {
-            let blk_num = self.get_anode_block_nr(seqnr)?;
-            if blk_num == 0 {
-                // No anode block at this seqnr — allocate one
-                let new_blk = self.alloc_anode_block(seqnr)?;
-                // Now use the first usable slot in the new block
-                let mut data = self.read_reserved_raw(new_blk)?;
-                let anodenr = if split {
-                    (seqnr << 16) | ANODE_USERFIRST
-                } else {
-                    seqnr * self.anodes_per_block + ANODE_USERFIRST
-                };
-                let base = ANODE_BLOCK_HEADER_SIZE + ANODE_USERFIRST as usize * ANODE_SIZE;
-                put_u32(&mut data, base, clustersize);
-                put_u32(&mut data, base + 4, blocknr);
-                put_u32(&mut data, base + 8, next);
-                put_u32(&mut data, 4, self.datestamp);
-                self.write_reserved(new_blk, &data)?;
-                return Ok(anodenr);
-            }
-            let mut data = self.read_reserved_raw(blk_num)?;
-            if u16::from_be_bytes(data[0..2].try_into().unwrap()) != ABLKID {
-                continue;
-            }
-            for offset in 0..self.anodes_per_block {
-                let anodenr = if split {
-                    (seqnr << 16) | offset
-                } else {
-                    seqnr * self.anodes_per_block + offset
-                };
-                if anodenr < ANODE_USERFIRST {
+        let limit = self.anode_block_limit();
+        if self.anode_block_full.len() < limit as usize {
+            self.anode_block_full.resize(limit as usize, false);
+        }
+        let mut start = (self.anode_roving / 32) * 32;
+        loop {
+            let mut seqnr = start;
+            while seqnr < limit {
+                if self.anode_block_full[seqnr as usize] {
+                    seqnr += 1;
                     continue;
                 }
-                let base = ANODE_BLOCK_HEADER_SIZE + offset as usize * ANODE_SIZE;
-                let cs = u32::from_be_bytes(data[base..base + 4].try_into().unwrap());
-                let bn = u32::from_be_bytes(data[base + 4..base + 8].try_into().unwrap());
-                if cs == 0 && bn == 0 {
+                let blk_num = self.get_anode_block_nr(seqnr)?;
+                if blk_num == 0 {
+                    if start != 0 {
+                        break; // start over from 0 before making a block
+                    }
+                    // No anode block at this seqnr — allocate one
+                    let new_blk = self.alloc_anode_block(seqnr)?;
+                    // Now use the first usable slot in the new block
+                    let mut data = self.read_reserved_raw(new_blk)?;
+                    let anodenr = if split {
+                        (seqnr << 16) | ANODE_USERFIRST
+                    } else {
+                        seqnr * self.anodes_per_block + ANODE_USERFIRST
+                    };
+                    let base = ANODE_BLOCK_HEADER_SIZE + ANODE_USERFIRST as usize * ANODE_SIZE;
                     put_u32(&mut data, base, clustersize);
                     put_u32(&mut data, base + 4, blocknr);
                     put_u32(&mut data, base + 8, next);
                     put_u32(&mut data, 4, self.datestamp);
-                    self.write_reserved(blk_num, &data)?;
+                    self.write_reserved(new_blk, &data)?;
+                    self.anode_roving = seqnr;
                     return Ok(anodenr);
                 }
+                let mut data = self.read_reserved_raw(blk_num)?;
+                if u16::from_be_bytes(data[0..2].try_into().unwrap()) == ABLKID {
+                    for offset in 0..self.anodes_per_block {
+                        let anodenr = if split {
+                            (seqnr << 16) | offset
+                        } else {
+                            seqnr * self.anodes_per_block + offset
+                        };
+                        if anodenr < ANODE_USERFIRST {
+                            continue;
+                        }
+                        let base = ANODE_BLOCK_HEADER_SIZE + offset as usize * ANODE_SIZE;
+                        let cs = u32::from_be_bytes(data[base..base + 4].try_into().unwrap());
+                        let bn = u32::from_be_bytes(data[base + 4..base + 8].try_into().unwrap());
+                        if cs == 0 && bn == 0 {
+                            put_u32(&mut data, base, clustersize);
+                            put_u32(&mut data, base + 4, blocknr);
+                            put_u32(&mut data, base + 8, next);
+                            put_u32(&mut data, 4, self.datestamp);
+                            self.write_reserved(blk_num, &data)?;
+                            self.anode_roving = seqnr;
+                            return Ok(anodenr);
+                        }
+                    }
+                }
+                // No free anode in this block (pfs3aio clears its bit, `anodes.c:414-416`).
+                self.anode_block_full[seqnr as usize] = true;
+                seqnr += 1;
             }
+            if start == 0 {
+                return Err(Error::DiskFull("no free anode slots".into()));
+            }
+            start = 0;
         }
-        Err(Error::DiskFull("no free anode slots".into()))
     }
 
     /// ART-311: the anode blocks this volume can address. pfs3aio passes an
@@ -1030,43 +1083,62 @@ impl Writer {
         let idx_off = seqnr % ipb;
 
         if self.vol.rootblock.is_large() {
-            // Large mode: superindex → index block → anode block
+            // Large mode: superindex → super block → index block → anode block
             let super_nr = seqnr / (ipb * ipb);
             let remainder = seqnr % (ipb * ipb);
             let idx_in_super = remainder / ipb;
             let off_in_idx = remainder % ipb;
 
-            let super_blk = self
+            let mut super_blk = self
                 .vol
                 .rootblock_ext
                 .as_ref()
                 .and_then(|e| e.superindex.get(super_nr as usize).copied())
                 .unwrap_or(0);
             if super_blk == 0 {
-                return Err(Error::DiskFull("no superindex slot available".into()));
+                // ART-311: a missing super block is made here, as pfs3aio's
+                // NewSuperBlock does (`anodes.c:851-870`), up to MAXSUPER; the
+                // rootblock extension names it when `update_rootblock` commits.
+                if super_nr as usize > MAXSUPER || self.vol.rootblock_ext.is_none() {
+                    return Err(Error::DiskFull("no superindex slot available".into()));
+                }
+                super_blk = self.alloc_reserved_block()?;
+                let mut sdata = vec![0u8; self.resblocksize as usize];
+                put_u16(&mut sdata, 0, SBLKID);
+                put_u32(&mut sdata, 4, self.datestamp);
+                put_u32(&mut sdata, 8, super_nr);
+                self.write_reserved(super_blk, &sdata)?;
+                if let Some(ext) = self.vol.rootblock_ext.as_mut() {
+                    if ext.superindex.len() <= super_nr as usize {
+                        ext.superindex.resize(super_nr as usize + 1, 0);
+                    }
+                    ext.superindex[super_nr as usize] = super_blk;
+                }
+                self.rext_dirty = true;
+                self.refresh_anode_reader();
             }
-            let idx_blk = {
-                let sdata = self.vol.cache.read_reserved(
-                    self.vol.dev.as_ref(),
-                    super_blk as u64,
-                    self.resblocksize as u16,
-                )?;
-                let off = INDEX_BLOCK_HEADER_SIZE + idx_in_super as usize * 4;
-                u32::from_be_bytes(sdata[off..off + 4].try_into().unwrap())
-            };
+            // ART-311: through this writer's own pending writes, like every index
+            // read since ART-312. A super block made above exists only there, and
+            // the reserved block it took may still hold a freed block's bytes.
+            let sdata = self.read_reserved_raw(super_blk)?;
+            let soff = INDEX_BLOCK_HEADER_SIZE + idx_in_super as usize * 4;
+            let idx_blk = u32::from_be_bytes(sdata[soff..soff + 4].try_into().unwrap());
             if idx_blk == 0 {
                 // Need to allocate an index block too
                 let new_idx = self.alloc_reserved_block()?;
                 let mut idata = vec![0u8; self.resblocksize as usize];
                 put_u16(&mut idata, 0, IBLKID);
                 put_u32(&mut idata, 4, self.next_datestamp());
-                put_u32(&mut idata, 8, idx_in_super);
+                // ART-311: an index block's seqnr is its number across the volume,
+                // `seqnr / indexperblock` (pfs3aio `anodes.c:592-595,767`). 0.1.3
+                // wrote its position inside its super block — the same only under
+                // super block 0.
+                put_u32(&mut idata, 8, seqnr / ipb);
                 let entry_off = INDEX_BLOCK_HEADER_SIZE + off_in_idx as usize * 4;
                 put_u32(&mut idata, entry_off, new_blk);
                 self.write_reserved(new_idx, &idata)?;
                 // Update super block
                 let mut sdata = self.read_reserved_raw(super_blk)?;
-                let soff = INDEX_BLOCK_HEADER_SIZE + idx_in_super as usize * 4;
                 put_u32(&mut sdata, soff, new_idx);
                 put_u32(&mut sdata, 4, self.datestamp);
                 self.write_reserved(super_blk, &sdata)?;
@@ -1294,6 +1366,22 @@ impl Writer {
     // ---- Rootblock update ----
 
     fn update_rootblock(&mut self) -> Result<()> {
+        // ART-311: a new super block is named by the rootblock extension
+        // (`blocks.h:448`, superindex at 0x40); pfs3aio writes the extension
+        // before the rootblock (`update.c:240-256,265-270`). Only the
+        // superindex changes; every other extension field is left as read.
+        if self.rext_dirty {
+            let ext_blk = self.vol.rootblock.extension;
+            let mut rext = self.read_reserved_raw(ext_blk)?;
+            if let Some(ext) = &self.vol.rootblock_ext {
+                for (i, &blk) in ext.superindex.iter().enumerate().take(MAXSUPER + 1) {
+                    put_u32(&mut rext, 0x40 + i * 4, blk);
+                }
+            }
+            self.write_reserved(ext_blk, &rext)?;
+            self.rext_dirty = false;
+        }
+
         // Flush all pending reserved block writes first
         self.flush_pending()?;
 

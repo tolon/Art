@@ -59,6 +59,11 @@ const MAXBITMAPINDEX: u64 = 103;
 const MAXSMALLDISK: u64 = (MAXSMALLBITMAPINDEX + 1) * 253 * 253 * 32;
 const MAXNUMRESERVED: u32 = 4096 + 255 * 1024 * 8;
 
+/// pfs3aio `blocks.h`: the rootblock names `MAXSMALLINDEXNR + 1` anode index
+/// blocks in small mode, the extension `MAXSUPER + 1` super blocks.
+const MAXSMALLINDEXNR: u64 = 98;
+const MAXSUPER: u64 = 15;
+
 // The real on-disk sizes the directory/anode model below is built from
 // (round-2 review, CRITICAL 1 — the plan's original "17 fixed bytes" guess
 // undercounted against the real writer and is superseded by these).
@@ -213,35 +218,39 @@ fn reserved_needed(total_blocks: u64, content: &ContentMeasure) -> u64 {
     let anode_blocks = anode_count
         .saturating_sub(first_block_room)
         .div_ceil(anodes_per_block);
-    dir_blocks + anode_blocks
+    // ART-311: past the format's one index block the writer makes another for
+    // every `index_per_block` anode blocks (`NewIndexBlock`), and past the
+    // format's one super block another for every `index_per_block²`
+    // (`NewSuperBlock`, SUPERINDEX mode only — a small-mode volume never has
+    // that many anode blocks).
+    let index_per_block = (resblocksize / 4).saturating_sub(3);
+    let all_anode_blocks = anode_blocks + 1;
+    let index_blocks = all_anode_blocks.div_ceil(index_per_block).saturating_sub(1);
+    let super_blocks = all_anode_blocks
+        .div_ceil(index_per_block * index_per_block)
+        .saturating_sub(1);
+    dir_blocks + anode_blocks + index_blocks + super_blocks
 }
 
-/// The most anodes `libpfs3`'s writer can ever serve below `MAXSMALLDISK`
-/// (small mode), independent of the partition's size (round-2 review,
-/// IMPORTANT 2). Format only ever pre-allocates ONE anode index block
-/// (`format.rs` "Write anode index block", registered as the single entry
-/// `rootblock.indexblocks[0]`), and small mode's own allocator refuses a
-/// second one outright: `alloc_anode_block`'s small-mode branch
-/// (`writer.rs:1014-1024`) returns `Err("no index block slot available")`
-/// the instant `indexblocks[idx_nr]` is unset. The large-mode branch just
-/// above it (`writer.rs:991-1006`) does allocate a fresh index block, but
-/// SUPERINDEX mode buys almost nothing: `alloc_anode` searches only anode
-/// blocks 0..256 (`writer.rs:901`, then `"no free anode slots"` at `:947`),
-/// so a large-mode volume holds at most 256 × 84 − 6 = 21 498 anodes at the
-/// 1024-byte reserved block size. Sizing content past `MAXSMALLDISK` does
-/// not lift that ceiling (ART-311). One index block holds `index_per_block` anode-block
-/// pointers (`(resblocksize/4)-3`, `rootblock.rs:153-155` / `format.rs:113`
-/// — 253 at the 1024-byte reserved block size), each anode block holding
-/// `anodes_per_block` anodes (84 at that size) minus the `ANODE_USERFIRST`
-/// (6) reserved low anode numbers, all inside the very first one. Measured
-/// against the real writer: 25 000 small files failed after 20 382 at both
-/// a 17 MB and a 21.7 MB small-mode partition — consistent with this cap
-/// (253 × 84 - 6 = 21 246) once directory overhead is subtracted.
-fn pfs3_small_mode_anode_cap(total_blocks: u64) -> u64 {
+/// The most anodes `libpfs3`'s writer can hand out on a partition of
+/// `total_blocks` — pfs3aio's own limits since ART-311 was fixed: the anode
+/// block number is 16 bits (`anodes.c:582`), and small mode's rootblock names
+/// only `MAXSMALLINDEXNR + 1` index blocks of `index_per_block` anode blocks
+/// each (SUPERINDEX mode's `MAXSUPER + 1` super blocks reach past 16 bits).
+/// Each anode block holds `anodes_per_block` anodes; the format keeps the
+/// first `ANODE_USERFIRST`. Before the fix the writer held one index block's
+/// worth in small mode, 21 246 anodes, and this function was the small-mode
+/// cap that pushed many-file content past MAXSMALLDISK.
+fn pfs3_anode_cap(total_blocks: u64) -> u64 {
     let resblocksize = u64::from(pfs3_reserved_block_bytes(total_blocks));
     let index_per_block = (resblocksize / 4).saturating_sub(3);
     let anodes_per_block = (resblocksize - ANODE_BLOCK_HEADER_SIZE) / ANODE_SIZE;
-    (index_per_block * anodes_per_block).saturating_sub(ANODE_USERFIRST)
+    let by_index = if total_blocks > MAXSMALLDISK {
+        (MAXSUPER + 1) * index_per_block * index_per_block
+    } else {
+        (MAXSMALLINDEXNR + 1) * index_per_block
+    };
+    (by_index.min(1 << 16) * anodes_per_block).saturating_sub(ANODE_USERFIRST)
 }
 
 /// Whether `content` fits a fresh PFS3 partition of `total_blocks`, keeping
@@ -256,15 +265,8 @@ pub fn pfs3_fits(total_blocks: u64, content: &ContentMeasure) -> bool {
     if content.data_blocks > usable || reserved_needed(total_blocks, content) > reserved_free {
         return false;
     }
-    // Below MAXSMALLDISK, the writer's own anode-space ceiling
-    // (`pfs3_small_mode_anode_cap`) does not grow with `total_blocks` — a
-    // size that otherwise fits must still be refused once content needs
-    // more anodes than that, so `pfs3_fit_bytes`'s bisection sizes up past
-    // MAXSMALLDISK instead of settling on a small-mode size the real writer
-    // would refuse.
-    if total_blocks <= MAXSMALLDISK
-        && anode_count_needed(total_blocks, content) > pfs3_small_mode_anode_cap(total_blocks)
-    {
+    // The writer's anode ceiling (`pfs3_anode_cap`), at every size.
+    if anode_count_needed(total_blocks, content) > pfs3_anode_cap(total_blocks) {
         return false;
     }
     true
@@ -462,8 +464,8 @@ fn split_work(rest: u64) -> Vec<(String, Option<u32>, u64)> {
 /// wrote that mode wrong; ART builds the vendored `0.1.3+art.2`, which writes
 /// it as pfs3aio does (ART-310, fixed), so the **format** `NativeFormatter`
 /// writes on these partitions is right, and its writer no longer hands one
-/// anode number out twice (ART-312, fixed). Filling them is still bound by
-/// the writer's ceiling of ~21 500 anodes in either mode (ART-311).
+/// anode number out twice (ART-312, fixed). Its writer's anode ceiling is
+/// pfs3aio's (ART-311, fixed).
 pub fn plan_card_image(
     card_gb: u32,
     content: &[RequestedPartition],
@@ -564,9 +566,8 @@ pub fn plan_card_image(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::preload::pfs3_test_device::MemDevice;
     use crate::core::rdb::{create_rdb_layout, parse_rdb};
-    use std::collections::HashMap;
-    use std::sync::Mutex;
 
     /// The smallest real card measured for each label (fdisk output in the
     /// threads the research note cites). An image for that label must fit it.
@@ -606,54 +607,6 @@ mod tests {
         let mut m = ContentMeasure::default();
         m.add_file("Empty", 0);
         assert_eq!(m.data_blocks, 1);
-    }
-
-    /// A block device that keeps only the blocks written to it — so a
-    /// 100 GiB PFS3 format costs the reserved area in memory, not 100 GiB of
-    /// disk. `libpfs3`'s own trait, `libpfs3::io::BlockDevice`.
-    #[derive(Default)]
-    struct MemDevice {
-        blocks: Mutex<HashMap<u64, Vec<u8>>>,
-    }
-
-    impl libpfs3::io::BlockDevice for MemDevice {
-        fn read_block(&self, block: u64, buf: &mut [u8]) -> libpfs3::error::Result<()> {
-            match self.blocks.lock().unwrap().get(&block) {
-                Some(data) => buf.copy_from_slice(data),
-                None => buf.fill(0),
-            }
-            Ok(())
-        }
-        fn read_blocks(
-            &self,
-            block: u64,
-            count: u32,
-            buf: &mut [u8],
-        ) -> libpfs3::error::Result<()> {
-            for i in 0..count as usize {
-                self.read_block(block + i as u64, &mut buf[i * 512..(i + 1) * 512])?;
-            }
-            Ok(())
-        }
-        fn block_size(&self) -> u32 {
-            512
-        }
-        fn write_block(&self, block: u64, data: &[u8]) -> libpfs3::error::Result<()> {
-            self.blocks
-                .lock()
-                .unwrap()
-                .insert(block, data[..512].to_vec());
-            Ok(())
-        }
-        fn write_blocks(&self, block: u64, count: u32, data: &[u8]) -> libpfs3::error::Result<()> {
-            for i in 0..count as usize {
-                self.write_block(block + i as u64, &data[i * 512..(i + 1) * 512])?;
-            }
-            Ok(())
-        }
-        fn flush(&self) -> libpfs3::error::Result<()> {
-            Ok(())
-        }
     }
 
     fn format_in_memory(total_blocks: u64) -> (MemDevice, libpfs3::format::FormatResult) {
@@ -910,44 +863,61 @@ mod tests {
         assert_estimate_holds("10 large drawers, 100-char names", &dirs, &files, &m);
     }
 
-    /// IMPORTANT 2 (round-2 review): below `MAXSMALLDISK`, `libpfs3`'s
-    /// writer can never allocate a second anode index block ("no index
-    /// block slot available", `writer.rs:1014-1024`) — small mode's entire
-    /// anode space is one index block's worth, `pfs3_small_mode_anode_cap`
-    /// blocks regardless of the partition's size (measured against the real
-    /// writer: 25 000 files failed after 20 382 at both a 17 MB and a
-    /// 21.7 MB small-mode partition). `pfs3_fits` must refuse every
-    /// small-mode size once content needs more anodes than that, so
-    /// `pfs3_fit_bytes`'s bisection sizes up past `MAXSMALLDISK`.
+    /// **ART-311, fixed.** `libpfs3`'s writer makes the index blocks it needs,
+    /// so 25 000 files no longer size past MAXSMALLDISK — the estimate stays in
+    /// small mode, and the content is filled there for real. Before the fix
+    /// the small-mode anode cap pushed this content to at least ~5.24 GB
+    /// (`many_files_cross_into_superindex_mode`, removed with the cap).
     ///
-    /// This only proves the size crosses the mode boundary, not that the
-    /// content can be written there: filling this content at the returned
-    /// estimate is **not** attempted here. The first attempt at such a fill,
-    /// against `libpfs3` 0.1.3, failed at once with `"anode 5 not found"`:
-    /// 0.1.3's format pointed `superindex[0]` at the anode index block where
-    /// every reader expects a super index block. That was ART-310, fixed in
-    /// the vendored `0.1.3+art.2`. `core::preload::native`'s
-    /// `a_large_pfs3_volume_takes_its_own_writes` shows a SUPERINDEX-mode
-    /// volume taking a few writes inside its first anode block only; it does
-    /// not reach a second anode block through the SB -> IB path, and the
-    /// writer's ceiling there is ART-311. Filling AGS scale
-    /// (~140 000 files) — and SUPERINDEX mode generally — is round 5's concern
-    /// per the review's own ruling; this test proves only what it can honestly
-    /// prove today.
+    /// **Deviation from the brief, recorded (implementer's decision).** The
+    /// brief's own test called `assert_estimate_holds`, which also probes one
+    /// cylinder smaller and requires the writer to either refuse it outright
+    /// or breach the always-free twentieth. Measured directly: at 250
+    /// directories this content's 66-cylinder estimate sits right across an
+    /// unusually large `pfs3_num_reserved` step — 1408 reserved blocks at
+    /// cylinder 65 (65 520 blocks), 2592 at cylinder 66 (66 528 blocks), the
+    /// same doubling series `many_small_files_do_not_run_out_of_reserved_blocks`
+    /// already documents at a different threshold. Cylinder 65 holds all
+    /// 25 000 files fine (37 702 of 62 702 data blocks still free), so the
+    /// probe fails by design, exactly as `pfs3_fit_bytes`'s own doc discloses
+    /// ("it is minimal only locally: just past a step it can pass over a
+    /// smaller size that also fits, by a few cylinders at most") — not a
+    /// defect in this task's fix. Broken down: `reserved_needed` asks for
+    /// 1418 blocks against cylinder 65's 1392 free, a 26-block shortfall;
+    /// `dir_blocks` (the pooled, proven-safe-but-not-tight directory-entry
+    /// estimate — `dir_extra_blocks`'s own doc) is 1107 of those 1418, while
+    /// this task's own addition (`index_blocks`) is exactly 1. The shortfall
+    /// is the pre-existing pooling slack, ~30x this task's own contribution;
+    /// tightening `dir_extra_blocks` is out of ART-311's scope. So this test
+    /// keeps `assert_estimate_holds`'s two checks that ARE about this task —
+    /// the estimate holds the real fill, and the always-free twentieth is
+    /// kept — without its one-cylinder-smaller probe.
     #[test]
-    fn many_files_cross_into_superindex_mode() {
-        let (_dirs, _files, m) = profile(250, 100, |_| 200); // 25 000 files
+    fn many_files_stay_in_small_mode_and_fit_their_estimate() {
+        let (dirs, files, m) = profile(250, 100, |_| 200); // 25 000 files
         let bytes = pfs3_fit_bytes(&m).expect("within PFS3's range");
-        let total_blocks = bytes / PFS3_BLOCK;
         assert!(
-            total_blocks > MAXSMALLDISK,
-            "25 000 files: estimate {bytes} bytes ({total_blocks} blocks) is still small-mode \
-             (MAXSMALLDISK={MAXSMALLDISK} blocks) — the anode cap should have pushed this past it"
+            bytes / PFS3_BLOCK <= MAXSMALLDISK,
+            "25 000 files: estimate {bytes} bytes is past MAXSMALLDISK ({MAXSMALLDISK} blocks)"
         );
-        println!(
-            "25 000 files: {bytes} bytes ({total_blocks} blocks, MAXSMALLDISK={MAXSMALLDISK} \
-             blocks) — estimate crosses into SUPERINDEX mode, not filled (see doc comment)"
+        let total_blocks = bytes / PFS3_BLOCK;
+        let (free, data) = fill(total_blocks, &dirs, &files).unwrap_or_else(|e| {
+            panic!("25 000 small files: the estimated {bytes} bytes did not hold it: {e}")
+        });
+        assert!(
+            free >= data / 20,
+            "25 000 small files: {free} free of {data}, under the always-free twentieth"
         );
+        println!("25 000 small files: {bytes} bytes, {free} free blocks");
+    }
+
+    /// The writer's anode ceiling is pfs3aio's: small mode, 99 index blocks of
+    /// 253 anode blocks of 84 anodes; SUPERINDEX mode, the 16-bit anode block
+    /// number (`anodes.c:582`); the format's first six anodes excluded.
+    #[test]
+    fn the_anode_ceiling_is_pfs3aios() {
+        assert_eq!(pfs3_anode_cap(MAXSMALLDISK), 99 * 253 * 84 - 6);
+        assert_eq!(pfs3_anode_cap(MAXSMALLDISK + 1), 65_536 * 84 - 6);
     }
 
     #[test]
