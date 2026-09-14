@@ -73,6 +73,17 @@ pub struct AmigaDate {
 }
 
 impl AmigaDate {
+    /// Seconds since 1970-01-01 **as the wall clock reads**, with no zone —
+    /// what AmigaDOS stores (ART-317). Not an instant: turning it into one
+    /// needs the offset in force on that date, which is
+    /// `core::clock::AmigaClock::unix_from_amiga`'s job.
+    pub fn to_wall_seconds(self) -> i64 {
+        AMIGA_EPOCH_UNIX
+            + (self.days as i64) * 86_400
+            + (self.mins as i64) * 60
+            + (self.ticks as i64) / TICKS_PER_SEC
+    }
+
     pub fn to_unix(self) -> i64 {
         AMIGA_EPOCH_UNIX
             + (self.days as i64) * 86_400

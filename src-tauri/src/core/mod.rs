@@ -19,6 +19,7 @@ pub mod artwork;
 pub mod binary;
 pub mod card;
 pub mod cbm;
+pub mod clock;
 pub mod compatibility;
 pub mod conversion;
 pub mod detect;
