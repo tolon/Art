@@ -130,7 +130,7 @@ const FIRSTBOOT_PHASE: Phase = {
 };
 
 function progress(id: number, state: JobProgress["state"], done = 0): JobProgress {
-  return { id, title: "Building", done, total: 1980, message: "SYS:C/Assign", state };
+  return { id, title: { key: "components.jobBar.title.installRelease", params: { release: "AmigaOS 3.2", target: "Tree" } }, done, total: 1980, message: "SYS:C/Assign", state };
 }
 
 // ---------------------------------------------------------------------------

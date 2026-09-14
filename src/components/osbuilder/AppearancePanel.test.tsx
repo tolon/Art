@@ -490,7 +490,7 @@ describe("ART-248: the apply runs as a cancellable job", () => {
 
     report!({
       id: 1,
-      title: "Applying appearance to distribution tree",
+      title: { key: "components.jobBar.title.applyAppearance" },
       done: 3,
       total: 6,
       message: "Utilities.info",

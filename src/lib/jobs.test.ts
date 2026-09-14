@@ -43,7 +43,7 @@ beforeEach(() => {
 function job(overrides: Partial<JobProgress> = {}): JobProgress {
   return {
     id: 1,
-    title: "Copying",
+    title: { key: "components.jobBar.title.copyInto", params: { target: "DH0" } },
     done: 0,
     total: null,
     message: "",
@@ -177,7 +177,7 @@ describe("awaitJobResult — the fast-path race (N1, Task 7's re-review)", () =>
     // `job-progress` counterpart of the same race.
     emit("job-progress", {
       id: 9,
-      title: "x",
+      title: { key: "components.jobBar.title.copyInto", params: { target: "DH0" } },
       done: 0,
       total: null,
       message: "",

@@ -1017,7 +1017,7 @@ describe("a run that goes wrong mid-flight still says where the copy is", () => 
     await runToConfirmation();
     report!({
       id: 7,
-      title: "Installing BoingBag 3.9-1 on the Amiga",
+      title: { key: "components.jobBar.title.installOnAmiga", params: { name: "BoingBag 3.9-1" } },
       done: 0,
       total: null,
       message: REPORTED,
@@ -1038,7 +1038,7 @@ describe("a run that goes wrong mid-flight still says where the copy is", () => 
     await runToConfirmation();
     report!({
       id: 7,
-      title: "Installing BoingBag 3.9-1 on the Amiga",
+      title: { key: "components.jobBar.title.installOnAmiga", params: { name: "BoingBag 3.9-1" } },
       done: 0,
       total: null,
       message: "   ",
@@ -1059,7 +1059,7 @@ describe("a run that goes wrong mid-flight still says where the copy is", () => 
     await act(async () => {
       report!({
         id: 99,
-        title: "Something else entirely",
+        title: { key: "components.jobBar.title.syncAminet" },
         done: 0,
         total: null,
         message: REPORTED,
@@ -1081,7 +1081,7 @@ describe("a cancelled run does not claim the copy was cleaned up when it was not
     await runToConfirmation();
     report!({
       id: 7,
-      title: "Installing BoingBag 3.9-1 on the Amiga",
+      title: { key: "components.jobBar.title.installOnAmiga", params: { name: "BoingBag 3.9-1" } },
       done: 0,
       total: null,
       message: said,
@@ -1111,7 +1111,7 @@ describe("while it is running", () => {
     await act(async () => {
       report!({
         id: 7,
-        title: "Installing BoingBag 3.9-1 on the Amiga",
+        title: { key: "components.jobBar.title.installOnAmiga", params: { name: "BoingBag 3.9-1" } },
         done: 3,
         total: 10,
         message: "Unpacking BoingBag39-1.lha",

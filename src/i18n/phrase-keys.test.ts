@@ -437,7 +437,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
   it("jobStatusLabel: every JobState variant resolves", () => {
     const base = {
       id: 1,
-      title: "Copying",
+      title: { key: "components.jobBar.title.copyInto" as const, params: { target: "DH0" } },
       done: 1,
       total: null,
       message: "",
