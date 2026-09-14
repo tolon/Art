@@ -26,39 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-320** 🔵 **`cargo test` forces `TMP`/`TEMP` onto `D:`, against the owner's own rule, and no fix is chosen yet** — *found 2026-09-14, Task 12 of `.superpowers/sdd/2026-09-14-art-117-rdb-embed/`, verifying ART-117's records*
-`src-tauri/.cargo/config.toml` (ART-184's own fix) sets `TMP`/`TEMP` to
-`D:/tmp/art-tests` with `force = true` for every `cargo test` and `cargo run`,
-not only build scripts. Cargo applies a forced `[env]` entry unconditionally,
-overriding whatever the shell already set — confirmed by Task 11
-(`.superpowers/sdd/2026-09-14-art-117-rdb-embed/task-11-report.md`) with a
-controlled, one-variable experiment: a throwaway compiled binary read
-`std::env::temp_dir()` as the shell's `E:\amiga\ProjeART\build\tmp` correctly
-when run directly, and read `D:\tmp\art-tests` every time the same check ran
-under `cargo test`. Consequences:
-
-- Every `cargo test`/`cargo test --lib` run this round put its scratch on
-  `D:`, against the owner's rule that test scratch goes on
-  `E:\amiga\ProjeART\build\tmp` and C:/D: are not used. `D:\tmp\art-tests`
-  holds **1.5 GB** as of this entry (measured 2026-09-14).
-- Task 11's own `#[ignore]`d hook
-  (`replace_the_driver_on_a_copy_of_the_owners_card_when_asked`) refuses
-  unless `TMP` is on `E:` (its own pre-flight check), so it cannot pass under
-  `cargo test -- --ignored` in this tree at all — Task 11 ran the compiled
-  test binary directly (`target\debug\deps\art_lib-<hash>.exe <test> --exact
-  --nocapture --ignored`), which is outside Cargo's process tree and so keeps
-  the shell's own `TMP`. `docs/STATUS.md`'s reproduce block now gives that
-  form, not the plain `cargo test` one, for this one hook.
-- Moving the forced path off `D:` is not a one-line fix: `E:` does not exist
-  on the CI runner, so the config can not simply name `E:\amiga\ProjeART\build\tmp`
-  unconditionally. Candidates not chosen here: a relative path under
-  `target/` (survives CI, but is inside the repo checkout, which ART-184's
-  own comment says is not where a 987 GB leak may go either, only smaller
-  scoped) or a CI-only override of the forced value.
-
-Not fixed. This is open and awaits the owner's decision on where a local
-`cargo test` run's scratch should go instead of `D:`.
-
 **ART-062** 🔵 **A handful of Turkish strings have been read on screen; the other ~2200 keys have not** (2262 leaf keys as of 2026-09-14 — count them, the figures written into this entry have been overtaken repeatedly). **Mechanical part done 2026-09-14** on `art-debt-2-0914` — the one string this table's original rows could still name and reach without a backend was measured, found clipped, and fixed; **stays open**, see "What remains" below.
 `src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
 was verified by `pnpm test`'s key-parity check and by reading the JSON — never
@@ -130,6 +97,88 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-320** 🔵 ✅ **`cargo test` forced `TMP`/`TEMP` onto `D:`, against the owner's own rule — moved to `E:`, CI overrides it with the runner's own temp directory** — *found 2026-09-14, Task 12 of `.superpowers/sdd/2026-09-14-art-117-rdb-embed/`, verifying ART-117's records; fixed 2026-09-14 on `art-debt-2-0914`, brief `.superpowers/sdd/2026-09-14-art-117-rdb-embed/tmp-fix-brief.md`*
+`src-tauri/.cargo/config.toml`'s `[env]` now forces `TMP`/`TEMP` to
+`E:/amiga/ProjeART/build/tmp` (still `force = true`); the comment there keeps
+ART-184's own history and records this decision and its date. **That file is
+machine-local and gitignored** (`.gitignore`, unchanged by this fix, already
+said so before ART-184 as well as after) — a CI checkout never has it, and CI
+has no `E:` drive either. `.github/workflows/ci.yml` and `release.yml`'s
+"Rust tests" steps point `cargo test` at the runner's own temp directory
+instead:
+
+    cargo test --config "env.TMP.value='${{ runner.temp }}'" --config "env.TMP.force=true" --config "env.TEMP.value='${{ runner.temp }}'" --config "env.TEMP.force=true"
+
+**Verified before relying on it, and a first attempt was wrong.** The Cargo
+reference (`https://doc.rust-lang.org/cargo/reference/config.html`) documents
+`--config` as TOML `KEY=VALUE` overrides merged left-to-right "using the same
+merging logic that is used when multiple configuration files apply", and
+`[env]`'s `force` key ("By default, the variables specified will not override
+values that already exist in the environment... This behavior can be changed
+by setting the `force` flag") separately from `value` — but does not spell
+out sub-key merging for a nested table like `env.TMP` in one place, so two
+controlled, one-variable experiments settled it rather than reading alone.
+**First** (config.toml present, matching only a developer's own machine): with
+the file's `env.TMP = { value = "D:/tmp/art-tests", force = true }` still in
+place, `$env:TMP` set to a third, distinct marker path and `--config
+"env.TMP.value='...cli-override-marker'"` given a fourth (no `force` on the
+command line), `cargo test --lib` printed `std::env::temp_dir()` as the
+**fourth** path: `--config` merges *into* an existing `env.TMP` table rather
+than replacing it, so a file's own `force = true` keeps applying to a `value`
+set on the command line. **This does not describe CI**, which never has the
+file — so a **second** experiment simulated CI exactly: `config.toml` moved
+aside (`git ls-files` confirms it was never tracked, so this matches a fresh
+checkout byte for byte), shell `$env:TMP` set to a marker directory, then
+`cargo test --lib --config "env.TMP.value='...'"` **without** `force`. Result:
+the *linker* (a real subprocess, not a mock) failed trying to write its own
+temp file into the shell's marker directory, not the `--config` value — proof
+the override was silently ignored, exactly as the reference predicts for an
+already-set variable with `force` defaulted to `false`. Adding `--config
+"env.TMP.force=true"` in the same scenario flipped the result: the linker
+(and `std::env::temp_dir()`) then used the `--config` value instead. **Both
+keys are required in the workflow files because CI has no config.toml for
+`force` to already be `true` in** — the single-line `--config
+env.TMP.value=...` form (this task's own brief's first suggestion) is
+confirmed wrong for CI and was not used. The workflow's shell is confirmed as
+`pwsh` (`windows-latest`'s default; neither file sets `defaults.run.shell`
+for these steps), matching the quoting form tested locally.
+
+**Shown in both configurations, real output**, via a throwaway `#[test]`
+printing `std::env::temp_dir()` (added, run, removed before commit each time
+— `git diff` confirmed clean): plain `cargo test --lib` under the new
+config.toml printed `"E:\\amiga\\ProjeART\\build\\tmp\\"`; the corrected CI
+form (`value` **and** `force`, config.toml moved aside, a pre-set shell `TMP`
+present to rule out a false pass) printed the pointed-at override path.
+`E:\amiga\ProjeART\build\tmp` already existed (it is also this project's
+general command-output scratch site) and received real test scratch directly
+during the full suite run (`art-card-build-*`, `art-cmd-write-*`,
+`art-osinstall-*`, `art-panel-many-*`, timestamped to the run).
+
+**`D:\tmp\art-tests` was left untouched, not deleted** (a separate,
+deliberate decision, per this project's own rule): measured at **1 559 047
+963 bytes (≈1.49 GiB), 5 594 items** before this fix's suite runs and
+**identical** after both — nothing new landed there once `TMP` pointed
+elsewhere.
+
+Task 11's own `#[ignore]`d hook
+(`replace_the_driver_on_a_copy_of_the_owners_card_when_asked`,
+`core/preload/embed.rs`) now passes its own TMP-on-`E:` pre-flight under a
+plain `cargo test --lib <name> -- --ignored` (refusing only for the missing
+`ART_CARD_IN`/`ART_RDB_EMBED_*` variables, as designed) — the compiled-binary
+workaround it needed while `TMP` forced onto `D:` is gone from its own doc
+comment and from `docs/STATUS.md`'s reproduce block.
+
+**CI itself is not proved by this entry** — the workflow override is only
+confirmed once CI actually runs it after the push that carries it, not by
+local reasoning or the local experiment alone.
+
+`cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean;
+`cargo test --lib` twice, identical: `test result: ok. 3398 passed; 0 failed;
+60 ignored; 0 measured; 0 filtered out` (both runs, `TMP`/`TEMP` on `E:`
+confirmed live by the throwaway test above);
+`scripts/scratch-root-sweep.py`, `scripts/scratch-guard-sweep.py` and
+`scripts/control-byte-sweep.py` all clean.
 
 **ART-117** 🟡 ✅ **`import_filesystem` refused a foreign card's existing RDB — ART now embeds and replaces a driver in place** — *found 2026-08-16 (Task 9), named for filing at Task 14; the 2026-08-21 "leave it" reopened by the owner on 2026-09-14; fixed 2026-09-14 on `art-debt-2-0914`*
 `src-tauri/src/core/preload/native.rs`, `core/card/build.rs` · `create_rdb_layout`

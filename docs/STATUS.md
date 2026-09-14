@@ -143,19 +143,17 @@ cd src-tauri && ART_OSINSTALL_DEST="E:\amiga\ProjeART\dist-3.2" \
 # ART-117: replace the PFS3 driver on a byte copy of the owner's card. Make the copy first — it is written; the
 # original is only read, and the test asserts its reserved range and mtime unchanged. The driver must state a newer
 # $VER: than the card's 19.2. The backup and the post-edit range are kept in
-# ART_RDB_EMBED_OUT (an existing folder; nothing in it is overwritten); TMP/TEMP keep the working files off C:.
-# `cargo test -- --ignored` cannot pass this hook's own TMP-on-E: pre-flight in this tree (ART-320:
-# src-tauri/.cargo/config.toml forces TMP/TEMP onto D: for every `cargo test`, overriding the shell) — so build once
-# with a plain `cargo test --lib`, then run the compiled test binary directly, which is outside Cargo's own process
-# tree and keeps the shell's env unmodified. Find its path under target/debug/deps/art_lib-<hash>.exe first.
-cd src-tauri && TMP="E:\amiga\ProjeART\build\tmp" TEMP="E:\amiga\ProjeART\build\tmp" \
+# ART_RDB_EMBED_OUT (an existing folder; nothing in it is overwritten).
+# TMP/TEMP no longer need setting by hand (ART-320, fixed: src-tauri/.cargo/config.toml forces them onto
+# E:\amiga\ProjeART\build\tmp with force = true), so this hook's own TMP-on-E: pre-flight now passes under a plain
+# `cargo test --lib -- --ignored`; the compiled-binary workaround ART-320 needed before the fix is gone.
+cd src-tauri && \
   ART_CARD_IN="E:\amiga\Amigatolon\caffeine\CaffeineOS_Storm_9317.img" \
   ART_RDB_EMBED_COPY="E:\amiga\ProjeART\build\tmp\caffeine-copy.img" \
   ART_RDB_EMBED_DRIVER="E:\amiga\ProjeART\build\tmp\pfs3aio-newer" \
   ART_RDB_EMBED_OUT="E:\amiga\ProjeART\art117-owner" \
-  target/debug/deps/art_lib-<hash>.exe \
-  core::preload::embed::tests::replace_the_driver_on_a_copy_of_the_owners_card_when_asked \
-  --exact --nocapture --ignored
+  cargo test --lib core::preload::embed::tests::replace_the_driver_on_a_copy_of_the_owners_card_when_asked \
+  -- --exact --nocapture --ignored
 
 # ART-159's two language components, against the disc they were read off.
 # Died mid-run four times in four on 2026-09-06 — exit 0, no `test result:`
@@ -246,6 +244,33 @@ block — do not stack another on top of it.**
 
 ### Start here (2026-09-14)
 
+000000000000000000. **ART-320 is fixed on `art-debt-2-0914` (not merged) — test scratch moved off `D:` to
+`E:\amiga\ProjeART\build\tmp`, and CI overrides it with the runner's own temp directory.**
+`src-tauri/.cargo/config.toml`'s `[env]` now forces `TMP`/`TEMP` to `E:/amiga/ProjeART/build/tmp` (still
+`force = true`). **That file is machine-local and gitignored** — a CI checkout never has it, and CI has no `E:`
+drive either — so `.github/workflows/ci.yml` and `release.yml`'s "Rust tests" steps instead give `cargo test`
+**both** `value` and `force` on the command line: `cargo test --config "env.TMP.value='${{ runner.temp }}'"
+--config "env.TMP.force=true" --config "env.TEMP.value='${{ runner.temp }}'" --config "env.TEMP.force=true"`.
+Verified with two controlled experiments, not assumed from the Cargo reference alone (which documents `--config`
+merging and `[env]`'s `force` key separately but not sub-key table merging in one place): first, with
+`config.toml` present and its own `force = true`, a bare `--config env.TMP.value=...` (no `force`) did win over
+a distinct shell `TMP` — `--config` merges into an existing `env.TMP` table rather than replacing it. **That does
+not describe CI**, which has no such file, so a second experiment moved `config.toml` aside (matching a fresh
+checkout exactly — `git ls-files` confirms it was never tracked) and re-ran the same bare override: this time the
+*linker itself* (a real subprocess) failed writing into the shell's own `TMP`, proving the override was silently
+ignored without `force`. Adding `--config "env.TMP.force=true"` fixed it. The workflow files carry both keys for
+exactly this reason. Confirmed with a throwaway test printing `std::env::temp_dir()`, removed before each commit:
+plain `cargo test` under the real config.toml shows `"E:\\amiga\\ProjeART\\build\\tmp\\"`; the corrected CI form
+(value + force, config.toml absent, a pre-set shell `TMP` present) shows the pointed-at override path. Task 11's
+own real-card hook (`replace_the_driver_on_a_copy_of_the_owners_card_when_asked`) now passes its own TMP-on-`E:`
+pre-flight under a plain `cargo test --lib <name> -- --ignored` — the reproduce line in the ART-117 paragraph below
+and in the reproduce block further down no longer need the compiled-binary workaround, and are corrected in place.
+`D:\tmp\art-tests` (1.49 GB / 5 594 items before this round) was left untouched — deleting it is a separate,
+deliberate decision, not part of this fix — and did not grow: the suite's scratch went to `E:` instead, confirmed
+by `cargo test --lib` run twice. CI itself is not proved by this entry: the override is only proven once CI runs
+after the push that carries it. Full detail in [ISSUES.md](ISSUES.md#fixed). **Next:** push and watch CI once,
+then the owner's merge word (same as ART-117 below).
+
 00000000000000000. **ART-117 is fixed on `art-debt-2-0914` (not merged) — ART embeds or replaces a filesystem
 driver in a foreign card's existing RDB in place, and hst-imager no longer embeds.** Spec
 `docs/superpowers/specs/2026-09-14-art-117-rdb-embed-design.md`, plan
@@ -270,10 +295,10 @@ test` → `Test Files 111 passed (111)`, `Tests 1683 passed (1683)`, `pnpm lint`
 (amitools) clean both directions. **Survivors, disclosed:** no per-stage `sync()` (Task 5, mutation 4), the
 backup's read-back (Task 8, mutation 4), `ready_to_run()?` inside `core::preload::run` — redundant with
 `embed::run`'s own NO-BACKUP refusal (Task 9) — none of the three testable in-process, none a design gap. **New
-finding, filed [ART-320](ISSUES.md#open), not fixed:** `src-tauri/.cargo/config.toml` forces `cargo test`'s
-`TMP`/`TEMP` onto `D:` regardless of the shell, so Task 11's own hook cannot pass its TMP-on-`E:` pre-flight under
-`cargo test -- --ignored` — the compiled test binary was run directly instead (command above, under
-`#[ignore]`d hooks); moving the forced path is not a one-line fix, since `E:` does not exist on the CI runner. A
+finding, filed [ART-320](ISSUES.md#fixed), now fixed (see the bullet above):** at the time of this round,
+`src-tauri/.cargo/config.toml` forced `cargo test`'s `TMP`/`TEMP` onto `D:` regardless of the shell, so Task 11's
+own hook could not pass its TMP-on-`E:` pre-flight under `cargo test -- --ignored` — the compiled test binary was
+run directly instead (command shown then, now replaced). A
 `cargo deny check` failure was also found this round (one `rustls` advisory via `ureq`, unrelated to any change on
 this branch) — disclosed in the Lint row, not filed, not fixed. **Owed by the owner:** the byte copy and the
 ignored hook are already done (Task 11, checked against `hst.imager` and amitools' `rdbtool`, both agreeing) —
@@ -742,9 +767,12 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
   `SDH0`, FFS, 0.90 GiB, in MBR slot 2 — so a correct preload plan has **two**
   steps and no driver-embed step, because Kickstart carries FFS. If the plan
   shows three, something is wrong before anything is formatted.
-- The test suite's own scratch goes to `D:/tmp/art-tests`, forced by
-  `src-tauri/.cargo/config.toml` ([ART-184](ISSUES.md#fixed)) — machine-local
-  relief, not a fix.
+- The test suite's own scratch goes to `E:/amiga/ProjeART/build/tmp`, forced
+  by the machine-local, gitignored `src-tauri/.cargo/config.toml`
+  ([ART-184](ISSUES.md#fixed), [ART-320](ISSUES.md#fixed)); CI never has that
+  file (or an `E:` drive) at all, so `cargo test` there sets both `value` and
+  `force` itself on the command line. The old `D:\tmp\art-tests` (≈1.49 GiB,
+  5 594 items) is left in place, not deleted — that is a separate decision.
 - Rebuilding the card is the fastest way to see the whole engine work at once:
 
   ```bash
