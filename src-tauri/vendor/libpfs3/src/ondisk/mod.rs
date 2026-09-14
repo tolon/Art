@@ -4,6 +4,10 @@
 //! We parse manually via `byteorder` — never transmute raw buffers.
 //!
 //! Reference: pfs3aio/blocks.h, pfs3aio/struct.h
+//!
+//! Modified by ART on 2026-09-14 (ART-318): the deldir entry's name length byte,
+//! `fsizex` behind a long name, 31 entries per deldir block. `ART-PATCH.md` in
+//! this crate's root says what and why.
 
 mod direntry;
 mod rootblock;
@@ -237,16 +241,23 @@ impl DelDirEntry {
         if anode == 0 {
             return None;
         }
+        // ART-318: a length byte, then the name (pfs3aio `directory.c:4196-4199`).
+        // A name longer than 15 bytes reaches into `fsizex`, which then holds
+        // name, not size (`directory.c:3688`).
+        let name_len = usize::from(data[14]).min(DELENTRYFNSIZE - 1);
+        let fsizex = if name_len > DELENTRYFNSIZE_LARGE_FILE - 1 {
+            0
+        } else {
+            u16::from_be_bytes(data[30..32].try_into().unwrap())
+        };
         Some(Self {
             anode,
             fsize: u32::from_be_bytes(data[4..8].try_into().unwrap()),
             creation_day: u16::from_be_bytes(data[8..10].try_into().unwrap()),
             creation_minute: u16::from_be_bytes(data[10..12].try_into().unwrap()),
             creation_tick: u16::from_be_bytes(data[12..14].try_into().unwrap()),
-            filename: crate::util::latin1_to_string(&data[14..30])
-                .trim_end_matches('\0')
-                .to_string(),
-            fsizex: u16::from_be_bytes(data[30..32].try_into().unwrap()),
+            filename: crate::util::latin1_to_string(&data[15..15 + name_len]),
+            fsizex,
         })
     }
 
@@ -261,9 +272,24 @@ pub const DELDIR_HEADER_SIZE: usize = 32;
 /// Size of one deldir entry.
 pub const DELDIR_ENTRY_SIZE: usize = 32;
 
-/// Number of deldir entries that fit in one reserved block.
+/// Entries in a deldir block, whatever the reserved block size (pfs3aio `blocks.h:611`).
+pub const DELENTRIES_PER_BLOCK: usize = 31;
+/// The highest deldir block number; `rext.deldir` has `MAXDELDIR + 1` slots (`blocks.h:612`).
+pub const MAXDELDIR: usize = 31;
+/// ART-318: a deldir entry's name field, length byte included, in the build
+/// pfs3aio's own makefile makes (`makefile:21`, `LARGE_FILE_SIZE=0`;
+/// `blocks.h:100-105`): a name is at most 17 bytes, its last two where the
+/// struct has `fsizex`.
+pub const DELENTRYFNSIZE: usize = 18;
+/// The same in a `LARGE_FILE_SIZE` build, where `fsizex` holds size bits 32-47
+/// (`blocks.h:100-102,375-378`): a name is at most 15 bytes.
+pub const DELENTRYFNSIZE_LARGE_FILE: usize = 16;
+
+/// Number of deldir entries in one reserved block.
+/// ART-318: pfs3aio keeps 31 at every reserved block size; 0.1.3 computed 63 and 127 past 1024 bytes.
 pub fn deldir_entries_per_block(reserved_blksize: u16) -> usize {
-    (reserved_blksize as usize).saturating_sub(DELDIR_HEADER_SIZE) / DELDIR_ENTRY_SIZE
+    ((reserved_blksize as usize).saturating_sub(DELDIR_HEADER_SIZE) / DELDIR_ENTRY_SIZE)
+        .min(DELENTRIES_PER_BLOCK)
 }
 
 // ---- Big-endian write helpers ----

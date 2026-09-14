@@ -64,6 +64,10 @@ const MAXNUMRESERVED: u32 = 4096 + 255 * 1024 * 8;
 const MAXSMALLINDEXNR: u64 = 98;
 const MAXSUPER: u64 = 15;
 
+/// ART-316/318: a card's PFS3 partition is formatted with pfs3aio's two-block
+/// deldir, which the format takes out of the reserved area (`format.c:249-255`).
+const PFS3_DELDIR_BLOCKS: u64 = 2;
+
 // The real on-disk sizes the directory/anode model below is built from
 // (round-2 review, CRITICAL 1 — the plan's original "17 fixed bytes" guess
 // undercounted against the real writer and is superseded by these).
@@ -259,8 +263,8 @@ pub fn pfs3_fits(total_blocks: u64, content: &ContentMeasure) -> bool {
     let data = pfs3_data_blocks(total_blocks);
     let usable = data - data / 20;
     // The format itself spends part of the reserved area; the bitmap alone is
-    // data/(253×32) blocks. Leave that and a margin of 8 before counting ours.
-    let format_own = data.div_ceil(253 * 32) + 8;
+    // data/(253×32) blocks, and the deldir two. Leave those and a margin of 8.
+    let format_own = data.div_ceil(253 * 32) + 8 + PFS3_DELDIR_BLOCKS;
     let reserved_free = u64::from(pfs3_num_reserved(total_blocks)).saturating_sub(format_own);
     if content.data_blocks > usable || reserved_needed(total_blocks, content) > reserved_free {
         return false;
@@ -616,7 +620,8 @@ mod tests {
             total_blocks,
             &libpfs3::format::FormatOptions {
                 volume_name: "Test".into(),
-                enable_deldir: false,
+                // as NativeFormatter formats a card (ART-316/318)
+                enable_deldir: true,
             },
         )
         .unwrap();

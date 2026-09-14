@@ -188,7 +188,9 @@ impl VolumeFormatter for NativeFormatter {
                 let device = ArtBlockDevice::new(region);
                 let opts = libpfs3::format::FormatOptions {
                     volume_name: checked_name,
-                    enable_deldir: false,
+                    // ART-316/318: pfs3aio's two-block deldir, as the Amiga's own
+                    // format makes it (the owner's decision, 2026-09-14).
+                    enable_deldir: true,
                 };
                 libpfs3::format::format_with_size(&device, total_blocks as u64, &opts)
                     .map_err(from_pfs3)?;
@@ -1469,6 +1471,58 @@ mod tests {
         found
     }
 
+    /// **ART-318.** One used deldir entry as pfs3aio's handler reads it
+    /// (`blocks.h:368-379`): the name is the `name_len` bytes after the length
+    /// byte at 0x0E.
+    #[derive(Debug, PartialEq)]
+    struct RawDelEntry {
+        slot: usize,
+        anodenr: u32,
+        fsize: u32,
+        date: Vec<u8>,
+        name_len: u8,
+        name: Vec<u8>,
+        fsizex: u16,
+    }
+
+    /// **ART-318.** The deldir straight off the image: `rext.deldirroving`, and
+    /// every entry with a nonzero `anodenr` in every block `rext.deldir[..deldirsize]`
+    /// names, 31 to a block (`blocks.h:611`). Not through `libpfs3`'s reader.
+    fn raw_deldir(image: &Path) -> (u16, Vec<RawDelEntry>) {
+        let offset = partition_offset(image) as usize;
+        let raw = std::fs::read(image).unwrap();
+        let sector = |n: u32, len: usize| {
+            let at = offset + n as usize * 512;
+            raw[at..at + len].to_vec()
+        };
+        let root = sector(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        let ext = sector(be32(&root, 0x58), resblk);
+        let mut entries = Vec::new();
+        for b in 0..usize::from(be16(&ext, 0x36)) {
+            let dd = sector(be32(&ext, 0x90 + b * 4), resblk);
+            assert_eq!(&dd[0..2], b"DD", "deldir[{b}] must be a deldir block");
+            for e in 0..31 {
+                let at = 32 + e * 32;
+                let anodenr = be32(&dd, at);
+                if anodenr == 0 {
+                    continue;
+                }
+                let len = usize::from(dd[at + 14]).min(17);
+                entries.push(RawDelEntry {
+                    slot: b * 31 + e,
+                    anodenr,
+                    fsize: be32(&dd, at + 4),
+                    date: dd[at + 8..at + 14].to_vec(),
+                    name_len: dd[at + 14],
+                    name: dd[at + 15..at + 15 + len].to_vec(),
+                    fsizex: be16(&dd, at + 30),
+                });
+            }
+        }
+        (be16(&ext, 0x34), entries)
+    }
+
     /// A PFS3 volume of `total_blocks` formatted in memory by the vendored
     /// `libpfs3`, with the deldir off (Task 7 turns it on for `NativeFormatter`;
     /// these fill and bounds tests do not depend on it).
@@ -2270,6 +2324,168 @@ mod tests {
                 "{total}: an empty deldir"
             );
         }
+    }
+
+    /// **ART-316/318, cards.** `NativeFormatter` formats PFS3 with pfs3aio's
+    /// deldir on (the owner's decision, 2026-09-14), so a file deleted on the
+    /// Amiga lands where it can be undeleted.
+    #[test]
+    fn native_pfs3_format_turns_the_deldir_on() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image) as usize;
+        let raw = std::fs::read(&image).unwrap();
+        let root = &raw[offset + 2 * 512..];
+        assert_eq!(
+            be32(root, 0x04) & (8 | 256),
+            8 | 256,
+            "MODE_DELDIR | MODE_SUPERDELDIR"
+        );
+        let ext = &raw[offset + be32(root, 0x58) as usize * 512..];
+        assert_eq!(be16(ext, 0x36), 2, "deldirsize");
+    }
+
+    /// **ART-318.** A deleted file goes into the deldir as pfs3aio's
+    /// `DeleteObject` puts it there (`directory.c:1799-1830,4489-4564`): the slot
+    /// at `deldirroving`, which then advances; `anodenr`, `fsize`, the file's own
+    /// date, a length byte and at most `DELENTRYFNSIZE - 1` name bytes — 17 in
+    /// the build pfs3aio's `makefile:21` makes (`LARGE_FILE_SIZE=0`,
+    /// `blocks.h:100-105`), the last two in what the struct calls `fsizex`; the
+    /// file's data blocks freed and its anodes kept. `libpfs3`'s reader lists it
+    /// by that name and at its real size, not reading those name bytes as size
+    /// (`GetDDFileSize`, `directory.c:3688`).
+    #[test]
+    fn a_deleted_pfs3_file_goes_into_pfs3aios_deldir_entry() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image);
+        let name = "A-long-deleted-name.txt"; // 23 bytes
+        let (anode, date, free_before) = {
+            let vol = libpfs3::volume::Volume::open_rw(&image, offset).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.write_file("Short", b"s").unwrap();
+            let free_before = w.vol.free_blocks();
+            w.write_file(name, &[0xC3u8; 700]).unwrap(); // two data blocks
+            let e = w.vol.lookup(name).unwrap().unwrap();
+            let date = [e.creation_day, e.creation_minute, e.creation_tick]
+                .iter()
+                .flat_map(|v| v.to_be_bytes())
+                .collect::<Vec<u8>>();
+            w.delete(name).unwrap();
+            (e.anode, date, free_before)
+        };
+
+        let (roving, entries) = raw_deldir(&image);
+        assert_eq!(
+            entries,
+            vec![RawDelEntry {
+                slot: 0,
+                anodenr: anode,
+                fsize: 700,
+                date,
+                name_len: 17,
+                name: b"A-long-deleted-na".to_vec(),
+                fsizex: u16::from_be_bytes(*b"na"),
+            }],
+            "the deldir entry, raw"
+        );
+        assert_eq!(roving, 1, "deldirroving advances past the slot it gave out");
+
+        let mut vol = libpfs3::volume::Volume::open(&image, offset).unwrap();
+        assert_eq!(
+            vol.free_blocks(),
+            free_before,
+            "the file's two data blocks are free again"
+        );
+        let chain = vol.get_anode_chain(anode).unwrap();
+        assert_eq!(
+            chain.iter().map(|a| a.clustersize).sum::<u32>(),
+            2,
+            "its anodes are kept for undelete"
+        );
+        let listed: Vec<(String, u64)> = vol
+            .list_deldir()
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.filename.clone(), e.file_size()))
+            .collect();
+        assert_eq!(
+            listed,
+            vec![("A-long-deleted-na".to_string(), 700)],
+            "the reader's name, and its size without the name bytes in `fsizex`"
+        );
+    }
+
+    /// **ART-318.** A two-block deldir holds 62 files; the 63rd delete takes slot
+    /// 0 again, where `deldirroving` wrapped to, and the file it evicts loses its
+    /// anodes — only its anodes, its blocks having been freed at its own delete
+    /// (`AllocDeldirSlot`, `directory.c:4497-4518`).
+    #[test]
+    fn the_pfs3_deldir_roves_and_the_63rd_delete_evicts_slot_zero() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image);
+        let mut anodes = Vec::new();
+        {
+            let vol = libpfs3::volume::Volume::open_rw(&image, offset).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            for i in 0..63 {
+                let name = format!("F{i:02}");
+                w.write_file(&name, name.as_bytes()).unwrap();
+                anodes.push(w.vol.lookup(&name).unwrap().unwrap().anode);
+                w.delete(&name).unwrap();
+            }
+        }
+
+        let (roving, entries) = raw_deldir(&image);
+        let at = |slot: usize| entries.iter().find(|e| e.slot == slot).unwrap();
+        assert_eq!(entries.len(), 62, "a full deldir");
+        assert_eq!(
+            (at(0).anodenr, at(0).name.as_slice()),
+            (anodes[62], &b"F62"[..]),
+            "slot 0 holds the 63rd deleted file"
+        );
+        assert_eq!(
+            at(1).name.as_slice(),
+            &b"F01"[..],
+            "slot 1 still holds the second"
+        );
+        assert_eq!(roving, 1, "deldirroving wrapped to 0 and advanced past it");
+
+        let mut vol = libpfs3::volume::Volume::open(&image, offset).unwrap();
+        let evicted = &vol.get_anode_chain(anodes[0]).unwrap()[0];
+        assert_eq!(
+            (evicted.clustersize, evicted.blocknr, evicted.next),
+            (0, 0, 0),
+            "F00's anode is freed when its slot is taken"
+        );
+    }
+
+    /// **ART-318.** A deleted file undeletes while its freed blocks are
+    /// untouched, and is refused once a later write has taken them — pfs3aio's
+    /// `IsDelfileValid` (`directory.c:4092-4114`), needed because a delete now
+    /// frees the blocks.
+    #[test]
+    fn a_deleted_pfs3_file_undeletes_until_its_blocks_are_reused() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image);
+        let vol = libpfs3::volume::Volume::open_rw(&image, offset).unwrap();
+        let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+
+        w.write_file("Keep", b"keep me").unwrap();
+        w.delete("Keep").unwrap();
+        w.undelete(0, "Kept").unwrap();
+        assert_eq!(w.vol.read_file("Kept").unwrap(), b"keep me");
+
+        w.write_file("Lose", b"lose me").unwrap();
+        w.delete("Lose").unwrap(); // slot 1: roving moved on
+        w.write_file("Taker", b"takes the freed block").unwrap();
+        let err = w.undelete(1, "Lost").unwrap_err();
+        assert!(
+            matches!(&err, libpfs3::error::Error::NotFound(m) if m.contains("reused")),
+            "{err}"
+        );
+        assert!(
+            w.vol.lookup("Lost").unwrap().is_none(),
+            "a refused undelete writes nothing"
+        );
     }
 
     // ---- ART-113: a non-ASCII name is refused before anything is written ----

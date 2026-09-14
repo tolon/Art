@@ -12,7 +12,7 @@
 //! block's parent; (ART-315) the data bitmap's bounds; (ART-314) names — a name
 //! longer than `fnsize - 1` bytes is refused before anything is allocated;
 //! (ART-311) the anode search range, index blocks on demand, super blocks,
-//! the rootblock extension, the roving anode search.
+//! the rootblock extension, the roving anode search; (ART-318) the deldir write path.
 //! `ART-PATCH.md` in this crate's root says what and why.
 
 use crate::error::{Error, Result};
@@ -314,6 +314,23 @@ impl Writer {
         }
 
         let old_anode = entry.anode;
+
+        // ART-318: a delete frees the file's blocks, so a later write may have
+        // taken them; pfs3aio refuses such an entry (`IsDelfileValid`,
+        // `directory.c:4092-4114`).
+        let chain = self
+            .vol
+            .anodes
+            .get_chain(old_anode, self.vol.dev.as_ref(), &mut self.vol.cache)?;
+        let reused = chain
+            .iter()
+            .any(|an| (0..an.clustersize).any(|i| !self.data_block_is_free(an.blocknr + i)));
+        if reused {
+            return Err(Error::NotFound(format!(
+                "deleted file '{}': its blocks have been reused",
+                entry.filename
+            )));
+        }
 
         // Read file data via the anode chain (still intact)
         let file_data = self.vol.read_file_data(old_anode, entry.file_size())?;
@@ -703,9 +720,13 @@ impl Writer {
             self.free_anode_chain_reserved(target.anode)?;
             self.clear_anode_chain(target.anode)?;
         } else {
-            // Try to move to deldir instead of freeing
-            if !self.move_to_deldir(&target) {
-                self.free_data_blocks(target.anode)?;
+            // ART-318: pfs3aio's DeleteObject (`directory.c:1808-1830`). A file goes
+            // to the deldir first when there is one; the data blocks are freed
+            // either way, and the anodes are kept only for the deldir. Soft links
+            // never go there.
+            let kept = target.entry_type == ST_FILE && self.move_to_deldir(&target)?;
+            self.free_data_blocks(target.anode)?;
+            if !kept {
                 self.clear_anode_chain(target.anode)?;
             }
         }
@@ -713,86 +734,110 @@ impl Writer {
         self.update_rootblock()
     }
 
-    /// Move a deleted file entry to the deldir. Returns false if deldir not enabled.
-    fn move_to_deldir(&mut self, entry: &crate::ondisk::DirEntry) -> bool {
-        use crate::ondisk::*;
-        if !self.vol.rootblock.has_flag(MODE_DELDIR) {
-            return false;
+    /// ART-318: put a deleted file into the deldir as pfs3aio's `AllocDeldirSlot`
+    /// and `AddToDeldir` do (`directory.c:4489-4564`). The slot is
+    /// `rext.deldirroving`, which advances modulo `deldirsize × 31`; a slot whose
+    /// block is missing sends the roving pointer back to 0 and uses slot 0. A
+    /// file still in the slot loses its anodes — its blocks were freed at its own
+    /// delete. Returns `false` when the volume has no deldir. 0.1.3 took the first
+    /// empty slot, wrote the name without its length byte, freed an evicted
+    /// file's blocks a second time and swallowed every error.
+    fn move_to_deldir(&mut self, entry: &crate::ondisk::DirEntry) -> Result<bool> {
+        if !self.vol.rootblock.has_flag(MODE_DELDIR) || !self.vol.rootblock.has_extension() {
+            return Ok(false);
         }
-        let rext = match &self.vol.rootblock_ext {
-            Some(e) => e,
-            None => return false,
+        let ext_blk = self.vol.rootblock.extension;
+        let mut rext = self.read_reserved_raw(ext_blk)?;
+        let u16_at = |b: &[u8], at: usize| u16::from_be_bytes([b[at], b[at + 1]]);
+        let u32_at = |b: &[u8], at: usize| u32::from_be_bytes(b[at..at + 4].try_into().unwrap());
+        // rext: deldirroving 0x34, deldirsize 0x36, deldir[32] 0x90 (`blocks.h:444-456`).
+        let slots = usize::from(u16_at(&rext, 0x36)).min(MAXDELDIR + 1) * DELENTRIES_PER_BLOCK;
+        if slots == 0 {
+            return Ok(false);
+        }
+        let block_of =
+            |rext: &[u8], slot: usize| u32_at(rext, 0x90 + (slot / DELENTRIES_PER_BLOCK) * 4);
+        let roving = usize::from(u16_at(&rext, 0x34));
+        let (slot, next_roving) = if roving < slots && block_of(&rext, roving) != 0 {
+            (roving, (roving + 1) % slots)
+        } else {
+            (0, 0)
         };
-        let deldirblocks: Vec<u32> = rext
-            .deldirblocks
-            .iter()
-            .copied()
-            .filter(|&b| b != 0)
-            .collect();
-        if deldirblocks.is_empty() {
-            return false;
+        let dd_blk = block_of(&rext, slot);
+        if dd_blk == 0 {
+            return Ok(false);
         }
-
-        let rbs = self.vol.rootblock.reserved_blksize;
-        let entries_per_block = deldir_entries_per_block(rbs);
-
-        // Find a free slot (anode == 0) using roving pointer
-        for blk in &deldirblocks {
-            let data = match self.read_reserved_raw(*blk) {
-                Ok(d) => d,
-                Err(_) => continue,
-            };
-            if u16::from_be_bytes(data[0..2].try_into().unwrap()) != DELDIRID {
-                continue;
-            }
-
-            for i in 0..entries_per_block {
-                let off = DELDIR_HEADER_SIZE + i * DELDIR_ENTRY_SIZE;
-                if off + DELDIR_ENTRY_SIZE > data.len() {
-                    break;
-                }
-                let slot_anode = u32::from_be_bytes(data[off..off + 4].try_into().unwrap());
-                if slot_anode == 0 {
-                    // Found free slot — write the deldir entry
-                    let mut block_data = data;
-                    self.write_deldir_entry(&mut block_data, off, entry);
-                    let _ = self.write_reserved(*blk, &block_data);
-                    return true;
-                }
-            }
+        let mut data = self.read_reserved_raw(dd_blk)?;
+        if u16::from_be_bytes([data[0], data[1]]) != DELDIRID {
+            return Err(Error::Corrupt(format!(
+                "deldir block {dd_blk} is not a deldir block"
+            )));
         }
-
-        // Deldir full — evict oldest entry (first slot of first block)
-        let blk = deldirblocks[0];
-        let data = match self.read_reserved_raw(blk) {
-            Ok(d) => d,
-            Err(_) => return false,
-        };
-        let off = DELDIR_HEADER_SIZE;
-        let evict_anode = u32::from_be_bytes(data[off..off + 4].try_into().unwrap());
-        if evict_anode != 0 {
-            let _ = self.free_data_blocks(evict_anode);
-            let _ = self.clear_anode_chain(evict_anode);
+        let off = DELDIR_HEADER_SIZE + (slot % DELENTRIES_PER_BLOCK) * DELDIR_ENTRY_SIZE;
+        let evicted = u32_at(&data, off);
+        if evicted != 0 {
+            self.clear_anode_chain(evicted)?; // anodes only (`directory.c:4510-4518`)
         }
-        let mut block_data = data;
-        self.write_deldir_entry(&mut block_data, off, entry);
-        let _ = self.write_reserved(blk, &block_data);
-        true
+        self.write_deldir_entry(&mut data, off, entry);
+        // The deldir block's date and rext.dd_creation* are now (`directory.c:4556-4560`).
+        let (cday, cmin, ctick) = crate::util::current_amiga_datestamp();
+        put_u16(&mut data, 0x1A, cday);
+        put_u16(&mut data, 0x1C, cmin);
+        put_u16(&mut data, 0x1E, ctick);
+        put_u32(&mut data, 4, self.datestamp);
+        self.write_reserved(dd_blk, &data)?;
+        put_u16(&mut rext, 0x34, next_roving as u16);
+        put_u16(&mut rext, 0x88, cday);
+        put_u16(&mut rext, 0x8A, cmin);
+        put_u16(&mut rext, 0x8C, ctick);
+        self.write_reserved(ext_blk, &rext)?;
+        Ok(true)
     }
 
+    /// ART-318: pfs3aio's `deldirentry` (`blocks.h:368-379`) as `AddToDeldir` fills
+    /// it (`directory.c:4544-4550`): `anodenr`, `fsize`, the entry's own creation
+    /// date, a length byte and at most `DELENTRYFNSIZE - 1` name bytes. pfs3aio's
+    /// makefile builds with `LARGE_FILE_SIZE=0` (`makefile:21`), where that is 17
+    /// and a long name runs into what the struct calls `fsizex`; on a
+    /// `MODE_LARGEFILE` volume, which only a `LARGE_FILE_SIZE` build mounts as one
+    /// (`init.c:648`), the name stops at 15 and `fsizex` holds size bits 32-47
+    /// (`SetDDFileSize`, `directory.c:3704-3714`).
     fn write_deldir_entry(&self, block: &mut [u8], off: usize, entry: &crate::ondisk::DirEntry) {
         put_u32(block, off, entry.anode);
         put_u32(block, off + 4, entry.file_size() as u32);
         put_u16(block, off + 8, entry.creation_day);
         put_u16(block, off + 10, entry.creation_minute);
         put_u16(block, off + 12, entry.creation_tick);
-        let name_bytes = entry.name.as_bytes();
-        let len = name_bytes.len().min(16);
-        for b in &mut block[off + 14..off + 30] {
+        for b in &mut block[off + 14..off + DELDIR_ENTRY_SIZE] {
             *b = 0;
         }
-        block[off + 14..off + 14 + len].copy_from_slice(&name_bytes[..len]);
-        put_u16(block, off + 30, (entry.file_size() >> 32) as u16);
+        let largefile = self.vol.rootblock.has_largefile();
+        let fnsize = if largefile {
+            DELENTRYFNSIZE_LARGE_FILE
+        } else {
+            DELENTRYFNSIZE
+        };
+        let name = entry.name.as_bytes();
+        let len = name.len().min(fnsize - 1);
+        block[off + 14] = len as u8;
+        block[off + 15..off + 15 + len].copy_from_slice(&name[..len]);
+        if largefile {
+            put_u16(block, off + 30, (entry.file_size() >> 32) as u16);
+        }
+    }
+
+    /// ART-318: whether `blk` is a data block the bitmap holds free.
+    fn data_block_is_free(&self, blk: u32) -> bool {
+        if blk < self.bitmapstart || blk >= self.vol.rootblock.disksize {
+            return false;
+        }
+        let rel = blk - self.bitmapstart;
+        let per_block = self.index_per_block * 32;
+        let bit = rel % per_block;
+        self.data_bm
+            .get((rel / per_block) as usize)
+            .and_then(|(_, longs)| longs.get((bit / 32) as usize))
+            .is_some_and(|word| word & (0x8000_0000 >> (bit % 32)) != 0)
     }
 
     // ---- Data bitmap ----
