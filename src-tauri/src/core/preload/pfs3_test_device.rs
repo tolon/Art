@@ -7,7 +7,16 @@
 //! device — or reads raw blocks afterwards. **Bounded** when made with
 //! [`MemDevice::with_end`]: a write at or past the end is refused and
 //! remembered, the way ART's own devices refuse a write past a partition
-//! (`core/volume/device.rs`, `FileRegionMut::position`).
+//! (`core/volume/device.rs`, `FileRegionMut::position`). **Failable by call**
+//! with [`MemDevice::fail_from_write`] (ART-319): independent of `with_end`,
+//! which refuses by sector, this refuses every `write_block`/`write_blocks`
+//! call from a chosen call number on — the shape a commit failing part-way
+//! through needs, since the failing write is not necessarily near the
+//! partition's end. **Unreadable on demand** with [`MemDevice::fail_reads`]
+//! (ART-319, M1 final review): once armed, every `read_block`/`read_blocks`
+//! call fails from then on, whatever `end` or `fail_from_write` say — the
+//! shape a reload needs when the device that held the last commit can no
+//! longer even be read back.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -19,6 +28,17 @@ pub(crate) struct MemDevice {
     sectors: Arc<Mutex<HashMap<u64, Vec<u8>>>>,
     end: Option<u64>,
     refused: Arc<Mutex<Vec<u64>>>,
+    /// ART-319: every `write_block`/`write_blocks` call so far, whether it
+    /// succeeded or was refused.
+    write_count: Arc<Mutex<u64>>,
+    /// ART-319: armed by [`MemDevice::fail_from_write`] — the call number
+    /// (1-indexed, against `write_count`) at and after which every write is
+    /// refused.
+    fail_from_write: Arc<Mutex<Option<u64>>>,
+    /// ART-319 (M1, final review): armed by [`MemDevice::fail_reads`] —
+    /// once set, every `read_block`/`read_blocks` call fails, independent
+    /// of `end` and `fail_from_write`, which affect only writes.
+    reads_fail: Arc<Mutex<bool>>,
 }
 
 impl MemDevice {
@@ -34,9 +54,43 @@ impl MemDevice {
         }
     }
 
-    /// Every sector a write was refused at, in order.
+    /// Every sector a write was refused at, in order. A `with_end` refusal
+    /// records the specific out-of-range sector; a `fail_from_write`
+    /// refusal (M4, final review) records only the call's first block —
+    /// the `block` argument the refused `write_block`/`write_blocks` call
+    /// was made with — not every sector that call would otherwise have
+    /// written.
     pub(crate) fn refused(&self) -> Vec<u64> {
         self.refused.lock().unwrap().clone()
+    }
+
+    /// Every `write_block`/`write_blocks` call made on this device so far —
+    /// a fresh device (or `with_end`) starts at 0. ART-319: lets a test arm
+    /// [`MemDevice::fail_from_write`] relative to "the next write this
+    /// operation makes" instead of a number it would otherwise have to count
+    /// by hand.
+    pub(crate) fn write_count(&self) -> u64 {
+        *self.write_count.lock().unwrap()
+    }
+
+    /// ART-319: from write call number `at` on (1-indexed, counting every
+    /// `write_block`/`write_blocks` call since this device was made), every
+    /// write is refused and recorded in [`MemDevice::refused`] — as if the
+    /// device had stopped accepting writes mid-operation. Independent of
+    /// `with_end`, which refuses by sector: this is what lets a test fail a
+    /// commit's own write without the failure needing to be near the
+    /// partition's end.
+    pub(crate) fn fail_from_write(&self, at: u64) {
+        *self.fail_from_write.lock().unwrap() = Some(at);
+    }
+
+    /// ART-319 (M1, final review): from this call on, every
+    /// `read_block`/`read_blocks` call fails — the shape a reload needs
+    /// when the device that held the last commit can no longer even be
+    /// read back (independent of `with_end`/`fail_from_write`, which
+    /// affect only writes).
+    pub(crate) fn fail_reads(&self) {
+        *self.reads_fail.lock().unwrap() = true;
     }
 
     /// `len` bytes from `sector` on; a sector never written reads as zeros.
@@ -63,11 +117,21 @@ impl MemDevice {
 
 impl libpfs3::io::BlockDevice for MemDevice {
     fn read_block(&self, block: u64, buf: &mut [u8]) -> Result<()> {
+        if *self.reads_fail.lock().unwrap() {
+            return Err(Error::Io(std::io::Error::other(
+                "device unreadable (MemDevice::fail_reads, test)",
+            )));
+        }
         buf.copy_from_slice(&self.read(block, buf.len()));
         Ok(())
     }
 
     fn read_blocks(&self, block: u64, count: u32, buf: &mut [u8]) -> Result<()> {
+        if *self.reads_fail.lock().unwrap() {
+            return Err(Error::Io(std::io::Error::other(
+                "device unreadable (MemDevice::fail_reads, test)",
+            )));
+        }
         let len = count as usize * 512;
         buf[..len].copy_from_slice(&self.read(block, len));
         Ok(())
@@ -82,6 +146,22 @@ impl libpfs3::io::BlockDevice for MemDevice {
     }
 
     fn write_blocks(&self, block: u64, count: u32, data: &[u8]) -> Result<()> {
+        // ART-319: counted, and checked against `fail_from_write`, before the
+        // sector-range check below — a call refused here never reaches it.
+        let call_no = {
+            let mut wc = self.write_count.lock().unwrap();
+            *wc += 1;
+            *wc
+        };
+        if self
+            .fail_from_write
+            .lock()
+            .unwrap()
+            .is_some_and(|at| call_no >= at)
+        {
+            self.refused.lock().unwrap().push(block);
+            return Err(Error::BlockOutOfRange(block));
+        }
         for i in 0..u64::from(count) {
             let n = block + i;
             if self.end.is_some_and(|end| n >= end) {

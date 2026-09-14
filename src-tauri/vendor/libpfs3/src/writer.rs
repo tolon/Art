@@ -17,6 +17,9 @@
 //! other than 1024/2048/4096 (M3); `max_name_bytes` calls the one name-limit
 //! rule now in `format::pfs3_name_limit` (M6);
 //! on 2026-09-14 (ART-317): a caller-supplied datestamp;
+//! on 2026-09-14 (ART-319): every public mutator discards back to the last
+//! successful commit on error, and a commit that fails part-way locks the
+//! writer;
 //! `ART-PATCH.md` in this crate's root says what and why.
 
 use crate::error::{Error, Result};
@@ -63,6 +66,18 @@ pub struct Writer {
     /// ART-317, whose caller sets local time before each operation. A deldir
     /// entry's own date is not this: it is copied from the deleted entry.
     entry_date: Option<(u16, u16, u16)>,
+    /// ART-319: set when a commit itself (`update_rootblock`, or
+    /// `set_volume_name`'s own direct write) failed part-way — the device may
+    /// already be half-written, since a pending write lands in place, not
+    /// copy-on-write (M5) — or when `discard_to_last_commit`'s own reload
+    /// could not even read the device back (M1, final review), leaving
+    /// nothing safe to fall back to. Once set, every later public mutating
+    /// call refuses immediately with `Error::CommitFailed`, before touching
+    /// anything; nothing clears it — the caller must reopen the volume, by
+    /// building a new `Volume` from the device, not by calling `Writer::open`
+    /// on the `Volume` `into_volume` hands back, which still holds this
+    /// failed attempt's in-memory state (M2, final review).
+    poisoned: bool,
 }
 
 impl Writer {
@@ -107,6 +122,7 @@ impl Writer {
             anode_roving: 0,
             rext_dirty: false,
             entry_date: None,
+            poisoned: false,
             vol,
         };
         w.load_reserved_bitmap()?;
@@ -114,7 +130,14 @@ impl Writer {
         Ok(w)
     }
 
-    /// Consume the writer and return the underlying volume.
+    /// Consume the writer and return the underlying volume. **M2 (final
+    /// review): if this writer is locked (`self.poisoned`), the `Volume`
+    /// returned here still holds the failed attempt's own in-memory
+    /// rootblock and other state** — `Writer::open` on it has no lock of its
+    /// own and its next commit would write those values. Reopening a locked
+    /// volume means building a fresh `Volume` from the device
+    /// (`Volume::from_device` / `open*`), not calling `Writer::open` on the
+    /// value this returns.
     pub fn into_volume(self) -> Volume {
         self.vol
     }
@@ -159,28 +182,111 @@ impl Writer {
         Ok(())
     }
 
+    /// ART-319: entry point for every public mutator, `op`. On `Err`, unless
+    /// the failure already locked the writer (`self.poisoned` — set by
+    /// `update_rootblock`/`set_volume_name`'s own commit write, because the
+    /// device may already be half-written), this discards back to the last
+    /// successful commit and returns the original error unchanged. Calling
+    /// this from within an already-guarded call (a path wrapper calling its
+    /// `_in` twin, `rename_in` calling `delete_in`) is harmless: a reload
+    /// twice reads the identical, still-current state a second time, and an
+    /// inner call that already committed (its own `update_rootblock` ran) is
+    /// simply what "the last commit" now is for the outer discard to reload.
+    /// Research (`D:\Projeler\Amiga\scratch-0913\art319-pfs3aio-research.md`,
+    /// pfs3aio `211f7f0`): pfs3aio publishes state only at its own commit
+    /// point, the root block write (`update.c:265-270`), and on a failed
+    /// commit explicitly reverses the in-memory bitmap changes it had staged
+    /// (`UndoFreeList`, `update.c:311-328`; the deferred-free list itself,
+    /// `allocation.c:765-799`, with its intent stated in the comment at
+    /// `allocation.c:741-745`) rather than re-reading the disk — this
+    /// crate's writer discards by re-reading instead, because every write of
+    /// this writer already goes through `pending_writes` and only reaches
+    /// disk at that same commit point (see `discard_to_last_commit` below).
+    fn guarded<T>(&mut self, op: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        if self.poisoned {
+            return Err(Error::CommitFailed);
+        }
+        let result = op(self);
+        if result.is_err() && !self.poisoned {
+            self.discard_to_last_commit();
+        }
+        result
+    }
+
+    /// ART-319: rebuild this writer's in-memory state from what the device
+    /// actually holds — the last successful commit. Every metadata write of
+    /// this writer goes through `write_reserved` into `pending_writes`, only
+    /// reaching disk in `update_rootblock`'s `flush_pending`; a failure
+    /// anywhere before that point (`DiskFull` mid `alloc_data_blocks`,
+    /// `move_to_deldir` staging an entry and then `free_data_blocks`
+    /// failing) has therefore changed nothing on disk, so reloading from the
+    /// device discards exactly the failed attempt's in-memory half-state and
+    /// nothing else — the same commit-point discipline pfs3aio's own
+    /// `UpdateDisk`/`UndoFreeList` keeps (`update.c:265-270,311-328`,
+    /// `allocation.c:741-799`; see `guarded`'s own comment above). `datestamp`
+    /// is kept, monotonic, rather than reloaded — the disk's own counter can
+    /// only be lower or equal; `anode_roving` (a hint) and `entry_date`
+    /// (caller-set) are left untouched. **If the device cannot even be
+    /// re-read here, there is nothing safe left to fall back to, so this
+    /// locks the writer instead of leaving it running on state it could not
+    /// refresh (M1, final review) — even when the operation that triggered
+    /// this discard never itself touched the device** (a refusal that fires
+    /// before any I/O, e.g. `check_name_len`).
+    fn discard_to_last_commit(&mut self) {
+        self.pending_writes.clear();
+        if self.vol.reload().is_err() {
+            self.poisoned = true;
+            return;
+        }
+        self.res_bitmap.clear();
+        self.data_bm.clear(); // load_data_bitmap pushes
+        if self.load_reserved_bitmap().is_err() || self.load_data_bitmap().is_err() {
+            self.poisoned = true;
+            return;
+        }
+        self.anode_block_full.clear();
+        self.rext_dirty = false;
+        self.datestamp = self.datestamp.max(self.vol.rootblock.datestamp);
+    }
+
     // ---- High-level API (path-based, for CLI) ----
 
     /// Write a file at the given path. Parent directories must exist.
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<()> {
+        self.guarded(|w| w.write_file_impl(path, data))
+    }
+
+    fn write_file_impl(&mut self, path: &str, data: &[u8]) -> Result<()> {
         let (parent_anode, filename) = self.split_path(path)?;
         self.write_file_in(parent_anode, &filename, data)
     }
 
     /// Create a directory at the given path.
     pub fn create_dir(&mut self, path: &str) -> Result<()> {
+        self.guarded(|w| w.create_dir_impl(path))
+    }
+
+    fn create_dir_impl(&mut self, path: &str) -> Result<()> {
         let (parent_anode, dirname) = self.split_path(path)?;
         self.create_dir_in(parent_anode, &dirname)
     }
 
     /// Delete a file or empty directory at the given path.
     pub fn delete(&mut self, path: &str) -> Result<()> {
+        self.guarded(|w| w.delete_impl(path))
+    }
+
+    fn delete_impl(&mut self, path: &str) -> Result<()> {
         let (parent_anode, name) = self.split_path(path)?;
         self.delete_in(parent_anode, &name)
     }
 
     /// Set the volume name (max 30 characters).
     pub fn set_volume_name(&mut self, name: &str) -> Result<()> {
+        self.guarded(|w| w.set_volume_name_impl(name))
+    }
+
+    fn set_volume_name_impl(&mut self, name: &str) -> Result<()> {
         let name_bytes = name.as_bytes();
         let len = name_bytes.len().min(30);
         self.vol.rootblock.diskname = name[..len].to_string();
@@ -199,16 +305,31 @@ impl Writer {
         cluster[RB_OFF_DISKNAME + 1..RB_OFF_DISKNAME + 1 + len].copy_from_slice(&name_bytes[..len]);
         let ds = self.next_datestamp();
         put_u32(&mut cluster, RB_OFF_DATESTAMP, ds);
-        self.vol
+        // ART-319: this writes the rootblock cluster directly — its own
+        // commit point, not routed through `update_rootblock` — so a failure
+        // here is treated the same way: the device may already hold a
+        // half-written sector, so this locks the writer rather than letting
+        // `guarded` discard and continue.
+        if let Err(e) = self
+            .vol
             .dev
-            .write_blocks(self.firstreserved as u64, rblkcluster, &cluster)?;
-        self.vol.dev.flush()
+            .write_blocks(self.firstreserved as u64, rblkcluster, &cluster)
+            .and_then(|()| self.vol.dev.flush())
+        {
+            self.poisoned = true;
+            return Err(e);
+        }
+        Ok(())
     }
 
     // ---- Anode-based API (for FUSE) ----
 
     /// Create a file in a directory identified by anode.
     pub fn write_file_in(&mut self, parent_anode: u32, name: &str, data: &[u8]) -> Result<()> {
+        self.guarded(|w| w.write_file_in_impl(parent_anode, name, data))
+    }
+
+    fn write_file_in_impl(&mut self, parent_anode: u32, name: &str, data: &[u8]) -> Result<()> {
         self.check_name_len(name)?;
         // Check if file already exists — if so, overwrite it
         if let Ok((_, entry_data, pos)) = self.find_dir_entry(parent_anode, name) {
@@ -252,6 +373,10 @@ impl Writer {
 
     /// Create a directory in a parent identified by anode. Returns the new dir's anode number.
     pub fn create_dir_in(&mut self, parent_anode: u32, name: &str) -> Result<()> {
+        self.guarded(|w| w.create_dir_in_impl(parent_anode, name))
+    }
+
+    fn create_dir_in_impl(&mut self, parent_anode: u32, name: &str) -> Result<()> {
         self.check_name_len(name)?;
         let dir_blk = self.alloc_reserved_block()?;
         let anodenr = self.alloc_anode(1, dir_blk, 0)?;
@@ -269,12 +394,25 @@ impl Writer {
 
     /// Create a softlink in a parent directory.
     pub fn create_softlink(&mut self, path: &str, target: &str) -> Result<()> {
+        self.guarded(|w| w.create_softlink_impl(path, target))
+    }
+
+    fn create_softlink_impl(&mut self, path: &str, target: &str) -> Result<()> {
         let (parent_anode, name) = self.split_path(path)?;
         self.create_softlink_in(parent_anode, &name, target)
     }
 
     /// Create a softlink by parent anode.
     pub fn create_softlink_in(
+        &mut self,
+        parent_anode: u32,
+        name: &str,
+        target: &str,
+    ) -> Result<()> {
+        self.guarded(|w| w.create_softlink_in_impl(parent_anode, name, target))
+    }
+
+    fn create_softlink_in_impl(
         &mut self,
         parent_anode: u32,
         name: &str,
@@ -309,6 +447,10 @@ impl Writer {
 
     /// Create a hardlink in a parent directory.
     pub fn create_hardlink(&mut self, path: &str, target_anode: u32) -> Result<()> {
+        self.guarded(|w| w.create_hardlink_impl(path, target_anode))
+    }
+
+    fn create_hardlink_impl(&mut self, path: &str, target_anode: u32) -> Result<()> {
         let (parent_anode, name) = self.split_path(path)?;
         self.check_name_len(&name)?;
         self.add_dir_entry(parent_anode, &name, ST_LINKFILE, target_anode, 0, 0)?;
@@ -317,6 +459,10 @@ impl Writer {
 
     /// Undelete a file from the deldir by index. Writes it to `dest_path`.
     pub fn undelete(&mut self, deldir_idx: usize, dest_path: &str) -> Result<()> {
+        self.guarded(|w| w.undelete_impl(deldir_idx, dest_path))
+    }
+
+    fn undelete_impl(&mut self, deldir_idx: usize, dest_path: &str) -> Result<()> {
         // Read the deldir entry
         let rext = self
             .vol
@@ -399,18 +545,30 @@ impl Writer {
     /// Force-remove a directory entry without touching anodes or data blocks.
     /// Used by check --repair for entries with broken anode chains.
     pub fn force_remove_entry(&mut self, parent_anode: u32, name: &str) -> Result<()> {
+        self.guarded(|w| w.force_remove_entry_impl(parent_anode, name))
+    }
+
+    fn force_remove_entry_impl(&mut self, parent_anode: u32, name: &str) -> Result<()> {
         self.remove_dir_entry(parent_anode, name)?;
         self.update_rootblock()
     }
 
     /// Repair: set the rootblock's blocksfree field.
     pub fn repair_blocksfree(&mut self, correct_free: u32) -> Result<()> {
+        self.guarded(|w| w.repair_blocksfree_impl(correct_free))
+    }
+
+    fn repair_blocksfree_impl(&mut self, correct_free: u32) -> Result<()> {
         self.vol.rootblock.blocksfree = correct_free;
         self.update_rootblock()
     }
 
     /// Repair: set the rootblock's reserved_free field.
     pub fn repair_reserved_free(&mut self, correct_free: u32) -> Result<()> {
+        self.guarded(|w| w.repair_reserved_free_impl(correct_free))
+    }
+
+    fn repair_reserved_free_impl(&mut self, correct_free: u32) -> Result<()> {
         self.vol.rootblock.reserved_free = correct_free;
         self.update_rootblock()
     }
@@ -418,6 +576,16 @@ impl Writer {
     /// Overwrite an existing file's data in-place, reusing its anode.
     /// The anode number stays stable — safe for FUSE inode caching.
     pub fn overwrite_file_in(
+        &mut self,
+        parent_anode: u32,
+        name: &str,
+        file_anode: u32,
+        data: &[u8],
+    ) -> Result<()> {
+        self.guarded(|w| w.overwrite_file_in_impl(parent_anode, name, file_anode, data))
+    }
+
+    fn overwrite_file_in_impl(
         &mut self,
         parent_anode: u32,
         name: &str,
@@ -701,6 +869,15 @@ impl Writer {
         name: &str,
         protection: u8,
     ) -> Result<()> {
+        self.guarded(|w| w.update_dir_entry_protection_impl(dir_anode, name, protection))
+    }
+
+    fn update_dir_entry_protection_impl(
+        &mut self,
+        dir_anode: u32,
+        name: &str,
+        protection: u8,
+    ) -> Result<()> {
         let (blk, mut data, pos) = self.find_dir_entry(dir_anode, name)?;
         data[pos + 16] = protection;
         put_u32(&mut data, 4, self.next_datestamp());
@@ -709,6 +886,16 @@ impl Writer {
     }
 
     pub fn rename_in(
+        &mut self,
+        src_parent: u32,
+        src_name: &str,
+        dst_parent: u32,
+        dst_name: &str,
+    ) -> Result<()> {
+        self.guarded(|w| w.rename_in_impl(src_parent, src_name, dst_parent, dst_name))
+    }
+
+    fn rename_in_impl(
         &mut self,
         src_parent: u32,
         src_name: &str,
@@ -748,6 +935,10 @@ impl Writer {
 
     /// Delete a file or empty directory by name in a parent directory.
     pub fn delete_in(&mut self, parent_anode: u32, name: &str) -> Result<()> {
+        self.guarded(|w| w.delete_in_impl(parent_anode, name))
+    }
+
+    fn delete_in_impl(&mut self, parent_anode: u32, name: &str) -> Result<()> {
         let entries = self.vol.list_dir_by_anode(parent_anode)?;
         let target = entries
             .iter()
@@ -1453,7 +1644,26 @@ impl Writer {
 
     // ---- Rootblock update ----
 
+    /// The commit point: flushes every pending reserved-block write, then
+    /// writes the rootblock cluster last. ART-319: any error from in here
+    /// locks the writer — `update_rootblock_body`'s own writes land in place,
+    /// not copy-on-write (M5), so part of this operation's metadata (a
+    /// mutated dir block, a new bitmap value) can already be on disk while
+    /// the rootblock that would make it official is not; reloading and
+    /// continuing over that could silently accept the half state as though
+    /// it were the last commit, so this locks instead of guessing which of
+    /// the three writes inside failed.
     fn update_rootblock(&mut self) -> Result<()> {
+        match self.update_rootblock_body() {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                self.poisoned = true;
+                Err(e)
+            }
+        }
+    }
+
+    fn update_rootblock_body(&mut self) -> Result<()> {
         // ART-311: a new super block is named by the rootblock extension
         // (`blocks.h:448`, superindex at 0x40); pfs3aio writes the extension
         // before the rootblock (`update.c:240-256,265-270`). Only the

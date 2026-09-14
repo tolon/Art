@@ -26,21 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-319** 🔵 **An error part-way through a PFS3 writer operation leaves pending writes and in-memory
-index/superindex/deldir state for the next commit** — *found 2026-09-14 while implementing ART-315; widened
-2026-09-14 by the final review, M4; reading-derived, not run*
-`src-tauri/vendor/libpfs3/src/writer.rs` (`alloc_data_blocks`, `move_to_deldir`, `free_data_blocks`) · Two cases,
-both because `Writer`'s in-memory state (the data bitmap, `pending_writes`) is only written back on a successful
-commit, and an error returned mid-operation leaves it as the failed attempt left it, for whatever the writer does
-next: (1) On `DiskFull` after a partial data allocation the cleared bits stay cleared in memory and the touched
-bitmap blocks stay in `pending_writes`, without `blocksfree` being reduced; the next operation that commits writes
-them, and those blocks are lost to the volume. **Unreachable from ART today:** `copy_in_pfs3` refuses content
-larger than the free space before writing and stops at the first error. (2) ART-318's writer path: `delete_in`
-calls `move_to_deldir` (which can itself write and succeed) and then `free_data_blocks`; if `free_data_blocks`
-fails after `move_to_deldir` succeeded, the file is left both in its directory and in the deldir, in memory, for
-the next commit — a later eviction of that deldir slot then frees a file still reachable from its directory.
-**Unreachable from ART today:** ART never deletes on PFS3.
-
 **ART-117** 🟡 **`import_filesystem` refuses a foreign card's existing RDB —
 by design, but the gap has no other path today** — *found 2026-08-16 (Task 9),
 named for filing at Task 14*
@@ -198,6 +183,124 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-319** 🔵 ✅ **An error part-way through a PFS3 writer operation leaves pending writes and in-memory
+index/superindex/deldir state for the next commit** — *found 2026-09-14 while implementing ART-315; widened
+2026-09-14 by the final review, M4; fixed 2026-09-14 on `art-319-writer-rollback` (brief
+`.superpowers/sdd/2026-09-14-art-319-writer-rollback/brief.md`, approved in chat, no spec file); the fix's own
+final review ("With fixes", 2 Important, 5 Minor) addressed in the same round's second fix wave*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`alloc_data_blocks`, `move_to_deldir`, `free_data_blocks`) · Two cases,
+both because `Writer`'s in-memory state (the data bitmap, `pending_writes`) is only written back on a successful
+commit, and an error returned mid-operation leaves it as the failed attempt left it, for whatever the writer does
+next: (1) On `DiskFull` after a partial data allocation the cleared bits stay cleared in memory and the touched
+bitmap blocks stay in `pending_writes`, without `blocksfree` being reduced; the next operation that commits writes
+them, and those blocks are lost to the volume. (2) ART-318's writer path: `delete_in` calls `move_to_deldir`
+(which can itself write and succeed) and then `free_data_blocks`; if `free_data_blocks` fails after
+`move_to_deldir` succeeded, the file is left both in its directory and in the deldir, in memory, for the next
+commit — a later eviction of that deldir slot then frees a file still reachable from its directory.
+**Fixed:** every public `Writer` mutator now runs through `Writer::guarded`
+(`src-tauri/vendor/libpfs3/src/writer.rs`): on `Err`, unless the writer is already locked, it discards back to
+the last successful commit through the new `Volume::reload` (`src-tauri/vendor/libpfs3/src/volume.rs` — the same
+parse `from_device` does, shared rather than duplicated) — `pending_writes` cleared, the rootblock/extension/
+anodes/bitmap/cache rebuilt from the device, `res_bitmap`/`data_bm` reloaded, `anode_block_full` cleared,
+`rext_dirty` cleared; `datestamp` stays monotonic, `anode_roving` and `entry_date` are untouched. Research
+(`D:\Projeler\Amiga\scratch-0913\art319-pfs3aio-research.md`, pfs3aio `211f7f0`, read not run): pfs3aio instead
+checks free space before allocating and defers every free to its own root-write commit point
+(`allocation.c:242-243,600-608,730`); this crate's writer has neither, so it discards on error instead. **A
+commit that fails part-way locks the writer:** if the error comes from inside the commit itself
+(`update_rootblock`'s rext write, `flush_pending`, or its rootblock cluster write, or `set_volume_name`'s own
+direct rootblock write) the device may already be half-written (pending writes land in place, not
+copy-on-write, M5), so `update_rootblock`/`set_volume_name` set a `poisoned` flag instead of discarding; every
+later public mutator then refuses immediately, before touching anything, with the new
+`libpfs3::error::Error::CommitFailed`, mapped by `core::preload::native::from_pfs3` to
+`CoreError::Pfs3WriterLocked` (`ART-PFS3-WRITER-LOCKED`) — its own ending, not a `Malformed`, so the sentence
+tells the user to reopen and check the volume rather than implying the file itself is damaged. **(I1, final
+review) This is what a *subsequent* call on an already-locked writer returns — never the call whose commit
+actually failed.** That call's own `guarded` sees `self.poisoned` already set (by its own
+`update_rootblock`/`set_volume_name`) before it returns, so the condition `result.is_err() && !self.poisoned` is
+false and `guarded` returns `result` — the operation's own original error — unchanged. **ART does not produce
+`Pfs3WriterLocked` today:** `copy_in_pfs3` (`src-tauri/src/core/preload/native.rs`) calls every writer method
+through `.map_err(from_pfs3)?`, so it returns at the first failing call and never makes the second, now-refused
+call that would surface this mapping. The CHANGELOG's Unreleased entry for this had claimed the opposite (that a
+user would now see the "reopen and check" sentence in place of "malformed"), which was wrong for the same
+reason and was dropped rather than corrected, since nothing user-visible changed.
+**(M1, final review) The sentence itself no longer names only one cause.** It used to read "this PFS3 volume's
+last write failed part-way through and may be half-written", which is wrong when the writer locked because
+`discard_to_last_commit`'s own reload could not read the device back after an *ordinary* failure — nothing was
+necessarily half-written in that case. Both `libpfs3::error::Error::CommitFailed` and `CoreError::Pfs3WriterLocked`
+now read: "a write to this PFS3 volume failed and ART could not confirm what is on the disk: reopen it (and check
+it) before writing to it again" — true of both causes, without claiming which one happened.
+**(M2, final review) "Reopen" means building a new `Volume` from the device** (`Volume::from_device` / `open*`),
+not calling `Writer::open` on the `Volume` a locked writer's own `into_volume` returns — that `Volume` still
+holds the failed attempt's in-memory rootblock and other state, and `Writer::open` puts no lock of its own on
+it, so its next commit would write those stale values. Documented on `Error::CommitFailed`, on
+`CoreError::Pfs3WriterLocked`, and on `Writer::into_volume`'s own doc comment; not exercised by a test — ART
+never reopens a locked writer this way today either.
+**Out of scope, disclosed rather than fixed:** `overwrite_file_in` writes new data over a file's existing blocks
+before its metadata, so an error after that point cannot be undone in memory — **unreachable from ART today:**
+`copy_in_pfs3` only ever calls `write_file_in` against a freshly-formatted, still-empty volume (it refuses when
+`vol.list_dir("")` is non-empty) with one entry per relative path from `collect_entries`'s walk of a Windows
+(case-insensitive) host directory tree, so `write_file_in`'s "already exists" branch that calls
+`overwrite_file_in` is never taken. `rename_in` deletes an existing destination with its own commit first, so a
+failed rename leaves the destination deleted (the volume stays consistent, nothing is lost or duplicated) —
+**unreachable from ART today:** ART never renames on PFS3. Both cases from the original entry
+(`copy_in_pfs3`'s pre-check on size, "ART never deletes on PFS3") are also still true, but no longer matter: the
+fix now handles them correctly rather than merely being unreachable.
+Tests (`src-tauri/src/core/preload/native.rs`, `mod tests`):
+`a_failed_pfs3_write_discards_its_partial_allocation` (red before the fix: `panicked … called
+\`Result::unwrap()\` on an \`Err\` value: DiskFull("not enough free blocks (need 1)")` — the committing write
+after the failed one itself failed disk-full, because the failed attempt's in-memory bitmap was never
+discarded),
+`a_failed_pfs3_delete_stages_no_deldir_entry` (red before the fix: `panicked … a failed delete left an entry in
+the deldir`),
+`a_pfs3_commit_failing_part_way_locks_the_writer` (red before the fix: `panicked … the next operation must
+return the lock error, got: block 2 out of range` — the second call reached the device and was refused there,
+rather than being refused by the writer before touching it),
+`a_poisoned_pfs3_writers_error_reaches_the_user_as_a_readable_sentence` (the `from_pfs3`/`CoreError` mapping and
+its sentence — **(M4, final review) this test had never actually been seen red**: it passed on its first run
+because the mapping it pins was already present when it was written; its guard is proven by mutation instead,
+below),
+`a_failed_pfs3_set_volume_name_locks_the_writer` (**I2, final review** — `set_volume_name` writes the rootblock
+cluster directly, its own commit point, not routed through `update_rootblock`, and had no test of its own lock
+behaviour; the locking code already existed when this test was written, so it passed unchanged on its first run
+— its guard is proven by mutation, below),
+`a_reload_that_cannot_read_the_device_locks_the_writer` (**M1, final review** — an operation that fails before
+any device I/O at all, a name over the volume's own limit (`check_name_len`, checked before `find_dir_entry` or
+any allocation), still runs through `guarded`'s discard; if the device has gone unreadable by the time
+`Volume::reload` runs there, there is nothing safe left to fall back to, so the writer must lock even though this
+particular failed call touched the device not at all. The locking code already existed, so this test too passed
+unchanged on its first run — proven by mutation, below).
+`pfs3_test_device::MemDevice` gained `write_count`/`fail_from_write` for the third test and `fail_reads` for the
+M1 test, alongside its existing `with_end`/`patch`/`refused`.
+Mutations put back and seen to fail, then restored and seen to pass again (backed up to
+`D:\Projeler\Amiga\scratch-0913\writer.rs.art319-fixed-backup` and, for the final review's own fix wave,
+`D:\Projeler\Amiga\scratch-0913\writer.rs.art319-finalfix-backup` /
+`D:\Projeler\Amiga\scratch-0913\native.rs.art319-finalfix-backup`; restored with `shutil.copyfile`, never `git
+checkout --`): (a) `discard_to_last_commit` made a no-op → tests 1 and 2 red, test 3 unaffected; (b)
+`update_rootblock`'s `self.poisoned = true` dropped, so a commit failure falls through to an ordinary discard →
+test 3 red, tests 1/2 unaffected; (c) `data_bm.clear()` dropped from the reload (`load_data_bitmap` pushes, so
+the stale bitmap survives in front of the reloaded one) → test 1 red, tests 2/3 unaffected; (d)
+`pending_writes.clear()` dropped from the reload → test 2 red **and** test 1 red too (the failed write's own
+stale bitmap writes also survive), test 3 unaffected — a stronger catch than the brief predicted for this
+mutation, not a survivor. Three more, from the final review: (e) `set_volume_name_impl`'s own
+`self.poisoned = true;` dropped (I2) → red: `panicked … the next operation must return the lock error, got:
+block 2 out of range`; (f) `discard_to_last_commit`'s `self.poisoned = true;` on a failed `self.vol.reload()`
+dropped — the assignment only, its `return` left in place (M1) → red: `panicked … the reload's own read failure
+must lock the writer, got: I/O error: device unreadable (MemDevice::fail_reads, test)`; (g) the
+`libpfs3::error::Error::CommitFailed => CoreError::Pfs3WriterLocked` arm dropped from `from_pfs3`, falling
+through to the generic `Malformed` arm (M4) → red, and the first time this particular test had ever been seen
+red: `panicked … malformed pfs3: a write to this PFS3 volume failed and ART could not confirm what is on the
+disk: reopen it (and check it) before writing to it again`. No survivor across all seven mutations: every one
+was killed by at least the guard aimed at it.
+Any public mutator the tests above do not exercise directly for its own discard/lock behaviour — `create_dir`/
+`create_dir_in`, `create_softlink`/`create_softlink_in`, `create_hardlink`, `undelete`, `force_remove_entry`,
+`update_dir_entry_protection`, `rename_in`, `overwrite_file_in` — is wrapped the same way but has no
+behavioural test of its own: its test would be structurally identical to the ones above, applied to a different
+mutator, so it is disclosed here rather than duplicated eight more times (**I2, final review: this list was
+previously wrong** — it omitted `create_dir`/`create_dir_in`, `rename_in` and `overwrite_file_in`, and named
+`set_volume_name`, which now has the test above). `repair_reserved_free` is exercised, but **only as the
+second, already-locked call** in `a_pfs3_commit_failing_part_way_locks_the_writer` — that covers its refusal
+once the writer is poisoned, not its own discard-to-last-commit behaviour on an ordinary failure of its own.
 
 **ART-317** 🟡 ✅ **Every Amiga date ART stamps from the host clock or a host file's modification time is UTC;
 the Amiga reads it as local time** — *found 2026-09-11 (D7, measured on the Windows run: libpfs3 entries 18:15
