@@ -18,6 +18,24 @@ import tr from "./tr.json";
 
 const PREFIX = "components.jobBar.title.";
 
+/** Names i18next itself reads out of the options object `t(key, params)`
+ *  takes. A `.text(name, …)` site passes `params` straight through, so a
+ *  value named one of these would silently steer i18next instead of
+ *  interpolating — https://www.i18next.com/translation-function/essentials
+ *  lists them as `TOptions`. */
+const RESERVED_PARAM_NAMES = new Set([
+  "lng",
+  "ns",
+  "context",
+  "defaultValue",
+  "returnObjects",
+  "keySeparator",
+  "nsSeparator",
+  "ordinal",
+  "interpolation",
+  "postProcess",
+]);
+
 function leaf(catalogue: unknown, key: string): string | undefined {
   let node: unknown = catalogue;
   for (const part of key.split(".")) {
@@ -94,7 +112,11 @@ function scan(): { sites: Site[]; calls: number; letCalls: number } {
     for (const m of text.matchAll(/JobTitle::new\(\s*"([^"]+)"\s*\)([^;]*);/g)) {
       const chain = m[2];
       const params = [...chain.matchAll(/\.text\(\s*"(\w+)"/g)].map((p) => p[1]);
-      if (/\.count\(/.test(chain)) params.push("count");
+      // `\.count\(\)` (no argument) is `Iterator::count()`, which can appear
+      // inside a `.text(...)` argument — e.g. `xs.iter().count()`. Only the
+      // builder's own `.count(n)` takes a value, so require a non-empty
+      // argument or an iterator's bare `.count()` is mistaken for it.
+      if (/\.count\((?!\s*\))/.test(chain)) params.push("count");
       sites.push({ file, key: m[1], params: params.sort() });
     }
   }
@@ -151,6 +173,28 @@ describe("the job titles Rust sets (ART-301)", () => {
     expect(JOB_TITLE_KEYS.filter((key) => !named.has(key))).toEqual([]);
   });
 
+  it("keeps `JobTitle::new(` out of the mechanism files' production code", () => {
+    // MECHANISM is skipped by the loop above because their own tests build
+    // titles from keys on purpose — but that means a real job started from
+    // `commands/jobs.rs` (or a real key baked into `core/jobs/mod.rs`)
+    // outside a test would never be scanned by it. This checks the two
+    // files directly: no `JobTitle::new(` before their own `mod tests`,
+    // ignoring `//`/`///` comment lines — both files' doc comments name
+    // `JobTitle::new(` in prose, which is not a call site.
+    const offenders: string[] = [];
+    for (const file of MECHANISM) {
+      const text = readFileSync(join(RUST_SRC, file), "utf8");
+      const testsAt = text.search(/#\[cfg\(test\)\]\s*\n\s*mod tests/);
+      const production = testsAt === -1 ? text : text.slice(0, testsAt);
+      const code = production
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("//"))
+        .join("\n");
+      if (/JobTitle::new\(/.test(code)) offenders.push(file);
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it("names every key as a literal, in its own `let title` statement", () => {
     // A key built at run time, or a title built inline inside a spawn call,
     // would escape the two checks below — so neither shape is allowed.
@@ -176,5 +220,17 @@ describe("the job titles Rust sets (ART-301)", () => {
         : [`${s.file} → ${s.key}: passes [${s.params.join(", ")}], the sentence names [${wanted.join(", ")}]`];
     });
     expect(wrong).toEqual([]);
+  });
+
+  it("never names a value after an i18next option", () => {
+    // Every `.text(name, …)` value is passed straight through to `t()` as
+    // its options object, so a value literally named e.g. `context` would
+    // silently steer rendering instead of interpolating.
+    const offenders = RUST.sites.flatMap((s) =>
+      s.params
+        .filter((p) => RESERVED_PARAM_NAMES.has(p))
+        .map((p) => `${s.file} → ${s.key}: ${p}`)
+    );
+    expect(offenders).toEqual([]);
   });
 });

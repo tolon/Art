@@ -15,7 +15,6 @@
 //! `core/safety`, cancelling can leave work unfinished but never a half-written
 //! file.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -81,26 +80,28 @@ impl JobState {
 /// renders it with `t(title.key, title.params)`.
 ///
 /// **A key is a literal, by construction.** [`JobTitle::new`] takes a
-/// `&'static str` and the field is private. `src/i18n/job-title-keys.test.ts`
+/// `&'static str` and the field is private, and nothing on the Rust side
+/// deserializes a `JobTitle` today — `serde_json` cannot build one from
+/// outside a `JobTitle::new(…)` call site. `src/i18n/job-title-keys.test.ts`
 /// reads every `JobTitle::new("…")` in the Rust tree and fails on a key the
 /// catalogue list does not hold, a listed key no Rust site names, or a value
-/// the sentence does not use.
+/// the sentence does not use — its literal check covers only
+/// `JobTitle::new` call sites, which is every site there is while nothing
+/// deserializes a key.
 ///
 /// Values are what the user gave or what ART found — a path, a package name,
 /// a release — and are never translated. A count goes in through
 /// [`JobTitle::count`], because i18next chooses `_one` / `_other` only from a
 /// value named `count`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct JobTitle {
-    /// A `Cow` only so the type can derive `Deserialize`; every key ART
-    /// builds is borrowed from a literal.
-    key: Cow<'static, str>,
+    key: &'static str,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     params: BTreeMap<String, JobParam>,
 }
 
 /// One value a job title interpolates.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum JobParam {
     /// A JSON number. Listed first so a number reads back as a count.
@@ -111,7 +112,7 @@ pub enum JobParam {
 impl JobTitle {
     pub fn new(key: &'static str) -> Self {
         Self {
-            key: Cow::Borrowed(key),
+            key,
             params: BTreeMap::new(),
         }
     }
@@ -132,7 +133,7 @@ impl JobTitle {
     }
 
     pub fn key(&self) -> &str {
-        &self.key
+        self.key
     }
 
     pub fn params(&self) -> &BTreeMap<String, JobParam> {
@@ -141,7 +142,7 @@ impl JobTitle {
 }
 
 /// A snapshot of a job, safe to send to the UI.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct JobProgress {
     pub id: JobId,
     /// What this job is: a catalogue key and its values, rendered in the
@@ -373,16 +374,5 @@ mod tests {
                 "params": { "count": 2, "target": "E:/tree" }
             })
         );
-    }
-
-    /// `JobProgress` derives `Deserialize`, so the title must read back as
-    /// itself — a count as a count, a text as a text.
-    #[test]
-    fn a_title_reads_back_as_itself() {
-        let title = JobTitle::new("components.jobBar.title.previewPackages")
-            .count(3)
-            .text("target", &"Work.hdf");
-        let back: JobTitle = serde_json::from_value(serde_json::to_value(&title).unwrap()).unwrap();
-        assert_eq!(back, title);
     }
 }
