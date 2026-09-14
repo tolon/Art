@@ -53,6 +53,11 @@ Everything else in the writer is 0.1.3's, including its anode ceiling (ART-311).
    directory block copies the parent of the directory's existing blocks (`writer.rs` `add_dir_entry`; pfs3aio
    `directory.c:3176,3204`). 0.1.3 wrote the root with 5 and every continuation block with the directory's
    own anode. `libpfs3`'s reader never reads `parent`.
+5. **Data blocks stay below the partition's end ([ART-315](../../../docs/ISSUES.md)).** `alloc_data_blocks`
+   skips a bitmap bit at or past `disksize` (0.1.3: `disksize + bitmapstart`), `free_data_block` ignores a
+   block at or past it, and `load_data_bitmap` sizes the bitmap from `disksize − bitmapstart`. pfs3aio refuses
+   `blocknr >= numblocks` (`allocation.c:344`) and leaves the bits past the last block set, so on a volume
+   formatted by pfs3aio or hst-imager 0.1.3 could hand out a block past the partition.
 
 ## Re-vendoring
 
@@ -174,18 +179,56 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      dev.flush()?;
 --- a/src/writer.rs
 +++ b/src/writer.rs
-@@ -6,6 +6,10 @@
+@@ -6,6 +6,11 @@
  //! - Anode allocation and chain building
  //! - Directory entry creation and removal
  //! - Rootblock update
 +//!
 +//! Modified by ART on 2026-09-13 (ART-312): `get_anode_block_nr` sees this
 +//! writer's own pending writes; on 2026-09-14 (ART-313): a continuation directory
-+//! block's parent. `ART-PATCH.md` in this crate's root says what and why.
++//! block's parent; (ART-315) the data bitmap's bounds. `ART-PATCH.md` in this
++//! crate's root says what and why.
  
  use crate::error::{Error, Result};
  use crate::ondisk::*;
-@@ -1097,6 +1101,7 @@ impl Writer {
+@@ -739,9 +744,11 @@ impl Writer {
+     fn load_data_bitmap(&mut self) -> Result<()> {
+         let no_bmb = {
+             let bits_per_bmb = self.index_per_block * 32;
+-            let ds = self.vol.rootblock.disksize;
++            // ART-315: the bitmap covers the data blocks, [bitmapstart, disksize),
++            // not the whole disk (format.rs sizes it the same way).
++            let data_blocks = self.vol.rootblock.disksize.saturating_sub(self.bitmapstart);
+             // Cap at a reasonable maximum to prevent OOM on corrupt disksize
+-            ds.div_ceil(bits_per_bmb).min(16384)
++            data_blocks.div_ceil(bits_per_bmb).min(16384)
+         };
+         for seq in 0..no_bmb {
+             if let Some(blk) = self.get_bitmap_block_nr(seq)? {
+@@ -778,7 +785,10 @@ impl Writer {
+                             .ok_or_else(|| {
+                                 Error::Corrupt("block number overflow in bitmap".into())
+                             })?;
+-                        if data_blk >= self.vol.rootblock.disksize + self.bitmapstart {
++                        // ART-315: a data block is below the partition's end. pfs3aio
++                        // allocation.c:344 refuses `blocknr >= numblocks`; the bits past
++                        // it are left set by pfs3aio's and hst-imager's formats.
++                        if data_blk >= self.vol.rootblock.disksize {
+                             continue; // skip out-of-range bitmap bits
+                         }
+                         longs[li] &= !(0x8000_0000 >> bit);
+@@ -825,7 +835,9 @@ impl Writer {
+     }
+ 
+     fn free_data_block(&mut self, blk: u32) -> Result<()> {
+-        if blk < self.bitmapstart {
++        // ART-315: a block outside [bitmapstart, disksize) has no bit of its own;
++        // freeing one past the end would set a tail bit the allocator must never see.
++        if blk < self.bitmapstart || blk >= self.vol.rootblock.disksize {
+             return Ok(());
+         }
+         let rel = blk - self.bitmapstart;
+@@ -1097,6 +1109,7 @@ impl Writer {
                  .anodes
                  .get_chain(dir_anode, self.vol.dev.as_ref(), &mut self.vol.cache)?;
  
@@ -193,7 +236,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          for an in &chain {
              for i in 0..an.clustersize {
                  let blk = an.blocknr + i;
-@@ -1104,6 +1109,11 @@ impl Writer {
+@@ -1104,6 +1117,11 @@ impl Writer {
                  if u16::from_be_bytes(data[0..2].try_into().unwrap()) != DBLKID {
                      continue;
                  }
@@ -205,7 +248,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
                  // Find end of entries
                  let mut pos = DIR_BLOCK_HEADER_SIZE;
                  while pos < self.resblocksize as usize {
-@@ -1123,13 +1133,17 @@ impl Writer {
+@@ -1123,13 +1141,17 @@ impl Writer {
                  }
              }
          }
@@ -225,7 +268,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          new_data[DIR_BLOCK_HEADER_SIZE..DIR_BLOCK_HEADER_SIZE + entry_bytes.len()]
              .copy_from_slice(&entry_bytes);
          self.write_reserved(new_blk, &new_data)?;
-@@ -1286,10 +1300,44 @@ impl Writer {
+@@ -1286,10 +1308,44 @@ impl Writer {
          Ok(())
      }
  

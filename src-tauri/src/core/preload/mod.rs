@@ -45,6 +45,8 @@
 
 pub mod amiga_names;
 pub mod native;
+#[cfg(test)]
+pub(crate) mod pfs3_test_device;
 pub mod pfs3dev;
 
 use std::path::{Path, PathBuf};

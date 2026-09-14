@@ -1096,6 +1096,7 @@ mod tests {
     use super::*;
     use crate::core::jobs::NoProgress;
     use crate::core::osinstall::fixtures;
+    use crate::core::preload::pfs3_test_device::MemDevice;
     use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
 
     /// Several tests share a tag (`"pds3"`, for instance) because they are
@@ -1420,6 +1421,21 @@ mod tests {
         found
     }
 
+    /// A PFS3 volume of `total_blocks` formatted in memory by the vendored
+    /// `libpfs3`, with the deldir off (Task 7 turns it on for `NativeFormatter`;
+    /// these fill and bounds tests do not depend on it).
+    fn formatted_in_memory(dev: &MemDevice, total_blocks: u64) -> libpfs3::format::FormatResult {
+        libpfs3::format::format_with_size(
+            dev,
+            total_blocks,
+            &libpfs3::format::FormatOptions {
+                volume_name: "Work".into(),
+                enable_deldir: false,
+            },
+        )
+        .unwrap()
+    }
+
     /// The pieces needed to reopen a formatted `DOS\3` partition's volume for
     /// verification, without going through `NativeFormatter` a second time.
     fn ffs_region(image: &Path) -> (FileRegionMut, VolumeGeometry, u64) {
@@ -1735,6 +1751,107 @@ mod tests {
                 "{label} (anode {dir}): every directory block's parent must be {expected}, read {parents:?}"
             );
         }
+    }
+
+    /// **ART-315.** pfs3aio and hst-imager leave the data bitmap's tail bits —
+    /// the bits past the partition's last block — set, i.e. free; only a block
+    /// below the partition's end may be handed out (pfs3aio `allocation.c:344`).
+    /// A write asking for one block more than the volume holds must be refused
+    /// as disk full, and nothing may reach past the partition. 48 000 blocks is
+    /// small mode with 46 590 data blocks: the last bitmap block uses 6 110 of
+    /// its 8 096 bits.
+    #[test]
+    fn a_pfs3_allocation_never_hands_out_a_block_past_the_partition() {
+        const TOTAL: u64 = 48_000;
+        let dev = MemDevice::with_end(TOTAL);
+        let data_blocks = formatted_in_memory(&dev, TOTAL).data_blocks as u32;
+        let root = dev.read(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        let bits_per_bmb = (resblk as u32 / 4 - 3) * 32;
+        let last_seq = (data_blocks - 1) / bits_per_bmb;
+        // bitmapindex[0] at 0x60 -> the last bitmap block.
+        let bmi = dev.read(u64::from(be32(&root, 0x60)), resblk);
+        let bm_blk = u64::from(be32(&bmi, 12 + last_seq as usize * 4));
+        let mut bm = dev.read(bm_blk, resblk);
+        let used_bits = data_blocks - last_seq * bits_per_bmb;
+        assert!(
+            used_bits < bits_per_bmb,
+            "the last bitmap block must have tail bits"
+        );
+        for bit in used_bits..bits_per_bmb {
+            let at = 12 + (bit / 32) as usize * 4;
+            let word = be32(&bm, at) | (0x8000_0000 >> (bit % 32));
+            bm[at..at + 4].copy_from_slice(&word.to_be_bytes());
+        }
+        dev.patch(bm_blk, &bm);
+
+        let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+        let one_too_many = vec![0x5Au8; (data_blocks as usize + 1) * 512];
+        let err = w.write_file("Big", &one_too_many).unwrap_err();
+        assert!(
+            matches!(err, libpfs3::error::Error::DiskFull(_)),
+            "expected disk full, got: {err}"
+        );
+        assert_eq!(
+            dev.refused(),
+            Vec::<u64>::new(),
+            "a write reached past the partition's end ({TOTAL})"
+        );
+    }
+
+    /// **ART-315, the free side.** Freeing a data block past the partition's
+    /// end must change nothing: its bitmap bit is exactly a tail bit the
+    /// allocator must never find set, and counting it into `blocksfree` claims
+    /// a block that does not exist. File `A`'s one extent (anode 6, the first
+    /// user anode, in the format's anode block) is pointed at block `TOTAL`
+    /// raw, then `A` is deleted.
+    #[test]
+    fn freeing_a_pfs3_block_past_the_partition_changes_nothing() {
+        const TOTAL: u64 = 48_000;
+        let dev = MemDevice::with_end(TOTAL);
+        formatted_in_memory(&dev, TOTAL);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.write_file("A", b"one block").unwrap();
+        }
+        let root = dev.read(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        // rootblock.indexblocks[0] (0x60 + 5 × 4) -> IB -> index[0] -> AB.
+        let ib = dev.read(u64::from(be32(&root, 0x60 + 5 * 4)), resblk);
+        let ab_blk = u64::from(be32(&ib, 12));
+        let mut ab = dev.read(ab_blk, resblk);
+        let at = 16 + 6 * 12;
+        assert_eq!(be32(&ab, at), 1, "anode 6 must be A's one-block extent");
+        ab[at + 4..at + 8].copy_from_slice(&(TOTAL as u32).to_be_bytes());
+        dev.patch(ab_blk, &ab);
+
+        let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let free_before = vol.free_blocks();
+        let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+        w.delete("A").unwrap();
+        assert_eq!(
+            w.into_volume().free_blocks(),
+            free_before,
+            "blocksfree counted block {TOTAL}, past the partition, as freed"
+        );
+
+        let root = dev.read(2, 512);
+        let bitmapstart = be32(&root, 0x34) + 1;
+        let rel = TOTAL as u32 - bitmapstart;
+        let bits_per_bmb = (resblk as u32 / 4 - 3) * 32;
+        let bmi = dev.read(u64::from(be32(&root, 0x60)), resblk);
+        let bm = dev.read(
+            u64::from(be32(&bmi, 12 + (rel / bits_per_bmb) as usize * 4)),
+            resblk,
+        );
+        let bit = rel % bits_per_bmb;
+        assert_eq!(
+            be32(&bm, 12 + (bit / 32) as usize * 4) & (0x8000_0000 >> (bit % 32)),
+            0,
+            "the bitmap bit for block {TOTAL}, past the partition, was set free"
+        );
     }
 
     // ---- ART-113: a non-ASCII name is refused before anything is written ----
