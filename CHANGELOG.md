@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ART can put a filesystem driver into a card's existing partition table, or update the one there, without
+  hst-imager.** When a partition needs a driver the card lacks, or the driver you chose is newer than the card's, the
+  preview names both versions and where on the card it goes, and asks where to save a copy of the card's partition
+  area. Only then does ART write — in four undoable steps, reading every block back before keeping the change. A card
+  ART built gets room by widening its reserved area over empty space. A driver on the card is replaced only by a newer copy of the same driver: a different one, or one that does not
+  say what it is, is left as it is, and the preview says why. A card ART cannot fully account for is refused
+  with the reason, and hst-imager is named there; ART no longer runs hst-imager for this step on its own.
 - **PFS3 partitions ART formats now carry PFS3's deleted-files area (deldir), in the
   layout the Amiga's own handler reads.** A file deleted through ART's writer goes into
   it and can be undeleted through that same writer. Checked only by reading pfs3aio's

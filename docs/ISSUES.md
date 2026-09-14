@@ -26,57 +26,38 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-117** 🟡 **`import_filesystem` refuses a foreign card's existing RDB —
-by design, but the gap has no other path today** — *found 2026-08-16 (Task 9),
-named for filing at Task 14*
-`src-tauri/src/core/preload/native.rs`, `core/card/build.rs` · `create_rdb_layout`
-builds an RDB **from scratch** on a fixed 16-head/63-sector LBA geometry; it
-cannot edit one already on disk. Real cards disagree with that geometry —
-CaffeineOS's RDB is 12 heads, 256 sectors — so writing a fresh RDB over an
-existing area would invalidate every partition already in it, and
-`NativeFormatter::import_filesystem` refuses by name rather than attempting
-it. A card ART itself built already carries its drivers (`build.rs` lays an
-RDB per area and embeds FSHD/LSEG at build time), and an FFS partition needs
-no driver at all — Kickstart carries FFS — so the gap is narrower than it
-first looks: embedding a PFS3 driver into a **foreign** card's existing RDB
-(one ART did not build) is the one case with no path in ART today.
-`hst-imager` does it; that is named in the refusal text. Not fixed — filed as
-future work, not implied to already work.
+**ART-320** 🔵 **`cargo test` forces `TMP`/`TEMP` onto `D:`, against the owner's own rule, and no fix is chosen yet** — *found 2026-09-14, Task 12 of `.superpowers/sdd/2026-09-14-art-117-rdb-embed/`, verifying ART-117's records*
+`src-tauri/.cargo/config.toml` (ART-184's own fix) sets `TMP`/`TEMP` to
+`D:/tmp/art-tests` with `force = true` for every `cargo test` and `cargo run`,
+not only build scripts. Cargo applies a forced `[env]` entry unconditionally,
+overriding whatever the shell already set — confirmed by Task 11
+(`.superpowers/sdd/2026-09-14-art-117-rdb-embed/task-11-report.md`) with a
+controlled, one-variable experiment: a throwaway compiled binary read
+`std::env::temp_dir()` as the shell's `E:\amiga\ProjeART\build\tmp` correctly
+when run directly, and read `D:\tmp\art-tests` every time the same check ran
+under `cargo test`. Consequences:
 
-**The premise is now confirmed on the owner's own copy** (2026-08-24, reading
-`CaffeineOS_Storm_9317.img` with ART's own `read_card` through
-`core::card::tests::read_real_card_when_asked`). This entry asserted
-CaffeineOS's geometry from memory of a card; the card is here and it agrees:
+- Every `cargo test`/`cargo test --lib` run this round put its scratch on
+  `D:`, against the owner's rule that test scratch goes on
+  `E:\amiga\ProjeART\build\tmp` and C:/D: are not used. `D:\tmp\art-tests`
+  holds **1.5 GB** as of this entry (measured 2026-09-14).
+- Task 11's own `#[ignore]`d hook
+  (`replace_the_driver_on_a_copy_of_the_owners_card_when_asked`) refuses
+  unless `TMP` is on `E:` (its own pre-flight check), so it cannot pass under
+  `cargo test -- --ignored` in this tree at all — Task 11 ran the compiled
+  test binary directly (`target\debug\deps\art_lib-<hash>.exe <test> --exact
+  --nocapture --ignored`), which is outside Cargo's process tree and so keeps
+  the shell's own `TMP`. `docs/STATUS.md`'s reproduce block now gives that
+  form, not the plain `cargo test` one, for this one hook.
+- Moving the forced path off `D:` is not a one-line fix: `E:` does not exist
+  on the CI runner, so the config can not simply name `E:\amiga\ProjeART\build\tmp`
+  unconditionally. Candidates not chosen here: a relative path under
+  `target/` (survives CI, but is inside the repo checkout, which ART-184's
+  own comment says is not where a 987 GB leak may go either, only smaller
+  scoped) or a CI-only override of the forced value.
 
-    area at 1178599424  cyl=38488  heads=12  sectors=256  partitions=2  drivers=1
-      SDH0  PDS3  lo=2    hi=535    buffers=600
-      SDH1  PDS3  lo=536  hi=36194  buffers=600
-    partitions-missing-driver=0
-
-**12 heads, 256 sectors** — not the 16/63 `create_rdb_layout` builds — so
-writing a fresh RDB over that area really would invalidate both partitions,
-which is what the refusal exists for. Two other things fell out of the same
-read and are worth having: ART reads a **third-party** PiStorm card correctly
-end to end (a card ART did not build, from a distribution ART has nothing to
-do with), and the card's shape is the one `CLAUDE.md` describes from two
-cards — MBR, a FAT32 primary (type `0x0C`, LBA 2048, 1.10 GiB), one `0x76`
-area beginning **1.178 GB in** whose first four bytes are `RDSK`. That is a
-third independent measurement of the model `core/mbr`'s defaults were chosen
-from.
-
-**Decided 2026-08-21 by the owner: leave it. `hst-imager` stays the named
-fallback for this one gap.** Editing an existing RDB in place is the kind of
-operation that takes every partition on the card with it when it goes wrong,
-and the geometry evidence says it would go wrong: `create_rdb_layout` assumes
-16 heads / 63 sectors and a real CaffeineOS card is 12 / 256. There is no
-measured demand for it either — the case is narrow (embedding a PFS3 driver
-into a card **ART did not build**; ART's own cards already carry their
-drivers, and FFS needs none because Kickstart carries it). The refusal names
-`hst-imager` by name, which is what makes this a signposted boundary rather
-than a dead end.
-
-Revisit only if someone actually meets the case and `hst-imager` cannot serve
-it — not before.
+Not fixed. This is open and awaits the owner's decision on where a local
+`cargo test` run's scratch should go instead of `D:`.
 
 **ART-062** 🔵 **A handful of Turkish strings have been read on screen; the other ~2200 keys have not** (2262 leaf keys as of 2026-09-14 — count them, the figures written into this entry have been overtaken repeatedly). **Mechanical part done 2026-09-14** on `art-debt-2-0914` — the one string this table's original rows could still name and reach without a backend was measured, found clipped, and fixed; **stays open**, see "What remains" below.
 `src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
@@ -149,6 +130,57 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-117** 🟡 ✅ **`import_filesystem` refused a foreign card's existing RDB — ART now embeds and replaces a driver in place** — *found 2026-08-16 (Task 9), named for filing at Task 14; the 2026-08-21 "leave it" reopened by the owner on 2026-09-14; fixed 2026-09-14 on `art-debt-2-0914`*
+`src-tauri/src/core/preload/native.rs`, `core/card/build.rs` · `create_rdb_layout`
+builds an RDB **from scratch** on a fixed 16-head/63-sector LBA geometry; it
+cannot edit one already on disk. Real cards disagree with that geometry —
+CaffeineOS's RDB is 12 heads, 256 sectors — so writing a fresh RDB over an
+existing area would invalidate every partition already in it, and
+`NativeFormatter::import_filesystem` refuses by name rather than attempting
+it. A card ART itself built already carries its drivers (`build.rs` lays an
+RDB per area and embeds FSHD/LSEG at build time), and an FFS partition needs
+no driver at all — Kickstart carries FFS — so the gap is narrower than it
+first looks: embedding a PFS3 driver into a **foreign** card's existing RDB
+(one ART did not build) is the one case with no path in ART today.
+`hst-imager` does it; that is named in the refusal text. Not fixed — filed as
+future work, not implied to already work.
+
+**The premise is now confirmed on the owner's own copy** (2026-08-24, reading
+`CaffeineOS_Storm_9317.img` with ART's own `read_card` through
+`core::card::tests::read_real_card_when_asked`). This entry asserted
+CaffeineOS's geometry from memory of a card; the card is here and it agrees:
+
+    area at 1178599424  cyl=38488  heads=12  sectors=256  partitions=2  drivers=1
+      SDH0  PDS3  lo=2    hi=535    buffers=600
+      SDH1  PDS3  lo=536  hi=36194  buffers=600
+    partitions-missing-driver=0
+
+**12 heads, 256 sectors** — not the 16/63 `create_rdb_layout` builds — so
+writing a fresh RDB over that area really would invalidate both partitions,
+which is what the refusal exists for. Two other things fell out of the same
+read and are worth having: ART reads a **third-party** PiStorm card correctly
+end to end (a card ART did not build, from a distribution ART has nothing to
+do with), and the card's shape is the one `CLAUDE.md` describes from two
+cards — MBR, a FAT32 primary (type `0x0C`, LBA 2048, 1.10 GiB), one `0x76`
+area beginning **1.178 GB in** whose first four bytes are `RDSK`. That is a
+third independent measurement of the model `core/mbr`'s defaults were chosen
+from.
+
+**Decided 2026-08-21 by the owner: leave it. `hst-imager` stays the named
+fallback for this one gap.** Editing an existing RDB in place is the kind of
+operation that takes every partition on the card with it when it goes wrong,
+and the geometry evidence says it would go wrong: `create_rdb_layout` assumes
+16 heads / 63 sectors and a real CaffeineOS card is 12 / 256. There is no
+measured demand for it either — the case is narrow (embedding a PFS3 driver
+into a card **ART did not build**; ART's own cards already carry their
+drivers, and FFS needs none because Kickstart carries it). The refusal names
+`hst-imager` by name, which is what makes this a signposted boundary rather
+than a dead end.
+
+**Corrected 2026-09-14 by the research** (`docs/superpowers/notes/2026-09-14-art-117-rdb-embed-research.md` §4.5). The 16-head/63-sector argument above is about **rebuilding** an RDB with `create_rdb_layout`, and it is right about that. It does not apply to an **append**: an in-place edit never writes a PART block or a cylinder number, and its only arithmetic is on block numbers inside the reserved range, with geometry entering only as a bound. The same read found what this entry did not know — an unlinked stale RDB copy at blocks 2048–2179 and old PFS3 structures from block 5120, both inside CaffeineOS's reserved range — so "not on a chain" is not "free", which is why the editor allocates above everything live and journals whatever it overwrites. The owner reopened the decision on 2026-09-14 (`.superpowers/sdd/2026-09-14-debt-2-round/progress.md:3-5`) and chose in-place append, replace-when-newer, and a user-chosen RDB backup; spec `docs/superpowers/specs/2026-09-14-art-117-rdb-embed-design.md`.
+
+**Fixed:** `core/rdbedit.rs` walks an RDB strictly, allocates above everything live and raises `RDBBlocksHi` over zero blocks when there is no room (decision 12); `core/preload/embed.rs` backs the range up to a file the user chooses, writes four synced journalled stages, reads every block back before committing, and ends in one of six sentences. hst-imager no longer embeds: `VolumeFormatter::import_filesystem` and `ForeignRdbEmbedNotSupported` are gone. Tests: `core::rdbedit::walk_tests::{the_caffeine_shaped_rdb_is_accounted_for_block_by_block, each_strict_check_refuses_with_its_own_block_and_sentence}`, `core::rdb::tests::the_extracted_builders_write_the_bytes_the_layout_always_wrote`, `core::rdbedit::alloc_tests::{an_art_built_card_gets_room_by_raising_rdb_blocks_hi_to_exactly_the_last_block, a_raise_never_crosses_a_block_that_is_not_empty}` and the three partition-area bounds, `core::preload::embed::tests::{a_crash_after_any_append_stage_leaves_a_valid_rdb_and_a_journal_that_restores_it, a_crash_after_any_replace_stage_leaves_a_valid_rdb_and_a_journal_that_restores_it, a_replace_on_the_caffeine_shape_swaps_one_pointer_and_leaves_the_old_driver_where_it_was, a_write_that_does_not_verify_is_rolled_back_byte_for_byte, a_rollback_that_fails_leaves_the_journal_and_names_it_and_the_backup}`, one test per refusal code, `core::preload::tests::{a_newer_driver_replaces_the_cards_own_before_the_format, a_driver_that_is_not_newer_plans_no_edit_and_says_so, a_replace_across_different_drivers_is_a_note_naming_both, a_missing_remembered_driver_file_is_a_note_and_the_plan_still_formats}`, `core::rdbedit::driver_tests::an_sfs_driver_on_the_card_is_not_replaced_by_pfs3aio`, `core::preload::embed::tests::a_replace_across_different_drivers_is_refused_before_anything_is_written`, `commands::preload::tests::an_embed_step_runs_natively_and_reports_native`, and `VolumePreload.test.tsx`. Mutations, each seen failing: checksum enforcement off, the repeat check, DriveInit dropped from the used set, the partition bound `>=` made `>` (walk); PatchFlags changed and a non-zero tail (builders); the `RDBBlocksHi` bound, each of the three partition-area bounds, the zero check, the window (allocation); `>` made `>=`, the whole-longword check, the program-name check skipped, a case-sensitive comparison, an unnamed card driver let through, a version token taken for a name (driver); the same-driver check deleted or moved after the version comparison (prepare); link before data, `HighRDSKBlock` after the link, verification off (append); the head-of-list swap, a fresh header, `Next` dropped, the raise left out of S3 (replace); the VHD, journal and no-version refusals, and replacing when not newer (prepare); `create_new` made `create`, the backup after the first write, the rollback ending mislabelled (run); a replace refusal or a missing driver file failing the plan, the different-driver note dropped, the kept note dropped, `ready_to_run`'s exists check, `outcome.embedded` dropped, the raise missing from the log line (wiring); the backup blocker, the backup not sent, the replace's card version, the notes not rendered, a key renamed (screen). If any of these did not fail when its task ran, it is moved to the survivors below with the reason, not left in this list. Survivors, disclosed: a sync per stage and the backup's read-back (no in-process test can lose a page cache or make a file read back other bytes); the driver's size checked before its bytes are read (the same refusal either way); `ready_to_run` inside `core::preload::run` (`embed::run` refuses first). **Accepted by the owner (spec decision 13):** a renamed driver, or a card driver that states no `$VER:` name, cannot be replaced by ART; the plan note names hst-imager. **Task 11 already ran the ignored `replace_the_driver_on_a_copy_of_the_owners_card_when_asked`** against a byte copy of the owner's own 59.478 GiB `CaffeineOS_Storm_9317.img`, and checked the result two ways outside ART's own reader — `hst.imager rdb info` and amitools' `rdbtool info` — both agreeing with ART's own walk in every field; the original card's size and mtime are unchanged. **Owed by the owner:** mounting both PDS partitions of the edited copy in WinUAE or on a PiStorm and asking the loaded handler for `version full` — no Amiga or WinUAE session has run against the edit yet. **Unverified:** whether scsi.device, pi-scsi or HDToolBox read `RDBBlocksHi`/`HighRDSKBlock`, and whether an SD card writes a 512-byte sector atomically.
 
 **ART-250** 🟡 ✅ **`tooltypes()`'s lossy UTF-8 decode could not byte-for-byte round-trip a NewIcon
 `IM1=`/`IM2=` tool type** — *found 2026-09-06 by the drawer-icons round's icon-oracle run against the owner's own
