@@ -3,7 +3,7 @@
 # probe() report, so nothing claims the unpatched release was built.
 [package]
 name = "libpfs3"
-version = "0.1.3+art.4"
+version = "0.1.3+art.5"
 edition = "2024"
 license = "LGPL-3.0-or-later"
 description = "Pure Rust PFS3 (Amiga) filesystem library — read, write, format, and check"

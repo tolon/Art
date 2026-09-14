@@ -48,6 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are copied as written. Dates already on existing disks and cards stay as they were written. Each install
   disc ART already knows about is read again once, because remembering its listing changed shape to hold the
   corrected dates.
+- **If a write to a PFS3 partition fails partway through committing, ART now says the volume must be reopened
+  and checked, instead of a generic "malformed" message.** The underlying condition this guards is not reachable
+  through ART today (ART-319); this is the sentence you would see if it ever were.
 
 ## [0.9.3] - 2026-09-13
 
