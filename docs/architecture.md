@@ -164,12 +164,14 @@ between the decision to open the emulator and the process spawn that carried it 
 `launch_winuae_process`, `WinUaeProcess`) into `tools/winuae_launcher.rs` and leaving only
 config generation and install-location detection in `core/winuae.rs`.
 
-`core/preload::VolumeFormatter` (`probe`, `import_filesystem`, `format_partition`, `copy_in`)
+`core/preload::VolumeFormatter` (`probe`, `format_partition`, `can_copy_in`, `copy_in`)
 is the largest of them: `src-tauri/src/tools/hst_imager.rs` launches `hst.imager.exe` and lives
 outside `core/` for exactly this reason, while `core/preload/native.rs` — PFS3 through
 `libpfs3`, FFS through `core/volume/write` — launches nothing and lives inside it. Native is the
 product's default; `hst-imager` is a fallback the caller in `commands/` chooses per operation,
-never a decision `core/` makes for itself.
+never a decision `core/` makes for itself. Embedding or replacing a filesystem driver in a card's
+RDB is **not** on the trait: it is ART's own editor, `core/preload/embed.rs` over
+`core/rdbedit.rs`, whichever formatter runs the other steps, and it never falls back (ART-117).
 
 ### The same rule pointing inwards: `core/` modules do not depend upwards
 

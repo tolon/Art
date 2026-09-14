@@ -238,9 +238,12 @@ Not on a chain does not mean zero.
       200 bytes `version_from_ver_string` reads (`rdb.rs:129-169`); a token that starts with a digit and holds a dot
       is a version, not a name. It is read from the chosen file, and from the card driver's LSEG payload — the bytes
       the strict walk already collects (decision 5). Names are compared ignoring ASCII case. A replace is refused with
-      `DIFFERENT-DRIVER` — `RdbEditRefusal::DifferentDriver { card: Option<String>, file: String }` — when the names
-      differ, or when the card driver has no readable name. The plan note is `PlanNote::DifferentDriver`.
-    - A chosen file with no `$VER:` is not this refusal: it is decision 1's "no `$VER:` plans no step".
+      `DIFFERENT-DRIVER` — `RdbEditRefusal::DifferentDriver { card: Option<String>, file: Option<String> }` — when the
+      names differ, or when either side has no readable name. The plan note is `PlanNote::DifferentDriver`.
+    - A chosen file with **no `$VER:` marker at all** is not this refusal: it is decision 1's "no `$VER:` plans no
+      step". *Corrected 2026-09-14 by the final whole-branch review (I1):* a file whose `$VER:` states a version and
+      names no program (`$VER: 44.5 (1.1.26)`) **is** this refusal, `file: None`. The first implementation let it
+      through before asking the card, and an `SFS\0` card's driver would then have been replaced by it.
     - **Order.** Checked in the read-only half after the strict walk and **before** the version comparison, so a
       different driver is never reported as merely "not newer".
     - **Reported** as a plan note, like every replace refusal (decision 6): both names, or that the card driver's
@@ -322,8 +325,16 @@ imports only `adf::bcpl` and `error` (`:9-10`).
   12; a driver that did read `RDBBlocksHi` would see a larger reserved range, still below the first partition.
 - **Unverified whether an SD card writes a 512-byte sector atomically.** A torn S3 or S4 sector fails its checksum and
   hides the partitions until the journal or the backup restores it.
-- **Every replace consumes n + 1 new blocks**; orphaned blocks are not zeroed or reused. CaffeineOS has about 46
-  replaces of room.
+- **Every replace consumes n + 1 new blocks**; orphaned blocks are not zeroed or reused. *Corrected 2026-09-14 by
+  the final whole-branch review (M3):* this line said CaffeineOS "has about 46 replaces of room", and that counts
+  every block up to `RDBBlocksHi` 6143 as room. Below `RDBBlocksHi` decision 2 allocates without a zero check, so
+  only the first **14** replaces of a 62 604-byte driver (129 blocks each, from block 132) land on zero blocks,
+  ending at block 1937. The 15th reaches the unlinked stale RDB copy at 2048–2179, and from the 39th the edit writes
+  over the old PFS3 structures from block 5120; 46 still fit below 6143. Those bytes are unlinked (no RDB chain and
+  no partition reaches them — `walk_strict` refuses an `RDBBlocksHi` at or past the first partition), every one is
+  saved in the journal before it is written (decision 8) and is in the backup file (decision 7), and verification
+  checks every block outside the write set unchanged (decision 9). So the count was wrong and the safety was not: a
+  zero check below `RDBBlocksHi` is not added.
 - **ART's own cards have room only through decision 12**: `create_rdb_layout` sets `RDBBlocksHi` = `HighRDSKBlock` =
   the last structured block (`rdb.rs:883`, `:918`, `:922`). Each raise moves `RDBBlocksHi` up by the edit's own
   blocks, so repeated replaces walk it towards block 2016 and then meet `NO-ROOM` (about 14 replaces of a 62 604-byte
