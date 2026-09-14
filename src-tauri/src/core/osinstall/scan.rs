@@ -435,9 +435,38 @@ pub fn media_for_layer<'a>(
 /// applied across the result. Exported rather than reimplemented — a second
 /// answer to "is this one disk or two" is how the two would drift.
 pub fn dedupe_identical_disks(found: Vec<FoundMedia>) -> Vec<FoundMedia> {
+    dedupe_identical_disks_cached(found, &scan_cache::ScanCache::off())
+}
+
+/// [`dedupe_identical_disks`], with a disc's SHA-256 also kept in `cache`
+/// so the next process does not read the disc again (ART-302). The memo
+/// answers first, then the cache, then the disc.
+pub fn dedupe_identical_disks_cached(
+    found: Vec<FoundMedia>,
+    cache: &scan_cache::ScanCache,
+) -> Vec<FoundMedia> {
     let memo = ShaMemo::process();
     dedupe_identical_disks_with(found, &mut |path: &Path| {
-        memo.get_or_hash(path, &mut file_sha256)
+        cached_sha256(path, memo, cache, &mut file_sha256)
+    })
+}
+
+/// One disc's SHA-256 through the three places it may already be known.
+/// A hash read from the disc is written to the cache; a cache that is off
+/// neither reads nor writes ([`scan_cache::ScanCache::Off`]).
+fn cached_sha256(
+    path: &Path,
+    memo: &ShaMemo,
+    cache: &scan_cache::ScanCache,
+    hasher: &mut impl FnMut(&Path) -> Option<String>,
+) -> Option<String> {
+    memo.get_or_hash(path, &mut |p: &Path| {
+        if let Some(known) = cache.lookup_sha256(p) {
+            return Some(known);
+        }
+        let hash = hasher(p)?;
+        cache.store_sha256(p, &hash);
+        Some(hash)
     })
 }
 
@@ -500,10 +529,9 @@ fn dedupe_identical_disks_with(
 /// remembered only while the file's size and modification time are the ones
 /// it was hashed at. A changed file is a new file and is hashed again.
 ///
-/// In memory and for the life of the process, not on disk: the questions
-/// that pay for a hash come in a burst — the slots, the chain and the plan of
-/// one tab — and a disc's hash is not worth a settings file. Only discs whose
-/// names repeat at one size ever reach it, so it holds a handful of strings.
+/// In memory for the life of the process, in front of the scan cache: the
+/// questions that pay for a hash come in a burst, and [`cached_sha256`]
+/// keeps the hash on disk for the next start (ART-302).
 #[derive(Default)]
 pub(crate) struct ShaMemo {
     entries: std::sync::Mutex<std::collections::HashMap<PathBuf, Remembered>>,
@@ -1114,6 +1142,39 @@ mod tests {
         let third = memo.get_or_hash(&path, &mut hasher);
         assert_ne!(third, first);
         assert_eq!(calls.get(), 2, "a changed file is hashed again");
+    }
+
+    /// ART-302. A second session — a fresh memo, the same cache — takes a
+    /// disc's hash from the cache instead of reading the disc again. The
+    /// owner's two identical 490 856 448-byte `AmigaOS3.9` images cost 24.2 s
+    /// on the first question of every start before this.
+    #[test]
+    fn a_new_session_takes_a_discs_hash_from_the_cache_not_the_disc() {
+        let (_guard, dir) = scratch("dedupe-cached");
+        let path = dir.join("disk.iso");
+        std::fs::write(&path, vec![3u8; 4096]).unwrap();
+        let cache = scan_cache::ScanCache::in_dir(dir.join("cache"));
+        let calls = std::cell::Cell::new(0u32);
+        let mut hasher = |p: &Path| {
+            calls.set(calls.get() + 1);
+            file_sha256(p)
+        };
+
+        let first = cached_sha256(&path, &ShaMemo::default(), &cache, &mut hasher);
+        assert_eq!(calls.get(), 1, "the first session reads the disc");
+
+        let second = cached_sha256(&path, &ShaMemo::default(), &cache, &mut hasher);
+        assert_eq!(second, first);
+        assert_eq!(
+            calls.get(),
+            1,
+            "a fresh process reads the cache, not the disc"
+        );
+
+        std::fs::write(&path, vec![4u8; 8192]).unwrap();
+        let third = cached_sha256(&path, &ShaMemo::default(), &cache, &mut hasher);
+        assert_ne!(third, first);
+        assert_eq!(calls.get(), 2, "a changed disc is read again");
     }
 
     /// One folder named twice is one folder. A user who picks their media

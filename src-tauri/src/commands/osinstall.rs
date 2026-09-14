@@ -971,7 +971,7 @@ fn gather_facts(
         packages.extend(found);
         hashes.extend(mediahash::remembered_media_in(folder, &cache).unwrap_or_default());
     }
-    let media = scan::dedupe_identical_disks(media);
+    let media = scan::dedupe_identical_disks_cached(media, &cache);
     let packages = narrow_by_distinguished_by(release, packages);
 
     let manifest = match tree {
