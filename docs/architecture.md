@@ -67,6 +67,7 @@ amiga-retro-toolkit/
 │   │   ├── tools/               #   platform-specific: launches external programs
 │   │   │   ├── hst_imager.rs   #     the VolumeFormatter that shells out (outside core/)
 │   │   │   ├── recycle_bin.rs  #     the HostRecycler: IFileOperation, also outside core/
+│   │   │   ├── local_time.rs   #     the AmigaClock: chrono::Local, also outside core/
 │   │   │   └── winuae_launcher.rs #  the EmulatorLauncher: spawns winuae64.exe (ART-274)
 │   │   └── core/               #   AMIGA CORE (platform-independent)
 │   │       ├── error.rs        #     CoreError
@@ -140,16 +141,18 @@ Concretely: if a `core/` module needs to do something platform-specific (open
 a file dialog, detect a USB drive, launch WinUAE), it exposes a **trait**, and
 the implementation lives outside the core.
 
-There are five live instances: `MirrorClient` (`core/sources/mirror.rs` →
+There are six live instances: `MirrorClient` (`core/sources/mirror.rs` →
 `net/http_mirror.rs`, the network), `VolumeFormatter` (below), `HostRecycler`
 (`core/hostfs.rs` → `tools/recycle_bin.rs`, which is how a file the user deletes goes to the
 Windows Recycle Bin rather than into a recovery mechanism ART invented — ART-080),
 `EmulatorLauncher` (`core/amigainstall/run.rs` → `tools/winuae_launcher.rs`, which is how ART
-starts and ends the WinUAE process a run or a first-boot rehearsal drives), and
-`VolumeSession` (`core/whdload/install.rs` → `commands/whdload.rs`, ART-242): one WHDLoad
+starts and ends the WinUAE process a run or a first-boot rehearsal drives), `AmigaClock`
+(`core/clock.rs` → `tools/local_time.rs`, ART-317), the local UTC offset in force on a given
+date, so every Amiga date ART makes from an instant is local wall time as AmigaDOS stamps it;
+and `VolumeSession` (`core/whdload/install.rs` → `commands/whdload.rs`, ART-242): one WHDLoad
 pack's disk write — create the drawer, copy its contents, place its icon — run inside a single
 opened, backed-up-once, committed-once volume session. Its implementation lives in
-`commands/` rather than `tools/`, unlike the other four, because what it wraps
+`commands/` rather than `tools/`, unlike the other five, because what it wraps
 (`commands/volume_write.rs::with_volume`, the session/backup/write-strategy machinery) is
 itself still a command-layer helper rather than a `core/` module — promoting `with_volume`
 into `core/` is a round of its own, so `CommandVolumeSession` is the thin seam that lets

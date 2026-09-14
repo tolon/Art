@@ -41,29 +41,6 @@ fails after `move_to_deldir` succeeded, the file is left both in its directory a
 the next commit — a later eviction of that deldir slot then frees a file still reachable from its directory.
 **Unreachable from ART today:** ART never deletes on PFS3.
 
-**ART-317** 🟡 **Every Amiga date ART stamps from the host clock or a host file's modification time is UTC;
-the Amiga reads it as local time** — *found 2026-09-11 (D7, measured on the Windows run: libpfs3 entries 18:15
-beside hst-imager's 21:15 on a UTC+3 machine, experiment E2 — see
-`docs/superpowers/notes/2026-09-11-libpfs3-format-fix-research.md` on the local-only branch `art-310-windows`,
-`git show art-310-windows:docs/superpowers/notes/2026-09-11-libpfs3-format-fix-research.md`); scope widened and
-rescoped 2026-09-14; filed 2026-09-14*
-`src-tauri/vendor/libpfs3/src/util.rs:163-172` · `src-tauri/src/core/volume/write/layout.rs:104-120` ·
-`src-tauri/src/core/adf/bcpl.rs:5-6` · `src-tauri/src/core/preload/native.rs:642-655` ·
-`src-tauri/src/core/adf/create.rs:192-204` · `src-tauri/src/core/adf/mutate.rs` ·
-`src-tauri/src/core/volume/write/copy.rs:372-373,380-388` · `src-tauri/src/core/volume/write/uaem.rs:206` ·
-AmigaDOS `DateStamp()` is local time with no zone (pfs3aio stamps with it, `directory.c:3540`, `format.c:393`;
-pfs3aio `211f7f0`, read, not run). ART stamps two kinds of Amiga date as UTC seconds − 252 460 800: one read
-from the host clock at write time (libpfs3's own rootblock and entry dates, ART's FFS/OFS writer, the RDB and
-ADF paths) and one converted from a host file's modification time (the host-mtime fallback, `copy.rs:380-388`).
-**A `.uaem` sidecar's own date is not part of this defect and was wrongly folded into "every date" before
-2026-09-14's rescope:** `uaem.rs:206`'s `amiga_from_civil` parses the sidecar's zone-less text directly into an
-`AmigaDate` with no UTC step at all, and `copy.rs:372-373` writes that value through unchanged — already local,
-never converted. Nothing in ART obtains the local offset for the two paths that are wrong; `core/` may not call
-a Windows API. **How it hurts a user:** every file, directory and volume ART stamps from `now()` or from a host
-file's own modification time shows a time off by the machine's UTC offset on the Amiga; a file carrying its own
-`.uaem` sidecar date is unaffected. **Decided 2026-09-14:** local time everywhere, with the offset obtained
-outside `core/` (plan 5, design first).
-
 **ART-117** 🟡 **`import_filesystem` refuses a foreign card's existing RDB —
 by design, but the gap has no other path today** — *found 2026-08-16 (Task 9),
 named for filing at Task 14*
@@ -221,6 +198,43 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-317** 🟡 ✅ **Every Amiga date ART stamps from the host clock or a host file's modification time is UTC;
+the Amiga reads it as local time** — *found 2026-09-11 (D7, measured on the Windows run: libpfs3 entries 18:15
+beside hst-imager's 21:15 on a UTC+3 machine, experiment E2 — see
+`docs/superpowers/notes/2026-09-11-libpfs3-format-fix-research.md` on the local-only branch `art-310-windows`,
+`git show art-310-windows:docs/superpowers/notes/2026-09-11-libpfs3-format-fix-research.md`); scope widened and
+rescoped 2026-09-14; filed 2026-09-14; fixed 2026-09-14 on `art-debt-0914`*
+`src-tauri/vendor/libpfs3/src/util.rs:163-172` · `src-tauri/src/core/volume/write/layout.rs:104-120` ·
+`src-tauri/src/core/adf/bcpl.rs:5-6` · `src-tauri/src/core/preload/native.rs:642-655` ·
+`src-tauri/src/core/adf/create.rs:192-204` · `src-tauri/src/core/adf/mutate.rs` (does not exist; no such
+file on 2026-09-14) ·
+`src-tauri/src/core/volume/write/copy.rs:372-373,380-388` · `src-tauri/src/core/volume/write/uaem.rs:206` ·
+AmigaDOS `DateStamp()` is local time with no zone (pfs3aio stamps with it, `directory.c:3540`, `format.c:393`;
+pfs3aio `211f7f0`, read, not run). ART stamps two kinds of Amiga date as UTC seconds − 252 460 800: one read
+from the host clock at write time (libpfs3's own rootblock and entry dates, ART's FFS/OFS writer, the RDB and
+ADF paths) and one converted from a host file's modification time (the host-mtime fallback, `copy.rs:380-388`).
+**A `.uaem` sidecar's own date is not part of this defect and was wrongly folded into "every date" before
+2026-09-14's rescope:** `uaem.rs:206`'s `amiga_from_civil` parses the sidecar's zone-less text directly into an
+`AmigaDate` with no UTC step at all, and `copy.rs:372-373` writes that value through unchanged — already local,
+never converted. Nothing in ART obtains the local offset for the two paths that are wrong; `core/` may not call
+a Windows API. **How it hurts a user:** every file, directory and volume ART stamps from `now()` or from a host
+file's own modification time shows a time off by the machine's UTC offset on the Amiga; a file carrying its own
+`.uaem` sidecar date is unaffected. **Decided 2026-09-14:** local time everywhere, with the offset obtained
+outside `core/` (plan 5, design first).
+**Fixed:** every writer, copy source and reader takes a `core::clock::AmigaClock`. The product's is
+`tools::local_time::LOCAL_TIME` (`chrono::Local`, the offset in force on each date), and libpfs3 is
+`0.1.3+art.4`. Tests: `core::clock::tests::the_offset_is_the_one_in_force_at_the_date_not_now`,
+`a_new_drawer_and_a_new_file_carry_the_writers_local_time`, `a_new_disk_is_stamped_with_the_clocks_local_time`,
+`a_winter_mtime_copied_in_summer_keeps_its_winter_local_time`, `a_uaem_date_round_trips_without_an_offset` (a
+`.uaem` date is wall time and is never shifted), `a_pfs3_format_and_copy_in_carry_the_clocks_local_time`,
+`an_ffs_format_and_copy_in_carry_the_clocks_local_time`,
+`a_pfs3_delete_keeps_the_files_date_and_stamps_the_deldir_with_the_clock` (pfs3aio `AddToDeldir`, read at
+211f7f0), `a_listed_date_is_the_instant_the_writer_stamped`,
+`a_disc_recording_date_is_read_as_local_wall_time`, `core_makes_amiga_dates_only_through_the_clock`; each seen
+failing with its defect put back. Survivor: on a UTC CI runner, `offset_at` returning 0 passes; the ignored
+`agrees_with_dotnet_timezoneinfo_across_seasons_and_years` catches it on a non-UTC machine. Dates already on
+volumes stay as written.
 
 **ART-301** 🔵 ✅ **The job bar's titles were English sentences composed in Rust** — *found 2026-09-10 in the
 owner's screenshot; fixed 2026-09-14 on `art-debt-0914`*

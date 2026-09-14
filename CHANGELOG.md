@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **PFS3 drawers record the drawer they are in the way the Amiga's PFS3 handler
   expects.** A PFS3 partition ART formatted before this fix is worth formatting
   again.
+- **Dates on the Amiga now show your local time.** Files, drawers, disks and partitions ART creates or copies
+  onto an Amiga volume carry the time your PC's clock shows — a file last changed in winter keeps its winter
+  time — where they used to carry UTC and showed early or late by your time zone. Dates ART shows for files
+  inside a disk image are read the same way. Dates carried in `.uaem` files were always your local time and
+  are copied as written. Dates already on existing disks and cards stay as they were written. Each install
+  disc ART already knows about is read again once, because remembering its listing changed shape to hold the
+  corrected dates.
 
 ## [0.9.3] - 2026-09-13
 
