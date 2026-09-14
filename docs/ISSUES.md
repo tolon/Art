@@ -224,7 +224,10 @@ file's own modification time shows a time off by the machine's UTC offset on the
 outside `core/` (plan 5, design first).
 **Fixed:** every writer, copy source and reader takes a `core::clock::AmigaClock`. The product's is
 `tools::local_time::LOCAL_TIME` (`chrono::Local`, the offset in force on each date), and libpfs3 is
-`0.1.3+art.4`. Tests: `core::clock::tests::the_offset_is_the_one_in_force_at_the_date_not_now`,
+`0.1.3+art.4`. Tests: `core::clock::tests::the_offset_is_the_one_in_force_at_the_date_not_now` (M3, final
+review: re-run with the defect-shaped mutation itself — `amiga_from_unix` changed to
+`self.offset_at(self.now_unix())` in place of `self.offset_at(unix)` — and it does go red, alongside
+`a_round_trip_survives_both_sides_of_the_switch`; the citation stands),
 `a_new_drawer_and_a_new_file_carry_the_writers_local_time`, `a_new_disk_is_stamped_with_the_clocks_local_time`,
 `a_winter_mtime_copied_in_summer_keeps_its_winter_local_time`, `a_uaem_date_round_trips_without_an_offset` (a
 `.uaem` date is wall time and is never shifted), `a_pfs3_format_and_copy_in_carry_the_clocks_local_time`,
@@ -232,9 +235,19 @@ outside `core/` (plan 5, design first).
 `a_pfs3_delete_keeps_the_files_date_and_stamps_the_deldir_with_the_clock` (pfs3aio `AddToDeldir`, read at
 211f7f0), `a_listed_date_is_the_instant_the_writer_stamped`,
 `a_disc_recording_date_is_read_as_local_wall_time`, `core_makes_amiga_dates_only_through_the_clock`; each seen
-failing with its defect put back. Survivor: on a UTC CI runner, `offset_at` returning 0 passes; the ignored
-`agrees_with_dotnet_timezoneinfo_across_seasons_and_years` catches it on a non-UTC machine. Dates already on
-volumes stay as written.
+failing with its defect put back. **Survivors, disclosed by the final review (I1) and its fix wave
+(2026-09-14):** on a UTC CI runner, `offset_at` returning 0 passes every non-ignored test; the ignored
+`agrees_with_dotnet_timezoneinfo_across_seasons_and_years` catches it on a non-UTC machine — run on the owner's
+machine in the fix wave, `test result: ok. 1 passed; 0 failed`, offset and round trip both agreeing with .NET's
+`TimeZoneInfo` at all four instants checked. (a) A `commands/`/`tools/` site could pass
+`&crate::core::clock::UtcClock` in place of `&crate::tools::local_time::LOCAL_TIME` and make a UTC date on every
+machine, not only a UTC CI runner; **closed** by `core::independence::commands_and_tools_never_name_utc_clock_outside_a_test`
+(grepped `commands/**`/`tools/**` for `UtcClock` first — no site found, so nothing needed allow-listing). Two
+survivors remain **open**, neither guarded nor disclosed before this fix wave: (b) calling
+`amiga_from_wall(system_now_unix())` directly bypasses the clock's own offset lookup — both are `pub` and
+`clock.rs` is on `core_makes_amiga_dates_only_through_the_clock`'s own allow-list, so no guard sees it; (c) a
+libpfs3 `Writer` opened without calling `set_entry_date` falls back to UTC (`vendor/libpfs3/src/writer.rs:132-133`)
+and the independence guards do not read `vendor/`. Dates already on volumes stay as written.
 
 **ART-301** 🔵 ✅ **The job bar's titles were English sentences composed in Rust** — *found 2026-09-10 in the
 owner's screenshot; fixed 2026-09-14 on `art-debt-0914`*
