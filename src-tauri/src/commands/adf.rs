@@ -172,8 +172,14 @@ pub fn adf_create_blank(
             .into())
         }
     };
-    let result =
-        save_new_adf(&PathBuf::from(&path), &volume_name, ft, bootable).map_err(Into::into);
+    let result = save_new_adf(
+        &PathBuf::from(&path),
+        &volume_name,
+        ft,
+        bootable,
+        &crate::tools::local_time::LOCAL_TIME,
+    )
+    .map_err(Into::into);
 
     write_result(
         &oplog,

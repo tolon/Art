@@ -18,13 +18,15 @@ use super::checksum::block_checksum;
 /// Boot blocks at the front of a floppy, excluded from the bitmap.
 pub const FLOPPY_RESERVED: u32 = 2;
 use super::{AdfImage, AdfInfo, DD_SIZE, DD_TOTAL_BLOCKS};
+use crate::core::clock::AmigaClock;
 use crate::core::error::{CoreError, CoreResult};
 
-/// Create an in-memory 880 KB ADF image buffer.
-pub fn create_blank_adf(
+/// Create an in-memory 880 KB ADF image buffer, stamped with `now`.
+pub fn create_blank_adf_at(
     volume_name: &str,
     fs_type: FileSystemType,
     bootable: bool,
+    now: AmigaDate,
 ) -> CoreResult<Vec<u8>> {
     let clean_name = volume_name.trim();
     if clean_name.is_empty() {
@@ -83,7 +85,6 @@ pub fn create_blank_adf(
     root_slice[316..320].copy_from_slice(&881u32.to_be_bytes());
 
     // Date (now)
-    let now = get_current_amiga_date();
     root_slice[420..424].copy_from_slice(&now.days.to_be_bytes());
     root_slice[424..428].copy_from_slice(&now.mins.to_be_bytes());
     root_slice[428..432].copy_from_slice(&now.ticks.to_be_bytes());
@@ -144,6 +145,7 @@ pub fn save_new_adf(
     volume_name: &str,
     fs_type: FileSystemType,
     bootable: bool,
+    clock: &dyn AmigaClock,
 ) -> CoreResult<AdfInfo> {
     if path.exists() {
         return Err(CoreError::SafetyRefused(format!(
@@ -152,7 +154,7 @@ pub fn save_new_adf(
         )));
     }
 
-    let bytes = create_blank_adf(volume_name, fs_type, bootable)?;
+    let bytes = create_blank_adf_at(volume_name, fs_type, bootable, clock.amiga_now())?;
     crate::core::safety::atomic_write(path, &bytes)?;
     let img = AdfImage::open(path)?;
     img.info()
@@ -188,20 +190,20 @@ pub fn set_bitmap_bit(bm_block: &mut [u8], block_num: usize, is_free: bool) {
     bm_block[off..off + 4].copy_from_slice(&lw.to_be_bytes());
 }
 
-/// Helper to get current date as AmigaDate (days since 1978-01-01).
-fn get_current_amiga_date() -> AmigaDate {
-    let now_unix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(super::bcpl::AMIGA_EPOCH_UNIX);
-
-    let secs_since_amiga = (now_unix - super::bcpl::AMIGA_EPOCH_UNIX).max(0);
-    let days = (secs_since_amiga / 86_400) as u32;
-    let rem_secs = secs_since_amiga % 86_400;
-    let mins = (rem_secs / 60) as u32;
-    let ticks = ((rem_secs % 60) * 50) as u32;
-
-    AmigaDate { days, mins, ticks }
+/// [`create_blank_adf_at`] stamped with UTC now — test-only (ART-317). The
+/// product goes through [`save_new_adf`], which takes the clock.
+#[cfg(test)]
+pub fn create_blank_adf(
+    volume_name: &str,
+    fs_type: FileSystemType,
+    bootable: bool,
+) -> CoreResult<Vec<u8>> {
+    create_blank_adf_at(
+        volume_name,
+        fs_type,
+        bootable,
+        crate::core::clock::UtcClock.amiga_now(),
+    )
 }
 
 #[cfg(test)]
@@ -256,7 +258,14 @@ mod tests {
         let target = dir.join("Existing.adf");
         std::fs::write(&target, b"a disk the user already made").unwrap();
 
-        let err = save_new_adf(&target, "New", FileSystemType::Ffs, false).unwrap_err();
+        let err = save_new_adf(
+            &target,
+            "New",
+            FileSystemType::Ffs,
+            false,
+            &crate::core::clock::UtcClock,
+        )
+        .unwrap_err();
         assert!(matches!(err, CoreError::SafetyRefused(_)), "got {err:?}");
         assert_eq!(
             std::fs::read(&target).unwrap(),
@@ -271,11 +280,45 @@ mod tests {
         let (_guard, dir) = crate::core::ScratchDir::pair("art-adf-new", "save");
         let target = dir.join("Fresh.adf");
 
-        let info = save_new_adf(&target, "Fresh", FileSystemType::Ffs, false).unwrap();
+        let info = save_new_adf(
+            &target,
+            "Fresh",
+            FileSystemType::Ffs,
+            false,
+            &crate::core::clock::UtcClock,
+        )
+        .unwrap();
         assert_eq!(info.volume_name, "Fresh");
         assert!(target.exists());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    static PLUS_THREE: crate::core::clock::FixedClock = crate::core::clock::FixedClock {
+        now: 1_768_478_400,
+        offset: 10_800,
+    };
+
+    /// ART-317: both root-block dates of a new disk are the clock's local time.
+    #[test]
+    fn a_new_disk_is_stamped_with_the_clocks_local_time() {
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-adf-new", "local-time");
+        let target = dir.join("Local.adf");
+        save_new_adf(&target, "Local", FileSystemType::Ffs, false, &PLUS_THREE).unwrap();
+
+        let image = std::fs::read(&target).unwrap();
+        let root = 880 * 512;
+        let word = |o: usize| u32::from_be_bytes(image[root + o..root + o + 4].try_into().unwrap());
+        assert_eq!(
+            (word(420), word(424), word(428)),
+            (17_546, 900, 0),
+            "last-changed date"
+        );
+        assert_eq!(
+            (word(472), word(476), word(480)),
+            (17_546, 900, 0),
+            "creation date"
+        );
     }
 }
 
