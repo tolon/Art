@@ -388,13 +388,8 @@ the built `.exe` once. "It compiled" is not the same claim as "it opens".
    physical — a microSD card, a USB reader and an HDMI cable, the last plugged
    in **before** power or the VPU never configures the port and there is no
    RTG that session.
-2. **[ART-118](ISSUES.md) — the OS Builder's install screen in a real
-   window.** Deeper interaction than a smoke test (filling the fields, ticking
-   a component, running Plan or Verify) crashes the renderer reproducibly with
-   an access violation in every headless Chrome and Edge combination tried.
-   This one needs `pnpm tauri dev` and a human, not a substitute.
 
-Neither needs a design decision or more code first.
+It needs no design decision or more code first.
 
 ---
 

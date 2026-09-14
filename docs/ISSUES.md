@@ -115,49 +115,6 @@ is that machine's git-ignored `.superpowers/sdd/2026-09-11-art-310-libpfs3-forma
 That defect is ART-312, fixed 2026-09-13 on `art-312-anode-reuse`. The owner chose on 2026-09-13 to finish this branch first and port that work
 afterwards.
 
-**ART-118** 🟠 **The OS Builder's install screen has never been driven in a
-real browser past its headings — jsdom now covers what a browser could not,
-the crash itself is still unresolved** — *found 2026-08-15/16, Task 13's
-browser pass and Task 14's real run; narrowed 2026-08-19*
-`src/components/osbuilder/OsInstall.tsx` · A headless-Chrome probe confirmed
-the route, the new `Install` kind, and five resolved `h2` strings with no raw
-key and no `{{…}}`. Deeper interaction — filling the media/ROM/destination
-fields, ticking a component, running Plan, reading the confirmation panel or
-the refusals card, running Verify and reading its three states, switching to
-Turkish — crashed the renderer reproducibly with an access violation
-(`-1073741819`), in both Chrome and Edge and both headless modes, and was not
-resolved. Task 14's real run (`run_the_real_engine_against_the_users_own_media_when_asked`)
-exercised the same 26-component checklist and the modules-on-without-being-
-chosen path **through the Rust engine directly**, never through this screen —
-so the engine's own correctness is now evidenced far beyond the screen's own
-verification.
-
-**2026-08-19: `src/components/osbuilder/OsInstall.test.tsx` added — five jsdom
-component tests, the first automated coverage of this screen at all.**
-Mocked at the `@/lib/osinstall` / `@/lib/pistorm` / `@/lib/settings` boundary
-(the house pattern — see `useRomPairing.test.tsx`), not deeper, and the real
-component is rendered directly rather than a proxy harness. What is now
-covered:
-- The screen mounts **past its headings** with the media/ROM/destination
-  fields, the 26-entry component checklist, and the Build and Verify actions
-  all present and reachable — the thing no browser session could get past.
-- The whole rendered tree carries no raw i18next key shape and no literal
-  `{{…}}`, in **both English and Turkish** — the first time any language has
-  been checked against a running instance of this screen (`ART-062`).
-- Ticking a component in the checklist reaches the request `osinstallPlan` is
-  asked to plan and changes what the plan section shows — the checklist's
-  own wiring had never been exercised by anything before this.
-- A refusal renders as the real, translated sentence, not a blank card.
-
-What is still **not** covered, and why this stays open rather than closing:
-jsdom does no layout at all, so it cannot reproduce the access violation
-itself (a native renderer crash) or measure whether a long Turkish string
-overflows its container — that half of `ART-062` is unchanged and still a
-real-screen job. The crash's root cause is still unknown; a real
-`pnpm tauri dev` pass by a human, driving the screen against a real media
-folder (e.g. `E:\amiga\ProjeART\dist-3.2`), is still owed and is what would
-actually close this.
-
 **ART-117** 🟡 **`import_filesystem` refuses a foreign card's existing RDB —
 by design, but the gap has no other path today** — *found 2026-08-16 (Task 9),
 named for filing at Task 14*
@@ -342,6 +299,59 @@ one size — two identical 490 856 448-byte images — and proving them identica
 stores md5s keyed by size and modification time) would let the next start pay nothing.
 
 ## Fixed
+
+**ART-118** 🟠 ✅ **The OS Builder's install screen has never been driven in a
+real browser past its headings — jsdom now covers what a browser could not,
+the crash itself is still unresolved** — *found 2026-08-15/16, Task 13's
+browser pass and Task 14's real run; narrowed 2026-08-19*
+`src/components/osbuilder/OsInstall.tsx` · A headless-Chrome probe confirmed
+the route, the new `Install` kind, and five resolved `h2` strings with no raw
+key and no `{{…}}`. Deeper interaction — filling the media/ROM/destination
+fields, ticking a component, running Plan, reading the confirmation panel or
+the refusals card, running Verify and reading its three states, switching to
+Turkish — crashed the renderer reproducibly with an access violation
+(`-1073741819`), in both Chrome and Edge and both headless modes, and was not
+resolved. Task 14's real run (`run_the_real_engine_against_the_users_own_media_when_asked`)
+exercised the same 26-component checklist and the modules-on-without-being-
+chosen path **through the Rust engine directly**, never through this screen —
+so the engine's own correctness is now evidenced far beyond the screen's own
+verification.
+
+**2026-08-19: `src/components/osbuilder/OsInstall.test.tsx` added — five jsdom
+component tests, the first automated coverage of this screen at all.**
+Mocked at the `@/lib/osinstall` / `@/lib/pistorm` / `@/lib/settings` boundary
+(the house pattern — see `useRomPairing.test.tsx`), not deeper, and the real
+component is rendered directly rather than a proxy harness. What is now
+covered:
+- The screen mounts **past its headings** with the media/ROM/destination
+  fields, the 26-entry component checklist, and the Build and Verify actions
+  all present and reachable — the thing no browser session could get past.
+- The whole rendered tree carries no raw i18next key shape and no literal
+  `{{…}}`, in **both English and Turkish** — the first time any language has
+  been checked against a running instance of this screen (`ART-062`).
+- Ticking a component in the checklist reaches the request `osinstallPlan` is
+  asked to plan and changes what the plan section shows — the checklist's
+  own wiring had never been exercised by anything before this.
+- A refusal renders as the real, translated sentence, not a blank card.
+
+What is still **not** covered, and why this stays open rather than closing:
+jsdom does no layout at all, so it cannot reproduce the access violation
+itself (a native renderer crash) or measure whether a long Turkish string
+overflows its container — that half of `ART-062` is unchanged and still a
+real-screen job. The crash's root cause is still unknown; a real
+`pnpm tauri dev` pass by a human, driving the screen against a real media
+folder (e.g. `E:\amiga\ProjeART\dist-3.2`), is still owed and is what would
+actually close this.
+
+**Closed 2026-09-14: superseded, not reproduced.** The screen this entry is about no longer exists: the four-tab
+rewrite deleted `src/components/osbuilder/OsInstall.tsx` and its test (`docs/STATUS.md`, the four-tabs item;
+no `OsInstall*` remains under `src/components/osbuilder/`). Its successor has jsdom coverage per tab
+(`FilesTab.test.tsx`, `ChoiceTab.test.tsx`, `MachineTab.test.tsx`, `BuildTab.test.tsx`) and has been driven by
+the owner in packaged builds, which found defects and no crash: ART-297 (2026-09-10, `main-f354f46`), ART-303
+(2026-09-10, `main-e2633a6`), ART-304 (2026-09-11, `main-706de9f`); the single-column screen before it on
+2026-08-22 (`docs/session-log.md`, "The owner drove the OS Builder"). **Not claimed:** the access violation
+(`-1073741819`) was a headless Chrome/Edge renderer crash and was never explained; no headless run was repeated.
+The Turkish-layout half stays with ART-062.
 
 **ART-312** 🔴 ✅ **`libpfs3`'s writer can hand one anode number out twice in one operation, and a file
 then silently reads another block's bytes** — *found 2026-09-11 by the task-5 review of the Windows
