@@ -13,10 +13,10 @@
 
 use std::collections::BTreeSet;
 
-use crate::core::error::RdbEditRefusal;
+use crate::core::error::{PartitionBound, RaiseRefused, RdbEditRefusal};
 use crate::core::rdb::{
     dos_type_string, verify_rdb_block_checksum, BLOCK_SIZE, IDNAME_FSHD, IDNAME_LSEG, IDNAME_PART,
-    IDNAME_RDSK, NO_BLOCK,
+    IDNAME_RDSK, LSEG_DATA_BYTES, NO_BLOCK,
 };
 
 /// What ART reads of an Amiga disk to edit its RDB — the same 8 MiB
@@ -438,6 +438,105 @@ pub fn walk_strict(range: &[u8]) -> Result<StrictRdb, RdbEditRefusal> {
         fshds,
         drive_init,
         used,
+    })
+}
+
+/// Where an edit's blocks go (decisions 2 and 12).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Allocation {
+    /// `k`: the FSHD.
+    pub fshd_block: u32,
+    /// `k + n`: the last LSEG, and the new `HighRDSKBlock`.
+    pub last_block: u32,
+    /// `n`.
+    pub lseg_count: u32,
+    /// `RDBBlocksHi` as the edit leaves it.
+    pub rdb_blocks_hi: u32,
+    /// The value it had, when decision 12 raised it.
+    pub raised_from: Option<u32>,
+}
+
+pub fn lseg_blocks_for(len: usize) -> u32 {
+    len.div_ceil(LSEG_DATA_BYTES) as u32
+}
+
+/// Choose `k..=k+n` contiguously above everything live, and raise
+/// `RDBBlocksHi` over zero blocks when the reserved range is too small.
+pub fn allocate(
+    range: &[u8],
+    walk: &StrictRdb,
+    driver_len: usize,
+) -> Result<Allocation, RdbEditRefusal> {
+    let rdsk = &walk.rdsk;
+    // `walk_strict` keeps every used block and `HighRDSKBlock` ≤ `RDBBlocksHi`
+    // < the 8 MiB window, so neither sum below can overflow.
+    let start = rdsk.high_rdsk_block.max(walk.highest_used()) + 1;
+    let lseg_count = lseg_blocks_for(driver_len);
+    let last = start + lseg_count;
+    let envec_bound = walk.first_partition_block();
+    let below = |end: u32, bound: Option<u64>| bound.is_none_or(|first| u64::from(end) < first);
+
+    if last <= rdsk.rdb_blocks_hi && below(last, envec_bound) {
+        return Ok(Allocation {
+            fshd_block: start,
+            last_block: last,
+            lseg_count,
+            rdb_blocks_hi: rdsk.rdb_blocks_hi,
+            raised_from: None,
+        });
+    }
+
+    let refuse = |raise: RaiseRefused| RdbEditRefusal::NoRoom {
+        needed: lseg_count + 1,
+        start,
+        free: (rdsk.rdb_blocks_hi + 1).saturating_sub(start),
+        rdb_blocks_hi: rdsk.rdb_blocks_hi,
+        partition_block: envec_bound,
+        raise,
+    };
+
+    // Decision 12, in this order: the window, the partitionable area, and
+    // only then the bytes — so no block past the window is ever looked for.
+    let window_blocks = (EDIT_WINDOW_BYTES / BLOCK_SIZE) as u32;
+    if last >= window_blocks {
+        return Err(refuse(RaiseRefused::PastWindow { window_blocks }));
+    }
+    let rdb_geometry_bound = walk.parts.iter().filter_map(|p| p.rdb_first_block).min();
+    let lo_cylinder_bound = u64::from(rdsk.lo_cylinder).checked_mul(u64::from(rdsk.cyl_blocks));
+    // The lowest bound and which one it is, so the sentence can name it. On a
+    // tie the first listed wins: `min_by_key` keeps the first minimum.
+    let lowest = [
+        (envec_bound, PartitionBound::PartitionEnvec),
+        (rdb_geometry_bound, PartitionBound::RdbGeometry),
+        (lo_cylinder_bound, PartitionBound::LoCylinder),
+    ]
+    .into_iter()
+    .filter_map(|(limit, bound)| limit.map(|limit| (limit, bound)))
+    .min_by_key(|(limit, _)| *limit);
+    if let Some((limit, bound)) = lowest {
+        if u64::from(last) >= limit {
+            return Err(refuse(RaiseRefused::PastPartitionArea { limit, bound }));
+        }
+    }
+    for block in (rdsk.rdb_blocks_hi + 1)..=last {
+        match block_at(range, block) {
+            Some(bytes) if bytes.iter().all(|b| *b == 0) => {}
+            Some(_) => return Err(refuse(RaiseRefused::NonZeroBlock(block))),
+            None => {
+                return Err(unaccounted(
+                    block,
+                    format!("the image ends before block {block}"),
+                ))
+            }
+        }
+    }
+
+    Ok(Allocation {
+        fshd_block: start,
+        last_block: last,
+        lseg_count,
+        rdb_blocks_hi: last.max(rdsk.rdb_blocks_hi),
+        raised_from: (last > rdsk.rdb_blocks_hi).then_some(rdsk.rdb_blocks_hi),
     })
 }
 
@@ -1065,5 +1164,231 @@ mod block_tests {
         assert!(block_array(&[0u8; 1024], 2).is_none());
         assert!(block_array(&[0u8; 1023], 1).is_none());
         assert!(block_array(&[], u32::MAX).is_none());
+    }
+}
+
+#[cfg(test)]
+mod alloc_tests {
+    use super::fixtures::*;
+    use super::*;
+    use crate::core::error::{PartitionBound, RaiseRefused, RdbEditRefusal};
+
+    /// 1006 LSEGs from block 2 end at 1008; 1005 end at 1007.
+    const REACHES_1008: usize = 1006 * 492;
+    const STOPS_AT_1007: usize = 1005 * 492;
+
+    fn allocate_on(range: &[u8], len: usize) -> Result<Allocation, RdbEditRefusal> {
+        allocate(range, &walk_strict(range).unwrap(), len)
+    }
+
+    /// Decision 2 on the owner's shape: 132–260 whether the old driver is
+    /// linked or only still sitting there — `HighRDSKBlock` 131 is respected.
+    #[test]
+    fn on_the_caffeine_shape_the_driver_takes_132_to_260_and_nothing_is_raised() {
+        for linked in [true, false] {
+            let got = allocate_on(&caffeine_like(linked), 62_604).unwrap();
+            assert_eq!(
+                got,
+                Allocation {
+                    fshd_block: 132,
+                    last_block: 260,
+                    lseg_count: 128,
+                    rdb_blocks_hi: 6143,
+                    raised_from: None,
+                },
+                "linked {linked}"
+            );
+        }
+    }
+
+    /// Decision 12: the cards ART builds have no room until the raise.
+    #[test]
+    fn an_art_built_card_gets_room_by_raising_rdb_blocks_hi_to_exactly_the_last_block() {
+        assert_eq!(
+            allocate_on(&art_like(true), 62_604).unwrap(),
+            Allocation {
+                fshd_block: 131,
+                last_block: 259,
+                lseg_count: 128,
+                rdb_blocks_hi: 259,
+                raised_from: Some(130),
+            }
+        );
+        assert_eq!(
+            allocate_on(&art_like(false), 62_604).unwrap(),
+            Allocation {
+                fshd_block: 2,
+                last_block: 130,
+                lseg_count: 128,
+                rdb_blocks_hi: 130,
+                raised_from: Some(1),
+            }
+        );
+    }
+
+    #[test]
+    fn a_raise_never_crosses_a_block_that_is_not_empty() {
+        let mut range = art_like(false);
+        range[500 * 512 + 7] = 1;
+        assert!(
+            allocate_on(&range, 62_604).is_ok(),
+            "control: 2–130 stays below block 500"
+        );
+        let err = allocate_on(&range, 600 * 492).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                RdbEditRefusal::NoRoom {
+                    raise: RaiseRefused::NonZeroBlock(500),
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert_eq!(err.code(), "ART-RDB-EDIT-NO-ROOM");
+        let sentence = err.to_string();
+        assert!(
+            sentence.contains("needs 601 blocks from block 2"),
+            "{sentence}"
+        );
+        assert!(
+            sentence.contains("only 0 are free below RDBBlocksHi 1"),
+            "{sentence}"
+        );
+        assert!(
+            sentence.contains("block 500 above it is not empty"),
+            "{sentence}"
+        );
+        assert!(
+            sentence.contains("hst-imager rewrites the whole RDB"),
+            "{sentence}"
+        );
+    }
+
+    fn refused_at_1008(range: &[u8]) -> RdbEditRefusal {
+        assert!(
+            allocate_on(range, STOPS_AT_1007).is_ok(),
+            "control: 2–1007 fits"
+        );
+        allocate_on(range, REACHES_1008).unwrap_err()
+    }
+
+    #[test]
+    fn the_raise_stops_at_the_first_partition_by_its_own_envec() {
+        assert!(
+            allocate_on(&art_like(false), REACHES_1008).is_ok(),
+            "control: 2016 is the bound"
+        );
+        let mut range = art_like(false);
+        put(&mut range, 1, 35, 8); // PART Surfaces: 2 × 8 × 63 = 1008
+        seal(&mut range, 1);
+        let err = refused_at_1008(&range);
+        assert!(
+            matches!(
+                err,
+                RdbEditRefusal::NoRoom {
+                    raise: RaiseRefused::PastPartitionArea {
+                        limit: 1008,
+                        bound: PartitionBound::PartitionEnvec
+                    },
+                    partition_block: Some(1008),
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert!(
+            err.to_string()
+                .contains("the first partition begins at block 1008 by its own DosEnvec"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn the_raise_stops_at_the_first_partition_by_the_rdbs_own_geometry() {
+        let mut range = art_like(false);
+        put(&mut range, 0, 18, 8); // rdb_Heads: 2 × 8 × 63 = 1008
+        seal(&mut range, 0);
+        let err = refused_at_1008(&range);
+        assert!(
+            matches!(
+                err,
+                RdbEditRefusal::NoRoom {
+                    raise: RaiseRefused::PastPartitionArea {
+                        limit: 1008,
+                        bound: PartitionBound::RdbGeometry
+                    },
+                    partition_block: Some(2016),
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert!(
+            err.to_string().contains(
+                "the first partition begins at block 1008 by the RDB's own heads and sectors"
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn the_raise_stops_where_lo_cylinder_says_the_partitionable_area_begins() {
+        let mut range = art_like(false);
+        put(&mut range, 0, 36, 504); // rdb_CylBlocks: 2 × 504 = 1008
+        seal(&mut range, 0);
+        let err = refused_at_1008(&range);
+        assert!(
+            matches!(
+                err,
+                RdbEditRefusal::NoRoom {
+                    raise: RaiseRefused::PastPartitionArea {
+                        limit: 1008,
+                        bound: PartitionBound::LoCylinder
+                    },
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert!(
+            err.to_string()
+                .contains("rdb_LoCylinder puts the partitionable area at block 1008"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn the_raise_stops_at_the_window_art_reads() {
+        let range = build(&Shape {
+            cylinders: 1000,
+            heads: 255,
+            sectors: 63,
+            rdb_blocks_hi: 16_000,
+            lo_cylinder: 2,
+            parts: vec![("DH0", 2, 999, PDS3)],
+            fshds: Vec::new(),
+            high_rdsk_block: Some(16_000),
+            total_blocks: WINDOW_BLOCKS,
+        });
+        let err = allocate_on(&range, 400 * 492).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                RdbEditRefusal::NoRoom {
+                    raise: RaiseRefused::PastWindow {
+                        window_blocks: 16_384
+                    },
+                    start: 16_001,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert!(
+            err.to_string()
+                .contains("ART reads only the first 16384 blocks"),
+            "{err}"
+        );
     }
 }
