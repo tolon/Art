@@ -33,8 +33,13 @@ pub enum RdbEditRefusal {
     /// An append whose driver states no `$VER:`.
     DriverNoVersion,
     /// A replace whose file names another program than the card's driver,
-    /// or whose card driver names none (spec decision 13).
-    DifferentDriver { card: Option<String>, file: String },
+    /// or where either side's `$VER:` names no program (spec decision 13).
+    /// `None` is "no readable name": a file with no `$VER:` at all never gets
+    /// here — that is decision 1's "no `$VER:` plans no step".
+    DifferentDriver {
+        card: Option<String>,
+        file: Option<String>,
+    },
     /// A dynamic VHD: a write could grow it, and the journal identifies an
     /// image by size.
     DynamicVhd,
@@ -167,17 +172,42 @@ impl std::fmt::Display for RdbEditRefusal {
                  the version in the RDB and the one already loaded, so ART will not write one it \
                  guessed. Nothing was written."
             ),
-            Self::DifferentDriver { card: Some(card), file } => write!(
+            Self::DifferentDriver {
+                card: Some(card),
+                file: Some(file),
+            } => write!(
                 f,
                 "the card's driver calls itself '{card}' and the file you chose calls itself \
                  '{file}'. ART replaces a driver only with a newer copy of the same one; hst-imager \
                  can replace it — back the card up first. Nothing was written."
             ),
-            Self::DifferentDriver { card: None, file } => write!(
+            Self::DifferentDriver {
+                card: None,
+                file: Some(file),
+            } => write!(
                 f,
                 "the card's driver does not say what it is ($VER:), so ART cannot tell whether \
                  '{file}' is a newer copy of it; hst-imager can replace it — back the card up \
                  first. Nothing was written."
+            ),
+            Self::DifferentDriver {
+                card: Some(card),
+                file: None,
+            } => write!(
+                f,
+                "the card's driver calls itself '{card}', and the file you chose states a version \
+                 but no program name ($VER:), so ART cannot tell whether it is a newer copy of the \
+                 same driver; hst-imager can replace it — back the card up first. Nothing was \
+                 written."
+            ),
+            Self::DifferentDriver {
+                card: None,
+                file: None,
+            } => write!(
+                f,
+                "neither the card's driver nor the file you chose says which program it is \
+                 ($VER:), so ART cannot tell whether the file is a newer copy of the card's \
+                 driver; hst-imager can replace it — back the card up first. Nothing was written."
             ),
             Self::DynamicVhd => write!(
                 f,
@@ -474,6 +504,25 @@ pub enum CoreError {
         journal: PathBuf,
         detail: String,
     },
+
+    /// ART-117: the edit was written, verified and synced — the card holds it
+    /// — and only its undo journal file could not be removed (final review
+    /// I2). **Not a failed edit**, and its next step is the opposite of
+    /// [`RdbEditFailed`](Self::RdbEditFailed)'s `restored: false`: undoing
+    /// this journal would take a good edit back out.
+    #[error(
+        "the RDB edit was written and verified, and the card holds it — but ART could not remove \
+         its undo journal at '{}': {detail}. The card needs nothing more. Delete that file once \
+         ART is closed: it holds the RDB as it was before this edit, so do not undo it in the \
+         File Manager, which would take the new driver out again. The RDB backup is at '{}'.",
+        journal.display(),
+        backup.display()
+    )]
+    RdbEditJournalLeft {
+        backup: PathBuf,
+        journal: PathBuf,
+        detail: String,
+    },
 }
 
 /// The sentence for [`CoreError::NonAsciiPfs3Names`] — pulled out of the
@@ -571,6 +620,7 @@ impl CoreError {
             Self::RdbEditFailed {
                 restored: false, ..
             } => "ART-RDB-EDIT-ROLLBACK-FAILED",
+            Self::RdbEditJournalLeft { .. } => "ART-RDB-EDIT-JOURNAL-LEFT",
         }
     }
 
@@ -726,7 +776,7 @@ mod tests {
             CoreError::RdbEditRefused(RdbEditRefusal::DriverNoVersion),
             CoreError::RdbEditRefused(RdbEditRefusal::DifferentDriver {
                 card: None,
-                file: "pfs3aio".into(),
+                file: Some("pfs3aio".into()),
             }),
             CoreError::RdbEditRefused(RdbEditRefusal::DynamicVhd),
             CoreError::RdbEditRefused(RdbEditRefusal::JournalPending {
@@ -751,6 +801,11 @@ mod tests {
             CoreError::RdbEditFailed {
                 backup: "x".into(),
                 restored: false,
+                journal: "j".into(),
+                detail: "x".into(),
+            },
+            CoreError::RdbEditJournalLeft {
+                backup: "x".into(),
                 journal: "j".into(),
                 detail: "x".into(),
             },

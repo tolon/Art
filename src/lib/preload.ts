@@ -162,12 +162,13 @@ export type PlanNote =
     }
   | {
       /** The card's driver and the chosen file name different programs, or
-       *  the card's names none (spec decision 13). */
+       *  either side's `$VER:` names none (spec decision 13). `null` is "no
+       *  readable name"; a file with no `$VER:` at all is a `driver-kept`. */
       note: "different-driver";
       dostype: string;
       card_version: DriverVersion;
       card_name: string | null;
-      file_name: string;
+      file_name: string | null;
     }
   | { note: "second-edit-skipped"; dostype: string };
 
@@ -222,11 +223,20 @@ export interface StepReport {
 
 export const PRELOAD_EVENT = "preload-result";
 
+/** Why a run stopped: the job's own error sentence and its id. */
+export interface StopReport {
+  code: string;
+  message: string;
+}
+
 export interface PreloadResult {
   job_id: number;
   image: string;
   outcome: PreloadOutcome;
   steps: StepReport[];
+  /** Set when the run stopped after changing the card's RDB (final review
+   *  I3): `outcome` is then what it had done before it stopped. */
+  stopped: StopReport | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -263,8 +273,9 @@ export async function preloadRun(
   });
 }
 
-/** Subscribe to finished preloads. A cancelled or failed job never sends one —
- *  the job bar is where those are seen. */
+/** Subscribe to finished preloads. A cancelled or failed job sends one only
+ *  when it had already changed the card's RDB, with `stopped` set (final
+ *  review I3); every other stop is the job bar's to report. */
 export async function onPreloadResult(
   handler: (result: PreloadResult) => void
 ): Promise<UnlistenFn> {
@@ -680,32 +691,37 @@ export function planNotePhrase(note: PlanNote): Phrase {
           code: note.code,
         },
       };
-    case "different-driver":
+    case "different-driver": {
+      const base = { dostype: note.dostype, card: versionText(note.card_version) };
+      if (note.card_name && note.file_name) {
+        return {
+          key: "preload.plan.note.differentDriver",
+          params: { ...base, cardName: note.card_name, fileName: note.file_name },
+        };
+      }
+      if (note.file_name) {
+        return {
+          key: "preload.plan.note.differentDriverUnknown",
+          params: { ...base, fileName: note.file_name },
+        };
+      }
+      // Final review I1: the file's `$VER:` states a version and no program.
       return note.card_name
         ? {
-            key: "preload.plan.note.differentDriver",
-            params: {
-              dostype: note.dostype,
-              card: versionText(note.card_version),
-              cardName: note.card_name,
-              fileName: note.file_name,
-            },
+            key: "preload.plan.note.differentDriverFileUnnamed",
+            params: { ...base, cardName: note.card_name },
           }
-        : {
-            key: "preload.plan.note.differentDriverUnknown",
-            params: {
-              dostype: note.dostype,
-              card: versionText(note.card_version),
-              fileName: note.file_name,
-            },
-          };
+        : { key: "preload.plan.note.differentDriverBothUnnamed", params: base };
+    }
     case "second-edit-skipped":
       return { key: "preload.plan.note.secondEdit", params: { dostype: note.dostype } };
   }
 }
 
-/** The result panel's sentence for a finished RDB edit. */
-export function embeddedPhrase(report: EmbedReport): Phrase {
+/** The result panel's sentence for a finished RDB edit — and, when the run
+ *  `stopped` after it, a sentence that says the run did not finish and the
+ *  RDB change stays (final review I3). */
+export function embeddedPhrase(report: EmbedReport, stopped = false): Phrase {
   const params = {
     dostype: report.dostype,
     file: versionText(report.file_version),
@@ -713,9 +729,16 @@ export function embeddedPhrase(report: EmbedReport): Phrase {
     last: report.last_block,
     backup: report.backup,
   };
-  return report.card_version
-    ? { key: "preload.result.replaced", params: { ...params, card: versionText(report.card_version) } }
-    : { key: "preload.result.embedded", params };
+  if (report.card_version) {
+    return {
+      key: stopped ? "preload.result.stoppedAfterReplaced" : "preload.result.replaced",
+      params: { ...params, card: versionText(report.card_version) },
+    };
+  }
+  return {
+    key: stopped ? "preload.result.stoppedAfterEmbedded" : "preload.result.embedded",
+    params,
+  };
 }
 
 /** The save dialog's suggestion: `<card stem>-rdb-backup.bin` (decision 11). */

@@ -223,6 +223,17 @@ impl<'a> Journalled<'a> {
         remove_journal(&self.path)
     }
 
+    /// The caller has already [`sync`](Journalled::sync)ed and validated the
+    /// operation: remove the journal, and nothing else.
+    ///
+    /// For a caller that has to tell a failed sync (the new data may not be
+    /// durable) from a failed removal (it is, and only the journal file is
+    /// left) — ART-117's RDB edit, whose endings differ on exactly that
+    /// (final review I2). Everyone else wants [`commit`](Journalled::commit).
+    pub fn close_after_sync(self) -> CoreResult<()> {
+        remove_journal(&self.path)
+    }
+
     /// The operation failed: put every saved block back, then drop the journal.
     ///
     /// Restores from the in-memory copy, which is byte-identical to the one on

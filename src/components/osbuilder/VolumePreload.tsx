@@ -623,31 +623,51 @@ export function VolumePreload() {
 
       {result && (
         <section className="card" style={{ marginBottom: 16 }}>
-          <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("preload.result.heading")}</h2>
-          <p style={{ fontSize: 12, margin: "4px 0 8px" }}>
-            {t("preload.result.formatted", {
-              volumes: result.outcome.formatted.join(", "),
-            })}
-          </p>
-          <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
-            {(() => {
-              const phrase = copiedPhrase(result.outcome.copied);
-              return t(phrase.key, phrase.params);
-            })()}
-          </p>
+          <h2 style={{ fontSize: 16, marginTop: 0 }}>
+            {result.stopped ? t("preload.result.stoppedHeading") : t("preload.result.heading")}
+          </h2>
+          {/* Final review I3: a run that stopped after changing the card's
+              RDB says it stopped, and why, before what it had done. */}
+          {result.stopped && (
+            <p
+              className="badge badge-err"
+              style={{ display: "block", padding: "6px 12px", fontSize: 12, margin: "4px 0 8px" }}
+            >
+              {errorText(t, new Error(`${result.stopped.message} (${result.stopped.code})`))}
+            </p>
+          )}
+          {(!result.stopped || result.outcome.formatted.length > 0) && (
+            <p style={{ fontSize: 12, margin: "4px 0 8px" }}>
+              {t("preload.result.formatted", {
+                volumes: result.outcome.formatted.join(", "),
+              })}
+            </p>
+          )}
+          {(!result.stopped || result.outcome.copied.files > 0) && (
+            <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
+              {(() => {
+                const phrase = copiedPhrase(result.outcome.copied);
+                return t(phrase.key, phrase.params);
+              })()}
+            </p>
+          )}
           {result.outcome.tool && (
             <p className="faint" style={{ fontSize: 11, margin: "0 0 8px" }}>
               {t("preload.result.tool", { version: result.outcome.tool.raw })}
             </p>
           )}
-          {result.outcome.embedded && (
-            <p style={{ fontSize: 12, margin: "0 0 8px" }}>
-              {t(
-                embeddedPhrase(result.outcome.embedded).key,
-                embeddedPhrase(result.outcome.embedded).params
-              )}
-            </p>
-          )}
+          {result.outcome.embedded &&
+            (() => {
+              const phrase = embeddedPhrase(result.outcome.embedded, result.stopped !== null);
+              return (
+                <p
+                  className={result.stopped ? "badge badge-warn" : undefined}
+                  style={{ display: "block", fontSize: 12, margin: "0 0 8px" }}
+                >
+                  {t(phrase.key, phrase.params)}
+                </p>
+              );
+            })()}
           {/* ART-120: which tool ran which step, and why, whenever it was
               not the default — never silent about a fallback. */}
           {result.steps.length > 0 && (

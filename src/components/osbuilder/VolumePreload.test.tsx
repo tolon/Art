@@ -7,13 +7,14 @@
 // a deleted key cannot pass by rendering its own name.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { changeLanguage } from "@/i18n";
 import type { CardReport } from "@/lib/card";
 import type { ParsedPartition } from "@/lib/hdf";
-import type { PreloadPlan } from "@/lib/preload";
+import { subscribeSafely } from "@/lib/jobs";
+import { onPreloadResult, type PreloadPlan, type PreloadResult } from "@/lib/preload";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 const planMock = vi.hoisted(() => vi.fn());
@@ -205,5 +206,58 @@ describe("the volume preload screen and an RDB edit", () => {
     const checkboxes = screen.getAllByRole("checkbox");
     await user.click(checkboxes[checkboxes.length - 1]);
     expect(runButton().disabled).toBe(false);
+  });
+
+  // Final review I3: a run that stops after its RDB edit — a later format
+  // failed — still says the card's RDB was changed, with the driver, the
+  // versions and the backup, and does not say "Done".
+  it("says the RDB change stays when the run stops after it", async () => {
+    let deliver: ((result: PreloadResult) => void) | null = null;
+    vi.mocked(subscribeSafely).mockImplementationOnce((start) => {
+      void start();
+      return () => {};
+    });
+    vi.mocked(onPreloadResult).mockImplementationOnce((handler) => {
+      deliver = handler;
+      return Promise.resolve(() => {});
+    });
+    render(<VolumePreload />);
+    await waitFor(() => expect(deliver).not.toBeNull());
+
+    act(() =>
+      deliver!({
+        job_id: 1,
+        image: "E:\\cards\\caffeine.img",
+        outcome: {
+          formatted: [],
+          copied: { files: 0, directories: 0, bytes: 0, comments_lost: 0, dates_lost: 0 },
+          tool: null,
+          embedded: {
+            slot: 2,
+            dostype: "PDS3",
+            card_version: { version: 19, revision: 2 },
+            file_version: { version: 19, revision: 3 },
+            first_block: 132,
+            last_block: 260,
+            rdb_blocks_hi_raised: null,
+            backup: BACKUP,
+          },
+        },
+        steps: [],
+        stopped: {
+          code: "ART-FORMAT-MALFORMED",
+          message: "malformed hst-imager: the tool said no",
+        },
+      })
+    );
+
+    expect(await screen.findByText("Stopped before it finished")).toBeTruthy();
+    expect(
+      screen.getByText(
+        `The run stopped before it finished, but it had already replaced PDS3 19.2 with 19.3 in RDB blocks 132–260, and that change stays on the card. The RDB backup is at ${BACKUP}.`
+      )
+    ).toBeTruthy();
+    expect(screen.getByText(/the tool said no/)).toBeTruthy();
+    expect(screen.queryByText("Done")).toBeNull();
   });
 });

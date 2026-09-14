@@ -59,12 +59,6 @@ impl std::fmt::Display for DriverVersion {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EmbedMode {
-    Append,
-    Replace,
-}
-
 /// An edit ART has planned and can carry out: the range it read is the
 /// backup, the baseline for verification and what the plan was made from.
 #[derive(Debug)]
@@ -95,20 +89,49 @@ fn dos_type_of(label: &str) -> CoreResult<u32> {
         .ok_or_else(|| CoreError::InvalidInput(format!("'{label}' is not a DosType ART can name")))
 }
 
-/// The driver: its size from metadata before a byte is read, then its bytes.
-#[allow(clippy::type_complexity)]
-fn load_driver(path: &Path) -> CoreResult<(Vec<u8>, Option<(u16, u16)>)> {
-    let bytes = std::fs::metadata(path)?.len();
-    if bytes > DRIVER_MAX_BYTES {
-        return Err(refuse(RdbEditRefusal::DriverTooLarge {
+/// A driver file as ART read it.
+#[derive(Debug)]
+struct LoadedDriver {
+    bytes: Vec<u8>,
+    /// What its `$VER:` states, when it states one.
+    version: Option<(u16, u16)>,
+}
+
+/// All of `reader` when it holds at most `cap` bytes, or `None` when it holds
+/// more — read no further than one byte past the cap, which is all it takes
+/// to know (final review M9).
+fn read_capped(reader: impl std::io::Read, cap: u64) -> CoreResult<Option<Vec<u8>>> {
+    use std::io::Read;
+    let mut data = Vec::new();
+    reader.take(cap.saturating_add(1)).read_to_end(&mut data)?;
+    Ok((data.len() as u64 <= cap).then_some(data))
+}
+
+/// The driver: its size from metadata before a byte is read, then no more of
+/// its bytes than the cap allows — a file that grew after the size check is
+/// refused, not read whole.
+fn load_driver(path: &Path) -> CoreResult<LoadedDriver> {
+    let too_large = |bytes: u64| {
+        refuse(RdbEditRefusal::DriverTooLarge {
             bytes,
             cap: DRIVER_MAX_BYTES,
-        }));
+        })
+    };
+    let bytes = std::fs::metadata(path)?.len();
+    if bytes > DRIVER_MAX_BYTES {
+        return Err(too_large(bytes));
     }
-    let data = std::fs::read(path)?;
+    let Some(data) = read_capped(std::fs::File::open(path)?, DRIVER_MAX_BYTES)? else {
+        // It grew between the size check and the read.
+        let now = std::fs::metadata(path)?.len().max(DRIVER_MAX_BYTES + 1);
+        return Err(too_large(now));
+    };
     check_driver_bytes(&data).map_err(refuse)?;
     let version = version_from_ver_string(&data);
-    Ok((data, version))
+    Ok(LoadedDriver {
+        bytes: data,
+        version,
+    })
 }
 
 /// Where the Amiga disk in `slot` starts: `None` means a plain image's one
@@ -156,7 +179,10 @@ pub fn prepare_append(
     driver: &Path,
 ) -> CoreResult<EditReady> {
     let dos_type = dos_type_of(dostype)?;
-    let (data, version) = load_driver(driver)?;
+    let LoadedDriver {
+        bytes: data,
+        version,
+    } = load_driver(driver)?;
     let version = version.ok_or_else(|| refuse(RdbEditRefusal::DriverNoVersion))?;
     let (area_offset, range, walk) = open_rdb(image, slot)?;
     let plan = plan_append(&range, &walk, dos_type, version, &data).map_err(refuse)?;
@@ -177,7 +203,10 @@ pub fn prepare_replace(
     driver: &Path,
 ) -> CoreResult<Prepared> {
     let dos_type = dos_type_of(dostype)?;
-    let (data, version) = load_driver(driver)?;
+    let LoadedDriver {
+        bytes: data,
+        version,
+    } = load_driver(driver)?;
     let (area_offset, range, walk) = open_rdb(image, slot)?;
     let Some(on_card) = walk.fshds.iter().find(|fs| fs.dos_type == dos_type) else {
         return Err(refuse(RdbEditRefusal::Unaccounted {
@@ -222,6 +251,9 @@ pub(crate) enum WriteFailure {
     RolledBack(String),
     /// Written, and the journal is still beside the image.
     RollbackFailed { detail: String, journal: PathBuf },
+    /// Written, verified and synced — the card holds the edit — and only the
+    /// journal file could not be removed (final review I2).
+    JournalNotClosed { detail: String, journal: PathBuf },
 }
 
 /// S1–S4, a sync after each, and `after` told each finished stage. No
@@ -335,21 +367,32 @@ pub(crate) fn write_journalled(
     let mut journal = Journalled::begin(device, image, area_offset, description, &plan.blocks())
         .map_err(WriteFailure::BeforeFirstWrite)?;
     let journal_path = journal_path_for(image);
+    // Final review I2: the last sync is its own step, so a flush that fails —
+    // nobody knows whether the card keeps the edit, so it is undone — is told
+    // apart from a journal file that will not go, after an edit that is on
+    // the card and verified.
     let written = write_stages(&mut journal, plan, &mut |_| Ok(()))
-        .and_then(|()| verify(image, area_offset, before, plan, driver));
+        .and_then(|()| verify(image, area_offset, before, plan, driver))
+        .map_err(|err| err.to_string())
+        .and_then(|()| {
+            journal.sync().map_err(|err| {
+                format!(
+                    "the edit was written and verified, but the last sync before closing its \
+                     journal failed, so ART cannot tell whether the card keeps it: {err}"
+                )
+            })
+        });
     match written {
         Ok(()) => journal
-            .commit()
-            .map_err(|err| WriteFailure::RollbackFailed {
-                detail: format!(
-                    "the edit was written and verified, but its journal could not be closed: {err}"
-                ),
+            .close_after_sync()
+            .map_err(|err| WriteFailure::JournalNotClosed {
+                detail: err.to_string(),
                 journal: journal_path,
             }),
-        Err(err) => match journal.roll_back() {
-            Ok(()) => Err(WriteFailure::RolledBack(err.to_string())),
+        Err(detail) => match journal.roll_back() {
+            Ok(()) => Err(WriteFailure::RolledBack(detail)),
             Err(rollback) => Err(WriteFailure::RollbackFailed {
-                detail: format!("{err}; undoing it failed too: {rollback}"),
+                detail: format!("{detail}; undoing it failed too: {rollback}"),
                 journal: journal_path,
             }),
         },
@@ -377,13 +420,26 @@ pub struct EmbedTarget<'a> {
     pub image: &'a Path,
     pub slot: Option<usize>,
     pub dostype: &'a str,
-    pub mode: EmbedMode,
+    pub kind: EditKind,
     pub driver: &'a Path,
 }
 
 /// Decision 7: area blocks `0..blocks` into a new file — SAFE_CREATE, written
 /// to a temporary and renamed, then read back and compared.
 pub fn write_backup(path: &Path, range: &[u8], blocks: u32) -> CoreResult<()> {
+    write_backup_with(path, range, blocks, &|written: &Path| {
+        std::fs::read(written)
+    })
+}
+
+/// [`write_backup`] with the read-back injected, so a copy that reads back
+/// wrong can be tested.
+pub(crate) fn write_backup_with(
+    path: &Path,
+    range: &[u8],
+    blocks: u32,
+    read_back: &dyn Fn(&Path) -> std::io::Result<Vec<u8>>,
+) -> CoreResult<()> {
     let failed = |detail: String| CoreError::RdbBackupFailed {
         path: path.to_path_buf(),
         detail,
@@ -400,11 +456,22 @@ pub fn write_backup(path: &Path, range: &[u8], blocks: u32) -> CoreResult<()> {
         }
         Err(err) => return Err(failed(err.to_string())),
     }
-    let back = std::fs::read(path).map_err(|err| failed(err.to_string()))?;
-    if back != bytes {
-        return Err(failed("the file read back is not what ART wrote".into()));
-    }
-    Ok(())
+    let problem = match read_back(path) {
+        Ok(back) if back == bytes => return Ok(()),
+        Ok(_) => "the file read back is not what ART wrote".to_string(),
+        Err(err) => format!("the file could not be read back: {err}"),
+    };
+    // ART made this file a moment ago and it is not a backup. A file that looks
+    // like one is worse than none, and the next run would meet BACKUP-EXISTS
+    // (final review M10).
+    let detail = match std::fs::remove_file(path) {
+        Ok(()) => format!("{problem}, so ART removed the file it had made"),
+        Err(err) => format!(
+            "{problem}, and ART could not remove the file it had made ({err}) — it is not a \
+             valid backup; delete it"
+        ),
+    };
+    Err(failed(detail))
 }
 
 pub(crate) type OpenDevice = dyn Fn(&Path, u64, u64) -> CoreResult<Box<dyn BlockDeviceMut>>;
@@ -435,11 +502,11 @@ pub(crate) fn run_with(
     let Some(backup) = backup else {
         return Err(refuse(RdbEditRefusal::NoBackup));
     };
-    let ready = match target.mode {
-        EmbedMode::Append => {
+    let ready = match target.kind {
+        EditKind::Append => {
             prepare_append(target.image, target.slot, target.dostype, target.driver)?
         }
-        EmbedMode::Replace => {
+        EditKind::Replace => {
             match prepare_replace(target.image, target.slot, target.dostype, target.driver)? {
                 Prepared::Edit(ready) => *ready,
                 Prepared::Keep { card, file } => {
@@ -527,6 +594,13 @@ pub(crate) fn run_with(
             journal,
             detail,
         }),
+        Err(WriteFailure::JournalNotClosed { detail, journal }) => {
+            Err(CoreError::RdbEditJournalLeft {
+                backup: backup.to_path_buf(),
+                journal,
+                detail,
+            })
+        }
     }
 }
 
@@ -730,6 +804,53 @@ mod tests {
         // `journal` goes out of scope with neither commit nor roll_back: what a crash leaves.
     }
 
+    /// Every block on `walk`'s FSHD chain — each FSHD, then its LSEGs — with
+    /// its bytes in `range`.
+    fn chain_bytes(range: &[u8], walk: &StrictRdb) -> Vec<(u32, Vec<u8>)> {
+        walk.fshds
+            .iter()
+            .flat_map(|fs| std::iter::once(fs.block).chain(fs.lseg_blocks.iter().copied()))
+            .map(|block| {
+                let bytes = block_at(range, block).expect("a walked block is inside the range");
+                (block, bytes.to_vec())
+            })
+            .collect()
+    }
+
+    /// Spec Testing, "Crash points", in bytes (final review M8): before S4 the
+    /// chain is the old one byte for byte; after S4 every block on it holds
+    /// what the plan wrote there or, for a block the plan did not write, what
+    /// the card had. A list of block numbers cannot see an old FSHD rewritten
+    /// in place.
+    fn assert_chain_bytes(
+        tag: &str,
+        before: &[u8],
+        after: &[u8],
+        walked: &StrictRdb,
+        plan: &EditPlan,
+        crash_after: Stage,
+    ) {
+        let now = chain_bytes(after, walked);
+        if crash_after < Stage::Link {
+            let old = chain_bytes(before, &walk_strict(before).unwrap());
+            assert_eq!(now, old, "{tag}: the chain before the link, byte for byte");
+            return;
+        }
+        let planned: BTreeMap<u32, &[u8]> = plan
+            .stages
+            .iter()
+            .flat_map(|(_, writes)| writes.iter().map(|w| (w.block, &w.bytes[..])))
+            .collect();
+        for (block, bytes) in &now {
+            let expected = planned
+                .get(block)
+                .copied()
+                .or_else(|| block_at(before, *block))
+                .expect("a chain block is inside the range");
+            assert_eq!(&bytes[..], expected, "{tag}: block {block} after the link");
+        }
+    }
+
     /// Spec Testing, "Crash points": after each stage the RDB walks, no used
     /// block is above `HighRDSKBlock`, the PARTs are untouched, the chain is
     /// the old one before S4 and the new one after, and the journal restores
@@ -780,6 +901,7 @@ mod tests {
                     new_chain.push(plan.allocation.fshd_block);
                     assert_eq!(chain, new_chain, "{tag}: after the link");
                 }
+                assert_chain_bytes(&tag, &range, &after, &walked, &plan, crash_after);
                 let pending = find_journal(&image)
                     .unwrap()
                     .unwrap_or_else(|| panic!("{tag}: no journal"));
@@ -917,6 +1039,7 @@ mod tests {
                         .collect()
                 };
                 assert_eq!(chain, expected, "{tag}");
+                assert_chain_bytes(&tag, &range, &after, &walked, &plan, crash_after);
                 find_journal(&image)
                     .unwrap()
                     .unwrap_or_else(|| panic!("{tag}: no journal"))
@@ -1164,7 +1287,7 @@ mod tests {
         let err = prepare_replace(&image, None, "SFS0", &driver).unwrap_err();
         assert!(
             matches!(&err, CoreError::RdbEditRefused(RdbEditRefusal::DifferentDriver { card: Some(card), file })
-                if card == "SmartFilesystem" && file == "pfs3aio"),
+                if card == "SmartFilesystem" && file.as_deref() == Some("pfs3aio")),
             "{err:?}"
         );
         assert_refused(
@@ -1195,6 +1318,29 @@ mod tests {
             "ART-RDB-EDIT-DIFFERENT-DRIVER",
             "does not say what it is",
         );
+
+        // Final review I1, through prepare: a file whose `$VER:` states a
+        // newer-looking version and no program does not reach the versions.
+        let (_guard3, dir3, image3, before3) = scratch_card("replace-file-unnamed", &sfs);
+        let unnamed = driver_file(&dir3, &unnamed_driver(62_604, "44.5"));
+        let err = prepare_replace(&image3, None, "SFS0", &unnamed).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                CoreError::RdbEditRefused(RdbEditRefusal::DifferentDriver {
+                    card: Some(card),
+                    file: None
+                }) if card == "SmartFilesystem"
+            ),
+            "{err:?}"
+        );
+        assert_refused(
+            &image3,
+            &before3,
+            err,
+            "ART-RDB-EDIT-DIFFERENT-DRIVER",
+            "states a version but no program name",
+        );
     }
 
     /// A card is a list of disks: the step's MBR slot picks the area.
@@ -1220,12 +1366,20 @@ mod tests {
         OnceAt(usize),
         /// This write and every later one fails — the rollback's too.
         FromWrite(usize),
+        /// Only this sync (counting from 1) fails; every write lands.
+        SyncAt(usize),
+        /// At this sync the journal file is swapped for a folder of the same
+        /// name, so removing it fails — as a file held open or refused by the
+        /// OS would. The sync itself succeeds.
+        JournalStuckAtSync(usize),
     }
 
     struct Faulty {
         inner: FileRegionMut,
         writes: usize,
+        syncs: usize,
         fault: Fault,
+        journal: PathBuf,
     }
 
     impl BlockDevice for Faulty {
@@ -1246,6 +1400,7 @@ mod tests {
             let fails = match self.fault {
                 Fault::OnceAt(at) => self.writes == at,
                 Fault::FromWrite(at) => self.writes >= at,
+                Fault::SyncAt(_) | Fault::JournalStuckAtSync(_) => false,
             };
             if fails {
                 return Err(CoreError::Io(std::io::Error::other("the card was pulled")));
@@ -1253,6 +1408,20 @@ mod tests {
             self.inner.write_block(n, buf)
         }
         fn sync(&mut self) -> CoreResult<()> {
+            self.syncs += 1;
+            match self.fault {
+                Fault::SyncAt(at) if self.syncs == at => {
+                    return Err(CoreError::Io(std::io::Error::other(
+                        "the card stopped answering",
+                    )));
+                }
+                Fault::JournalStuckAtSync(at) if self.syncs == at => {
+                    std::fs::remove_file(&self.journal).unwrap();
+                    std::fs::create_dir(&self.journal).unwrap();
+                    std::fs::write(self.journal.join("held"), b"x").unwrap();
+                }
+                _ => {}
+            }
             self.inner.sync()
         }
     }
@@ -1289,7 +1458,7 @@ mod tests {
             image: &run.image,
             slot: None,
             dostype: "PDS3",
-            mode: EmbedMode::Append,
+            kind: EditKind::Append,
             driver: &run.driver,
         }
     }
@@ -1302,7 +1471,9 @@ mod tests {
             Ok(Box::new(Faulty {
                 inner,
                 writes: 0,
+                syncs: 0,
                 fault: fault(),
+                journal: journal_path_for(image),
             }) as Box<dyn BlockDeviceMut>)
         }
     }
@@ -1468,6 +1639,137 @@ mod tests {
         assert_eq!(std::fs::read(&run.image).unwrap(), run.before);
     }
 
+    /// **Final review I2.** Written, verified and synced, and only the
+    /// journal file will not go: the edit succeeded, and the sentence says so,
+    /// names the journal and the backup, and never tells anyone to undo it.
+    /// Sync 5 is the one after the four stages' own syncs.
+    #[test]
+    fn a_verified_edit_whose_journal_cannot_be_removed_says_it_succeeded() {
+        let run = art_run("run-journal-left");
+        let backup = run.dir.join("rdb.bin");
+        let err = run_with(
+            target(&run),
+            Some(&backup),
+            &NoProgress,
+            &with_fault(|| Fault::JournalStuckAtSync(5)),
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "ART-RDB-EDIT-JOURNAL-LEFT", "{err}");
+        let journal = journal_path_for(&run.image);
+        let sentence = err.to_string();
+        for needle in [
+            "was written and verified",
+            &journal.display().to_string(),
+            &backup.display().to_string(),
+            "Delete that file",
+        ] {
+            assert!(sentence.contains(needle), "{needle:?} in: {sentence}");
+        }
+        assert!(
+            !sentence.contains("undo it in the File Manager before"),
+            "a good edit is never to be undone: {sentence}"
+        );
+        assert!(
+            crate::core::card::read_card(&run.image)
+                .unwrap()
+                .provides_file_system(PDS3),
+            "the card holds the edit"
+        );
+        assert_eq!(std::fs::read(&backup).unwrap(), run.range[..131 * 512]);
+    }
+
+    /// The other half of I2: when the last sync is what fails, nobody knows
+    /// whether the card keeps the edit, so it is rolled back and said so — a
+    /// failed flush is not a stuck journal file.
+    #[test]
+    fn a_last_sync_that_fails_after_verification_is_rolled_back() {
+        let run = art_run("run-last-sync");
+        let backup = run.dir.join("rdb.bin");
+        let err = run_with(
+            target(&run),
+            Some(&backup),
+            &NoProgress,
+            &with_fault(|| Fault::SyncAt(5)),
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "ART-RDB-EDIT-ROLLED-BACK", "{err}");
+        let sentence = err.to_string();
+        assert!(
+            sentence.contains("last sync before closing its journal failed")
+                && sentence.contains(&backup.display().to_string()),
+            "{sentence}"
+        );
+        assert_eq!(std::fs::read(&run.image).unwrap(), run.before);
+        assert!(!journal_path_for(&run.image).exists());
+    }
+
+    /// A reader that fails once it is asked for more than `limit` bytes.
+    struct Endless {
+        served: u64,
+        limit: u64,
+    }
+
+    impl std::io::Read for Endless {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.served >= self.limit {
+                return Err(std::io::Error::other("read past the cap"));
+            }
+            let n = buf.len().min((self.limit - self.served) as usize);
+            buf[..n].fill(0);
+            self.served += n as u64;
+            Ok(n)
+        }
+    }
+
+    /// **Final review M9.** A driver is read no further than one byte past
+    /// the cap — a file that grew after the size check is not read whole.
+    #[test]
+    fn a_driver_is_read_no_further_than_one_byte_past_the_cap() {
+        let cap = 1000;
+        let over = read_capped(
+            Endless {
+                served: 0,
+                limit: cap + 1,
+            },
+            cap,
+        )
+        .unwrap();
+        assert_eq!(over, None);
+        let at_cap = read_capped(&[7u8; 1000][..], cap).unwrap();
+        assert_eq!(at_cap, Some(vec![7u8; 1000]));
+    }
+
+    /// **Final review M10.** A backup that reads back wrong is not left
+    /// looking like one: ART made it this run, so ART removes it, and the
+    /// sentence says what happened and names the path.
+    #[test]
+    fn a_backup_that_reads_back_wrong_is_removed_and_the_sentence_says_so() {
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-rdbedit", "backup-readback");
+        let range = art_like(false);
+        let backup = dir.join("rdb.bin");
+        let corrupt = |written: &Path| {
+            std::fs::read(written).map(|mut bytes| {
+                bytes[0] ^= 1;
+                bytes
+            })
+        };
+        let err = write_backup_with(&backup, &range, 131, &corrupt).unwrap_err();
+        assert_eq!(err.code(), "ART-RDB-BACKUP-FAILED", "{err}");
+        let sentence = err.to_string();
+        for needle in [
+            backup.display().to_string().as_str(),
+            "read back is not what ART wrote",
+            "ART removed the file it had made",
+            "The card was not touched.",
+        ] {
+            assert!(sentence.contains(needle), "{needle:?} in: {sentence}");
+        }
+        assert!(
+            !backup.exists(),
+            "a file that is not a valid backup must not be left looking like one"
+        );
+    }
+
     /// ART-117 on the owner's own card — on a byte copy the owner made.
     ///
     /// `TMP`/`TEMP` no longer need setting by hand (ART-320,
@@ -1570,7 +1872,7 @@ mod tests {
                 image: &copy,
                 slot,
                 dostype: "PDS3",
-                mode: EmbedMode::Replace,
+                kind: EditKind::Replace,
                 driver: &driver,
             },
             Some(&backup),

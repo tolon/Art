@@ -2181,6 +2181,8 @@
         "replaceRefused": "Karttaki {{dostype}} {{card}} kalıyor ve bağlanmaya devam ediyor: ART onu değiştirmeyecek — {{detail}} ({{code}})",
         "differentDriver": "Karttaki {{dostype}} {{card}} kalıyor: kendini {{cardName}} olarak adlandırıyor, seçtiğin dosya ise {{fileName}} olarak; ART bir sürücüyü yalnızca aynı sürücünün daha yeni bir kopyasıyla değiştirir. hst-imager değiştirebilir — önce kartı yedekle.",
         "differentDriverUnknown": "Karttaki {{dostype}} {{card}} kalıyor: ne olduğunu söylemiyor, bu yüzden ART {{fileName}} dosyasının onun daha yeni bir kopyası olup olmadığını anlayamaz. hst-imager değiştirebilir — önce kartı yedekle.",
+        "differentDriverFileUnnamed": "Karttaki {{dostype}} {{card}} kalıyor: kendini {{cardName}} olarak adlandırıyor, seçtiğin dosya ise bir sürüm belirtiyor ama program adı vermiyor; bu yüzden ART onun aynı sürücünün daha yeni bir kopyası olup olmadığını anlayamaz. hst-imager değiştirebilir — önce kartı yedekle.",
+        "differentDriverBothUnnamed": "Karttaki {{dostype}} {{card}} kalıyor: ne o ne de seçtiğin dosya hangi program olduğunu söylüyor; bu yüzden ART dosyanın onun daha yeni bir kopyası olup olmadığını anlayamaz. hst-imager değiştirebilir — önce kartı yedekle.",
         "secondEdit": "Karttaki {{dostype}} sürücüsü bu çalıştırmada güncelleme için denetlenmiyor: ART her çalıştırmada tek bir RDB düzenlemesi yapar."
       }
     },
@@ -2220,6 +2222,9 @@
       "copied": "Kopyalanan: {{files}} dosya, {{directories}} klasör, {{bytes}} bayt.",
       "copiedNoBytes": "Kopyalanan: {{files}} dosya, {{directories}} klasör. Kopyalamayı yapan araç toplamı yuvarlayarak bildiriyor (\"12.2 MB\"), bu yüzden ART uydurulmuş bir bayt sayısı yerine hiç göstermiyor.",
       "embedded": "{{dostype}} {{file}}, RDB blokları {{first}}–{{last}} içine gömüldü. RDB yedeği {{backup}} konumunda.",
+      "stoppedHeading": "Bitmeden durdu",
+      "stoppedAfterEmbedded": "Çalışma bitmeden durdu, ama {{dostype}} {{file}} sürücüsünü RDB blokları {{first}}–{{last}} içine çoktan gömmüştü; bu değişiklik kartta kalıyor. RDB yedeği {{backup}} konumunda.",
+      "stoppedAfterReplaced": "Çalışma bitmeden durdu, ama RDB blokları {{first}}–{{last}} içinde {{dostype}} {{card}} sürücüsünü {{file}} ile çoktan değiştirmişti; bu değişiklik kartta kalıyor. RDB yedeği {{backup}} konumunda.",
       "replaced": "{{dostype}} {{card}}, RDB blokları {{first}}–{{last}} içinde {{file}} ile değiştirildi; eski sürücünün blokları kartta bağlantısız olarak kalıyor. RDB yedeği {{backup}} konumunda.",
       "tool": "{{version}} ile.",
       "notVerified": "Bu çalıştırma birimi sonradan geri okuyup denetlemedi — ne ART'ın kendi yazıcısının yaptığı bir adım için, ne de hst-imager'ın yaptığı bir adım için. Amiga'da ya da ART olmayan bir şeyle doğrula.",

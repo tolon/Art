@@ -69,17 +69,37 @@ pub(crate) fn block_array(range: &[u8], n: u32) -> Option<[u8; BLOCK_SIZE]> {
 /// `bytes` with longword `index` set to `value` and the checksum recomputed
 /// over the block's own `SummedLongs` (decision 4). Every other byte is kept —
 /// a foreign block's name, PatchFlags and tail included.
-pub fn with_long(bytes: &[u8; BLOCK_SIZE], index: usize, value: u32) -> [u8; BLOCK_SIZE] {
-    debug_assert!(
-        index < BLOCK_SIZE / 4 && index != 2,
-        "a longword, and not the checksum"
-    );
+///
+/// `None` for an index outside the block, or for longword 2, the checksum
+/// itself (final review M4). A `debug_assert!` stood here, which a release
+/// build drops — and with `panic = "abort"` a bad index would then have ended
+/// the process instead of refusing.
+pub fn with_long(bytes: &[u8; BLOCK_SIZE], index: usize, value: u32) -> Option<[u8; BLOCK_SIZE]> {
+    if index == 2 {
+        return None;
+    }
     let mut out = *bytes;
-    let at = index * 4;
-    out[at..at + 4].copy_from_slice(&value.to_be_bytes());
+    let at = index.checked_mul(4)?;
+    out.get_mut(at..at.checked_add(4)?)?
+        .copy_from_slice(&value.to_be_bytes());
     let sum = crate::core::rdb::compute_rdb_checksum(&out);
     out[8..12].copy_from_slice(&sum.to_be_bytes());
-    out
+    Some(out)
+}
+
+/// [`with_long`] on a block the plan writes, refused by that block's number.
+fn set_long(
+    bytes: &[u8; BLOCK_SIZE],
+    block: u32,
+    index: usize,
+    value: u32,
+) -> Result<[u8; BLOCK_SIZE], RdbEditRefusal> {
+    with_long(bytes, index, value).ok_or_else(|| {
+        unaccounted(
+            block,
+            format!("longword {index} of block {block} is not a field ART writes"),
+        )
+    })
 }
 
 /// The RDSK fields the editor reads.
@@ -636,16 +656,28 @@ pub fn same_program(card: &str, file: &str) -> bool {
     card.eq_ignore_ascii_case(file)
 }
 
-/// Decision 13: a replace needs the same program on both sides. A file that
-/// names none is left to decision 1 ("no `$VER:` plans no step").
+/// Whether `data` carries a `$VER:` marker at all.
+fn has_ver_marker(data: &[u8]) -> bool {
+    data.windows(5).any(|window| window == b"$VER:")
+}
+
+/// Decision 13: a replace needs the same program named on both sides.
+///
+/// Only a file with **no `$VER:` marker at all** is left to decision 1 ("no
+/// `$VER:` plans no step"). A file whose `$VER:` states a version and names
+/// no program is refused here, before any version is compared — it would
+/// otherwise reach the comparison with a version and no identity (final
+/// review I1) — and so is a card driver whose name is missing or unreadable.
 pub fn check_same_driver(card_payload: &[u8], file: &[u8]) -> Result<(), RdbEditRefusal> {
-    let Some(file_name) = program_name_from_ver_string(file) else {
+    if !has_ver_marker(file) {
         return Ok(());
-    };
-    match program_name_from_ver_string(card_payload) {
-        Some(card) if same_program(&card, &file_name) => Ok(()),
-        card => Err(RdbEditRefusal::DifferentDriver {
-            card,
+    }
+    let file_name = program_name_from_ver_string(file);
+    let card_name = program_name_from_ver_string(card_payload);
+    match (&card_name, &file_name) {
+        (Some(card), Some(file)) if same_program(card, file) => Ok(()),
+        _ => Err(RdbEditRefusal::DifferentDriver {
+            card: card_name,
             file: file_name,
         }),
     }
@@ -664,9 +696,13 @@ pub enum Stage {
     Link,
 }
 
+/// Which of decision 1's two edits: the one enum for the planner and for
+/// `core::preload::embed`'s target (final review M7 merged a duplicate).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditKind {
+    /// A driver for a DosType the RDB does not carry.
     Append,
+    /// A newer copy of the driver the RDB carries for that DosType.
     Replace,
 }
 
@@ -696,12 +732,38 @@ impl EditPlan {
 }
 
 /// The RDSK as S3 writes it.
-fn raise_rdsk(rdsk: &[u8; BLOCK_SIZE], allocation: &Allocation) -> [u8; BLOCK_SIZE] {
-    let raised = with_long(rdsk, RDSK_HIGH_RDSK_BLOCK, allocation.last_block);
+fn raise_rdsk(
+    rdsk: &[u8; BLOCK_SIZE],
+    rdsk_block: u32,
+    allocation: &Allocation,
+) -> Result<[u8; BLOCK_SIZE], RdbEditRefusal> {
+    let raised = set_long(
+        rdsk,
+        rdsk_block,
+        RDSK_HIGH_RDSK_BLOCK,
+        allocation.last_block,
+    )?;
     match allocation.raised_from {
-        Some(_) => with_long(&raised, RDSK_RDB_BLOCKS_HI, allocation.rdb_blocks_hi),
-        None => raised,
+        Some(_) => set_long(
+            &raised,
+            rdsk_block,
+            RDSK_RDB_BLOCKS_HI,
+            allocation.rdb_blocks_hi,
+        ),
+        None => Ok(raised),
     }
+}
+
+/// S1's writes: the driver as LSEGs at `k + 1` onwards.
+fn lseg_writes(driver: &[u8], k: u32) -> Vec<BlockWrite> {
+    build_lseg_chain(driver, k + 1)
+        .into_iter()
+        .enumerate()
+        .map(|(index, bytes)| BlockWrite {
+            block: k + 1 + index as u32,
+            bytes,
+        })
+        .collect()
 }
 
 fn missing(block: u32) -> RdbEditRefusal {
@@ -729,33 +791,27 @@ pub fn plan_append(
     let allocation = allocate(range, walk, driver.len())?;
     let k = allocation.fshd_block;
 
-    let data: Vec<BlockWrite> = build_lseg_chain(driver, k + 1)
-        .into_iter()
-        .enumerate()
-        .map(|(index, bytes)| BlockWrite {
-            block: k + 1 + index as u32,
-            bytes,
-        })
-        .collect();
+    let data = lseg_writes(driver, k);
     let header = BlockWrite {
         block: k,
         bytes: build_fshd_block(dos_type, file_version.0, file_version.1, NO_BLOCK, k + 1),
     };
     let rdsk_block = walk.rdsk.block;
     let rdsk = block_array(range, rdsk_block).ok_or_else(|| missing(rdsk_block))?;
-    let raised = raise_rdsk(&rdsk, &allocation);
+    let raised = raise_rdsk(&rdsk, rdsk_block, &allocation)?;
     let link = match walk.fshds.last() {
         None => BlockWrite {
             block: rdsk_block,
-            bytes: with_long(&raised, RDSK_FILE_SYS_HEADER_LIST, k),
+            bytes: set_long(&raised, rdsk_block, RDSK_FILE_SYS_HEADER_LIST, k)?,
         },
         Some(last) => BlockWrite {
             block: last.block,
-            bytes: with_long(
+            bytes: set_long(
                 &block_array(range, last.block).ok_or_else(|| missing(last.block))?,
+                last.block,
                 NEXT,
                 k,
-            ),
+            )?,
         },
     };
 
@@ -819,42 +875,38 @@ pub fn plan_replace(
     let allocation = allocate(range, walk, driver.len())?;
     let k = allocation.fshd_block;
 
-    let data: Vec<BlockWrite> = build_lseg_chain(driver, k + 1)
-        .into_iter()
-        .enumerate()
-        .map(|(index, bytes)| BlockWrite {
-            block: k + 1 + index as u32,
-            bytes,
-        })
-        .collect();
+    let data = lseg_writes(driver, k);
     let old_bytes = block_array(range, old.block).ok_or_else(|| missing(old.block))?;
     let version = (u32::from(file_version.0) << 16) | u32::from(file_version.1);
-    let header = with_long(
-        &with_long(
-            &with_long(&old_bytes, NEXT, old.next),
+    let header = set_long(
+        &set_long(
+            &set_long(&old_bytes, k, NEXT, old.next)?,
+            k,
             FSHD_VERSION,
             version,
-        ),
+        )?,
+        k,
         FSHD_SEG_LIST_BLOCKS,
         k + 1,
-    );
+    )?;
     let rdsk_block = walk.rdsk.block;
     let rdsk = block_array(range, rdsk_block).ok_or_else(|| missing(rdsk_block))?;
-    let raised = raise_rdsk(&rdsk, &allocation);
+    let raised = raise_rdsk(&rdsk, rdsk_block, &allocation)?;
     let link = if at == 0 {
         BlockWrite {
             block: rdsk_block,
-            bytes: with_long(&raised, RDSK_FILE_SYS_HEADER_LIST, k),
+            bytes: set_long(&raised, rdsk_block, RDSK_FILE_SYS_HEADER_LIST, k)?,
         }
     } else {
         let previous = &walk.fshds[at - 1];
         BlockWrite {
             block: previous.block,
-            bytes: with_long(
+            bytes: set_long(
                 &block_array(range, previous.block).ok_or_else(|| missing(previous.block))?,
+                previous.block,
                 NEXT,
                 k,
-            ),
+            )?,
         }
     };
 
@@ -928,6 +980,16 @@ pub(crate) mod fixtures {
         for (index, byte) in data.iter_mut().enumerate().skip(128) {
             *byte = (index % 251) as u8;
         }
+        data
+    }
+
+    /// A driver whose `$VER:` states a version and names no program —
+    /// `$VER: 44.5 (1.1.26)` (final review I1).
+    pub fn unnamed_driver(len: usize, version: &str) -> Vec<u8> {
+        let mut data = hunk_driver(len, "19.3");
+        data[64..128].fill(0);
+        let ver = format!("$VER: {version} (1.1.26)\0");
+        data[64..64 + ver.len()].copy_from_slice(ver.as_bytes());
         data
     }
 
@@ -1539,7 +1601,7 @@ mod block_tests {
     fn with_long_changes_one_longword_and_reseals_over_the_blocks_own_summed_longs() {
         let range = caffeine_like(true);
         let before = block_array(&range, 3).unwrap();
-        let after = with_long(&before, FSHD_VERSION, (19 << 16) | 3);
+        let after = with_long(&before, FSHD_VERSION, (19 << 16) | 3).unwrap();
         assert!(verify_rdb_block_checksum(&after));
         assert_eq!(long(&after, FSHD_VERSION), (19 << 16) | 3);
         for (at, (old, new)) in before.iter().zip(after.iter()).enumerate() {
@@ -1936,7 +1998,7 @@ mod driver_tests {
             err,
             RdbEditRefusal::DifferentDriver {
                 card: Some("SmartFilesystem".into()),
-                file: "pfs3aio".into()
+                file: Some("pfs3aio".into())
             }
         );
         assert_eq!(err.code(), "ART-RDB-EDIT-DIFFERENT-DRIVER");
@@ -1958,7 +2020,7 @@ mod driver_tests {
             err,
             RdbEditRefusal::DifferentDriver {
                 card: None,
-                file: "pfs3aio".into()
+                file: Some("pfs3aio".into())
             }
         );
         assert!(err.to_string().contains("does not say what it is"), "{err}");
@@ -1976,6 +2038,79 @@ mod driver_tests {
         let mut silent = hunk_driver(62_604, "19.3");
         silent[64..69].copy_from_slice(b"$XXX:");
         assert_eq!(check_same_driver(&card, &silent), Ok(()));
+    }
+
+    /// **Final review M4.** An index outside the block, or the checksum's own
+    /// longword, is refused — not a panic, which `panic = "abort"` makes an
+    /// abort.
+    #[test]
+    fn with_long_refuses_an_index_outside_the_block_or_the_checksum() {
+        let block = [0u8; BLOCK_SIZE];
+        assert_eq!(with_long(&block, 128, 1), None);
+        assert_eq!(with_long(&block, usize::MAX, 1), None);
+        assert_eq!(
+            with_long(&block, 2, 1),
+            None,
+            "the checksum is computed, never set"
+        );
+        let set = with_long(&block, 127, 7).expect("the last longword is a field");
+        assert_eq!(long(&set, 127), 7);
+    }
+
+    /// **Final review I1.** A file whose `$VER:` states a version and names
+    /// no program is not decision 1's silent file: it still has to name the
+    /// card's program. The reviewer's probe — an `SFS\0` card against
+    /// `$VER: 44.5` — let the replace through before this.
+    #[test]
+    fn a_file_whose_ver_names_no_program_is_refused_against_a_named_card_driver() {
+        let card = named_driver(4096, "SmartFilesystem", "1.293");
+        let file = unnamed_driver(62_604, "44.5");
+        assert_eq!(
+            crate::core::rdb::version_from_ver_string(&file),
+            Some((44, 5)),
+            "a version is still read from it"
+        );
+        let err = check_same_driver(&card, &file).unwrap_err();
+        assert_eq!(
+            err,
+            RdbEditRefusal::DifferentDriver {
+                card: Some("SmartFilesystem".into()),
+                file: None
+            }
+        );
+        assert!(
+            err.to_string()
+                .contains("states a version but no program name"),
+            "{err}"
+        );
+    }
+
+    /// The other arms of "either side unnamed": a card driver whose `$VER:`
+    /// names no program is refused against a named file and against an
+    /// unnamed one.
+    #[test]
+    fn a_card_driver_whose_ver_names_no_program_is_refused_against_any_file() {
+        let card = unnamed_driver(4096, "19.2");
+        assert_eq!(
+            check_same_driver(&card, &hunk_driver(62_604, "19.3")),
+            Err(RdbEditRefusal::DifferentDriver {
+                card: None,
+                file: Some("pfs3aio".into())
+            })
+        );
+        let err = check_same_driver(&card, &unnamed_driver(62_604, "19.3")).unwrap_err();
+        assert_eq!(
+            err,
+            RdbEditRefusal::DifferentDriver {
+                card: None,
+                file: None
+            }
+        );
+        assert!(
+            err.to_string()
+                .contains("neither the card's driver nor the file you chose"),
+            "{err}"
+        );
     }
 }
 

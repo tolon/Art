@@ -639,6 +639,26 @@ describe("planNotePhrase", () => {
       key: "preload.plan.note.differentDriverUnknown",
       params: { dostype: "PDS3", card: "19.2", fileName: "pfs3aio" },
     });
+    // Final review I1: a file whose $VER: names no program, against a named
+    // and an unnamed card driver.
+    expect(
+      planNotePhrase({
+        note: "different-driver",
+        dostype: "SFS0",
+        card_version: { version: 1, revision: 293 },
+        card_name: "SmartFilesystem",
+        file_name: null,
+      })
+    ).toEqual({
+      key: "preload.plan.note.differentDriverFileUnnamed",
+      params: { dostype: "SFS0", card: "1.293", cardName: "SmartFilesystem" },
+    });
+    expect(
+      planNotePhrase({ note: "different-driver", dostype: "PDS3", card_version: card, card_name: null, file_name: null })
+    ).toEqual({
+      key: "preload.plan.note.differentDriverBothUnnamed",
+      params: { dostype: "PDS3", card: "19.2" },
+    });
     expect(planNotePhrase({ note: "second-edit-skipped", dostype: "DOS3" })).toEqual({
       key: "preload.plan.note.secondEdit",
       params: { dostype: "DOS3" },
@@ -664,6 +684,19 @@ describe("embeddedPhrase", () => {
     });
     expect(embeddedPhrase({ ...report, card_version: { version: 19, revision: 2 } })).toEqual({
       key: "preload.result.replaced",
+      params: { dostype: "PDS3", file: "19.3", first: 132, last: 260, backup: "E:\\rdb.bin", card: "19.2" },
+    });
+  });
+
+  // Final review I3: a run that stopped after the edit says so, with the
+  // same parts — the backup included.
+  it("says the change stays when the run stopped after it", () => {
+    expect(embeddedPhrase(report, true)).toEqual({
+      key: "preload.result.stoppedAfterEmbedded",
+      params: { dostype: "PDS3", file: "19.3", first: 132, last: 260, backup: "E:\\rdb.bin" },
+    });
+    expect(embeddedPhrase({ ...report, card_version: { version: 19, revision: 2 } }, true)).toEqual({
+      key: "preload.result.stoppedAfterReplaced",
       params: { dostype: "PDS3", file: "19.3", first: 132, last: 260, backup: "E:\\rdb.bin", card: "19.2" },
     });
   });

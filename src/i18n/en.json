@@ -2181,6 +2181,8 @@
         "replaceRefused": "{{dostype}} {{card}} on the card stays, and still mounts: ART will not replace it — {{detail}} ({{code}})",
         "differentDriver": "{{dostype}} {{card}} on the card stays: it calls itself {{cardName}} and the file you chose calls itself {{fileName}}, and ART replaces a driver only with a newer copy of the same one. hst-imager can replace it — back the card up first.",
         "differentDriverUnknown": "{{dostype}} {{card}} on the card stays: it does not say what it is, so ART cannot tell whether {{fileName}} is a newer copy of it. hst-imager can replace it — back the card up first.",
+        "differentDriverFileUnnamed": "{{dostype}} {{card}} on the card stays: it calls itself {{cardName}}, and the file you chose states a version but no program name, so ART cannot tell whether it is a newer copy of the same driver. hst-imager can replace it — back the card up first.",
+        "differentDriverBothUnnamed": "{{dostype}} {{card}} on the card stays: neither it nor the file you chose says which program it is, so ART cannot tell whether the file is a newer copy of it. hst-imager can replace it — back the card up first.",
         "secondEdit": "{{dostype}}'s driver on the card is not checked for an update this run: ART makes one RDB edit per run."
       }
     },
@@ -2220,6 +2222,9 @@
       "copied": "Copied in: {{files}} file(s), {{directories}} folder(s), {{bytes}} bytes.",
       "copiedNoBytes": "Copied in: {{files}} file(s), {{directories}} folder(s). The tool that did the copying reports its total rounded (\"12.2 MB\"), so ART shows no byte count rather than an invented one.",
       "embedded": "Embedded {{dostype}} {{file}} in RDB blocks {{first}}–{{last}}. The RDB backup is at {{backup}}.",
+      "stoppedHeading": "Stopped before it finished",
+      "stoppedAfterEmbedded": "The run stopped before it finished, but it had already embedded {{dostype}} {{file}} in RDB blocks {{first}}–{{last}}, and that change stays on the card. The RDB backup is at {{backup}}.",
+      "stoppedAfterReplaced": "The run stopped before it finished, but it had already replaced {{dostype}} {{card}} with {{file}} in RDB blocks {{first}}–{{last}}, and that change stays on the card. The RDB backup is at {{backup}}.",
       "replaced": "Replaced {{dostype}} {{card}} with {{file}} in RDB blocks {{first}}–{{last}}; the old driver's blocks stay on the card, unlinked. The RDB backup is at {{backup}}.",
       "tool": "By {{version}}.",
       "notVerified": "This run did not read the volume back afterwards to check it — not for a step ART's own writer did, and not for one hst-imager did. Verify it on the Amiga, or with something that is not ART.",

@@ -1123,6 +1123,8 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       { note: "replace-refused", dostype: "PDS3", card_version: card, code: "ART-RDB-EDIT-NO-ROOM", detail: "x" },
       { note: "different-driver", dostype: "SFS0", card_version: card, card_name: "SmartFilesystem", file_name: "pfs3aio" },
       { note: "different-driver", dostype: "PDS3", card_version: card, card_name: null, file_name: "pfs3aio" },
+      { note: "different-driver", dostype: "SFS0", card_version: card, card_name: "SmartFilesystem", file_name: null },
+      { note: "different-driver", dostype: "PDS3", card_version: card, card_name: null, file_name: null },
       { note: "second-edit-skipped", dostype: "DOS3" },
     ];
     for (const note of notes) {
@@ -1158,6 +1160,8 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     };
     expect(resolvesAtRuntime(embeddedPhrase(report).key)).toBe(true);
     expect(resolvesAtRuntime(embeddedPhrase({ ...report, card_version: card }).key)).toBe(true);
+    expect(resolvesAtRuntime(embeddedPhrase(report, true).key)).toBe(true);
+    expect(resolvesAtRuntime(embeddedPhrase({ ...report, card_version: card }, true).key)).toBe(true);
   });
 
   it("pairingPhrase: every Pairing variant resolves, or is deliberately null", () => {

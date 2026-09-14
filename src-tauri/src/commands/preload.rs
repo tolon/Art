@@ -72,7 +72,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::core::card::manifest::{manifest_path_for, read_manifest};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::{JobTitle, ProgressSink};
-use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
+use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::osinstall::apply::MANIFEST_FILE_NAME;
 use crate::core::osinstall::PairedRom;
 use crate::core::preload::embed::EmbedReport;
@@ -300,6 +300,25 @@ pub struct PreloadResult {
     /// Which tool performed each step, and why, when it was not the default.
     /// See this module's own doc comment: never silent, for every step.
     pub steps: Vec<StepReport>,
+    /// Set when the run stopped after changing the card's RDB (final review
+    /// I3): the error it stopped with, so the result panel can say the run
+    /// did not finish while still saying what it did to the RDB.
+    pub stopped: Option<StopReport>,
+}
+
+/// Why a run stopped: the job's own error, its sentence and its id.
+#[derive(Debug, Clone, Serialize)]
+pub struct StopReport {
+    pub code: String,
+    pub message: String,
+}
+
+/// A run that stopped, with what it had done and which tool did each step.
+#[derive(Debug)]
+struct Stopped {
+    error: CoreError,
+    outcome: PreloadOutcome,
+    steps: Vec<StepReport>,
 }
 
 /// What one step changed, so [`run_with_fallback`] can fold it into a
@@ -466,9 +485,30 @@ fn run_with_fallback(
     native: &dyn VolumeFormatter,
     fallback: Option<&dyn VolumeFormatter>,
     sink: &dyn ProgressSink,
-) -> CoreResult<(PreloadOutcome, Vec<StepReport>)> {
+) -> Result<(PreloadOutcome, Vec<StepReport>), Box<Stopped>> {
     let mut outcome = PreloadOutcome::default();
     let mut reports = Vec::new();
+    match run_steps_with_fallback(made, native, fallback, sink, &mut outcome, &mut reports) {
+        Ok(()) => Ok((outcome, reports)),
+        // Boxed, as `core::preload::RunStopped` is (clippy::result_large_err).
+        Err(error) => Err(Box::new(Stopped {
+            error,
+            outcome,
+            steps: reports,
+        })),
+    }
+}
+
+/// [`run_with_fallback`]'s loop, each finished step folded into `outcome`
+/// and `reports` as it goes, so a stop still has what was done.
+fn run_steps_with_fallback(
+    made: &PreloadPlan,
+    native: &dyn VolumeFormatter,
+    fallback: Option<&dyn VolumeFormatter>,
+    sink: &dyn ProgressSink,
+    outcome: &mut PreloadOutcome,
+    reports: &mut Vec<StepReport>,
+) -> CoreResult<()> {
     // Which tool(s) actually did work, so the summary line above the
     // per-step list can never claim a single tool when the steps disagree
     // (fix-wave finding 4: this used to be `native.probe().ok()`
@@ -499,7 +539,7 @@ fn run_with_fallback(
                 tool: tool_name_of(Some(fallback)),
                 fallback_reason: Some(reason),
             });
-            apply_effect(&mut outcome, effect);
+            apply_effect(outcome, effect);
             continue;
         }
 
@@ -511,7 +551,7 @@ fn run_with_fallback(
                     fallback_reason: None,
                 });
                 used_native = true;
-                apply_effect(&mut outcome, effect);
+                apply_effect(outcome, effect);
                 continue;
             }
             Err(err) => err,
@@ -535,7 +575,7 @@ fn run_with_fallback(
             tool: tool_name_of(Some(fallback)),
             fallback_reason: Some(reason),
         });
-        apply_effect(&mut outcome, effect);
+        apply_effect(outcome, effect);
     }
 
     // Only claim a tool here when every step that ran agreed on one — a
@@ -548,7 +588,7 @@ fn run_with_fallback(
     };
 
     sink.report(total, Some(total), "done");
-    Ok((outcome, reports))
+    Ok(())
 }
 
 /// One line per step where the fallback fired, for the operation log — the
@@ -596,6 +636,79 @@ fn embed_summary(report: &EmbedReport) -> String {
 /// The plan is recomputed here rather than taken from the caller: a screen
 /// that previewed one thing must not be able to run another, and the card may
 /// have changed since.
+/// The operation log's record for a run (section 53): what was formatted and
+/// with which tool, which tool did which step when it was not the default,
+/// and the RDB edit.
+fn run_record(
+    image: &str,
+    made: &PreloadPlan,
+    result: &Result<(PreloadOutcome, Vec<StepReport>), Box<Stopped>>,
+) -> OperationRecord {
+    let record = user_operation("Format and fill Amiga volumes")
+        .source(image)
+        .destination(image)
+        .detail("Partitions formatted", made.formats().to_string());
+    match result {
+        Ok((done, reports)) => {
+            let record = record
+                .detail("Volumes", done.formatted.join(", "))
+                .detail("Files copied", done.copied.files.to_string())
+                .detail(
+                    "Tool",
+                    done.tool
+                        .as_ref()
+                        .map(|t| t.raw.clone())
+                        .unwrap_or_else(|| "unknown".into()),
+                );
+            let record = match fallback_summary(reports) {
+                Some(summary) => record.detail("Fallback", summary),
+                None => record,
+            };
+            // **Not verified, and it says so.** ART has no PFS3 reader here,
+            // so the files inside the volume cannot be read back.
+            with_embed(record, done.embedded.as_ref()).outcome(OperationOutcome::verified(false))
+        }
+        // Final review I3: a run that stopped still logs what it had changed
+        // — the volumes it erased and the RDB edit — beside the failure.
+        Err(stopped) => {
+            let record = match stopped.outcome.formatted.is_empty() {
+                true => record,
+                false => record.detail("Volumes", stopped.outcome.formatted.join(", ")),
+            };
+            let record = with_embed(record, stopped.outcome.embedded.as_ref());
+            record.failure(stopped.error.code(), stopped.error.to_string())
+        }
+    }
+}
+
+/// The driver and RDB-backup lines, when the run changed the card's RDB.
+fn with_embed(record: OperationRecord, embedded: Option<&EmbedReport>) -> OperationRecord {
+    match embedded {
+        Some(embedded) => record
+            .detail("Driver", embed_summary(embedded))
+            .detail("RDB backup", embedded.backup.display().to_string()),
+        None => record,
+    }
+}
+
+/// What the screen is sent for a run that stopped **after changing the
+/// card's RDB** (final review I3), so the result panel can say the change
+/// stays and where the backup is. A stop that changed no RDB sends nothing,
+/// as before: the job bar's failure is the whole story there.
+fn stopped_result(job_id: u64, image: String, stopped: &Stopped) -> Option<PreloadResult> {
+    stopped.outcome.embedded.as_ref()?;
+    Some(PreloadResult {
+        job_id,
+        image,
+        outcome: stopped.outcome.clone(),
+        steps: stopped.steps.clone(),
+        stopped: Some(StopReport {
+            code: stopped.error.code().to_string(),
+            message: stopped.error.to_string(),
+        }),
+    })
+}
+
 #[tauri::command]
 pub fn preload_run(
     command: PreloadCommand,
@@ -636,53 +749,32 @@ pub fn preload_run(
         // §53. A format destroys what was there, so what was formatted and
         // with which tool are the two things the log has to carry — and now,
         // which tool did which step, when it was not the default.
-        let record = user_operation("Format and fill Amiga volumes")
-            .source(&for_log)
-            .destination(&for_log)
-            .detail("Partitions formatted", made.formats().to_string());
-        let record = match &run_result {
-            Ok((done, reports)) => {
-                let record = record
-                    .detail("Volumes", done.formatted.join(", "))
-                    .detail("Files copied", done.copied.files.to_string())
-                    .detail(
-                        "Tool",
-                        done.tool
-                            .as_ref()
-                            .map(|t| t.raw.clone())
-                            .unwrap_or_else(|| "unknown".into()),
-                    );
-                let record = match fallback_summary(reports) {
-                    Some(summary) => record.detail("Fallback", summary),
-                    None => record,
-                };
-                let record = match &done.embedded {
-                    Some(embedded) => record
-                        .detail("Driver", embed_summary(embedded))
-                        .detail("RDB backup", embedded.backup.display().to_string()),
-                    None => record,
-                };
-                // **Not verified, and it says so.** ART has no PFS3 reader
-                // here, so the files inside the volume cannot be read back.
-                // Claiming verification here would be the one thing §89
-                // forbids.
-                record.outcome(OperationOutcome::verified(false))
-            }
-            Err(err) => record.failure(err.code(), err.to_string()),
-        };
-        write_to_path(&log_path, &record);
+        write_to_path(&log_path, &run_record(&for_log, &made, &run_result));
 
-        let (outcome, steps) = run_result?;
-        let _ = emit_app.emit(
-            PRELOAD_EVENT,
-            PreloadResult {
-                job_id,
-                image: for_log,
-                outcome,
-                steps,
-            },
-        );
-        Ok(())
+        match run_result {
+            Ok((outcome, steps)) => {
+                let _ = emit_app.emit(
+                    PRELOAD_EVENT,
+                    PreloadResult {
+                        job_id,
+                        image: for_log,
+                        outcome,
+                        steps,
+                        stopped: None,
+                    },
+                );
+                Ok(())
+            }
+            // Final review I3: a run that stopped after changing the card's
+            // RDB still tells the screen so; the job itself fails with the
+            // stop's own error, which the job bar shows.
+            Err(stopped) => {
+                if let Some(result) = stopped_result(job_id, for_log, &stopped) {
+                    let _ = emit_app.emit(PRELOAD_EVENT, result);
+                }
+                Err(stopped.error)
+            }
+        }
     });
 
     Ok(id)
@@ -1038,6 +1130,8 @@ mod tests {
         /// itself, from one field, so a double cannot claim it could do a
         /// copy it then refuses.
         copy_fails_with: Option<fn() -> CoreError>,
+        /// What `format_partition` fails with, after recording the call.
+        format_fails_with: Option<fn() -> CoreError>,
     }
 
     impl VolumeFormatter for Recorder {
@@ -1057,7 +1151,10 @@ mod tests {
             self.calls
                 .borrow_mut()
                 .push(format!("format {index} {volume}"));
-            Ok(())
+            match self.format_fails_with {
+                Some(make_err) => Err(make_err()),
+                None => Ok(()),
+            }
         }
         fn copy_in(
             &self,
@@ -1395,8 +1492,9 @@ mod tests {
             ..Default::default()
         };
 
-        let err =
-            run_with_fallback(&made, &native, None, &crate::core::jobs::NoProgress).unwrap_err();
+        let err = run_with_fallback(&made, &native, None, &crate::core::jobs::NoProgress)
+            .unwrap_err()
+            .error;
 
         assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
         assert!(
@@ -1554,8 +1652,9 @@ mod tests {
                 volume_name: "Games".into(),
             },
         ]);
-        let err =
-            run_with_fallback(&made, &native, None, &crate::core::jobs::NoProgress).unwrap_err();
+        let err = run_with_fallback(&made, &native, None, &crate::core::jobs::NoProgress)
+            .unwrap_err()
+            .error;
         assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
         assert!(err.to_string().contains("hst-imager"), "{err}");
         assert!(err.to_string().contains("ART-113"), "{err}");
@@ -1585,6 +1684,11 @@ mod tests {
             &crate::core::jobs::NoProgress,
         )
         .unwrap_err();
+        assert!(
+            stopped_result(1, "card.img".into(), &err).is_none(),
+            "a stop that changed no RDB sends the screen nothing"
+        );
+        let err = err.error;
         assert_eq!(err.code(), "ART-IO", "{err}");
         assert!(
             other.calls.borrow().is_empty(),
@@ -1657,6 +1761,101 @@ mod tests {
             Some(backup)
         );
         assert_eq!(outcome.formatted, vec!["DH0"]);
+    }
+
+    /// **Final review I3, through the command layer.** An embed, then a
+    /// format the native path fails: the stop still carries the edit, the log
+    /// record names the driver and the backup beside the failure, and the
+    /// screen is sent a result that says so.
+    #[test]
+    fn a_format_that_fails_after_the_embed_keeps_it_in_the_stop_the_log_and_the_screen() {
+        use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
+
+        let (_guard, dir) = scratch("embed-then-fail");
+        let image = dir.join("card.hdf");
+        crate::core::hdf::create_hdf(
+            &image,
+            32 * 1024 * 1024,
+            true,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::Pfs3Standard,
+                size_mb: 10,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+            &[],
+        )
+        .unwrap();
+        let driver = dir.join("pfs3aio");
+        std::fs::write(
+            &driver,
+            crate::core::rdbedit::fixtures::hunk_driver(62_604, "19.3"),
+        )
+        .unwrap();
+        let backup = dir.join("rdb.bin");
+        let made = plan(&PreloadRequest {
+            image: image.clone(),
+            driver: Some(driver),
+            partitions: vec![PreloadPartition {
+                area: 1,
+                index: 1,
+                volume_name: "Work".into(),
+                content: None,
+            }],
+            rdb_backup: Some(backup.clone()),
+        })
+        .unwrap();
+        let native = Recorder {
+            format_fails_with: Some(|| CoreError::Io(std::io::Error::other("the card was pulled"))),
+            ..Default::default()
+        };
+
+        let result = run_with_fallback(&made, &native, None, &crate::core::jobs::NoProgress);
+        let record = run_record("card.hdf", &made, &result);
+        let Err(stopped) = result else {
+            panic!("the format failed, so the run stopped")
+        };
+
+        assert_eq!(stopped.error.code(), "ART-IO", "{}", stopped.error);
+        assert_eq!(
+            stopped.outcome.embedded.as_ref().map(|e| e.backup.clone()),
+            Some(backup.clone()),
+            "the stop carries the edit the card holds"
+        );
+
+        assert!(
+            matches!(&record.outcome, OperationOutcome::Failure { error_code, .. } if error_code == "ART-IO"),
+            "{record:?}"
+        );
+        let detail = |key: &str| {
+            record
+                .details
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value.clone())
+        };
+        assert_eq!(
+            detail("Driver").as_deref(),
+            Some("PFS3 19.3 embedded in RDB blocks 2–130; RDBBlocksHi raised from 1 to 130"),
+            "{record:?}"
+        );
+        assert_eq!(detail("RDB backup"), Some(backup.display().to_string()));
+
+        let sent = stopped_result(7, "card.hdf".into(), &stopped)
+            .expect("a stop after an RDB edit is sent to the screen");
+        let stop = sent
+            .stopped
+            .as_ref()
+            .expect("the result says the run stopped");
+        assert_eq!(stop.code, "ART-IO");
+        assert!(
+            stop.message.contains("the card was pulled"),
+            "{}",
+            stop.message
+        );
+        assert_eq!(sent.outcome.embedded, stopped.outcome.embedded);
     }
 
     #[test]
@@ -2261,7 +2460,8 @@ mod tests {
                 );
                 println!("source files={source_files} directories={source_dirs}");
             }
-            Err(err) => {
+            Err(stopped) => {
+                let err = stopped.error;
                 // Not a panic: a refusal *is* a result here. Without
                 // `hst-imager` configured this is the expected end of the run
                 // for any tree carrying a non-ASCII AmigaDOS name, and it is
@@ -2390,7 +2590,7 @@ mod tests {
                     revision: 293,
                 },
                 card_name: None,
-                file_name: "pfs3aio".into(),
+                file_name: Some("pfs3aio".into()),
             })
             .unwrap();
             expect_keys(
@@ -2420,11 +2620,19 @@ mod tests {
                     tool: "native".into(),
                     fallback_reason: None,
                 }],
+                stopped: None,
             };
             let value = serde_json::to_value(&result).unwrap();
             // Deliberately not camelCased — `job_id` matches `LayoutResult`
             // and `OsInstallResult`, which do the same.
-            expect_keys(&value, &["job_id", "image", "outcome", "steps"]);
+            expect_keys(&value, &["job_id", "image", "outcome", "steps", "stopped"]);
+            assert_eq!(value["stopped"], serde_json::Value::Null);
+            let stop = serde_json::to_value(StopReport {
+                code: "ART-IO".into(),
+                message: "x".into(),
+            })
+            .unwrap();
+            expect_keys(&stop, &["code", "message"]);
             assert_eq!(value["steps"].as_array().unwrap().len(), 1);
         }
     }
