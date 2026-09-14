@@ -47,8 +47,8 @@ no-clock conveniences are `#[cfg(test)]`, so the product cannot compile without 
 | `core/volume/write/layout.rs:104-110` `amiga_now` (callers `dir.rs:397`, `file.rs:208`) | UTC now | 3 |
 | `core/volume/write/layout.rs:114-121` `amiga_from_unix` (callers `copy.rs:388`, `iso/mod.rs:545`, `iso/mod.rs:810`, `commands/iso.rs:175`, `osinstall/source_cd.rs:156`) | UTC instant → Amiga | 5, 7, 8 |
 | `core/adf/create.rs:192-204` `get_current_amiga_date` (caller `create.rs:86`) | UTC now | 4 |
-| `core/preload/native.rs:642-655` `current_amiga_date` (caller `native.rs:573`) | UTC now | 6 |
-| `vendor/libpfs3/src/util.rs:163-172` (callers `format.rs:114`, `writer.rs:571`, `writer.rs:1178`) | UTC now | 6 |
+| `core/preload/native.rs:657` `current_amiga_date` (caller `native.rs:588`, in `format_ffs_volume`) | UTC now | 6 |
+| `vendor/libpfs3/src/util.rs:163` `current_amiga_datestamp`, measured after plan 3 (`+art.3`). Callers: `format.rs:142` in `format_with_size`, which feeds the rootblock date `:214-216`, the rext root date `:275-277` and each new deldir block `:388-390`; `writer.rs:665` `update_dir_entry_size`; `writer.rs:803` `move_to_deldir`, which feeds deldir block `0x1A-0x1E` and `rext.dd_creation*` `0x88-0x8C`; `writer.rs:1405` `build_dir_entry` | UTC now | 6 |
 | `core/adf/bcpl.rs:76-81` `AmigaDate::to_unix` (caller `core/adf/fs.rs:87`) | Amiga → UTC instant | 7 |
 
 | Product site that constructs a writer or a dated source | Task |
@@ -56,7 +56,7 @@ no-clock conveniences are `#[cfg(test)]`, so the product cannot compile without 
 | `commands/volume_write.rs:171` (`with_volume`, BlockJournal), `:288` (`WholeFileVolume::writer`), `:1470` (`run_copy_in_folder_with`), `:2067` (`run_copy_in_staged_with`), `:2135` (`volume_attributes`) | 3 |
 | `commands/adf.rs:176` `save_new_adf` | 4 |
 | `core/volume/write/copy.rs:214` `source.metadata` (reaches every `HostFolder`/`HostSelection`/`IsoSource` built in `commands/archives.rs:176,308`, `commands/archive.rs:396`, `commands/sources.rs:660`, `commands/volume_write.rs:943,979,1210,1277`, `commands/iso.rs:357,363`, `core/whdload/install.rs:646`) — the constructors do not change | 5 |
-| `commands/preload.rs:611` `NativeFormatter`; `core/preload/native.rs:189` `FormatOptions`, `:895` `Writer::open`, `:997` `VolumeWriter::open` | 6 |
+| `commands/preload.rs` `let native = NativeFormatter;` (`:611` on 2026-09-14); `core/preload/native.rs:191` `FormatOptions`, `:948` `Writer::open` (in `copy_in_pfs3`), `:1050` `VolumeWriter::open` (in `copy_in_ffs`) | 6 |
 | `commands/volume.rs:65` and `commands/adf.rs:137-138` (listings); `commands/iso.rs:175` (single-file sidecar) and `:262` (`extract_tree`) | 7 |
 | `commands/osinstall.rs:394` `plan_with_cache_in`, `:1992` `open_media`, `:2791` `apply_staging_in`; `core/osinstall/apply.rs:1328`, `plan.rs:1705`, `scan.rs:137,163,166` | 8 |
 
@@ -70,6 +70,7 @@ is inside tests (from `:564`). `core/adf/mutate.rs`, named in the research note 
 |---|---|---|
 | `.uaem` in: `core/volume/write/uaem.rs:206` `amiga_from_civil` → `copy.rs:372-373` → the writer; `core/preload/native.rs:1066-1078` (FFS `copy_in`) | zone-less text straight to an Amiga triplet, no UTC step | Task 5 `a_uaem_date_round_trips_without_an_offset`; Task 6 FFS test |
 | `.uaem` out: `copy.rs::extract_from_volume` → `sidecar_for` → `uaem::render` (`uaem.rs:193`) | the volume's triplet rendered as text | Task 5 `a_uaem_date_round_trips_without_an_offset` |
+| libpfs3 `writer.rs:825-830` `write_deldir_entry` (the deldir **entry's** date) | copies the deleted file's own directory-entry date, as pfs3aio `AddToDeldir` does (`directory.c:4546-4548` at 211f7f0, read, not run) | Task 6 `a_pfs3_delete_keeps_the_files_date_and_stamps_the_deldir_with_the_clock`, mutation 5 |
 | `commands/volume_write.rs:2152` `date_text` | the same renderer | none new (no conversion to guard) |
 | `core/osinstall/source.rs` (ADF install media) | an Amiga date copied to an Amiga date | none new |
 
@@ -644,7 +645,9 @@ Run: `...; cargo test --lib a_new_disk_is_stamped_with_the_clocks_local_time` �
 
 - [ ] **Step 3: Implement.** Rename `pub fn create_blank_adf(` to `pub fn create_blank_adf_at(` with a last
 parameter `now: AmigaDate`. Delete `let now = get_current_amiga_date();` (`:86`). Delete
-`get_current_amiga_date` (`:191-205`). Add:
+`get_current_amiga_date` (`:191-205`). **Before deleting it**, copy the whole function, doc comment included, with the
+Write tool to `D:\Projeler\Amiga\scratch-0913\art317-get_current_amiga_date.rs`. Task 9 pastes it back from that file
+to mutate its guard. Then add:
 
 ```rust
 /// [`create_blank_adf_at`] stamped with UTC now — test-only (ART-317). The
@@ -834,11 +837,12 @@ Mutate: back up `copy.rs`. In `host_metadata`'s sidecar branch (`:372-373`), rep
 ### Task 6: libpfs3 `0.1.3+art.4`, and `NativeFormatter` takes the clock
 
 **Files:**
-- Modify: `src-tauri/vendor/libpfs3/src/format.rs` (header, `FormatOptions` `:24-37`, `:114`)
-- Modify: `src-tauri/vendor/libpfs3/src/writer.rs` (header, struct `:18-36`, `open` `:40-68`, `:571`, `:1178`)
+- Modify: `src-tauri/vendor/libpfs3/src/format.rs` (header `:6-11`, `FormatOptions` `:29-42`, `:142` in `format_with_size`)
+- Modify: `src-tauri/vendor/libpfs3/src/writer.rs` (header `:10-19`, struct `:26-58`, `open` `:62-106`, `:665` in `update_dir_entry_size`, `:803` in `move_to_deldir`, `:1405` in `build_dir_entry`)
 - Modify: `src-tauri/vendor/libpfs3/Cargo.toml`, `src-tauri/vendor/libpfs3/ART-PATCH.md`, `src-tauri/Cargo.lock`
 - Modify: `src-tauri/Cargo.toml` (the libpfs3 comment naming the vendored version, `:164`)
-- Modify: `src-tauri/src/core/preload/native.rs:128, :132-267, :513-517, :573, :639-655, :827-836, :895, :978-997`; tests
+- Modify: `src-tauri/src/core/preload/native.rs:130` (`LIBPFS3_VERSION`), `:134` (`NativeFormatter`), `:191` (`FormatOptions`), `:528-532` (`format_ffs_volume`), `:588`, `:657-670` (`current_amiga_date`), `copy_in_pfs3` `:874`/`:948`/`:954`, `copy_in_ffs` `:1050`; tests, including the `FormatOptions` literals near `:1536` (`formatted_in_memory`) and `:2258`, and `probe_names_libpfs3` near `:3170`
+- Modify: every other `libpfs3::format::FormatOptions {` literal `rg` finds under `src-tauri/src` (on 2026-09-14 also `core/card/sizing.rs:664`, a test)
 - Modify: `src-tauri/src/commands/preload.rs:611`; tests in `native.rs`, `core/firstboot/cardread.rs`, `core/osinstall/verify.rs`, `commands/preload.rs`
 - Modify: `THIRD_PARTY_LICENSES.md:65`
 
@@ -851,8 +855,25 @@ Mutate: back up `copy.rs`. In `host_metadata`'s sidecar branch (`:372-373`), rep
   - `#[cfg(test)] NativeFormatter::UTC`
 
 - [ ] **Step 0: Precondition.** `rg -n "^version" D:\Projeler\Amiga\amiga-retro-toolkit\src-tauri\vendor\libpfs3\Cargo.toml`
-must print `0.1.3+art.3`. If it prints `art.2`, **stop**: plan 3 has not landed. Re-read `format.rs` and
+must print `0.1.3+art.3`. If it prints `art.2`, **stop**: plan 3 has not landed. Re-read `util.rs`, `format.rs` and
 `writer.rs` whole before editing, because plan 3 changed both.
+Run: `rg -n "current_amiga_datestamp" D:\Projeler\Amiga\amiga-retro-toolkit\src-tauri\vendor\libpfs3\src`
+Expected, as measured on 2026-09-14 after plan 3:
+- `util.rs:163`, the definition;
+- `format.rs:27`, the import;
+- `format.rs:142` in `format_with_size`;
+- `writer.rs:665` in `update_dir_entry_size`;
+- `writer.rs:803` in `move_to_deldir`;
+- `writer.rs:1405` in `build_dir_entry`.
+Line numbers may move; the function names are the anchors. A call site not on that list is converted in Step 3 the
+same way as its neighbours, and it gets an assertion in Step 1 before you go on.
+**What pfs3aio stamps, read at 211f7f0 (not run).** `directory.c`:
+- `NewDeldirBlock` gives a new deldir block the rootblock's creation date (`:4477-4479`).
+- `AddToDeldir` copies the deleted entry's own date into the deldir entry (`:4546-4548`).
+- `AddToDeldir` then stamps the deldir block and `rext.dd_creation*` with `DateStamp()` (`:4556-4560`).
+So "now" (an instant) is converted; the deldir entry's date is the file's own and is not.
+No product code deletes on PFS3 today — `rg -n "\.delete\(" src-tauri/src` finds it only in `native.rs` tests.
+The deldir stamp is converted anyway, so a later caller gets local time.
 
 - [ ] **Step 1: Failing tests** in `native.rs`'s `mod tests`:
 
@@ -877,6 +898,58 @@ must print `0.1.3+art.3`. If it prints `art.2`, **stop**: plan 3 has not landed.
         assert_eq!(rext.root_date, local, "root date");
         let entry = vol.list_dir("").unwrap().into_iter().find(|e| e.name == "Readme").unwrap();
         assert_eq!((entry.creation_day, entry.creation_minute, entry.creation_tick), local, "entry date");
+        let rb = &vol.rootblock;
+        assert_eq!((rb.creation_day, rb.creation_minute, rb.creation_tick), local, "rootblock date");
+        // format_partition turns the deldir on (ART-316); a new deldir block carries the
+        // rootblock's date (pfs3aio NewDeldirBlock, `directory.c:4477-4479`).
+        let raw = std::fs::read(&image).unwrap();
+        let at = partition_offset(&image) as usize;
+        let sector = |n: u32, len: usize| raw[at + n as usize * 512..at + n as usize * 512 + len].to_vec();
+        let root = sector(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        let ext = sector(be32(&root, 0x58), resblk);
+        let dd = sector(be32(&ext, 0x90), resblk);
+        assert_eq!((be16(&dd, 0x1A), be16(&dd, 0x1C), be16(&dd, 0x1E)), local, "deldir block date at format");
+    }
+
+    /// ART-317 on the PFS3 deldir. pfs3aio `directory.c` at 211f7f0 (read, not run):
+    /// `AddToDeldir` copies the deleted entry's own date into the deldir entry
+    /// (`:4546-4548`) and stamps the deldir block and `rext.dd_creation*` with
+    /// `DateStamp()` (`:4556-4560`). So the entry keeps the file's date (wall time,
+    /// never shifted), and the block and the extension carry the delete's own
+    /// local time, from `Writer::set_entry_date`.
+    #[test]
+    fn a_pfs3_delete_keeps_the_files_date_and_stamps_the_deldir_with_the_clock() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image);
+        let written = (17_546u16, 900u16, 0u16); // 2026-01-15 15:00, when the file was written
+        let deleted = (17_727u16, 900u16, 0u16); // 2026-07-15 15:00, when it was deleted
+        {
+            let vol = libpfs3::volume::Volume::open_rw(&image, offset).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.set_entry_date(Some(written));
+            w.write_file("Gone", b"bye").unwrap();
+            w.set_entry_date(Some(deleted));
+            w.delete("Gone").unwrap();
+        }
+
+        let (_, entries) = raw_deldir(&image);
+        let entry = entries.iter().find(|e| e.name == b"Gone").expect("Gone is in the deldir");
+        assert_eq!(
+            (be16(&entry.date, 0), be16(&entry.date, 2), be16(&entry.date, 4)),
+            written,
+            "deldir entry: the file's own date"
+        );
+
+        let raw = std::fs::read(&image).unwrap();
+        let at = offset as usize;
+        let sector = |n: u32, len: usize| raw[at + n as usize * 512..at + n as usize * 512 + len].to_vec();
+        let root = sector(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        let ext = sector(be32(&root, 0x58), resblk);
+        let dd = sector(be32(&ext, 0x90), resblk);
+        assert_eq!((be16(&dd, 0x1A), be16(&dd, 0x1C), be16(&dd, 0x1E)), deleted, "deldir block date");
+        assert_eq!((be16(&ext, 0x88), be16(&ext, 0x8A), be16(&ext, 0x8C)), deleted, "rext.dd_creation");
     }
 
     /// ART-317 on FFS: the formatted root and a copied file.
@@ -982,21 +1055,33 @@ Run: `...; cargo test --lib an_ffs_format_and_copy_in_carry_the_clocks_local_tim
 - [ ] **Step 3: libpfs3.** In `format.rs`, add to `FormatOptions`, and `datestamp: None,` in `Default`:
 
 ```rust
-    /// Root and volume datestamp as (days, minutes, ticks) since 1978-01-01.
-    /// `None` stamps the current time as 0.1.3 did, which is UTC. Added by ART
-    /// for ART-317: AmigaDOS reads it as local time.
+    /// The format's datestamp as (days, minutes, ticks) since 1978-01-01: the
+    /// rootblock's creation date (0x0C), the extension's root date (0x10) and
+    /// each new deldir block's date (0x1A), which pfs3aio's `NewDeldirBlock`
+    /// copies from the rootblock. `None` stamps the current time as 0.1.3 did,
+    /// which is UTC. Added by ART for ART-317: AmigaDOS reads it as local time.
     pub datestamp: Option<(u16, u16, u16)>,
 ```
 
-At `:114`: `let (cday, cmin, ctick) = opts.datestamp.unwrap_or_else(current_amiga_datestamp);`
+In `format_with_size` (`:142` on 2026-09-14), replace `let (cday, cmin, ctick) = current_amiga_datestamp();` with
+`let (cday, cmin, ctick) = opts.datestamp.unwrap_or_else(current_amiga_datestamp);`. Its three uses (`:214-216`,
+`:275-277` and the deldir loop `:388-390`) then follow without edits.
 
-In `writer.rs`, add the struct field `entry_date: Option<(u16, u16, u16)>,` (after `pending_writes`),
-`entry_date: None,` in `open`, and, after `into_volume`:
+Every `FormatOptions {` literal must name the new field. `rg -n "FormatOptions \{" D:\Projeler\Amiga\amiga-retro-toolkit\src-tauri`
+lists them; add `datestamp: None,` to each test literal (`native.rs` `formatted_in_memory` and
+`a_pfs3_format_with_the_deldir_makes_pfs3aios_two_deldir_blocks`, `core/card/sizing.rs`). Step 4 gives the product
+literal its value.
+
+In `writer.rs`, add the struct field `entry_date: Option<(u16, u16, u16)>,` as its last field (after `rext_dirty`),
+and `entry_date: None,` after `rext_dirty: false,` in `open`'s `Self { … }`. After `into_volume`:
 
 ```rust
-    /// The date new and rewritten directory entries carry, as (days, minutes,
-    /// ticks). `None` is the current time, as 0.1.3 stamped it (UTC). Added by
-    /// ART for ART-317, whose caller sets local time before each entry.
+    /// "Now" for this writer, as (days, minutes, ticks): the date of each new or
+    /// rewritten directory entry, and the date a delete stamps on the deldir
+    /// block and `rext.dd_creation*` (pfs3aio `AddToDeldir`, `directory.c:4556-4560`).
+    /// `None` is the current time, as 0.1.3 stamped it (UTC). Added by ART for
+    /// ART-317, whose caller sets local time before each operation. A deldir
+    /// entry's own date is not this: it is copied from the deleted entry.
     pub fn set_entry_date(&mut self, date: Option<(u16, u16, u16)>) {
         self.entry_date = date;
     }
@@ -1006,14 +1091,23 @@ In `writer.rs`, add the struct field `entry_date: Option<(u16, u16, u16)>,` (aft
     }
 ```
 
-At `:571` and `:1178`: `let (cday, cmin, ctick) = self.entry_datestamp();`. Extend each file's
-`//! Modified by ART` header with one line: `//! Modified by ART on 2026-09-14 (ART-317): an optional caller-supplied datestamp.`
+**First route two sites, and see the deldir stamp still fail.**
+In `update_dir_entry_size` (`:665`) and `build_dir_entry` (`:1405`), replace
+`let (cday, cmin, ctick) = crate::util::current_amiga_datestamp();` with
+`let (cday, cmin, ctick) = self.entry_datestamp();`.
+Run: `...; cargo test --lib a_pfs3_delete_keeps_the_files_date_and_stamps_the_deldir_with_the_clock`
+Expected: FAIL at `"deldir block date"` (left = UTC now). The `"deldir entry"` assertion before it passes.
+
+**Then the third.** In `move_to_deldir` (`:803`), make the same replacement. Leave `write_deldir_entry` alone: it
+copies `entry.creation_*`, and that copy is correct. Re-run: `ok`.
+Extend each file's `//! Modified by ART` header (`format.rs:6-11`, `writer.rs:10-19`) with the clause
+`on 2026-09-14 (ART-317): a caller-supplied datestamp;`, placed before the `` `ART-PATCH.md` in this crate's root `` line.
 
 In `vendor/libpfs3/Cargo.toml`, set `version = "0.1.3+art.4"` and change `(+art.N)` in the header comment to
 `(+art.4)`. Then:
 Run: `...; cargo update -p libpfs3 --precise 0.1.3+art.4`
 Run: `...; cargo test --lib the_pinned_version_constant_matches_cargo_toml` → FAIL (constant still `art.3`).
-Set `LIBPFS3_VERSION` (`native.rs:128`) to `"0.1.3+art.4"` and the `probe_names_libpfs3` expected string to
+Set `LIBPFS3_VERSION` (`native.rs:130`, `const LIBPFS3_VERSION: &str = "0.1.3+art.3";`) to `"0.1.3+art.4"` and the `probe_names_libpfs3` expected string (near `:3170`) to
 `"libpfs3 0.1.3+art.4 (native, no external tool)"`. Change the vendored-version mention in `src-tauri/Cargo.toml`
 (the libpfs3 comment) and in `THIRD_PARTY_LICENSES.md:65` to `0.1.3+art.4`, adding `ART-317` to that line's
 list. `rg -n "art\.[0-3]\b" D:\Projeler\Amiga\amiga-retro-toolkit --glob "!**/superpowers/**" --glob "!**/Cargo.lock"`
@@ -1032,22 +1126,30 @@ fn pfs3_datestamp(date: AmigaDate) -> (u16, u16, u16) {
   - `format_partition`, the PFS3 arm: add `datestamp: Some(pfs3_datestamp(self.clock.amiga_now())),` to the
     `FormatOptions` literal. The FFS arm:
     `format_ffs_volume(&mut region, &geometry, &checked_name, self.clock.amiga_now())?;`.
-  - `format_ffs_volume(device, geometry, volume_name, now: AmigaDate)`: delete `let now = current_amiga_date();` (`:573`), and delete `current_amiga_date` (`:639-655`).
+  - `format_ffs_volume(device, geometry, volume_name, now: AmigaDate)`: delete `let now = current_amiga_date();` (`:588` on 2026-09-14), and delete `fn current_amiga_date` (`:657`) with its doc comment.
+  - Product `FormatOptions` literal (`:191`, which already sets `enable_deldir: true` since plan 3): add `datestamp: Some(pfs3_datestamp(self.clock.amiga_now())),` after `enable_deldir: true,`. This is the same line as the first bullet below — do it once.
   - `copy_in_pfs3` and `copy_in_ffs` get a last parameter `clock: &'static dyn AmigaClock`; `copy_in` passes `self.clock`.
   - `copy_in_pfs3`: first line of the loop body, before the cancellation check:
     `writer.set_entry_date(Some(pfs3_datestamp(clock.amiga_now())));`
-  - `copy_in_ffs:997`: `let mut writer = VolumeWriter::open_with_clock(&mut region, geometry, image, offset, clock)?;`
+  - `copy_in_ffs` (`let mut writer = VolumeWriter::open(&mut region, geometry, image, offset)?;`, `:1050` on 2026-09-14): `let mut writer = VolumeWriter::open_with_clock(&mut region, geometry, image, offset, clock)?;`
 
 - [ ] **Step 5: Pass**
 
-Run: `...; cargo test --lib core::preload:: *> E:\amiga\ProjeART\build\tmp\art317-t6a.txt; Select-String -Path E:\amiga\ProjeART\build\tmp\art317-t6a.txt -Pattern "test result:"` → `0 failed`, including both new tests, `the_pinned_version_constant_matches_cargo_toml` and `probe_names_libpfs3`.
+Run: `...; cargo test --lib core::preload:: *> E:\amiga\ProjeART\build\tmp\art317-t6a.txt; Select-String -Path E:\amiga\ProjeART\build\tmp\art317-t6a.txt -Pattern "test result:"` → `0 failed`, including the three new tests, `a_pfs3_format_with_the_deldir_makes_pfs3aios_two_deldir_blocks`, `the_pinned_version_constant_matches_cargo_toml` and `probe_names_libpfs3`.
 Run: `...; cargo test --lib commands::preload:: *> E:\amiga\ProjeART\build\tmp\art317-t6b.txt; Select-String -Path E:\amiga\ProjeART\build\tmp\art317-t6b.txt -Pattern "test result:"` → `0 failed`.
 Run: `...; cargo test --lib core::firstboot:: core::osinstall::verify *> E:\amiga\ProjeART\build\tmp\art317-t6c.txt; Select-String -Path E:\amiga\ProjeART\build\tmp\art317-t6c.txt -Pattern "test result:"` → `0 failed`.
 
-- [ ] **Step 6: Mutate, three guards.** Back up `native.rs`.
-  1. Delete the `set_entry_date` line → FAILS at `"entry date"`. Restore.
-  2. Use `datestamp: None` → FAILS at `"root date"` (PFS3). Restore.
+- [ ] **Step 6: Mutate, five guards.** Back up `native.rs` and `vendor/libpfs3/src/writer.rs` to
+`E:\amiga\ProjeART\build\tmp\art317-backup\`.
+  1. In `copy_in_pfs3`, delete the `set_entry_date` line → FAILS at `"entry date"`. Restore.
+  2. In the product `FormatOptions` literal, use `datestamp: None` → FAILS at `"root date"` (PFS3). Restore.
   3. In `copy_in_ffs`, pass `&crate::core::clock::UtcClock` → FAILS at `"file date"`. Restore.
+  4. In `move_to_deldir`, put back `let (cday, cmin, ctick) = crate::util::current_amiga_datestamp();` → FAILS at
+     `"deldir block date"`. Restore from the backup; `cargo test` rebuilds the vendored crate.
+  5. In `write_deldir_entry`, replace its three `entry.creation_*` puts with
+     `let (d, m, t) = self.entry_datestamp(); put_u16(block, off + 8, d); put_u16(block, off + 10, m); put_u16(block, off + 12, t);`
+     → FAILS at `"deldir entry: the file's own date"`: the entry's date is wall time and must not be re-stamped. Restore.
+Run the Step 5 commands again after the last restore: `0 failed`.
 
 - [ ] **Step 7: `ART-PATCH.md`.**
   - Title → `` # `libpfs3` 0.1.3+art.4 — ART's vendored copy ``.
@@ -1059,20 +1161,49 @@ Run: `...; cargo test --lib core::firstboot:: core::osinstall::verify *> E:\amig
 **`src/format.rs`, `src/writer.rs`** ([ART-317](../../../docs/ISSUES.md); design
 `docs/superpowers/specs/2026-09-14-art-317-local-time-design.md`):
 
-N. **The caller may supply the datestamp.** `FormatOptions::datestamp` sets the root and volume date, and
-   `Writer::set_entry_date` the date of each new or rewritten directory entry. `None` keeps 0.1.3's
-   `current_amiga_datestamp()`, which is UTC. AmigaDOS `DateStamp()` is local time with no zone, and pfs3aio
-   stamps with it; ART passes the local wall time. Std-only: the crate still asks no clock but `SystemTime`.
+N. **The caller may supply "now" ([ART-317](../../../docs/ISSUES.md)).** `FormatOptions::datestamp` sets the
+   format's date: the rootblock's creation date, the extension's root date and each new deldir block's date,
+   which pfs3aio's `NewDeldirBlock` copies from the rootblock (`directory.c:4477-4479`).
+   `Writer::set_entry_date` sets the date of each new or rewritten directory entry (`build_dir_entry`,
+   `update_dir_entry_size`), and the date a delete stamps on the deldir block and `rext.dd_creation*`
+   (`move_to_deldir`; pfs3aio `AddToDeldir` `DateStamp()`, `directory.c:4556-4560`). A deldir entry's own date
+   is still copied from the deleted entry, as pfs3aio does (`:4546-4548`). `None` keeps 0.1.3's
+   `current_amiga_datestamp()`, which is UTC. AmigaDOS `DateStamp()` is local time with no zone; ART passes the
+   local wall time. pfs3aio read at `211f7f0`, not run. Std-only: the crate still asks no clock but `SystemTime`.
 ```
 
-  (Number `N` after plan 3's last item.) Regenerate "Diff against 0.1.3" against the pristine release:
+  (Number `N` after plan 3's last item, 14 on 2026-09-14.) Regenerate "Diff against 0.1.3" the way plan 3 did,
+  against `7ce9136` — the commit that vendored crates.io's 0.1.3 unchanged. `git diff` against it includes this
+  task's uncommitted edits. Plan 3's script is `E:\amiga\ProjeART\build\art-patch-diff.py`. If it is missing,
+  write it with the Write tool first:
 
-Run: `New-Item -ItemType Directory -Force E:\amiga\ProjeART\build\tmp\libpfs3-orig`
-Run: `curl.exe -L -o E:\amiga\ProjeART\build\tmp\libpfs3-orig\libpfs3-0.1.3.crate https://static.crates.io/crates/libpfs3/libpfs3-0.1.3.crate`
-Run: `(Get-FileHash -Algorithm SHA256 E:\amiga\ProjeART\build\tmp\libpfs3-orig\libpfs3-0.1.3.crate).Hash` → `02F457EF99A09DDEBF56E454C6A25DC3A6860A602C878489F132A4CA3EED4317`
-Run: `tar -xzf E:\amiga\ProjeART\build\tmp\libpfs3-orig\libpfs3-0.1.3.crate -C E:\amiga\ProjeART\build\tmp\libpfs3-orig`
-Run: `cd D:\Projeler\Amiga\amiga-retro-toolkit; git diff --no-index E:/amiga/ProjeART/build/tmp/libpfs3-orig/libpfs3-0.1.3/src src-tauri/vendor/libpfs3/src > E:\amiga\ProjeART\build\tmp\libpfs3.diff`
-Replace the section's fenced diff with that file's content, with the `a/`/`b/` path prefixes shortened to `src/…` as the existing section spells them.
+```python
+"""Regenerate the diff at the end of the vendored libpfs3's ART-PATCH.md.
+
+The base is 7ce9136, the commit that vendored crates.io's 0.1.3 unchanged.
+The header lines `diff --git` and `index` are dropped, as the existing diff does.
+"""
+import pathlib
+import subprocess
+
+repo = pathlib.Path(r"D:\Projeler\Amiga\amiga-retro-toolkit")
+md = repo / "src-tauri" / "vendor" / "libpfs3" / "ART-PATCH.md"
+out = subprocess.run(
+    ["git", "diff", "--relative=src-tauri/vendor/libpfs3", "7ce9136", "--",
+     "src-tauri/vendor/libpfs3/src"],
+    cwd=repo, capture_output=True, text=True, encoding="utf-8", check=True,
+).stdout
+lines = [l for l in out.splitlines() if not l.startswith(("diff --git ", "index "))]
+text = md.read_text(encoding="utf-8")
+head, sep, _ = text.partition("## Diff against 0.1.3\n")
+assert sep, "ART-PATCH.md has no '## Diff against 0.1.3' heading"
+md.write_bytes((head + sep + "\n```diff\n" + "\n".join(lines) + "\n```\n").encode("utf-8"))
+print(f"ART-PATCH.md: diff of {len(lines)} lines")
+```
+
+Run: `python E:\amiga\ProjeART\build\art-patch-diff.py`
+Expected: `ART-PATCH.md: diff of <n> lines`. `<n>` is larger than before this task. The diff's `format.rs` and
+`writer.rs` hunks contain `datestamp` and `entry_datestamp`.
 
 - [ ] **Step 8: Commit** — `libpfs3 0.1.3+art.4: caller-supplied datestamps; NativeFormatter stamps local time (ART-317)`. The body carries the script's per-file counts.
 `git add` the vendor files, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `native.rs`, `commands/preload.rs`, `core/firstboot/cardread.rs`, `core/osinstall/verify.rs`, `THIRD_PARTY_LICENSES.md`.
@@ -1307,8 +1438,15 @@ Run: `...; cargo build` → finishes, so no product code calls a test-only wrapp
 
 Run: `...; cargo test --lib core_makes_amiga_dates_only_through_the_clock` → `ok`. If it names a product line,
 that line is a missed conversion: fix it through the clock, don't allow-list it.
-Mutate: back up `create.rs` and paste the deleted `get_current_amiga_date` (from `git show HEAD~6:src-tauri/src/core/adf/create.rs`)
-above `#[cfg(test)]` with `#[allow(dead_code)]` → FAILS naming `adf/create.rs`. Restore.
+Mutate: back up `create.rs` to `E:\amiga\ProjeART\build\tmp\art317-backup\`. Get the deleted function from
+`D:\Projeler\Amiga\scratch-0913\art317-get_current_amiga_date.rs`, which Task 4 Step 3 saved. If that file is missing,
+recover it independently of HEAD distance:
+`cd D:\Projeler\Amiga\amiga-retro-toolkit; git log -S"fn get_current_amiga_date" --format=%h -- src-tauri/src/core/adf/create.rs`.
+The first hash printed is Task 4's commit, the most recent one that changed the count. Then
+`git show <that hash>^:src-tauri/src/core/adf/create.rs > E:\amiga\ProjeART\build\tmp\create-before-art317.rs`
+(read-only; changes nothing in the tree), and copy the function out of it.
+Paste it above `create.rs`'s first `#[cfg(test)]` with `#[allow(dead_code)]` → FAILS naming `adf/create.rs`.
+Restore `create.rs` from the backup, and re-run: `ok`.
 
 - [ ] **Step 2: Gate `VolumeWriter::open`.** Put `#[cfg(test)]` on it and change its doc to "Tests only (ART-317):
 the product passes a clock through [`open_with_clock`](Self::open_with_clock)."
@@ -1327,7 +1465,13 @@ Run: `...; cargo clippy --all-targets -- -D warnings` → `error[E0599]: no func
 ### Task 10: Records, full verification, review
 
 **Files:**
-- Modify: `docs/ISSUES.md`, `docs/architecture.md:69-70, :142-155`, `CHANGELOG.md:8`, `docs/STATUS.md` (Snapshot and "Picking up next session", `:190`), `docs/session-log.md:12`
+- Modify: `docs/ISSUES.md`, `docs/architecture.md`, `CHANGELOG.md`, `docs/STATUS.md` (Snapshot and "Picking up next session"), `docs/session-log.md`
+
+**These five files have changed since this plan was written** — plan 4's close-out edited all of them.
+- Re-read each one whole at execution, and anchor every edit by the text quoted below, never by a line number.
+- Where the quoted text no longer exists, find the sentence that plays the same role, and say so in the commit message.
+- **Every number these records get is measured at execution, never copied from this plan or from an earlier row.**
+  That covers test totals, ignored counts, the open-defect count and the trait-instance count; say how each was measured.
 
 - [ ] **Step 1: Full suite, twice (ART-059)**
 
@@ -1351,18 +1495,21 @@ file on 2026-09-14)" after it. Append:
 `a_new_drawer_and_a_new_file_carry_the_writers_local_time`, `a_new_disk_is_stamped_with_the_clocks_local_time`,
 `a_winter_mtime_copied_in_summer_keeps_its_winter_local_time`, `a_uaem_date_round_trips_without_an_offset` (a
 `.uaem` date is wall time and is never shifted), `a_pfs3_format_and_copy_in_carry_the_clocks_local_time`,
-`an_ffs_format_and_copy_in_carry_the_clocks_local_time`, `a_listed_date_is_the_instant_the_writer_stamped`,
+`an_ffs_format_and_copy_in_carry_the_clocks_local_time`,
+`a_pfs3_delete_keeps_the_files_date_and_stamps_the_deldir_with_the_clock` (pfs3aio `AddToDeldir`, read at
+211f7f0), `a_listed_date_is_the_instant_the_writer_stamped`,
 `a_disc_recording_date_is_read_as_local_wall_time`, `core_makes_amiga_dates_only_through_the_clock`; each seen
 failing with its defect put back. Survivor: on a UTC CI runner, `offset_at` returning 0 passes; the ignored
 `agrees_with_dotnet_timezoneinfo_across_seasons_and_years` catches it on a non-UTC machine. Dates already on
 volumes stay as written."
 
-- [ ] **Step 3: `docs/architecture.md`.** At `:142`, "There are five live instances" → "six". After the
-`EmulatorLauncher` sentence, add: "`AmigaClock` (`core/clock.rs` → `tools/local_time.rs`, ART-317), the local UTC
-offset in force on a given date, so every Amiga date ART writes or shows is local wall time as AmigaDOS stamps
-it;". At `:69-70`, add a tree line
-`│   │   │   ├── local_time.rs   #     the AmigaClock: chrono::Local, also outside core/`. In `:151`,
-"unlike the other four" → "unlike the other five".
+- [ ] **Step 3: `docs/architecture.md`.** Find by text the sentence that counts the trait instances ("There are five
+live instances" on 2026-09-14). Count the traits it actually names at execution, and write that count plus one.
+After the `EmulatorLauncher` clause, add: "`AmigaClock` (`core/clock.rs` → `tools/local_time.rs`, ART-317), the
+local UTC offset in force on a given date, so every Amiga date ART makes from an instant is local wall time as
+AmigaDOS stamps it;". In the source tree listing, beside the line for `recycle_bin.rs`, add
+`│   │   │   ├── local_time.rs   #     the AmigaClock: chrono::Local, also outside core/`. In the `VolumeSession`
+sentence, "unlike the other four" (or whatever count it carries) becomes one more.
 
 - [ ] **Step 4: `CHANGELOG.md`**, under `## [Unreleased]`:
 
@@ -1376,7 +1523,11 @@ it;". At `:69-70`, add a tree line
   are copied as written. Dates already on existing disks and cards stay as they were written.
 ```
 
-- [ ] **Step 5: `docs/STATUS.md`.** Update the Snapshot numbers (test counts from Step 1, libpfs3 `0.1.3+art.4`).
+- [ ] **Step 5: `docs/STATUS.md`.** Update the Snapshot with measured numbers only:
+  - test totals and ignored counts from Step 1's two output files;
+  - the open-defect count, counted in `docs/ISSUES.md`'s `## Open` section after Step 2 (the `**ART-` title lines between `## Open` and `## Fixed`);
+  - the libpfs3 version from `src-tauri/vendor/libpfs3/Cargo.toml`.
+  Anchor by the Snapshot's own labels, not by line.
 Update the "Picking up next session" block **in place**: plan 5 done, ART-317 fixed, and the owner's two
 follow-ups — run the ignored `.NET` oracle test on the owner's machine, and add the CLAUDE.md trait-table row
 (Step 7). `docs/session-log.md`: a new top row, date 2026-09-14, "ART-317: Amiga dates in local time
