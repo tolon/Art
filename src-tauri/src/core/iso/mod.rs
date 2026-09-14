@@ -29,6 +29,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use crate::core::clock::AmigaClock;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::volume::write::copy::{
@@ -792,7 +793,7 @@ impl CopySource for IsoSource {
     /// deliberate: absent is not the same as `----rwed`, but AmigaDOS has no
     /// third state, and inventing restrictive bits for a disc that recorded
     /// none would break more than it protects.
-    fn metadata(&self, relative: &str) -> CoreResult<Option<Sidecar>> {
+    fn metadata(&self, relative: &str, clock: &dyn AmigaClock) -> CoreResult<Option<Sidecar>> {
         let Some(found) = self.entries.iter().find(|e| e.path == relative) else {
             return Ok(None);
         };
@@ -807,7 +808,11 @@ impl CopySource for IsoSource {
         }
         Ok(Some(Sidecar {
             protection: found.entry.protection.unwrap_or_else(default_protection),
-            date: found.entry.date.map(amiga_from_unix).unwrap_or_default(),
+            date: found
+                .entry
+                .date
+                .map(|unix| clock.amiga_from_unix(unix))
+                .unwrap_or_default(),
             comment: found.entry.comment.clone().unwrap_or_default(),
         }))
     }
@@ -2098,11 +2103,43 @@ pub(crate) mod tests {
         // `copy.rs` turns this `Sidecar` into the `FileMeta` the volume
         // writer stores, so `s` and `p` surviving here is `s` and `p`
         // surviving the copy (ART-078).
-        let startup = source.metadata("Startup-Sequence").unwrap().unwrap();
+        let startup = source
+            .metadata("Startup-Sequence", &crate::core::clock::UtcClock)
+            .unwrap()
+            .unwrap();
         assert_eq!(startup.protection, 0x40);
         assert_eq!(startup.comment, "the boot script");
-        let assign = source.metadata("Assign").unwrap().unwrap();
+        let assign = source
+            .metadata("Assign", &crate::core::clock::UtcClock)
+            .unwrap()
+            .unwrap();
         assert_eq!(assign.protection, 0x20);
+
+        // ART-317: a disc's recording date is an instant, read as local wall time.
+        static PLUS_TWO: crate::core::clock::FixedClock = crate::core::clock::FixedClock {
+            now: 0,
+            offset: 7_200,
+        };
+        use crate::core::clock::{AmigaClock, UtcClock};
+        let utc = source
+            .metadata("Startup-Sequence", &UtcClock)
+            .unwrap()
+            .unwrap();
+        let local = source
+            .metadata("Startup-Sequence", &PLUS_TWO)
+            .unwrap()
+            .unwrap();
+        assert_ne!(
+            utc.date,
+            crate::core::adf::bcpl::AmigaDate::default(),
+            "the fixture carries a date"
+        );
+        assert_eq!(
+            local.date,
+            PLUS_TWO.amiga_from_unix(UtcClock.unix_from_amiga(utc.date))
+        );
+        assert_ne!(local.date, utc.date);
+
         fs::remove_dir_all(&d).ok();
     }
 
@@ -2560,7 +2597,10 @@ pub(crate) mod tests {
             b"Hello from the disc.\n"
         );
         // And the recording date still reaches the volume.
-        assert!(source.metadata("README.TXT").unwrap().is_some());
+        assert!(source
+            .metadata("README.TXT", &crate::core::clock::UtcClock)
+            .unwrap()
+            .is_some());
 
         fs::remove_dir_all(&d).ok();
     }
