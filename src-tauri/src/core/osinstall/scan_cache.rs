@@ -128,8 +128,8 @@ use super::source::{starts_with_ignoring_case, MediaEntry, MediaSource};
 /// `3`: a disc's `MediaEntry::date` is local wall time (ART-317); a schema-2
 /// listing holds UTC and must miss. `sha256` (below) is a further field on
 /// [`CacheFile`] added after schema 2 shipped, but it did **not** bump the
-/// schema itself — it is `#[serde(default)]` and genuinely optional, so a
-/// schema-2 entry written before it existed still parses and still serves
+/// schema itself — it is `#[serde(default)]` and genuinely optional, so an
+/// entry written without `sha256` still parses and still serves
 /// its listing and its MD5 (`an_entry_written_before_sha256_existed_still_serves_its_md5`).
 /// The date is different in kind: every schema-2 entry's `MediaEntry::date`
 /// values were computed as UTC, so an old entry cannot simply be read as
@@ -224,7 +224,7 @@ struct CacheFile {
     /// it (ART-302). Unlike `md5` this one *is* an identity check: two discs
     /// with the same name and size are one disc only when these agree.
     /// Optional and `#[serde(default)]` without a schema bump, the way `md5`
-    /// arrived: a schema-2 entry written before this field parses as `None`
+    /// arrived: an entry written without this field parses as `None`
     /// and keeps its listing and MD5.
     #[serde(default)]
     sha256: Option<String>,
@@ -799,7 +799,7 @@ mod tests {
         assert_eq!(cache.lookup_sha256(&medium).as_deref(), Some("shavalue"));
     }
 
-    /// A schema-2 entry written before the field existed still loads.
+    /// An entry written without `sha256` still loads.
     #[test]
     fn an_entry_written_before_sha256_existed_still_serves_its_md5() {
         let (_guard, dir) = fixtures::scratch("sha256-old-entry");
@@ -828,6 +828,14 @@ mod tests {
     /// by mutation: reverting `SCAN_CACHE_SCHEMA` to `2` passed every other
     /// test in this module, because they all write and read through the
     /// live symbolic constant and so cannot see what its actual value is.
+    ///
+    /// M4 (final review): a miss has more than one cause — a future field
+    /// that does not survive the `serde_json::Value` round trip below would
+    /// keep the `is_none()` assertion green for the wrong reason. The
+    /// control arm sends the same entry through the same round trip with
+    /// the schema left at the live `SCAN_CACHE_SCHEMA` and asserts a hit
+    /// first, so the round trip itself is proved innocent before `2` is
+    /// read as evidence about the schema number specifically.
     #[test]
     fn a_schema_2_listing_from_before_local_time_is_a_miss() {
         let (_dir, image, cache) = media_and_cache("schema-2-utc-dates");
@@ -836,6 +844,16 @@ mod tests {
         let file = cache.file_for(&image).unwrap();
         let mut value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+
+        // Control arm: the same round trip, schema untouched, must still be
+        // a hit.
+        value["schema"] = serde_json::json!(SCAN_CACHE_SCHEMA);
+        std::fs::write(&file, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(
+            cache.lookup(&image).is_some(),
+            "the serde_json::Value round trip must not itself drop a hit"
+        );
+
         value["schema"] = serde_json::json!(2);
         std::fs::write(&file, serde_json::to_vec(&value).unwrap()).unwrap();
 

@@ -93,6 +93,17 @@ mod tests {
                 LOCAL_TIME.offset_at(unix)
             );
             assert_eq!(LOCAL_TIME.offset_at(unix), dotnet, "at {unix}");
+            // M6 (final review): `unix_from_amiga` is proved against
+            // `SeasonalClock` in `core::clock`'s own tests, never against the
+            // real `chrono::Local` this machine actually runs. Round-trip
+            // each instant this oracle already checks through the real
+            // clock, on both sides of whichever DST boundary the machine
+            // observes.
+            assert_eq!(
+                LOCAL_TIME.unix_from_amiga(LOCAL_TIME.amiga_from_unix(unix)),
+                unix,
+                "round trip at {unix}"
+            );
         }
     }
 }
