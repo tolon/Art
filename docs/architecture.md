@@ -832,7 +832,15 @@ Nothing in the build catches a `Phrase` pointing at a key nobody added either,
 so `src/i18n/phrase-keys.test.ts` enumerates every variant of every such mapper
 and asserts it resolves to a real leaf.
 
-Rust-side strings (`CoreError` messages, `WhdloadRefusal.reason` /
+A background job's title is the one place Rust names a catalogue key itself:
+`JobTitle::new("components.jobBar.title.…")` with `.text(name, value)` and
+`.count(n)`, serialised to the `Phrase` shape and rendered by `JobBar.tsx`
+(ART-301). The keys are written out in `JOB_TITLE_KEYS` (`src/lib/jobs.ts`).
+`src/i18n/job-title-keys.test.ts` reads the Rust sources and holds the two to
+each other in both directions, including the values each sentence
+interpolates. A new job adds its key there and to both catalogues.
+
+Other Rust-side strings (`CoreError` messages, `WhdloadRefusal.reason` /
 `.suggestion`) are not in this system yet and stay English whatever the chosen
 language — ART-060.
 

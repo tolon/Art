@@ -220,16 +220,67 @@ re-audits them without reason:
 
 ---
 
-**ART-301** 🔵 **The job bar's titles are English sentences composed in Rust** — *found 2026-09-10
-in the owner's screenshot*
-`src/components/JobBar.tsx` (`job.title`) · 33 `let title = format!(…)` sites in 17 command files and 7 fixed
-English titles — 40 job titles in 19 files (counted 2026-09-14; the first count, 34 / 18, included a test's
-`let title` in `artwork.rs` and missed the fixed titles). The owner saw *"Adding 1 package(s) to …"* twice on a Turkish screen. The two rows are **two
-runs**, not a double render — 21:22:08 and 21:23:04 in `operations.jsonl`. The refusal under each is
-the core's own sentence and English by design (ART-060); the title is not the core's sentence but
-the command layer's, and a job could carry a `Phrase` instead. A round of its own.
-
 ## Fixed
+
+**ART-301** 🔵 ✅ **The job bar's titles were English sentences composed in Rust** — *found 2026-09-10 in the
+owner's screenshot; fixed 2026-09-14 on `art-debt-0914`*
+`src-tauri/src/core/jobs/mod.rs` (`JobTitle`) · `src-tauri/src/commands/jobs.rs` · `src/lib/jobs.ts`
+(`JOB_TITLE_KEYS`) · `src/components/JobBar.tsx` · The owner saw *"Adding 1 package(s) to …"* twice on a Turkish
+screen. **Corrected count:** there were 40 titles in 19 command files, not 34 in 18 as this entry first said —
+33 built with `format!`, 7 fixed strings. A job now carries a `JobTitle`: a catalogue key under
+`components.jobBar.title.*` and the values its sentence names, serialised to the TypeScript `Phrase` shape.
+The job bar renders it with `t()`. A count goes in as `count`, so i18next picks `_one` / `_other` and no title
+builds `(s)` by hand. Paths, names and releases pass through untranslated. That makes 36 keys and 47 leaves in each
+catalogue. `spawn_job` takes a `JobTitle` and nothing else, so a sentence no longer compiles there. Unchanged
+on purpose: the refusal under a failed job is still the core's English sentence (ART-060), and the operation
+log's record names are not titles — `commands/oplog.rs`'s `user_operation` writes its own English strings to
+`operations.jsonl`, and a job's title never reaches that file. **The Turkish strings above were written by the
+plan, not yet read on screen by the owner** — folded into [ART-062](ISSUES.md)'s still-unread Turkish catalogue,
+not a separate claim of having been checked.
+Guards: `core::jobs::tests::{a_job_title_serializes_to_the_phrase_shape,
+a_count_is_sent_as_a_number_named_count, a_title_without_values_sends_no_params_field,
+a_job_progress_sends_its_title_as_a_phrase_not_a_sentence, a_title_reads_back_as_itself}`,
+`commands::jobs::tests::the_registry_keeps_the_title_it_was_given`; `src/components/JobBar.test.tsx` (*names a
+job in Turkish when Turkish is chosen*, *picks the plural from count, not from a hand-built (s)*);
+`src/i18n/job-title-keys.test.ts`, which reads the Rust tree. It checks both catalogues, literal keys in
+their own `let title` statement, exactly the values each sentence interpolates, all 40 sites, and no listed
+key without a site.
+
+Red before the fix:
+- Task 1 (`core::jobs::`/`commands::jobs::`, before `JobTitle` existed): `error[E0425]: cannot find type
+  \`JobTitle\` in this scope` at `src\commands\jobs.rs:335:36` — 14 compile errors, all `JobTitle` not found.
+- Task 2 (`src/components/JobBar.test.tsx`, `src/i18n/job-title-keys.test.ts`, before the catalogue existed):
+  `Error: Objects are not valid as a React child (found: object with keys {key, params})` and `TypeError:
+  JOB_TITLE_KEYS is not iterable` — `Test Files 2 failed (2)` / `Tests 9 failed (9)`.
+- Task 3 (`src/i18n/job-title-keys.test.ts`, before any command file moved off `format!`):
+  `AssertionError: expected 0 to be greater than 0` — `Test Files 1 failed (1)` / `Tests 1 failed | 7 passed (8)`.
+- Task 7 (`src/i18n/job-title-keys.test.ts`, pinning the reverse direction): no red on the count itself — all
+  40 sites were already migrated, so `"finds all forty sites"` passed immediately; the reverse direction's red
+  came only from its own mutation, below.
+
+Mutations put back and seen to fail:
+- Task 1 M1 — dropped `skip_serializing_if = "BTreeMap::is_empty"` on `JobTitle.params`: compiled, failed at run
+  time in `a_title_without_values_sends_no_params_field` (`params` serialised as `{}` instead of omitted).
+- Task 1 M2 — dropped `#[serde(untagged)]` on `JobParam`: compiled, failed at run time in
+  `a_count_is_sent_as_a_number_named_count` (plus `a_job_progress_sends_its_title_as_a_phrase_not_a_sentence`
+  and `a_job_title_serializes_to_the_phrase_shape`, both also asserting on the params shape).
+- Task 2 — mutated `JobBar.tsx`'s `{t(job.title.key, job.title.params)}` to `{job.title.key}`: `Test Files 1
+  failed (1)` / `Tests 4 failed | 1 passed (5)` — the four title-reading tests failed, showing the raw key
+  instead of the rendered sentence; the Stop-button test stayed innocent, as expected.
+- Task 3 M1 — mangled a key, `components.jobBar.title.copyOutOf` → `…copyOutOff` in `cbm.rs`: failed
+  `"names only keys the list holds"`, naming `commands\cbm.rs → components.jobBar.title.copyOutOff`.
+- Task 3 M2 — deleted `.text("source", &file.display())` from the same `cbm.rs` site: failed `"passes exactly
+  the values its sentence interpolates"`, naming `commands\cbm.rs → components.jobBar.title.copyOutOf: passes
+  [], the sentence names [source]`.
+- Task 7 — swapped `JobTitle::new("components.jobBar.title.syncAminet")` for
+  `…title.fetchArtwork"` in `sources.rs`: failed `"leaves no listed key without a Rust site"` (`Tests 1 failed |
+  8 passed (9)`), naming `components.jobBar.title.syncAminet` as a listed key with no Rust site.
+- Task 7 — replaced the same site's `JobTitle::new(...)` with a plain string,
+  `let title = "Syncing the Aminet catalog";`: `cargo check` refused it —
+  `error[E0308]: mismatched types … expected \`JobTitle\`, found \`&str\`` — the compiler itself, not a runtime
+  test, since `spawn_job` no longer accepts anything but `JobTitle` once the bridge is gone.
+
+No survivor. Every mutation above was killed by the guard it was aimed at; none needed strengthening.
 
 **ART-318** 🟠 ✅ **`libpfs3`'s writer put a deleted file into the deldir in a layout pfs3aio does not read** —
 *found 2026-09-14 while implementing ART-316; fixed 2026-09-14 on `art-debt-0914`*

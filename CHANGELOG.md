@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The job bar names each job in the language you chose.** Titles such as
+  "Adding 1 package(s) to …" were English on a Turkish screen and counted
+  with "(s)"; they now read, for example, "Work.hdf içine 1 paket ekleniyor",
+  or "Adding 1 package to Work.hdf" in English. A failed job's reason is
+  still in English.
 - **The OS Builder answers its first question of a session without re-reading two identical
   install discs whole, on every start after the first.** ART remembers a disc's fingerprint
   between starts; the first start after this update still reads them, and a remembered
