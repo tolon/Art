@@ -16,12 +16,14 @@
 //! type — is refused by name; `NativeFormatter` does not guess.
 //!
 //! `libpfs3` here is ART's vendored copy, `src-tauri/vendor/libpfs3`
-//! (`0.1.3+art.4`): its format and writer differ from 0.1.3 — the super index
+//! (`0.1.3+art.5`): its format and writer differ from 0.1.3 — the super index
 //! level and reserved anodes 0–4 (ART-310), one anode per allocation (ART-312),
 //! directory `parent`s (ART-313), names against `fnsize` (ART-314), the data
 //! bitmap's bounds (ART-315), the deldir, formatted on and written as pfs3aio
 //! writes it (ART-316, ART-318), pfs3aio's anode
-//! ceiling (ART-311), and a caller-supplied datestamp (ART-317); `ART-PATCH.md`
+//! ceiling (ART-311), a caller-supplied datestamp (ART-317), and the writer
+//! returning to its last commit on error, locking rather than continuing when
+//! a commit itself fails part-way (ART-319); `ART-PATCH.md`
 //! there lists each. The writer's other limits below (ART-113, ART-116) still hold.
 //!
 //! ## `import_filesystem` refuses
@@ -128,7 +130,7 @@ use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
 /// `the_pinned_version_constant_matches_cargo_toml` (below) reads the pin, the
 /// `[patch.crates-io]` line and the vendored manifest, so the constant cannot
 /// drift from what was actually built.
-const LIBPFS3_VERSION: &str = "0.1.3+art.4";
+const LIBPFS3_VERSION: &str = "0.1.3+art.5";
 
 /// A [`VolumeFormatter`] backed by `libpfs3` and ART's own FFS writer.
 /// Launches nothing; see the module docs for what each method actually does.
@@ -391,6 +393,7 @@ pub(crate) fn from_pfs3(err: libpfs3::error::Error) -> CoreError {
             more: 0,
             max_bytes: max,
         },
+        libpfs3::error::Error::CommitFailed => CoreError::Pfs3WriterLocked,
         other => CoreError::Malformed {
             format: "pfs3".into(),
             detail: other.to_string(),
@@ -3186,7 +3189,7 @@ mod tests {
     #[test]
     fn probe_names_libpfs3() {
         let probed = NativeFormatter::UTC.probe().unwrap();
-        assert_eq!(probed.raw, "libpfs3 0.1.3+art.4 (native, no external tool)");
+        assert_eq!(probed.raw, "libpfs3 0.1.3+art.5 (native, no external tool)");
     }
 
     /// `import_filesystem` refuses by name rather than pretend — see the
@@ -3750,5 +3753,196 @@ mod tests {
             },
             ".uaem date, unshifted"
         );
+    }
+
+    // ---- ART-319: the writer returns to its last commit on error ----
+
+    /// **ART-319.** `alloc_data_blocks` clears bitmap bits for a
+    /// `write_file_in` that does not fit, one bitmap block at a time, staging
+    /// every touched block into `pending_writes` before it runs out and
+    /// returns `DiskFull` — without reducing `blocksfree`. Unless that
+    /// partial attempt is discarded, the next commit flushes those stale
+    /// writes: the on-disk bitmap then says fewer blocks are free than
+    /// `blocksfree` claims, and a later allocation can hand out a block a
+    /// still-listed file already uses. Research (`art319-pfs3aio-research.md`):
+    /// pfs3aio checks `alloc_available` **before** touching the bitmap
+    /// (`allocation.c:242-243`), and even its own unwind-on-partial-failure
+    /// only *defers* the free to the next commit (`allocation.c:600-608,730`)
+    /// rather than mutating the bitmap directly — this crate's writer has
+    /// neither a check-first nor a deferred-free, so it discards the failed
+    /// attempt instead.
+    #[test]
+    fn a_failed_pfs3_write_discards_its_partial_allocation() {
+        const TOTAL: u64 = 48_000;
+        let dev = MemDevice::with_end(TOTAL);
+        formatted_in_memory(&dev, TOTAL);
+
+        let free_before = {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            vol.free_blocks()
+        };
+
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            let one_too_many = vec![0x5Au8; (free_before as usize + 1) * 512];
+            let err = w.write_file("Big", &one_too_many).unwrap_err();
+            assert!(
+                matches!(err, libpfs3::error::Error::DiskFull(_)),
+                "expected disk full, got: {err}"
+            );
+
+            // A committing write after the failed one.
+            w.write_file("Small", b"kept").unwrap();
+        }
+
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let bitmap_free = vol.bitmap_count_free().unwrap();
+        assert_eq!(
+            vol.rootblock.blocksfree, bitmap_free,
+            "blocksfree disagrees with the on-disk data bitmap after a failed allocation"
+        );
+        assert_eq!(
+            vol.rootblock.blocksfree,
+            free_before - 1,
+            "must be exactly the free count before the failed write, minus the small file's \
+             one block"
+        );
+        assert_eq!(vol.read_file("Small").unwrap(), b"kept");
+    }
+
+    /// **ART-319.** `delete_in` stages a deldir entry (`move_to_deldir`)
+    /// before `free_data_blocks` walks the file's own anode chain; if that
+    /// chain is corrupt, `move_to_deldir`'s write already sits in
+    /// `pending_writes` when the error comes back. Unless it is discarded,
+    /// the next commit flushes it — the file ends up listed both in its
+    /// directory and in the deldir, and a later eviction of that deldir slot
+    /// frees a file still reachable from its directory. Research: pfs3aio's
+    /// own `DeleteObject` has the identical shape — `AllocDeldirSlot`/
+    /// `AddToDeldir` write directly, with no rollback if a later step fails
+    /// (`directory.c:1816-1830`) — the research notes it found no live
+    /// trigger for that *in pfs3aio's own delete path as written* (`to ==
+    /// NULL` skips the one fallible step); this crate's writer can hit it
+    /// regardless, because a corrupt anode chain makes `free_data_blocks`
+    /// itself fail.
+    #[test]
+    fn a_failed_pfs3_delete_stages_no_deldir_entry() {
+        const TOTAL: u64 = 48_000;
+        let dev = MemDevice::with_end(TOTAL);
+        libpfs3::format::format_with_size(
+            &dev,
+            TOTAL,
+            &libpfs3::format::FormatOptions {
+                volume_name: "Work".into(),
+                enable_deldir: true,
+                datestamp: None,
+            },
+        )
+        .unwrap();
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.write_file("Gone", b"one block").unwrap();
+        }
+
+        // "Gone" is the format's first user anode, 6 — root dir uses 0-5 —
+        // one extent, the same reading
+        // `freeing_a_pfs3_block_past_the_partition_changes_nothing` does.
+        // Corrupt its `next` field into a one-anode cycle: `get_chain` trips
+        // over it before any block of the chain is freed.
+        let root = dev.read(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        let ib = dev.read(u64::from(be32(&root, 0x60 + 5 * 4)), resblk);
+        let ab_blk = u64::from(be32(&ib, 12));
+        let mut ab = dev.read(ab_blk, resblk);
+        let at = 16 + 6 * 12;
+        assert_eq!(be32(&ab, at), 1, "anode 6 must be Gone's one-block extent");
+        ab[at + 8..at + 12].copy_from_slice(&6u32.to_be_bytes()); // next = self
+        dev.patch(ab_blk, &ab);
+
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            let err = w.delete("Gone").unwrap_err();
+            assert!(
+                matches!(&err, libpfs3::error::Error::InvalidPartition(msg) if msg.contains("cycle")),
+                "expected the failure from free_data_blocks's own anode-cycle check, got: {err}"
+            );
+
+            // Another committing operation, after the failed delete.
+            w.write_file("Other", b"kept").unwrap();
+        }
+
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        assert!(
+            vol.list_deldir().unwrap().is_empty(),
+            "a failed delete left an entry in the deldir"
+        );
+        assert!(
+            vol.list_dir("").unwrap().iter().any(|e| e.name == "Gone"),
+            "the failed delete's file is missing from its own directory"
+        );
+    }
+
+    /// **ART-319.** If the commit's own write fails — here,
+    /// `update_rootblock`'s final rootblock-cluster write, its one write for
+    /// an operation with nothing pending — the device may already be
+    /// half-written (M5: writes land in place, not copy-on-write), so the
+    /// writer locks rather than reloading and continuing over an unknown
+    /// state. Every later mutating call then refuses immediately, with a
+    /// typed lock error, before it can touch the device at all.
+    #[test]
+    fn a_pfs3_commit_failing_part_way_locks_the_writer() {
+        const TOTAL: u64 = 48_000;
+        let dev = MemDevice::with_end(TOTAL);
+        formatted_in_memory(&dev, TOTAL);
+
+        let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+
+        // Arm the device to refuse the very next write — the rootblock
+        // cluster write inside `update_rootblock`, `repair_blocksfree`'s one
+        // write, since it has no pending reserved-block writes and a clean
+        // extension.
+        let before = dev.write_count();
+        dev.fail_from_write(before + 1);
+
+        let err = w.repair_blocksfree(123).unwrap_err();
+        assert!(
+            matches!(err, libpfs3::error::Error::BlockOutOfRange(_)),
+            "expected the commit's own write to be refused, got: {err}"
+        );
+        let after_first = dev.write_count();
+        assert_eq!(
+            after_first,
+            before + 1,
+            "the commit's own write did not even reach the device"
+        );
+
+        let err2 = w.repair_reserved_free(7).unwrap_err();
+        assert!(
+            matches!(err2, libpfs3::error::Error::CommitFailed),
+            "the next operation must return the lock error, got: {err2}"
+        );
+        assert_eq!(
+            dev.write_count(),
+            after_first,
+            "the device received a write after the writer should have locked"
+        );
+    }
+
+    /// **ART-319.** The lock error reaches the user as a readable sentence
+    /// that says what to do — reopen and check the volume — not
+    /// "malformed pfs3: ...", which would point someone at the wrong
+    /// diagnosis (a damaged file, rather than a session that failed
+    /// mid-commit).
+    #[test]
+    fn a_poisoned_pfs3_writers_error_reaches_the_user_as_a_readable_sentence() {
+        let err = from_pfs3(libpfs3::error::Error::CommitFailed);
+        assert!(matches!(err, CoreError::Pfs3WriterLocked), "{err}");
+        assert_eq!(err.code(), "ART-PFS3-WRITER-LOCKED");
+        let text = err.to_string().to_lowercase();
+        assert!(text.contains("reopen"), "{err}");
+        assert!(!text.contains("malformed"), "{err}");
     }
 }

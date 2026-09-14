@@ -248,6 +248,19 @@ pub enum CoreError {
          package folder is the published one; ART will not try any other key."
     )]
     PayloadPasswordRefused { archive: String },
+
+    /// ART-319: `libpfs3::error::Error::CommitFailed` — a PFS3 commit failed
+    /// part-way through and the writer session has locked itself rather than
+    /// risk continuing on a device that may be half-written. **Its own
+    /// ending, not a `Malformed`**, for the same reason `PayloadPasswordRefused`
+    /// is: the volume is not necessarily damaged, and the fix ("reopen it")
+    /// is different from what a "this file is corrupt" sentence would tell
+    /// someone to do.
+    #[error(
+        "this PFS3 volume's last write failed part-way through and may be half-written: \
+         reopen it (and check it) before writing to it again"
+    )]
+    Pfs3WriterLocked,
 }
 
 /// The sentence for [`CoreError::NonAsciiPfs3Names`] — pulled out of the
@@ -315,6 +328,7 @@ impl CoreError {
             Self::FirstBootNeedsCommand { .. } => "ART-FIRSTBOOT-NEEDS-COMMAND",
             Self::LimitExceeded { .. } => "ART-LIMIT-EXCEEDED",
             Self::PayloadPasswordRefused { .. } => "ART-PAYLOAD-PASSWORD",
+            Self::Pfs3WriterLocked => "ART-PFS3-WRITER-LOCKED",
         }
     }
 

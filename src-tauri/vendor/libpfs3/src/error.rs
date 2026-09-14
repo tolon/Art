@@ -1,7 +1,8 @@
 //! Error types for libpfs3.
 //!
 //! Modified by ART on 2026-09-14 (ART-314): the `NameTooLong` variant, for a
-//! name the volume cannot store and find again. `ART-PATCH.md` in this
+//! name the volume cannot store and find again; (ART-319) the `CommitFailed`
+//! variant, for a commit that failed part-way through. `ART-PATCH.md` in this
 //! crate's root says what and why.
 
 /// Result type alias using the PFS3 [`Error`].
@@ -44,6 +45,20 @@ pub enum Error {
 
     #[error("disk full: {0}")]
     DiskFull(String),
+
+    /// ART-319: a commit failed part-way through — the rootblock extension
+    /// write, flushing the pending reserved-block writes, or the rootblock
+    /// cluster write itself. Writes land in place, not copy-on-write, so the
+    /// device may already hold part of this operation's metadata while the
+    /// rootblock that would make it official does not; the writer locks
+    /// rather than reloading and continuing over that unknown state, and
+    /// every later mutating call returns this immediately, before touching
+    /// anything.
+    #[error(
+        "this PFS3 volume's last write failed part-way through and may be half-written: \
+         reopen it (and check it) before writing to it again"
+    )]
+    CommitFailed,
 
     #[error("corrupt filesystem: {0}")]
     Corrupt(String),

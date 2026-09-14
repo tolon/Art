@@ -1,7 +1,9 @@
 //! PFS3 volume: top-level read-only access to a PFS3 partition.
 //!
 //! Modified by ART on 2026-09-14, the final review (M2): `list_deldir` passes
-//! the volume's own `MODE_LARGEFILE` flag into `DelDirEntry::parse`.
+//! the volume's own `MODE_LARGEFILE` flag into `DelDirEntry::parse`; on
+//! 2026-09-14 (ART-319): `from_device`'s own parse is shared with `reload`,
+//! which `writer::Writer` uses to discard back to the last successful commit.
 //! `ART-PATCH.md` in this crate's root says what and why.
 
 use std::path::Path;
@@ -39,6 +41,23 @@ impl Volume {
 
     /// Open a PFS3 volume from an already-opened block device.
     pub fn from_device(dev: Box<dyn BlockDevice>) -> Result<Self> {
+        let (rootblock, rootblock_ext, anodes, bitmap, cache) = Self::parse_from(dev.as_ref())?;
+        Ok(Self {
+            dev,
+            cache,
+            rootblock,
+            rootblock_ext,
+            anodes,
+            bitmap,
+        })
+    }
+
+    /// ART-319: `from_device`'s own parse, taking a borrowed device instead
+    /// of consuming a `Box<dyn BlockDevice>` — shared by `from_device` and
+    /// `reload` rather than duplicated.
+    fn parse_from(
+        dev: &dyn BlockDevice,
+    ) -> Result<(Rootblock, Option<RootblockExt>, AnodeReader, BitmapReader, BlockCache)> {
         let mut buf = vec![0u8; 512];
         dev.read_block(ROOTBLOCK, &mut buf)?;
         let rb = Rootblock::parse(&buf)?;
@@ -56,7 +75,7 @@ impl Volume {
         Self::validate_rbs(&rootblock)?;
         let rootblock_ext = if rootblock.has_extension() {
             let rbs = rootblock.reserved_blksize;
-            let data = cache.read_reserved(dev.as_ref(), rootblock.extension as u64, rbs)?;
+            let data = cache.read_reserved(dev, rootblock.extension as u64, rbs)?;
             Some(RootblockExt::parse(data)?)
         } else {
             None
@@ -65,14 +84,25 @@ impl Volume {
         let anodes = AnodeReader::new(&rootblock, rootblock_ext.as_ref());
         let bitmap = BitmapReader::new(&rootblock);
 
-        Ok(Self {
-            dev,
-            cache,
-            rootblock,
-            rootblock_ext,
-            anodes,
-            bitmap,
-        })
+        Ok((rootblock, rootblock_ext, anodes, bitmap, cache))
+    }
+
+    /// ART-319: re-derive `rootblock`, `rootblock_ext`, `anodes`, `bitmap` and
+    /// `cache` from the device in place, without giving up ownership of
+    /// `dev` — the same parse `from_device` does, reused rather than
+    /// duplicated. `writer::Writer::discard_to_last_commit` calls this after
+    /// a mutating call fails: every metadata write of this crate's writer
+    /// goes through `pending_writes`, only reaching disk in
+    /// `update_rootblock`'s `flush_pending`, so the device already holds
+    /// exactly the last successful commit for this to read back.
+    pub(crate) fn reload(&mut self) -> Result<()> {
+        let (rootblock, rootblock_ext, anodes, bitmap, cache) = Self::parse_from(self.dev.as_ref())?;
+        self.rootblock = rootblock;
+        self.rootblock_ext = rootblock_ext;
+        self.anodes = anodes;
+        self.bitmap = bitmap;
+        self.cache = cache;
+        Ok(())
     }
 
     /// Open a PFS3 volume from a file.
