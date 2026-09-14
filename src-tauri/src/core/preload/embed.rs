@@ -439,22 +439,38 @@ pub(crate) fn write_journalled_with(
                      journal failed, so ART cannot tell whether the card keeps it: {err}"
                 )
             })
-        })
-        // ART-117 scoped re-review: a journal that outlives this point has to
-        // say the edit finished, or the next run would offer to undo it. A
-        // mark that will not write leaves the edit unclaimed, and undone.
-        .and_then(|()| {
-            (end.mark)(&mut journal).map_err(|err| {
-                format!(
+        });
+    // ART-117 scoped re-review: a journal that outlives this point has to say
+    // the edit finished, or the next run would offer to undo it. A mark that
+    // will not write leaves the edit unclaimed, and undone — once the mark,
+    // which may have landed, is out again. When it will not come out, no block
+    // is restored: the card keeps the verified edit, and the ending is the one
+    // that says so (delete the journal, never undo it).
+    let written = match written {
+        Ok(()) => match (end.mark)(&mut journal) {
+            Ok(()) => Ok(()),
+            Err(mark) => match journal.unmark() {
+                Ok(()) => Err(format!(
                     "the edit was written and verified, but ART could not mark its journal \
                      finished, so a journal left behind could not be told from an interrupted \
-                     edit: {err}"
-                )
-            })
-        });
+                     edit: {mark}"
+                )),
+                Err(unmark) => {
+                    return Err(WriteFailure::JournalNotClosed {
+                        detail: format!(
+                            "ART could not mark it finished ({mark}) nor put it back as it was \
+                             ({unmark}), so no block was undone"
+                        ),
+                        journal: journal_path,
+                    })
+                }
+            },
+        },
+        Err(detail) => Err(detail),
+    };
     match written {
         Ok(()) => (end.remove)(journal).map_err(|err| WriteFailure::JournalNotClosed {
-            detail: err.to_string(),
+            detail: format!("ART could not remove it: {err}"),
             journal: journal_path,
         }),
         Err(detail) => match journal.roll_back() {
@@ -1903,6 +1919,85 @@ mod tests {
             );
             assert!(!journal_path_for(&run.image).exists(), "{tag}");
         }
+    }
+
+    /// Marks, then makes the journal read-only and fails: the mark landed, and
+    /// taking it back out cannot open the file either.
+    fn mark_then_fail_and_lock(journal: &mut Journalled<'_>) -> CoreResult<()> {
+        journal.mark_finished()?;
+        let path = journal_path_for(Path::new(&journal.header().image_path));
+        let mut permissions = std::fs::metadata(&path)?.permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions)?;
+        Err(CoreError::Io(std::io::Error::other(
+            "the disk filled up after the mark",
+        )))
+    }
+
+    /// **ART-117 scoped re-review, follow-up.** The mark fails and version 1
+    /// cannot be put back either, so `roll_back` restores no block: the card
+    /// holds the verified edit and the journal may say it finished. The ending
+    /// is `JOURNAL-LEFT` — the edit stands, delete the journal, never undo it —
+    /// and never "undo it in the File Manager".
+    #[test]
+    // The scratch file is made writable again so its folder can be removed;
+    // that is the whole point of clearing the flag, not a security choice.
+    #[allow(clippy::permissions_set_readonly_false)]
+    fn a_mark_that_can_neither_be_written_nor_taken_out_leaves_the_verified_edit_and_says_so() {
+        let run = art_run("mark-and-unmark-fail");
+        let backup = run.dir.join("rdb.bin");
+        let journal = journal_path_for(&run.image);
+        let result = run_with_end(
+            target(&run),
+            Some(&backup),
+            &NoProgress,
+            &open_region,
+            &JournalEnd {
+                mark: &mark_then_fail_and_lock,
+                remove: REAL_END.remove,
+            },
+        );
+        // Writable again before any assertion, so a failing one still leaves a
+        // folder `ScratchDir` can remove.
+        if let Ok(metadata) = std::fs::metadata(&journal) {
+            let mut permissions = metadata.permissions();
+            permissions.set_readonly(false);
+            std::fs::set_permissions(&journal, permissions).unwrap();
+        }
+
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), "ART-RDB-EDIT-JOURNAL-LEFT", "{err}");
+        let sentence = err.to_string();
+        for needle in [
+            "was written and verified",
+            "could not mark it finished",
+            "Delete that file",
+            "do not undo it",
+            &journal.display().to_string(),
+            &backup.display().to_string(),
+        ] {
+            assert!(sentence.contains(needle), "{needle:?} in: {sentence}");
+        }
+        assert!(
+            !sentence.contains("undo it in the File Manager before"),
+            "{sentence}"
+        );
+        assert!(!sentence.contains("undoing it failed"), "{sentence}");
+        assert_ne!(
+            std::fs::read(&run.image).unwrap(),
+            run.before,
+            "no block was restored"
+        );
+        assert!(crate::core::card::read_card(&run.image)
+            .unwrap()
+            .provides_file_system(PDS3));
+        let pending = find_journal(&run.image)
+            .unwrap()
+            .expect("the journal is left");
+        assert!(
+            pending.is_finished(),
+            "the File Manager shows it as finished, as the sentence says"
+        );
     }
 
     /// The control: a journal left by a crash mid-stage carries no mark, so

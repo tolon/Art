@@ -286,21 +286,33 @@ impl<'a> Journalled<'a> {
         put_version(&mut file, FINISHED_MARK)
     }
 
+    /// Take a [mark](Journalled::mark_finished) back out: version 1 again,
+    /// synced and read back. Nothing to do when no mark was attempted.
+    ///
+    /// An error means the journal may still say its operation finished; a
+    /// caller must not then restore a block under it.
+    pub fn unmark(&mut self) -> CoreResult<()> {
+        if !self.marked {
+            return Ok(());
+        }
+        let mut file = OpenOptions::new().read(true).write(true).open(&self.path)?;
+        put_version(&mut file, FORMAT_VERSION)?;
+        self.marked = false;
+        Ok(())
+    }
+
     /// The operation failed: put every saved block back, then drop the journal.
     ///
     /// Restores from the in-memory copy, which is byte-identical to the one on
     /// disk. Rollback failing part-way leaves the journal in place on purpose —
     /// the next mount tries again rather than the image being left half-undone
     /// with nothing to say so.
-    pub fn roll_back(self) -> CoreResult<()> {
-        if self.marked {
-            // Before any block: a roll-back that dies part-way has to leave a
-            // journal the next run undoes, not one it calls finished. When the
-            // mark cannot be taken out, no block is touched — the card still
-            // holds the verified edit the mark describes.
-            let mut file = OpenOptions::new().read(true).write(true).open(&self.path)?;
-            put_version(&mut file, FORMAT_VERSION)?;
-        }
+    pub fn roll_back(mut self) -> CoreResult<()> {
+        // Before any block: a roll-back that dies part-way has to leave a
+        // journal the next run undoes, not one it calls finished. When the
+        // mark cannot be taken out, no block is touched — the card still
+        // holds the verified edit the mark describes.
+        self.unmark()?;
         for (block, bytes) in &self.previous {
             self.device.write_block(*block, bytes)?;
         }

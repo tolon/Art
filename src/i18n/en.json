@@ -1402,6 +1402,7 @@
       "undo": "Undo it",
       "leave": "Leave the image alone",
       "leaveTitle": "Leave the image exactly as it is and forget the record. Only do this if you know the operation completed.",
+      "finishedAriaLabel": "Journal left behind",
       "finishedTitle": "An operation on this image finished, and its journal was left behind",
       "finishedBody": "“{{description}}” finished and was verified; only its journal file could not be removed. Do not undo it — that would take the finished change back out. Delete the journal to write to this image again.",
       "deleteJournal": "Delete the journal"

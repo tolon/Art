@@ -525,15 +525,17 @@ pub enum CoreError {
     },
 
     /// ART-117: the edit was written, verified and synced — the card holds it
-    /// — and only its undo journal file could not be removed (final review
-    /// I2). **Not a failed edit**, and its next step is the opposite of
+    /// — and only its undo journal file was left behind: it could not be
+    /// removed (final review I2), or it could neither be marked finished nor
+    /// put back as it was, so no block was undone (scoped re-review). **Not a
+    /// failed edit**, and its next step is the opposite of
     /// [`RdbEditFailed`](Self::RdbEditFailed)'s `restored: false`: undoing
     /// this journal would take a good edit back out.
     #[error(
-        "the RDB edit was written and verified, and the card holds it — but ART could not remove \
-         its undo journal at '{}': {detail}. The card needs nothing more. Delete that file once \
-         ART is closed: it holds the RDB as it was before this edit, so do not undo it in the \
-         File Manager, which would take the new driver out again. The RDB backup is at '{}'.",
+        "the RDB edit was written and verified, and the card holds it — but its undo journal at \
+         '{}' was left behind: {detail}. The card needs nothing more. Delete that file once ART \
+         is closed: it holds the RDB as it was before this edit, so do not undo it in the File \
+         Manager, which would take the new driver out again. The RDB backup is at '{}'.",
         journal.display(),
         backup.display()
     )]

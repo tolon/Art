@@ -1402,6 +1402,7 @@
       "undo": "Geri al",
       "leave": "İmajı olduğu gibi bırak",
       "leaveTitle": "İmajı tam olarak şu anki haliyle bırakın ve kaydı unutun. Bunu yalnızca işlemin tamamlandığından eminseniz yapın.",
+      "finishedAriaLabel": "Geride kalan günlük",
       "finishedTitle": "Bu imaj üzerindeki bir işlem tamamlandı, ama günlüğü geride kaldı",
       "finishedBody": "“{{description}}” tamamlandı ve doğrulandı; yalnızca günlük dosyası kaldırılamadı. Geri almayın — bu, tamamlanan değişikliği yeniden çıkarır. Bu imaja yeniden yazmak için günlüğü silin.",
       "deleteJournal": "Günlüğü sil"

@@ -4143,7 +4143,9 @@ export function FileManager() {
           className="card"
           style={{ margin: "10px 0", borderColor: "var(--warn)" }}
           role="alertdialog"
-          aria-label={t("files.recovery.ariaLabel")}
+          aria-label={
+            recovery.finished ? t("files.recovery.finishedAriaLabel") : t("files.recovery.ariaLabel")
+          }
         >
           <strong>
             {recovery.finished ? t("files.recovery.finishedTitle") : t("files.recovery.title")}
